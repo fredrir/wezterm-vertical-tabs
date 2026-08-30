@@ -14,11 +14,12 @@ plugin owns all state and rendering; the backend is a thin terminal I/O bridge:
 
 1. Enter raw mode, alternate screen, hide cursor.
 2. Fill the alternate screen with `VTABS_BG` (skipped when unset), before anything else is drawn.
-3. Enable mouse reporting: `?1000h ?1002h ?1003h ?1006h`, and focus reporting
-   `?1004h`.
+3. Enable mouse reporting: `?1000h ?1002h ?1003h ?1006h`, focus reporting
+   `?1004h`, bracketed paste `?2004h`.
 4. Emit user var `vtabs_role` = `sidebar` (plain, base64 of the literal string).
-5. Set the pane title marker `wez-vtabs:0` (OSC 0 and OSC 2); `auth` replaces
-   `0` with the token.
+5. Set the pane title marker `wez-vtabs:<nonce>` (OSC 0 and OSC 2). The nonce is
+   a per-process random id, never the auth token: window titles are readable by
+   the whole desktop.
 6. Emit event `{"t":"ready","v":1,"cols":N,"rows":M}`.
 7. Loop until stdin EOF or `quit`.
 
@@ -35,6 +36,7 @@ All events carry `"t"`. Columns/rows are 1-based cell coordinates.
 | mouse  | `{"t":"mouse","k":"down"\|"up"\|"drag"\|"move"\|"wheel","b":"left"\|"middle"\|"right"\|"none","x":C,"y":R,"dy":-1\|1,"mods":["shift","ctrl","alt"]}` |
 | key    | `{"t":"key","key":"<name>","mods":["shift","ctrl","alt"],"raw":"<base64>"}`                                                                          |
 | focus  | `{"t":"focus","in":true\|false}`                                                                                                                     |
+| paste  | `{"t":"paste","data":"<base64>"}`, or `{"t":"paste","dropped":"size"}` past 64 KiB                                                                   |
 | pong | `{"t":"pong","n":N}` — echoes the ping's `n` (omitted when the ping had none) |
 
 - `dy` is only present for `wheel` (`-1` = up, `1` = down); `b` is `"none"` for wheel.
@@ -43,6 +45,10 @@ All events carry `"t"`. Columns/rows are 1-based cell coordinates.
 - `mods` is omitted when empty.
 - `raw` is the base64 of the exact bytes the key was decoded from (≤ 16), so the
   plugin can forward them to another pane verbatim. Omitted when empty.
+- A CSI/SS3 sequence the parser does not name is `"key":"unknown"` with its
+  bytes in `raw`; unrecognised mouse reports are dropped instead.
+- Bracketed paste is one `paste` event, never key events. Its bytes are not
+  parsed, so escapes inside a paste stay data.
 - Key names: a single printable character (as typed), or one of
   `enter escape tab backspace delete up down left right home end pageup pagedown space`.
   Control characters map to their letter with `"ctrl"` in `mods` (`0x03` → `c` + ctrl;
@@ -59,7 +65,7 @@ All events carry `"t"`. Columns/rows are 1-based cell coordinates.
 | clear   | `{"t":"clear"}`              | clear screen, cursor home                   |
 | quit    | `{"t":"quit"}`               | restore terminal and exit 0                 |
 | ping | `{"t":"ping","n":N}` | reply with `pong` carrying the same `n`; WezTerm only fires `user-var-changed` when the value changes, so `n` must vary |
-| auth | `{"t":"auth","token":"<hex>"}` | set pane title `wez-vtabs:<token>` (OSC 0 + OSC 2, non-hex stripped) and echo user var `vtabs_token` |
+| auth | `{"t":"auth","token":"<hex>"}` | echo user var `vtabs_token`; the title is not touched |
 
 `data` contains raw ANSI (CUP, SGR, …); it never contains a newline.
 Unknown commands are ignored. Malformed JSON lines are ignored.

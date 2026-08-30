@@ -39,7 +39,20 @@
 | 0 | anything else | content |
 
 One pane per tab holds the role: highest rank wins, every other pane is content.
-A faked title can neither empty a tab nor displace a live sidebar; it can echo
-the `auth` token sent to its own stdin and become that tab's sidebar. Not a
-security boundary: any process running as you can already drive the mux through
-`wezterm cli`.
+A faked title can neither empty a tab nor displace a live sidebar.
+
+Rank 1 is a real grant. Any process that can set its pane title — including one
+on an ssh/mux host you have a tab in — is sent `auth` on its own stdin, echoes
+it, and is then that tab's sidebar: it receives every frame for the window (every
+tab's title and cwd, local tabs included) and its events drive tab management,
+including `close_tab` without a prompt. A remote host can only do this in tabs of
+its own domain, within 30 s and 5 attempts per pane.
+
+| Config | Adopts in |
+| --- | --- |
+| `adopt = "auto"` (default) | local/unix domains, domains this process already spawned a backend in, domains listed in `backend.path` |
+| `adopt = true` | any domain, still only the tab's own domain |
+| `adopt = false` | nowhere; a marker pane is content, a surviving sidebar is replaced instead |
+
+Two GUI processes attached to one mux both manage the same tabs and fight over
+the sidebars. Unsupported.

@@ -83,6 +83,8 @@ pub enum Input {
         mods: Mods,
         raw: Vec<u8>,
     },
+    /// Bracketed paste; `None` once it grew past the size cap.
+    Paste(Option<Vec<u8>>),
     Command(Command),
 }
 
@@ -91,6 +93,7 @@ pub struct Parser {
     buf: Vec<u8>,
     stalled_flushes: u32,
     discarding: bool,
+    pasting: Option<Vec<u8>>,
 }
 
 /// Flushes arrive every ~30ms while input is pending; give up on a stalled prefix after this many.
@@ -99,11 +102,16 @@ const STALL_LIMIT: u32 = 10;
 /// Longest byte sequence a single key may carry as `raw`.
 const RAW_MAX: usize = 16;
 
+const PASTE_END: &[u8] = b"\x1b[201~";
+const PASTE_MAX: usize = 64 * 1024;
+
 enum Step {
     Token(Input, usize),
     Skip(usize),
     /// Drop these bytes and the rest of the command line they belong to.
     Discard(usize),
+    /// Bracketed paste opened: collect raw bytes until the terminator.
+    Paste(usize),
     Incomplete,
 }
 
@@ -144,8 +152,41 @@ impl Parser {
         !self.buf.is_empty()
     }
 
+    /// Returns false while the paste is still open and more bytes are needed.
+    fn collect_paste(&mut self, out: &mut Vec<Input>) -> bool {
+        let Some(data) = self.pasting.as_mut() else {
+            return true;
+        };
+        let end = find(&self.buf, PASTE_END);
+        let take = end.unwrap_or_else(|| self.buf.len() - partial_tail(&self.buf, PASTE_END));
+        if data.len() <= PASTE_MAX {
+            data.extend_from_slice(&self.buf[..take]);
+        }
+        self.buf
+            .drain(..take + if end.is_some() { PASTE_END.len() } else { 0 });
+        if end.is_none() {
+            return false;
+        }
+        let data = self.pasting.take().unwrap_or_default();
+        out.push(Input::Paste(if data.len() > PASTE_MAX {
+            None
+        } else {
+            Some(data)
+        }));
+        true
+    }
+
     fn drain(&mut self, timed_out: bool, stalled: bool) -> Vec<Input> {
         let mut out = Vec::new();
+        loop {
+            if !self.drain_once(timed_out, stalled, &mut out) {
+                return out;
+            }
+        }
+    }
+
+    /// Returns true when a mode change (discard, paste) means the rest of the buffer needs another pass.
+    fn drain_once(&mut self, timed_out: bool, stalled: bool, out: &mut Vec<Input>) -> bool {
         if self.discarding {
             match self.buf.iter().position(|&b| b == b'\n') {
                 Some(end) => {
@@ -154,10 +195,14 @@ impl Parser {
                 }
                 None => {
                     self.buf.clear();
-                    return out;
+                    return false;
                 }
             }
         }
+        if self.pasting.is_some() && !self.collect_paste(out) {
+            return false;
+        }
+        let mut again = false;
         let mut pos = 0;
         while pos < self.buf.len() {
             let wait = Wait { timed_out, stalled };
@@ -168,21 +213,41 @@ impl Parser {
                     {
                         raw.extend_from_slice(&self.buf[pos..pos + n]);
                     }
-                    push_coalesced(&mut out, input);
+                    push_coalesced(out, input);
                     pos += n;
                 }
                 Step::Skip(n) => pos += n,
                 Step::Discard(n) => {
                     pos += n;
                     self.discarding = true;
+                    again = true;
+                    break;
+                }
+                Step::Paste(n) => {
+                    pos += n;
+                    self.pasting = Some(Vec::new());
+                    again = true;
                     break;
                 }
                 Step::Incomplete => break,
             }
         }
         self.buf.drain(..pos);
-        out
+        again
     }
+}
+
+fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    haystack.windows(needle.len()).position(|w| w == needle)
+}
+
+/// Length of the trailing bytes that could still grow into `needle` in the next chunk.
+fn partial_tail(haystack: &[u8], needle: &[u8]) -> usize {
+    let max = needle.len().min(haystack.len());
+    (1..max)
+        .rev()
+        .find(|&n| haystack[haystack.len() - n..] == needle[..n])
+        .unwrap_or(0)
 }
 
 fn push_coalesced(out: &mut Vec<Input>, input: Input) {
@@ -268,6 +333,7 @@ fn parse_escape(bytes: &[u8], wait: Wait) -> Step {
             Step::Token(other, n) => Step::Token(other, n + 1),
             Step::Skip(n) => Step::Skip(n + 1),
             Step::Discard(n) => Step::Discard(n + 1),
+            Step::Paste(n) => Step::Paste(n + 1),
             Step::Incomplete => Step::Incomplete,
         },
     }
@@ -284,7 +350,7 @@ fn parse_ss3(bytes: &[u8], wait: Wait) -> Step {
         b'D' => "left",
         b'H' => "home",
         b'F' => "end",
-        _ => return Step::Skip(3),
+        _ => return Step::Token(unknown_key(), 3),
     };
     Step::Token(key(name, Mods::default()), 3)
 }
@@ -311,18 +377,28 @@ fn parse_csi(bytes: &[u8], wait: Wait) -> Step {
     let final_byte = bytes[end];
     let body = &bytes[2..end];
     let consumed = end + 1;
+    if body.first() == Some(&b'<') && matches!(final_byte, b'M' | b'm') {
+        // an unrecognised mouse report is dropped: it is not text and must never be forwarded
+        return match sgr_mouse(&body[1..], final_byte == b'M') {
+            Some(t) => Step::Token(t, consumed),
+            None => Step::Skip(consumed),
+        };
+    }
+    if final_byte == b'~' {
+        match params(body).first() {
+            Some(&200) => return Step::Paste(consumed),
+            Some(&201) => return Step::Skip(consumed),
+            _ => {}
+        }
+    }
     let token = match (body.first(), final_byte) {
-        (Some(b'<'), b'M' | b'm') => sgr_mouse(&body[1..], final_byte == b'M'),
         (None, b'I') => Some(Input::Focus(true)),
         (None, b'O') => Some(Input::Focus(false)),
         (_, b'~') => tilde_key(body),
         (_, b'A' | b'B' | b'C' | b'D' | b'H' | b'F') => letter_key(body, final_byte),
         _ => None,
     };
-    match token {
-        Some(t) => Step::Token(t, consumed),
-        None => Step::Skip(consumed),
-    }
+    Step::Token(token.unwrap_or_else(unknown_key), consumed)
 }
 
 /// An `ESC [`/`ESC O` introducer promises more bytes, so only a long stall turns it into escape.
@@ -432,6 +508,11 @@ fn ascii_key(b: u8) -> Input {
         0x1c..=0x1f => key(((b'\\' + b - 0x1c) as char).to_string(), ctrl),
         b => key((b as char).to_string(), Mods::default()),
     }
+}
+
+/// A sequence the parser cannot name: still forwardable, because `raw` carries the bytes.
+fn unknown_key() -> Input {
+    key("unknown", Mods::default())
 }
 
 fn key(name: impl Into<String>, mods: Mods) -> Input {
@@ -754,8 +835,15 @@ mod tests {
     }
 
     #[test]
-    fn unknown_csi_skipped() {
-        assert_eq!(feed(b"\x1b[?1;2c\x1b[A"), vec![plain("up")]);
+    fn unnamed_csi_becomes_the_unknown_key() {
+        assert_eq!(
+            feed(b"\x1b[?1;2c\x1b[A"),
+            vec![plain("unknown"), plain("up")]
+        );
+        assert_eq!(feed(b"\x1b[15~"), vec![plain("unknown")]);
+        assert_eq!(feed(b"\x1bOZ"), vec![plain("unknown")]);
+        let out = Parser::new().feed(b"\x1b[15~");
+        assert_eq!(raw_of(&out), vec![b"\x1b[15~".as_slice()]);
     }
 
     fn flush_until_stalled(p: &mut Parser) -> Vec<Input> {
@@ -864,8 +952,34 @@ mod tests {
 
     #[test]
     fn focus_requires_empty_params() {
-        assert!(feed(b"\x1b[5I").is_empty());
+        assert_eq!(feed(b"\x1b[5I"), vec![plain("unknown")]);
         assert_eq!(feed(b"\x1b[I"), vec![Input::Focus(true)]);
+    }
+
+    #[test]
+    fn bracketed_paste_is_one_event_never_keys() {
+        assert_eq!(
+            feed(b"\x1b[200~hi \x1b[A there\x1b[201~x"),
+            vec![Input::Paste(Some(b"hi \x1b[A there".to_vec())), plain("x"),]
+        );
+    }
+
+    #[test]
+    fn a_paste_split_across_chunks_including_its_terminator() {
+        let mut p = Parser::new();
+        assert!(p.feed(b"\x1b[200~one").is_empty());
+        assert!(p.feed(b" two\x1b[20").is_empty());
+        assert_eq!(p.feed(b"1~"), vec![Input::Paste(Some(b"one two".to_vec()))]);
+        assert!(!p.has_pending());
+    }
+
+    #[test]
+    fn an_oversized_paste_is_dropped_not_typed() {
+        let mut p = Parser::new();
+        assert!(p.feed(b"\x1b[200~").is_empty());
+        let big = vec![b'x'; PASTE_MAX + 1];
+        assert!(p.feed(&big).is_empty());
+        assert_eq!(p.feed(b"\x1b[201~"), vec![Input::Paste(None)]);
     }
 
     #[test]

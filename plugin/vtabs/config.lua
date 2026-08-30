@@ -29,6 +29,7 @@ M.defaults = {
   icon_map = {},
   title = nil, -- fun(tab: MuxTab, pane: Pane): string
   domain = "CurrentPaneDomain",
+  adopt = "auto", -- "auto": take over a backend pane where we spawn them | true: any domain | false: never
   skip_close_confirmation = true,
   private = {
     env = { HISTFILE = "", fish_private_mode = "1", VTABS_PRIVATE = "1" },
@@ -60,6 +61,7 @@ local VALID = {
   separator = { rule = true, gap = true, none = true },
   wheel = { scroll = true, switch = true },
   hover = { follow = true, press = true },
+  adopt = { auto = true, [true] = true, [false] = true },
 }
 
 local current = nil

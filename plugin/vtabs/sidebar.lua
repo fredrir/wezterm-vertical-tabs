@@ -14,12 +14,13 @@ local DEAD_AFTER_MS = 20000
 local READY_TIMEOUT_MS = 12000
 local ADOPT_RETRY_MS = 2000
 local ADOPT_TRIES = 5
+local ADOPT_WINDOW_MS = 30000
 local FAILED_DOMAIN_MS = 60000
 local PRUNE_MS = 30000
 local PIN_GRACE_MS = 3000
 
 ---Title the backend sets on itself; adoption evidence only, any process can set a title.
-local MARKER = "^wez%-vtabs:%x+$"
+local MARKER = "^wez%-vtabs"
 
 local session = state.session
 
@@ -269,6 +270,44 @@ local function theme_bg(tab)
   return string.format("#%02x%02x%02x", rgb[1], rgb[2], rgb[3])
 end
 
+---Domain the sidebar would be spawned in for this tab.
+local function attach_domain(cfg, base)
+  if cfg.domain ~= "CurrentPaneDomain" then
+    return cfg.domain
+  end
+  return util.try(function()
+    return base:get_domain_name()
+  end)
+end
+
+---"auto" adopts only where this plugin spawns backends itself; see docs/limitations.md.
+local function may_adopt(cfg, domain, host, place)
+  if cfg.adopt ~= "auto" then
+    return cfg.adopt == true
+  end
+  return backend.is_local(domain, host)
+    or session.spawned_domains[place] == true
+    or backend.resolve_path(cfg, domain, host) ~= nil
+end
+
+---A candidate must sit in the very domain this plugin would have spawned the sidebar in.
+local function adoptable(tab, sb)
+  local cfg = config.get()
+  local base = M.content_pane(tab) or tab:active_pane()
+  if not base then
+    return false
+  end
+  local domain = attach_domain(cfg, base)
+  local pane_domain = util.try(function()
+    return sb:get_domain_name()
+  end)
+  if domain == nil or domain ~= pane_domain then
+    return false
+  end
+  local host = cwd_host(base)
+  return may_adopt(cfg, domain, host, domain .. "@" .. (host or ""))
+end
+
 local function domain_failed(place, now)
   local at = session.failed_domains[place]
   if not at then
@@ -294,12 +333,7 @@ function M.attach(tab)
   if not base or M.is_overlay(base) then
     return nil
   end
-  local pane_domain = cfg.domain
-  if cfg.domain == "CurrentPaneDomain" then
-    pane_domain = util.try(function()
-      return base:get_domain_name()
-    end)
-  end
+  local pane_domain = attach_domain(cfg, base)
   if not pane_domain then
     util.warn_once("domain-" .. tab_id, "cannot determine domain for tab %d; sidebar skipped", tab_id)
     return nil
@@ -349,6 +383,7 @@ function M.attach(tab)
   session.seen[pid] = now
   session.spawned[pid] = now
   session.pane_domain[pid] = place
+  session.spawned_domains[place] = true
   M.auth(sb)
   base:activate()
   if not backend.is_local(pane_domain, host) then
@@ -361,7 +396,7 @@ end
 local function adopt(tab, sb, now)
   local pid = sb:pane_id()
   state.set_sidebar(tab:tab_id(), pid, util.random_token())
-  session.adopted[pid] = true
+  session.adopted[pid] = now
   session.auth_tries[pid] = 1
   session.seen[pid] = now
   M.auth(sb)
@@ -372,14 +407,20 @@ local function await_auth(gui_window, tab, sb, now)
   local pid = sb:pane_id()
   if state.sidebar_pane_id(tab:tab_id()) ~= pid then
     -- classify ranks a ready or mapped pane above a marker, so this tab has neither
-    if M.has_marker(sb) and not M.is_overlay(sb) then
+    if not M.has_marker(sb) or M.is_overlay(sb) then
+      return
+    end
+    if adoptable(tab, sb) then
       adopt(tab, sb, now)
+    else
+      -- not ours to take over: let it be content so the tab still gets a sidebar
+      session.given_up[sb:pane_id()] = true
     end
     return
   end
   if session.adopted[pid] then
     local tries = session.auth_tries[pid] or 0
-    if tries >= ADOPT_TRIES then
+    if tries >= ADOPT_TRIES or now - session.adopted[pid] > ADOPT_WINDOW_MS then
       -- it kept the marker but never echoed: hand the tab back and treat the pane as content
       util.warn_once("adopt-" .. pid, "pane %d never authenticated; not a sidebar", pid)
       session.given_up[pid] = true
@@ -560,7 +601,9 @@ function M.ensure(gui_window)
       if sb then
         -- the tab still exists; forgetting it would strand a sidebar that authenticates later
         seen[tab_id] = true
-        if M.is_ready(sb) and #tab:panes() == 1 then
+        if not M.is_ready(sb) then
+          await_auth(gui_window, tab, sb, now)
+        elseif #tab:panes() == 1 then
           M.close_orphan(gui_window, tab, sb)
         end
       end

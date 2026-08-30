@@ -188,6 +188,7 @@ M.session = {
   marker = {},
   pane_domain = {},
   failed_domains = {},
+  spawned_domains = {},
   given_up = {},
   logged_domains = {},
 }

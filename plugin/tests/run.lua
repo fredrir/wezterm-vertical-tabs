@@ -834,6 +834,75 @@ test("an adopted pane that never authenticates is handed back to content", funct
   eq(sidebars_in(tab), 1, "a real sidebar was attached instead")
 end)
 
+local function marker_tab(win, domain)
+  local tab = win.tab_list[1]
+  for _, p in ipairs(tab.pane_list) do
+    p.domain = domain or p.domain
+  end
+  local liar = fake.pane(tab, { title = "wez-vtabs:00", domain = domain or "local" })
+  table.insert(tab.pane_list, 1, liar)
+  return tab, liar
+end
+
+test("a marker pane in another domain is never adopted", function()
+  local win, gui = setup_window(1)
+  local tab, liar = marker_tab(win)
+  liar.domain = "desktop"
+  sidebar.ensure(gui)
+  eq(#liar.sent, 0, "never auth'd")
+  sidebar.ensure(gui)
+  eq(sidebar.is_backend(liar), false, "treated as content")
+  eq(sidebars_in(tab), 1, "the tab still gets a real sidebar")
+end)
+
+test("adopt=auto skips domains this process never spawned a backend in", function()
+  local win, gui = setup_window(1)
+  config.setup { backend = { path = { ["local"] = "/bin/wez-vtabs" } } }
+  local tab, liar = marker_tab(win, "desktop")
+  sidebar.ensure(gui)
+  eq(#liar.sent, 0, "never auth'd")
+  sidebar.ensure(gui)
+  eq(sidebar.is_backend(liar), false, "treated as content")
+  eq(sidebars_in(tab), 1)
+end)
+
+test("adopt=true takes over the same pane", function()
+  local win, gui = setup_window(1)
+  config.setup { adopt = true, backend = { path = { ["local"] = "/bin/wez-vtabs" } } }
+  local _, liar = marker_tab(win, "desktop")
+  sidebar.ensure(gui)
+  assert(liar.sent[1] and liar.sent[1]:find '"auth"', "auth sent")
+  eq(sidebar.is_ready(liar), false, "still needs the echo")
+  config.setup { backend = { path = "/bin/wez-vtabs" } }
+end)
+
+test("adopt=false never auths a marker pane", function()
+  local win, gui = setup_window(1)
+  config.setup { adopt = false, backend = { path = "/bin/wez-vtabs" } }
+  local tab, liar = marker_tab(win)
+  sidebar.ensure(gui)
+  eq(#liar.sent, 0, "never auth'd")
+  sidebar.ensure(gui)
+  eq(sidebars_in(tab), 1, "falls back to a fresh sidebar")
+  config.setup { backend = { path = "/bin/wez-vtabs" } }
+end)
+
+test("an adopted pane is abandoned once its window closes", function()
+  local win, gui = setup_window(1)
+  local _, liar = marker_tab(win)
+  sidebar.ensure(gui)
+  assert(#liar.sent > 0, "adopted")
+  local real_now = util.now_ms
+  local clock = real_now()
+  util.now_ms = function()
+    return clock
+  end
+  clock = clock + 31000
+  sidebar.ensure(gui)
+  util.now_ms = real_now
+  eq(state.sidebar_pane_id(win.tab_list[1].id) ~= liar:pane_id(), true, "unmapped after 30 s")
+end)
+
 -- ===================== implementer-2: interaction / geometry / focus =====================
 
 local function rgb(c)
