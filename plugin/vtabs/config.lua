@@ -8,7 +8,7 @@ M.defaults = {
   position = "left", -- "left" | "right"
   hide_native_tab_bar = true,
   poll_ms = 500,
-  padding = { top = 0, left = 1, right = 1 }, -- the top strip owns the rows above the first card
+  padding = { top = 1, left = 1, right = 1 }, -- top is added to the strip, which owns the rows above the first card
   row_gap = 1,
   tab_height = "card", -- "card": 2 painted rows | "row": 1 row, same as meta = false
   meta = "auto", -- "auto" | "cwd" | "process" | false

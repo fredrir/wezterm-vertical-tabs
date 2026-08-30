@@ -283,13 +283,9 @@ local function card_row(item, ctx, st, part, rows_in_card)
     if cfg.show_index then
       meta = string.format("%d %s %s", item.index, glyphs.meta_sep, meta)
     end
-    put(
-      cells,
-      g.meta_x1,
-      util.truncate(meta, g.meta_budget, glyphs.ellipsis),
-      { fg = theme.meta_fg or theme.dim },
-      g.meta_x2
-    )
+    -- The drag chip is one object in drag colours; meta_fg is only gated against page and card.
+    local meta_fg = st.dragging and theme.drag_fg or theme.meta_fg or theme.dim
+    put(cells, g.meta_x1, util.truncate(meta, g.meta_budget, glyphs.ellipsis), { fg = meta_fg }, g.meta_x2)
     if shows_close(item, cfg, st) and not item.is_pinned then
       spans = { { id = "close", x1 = g.close_x1, x2 = g.close_x2 } }
     end

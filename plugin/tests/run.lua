@@ -548,8 +548,8 @@ test("middle click through input closes the clicked tab", function()
   local sb = mark_ready(first)
   require("vtabs.view").sync(gui, { force = true })
   local hits = state.session.hits[sb:pane_id()]
-  eq(hits[5].id, win.tab_list[2].id, "second card starts three rows below the first")
-  input.handle(gui, sb, "vtabs", '{"t":"mouse","k":"down","b":"middle","x":3,"y":5}')
+  eq(hits[6].id, win.tab_list[2].id, "second card starts three rows below the first")
+  input.handle(gui, sb, "vtabs", '{"t":"mouse","k":"down","b":"middle","x":3,"y":6}')
   eq(#win.tab_list, 1)
   eq(win.active_tab_ref, first)
 end)
@@ -1594,7 +1594,7 @@ end
 test("press keeps the sidebar of the clicked tab focused and points the drag at it", function()
   local win, gui = drag_setup()
   local sb1 = sidebar.find(win.tab_list[1])
-  local drag = press_row(gui, sb1, 8)
+  local drag = press_row(gui, sb1, 9)
   eq(win.active_tab_ref, win.tab_list[3])
   eq(win.tab_list[3].active, sidebar.find(win.tab_list[3]), "sidebar holds focus, not the shell")
   eq(drag.pane_id, sidebar.find(win.tab_list[3]):pane_id())
@@ -1607,44 +1607,44 @@ test("one row of drift never arms a drag; three rows plus the dwell reorders on 
   for i, t in ipairs(win.tab_list) do
     ids[i] = t.id
   end
-  press_row(gui, sb1, 8)
+  press_row(gui, sb1, 9)
   local sb3 = sidebar.find(win.tab_list[3])
-  mouse(gui, sb3, "drag", "left", 5, 7)
+  mouse(gui, sb3, "drag", "left", 5, 8)
   eq(state.session.drag[gui:window_id()].active, false, "one row is jitter")
-  mouse(gui, sb3, "up", "left", 5, 7)
+  mouse(gui, sb3, "up", "left", 5, 8)
   eq(win.tab_list[3].id, ids[3], "order untouched")
 
-  press_row(gui, sb1, 8)
-  mouse(gui, sb3, "drag", "left", 5, 2)
+  press_row(gui, sb1, 9)
+  mouse(gui, sb3, "drag", "left", 5, 3)
   assert(state.session.drag[gui:window_id()].active, "three rows arms the drag")
-  mouse(gui, sb3, "up", "left", 5, 2)
+  mouse(gui, sb3, "up", "left", 5, 3)
   eq(win.tab_list[1].id, ids[3], "dragged tab took the first slot")
 end)
 
 test("a drag that starts before the dwell elapses is jitter", function()
   local win, gui = drag_setup()
   local sb1 = sidebar.find(win.tab_list[1])
-  press_row(gui, sb1, 8, "hold")
+  press_row(gui, sb1, 9, "hold")
   local sb3 = sidebar.find(win.tab_list[3])
-  mouse(gui, sb3, "drag", "left", 5, 2)
+  mouse(gui, sb3, "drag", "left", 5, 3)
   eq(state.session.drag[gui:window_id()].active, false)
 end)
 
 test("drag events from a pane other than the drag origin are dropped", function()
   local win, gui = drag_setup()
   local sb1 = sidebar.find(win.tab_list[1])
-  press_row(gui, sb1, 8)
+  press_row(gui, sb1, 9)
   local sb2 = sidebar.find(win.tab_list[2])
-  mouse(gui, sb2, "drag", "left", 5, 2)
+  mouse(gui, sb2, "drag", "left", 5, 3)
   eq(state.session.drag[gui:window_id()].active, false)
 end)
 
 test("a drag whose pane has no hit map is dropped instead of dropping at slot 1", function()
   local win, gui = drag_setup()
   local sb1 = sidebar.find(win.tab_list[1])
-  local drag = press_row(gui, sb1, 2)
+  local drag = press_row(gui, sb1, 3)
   state.session.hits[sb1:pane_id()] = nil
-  mouse(gui, sb1, "drag", "left", 5, 5)
+  mouse(gui, sb1, "drag", "left", 5, 6)
   eq(drag.active, false)
   eq(drag.over_index, nil)
 end)
@@ -1653,9 +1653,9 @@ test("right click opens the menu on release, never while the button is held", fu
   local win, gui = drag_setup()
   local sb1 = sidebar.find(win.tab_list[1])
   local before = #win.actions
-  mouse(gui, sb1, "down", "right", 5, 3)
+  mouse(gui, sb1, "down", "right", 5, 4)
   eq(#win.actions, before, "nothing opens under a held button")
-  mouse(gui, sb1, "up", "right", 5, 3)
+  mouse(gui, sb1, "up", "right", 5, 4)
   eq(last_action(win).action, "InputSelector")
 end)
 
@@ -1663,13 +1663,13 @@ test("hover=press restores content focus on release, hover=follow keeps the side
   local win, gui = drag_setup()
   local tab = win.tab_list[1]
   local sb1 = sidebar.find(tab)
-  press_row(gui, sb1, 2)
+  press_row(gui, sb1, 3)
   eq(tab.active, sb1)
-  mouse(gui, sb1, "up", "left", 5, 2)
+  mouse(gui, sb1, "up", "left", 5, 3)
   eq(tab.active, sb1, "follow leaves the sidebar active")
   config.setup { hover = "press", backend = { path = "/bin/wez-vtabs" } }
-  press_row(gui, sb1, 2)
-  mouse(gui, sb1, "up", "left", 5, 2)
+  press_row(gui, sb1, 3)
+  mouse(gui, sb1, "up", "left", 5, 3)
   assert(tab.active ~= sb1, "press mode hands focus back")
   config.setup { backend = { path = "/bin/wez-vtabs" } }
 end)
@@ -1678,10 +1678,10 @@ test("mouse move repaints on a row change and stays quiet inside the row", funct
   local win, gui = drag_setup()
   local sb1 = sidebar.find(win.tab_list[1])
   local sent = #sb1.sent
-  mouse(gui, sb1, "move", "none", 5, 5)
+  mouse(gui, sb1, "move", "none", 5, 6)
   local repainted = #sb1.sent
   assert(repainted > sent, "crossing into a background card repaints")
-  mouse(gui, sb1, "move", "none", 6, 5)
+  mouse(gui, sb1, "move", "none", 6, 6)
   eq(#sb1.sent, repainted, "same row, same spans, no frame")
 end)
 
@@ -2034,6 +2034,9 @@ test("every §6.1 gate holds on all ten palettes, or is declared ceiling-limited
     local c, where = theme.contrast, " on " .. p.name
     local ceiling = c(t.fg, t.active_bg)
     assert(c(t.meta_fg, t.active_bg) >= math.min(3.5, ceiling) - 0.001, "meta_fg vs active_bg" .. where)
+    -- The drag chip paints its meta row in drag_fg, so drag_bg gates that, not meta_fg (r3.1 #7).
+    local drag_ceiling = c(t.fg, t.drag_bg)
+    assert(c(t.drag_fg, t.drag_bg) >= math.min(3.5, drag_ceiling) - 0.001, "drag_fg vs drag_bg" .. where)
     assert(c(t.close_fg, t.active_bg) >= 3.0 - 0.001, "close_fg vs active_bg" .. where)
     assert(c(t.close_hover_fg, t.active_bg) >= 3.0 - 0.001, "close_hover_fg vs active_bg" .. where)
     assert(c(t.border, t.bg) >= 2.5 - 0.001, "border vs bg" .. where)
@@ -2166,7 +2169,7 @@ end)
 test("the P1 defaults and their aliases pass validation without warning", function()
   local before = #wezterm.log
   local cfg = config.setup {}
-  eq(cfg.padding.top, 0)
+  eq(cfg.padding.top, 1)
   eq(cfg.row_gap, 1)
   eq(cfg.tab_height, "card")
   eq(cfg.meta, "auto")
@@ -2262,11 +2265,19 @@ test("the strip is toggle plus padding when nothing is reserved", function()
   local linux = { is_mac = false }
   eq(strip_geom(RETINA, linux).rows, 2, "toggle row plus padding_top")
   eq(strip_geom(RETINA, { is_mac = false, toggle_button = false }).rows, 1)
-  eq(strip_geom(RETINA, { is_mac = false, padding_top = 0 }).rows, 1, "the P1 default padding")
+  eq(strip_geom(RETINA, { is_mac = false, padding_top = 0 }).rows, 1, "no padding, just the toggle row")
   eq(strip_geom(RETINA, { is_mac = false, toggle_button = false, padding_top = 0 }).rows, 0)
   eq(strip_geom(RETINA, linux).toggle_row, 1)
   eq(strip_geom(RETINA, linux).toggle_x, 2, "card_x1")
   eq(strip_geom(RETINA, { is_mac = false, card_x1 = 4 }).toggle_x, 4)
+end)
+
+test("the shipped padding gives the toggle a two-row hit span outside macOS", function()
+  local g = strip_geom(RETINA, { is_mac = false, padding_top = config.defaults.padding.top })
+  eq(g.rows, 2, "toggle row plus the shipped padding.top")
+  eq(g.toggle_row, 1)
+  eq(math.min(g.toggle_row + 1, g.rows), 2, "the span covers both strip rows")
+  assert(g.toggle_row + 1 <= g.rows, "P1-spec §9: toggle_row + 1 <= rows")
 end)
 
 test("the toggle span never reaches past the strip into the first card row", function()
@@ -2419,7 +2430,7 @@ test("all three rows of a card activate its tab, but only inside the card surfac
   local win, gui = drag_setup()
   local sb1 = sidebar.find(win.tab_list[1])
   local third = win.tab_list[3]
-  for _, row in ipairs { 8, 9, 10 } do
+  for _, row in ipairs { 9, 10, 11 } do
     win.active_tab_ref = win.tab_list[1]
     mouse(gui, sb1, "down", "left", 5, row)
     eq(win.active_tab_ref, third, "row " .. row .. " belongs to the third card")
@@ -2429,7 +2440,7 @@ test("all three rows of a card activate its tab, but only inside the card surfac
   for _, col in ipairs { 1, 28 } do
     win.active_tab_ref = win.tab_list[1]
     state.session.last_click[wid] = nil
-    mouse(gui, sb1, "down", "left", col, 8)
+    mouse(gui, sb1, "down", "left", col, 9)
     eq(win.active_tab_ref, win.tab_list[1], "col " .. col .. " carries no card surface")
   end
 end)
@@ -2438,14 +2449,14 @@ test("the close span closes and the toggle span collapses the sidebar", function
   local win, gui = drag_setup()
   local sb1 = sidebar.find(win.tab_list[1])
   local hits = state.session.hits[sb1:pane_id()]
-  eq(hit.span(hits[2], 25), "close")
-  eq(hit.span(hits[2], 27), "close")
-  eq(hit.span(hits[2], 24), nil)
-  eq(hit.span(hits[3], 26), "close", "the meta row carries the same span")
+  eq(hit.span(hits[3], 25), "close")
+  eq(hit.span(hits[3], 27), "close")
+  eq(hit.span(hits[3], 24), nil)
+  eq(hit.span(hits[4], 26), "close", "the meta row carries the same span")
   eq(hits[1].kind, "toggle")
 
   eq(#win.tab_list, 3)
-  mouse(gui, sb1, "down", "left", 26, 2)
+  mouse(gui, sb1, "down", "left", 26, 3)
   eq(#win.tab_list, 2, "clicking the ✕ closed the card's tab")
 
   assert(not state.is_collapsed(gui:window_id()))
@@ -2483,16 +2494,16 @@ test("a drop on a gap row lands below its card, a drop on the title row lands on
   local sb = sidebar.find(win.tab_list[1])
   local hits = state.session.hits[sb:pane_id()]
   local dims = state.session.dims[sb:pane_id()]
-  eq(hit.drop_slot(hits, 5, dims.rows, dims.strip_rows), 2, "title row")
-  eq(hit.drop_slot(hits, 6, dims.rows, dims.strip_rows), 2, "meta row")
-  eq(hit.drop_slot(hits, 7, dims.rows, dims.strip_rows), 3, "gap row drops below")
+  eq(hit.drop_slot(hits, 6, dims.rows, dims.strip_rows), 2, "title row")
+  eq(hit.drop_slot(hits, 7, dims.rows, dims.strip_rows), 2, "meta row")
+  eq(hit.drop_slot(hits, 8, dims.rows, dims.strip_rows), 3, "gap row drops below")
   eq(hit.drop_slot(hits, 1, dims.rows, dims.strip_rows), 1, "inside the strip")
 end)
 
 -- P1-spec §7, verbatim. Injected values in other tests cannot keep a wrong default green.
 local P1_DEFAULTS = {
   width = 28,
-  padding = { top = 0, left = 1, right = 1 },
+  padding = { top = 1, left = 1, right = 1 },
   row_gap = 1,
   tab_height = "card",
   meta = "auto",
@@ -2535,6 +2546,54 @@ test("tab_height accepts the row counts as well as the names", function()
   eq(config.setup({ tab_height = 1 }).meta, false, "a one-row card has no meta line")
   eq(config.setup({ tab_height = 2 }).meta, "auto")
   config.setup(legacy { backend = { path = "/bin/wez-vtabs" } })
+end)
+
+test("a dragged card paints its meta row in drag_fg, the loudest colour on that surface", function()
+  local win = drag_setup()
+  local wid = win.gui:window_id()
+  local cards = model.ordered(model.build(win.gui))
+  for _, item in ipairs(cards) do
+    item.meta = "~/projects/api"
+  end
+  -- An unmistakable drag_fg, so "which colour painted this row" needs no inference.
+  local resolved = theme.resolve({ drag_fg = "#ff00ff" }, fake.palette)
+  local cfg = config.get()
+  local function frame(drag)
+    return render.render {
+      cols = 28,
+      rows = 14,
+      items = cards,
+      theme = resolved,
+      cfg = cfg,
+      glyphs = cfg.glyphs,
+      scroll = 0,
+      strip = { rows = 1 },
+      drag = drag,
+    }
+  end
+  local idle = frame(nil)
+  local dragged = frame { tab_id = cards[1].tab_id, over_index = 1, active = true }
+  local function meta_row(r)
+    for row = 1, 14 do
+      if r.hits[row] and r.hits[row].part == "meta" and r.hits[row].id == cards[1].tab_id then
+        return row
+      end
+    end
+  end
+  local row = meta_row(dragged)
+  assert(row, "the drag chip still has a meta row")
+  local function row_has(data, y, colour)
+    local seg = data:match("\27%[" .. y .. ";1H(.-)\27%[" .. (y + 1) .. ";1H") or ""
+    return seg:find("38;2;" .. table.concat(colour, ";"), 1, true) ~= nil
+  end
+  assert(row_has(dragged.data, row, resolved.drag_fg), "drag colours, not meta_fg")
+  assert(not row_has(idle.data, meta_row(idle) or 1, resolved.drag_fg), "an idle card is unaffected")
+  local shipped = theme.resolve({}, fake.palette)
+  assert(
+    theme.contrast(shipped.drag_fg, shipped.drag_bg) >= math.min(3.5, theme.contrast(shipped.fg, shipped.drag_bg)),
+    "and by default it is the best the palette can do on drag_bg"
+  )
+  state.session.drag[wid] = nil
 end)
 
 os.remove(state.file)
