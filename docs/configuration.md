@@ -19,87 +19,93 @@ return config
 ## Options
 
 <!-- options:start -->
-| option                    | default                                                           | values |
-| ------------------------- | ----------------------------------------------------------------- | ------ |
-| `width`                   | `28`                                                              | number >= `8` |
-| `dim_inactive_panes`      | `false`                                                           | `true` \| `false` |
-| `position`                | `"left"`                                                          | `"left"` \| `"right"` |
-| `collapsed`               | `"rail"`                                                          | `"rail"` \| `"hidden"` |
-| `rail_width`              | `5`                                                               | number >= `3` |
-| `rail_titlebar`           | `"widen"`                                                         | `"widen"` \| `"band"` \| `"none"` |
-| `hide_native_tab_bar`     | `true`                                                            | `true` \| `false` |
-| `poll_ms`                 | `500`                                                             | number >= `50` |
-| `padding`                 | `{ top = 1, left = 2, right = 1 }`                                | `{ top, left, right }` |
-| `edge_to_edge`            | `true`                                                            | `true` \| `false` |
-| `tab_height`              | `"card"`                                                          | `"card"` (`2`) \| `"row"` (`1`) \| `"tall"` (`3`) |
-| `meta`                    | `false`                                                           | `"auto"` \| `"cwd"` \| `"process"` \| `false` |
-| `meta_sep`                | `"  "`                                                            | string |
-| `row_gap`                 | `1`                                                               | number >= `0` |
-| `new_tab_button`          | `"ghost"`                                                         | `"ghost"` \| `"row"` \| `false` |
-| `new_tab_label`           | `"New tab"`                                                       | string |
-| `corners`                 | `"chamfer"`                                                       | `"chamfer"` \| `"square"` |
-| `frame`                   | `false`                                                           | any |
-| `titlebar`                | `"auto"`                                                          | `"auto"` \| `"integrate"` \| `"plain"` \| `"macos"` |
-| `context`                 | `"popover"`                                                       | `"popover"` \| `false` |
-| `toggle_button`           | `true`                                                            | `true` \| `false` |
-| `close_button`            | `"hover"`                                                         | `"hover"` \| `"always"` \| `"never"` |
-| `confirm_close`           | `true`                                                            | `true` \| `false` |
-| `debug`                   | `false`                                                           | `true` \| `false` |
-| `show_index`              | `false`                                                           | `true` \| `false` |
-| `pinned_style`            | `"dense"`                                                         | `"dense"` \| `"compact"` \| `"full"` |
-| `separator`               | `"gap"`                                                           | `"rule"` \| `"gap"` \| `"none"` |
-| `scroll_indicator`        | `"auto"`                                                          | `"auto"` \| `"always"` \| `"never"` \| `true` \| `false` |
-| `wheel`                   | `"scroll"`                                                        | `"scroll"` \| `"switch"` |
-| `tear_off`                | `true`                                                            | `true` \| `false` |
-| `adopt`                   | `"auto"`                                                          | `"auto"` \| `true` \| `false` |
-| `window_title`            | `true`                                                            | `true` \| `false` |
-| `hover`                   | `"follow"`                                                        | `"follow"` \| `"press"` |
-| `hover_timeout_ms`        | `6000`                                                            | number >= `0` |
-| `tooltip`                 | `"auto"`                                                          | `"auto"` \| `true` \| `false` |
-| `tooltip_delay_ms`        | `600`                                                             | number >= `0` |
-| `double_click_ms`         | `400`                                                             | number >= `0` |
-| `animations`              | `"auto"`                                                          | `"auto"` \| `true` \| `false` |
-| `animation.fps`           | `30`                                                              | `15`-`60` |
-| `animation.expand_ms`     | `220`                                                             | number >= `0` |
-| `animation.collapse_ms`   | `160`                                                             | number >= `0` |
-| `animation.hover`         | `false`                                                           | `true` \| `false` |
-| `ellipsis`                | `"…"`                                                             | string |
-| `icons`                   | `true`                                                            | `true` \| `false` |
-| `icon_map`                | `{}`                                                              | table |
-| `title`                   | `nil`                                                             | `fun(tab, pane): string` |
-| `domain`                  | `"CurrentPaneDomain"`                                             | string |
-| `skip_close_confirmation` | `true`                                                            | `true` \| `false` |
-| `private.env`             | `{ HISTFILE = "", fish_private_mode = "1", VTABS_PRIVATE = "1" }` | table |
-| `keys`                    | `{}`                                                              | table \| `false` |
-| `theme`                   | `{ elevation = 0.06, split = "auto" }`                            | see Theme |
-| `hooks.filter`            | `nil`                                                             | `fun(tab, mux_window): boolean` |
-| `hooks.footer`            | `nil`                                                             | `fun(mux_window): rows` |
-| `hooks.theme`             | `nil`                                                             | `fun(window, theme): theme` |
-| `hooks.route`             | `nil`                                                             | `fun(meta): space_id` |
-| `backend.path`            | `nil`                                                             | string \| table \| `fun(domain, host)` |
-| `backend.repo`            | `"fredrir/wezterm-vertical-tabs"`                                 | string |
-| `backend.version`         | plugin version                                                    | string |
-| `backend.build`           | `true`                                                            | `true` \| `false` |
-| `backend.uservar`         | `"vtabs"`                                                         | string |
+| option                    | default                                                                      | values |
+| ------------------------- | ---------------------------------------------------------------------------- | ------ |
+| `width`                   | `28`                                                                         | number >= `8` |
+| `dim_inactive_panes`      | `false`                                                                      | `true` \| `false` |
+| `position`                | `"left"`                                                                     | `"left"` \| `"right"` |
+| `collapsed`               | `"rail"`                                                                     | `"rail"` \| `"hidden"` |
+| `rail_width`              | `5`                                                                          | number >= `3` |
+| `rail_titlebar`           | `"widen"`                                                                    | `"widen"` \| `"band"` \| `"none"` |
+| `hide_native_tab_bar`     | `true`                                                                       | `true` \| `false` |
+| `poll_ms`                 | `500`                                                                        | number >= `50` |
+| `padding`                 | `{ top = 1, left = 2, right = 1 }`                                           | `{ top, left, right }` |
+| `edge_to_edge`            | `true`                                                                       | `true` \| `false` |
+| `tab_height`              | `"card"`                                                                     | `"card"` (`2`) \| `"row"` (`1`) \| `"tall"` (`3`) |
+| `meta`                    | `false`                                                                      | `"auto"` \| `"cwd"` \| `"process"` \| `false` |
+| `meta_sep`                | `"  "`                                                                       | string |
+| `row_gap`                 | `1`                                                                          | number >= `0` |
+| `new_tab_button`          | `"ghost"`                                                                    | `"ghost"` \| `"row"` \| `false` |
+| `new_tab_label`           | `"New tab"`                                                                  | string |
+| `corners`                 | `"chamfer"`                                                                  | `"chamfer"` \| `"square"` |
+| `frame`                   | `false`                                                                      | any |
+| `titlebar`                | `"auto"`                                                                     | `"auto"` \| `"integrate"` \| `"plain"` \| `"macos"` |
+| `context`                 | `"popover"`                                                                  | `"popover"` \| `false` |
+| `popover`                 | `{ width = "auto", follow_pointer = true, fade_ms = 90, overflow = "clip" }` | see below |
+| `toggle_button`           | `true`                                                                       | `true` \| `false` |
+| `close_button`            | `"hover"`                                                                    | `"hover"` \| `"always"` \| `"never"` |
+| `confirm_close`           | `true`                                                                       | `true` \| `false` |
+| `debug`                   | `false`                                                                      | `true` \| `false` |
+| `show_index`              | `false`                                                                      | `true` \| `false` |
+| `pinned_style`            | `"dense"`                                                                    | `"dense"` \| `"compact"` \| `"full"` |
+| `separator`               | `"gap"`                                                                      | `"rule"` \| `"gap"` \| `"none"` |
+| `scroll_indicator`        | `"auto"`                                                                     | `"auto"` \| `"always"` \| `"never"` \| `true` \| `false` |
+| `wheel`                   | `"scroll"`                                                                   | `"scroll"` \| `"switch"` |
+| `tear_off`                | `true`                                                                       | `true` \| `false` |
+| `adopt`                   | `"auto"`                                                                     | `"auto"` \| `true` \| `false` |
+| `window_title`            | `true`                                                                       | `true` \| `false` |
+| `hover`                   | `"follow"`                                                                   | `"follow"` \| `"press"` |
+| `hover_timeout_ms`        | `6000`                                                                       | number >= `0` |
+| `tooltip`                 | `"auto"`                                                                     | `"auto"` \| `true` \| `false` |
+| `tooltip_delay_ms`        | `600`                                                                        | number >= `0` |
+| `double_click_ms`         | `400`                                                                        | number >= `0` |
+| `animations`              | `"auto"`                                                                     | `"auto"` \| `true` \| `false` |
+| `animation.fps`           | `30`                                                                         | `15`-`60` |
+| `animation.expand_ms`     | `220`                                                                        | number >= `0` |
+| `animation.collapse_ms`   | `160`                                                                        | number >= `0` |
+| `animation.hover`         | `false`                                                                      | `true` \| `false` |
+| `ellipsis`                | `"…"`                                                                        | string |
+| `icons`                   | `true`                                                                       | `true` \| `false` |
+| `icon_map`                | `{}`                                                                         | table |
+| `title`                   | `nil`                                                                        | `fun(tab, pane): string` |
+| `domain`                  | `"CurrentPaneDomain"`                                                        | string |
+| `skip_close_confirmation` | `true`                                                                       | `true` \| `false` |
+| `private.env`             | `{ HISTFILE = "", fish_private_mode = "1", VTABS_PRIVATE = "1" }`            | table |
+| `keys`                    | `{}`                                                                         | table \| `false` |
+| `theme`                   | `{ elevation = 0.06, split = "auto" }`                                       | see Theme |
+| `hooks.filter`            | `nil`                                                                        | `fun(tab, mux_window): boolean` |
+| `hooks.footer`            | `nil`                                                                        | `fun(mux_window): rows` |
+| `hooks.theme`             | `nil`                                                                        | `fun(window, theme): theme` |
+| `hooks.route`             | `nil`                                                                        | `fun(meta): space_id` |
+| `backend.path`            | `nil`                                                                        | string \| table \| `fun(domain, host)` |
+| `backend.repo`            | `"fredrir/wezterm-vertical-tabs"`                                            | string |
+| `backend.version`         | plugin version                                                               | string |
+| `backend.build`           | `true`                                                                       | `true` \| `false` |
+| `backend.uservar`         | `"vtabs"`                                                                    | string |
 <!-- options:end -->
 
 | option | note |
 | ------ | ---- |
 | `width` | re-asserted on the active tab after every resize; a divider drag is adopted until the config reloads |
 | `collapsed` | `"rail"` keeps the pane and narrows it, so the toggle stays reachable |
-| `padding` | cells inside the sidebar pane, painted in its own colour; `left = 2` replaces the window padding `edge_to_edge` removes, and mirrors to `right = 2` with `position = "right"` |
+| `padding` | cells inside the sidebar pane, painted in its own colour; `left = 2` replaces the window padding `edge_to_edge` removes, and mirrors to `right = 2` with `position = "right"`. It is unconditional, so setting `window_padding` yourself leaves one extra cell of air |
 | `edge_to_edge` | zeroes wezterm's window padding on the sides the sidebar touches, so its background reaches the window edge; the far side keeps wezterm's `1cell`, and top/bottom are window-global, so the content pane loses its half cell too. The split line stays: pair with `theme = { split = "hidden" }` for a seamless edge |
 | `tab_height` | pad rows around the card's content; independent of `meta` |
 | `meta` | off by default; opt in with `"auto"`, `"cwd"` or `"process"`. The popover header always shows cwd and domain, whatever this says |
 | `rail_width` | raised to the traffic-light reserve on macOS with `INTEGRATED_BUTTONS`: `ceil(70pt / cell width)`, so 9 columns at an 8 pt cell and 6 at 12 pt, the same on a 2x display |
 | `close_button` | treated as `"always"` when `hover = "press"`, where no background row is ever hovered |
 | `context` | `false` removes the mouse trigger only; `m` in keyboard mode still opens the popover |
+| `popover.width` | `"auto"` sizes the menu to its widest row, floor 16; a number is taken verbatim. Both are capped at `width - padding.left - padding.right` |
+| `popover.follow_pointer` | the pointer selects the row it is over inside the menu; over the scrim the keyboard selection stands |
+| `popover.fade_ms` | the menu's own colour fade in, over its rows only; `0` disables it, and nothing fades on close |
+| `popover.overflow` | `"clip"` keeps the menu inside the sidebar. `"grow"` is not implemented yet |
 | `confirm_close` | the question is a popover level in the sidebar, never wezterm's own overlay, which the release after the click that opened it would dismiss; the overlay is the fallback only when no sidebar can draw the question |
 | `show_index` | renders on the meta line with 2-row cards, inline with `meta = false` |
 | `titlebar` | `"macos"` forces the traffic-light reserve on any platform, for previews and screenshots; it changes nothing about the real window buttons |
 | `tooltip` | `"auto"` is off in `"press"` mode, where hover never reaches the sidebar |
 | `tooltip_delay_ms` | effective delay is `max(tooltip_delay_ms, poll_ms)`; halved in rail mode |
 | `animations` | colour only: expand and collapse fade around one hard width snap, never a slide |
+| `animation.expand_ms` | the fade in after the resize; the short pre-resize phase keeps its own constant. Same for `collapse_ms` |
 | `dim_inactive_panes` | wezterm dims the idle pane by default, which makes the sidebar change shade as focus moves |
 | `theme.split` | `"auto"` leaves wezterm's divider; `"hidden"` or a colour repaints **every** split in the window, not just the sidebar's |
 | `theme.elevation` | `0.06` = the default tint, `0` = seamless with the terminal background; capped at `0.3`. `theme.content_bg` stays untinted, which is what `frame` paints its gutter with |
@@ -178,6 +184,7 @@ the tab's content pane, which then takes focus back.
 | right click a tab                          | action popover, drawn inside the sidebar                                         |
 | click away from an open popover            | dismiss without switching tabs                                                   |
 | wheel over an open popover                 | move its selection                                                               |
+| move the pointer inside an open popover    | select the row under it (`popover.follow_pointer`)                               |
 | footer row                                 | calls the entry's `on_click`                                                     |
 
 | wezterm key                | set to                        | when                                                            |
@@ -243,6 +250,9 @@ WezTerm runs only the first `format-window-title` handler; register yours before
 | `surface_raised` | `lift(0.09)`, lowered until its text is no harder to read than the body        |
 | `scrim`          | fade applied behind an open popover; a contrast target, not a constant         |
 | `disabled_fg`    | `meta_fg` mixed 45% toward `surface_raised` — popover items that cannot be chosen |
+| `popover_sel_bg` | `accent` — the selected menu row is a fill, not a tint |
+| `popover_sel_fg` | `#000000` or `#ffffff`, whichever clears more against `popover_sel_bg`; also paints the row's `▎` marker |
+| `popover_sel_hint` | `popover_sel_fg` mixed 40% toward the fill, lifted to 3.0 against it |
 | `split`          | `"auto"` | `"hidden"` | a colour; window-global, see the note above           |
 
 Also settable: `active_fg hover_fg pinned_fg drag_fg`. `use_scheme_tab_bar` is deprecated and

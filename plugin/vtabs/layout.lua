@@ -36,9 +36,13 @@ function M.rail_grid(cols)
     card_x2 = cols,
     gutter = 1,
     icon_x = math.ceil(cols / 2),
-    title_budget = 0,
-    meta_budget = 0,
   }
+end
+
+---Whether the grid has a text column at all. Every painter asks the grid this one way, so a rail
+---never has to be recognised twice; a nil budget means the glyph is all there is room for.
+function M.has_text(g)
+  return g.title_budget ~= nil
 end
 
 local ACTION_STRIDE = 3

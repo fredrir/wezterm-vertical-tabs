@@ -100,7 +100,7 @@ local function on_down(gui_window, pane, ev, cfg)
     if on_card then
       local span = hit.span(h, ev.x)
       if span == "close" then
-        pending_close[wid] = { tab_id = h.id, at = now, row = ev.y }
+        pending_close[wid] = { tab_id = h.id, at = now, row = ev.y, col = ev.x }
       elseif span == "pin" then
         actions.toggle_pin(gui_window, h.id)
       else
@@ -125,9 +125,9 @@ local function on_down(gui_window, pane, ev, cfg)
       actions.new_tab(gui_window)
     end
   elseif ev.b == "middle" and on_card then
-    pending_close[wid] = { tab_id = h.id, at = now, row = ev.y }
+    pending_close[wid] = { tab_id = h.id, at = now, row = ev.y, col = ev.x }
   elseif ev.b == "right" and on_card and cfg.context == "popover" then
-    pending_menu[wid] = { tab_id = h.id, at = now, row = ev.y }
+    pending_menu[wid] = { tab_id = h.id, at = now, row = ev.y, col = ev.x }
   end
 end
 
@@ -183,13 +183,13 @@ local function on_up(gui_window, pane, ev, cfg)
   end
   if ev.b == "right" then
     if menu_for then
-      popover.open(gui_window, menu_for.tab_id, menu_for.row)
+      popover.open(gui_window, menu_for.tab_id, menu_for.row, menu_for.col)
       view.invalidate_frames(pid)
     end
     return
   end
   if close_for and released_on(session.hits[pid], ev, close_for) then
-    actions.request_close(gui_window, close_for.tab_id, close_for.row)
+    actions.request_close(gui_window, close_for.tab_id, close_for.row, close_for.col)
     view.invalidate_frames(pid)
     return
   end
@@ -235,10 +235,18 @@ end
 function M.mouse(gui_window, pane, ev)
   local cfg = config.get()
   local wid = gui_window:window_id()
+  local had_popover = popover.get(wid) ~= nil
   if ev.k == "move" then
-    local moved = hover_moved(session.hover[wid], ev, pane:pane_id())
+    local pid = pane:pane_id()
+    local moved = hover_moved(session.hover[wid], ev, pid)
     session.hover[wid] = { x = ev.x, y = ev.y, at = util.now_ms() }
-    if not moved then
+    -- An open menu owns the pointer: motion moves its selection instead of the list's hover.
+    if had_popover then
+      if not popover.point_at(gui_window, hit.at(session.hits[pid], ev.y), ev.x) then
+        return
+      end
+      view.invalidate_frames(pid)
+    elseif not moved then
       return
     end
   elseif ev.k == "down" then
@@ -251,6 +259,10 @@ function M.mouse(gui_window, pane, ev)
     on_wheel(gui_window, ev, cfg)
   end
   view.sync(gui_window)
+  -- The fade needs the frame that put the menu on screen, so it plays after that sync, not before.
+  if not had_popover and popover.get(wid) then
+    view.animate_popover(gui_window)
+  end
 end
 
 local MOVE = { down = 1, j = 1, tab = 1, up = -1, k = -1 }
@@ -510,6 +522,9 @@ function M.key(gui_window, pane, ev)
     KEYS[key](gui_window, items, index)
   end
   view.sync(gui_window)
+  if popover.get(wid) then
+    view.animate_popover(gui_window)
+  end
 end
 
 ---Entry point for the `user-var-changed` event; only registered sidebar panes are trusted.

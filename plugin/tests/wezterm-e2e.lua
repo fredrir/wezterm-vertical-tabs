@@ -38,7 +38,26 @@ wezterm.on("window-resized", function(window)
   wezterm.log_info("e2e: sidebar cols on resize " .. sidebar_cols(window))
 end)
 
+-- The traffic-light reserve and the rail's own strip geometry are keyed off the target triple,
+-- so they can only be exercised anywhere else by lying to `platform` about the platform.
+-- `integrated_title_button_style = "MacOsNative"` is rejected off macOS, so the two facts
+-- `chrome_for` reads from the effective config are forced at the one place that consumes them.
+if os.getenv "VTABS_E2E_MACOS" then
+  local platform = require "vtabs.platform"
+  platform.is_mac = true
+  local real = platform.strip_geometry
+  platform.strip_geometry = function(dims, opts)
+    opts = opts or {}
+    opts.is_mac = true
+    opts.integrated_buttons = true
+    opts.native_button_style = true
+    return real(dims, opts)
+  end
+  config.window_decorations = "INTEGRATED_BUTTONS|RESIZE"
+end
+
 vtabs.apply_to_config(config, {
+  titlebar = os.getenv "VTABS_E2E_MACOS" and "integrate" or nil,
   poll_ms = 200,
   debug = true,
   confirm_close = false,
@@ -76,11 +95,148 @@ local probes = {
     local dims = window:get_dimensions()
     window:set_inner_size(dims.pixel_width + 300, dims.pixel_height)
   end,
+  shrink = function(window)
+    local dims = window:get_dimensions()
+    window:set_inner_size(dims.pixel_width - 300, dims.pixel_height)
+  end,
+  -- A drag: ten resizes 100 ms apart, the way `window-resized` really arrives.
+  drag_shrink = function(window)
+    local n, step = 0, nil
+    step = function()
+      n = n + 1
+      local ok = pcall(function()
+        local d = window:get_dimensions()
+        window:set_inner_size(d.pixel_width - 30, d.pixel_height)
+      end)
+      if ok and n < 10 then
+        wezterm.time.call_after(0.1, step)
+      end
+    end
+    step()
+  end,
+  drag_grow = function(window)
+    local n, step = 0, nil
+    step = function()
+      n = n + 1
+      local ok = pcall(function()
+        local d = window:get_dimensions()
+        window:set_inner_size(d.pixel_width + 30, d.pixel_height)
+      end)
+      if ok and n < 10 then
+        wezterm.time.call_after(0.1, step)
+      end
+    end
+    step()
+  end,
+  new_tab = function(window)
+    require("vtabs.actions").new_tab(window)
+  end,
+  tear_off = function(window)
+    require("vtabs.actions").tear_off(window, window:mux_window():active_tab():tab_id())
+  end,
+  -- `actions.new_tab` attaches after an awaiting `spawn_tab`; a poll landing in that await has
+  -- already attached and cleared `session.attaching`, so the second call sees exactly this state.
+  double_attach = function(window)
+    local sidebar = require "vtabs.sidebar"
+    local tab = window:mux_window():active_tab()
+    local before = sidebar.find(tab)
+    local again = sidebar.attach(tab)
+    wezterm.log_info(
+      "e2e: double attach had "
+        .. tostring(before and before:pane_id())
+        .. " got "
+        .. tostring(again and again:pane_id())
+    )
+  end,
+  reload = function()
+    wezterm.reload_configuration()
+  end,
   rail_mode = function()
     require("vtabs.config").get().collapsed = "rail"
   end,
+  popover_level = function(window)
+    local pop = require("vtabs.popover").get(window:window_id())
+    wezterm.log_info("e2e: popover level " .. (pop and (tostring(pop.level) .. ":" .. tostring(pop.confirm)) or "none"))
+  end,
+  confirm_on = function()
+    require("vtabs.config").get().confirm_close = true
+  end,
+  confirm_off = function()
+    require("vtabs.config").get().confirm_close = false
+  end,
+  footer_hook = function()
+    require("vtabs.config").get().hooks.footer = function()
+      return { { id = "e2e_footer", text = "e2e footer" } }
+    end
+  end,
+  no_footer_hook = function()
+    require("vtabs.config").get().hooks.footer = nil
+  end,
+  private_window = function(window)
+    require("vtabs.actions").new_window(window, true)
+  end,
+  -- The hit map is the only source for the columns a click has to land on; labels move, spans do not.
+  probe_hits = function(window)
+    local state = require "vtabs.state"
+    local sidebar = require "vtabs.sidebar"
+    local sb = sidebar.find(window:mux_window():active_tab())
+    local out = {}
+    for row, h in pairs(sb and state.session.hits[sb:pane_id()] or {}) do
+      local parts = { string.format("%s/%s/%d/%s-%s", h.kind, tostring(h.id), row, tostring(h.x1), tostring(h.x2)) }
+      for _, span in ipairs(h.spans or {}) do
+        parts[#parts + 1] = string.format("%s@%d-%d", tostring(span.id), span.x1, span.x2)
+      end
+      out[#out + 1] = table.concat(parts, ",")
+    end
+    table.sort(out)
+    wezterm.log_info("e2e: hits " .. table.concat(out, " "))
+  end,
   hidden_mode = function()
     require("vtabs.config").get().collapsed = "hidden"
+  end,
+  -- geometry's caches are module-locals; upvalues are the only way to trace them from outside.
+  probe_geom = function(window)
+    local geometry = require "vtabs.geometry"
+    local wid = window:window_id()
+    local out = {}
+    for i = 1, 40 do
+      local name, value = debug.getupvalue(geometry.correct, i)
+      if not name then
+        break
+      end
+      if type(value) == "table" and value[wid] ~= nil then
+        local v = value[wid]
+        if type(v) == "table" then
+          local parts = {}
+          for _, k in ipairs { "tab_id", "cols", "tab_cols", "target", "stuck", "collapsed", "px" } do
+            if v[k] ~= nil then
+              parts[#parts + 1] = k .. "=" .. tostring(v[k])
+            end
+          end
+          out[#out + 1] = name .. "{" .. table.concat(parts, ",") .. "}"
+        else
+          out[#out + 1] = name .. "=" .. tostring(v)
+        end
+      end
+    end
+    wezterm.log_info("e2e: geom " .. tostring(geometry.desired(wid)) .. " | " .. table.concat(out, " "))
+  end,
+  -- One line per tab: the sidebar panes the plugin itself sees, so a duplicate is visible plugin-side.
+  probe_panes = function(window)
+    local sidebar = require "vtabs.sidebar"
+    local out = {}
+    for _, info in ipairs(window:mux_window():tabs_with_info()) do
+      local marked, total = 0, 0
+      for _, p in ipairs(info.tab:panes()) do
+        total = total + 1
+        if sidebar.has_marker(p) then
+          marked = marked + 1
+        end
+      end
+      local sb = sidebar.find(info.tab)
+      out[#out + 1] = string.format("%d:%d/%d/%s", info.tab:tab_id(), marked, total, tostring(sb and sb:pane_id()))
+    end
+    wezterm.log_info("e2e: panes " .. table.concat(out, " "))
   end,
   probe_desired = function(window)
     local geometry = require "vtabs.geometry"

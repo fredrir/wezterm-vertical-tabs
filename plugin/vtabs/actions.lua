@@ -238,7 +238,7 @@ end
 
 ---WezTerm's `CloseCurrentTab { confirm = true }` opens a per-tab overlay that the mouse-up after
 ---the click dismisses again, so the sidebar asks in a popover level of its own instead.
-function M.request_close(gui_window, tab_id, anchor_row)
+function M.request_close(gui_window, tab_id, anchor_row, anchor_col)
   if not M.needs_confirm(gui_window, tab_id, "close") then
     return M.close_tab(gui_window, tab_id)
   end
@@ -246,7 +246,7 @@ function M.request_close(gui_window, tab_id, anchor_row)
     return close_now(gui_window, tab_id, false, true)
   end
   local popover = require "vtabs.popover"
-  popover.open(gui_window, tab_id, anchor_row or 0)
+  popover.open(gui_window, tab_id, anchor_row or 0, anchor_col)
   popover.to_confirm(gui_window, "close")
   return false
 end

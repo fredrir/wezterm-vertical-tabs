@@ -2126,6 +2126,8 @@ test("layout: the grid, plan and scroll are pure and inspectable", function()
   local rl = layout.plan(rail)
   eq(rl.grid.icon_x, 3)
   eq(rl.grid.close_x, nil, "a rail card has no close column at all")
+  eq(layout.has_text(rl.grid), false, "nor any text column, which is the one contract the painters read")
+  eq(layout.has_text(l.grid), true)
   eq(rl.rail, true)
 end)
 
@@ -4419,10 +4421,10 @@ test("the menu's close items raise the same confirm level, and Cancel leaves the
   local asked = false
   for _, r in ipairs(rect.rows) do
     for _, span in ipairs(r.spans or {}) do
-      asked = asked or span.text:find("Close 2 other tabs?", 1, true) ~= nil
+      asked = asked or span.text:find("and 1 other", 1, true) ~= nil
     end
   end
-  assert(asked, "one question, naming the count")
+  assert(asked, "the question names the first victim, then how many more follow it")
   popover.run(others_gui, "confirm_close")
   eq(#others.tab_list, 1, "and Close takes them all")
 end)
@@ -4446,6 +4448,154 @@ test("a tab the skip list names closes without a question, and so does confirm_c
   mouse(opted_gui, sb2, "up", "left", 26, opted_row)
   eq(popover.get(opted_gui:window_id()), nil, "opting out never asks")
   eq(#opted.tab_list, 2)
+  config.setup { backend = { path = "/bin/wez-vtabs" } }
+end)
+
+test("the menu opens at the column that asked for it, and its hits are pane columns", function()
+  local win, gui = drag_setup()
+  local sb = sidebar.find(win.tab_list[1])
+  local cfg = config.get()
+  local resolved = theme.resolve({}, fake.palette)
+  local function rect_at(col)
+    popover.close(gui)
+    popover.open(gui, win.tab_list[1].id, 9, col)
+    return popover.rect(gui, 24, 28, resolved, cfg)
+  end
+  local narrow = rect_at(3)
+  eq(narrow.x, 3, "a click on the card's own gutter opens flush with it")
+  local mid = rect_at(12)
+  local first_col = cfg.padding.left + 1
+  local last_col = 28 - cfg.padding.right - mid.w + 1
+  eq(mid.x, math.min(12, last_col), "and one further right tracks the pointer to where it still fits")
+  eq(rect_at(28).x, last_col, "a click at the right edge slides the whole menu back inside")
+  eq(rect_at(1).x, first_col, "and one left of the padding is pushed off it")
+  assert(mid.x + mid.w - 1 <= 28 - cfg.padding.right, "the right border never leaves the sidebar")
+
+  -- The hit map is read against pane columns, so a rect that no longer starts at the padding must
+  -- still map a click to the row it painted.
+  local placed = rect_at(12)
+  local rows = {}
+  for i, row in ipairs(placed.rows) do
+    if row.hit and row.hit.id then
+      rows[#rows + 1] = { y = placed.y + i - 1, hit = row.hit }
+    end
+  end
+  assert(#rows >= 2, "the menu painted items")
+  local second = rows[2]
+  eq(second.hit.x1, placed.x + 1, "the span starts inside the left border, in absolute columns")
+  eq(second.hit.x2, placed.x + placed.w - 2)
+  view_mod.sync(gui, { force = true })
+  local live = state.session.hits[sb:pane_id()]
+  local found = nil
+  for row, h in pairs(live) do
+    if h.kind == "popover" and h.id and not found then
+      found = { row = row, hit = h }
+    end
+  end
+  assert(found, "and the live frame carries them too")
+  assert(found.hit.x1 > 1, "a click at column 1 is scrim, not the first item")
+  popover.close(gui)
+end)
+
+test("the selected menu row is an accent fill that clears 4.5 on all ten palettes", function()
+  local schemes = require "palettes"
+  for _, p in ipairs(schemes) do
+    local t = theme.resolve({}, p)
+    local where = " on " .. p.name
+    assert(theme.contrast(t.popover_sel_fg, t.popover_sel_bg) >= 4.5, "selected text" .. where)
+    assert(theme.contrast(t.popover_sel_bg, t.surface_raised) >= 2.5, "fill against the panel" .. where)
+    assert(theme.contrast(t.popover_sel_hint, t.popover_sel_bg) >= 3.0, "hint" .. where)
+    local ink = rgb(t.popover_sel_fg)
+    assert(ink == "0,0,0" or ink == "255,255,255", "the ink is one of the two absolutes" .. where)
+    -- The construction this replaced: hover_bg on surface_raised was the same colour in practice.
+    assert(theme.contrast(t.hover_bg, t.surface_raised) < 1.2, "which the old one never was" .. where)
+  end
+end)
+
+test("the pointer selects the row under it inside the menu, and leaves it alone outside", function()
+  local win, gui, sb = open_popover(3)
+  local pop = popover.get(gui:window_id())
+  pop.index = 1
+  local hits = state.session.hits[sb:pane_id()]
+  local item_row, scrim_row, disabled_row
+  for row, h in pairs(hits) do
+    if h.kind == "popover" and h.id then
+      if h.disabled then
+        disabled_row = row
+      elseif not item_row and popover.items(gui, pop.tab_id)[1].id ~= h.id then
+        item_row = row
+      end
+    elseif h.kind == "scrim" then
+      scrim_row = scrim_row or row
+    end
+  end
+  assert(item_row and scrim_row and disabled_row, "an enabled row, a disabled one and the scrim")
+  mouse(gui, sb, "move", "none", hits[item_row].x1 + 1, item_row)
+  eq(popover.selected(gui).id, hits[item_row].id, "the pointer picked the row it is over")
+  local picked = popover.get(gui:window_id()).index
+  mouse(gui, sb, "move", "none", 1, scrim_row)
+  eq(popover.get(gui:window_id()).index, picked, "the scrim never erases the selection")
+  mouse(gui, sb, "move", "none", hits[disabled_row].x1 + 1, disabled_row)
+  eq(popover.get(gui:window_id()).index, picked, "and a disabled row is not selectable")
+  config.setup { meta = "auto", popover = { follow_pointer = false }, backend = { path = "/bin/wez-vtabs" } }
+  mouse(gui, sb, "move", "none", hits[item_row].x1 + 1, item_row)
+  eq(popover.get(gui:window_id()).index, picked, "opting out pins the selection to the keyboard")
+  config.setup { meta = "auto", backend = { path = "/bin/wez-vtabs" } }
+  popover.close(gui)
+  eq(#win.tab_list, 3)
+end)
+
+test("opening the menu fades its own rows once, for the configured time, and closing does not", function()
+  local win, gui = drag_setup()
+  local sb = sidebar.find(win.tab_list[1])
+  local function anims_since(n)
+    local out = {}
+    for i = n + 1, #sb.sent do
+      if sb.sent[i]:find('"anim"', 1, true) then
+        out[#out + 1] = sb.sent[i]
+      end
+    end
+    return out
+  end
+  local before = #sb.sent
+  mouse(gui, sb, "down", "right", 5, 3)
+  mouse(gui, sb, "up", "right", 5, 3)
+  local sent = anims_since(before)
+  eq(#sent, 1, "one fade, on the frame that first painted the menu")
+  eq(sent[1]:match '"ms":(%d+)', "90", "the configured duration reaches the backend")
+  local rect = popover.rect(gui, 24, 28, theme.resolve({}, fake.palette), config.get())
+  local rows = 0
+  for _ in sent[1]:gmatch '"y":%d+' do
+    rows = rows + 1
+  end
+  eq(rows, rect.h, "over the menu's own rows, not the whole sidebar")
+
+  before = #sb.sent
+  popover.close(gui)
+  view_mod.sync(gui, { force = true })
+  eq(#anims_since(before), 0, "a dismissed menu vanishes at once")
+
+  config.setup { meta = "auto", popover = { fade_ms = 0 }, backend = { path = "/bin/wez-vtabs" } }
+  before = #sb.sent
+  mouse(gui, sb, "down", "right", 5, 3)
+  mouse(gui, sb, "up", "right", 5, 3)
+  eq(#anims_since(before), 0, "and 0 turns it off")
+  popover.close(gui)
+  config.setup { meta = "auto", backend = { path = "/bin/wez-vtabs" } }
+end)
+
+test("the menu is as wide as its widest row wants, clamped to the sidebar", function()
+  local cfg = config.get()
+  local menu = popover.items(fake.window().gui, 1)
+  local natural = popover.width_for(cfg, 80, menu, nil)
+  eq(natural, 23, "the widest label is 18 cells and carries no hint")
+  eq(popover.width_for(cfg, 28, menu, nil), 23, "the shipped 28-column sidebar still fits it whole")
+  eq(popover.width_for(cfg, 22, menu, nil), 19, "a narrower one caps it at the columns it can spare")
+  local fixed = util.merge(cfg, { popover = { width = 18 } })
+  eq(popover.width_for(fixed, 80, menu, nil), 18, "a number is taken verbatim")
+  eq(popover.width_for(util.merge(cfg, { popover = { width = 4 } }), 80, menu, nil), 16, "with a floor")
+  eq(popover.width_for(cfg, 80, menu, { string.rep("x", 40) }), 45, "a header can widen it too")
+  eq(config.setup({ popover = { width = "wide" } }).popover.width, "auto", "a bad value resets")
   config.setup { backend = { path = "/bin/wez-vtabs" } }
 end)
 

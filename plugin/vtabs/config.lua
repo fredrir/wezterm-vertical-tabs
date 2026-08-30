@@ -100,6 +100,11 @@ function M.setup(opts)
     -- A fresh table: `merge` shares the one in `defaults` whenever the user passed no padding.
     cfg.padding = { top = cfg.padding.top, left = given.left or 1, right = given.right or 2 }
   end
+  if cfg.popover.width ~= "auto" and type(cfg.popover.width) ~= "number" then
+    util.warn 'popover.width must be "auto" or a number, using auto'
+    cfg.popover.width = "auto"
+  end
+
   -- press mode never hovers a background row, so a hover-only close button would never appear.
   if cfg.hover == "press" and cfg.close_button == "hover" then
     cfg.close_button = "always"

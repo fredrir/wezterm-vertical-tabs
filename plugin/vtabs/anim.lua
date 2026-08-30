@@ -12,7 +12,11 @@ M.PHASES = {
   expand_out = { ms = 80, ease = "inOutQuad", dir = "out", stagger = 12, cap = 120, reverse = false },
   expand_in = { ms = 220, ease = "outCubic", dir = "in", stagger = 12, cap = 120, reverse = false },
   hover = { ms = 60, ease = "linear", dir = "in", stagger = 0, cap = 0, reverse = false },
+  -- The menu rises from the sidebar surface all at once; a staggered menu reads as a wipe.
+  popover_in = { ms = 90, ease = "outCubic", dir = "in", stagger = 0, cap = 0, reverse = false },
 }
+
+M.MAX_MS = 4000
 
 local function painted_rows(frame)
   local rows = {}
@@ -27,7 +31,7 @@ end
 ---Builds the backend `anim` command for one phase.
 ---@param phase string a key of `M.PHASES`
 ---@param frame table a `render.render` result: `rows` strings and `rows_n`
----@param opts table `{ id, anchor = "#rrggbb", fps, rows = { row, ... }|nil }`
+---@param opts table `{ id, anchor = "#rrggbb", fps, ms, rows = { row, ... }|nil }`
 ---@return table|nil command, string|nil reason `"phase" | "empty" | "rows" | "size" | "anchor"`
 function M.build(phase, frame, opts)
   local spec = M.PHASES[phase]
@@ -37,6 +41,11 @@ function M.build(phase, frame, opts)
   opts = opts or {}
   if type(opts.anchor) ~= "string" or not opts.anchor:match "^#%x%x%x%x%x%x$" then
     return nil, "anchor"
+  end
+  -- The durations are config, not constants; the phase table only carries the default.
+  local ms = math.floor(tonumber(opts.ms) or spec.ms)
+  if ms <= 0 or ms > M.MAX_MS then
+    return nil, "ms"
   end
   local rows = opts.rows or painted_rows(frame)
   local selected = {}
@@ -67,7 +76,7 @@ function M.build(phase, frame, opts)
   return {
     t = "anim",
     id = opts.id or 1,
-    ms = spec.ms,
+    ms = ms,
     fps = opts.fps or 30,
     ease = spec.ease,
     dir = spec.dir,

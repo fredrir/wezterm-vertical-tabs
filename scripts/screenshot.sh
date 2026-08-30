@@ -2,7 +2,7 @@
 # Shoots the sidebar in a throwaway WezTerm. Run under a display: `just screenshot [state]`.
 set -eu
 root=$(cd "$(dirname "$0")/.." && pwd)
-out=${VTABS_SHOTS:-/tmp/vtabs-team/p1-shots}
+out=${VTABS_SHOTS:-$root/.claude/team/shots}
 bin="${VTABS_BIN:-$root/backend/target/release/wez-vtabs}"
 cols=120
 sidebar_cols=28
@@ -29,7 +29,11 @@ popover-space|Catppuccin Mocha|default|rclick_space|in_sidebar:Spaces arrive in 
 rename|Catppuccin Mocha|default|key:r|in_sidebar:esc cancel
 rail|Catppuccin Mocha|rail|probe:toggle|rail_width
 tooltip|Catppuccin Mocha|tooltip|dwell|tooltip_only
-anim-mid|Catppuccin Mocha|anim|toggle_fast|animating"
+anim-mid|Catppuccin Mocha|anim|toggle_fast|animating
+new-tab-hover|Catppuccin Mocha|default|hover_new_tab|always
+padded|Catppuccin Mocha|padded|scene|always
+strip-macos|Catppuccin Mocha|macos|scene|always
+strip-macos-rail|Catppuccin Mocha|macos-rail|probe:toggle|rail_width"
 
 cli() { wezterm cli --no-auto-start "$@"; }
 list() { cli list --format json; }
@@ -112,6 +116,7 @@ step() {
   case $1 in
     scene) ;;
     hover) point_at "" logs || echo "  no X window; hover skipped" ;;
+    hover_new_tab) point_at "" "New tab" || echo "  no X window; hover skipped" ;;
     dwell)
       # hover first, snapshot inside the delay, then rest past it: the diff is the tooltip
       point_at "" logs || return 1
