@@ -363,6 +363,8 @@ function M.sync(gui_window, opts)
   local focus_index = state.has_focus(wid) and session.focus_index[wid] or nil
   local now = util.now_ms()
   geometry.sync(gui_window, active_tab_id)
+  -- After the width settles, so the card is drawn at the pane rect the correction leaves behind.
+  require("vtabs.frame").sync(gui_window)
 
   for _, info in ipairs(mux_win:tabs_with_info()) do
     local sb = sidebar.find(info.tab)

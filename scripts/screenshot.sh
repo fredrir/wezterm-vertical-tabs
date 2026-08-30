@@ -37,7 +37,10 @@ padded|Catppuccin Mocha|padded|scene|always
 strip-macos|Catppuccin Mocha|macos|scene|always
 rail-macos|Catppuccin Mocha|macos-rail|probe:toggle|rail_widened
 rail-macos-plain|Catppuccin Mocha|macos-rail-plain|probe:toggle|rail_width
-settings|Catppuccin Mocha|default|settings|settings_tab"
+settings|Catppuccin Mocha|default|settings|settings_tab
+zen|Catppuccin Mocha|zen|scene|always
+zen-square|Catppuccin Mocha|zen-square|scene|always
+zen-rail|Catppuccin Mocha|zen-rail|probe:toggle|always"
 
 cli() { wezterm cli --no-auto-start "$@"; }
 list() { cli list --format json; }

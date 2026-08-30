@@ -221,6 +221,7 @@ M.options = {
     open = true,
     label = "Frame",
     group = "layout",
+    values = '`"zen"` \\| `false` \\| table',
     help = "inset the sidebar, leaving a gutter column in the content colour",
   },
   {
