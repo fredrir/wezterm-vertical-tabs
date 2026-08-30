@@ -5,6 +5,7 @@ local sidebar = require "vtabs.sidebar"
 local state = require "vtabs.state"
 local util = require "vtabs.util"
 
+local page = require "vtabs.page"
 local schema = require "vtabs.schema"
 
 local M = {}
@@ -20,9 +21,25 @@ local function opt(cfg, key, fallback)
   return box[key]
 end
 
+---An absolute path with no `..` segment. `find("..", 1, true)` rejected `~/my..notes/` too, which
+---is a perfectly ordinary directory; only a whole segment is a traversal.
+local function safe_path(path)
+  if type(path) ~= "string" or path == "" or path:sub(1, 1) ~= "/" then
+    return false
+  end
+  for segment in path:gmatch "[^/]+" do
+    if segment == ".." then
+      return false
+    end
+  end
+  return true
+end
+
+M.safe_path = safe_path
+
 local function config_dir()
   local base = os.getenv "XDG_CONFIG_HOME"
-  if not base or base == "" or base:sub(1, 1) ~= "/" or base:find("..", 1, true) then
+  if not safe_path(base) then
     base = (wezterm.home_dir or os.getenv "HOME" or ".") .. "/.config"
   end
   return base .. "/wez-vtabs"
@@ -35,11 +52,10 @@ M.dir = config_dir()
 function M.path(cfg)
   local given = opt(cfg, "path", nil)
   if type(given) == "string" and given ~= "" then
-    if given:sub(1, 1) ~= "/" or given:find("..", 1, true) then
-      util.warn_once("settings-path", "settings.path must be an absolute path, using the default")
-    else
+    if safe_path(given) then
       return given
     end
+    util.warn_once("settings-path", "settings.path must be an absolute path, using the default")
   end
   return M.dir .. "/settings.json"
 end
@@ -110,34 +126,10 @@ function M.load(cfg)
   return kept
 end
 
-local function same(a, b)
-  if type(a) ~= "table" or type(b) ~= "table" then
-    return a == b
-  end
-  for k, v in pairs(a) do
-    if not same(v, b[k]) then
-      return false
-    end
-  end
-  for k in pairs(b) do
-    if a[k] == nil then
-      return false
-    end
-  end
-  return true
-end
-
 ---Only what differs from the schema default, so a future change to a default reaches this user.
+---The page already walks the descriptors for exactly this set; one walk, one answer.
 function M.changed(cfg)
-  local out = {}
-  for _, option in ipairs(schema.options) do
-    local value = schema.get(cfg, option.key)
-    local default = schema.get(config.defaults, option.key)
-    if value ~= nil and type(value) ~= "function" and not same(value, default) then
-      schema.set(out, option.key, value)
-    end
-  end
-  return out
+  return page.changed(cfg)
 end
 
 ---Writes the non-default keys, versioned, atomically, 0600. Called by an edit, never by a timer.

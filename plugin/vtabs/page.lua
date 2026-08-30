@@ -5,6 +5,8 @@ local platform = require "vtabs.platform"
 local render = require "vtabs.render"
 local schema = require "vtabs.schema"
 local util = require "vtabs.util"
+local hit = require "vtabs.hit"
+local KIND = hit.KIND
 local version = require "vtabs.version"
 
 local M = {}
@@ -282,6 +284,24 @@ local function widget_for(option, key, value)
   return type(value) == "string" and "text" or "locked"
 end
 
+---`schema.get` walks a dotted key assuming every level is a table; `settings` defaults to `true`,
+---so asking for `settings.path`'s default indexes a boolean. Here nothing under a non-table
+---default has a default of its own, which is the honest answer anyway.
+local function default_for(key)
+  local node = config.defaults
+  local last = nil
+  for part in key:gmatch "[^.]+" do
+    if last then
+      if type(node[last]) ~= "table" then
+        return nil
+      end
+      node = node[last]
+    end
+    last = part
+  end
+  return node[last]
+end
+
 local function field(key, option, cfg, group, opts)
   opts = opts or {}
   local value = opts.value
@@ -290,7 +310,7 @@ local function field(key, option, cfg, group, opts)
   end
   local default = opts.default
   if default == nil then
-    default = schema.get(config.defaults, key)
+    default = default_for(key)
   end
   return {
     key = key,
@@ -404,6 +424,21 @@ function M.apply_mode(row)
   return "instant"
 end
 
+---Everything that differs from the schema default, nested as the user would write it. `settings`
+---persists exactly this set and `as_lua` prints it, so the file and the clipboard cannot disagree.
+function M.changed(cfg)
+  local out = {}
+  for _, row in ipairs(M.fields(cfg or config.get())) do
+    -- a container's own row is skipped: its children carry the same values one key at a time, and
+    -- writing both would try to index the table it had already been set to
+    local container = row.entries ~= nil
+    if row.changed and not container and type(row.value) ~= "function" then
+      schema.set(out, row.key, row.value)
+    end
+  end
+  return out
+end
+
 ---The current non-default set as a paste-ready `apply_to_config` call: the escape hatch that makes
 ---the page a starting point rather than a lock-in.
 function M.as_lua(cfg)
@@ -428,12 +463,7 @@ function M.as_lua(cfg)
     return "{\n" .. table.concat(parts, "\n") .. "\n" .. string.rep(" ", indent) .. "}"
   end
 
-  local changed = {}
-  for _, row in ipairs(M.fields(cfg)) do
-    if row.changed and row.widget ~= "entries" and type(row.value) ~= "function" then
-      schema.set(changed, row.key, row.value)
-    end
-  end
+  local changed = M.changed(cfg)
   local lines = {}
   for _, key in ipairs(util.sorted_keys(changed)) do
     lines[#lines + 1] = string.format("  %s = %s,", key, render_value(changed[key], 2))
@@ -513,7 +543,7 @@ function M.plan(view)
     local row = math.max(math.floor(rows / 2), 1)
     for i = 1, rows do
       out.rows[i] = { kind = "space" }
-      out.hits[i] = { kind = "space" }
+      out.hits[i] = { kind = KIND.SPACE }
     end
     out.rows[row] = { kind = "too_narrow", text = "Settings needs " .. M.MIN_COLS .. " columns" }
     return out
@@ -549,11 +579,11 @@ function M.plan(view)
   out.focus, out.scroll = focus, scroll
 
   out.rows[1] = { kind = "header" }
-  out.hits[1] = { kind = "chrome" }
+  out.hits[1] = { kind = KIND.CHROME }
   out.rows[2] = { kind = "rule" }
-  out.hits[2] = { kind = "chrome" }
+  out.hits[2] = { kind = KIND.CHROME }
   out.rows[3] = { kind = "space" }
-  out.hits[3] = { kind = "space" }
+  out.hits[3] = { kind = KIND.SPACE }
   for i = 1, body do
     local row = 3 + i
     local nav = groups[i]
@@ -585,7 +615,7 @@ function M.plan(view)
     end
     if nav or entry then
       out.hits[row] = {
-        kind = "body",
+        kind = KIND.BODY,
         nav = nav,
         id = entry and entry.key or nil,
         index = entry and (i + scroll) or nil,
@@ -594,23 +624,23 @@ function M.plan(view)
         spans = spans,
       }
     else
-      out.hits[row] = { kind = "space" }
+      out.hits[row] = { kind = KIND.SPACE }
     end
   end
   for row = body + 4, rows - 3 do
     out.rows[row] = { kind = "space" }
-    out.hits[row] = { kind = "space" }
+    out.hits[row] = { kind = KIND.SPACE }
   end
   if rows >= 3 then
     -- the rows carry raw keys, which is what makes them greppable; the descriptor's own label and
     -- help belong here, where there is room for a sentence and only one row is being asked about
     local current = shown[focus]
     out.rows[rows - 2] = { kind = "help", field = current and not current.caveat and current or nil }
-    out.hits[rows - 2] = { kind = "space" }
+    out.hits[rows - 2] = { kind = KIND.SPACE }
     out.rows[rows - 1] = { kind = "rule" }
-    out.hits[rows - 1] = { kind = "chrome" }
+    out.hits[rows - 1] = { kind = KIND.CHROME }
     out.rows[rows] = { kind = "hints" }
-    out.hits[rows] = { kind = "chrome" }
+    out.hits[rows] = { kind = KIND.CHROME }
   end
   return out
 end
@@ -1057,7 +1087,7 @@ local SPANS = {
 
 ---A click, routed by the column the hit record says it landed in.
 function M.click(gui_window, view, h, x)
-  local span = require("vtabs.hit").span(h, x)
+  local span = hit.span(h, x)
   if not span then
     return false
   end

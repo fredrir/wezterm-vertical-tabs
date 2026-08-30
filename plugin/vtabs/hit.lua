@@ -1,7 +1,23 @@
 local M = {}
 
+---Every `kind` a hit record can carry. Producers (`layout`, `render`, `page`) build them and
+---consumers (`input`, `view`) branch on them; naming them here is what stops the two drifting.
+M.KIND = {
+  TAB = "tab",
+  NEW_TAB = "new_tab",
+  FOOTER = "footer",
+  STRIP = "strip",
+  ACTION = "action",
+  SEPARATOR = "separator",
+  SPACE = "space",
+  SCRIM = "scrim",
+  POPOVER = "popover",
+  BODY = "body",
+  CHROME = "chrome",
+}
+
 function M.at(hits, y)
-  return hits and hits[y] or { kind = "space" }
+  return hits and hits[y] or { kind = M.KIND.SPACE }
 end
 
 ---First sub-target under `x`: "close" or "pin" on a card row, else nil.

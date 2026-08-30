@@ -2,6 +2,7 @@ local ansi = require "vtabs.ansi"
 local layout = require "vtabs.layout"
 local theme_mod = require "vtabs.theme"
 local util = require "vtabs.util"
+local KIND = require("vtabs.hit").KIND
 
 ---@class VtabsItem
 ---@field tab_id integer
@@ -442,7 +443,7 @@ function M.composite(frame, rect)
           cell.scrim = scrim
         end
       end
-      frame.hits[row] = rect.outside_hit or { kind = "scrim" }
+      frame.hits[row] = rect.outside_hit or { kind = KIND.SCRIM }
     end
   end
   for i = 1, y2 - y1 + 1 do
@@ -458,7 +459,7 @@ function M.composite(frame, rect)
       for _, span in ipairs(spec.spans or {}) do
         put(cells, x1 + (span.x or 1) - 1, span.text, { fg = span.fg or fg, bg = bg, bold = span.bold }, x2)
       end
-      frame.hits[row] = spec.hit or { kind = "popover" }
+      frame.hits[row] = spec.hit or { kind = KIND.POPOVER }
     end
   end
   return frame

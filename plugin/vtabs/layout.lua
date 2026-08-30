@@ -1,4 +1,5 @@
 local util = require "vtabs.util"
+local KIND = require("vtabs.hit").KIND
 
 local M = {}
 
@@ -405,9 +406,9 @@ function M.plan(view)
       for _, action in ipairs(actions) do
         spans[#spans + 1] = { id = action.id, x1 = action.x1, x2 = action.x2 }
       end
-      hits[row] = { kind = "action", x1 = actions[1].x1, x2 = actions[#actions].x2, spans = spans }
+      hits[row] = { kind = KIND.ACTION, x1 = actions[1].x1, x2 = actions[#actions].x2, spans = spans }
     else
-      hits[row] = { kind = "strip" }
+      hits[row] = { kind = KIND.STRIP }
     end
   end
 
@@ -422,13 +423,13 @@ function M.plan(view)
     local thumb_lit = thumb_here and thumb.lit
     if not entry or entry.kind == "space" then
       rows[row] = { kind = "space", fade = fade, thumb = thumb_here, thumb_lit = thumb_lit }
-      hits[row] = { kind = "space" }
+      hits[row] = { kind = KIND.SPACE }
     elseif entry.kind == "header" then
       rows[row] = { kind = "header", fade = fade, thumb = thumb_here, thumb_lit = thumb_lit }
-      hits[row] = { kind = "space" }
+      hits[row] = { kind = KIND.SPACE }
     elseif entry.kind == "separator" then
       rows[row] = { kind = "separator", fade = fade, thumb = thumb_here, thumb_lit = thumb_lit }
-      hits[row] = { kind = "separator" }
+      hits[row] = { kind = KIND.SEPARATOR }
     else
       local item = entry.item
       local st = {
@@ -451,7 +452,7 @@ function M.plan(view)
         thumb_lit = thumb_lit,
       }
       hits[row] = {
-        kind = "tab",
+        kind = KIND.TAB,
         id = item.tab_id,
         slot = entry.slot,
         part = entry.part,
@@ -466,7 +467,7 @@ function M.plan(view)
   if ghost_gap > 0 then
     local row = strip_rows + list_rows + 1
     rows[row] = { kind = "space" }
-    hits[row] = { kind = "space" }
+    hits[row] = { kind = KIND.SPACE }
   end
 
   if ghost_h > 0 then
@@ -478,7 +479,7 @@ function M.plan(view)
       local row = base + i
       if row <= view.rows then
         rows[row] = { kind = "ghost", shape = shape, index = i, hovered = hovered }
-        hits[row] = { kind = "new_tab", x1 = g.card_x1, x2 = g.card_x2 }
+        hits[row] = { kind = KIND.NEW_TAB, x1 = g.card_x1, x2 = g.card_x2 }
       end
     end
   end
@@ -488,7 +489,7 @@ function M.plan(view)
     local row = view.rows - pad_b + i
     if row >= 1 then
       rows[row] = { kind = "space" }
-      hits[row] = { kind = "space" }
+      hits[row] = { kind = KIND.SPACE }
     end
   end
 
@@ -497,7 +498,7 @@ function M.plan(view)
     if row >= 1 then
       local hovered = view.hover ~= nil and view.hover.y == row and entry.id ~= nil
       rows[row] = { kind = "footer", entry = entry, hovered = hovered }
-      hits[row] = { kind = "footer", id = entry.id, entry = entry, x1 = g.card_x1, x2 = g.card_x2 }
+      hits[row] = { kind = KIND.FOOTER, id = entry.id, entry = entry, x1 = g.card_x1, x2 = g.card_x2 }
     end
   end
 

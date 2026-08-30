@@ -6227,6 +6227,52 @@ test("P3 §2: the 60-column layout is nav plus form, and says so under 48", func
   assert(page.grid(48), "48 is the floor, not the first refusal")
 end)
 
+test("refactor 9: the hit kinds, the changed-set walk and the path check each have one home", function()
+  local settings = require "vtabs.settings"
+  -- the constants are the strings, so producers and consumers cannot drift apart on a typo
+  eq(hit.KIND.TAB, "tab")
+  eq(hit.KIND.ACTION, "action")
+  eq(hit.KIND.BODY, "body")
+  local v = p1_view { rows = 20, opts = { separator = "gap" } }
+  v.strip = { rows = 2, cols = 0, toggle_row = 1 }
+  local r = render.render(v)
+  local kinds = {}
+  for row = 1, v.rows do
+    kinds[r.hits[row].kind] = true
+  end
+  for _, kind in ipairs { hit.KIND.ACTION, hit.KIND.TAB, hit.KIND.NEW_TAB, hit.KIND.SPACE } do
+    assert(kinds[kind], "the sidebar still produces " .. kind)
+  end
+
+  -- one walk answers both "what goes in the file" and "what goes on the clipboard"
+  local cfg = config.setup { width = 32, theme = { accent = "#f5c2e7" }, backend = { path = "/bin/wez-vtabs" } }
+  local changed = settings.changed(cfg)
+  eq(changed.width, 32)
+  eq(changed.theme.accent, "#f5c2e7", "nested through the same descriptor walk")
+  eq(changed.row_gap, nil, "and nothing still at its default")
+  eq(changed.theme.elevation, nil)
+  local text = page.as_lua(cfg)
+  assert(text:find("width = 32", 1, true) and text:find('accent = "#f5c2e7"', 1, true), text)
+
+  -- the path check names a traversal segment, not any two dots anywhere in the string
+  eq(settings.safe_path "/home/me/.config/wez-vtabs/settings.json", true)
+  eq(settings.safe_path "/home/me/my..notes/settings.json", true, "two dots inside a name are not a traversal")
+  eq(settings.safe_path "/home/me/../etc/settings.json", false, "a whole `..` segment is")
+  eq(settings.safe_path "settings.json", false, "and a relative path is refused outright")
+  eq(settings.safe_path "", false)
+  eq(settings.safe_path(nil), false)
+
+  -- a container with a non-table default has no default for its children, and asking cannot throw
+  local boxed = config.setup { settings = { path = "/tmp/x.json" }, backend = { path = "/bin/wez-vtabs" } }
+  local rows = {}
+  for _, row in ipairs(page.fields(boxed)) do
+    rows[row.key] = row
+  end
+  assert(rows["settings.path"], "settings.path is listed")
+  eq(rows["settings.path"].default, nil, "with no default of its own to compare against")
+  config.setup(legacy { backend = { path = "/bin/wez-vtabs" } })
+end)
+
 test("P3 A5: settings.json holds only what differs, versioned, and never a symlink", function()
   local settings = require "vtabs.settings"
   local schema_mod = require "vtabs.schema"
