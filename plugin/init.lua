@@ -87,7 +87,8 @@ M.toggle_sidebar = reported("toggle_sidebar", actions.toggle_sidebar)
 M.show_sidebar = reported("show_sidebar", actions.show_sidebar)
 M.sync = reported("sync", view.sync)
 M.invalidate_theme = view.invalidate_theme
-M.is_sidebar_pane = sidebar.is_ready
+M.is_sidebar_pane = sidebar.is_backend
+M.window_title = view.window_title
 
 function M.is_private_window(window)
   local wid = util.try(function()
@@ -157,10 +158,12 @@ local function register_events(cfg)
     end)
   )
 
-  -- Only the first handler registered for this event is ever called, so a user's own one wins.
-  wezterm.on("format-window-title", function(tab, pane, tabs, panes)
-    return view.window_title(tab, pane, tabs, panes)
-  end)
+  -- WezTerm calls only the first handler registered for this event (config/src/lua.rs:795-814).
+  if cfg.window_title then
+    wezterm.on("format-window-title", function(tab, pane, tabs, panes)
+      return view.window_title(tab, pane, tabs, panes)
+    end)
+  end
 
   wezterm.on("gui-attached", function()
     for _, mux_win in ipairs(wezterm.mux.all_windows()) do

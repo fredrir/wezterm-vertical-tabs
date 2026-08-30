@@ -1310,10 +1310,14 @@ test("a paste is refused when it is oversized, malformed or from a background ta
   local _, gui, _, sb, content = key_setup()
   input.handle(gui, sb, "vtabs", '{"t":"paste","data":"!!!!"}')
   eq(#content.pasted, 0, "malformed base64 dropped")
-  local win2, gui2 = drag_setup()
-  win2.active_tab_ref = win2.tab_list[1]
-  local other = win2.tab_list[2]
-  input.handle(gui2, sidebar.find(other), "vtabs", '{"t":"paste","data":"aGk="}')
+  local _, gui2, tab2, sb2, content2 = key_setup(2)
+  input.handle(gui2, sb2, "vtabs", '{"t":"paste","dropped":"size"}')
+  eq(#content2.pasted, 0, "the backend's oversize form carries nothing to paste")
+  eq(tab2.active, content2, "focus still returns to the shell")
+  local win3, gui3 = drag_setup()
+  win3.active_tab_ref = win3.tab_list[1]
+  local other = win3.tab_list[2]
+  input.handle(gui3, sidebar.find(other), "vtabs", '{"t":"paste","data":"aGk="}')
   eq(#sidebar.content_pane(other).pasted, 0, "background tab dropped")
 end)
 
@@ -1353,6 +1357,20 @@ test("safe_key_bytes takes one key press per shape and refuses a command line", 
   end
   eq(input.safe_key_bytes(nil), nil)
   eq(input.safe_key_bytes "\xff\xfe", nil, "invalid utf-8 is not one codepoint")
+end)
+
+-- Sequences backend/src/parser.rs names "unknown": F5, SS3 Z, and a CSI it does not decode.
+test("a key the backend could not name is still forwarded by its raw bytes", function()
+  local _, gui, tab, sb, content = key_setup()
+  input.handle(gui, sb, "vtabs", '{"t":"key","key":"unknown","raw":"G1sxNX4="}')
+  eq(content.sent[#content.sent], "\27[15~", "F5 reaches the shell")
+  eq(tab.active, content)
+  local _, gui2, _, sb2, content2 = key_setup(2)
+  input.handle(gui2, sb2, "vtabs", '{"t":"key","key":"unknown","raw":"G09a"}')
+  eq(content2.sent[#content2.sent], "\27OZ")
+  local _, gui3, _, sb3, content3 = key_setup(3)
+  input.handle(gui3, sb3, "vtabs", '{"t":"key","key":"unknown"}')
+  eq(#content3.sent, 0, "without raw there is nothing to forward")
 end)
 
 test("a raw payload carrying a whole command line never reaches the content pane", function()
@@ -1443,6 +1461,25 @@ test("close_others restores the kept tab once, not after every close", function(
   eq(switches, 4, "three closes plus one restore")
 end)
 
+test("is_sidebar_pane answers for any backend pane and changes nothing while it answers", function()
+  local vtabs = require "vtabs.sidebar"
+  local win, gui = setup_window(1)
+  sidebar.ensure(gui)
+  local tab = win.tab_list[1]
+  local sb = sidebar.find(tab)
+  local pid = sb:pane_id()
+  sb.vars.vtabs_token = state.token_for(pid)
+  state.session.ready[pid] = nil
+  local mapped = state.sidebar_pane_id(tab:tab_id())
+  assert(vtabs.is_backend(sb), "a backend pane is skippable before anyone authenticates it")
+  eq(state.session.ready[pid], nil, "answering never promotes the pane to ready")
+  eq(state.sidebar_pane_id(tab:tab_id()), mapped, "no map mutation")
+  assert(vtabs.is_ready(sb), "the trusted predicate is the one that promotes")
+  eq(state.session.ready[pid], true)
+  eq(vtabs.is_backend(sidebar.content_pane(tab)), false, "a content pane is not a backend")
+  eq(vtabs.is_backend(nil), false)
+end)
+
 test("the window title names the content pane while the sidebar holds focus", function()
   local view_only = require "vtabs.view"
   local sb = { pane_id = 7, title = "wez-vtabs:deadbeef" }
@@ -1453,6 +1490,9 @@ test("the window title names the content pane while the sidebar holds focus", fu
   eq(view_only.window_title(tab, shell, { tab }, { sb, shell }), nil, "wezterm's default is left alone")
   eq(view_only.window_title(tab, sb, { tab }, { sb }), nil, "no content pane, no opinion")
   eq(view_only.window_title(nil, nil, nil, nil), nil)
+  eq(config.setup({}).window_title, true, "registered by default")
+  eq(config.setup({ window_title = false }).window_title, false, "opt out leaves the event alone")
+  config.setup { backend = { path = "/bin/wez-vtabs" } }
 end)
 
 test("an unreachable contrast gate stops at the target colour instead of mixing past it", function()

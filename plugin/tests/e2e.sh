@@ -2,7 +2,12 @@
 # Drives a throwaway WezTerm instance and exercises the sidebar through the CLI.
 set -eu
 root=$(cd "$(dirname "$0")/../.." && pwd)
-bin="${VTABS_BIN:-$root/backend/target/release/wez-vtabs}"
+bin="${VTABS_BIN:-}"
+if [ -z "$bin" ]; then
+  # No override: build, so the run tests the working tree and not a stale binary.
+  (cd "$root/backend" && cargo build --locked --release) || { echo "backend build failed"; exit 1; }
+  bin="$root/backend/target/release/wez-vtabs"
+fi
 [ -x "$bin" ] || { echo "backend binary not found: $bin"; exit 1; }
 log=$(mktemp -t vtabs-e2e.XXXXXX)
 

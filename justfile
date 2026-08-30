@@ -21,7 +21,7 @@ lint:
     cd backend && cargo fmt --check && cargo clippy --all-targets --locked -- -D warnings
     cd plugin && luacheck init.lua vtabs tests && stylua --check init.lua vtabs tests
 
-e2e mode="local":
+e2e mode="local": build
     sh plugin/tests/e2e.sh {{mode}}
 
 build profile="release":

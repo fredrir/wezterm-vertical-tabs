@@ -37,6 +37,8 @@ return config
 | `scroll_indicator`        | `true`                                                            | right-edge thumb when tabs overflow                                                                                                             |
 | `wheel`                   | `"scroll"`                                                        | `"scroll"` the list or `"switch"` tabs                                                                                                          |
 | `tear_off`                | `true`                                                            | drag a tab onto the sidebar's inner edge (3+ columns of travel) to move it to a new window                                                      |
+| `adopt`                   | `"auto"`                                                          | take over an unmapped pane that carries the `wez-vtabs:` title marker instead of splitting a second sidebar. `"auto"`: only in a domain this plugin spawns backends in (local, already-spawned, or one `backend.path` resolves); `true`: any domain; `false`: never. See the identity table in `docs/limitations.md` |
+| `window_title`            | `true`                                                            | while the sidebar is the active pane, title the window after the content pane instead. `false` leaves `format-window-title` unregistered |
 | `hover`                   | `"follow"`                                                       | `"follow"`: the sidebar is the tab's active pane while the pointer is over it (sets `pane_focus_follows_mouse = true` when you left it unset — this is a global wezterm option); `"press"`: only from press to release |
 | `hover_timeout_ms`        | `6000`                                                            | clear hover highlight after inactivity (`0` = never); terminals report no mouse-leave                                                           |
 | `double_click_ms`         | `400`                                                             | double-click on empty space opens a new tab                                                                                                     |
@@ -140,7 +142,10 @@ the tab's content pane, which then takes focus back.
 `vtabs.apply_to_config(config, opts)`, `vtabs.action.*`,
 `vtabs.toggle_sidebar(window)`, `vtabs.show_sidebar(window, bool)`,
 `vtabs.sync(window, { force = true })`, `vtabs.invalidate_theme(window_id?)`,
-`vtabs.is_sidebar_pane(pane)`, `vtabs.is_private_window(window)`, `vtabs.version`.
+`vtabs.is_sidebar_pane(pane)` (true for any pane presenting as a sidebar backend; for skipping, never for trust), `vtabs.window_title(tab, pane, tabs, panes)`, `vtabs.is_private_window(window)`, `vtabs.version`.
+
+WezTerm runs only the first `format-window-title` handler; register yours before
+`apply_to_config` or call `vtabs.window_title` from it.
 
 ## Theme
 

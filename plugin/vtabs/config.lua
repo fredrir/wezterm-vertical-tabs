@@ -22,6 +22,7 @@ M.defaults = {
   wheel = "scroll", -- "scroll" | "switch"
   tear_off = true, -- drop on the sidebar's inner edge to move the tab to a new window
   hover = "follow", -- "follow": sidebar holds focus while hovered | "press": only press → release
+  window_title = true, -- title the window after the content pane while the sidebar is active
   hover_timeout_ms = 6000,
   double_click_ms = 400,
   ellipsis = "…",
