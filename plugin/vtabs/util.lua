@@ -188,7 +188,10 @@ function M.sanitize(s)
       end
       i = i + 1
     else
-      if not (b == 0xc2 and string.byte(s, i + 1) <= 0x9f) then
+      local b2, b3 = string.byte(s, i + 1), string.byte(s, i + 2)
+      -- U+202A-202E reorder the glyphs around them; the U+2066-2069 isolates are legitimate
+      local bidi_override = b == 0xe2 and b2 == 0x80 and b3 and b3 >= 0xaa and b3 <= 0xae
+      if not (b == 0xc2 and b2 <= 0x9f) and not bidi_override then
         out[#out + 1] = s:sub(i, i + len - 1)
       end
       i = i + len
