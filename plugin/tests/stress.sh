@@ -50,6 +50,8 @@ macos_rail() {
   reserve_cols=$(printf '%s' "$reserve" | cut -d' ' -f1)
   [ "$rail_cols" -ge "$reserve_cols" ] ||
     fail "rail_titlebar=widen left the rail at $rail_cols cols, under the $reserve_cols-column reserve"
+  # `soft` runs this in a subshell, so the width the later rail checks want travels through a file.
+  printf '%s' "$rail_cols" >"$home/rail_want"
   no_warnings "$mac_mark" "the macOS rail"
   vtest "$first_content" toggle
   sleep 2.5
@@ -58,12 +60,7 @@ macos_rail() {
 }
 if [ -n "${VTABS_E2E_MACOS:-}" ]; then
   soft macos_rail
-  # `soft` runs its group in a subshell, so the width every later rail check wants is read here.
-  mac_reserve=$(probe_line "$first_content" probe_reserve reserve | cut -d' ' -f1)
-  case "$mac_reserve" in
-    '' | *[!0-9]*) ;;
-    *) [ "$mac_reserve" -gt "$rail_want" ] && rail_want=$mac_reserve ;;
-  esac
+  [ -s "$home/rail_want" ] && rail_want=$(cat "$home/rail_want")
   echo "  the rail is expected at $rail_want cols under the macOS reserve"
 fi
 
