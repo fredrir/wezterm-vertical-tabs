@@ -5,7 +5,7 @@ use crate::event::Event;
 use crate::log::Logger;
 use crate::parser::Input;
 use crate::terminal;
-use crate::uservar::{TOKEN_VAR, set_user_var};
+use crate::uservar::{TOKEN_VAR, set_user_var, title_marker};
 
 const CLEAR_SCREEN: &str = "\x1b[2J\x1b[H";
 
@@ -37,7 +37,7 @@ impl<W: Write> App<W> {
         match input {
             Input::Mouse(m) => self.emit(&Event::from(m))?,
             Input::Focus(focused) => self.emit(&Event::Focus { focused })?,
-            Input::Key { name, mods } => self.emit(&Event::key(name, mods))?,
+            Input::Key { name, mods, raw } => self.emit(&Event::key(name, mods, &raw))?,
             Input::Command(cmd) => return self.run(cmd),
         }
         Ok(true)
@@ -48,7 +48,10 @@ impl<W: Write> App<W> {
             Command::Frame { data } => self.write(data.as_bytes())?,
             Command::Clear => self.write(CLEAR_SCREEN.as_bytes())?,
             Command::Ping { n } => self.emit(&Event::Pong { n })?,
-            Command::Auth { token } => self.write(set_user_var(TOKEN_VAR, &token).as_bytes())?,
+            Command::Auth { token } => {
+                self.write(title_marker(&token).as_bytes())?;
+                self.write(set_user_var(TOKEN_VAR, &token).as_bytes())?
+            }
             Command::Quit => return Ok(false),
         }
         Ok(true)
@@ -124,7 +127,9 @@ mod tests {
             token: "abc".into(),
         }))
         .unwrap();
-        assert_eq!(a.out, set_user_var("vtabs_token", "abc").as_bytes());
+        let mut expected = title_marker("abc").into_bytes();
+        expected.extend_from_slice(set_user_var("vtabs_token", "abc").as_bytes());
+        assert_eq!(a.out, expected);
     }
 
     #[test]
@@ -145,11 +150,12 @@ mod tests {
         a.handle(Input::Key {
             name: "x".into(),
             mods: Mods::default(),
+            raw: b"x".to_vec(),
         })
         .unwrap();
         assert_eq!(
             a.out,
-            set_user_var("vtabs", r#"{"t":"key","key":"x"}"#).as_bytes()
+            set_user_var("vtabs", r#"{"t":"key","key":"x","raw":"eA=="}"#).as_bytes()
         );
     }
 }

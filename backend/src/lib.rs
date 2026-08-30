@@ -3,5 +3,6 @@ pub mod command;
 pub mod event;
 pub mod log;
 pub mod parser;
+pub mod signal;
 pub mod terminal;
 pub mod uservar;
