@@ -1110,6 +1110,11 @@ test("sanitize always returns valid UTF-8, whatever bytes arrive", function()
   end
   eq(util.sanitize "~/projects/api", "~/projects/api", "clean text is untouched")
   eq(util.sanitize "日本語", "日本語", "multibyte survives")
+  eq(util.sanitize "safe\226\128\174gpj.exe", "safegpj.exe", "RLO cannot disguise a filename")
+  for _, cp in ipairs { "\226\128\170", "\226\128\171", "\226\128\172", "\226\128\173", "\226\128\174" } do
+    eq(util.sanitize("a" .. cp .. "b"), "ab", "bidi override U+202A-202E stripped")
+  end
+  eq(util.sanitize "\226\129\166ا\226\129\169", "\226\129\166ا\226\129\169", "isolates U+2066-2069 kept")
   eq(util.sanitize "a\194\133b", "ab", "C1 in UTF-8 form still goes")
 end)
 
@@ -1163,6 +1168,62 @@ test("one unrenderable tab does not stop the other sidebars", function()
   end
   view_mod.sync(gui, { force = true })
   assert(#second.sent > before, "the healthy sidebar still got its frame")
+end)
+
+test("P1 screenshots: icon weight, chamfer, toggle surface, dashed ghost", function()
+  local v = p1_view { rows = 20, hover = { x = 5, y = 8 } }
+  v.strip = { rows = 2, toggle = { row = 1, x = 2, x1 = 1, x2 = 4 } }
+  local r = render.render(v)
+  local rows = {}
+  for row = 1, v.rows do
+    rows[row] = row_text(r.data, row)
+  end
+
+  local active_row, hover_row
+  for row = 1, v.rows do
+    local h = r.hits[row]
+    if h and h.kind == "tab" and h.part == "title" then
+      if h.id == 2 then
+        active_row = row
+      elseif h.id == 3 then
+        hover_row = row
+      end
+    end
+  end
+  assert(active_row and hover_row, "found both cards")
+
+  eq(usub(rows[active_row], 27, 27), "▙", "the active card keeps its chamfer")
+  eq(usub(rows[hover_row], 27, 27), " ", "a hovered card does not: hover_bg is 1.15 against the page")
+
+  assert(r.rows[active_row]:find(ansi.fg(v.theme.meta_fg), 1, true), "icon paints at meta weight")
+
+  local lit = render.render(p1_view {
+    rows = 20,
+    hover = { x = 2, y = 1 },
+    strip = { rows = 2, toggle = { row = 1, x = 2, x1 = 1, x2 = 4 } },
+  })
+  assert(lit.rows[1]:find(ansi.bg(v.theme.hover_bg), 1, true), "the toggle span reads as a button when hovered")
+  assert(not r.rows[1]:find(ansi.bg(v.theme.hover_bg), 1, true), "and is bare otherwise")
+
+  local ghost_top
+  for row = 1, v.rows do
+    if r.hits[row] and r.hits[row].kind == "new_tab" then
+      ghost_top = ghost_top or row
+    end
+  end
+  eq(usub(rows[ghost_top], 3, 4), "╌ ", "idle ghost border is dashed with a gap cell")
+  local over = render.render(p1_view { rows = 20, hover = { x = 5, y = 19 } })
+  local over_rows = {}
+  for row = 1, 20 do
+    over_rows[row] = row_text(over.data, row)
+  end
+  local top
+  for row = 1, 20 do
+    if over.hits[row] and over.hits[row].kind == "new_tab" then
+      top = top or row
+    end
+  end
+  eq(usub(over_rows[top], 3, 4), "──", "hovered ghost border is solid")
 end)
 
 test("P1 frames are written for design review", function()
