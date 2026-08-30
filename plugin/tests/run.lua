@@ -1744,6 +1744,50 @@ test("addendum: the ghost card closes at every width and on both rails", functio
   end
 end)
 
+test("layout: hits are computed without painting anything", function()
+  local layout = require "vtabs.layout"
+  local v = p1_view { rows = 20, hover = { x = 5, y = 6 }, opts = { separator = "gap" } }
+  local l = layout.plan(v)
+  local painted = render.render(v)
+  for row = 1, v.rows do
+    local a, b = l.hits[row], painted.hits[row]
+    eq(a == nil, b == nil, "row " .. row .. " presence")
+    if a then
+      eq(a.kind, b.kind, "row " .. row .. " kind")
+      eq(a.id, b.id, "row " .. row .. " id")
+      eq(a.slot, b.slot, "row " .. row .. " slot")
+      eq(a.part, b.part, "row " .. row .. " part")
+      eq(a.x1, b.x1)
+      eq(a.x2, b.x2)
+      eq(hit.span(a, 26), hit.span(b, 26), "row " .. row .. " span")
+    end
+  end
+  eq(l.scroll, painted.scroll)
+  eq(l.total, painted.total_rows)
+end)
+
+test("layout: the grid, plan and scroll are pure and inspectable", function()
+  local layout = require "vtabs.layout"
+  local v = p1_view { rows = 20, opts = { separator = "gap" } }
+  local l = layout.plan(v)
+  eq(l.grid.card_x1, 2)
+  eq(l.grid.card_x2, 27)
+  eq(l.grid.icon_x, 4)
+  eq(l.grid.title_x1, 6)
+  eq(l.rail, false)
+  eq(l.strip_rows, v.strip.rows)
+  eq(l.plan[1].kind, "tab", "the pinned entry leads the plan")
+  eq(l.plan[1].part, "title")
+  eq(l.rows[l.strip_rows + 1].kind, "card", "and lands on the first list row")
+
+  local rail = p1_view { rows = 16, cols = 5, opts = { separator = "gap" } }
+  rail.rail = true
+  local rl = layout.plan(rail)
+  eq(rl.grid.icon_x, 3)
+  eq(rl.grid.close_x, nil, "a rail card has no close column at all")
+  eq(rl.rail, true)
+end)
+
 test("P1 frames are written for design review", function()
   -- the shared fixture pins row_gap and separator for positional tests; frames want the shipped values
   local design = { row_gap = config.defaults.row_gap, separator = config.defaults.separator }

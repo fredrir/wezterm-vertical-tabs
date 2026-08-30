@@ -1,4 +1,5 @@
 local ansi = require "vtabs.ansi"
+local layout = require "vtabs.layout"
 local theme_mod = require "vtabs.theme"
 local util = require "vtabs.util"
 
@@ -175,49 +176,6 @@ local function emit(cells, page_bg, fade)
 end
 
 ---Column grid of §1.1; every landmark derives from `cols` and `padding`.
-local function framed(cfg)
-  return type(cfg.frame) == "table" or cfg.frame == true
-end
-
-local function grid(cfg, cols)
-  local pad_l = math.max(cfg.padding.left or 0, 0)
-  local pad_r = math.max(cfg.padding.right or 0, 0)
-  local g = {}
-  g.card_x1 = pad_l + 1
-  g.card_x2 = math.max(cols - pad_r - (framed(cfg) and 1 or 0), g.card_x1)
-  g.gutter = g.card_x1
-  g.icon_x = g.gutter + 2
-  g.title_x1 = g.icon_x + 2
-  g.close_x = g.card_x2 - 1
-  g.title_x2 = g.close_x - 2
-  g.meta_x1 = g.title_x1
-  g.meta_x2 = g.close_x - 1
-  g.close_x1 = g.close_x - 1
-  g.close_x2 = g.close_x + 1
-  g.title_budget = math.max(g.title_x2 - g.title_x1 + 1, 0)
-  g.meta_budget = math.max(g.meta_x2 - g.meta_x1 + 1, 0)
-  return g
-end
-
----Collapsed: one icon column, no title, no close, no meta. The nils are the point.
-local function rail_grid(cols)
-  return {
-    card_x1 = 1,
-    card_x2 = cols,
-    gutter = 1,
-    icon_x = math.ceil(cols / 2),
-    close_x = nil,
-    close_x1 = nil,
-    close_x2 = nil,
-    title_x1 = nil,
-    title_x2 = nil,
-    meta_x1 = nil,
-    meta_x2 = nil,
-    title_budget = 0,
-    meta_budget = 0,
-  }
-end
-
 local function row_colors(item, theme, st)
   if st.dragging then
     return theme.drag_fg, theme.drag_bg
@@ -264,16 +222,6 @@ local function marker(item, theme, st, glyphs)
   return " ", theme.fg
 end
 
-local function shows_close(item, cfg, st)
-  if cfg.close_button == "never" or st.dragging then
-    return false
-  end
-  if cfg.close_button == "always" or cfg.hover == "press" then
-    return true
-  end
-  return st.hovered or item.is_active
-end
-
 ---Path-shaped meta keeps its tail: two siblings must not both collapse to their shared parent.
 local function fit_meta(text, budget, glyphs, sep)
   if util.width(text) <= budget then
@@ -307,12 +255,12 @@ local function fit_meta(text, budget, glyphs, sep)
   return head .. util.shorten_path(tail, room, glyphs.ellipsis)
 end
 
----Renders one row of a card and the sub-targets on it.
-local function card_row(item, ctx, st, part, rows_in_card)
+---Paints one row of a card; which sub-targets exist was decided in layout.
+local function card_row(item, ctx, st, part, rows_in_card, spans)
   local theme, cfg, glyphs, g, cols = ctx.theme, ctx.cfg, ctx.glyphs, ctx.grid, ctx.cols
   local cells = new_line(cols, theme.bg, theme.fg)
   if part == "gap" then
-    return cells, nil
+    return cells
   end
   local fg, bg = row_colors(item, theme, st)
   local icon_fg = st.dragging and fg or theme.meta_fg or theme.dim
@@ -325,19 +273,8 @@ local function card_row(item, ctx, st, part, rows_in_card)
     put(cells, g.gutter, glyphs.active, { fg = item.is_private and theme.private_accent or theme.accent }, g.gutter)
   end
 
-  local spans = nil
-  if part == "title" and g.title_x1 == nil then
-    if item.icon ~= "" then
-      put(
-        cells,
-        g.icon_x,
-        util.sanitize(item.icon),
-        { fg = item.is_private and theme.private_accent or icon_fg },
-        g.icon_x
-      )
-    end
-  elseif part == "icon" then
-    if cfg.icons and item.icon ~= "" then
+  if part == "icon" or (part == "title" and g.title_x1 == nil) then
+    if item.icon ~= "" and (cfg.icons or g.title_x1 == nil) then
       put(
         cells,
         g.icon_x,
@@ -359,47 +296,36 @@ local function card_row(item, ctx, st, part, rows_in_card)
     local title = util.truncate(util.sanitize(item.title), g.title_budget, glyphs.ellipsis)
     local title_fg = item.is_active and not st.dragging and (theme.title_active or fg) or fg
     put(cells, g.title_x1, title, { fg = title_fg, bold = item.is_active }, g.title_x2)
-    local pin_only = item.is_pinned and cfg.pinned_style ~= "full"
-    local glyph, glyph_fg, span_id
-    if pin_only then
-      if cfg.pinned_style == "compact" or st.hovered then
-        glyph, glyph_fg, span_id = glyphs.pinned, theme.pinned_fg, "pin"
+    local span = spans and spans[1]
+    if span then
+      local glyph = span.id == "pin" and glyphs.pinned or glyphs.close
+      local glyph_fg = theme.close_fg
+      if span.id == "pin" then
+        glyph_fg = theme.pinned_fg
+      elseif st.hovered and st.pointer_x ~= nil and st.pointer_x >= span.x1 and st.pointer_x <= span.x2 then
+        glyph_fg = theme.close_hover_fg
       end
-    elseif shows_close(item, cfg, st) then
-      local on_close = st.pointer_x ~= nil and st.pointer_x >= g.close_x1 and st.pointer_x <= g.close_x2
-      glyph = glyphs.close
-      glyph_fg = (st.hovered and on_close) and theme.close_hover_fg or theme.close_fg
-      span_id = "close"
-    end
-    if glyph then
       put(cells, g.close_x, glyph, { fg = glyph_fg }, g.close_x)
-      spans = { { id = span_id, x1 = g.close_x1, x2 = g.close_x2 } }
     end
   elseif g.meta_x1 == nil then
-    return cells, nil
+    return cells
   else
     local meta = util.sanitize(item.meta or "")
     local sep = cfg.meta_sep ~= nil and cfg.meta_sep or glyphs.meta_sep
     if cfg.show_index then
       meta = string.format("%d%s%s", item.index, sep, meta)
     end
-    -- meta_fg is gated against page and card only, never against drag_bg
     local meta_fg = st.dragging and theme.drag_fg or theme.meta_fg or theme.dim
     put(cells, g.meta_x1, fit_meta(meta, g.meta_budget, glyphs, sep), { fg = meta_fg }, g.meta_x2)
-    if shows_close(item, cfg, st) and not item.is_pinned then
-      spans = { { id = "close", x1 = g.close_x1, x2 = g.close_x2 } }
-    end
   end
 
   -- inverted from P1: the active card is square, so the chamfer is what marks a hover
   local chamfered = (st.hovered or st.focused) and not item.is_active and not st.dragging
-  if chamfered and rows_in_card >= 2 and glyphs.corners == "chamfer" then
-    if part ~= "icon" then
-      local ch = part == "title" and glyphs.chamfer_top or glyphs.chamfer_bottom
-      cells[g.card_x2] = { ch = ch, fg = bg, bg = theme.bg }
-    end
+  if chamfered and rows_in_card >= 2 and glyphs.corners == "chamfer" and part ~= "icon" then
+    local ch = part == "title" and glyphs.chamfer_top or glyphs.chamfer_bottom
+    cells[g.card_x2] = { ch = ch, fg = bg, bg = theme.bg }
   end
-  return cells, spans
+  return cells
 end
 
 local function chrome_row(ctx, glyph, glyph_x, text, text_fg, glyph_fg, bg)
@@ -447,65 +373,6 @@ local function ghost_rows(ctx, hovered)
     rows[i] = cells
   end
   return rows
-end
-
----Reorders items so the dragged one sits at the hovered slot in the pinned-first sequence.
-local function apply_drag(items, drag)
-  if not drag or not drag.over_index or not drag.active then
-    return items
-  end
-  local dragged = nil
-  local rest = {}
-  for _, item in ipairs(items) do
-    if item.tab_id == drag.tab_id then
-      dragged = item
-    else
-      rest[#rest + 1] = item
-    end
-  end
-  if not dragged then
-    return items
-  end
-  local pinned, unpinned = util.partition(rest, function(i)
-    return i.is_pinned
-  end)
-  local ghost = {}
-  for k, v in pairs(dragged) do
-    ghost[k] = v
-  end
-  ghost.is_pinned = drag.over_index <= #pinned + (dragged.is_pinned and 1 or 0)
-  ghost.armed_pinned = dragged.is_pinned
-  local target = math.max(1, math.min(drag.over_index, #rest + 1))
-  local sequence = {}
-  for _, i in ipairs(pinned) do
-    sequence[#sequence + 1] = i
-  end
-  for _, i in ipairs(unpinned) do
-    sequence[#sequence + 1] = i
-  end
-  table.insert(sequence, target, ghost)
-  return sequence
-end
-
-local function footer_entry(entry)
-  if type(entry) == "string" then
-    return { text = entry }
-  end
-  return entry or { text = "" }
-end
-
----Ghost card height that leaves the list at least 3 rows (2 for the one-row form).
-local function new_tab_rows(cfg, rows, strip_rows, footer_n)
-  if not cfg.new_tab_button then
-    return 0
-  end
-  if rows - strip_rows - 3 - footer_n >= 3 then
-    return 3
-  end
-  if rows - strip_rows - 1 - footer_n >= 2 then
-    return 1
-  end
-  return 0
 end
 
 ---Paints the inner edge in the content's own colour and chamfers the page away from it.
@@ -593,269 +460,99 @@ function M.paint(frame)
   }
 end
 
----Renders the sidebar.
+---Renders the sidebar: layout decides every row and hit, this paints them.
 ---@param view VtabsRenderInput
----@return table `{ data, hits = { [row] = VtabsHit }, total_rows, scroll }`
+---@return table `{ data, rows, rows_n, hits, total_rows, scroll }`
 function M.render(view)
   local cfg, theme, cols = view.cfg, view.theme, view.cols
   local glyphs = view.glyphs
-  local rail = view.rail == true
-  local g = rail and rail_grid(cols) or grid(cfg, cols)
+  local plan = layout.plan(view)
+  local g = plan.grid
   local ctx = { theme = theme, cfg = cfg, cols = cols, glyphs = glyphs, grid = g }
-  local strip_rows = view.strip and math.max(view.strip.rows or 0, 0) or math.max(cfg.padding.top or 0, 0)
-  strip_rows = math.min(strip_rows, view.rows)
-  local footer = {}
-  for _, entry in ipairs(view.footer or {}) do
-    footer[#footer + 1] = footer_entry(entry)
-  end
-  local ghost_h = new_tab_rows(cfg, view.rows, strip_rows, #footer)
-  if rail and ghost_h > 0 then
-    ghost_h = 1
-  end
-  local list_rows = math.max(view.rows - strip_rows - ghost_h - #footer, 0)
-
-  local ordered = apply_drag(view.items, view.drag)
-  local pinned, rest = util.partition(ordered, function(i)
-    return i.is_pinned
-  end)
-  local plan = {}
-  if view.private then
-    plan[#plan + 1] = { kind = "header" }
-    plan[#plan + 1] = { kind = "space" }
-  end
-  local slot = 0
-  local function push(item)
-    slot = slot + 1
-    local dense = item.is_pinned and cfg.pinned_style ~= "full"
-    local armed_dense = item.armed_pinned ~= nil and item.armed_pinned and cfg.pinned_style ~= "full"
-    local one_row = dense or rail or cfg.meta == false
-    local full = cfg.tab_height == "tall" and 3 or 2
-    local rows_in_card = one_row and 1 or full
-    if item.armed_pinned ~= nil then
-      rows_in_card = (armed_dense or rail or cfg.meta == false) and 1 or full
-    end
-    plan[#plan + 1] = { kind = "tab", item = item, slot = slot, part = "title", rows_in_card = rows_in_card }
-    if rows_in_card == 3 then
-      plan[#plan + 1] = { kind = "tab", item = item, slot = slot, part = "icon", rows_in_card = rows_in_card }
-    end
-    if rows_in_card >= 2 then
-      plan[#plan + 1] = { kind = "tab", item = item, slot = slot, part = "meta", rows_in_card = rows_in_card }
-    end
-    if not dense or item.armed_pinned ~= nil then
-      for _ = 1, cfg.row_gap do
-        plan[#plan + 1] = { kind = "tab", item = item, slot = slot, part = "gap", rows_in_card = rows_in_card }
-      end
-    end
-  end
-  for _, item in ipairs(pinned) do
-    push(item)
-  end
-  if #pinned > 0 and cfg.separator ~= "none" then
-    plan[#plan + 1] = { kind = cfg.separator == "rule" and "separator" or "space" }
-  end
-  for _, item in ipairs(rest) do
-    push(item)
-  end
-
-  local total = #plan
-  local max_scroll = math.max(total - list_rows, 0)
-  local scroll = math.max(0, math.min(view.scroll or 0, max_scroll))
-  if view.ensure_visible then
-    for i, entry in ipairs(plan) do
-      if entry.kind == "tab" and entry.item.tab_id == view.ensure_visible and entry.part == "title" then
-        local last = i + (entry.rows_in_card or 1) - 1
-        if i <= scroll then
-          scroll = i - 1
-        elseif last > scroll + list_rows then
-          scroll = math.min(last - list_rows, total - 1)
-        end
-        break
-      end
-    end
-  end
-  scroll = math.max(0, math.min(scroll, max_scroll))
-
-  local hovered_entry = view.hover and plan[view.hover.y - strip_rows + scroll] or nil
-  local hovered_id = hovered_entry and hovered_entry.kind == "tab" and hovered_entry.item.tab_id or nil
-
-  -- a gap row paints nothing, so fading it would leave the cut edge looking solid
-  local function paints(entry)
-    return entry ~= nil and entry.kind ~= "space" and not (entry.kind == "tab" and entry.part == "gap")
-  end
-  local fade_first, fade_last
-  for i = 1, list_rows do
-    if paints(plan[i + scroll]) then
-      fade_first = i
-      break
-    end
-  end
-  for i = list_rows, 1, -1 do
-    if paints(plan[i + scroll]) then
-      fade_last = i
-      break
-    end
-  end
-
-  local hits = {}
   local painted, fades = {}, {}
-  local function line(row, cells, fade)
-    painted[row] = cells
-    fades[row] = fade
-  end
 
-  for row = 1, strip_rows do
-    local cells = new_line(cols, theme.bg, theme.fg)
-    local toggle = view.strip and view.strip.toggle
-    local last = toggle and math.min(toggle.row + 1, strip_rows) or 0
-    local on = toggle
-      and view.hover
-      and view.hover.y >= toggle.row
-      and view.hover.y <= last
-      and view.hover.x >= toggle.x1
-      and view.hover.x <= toggle.x2
-    if toggle and on and row >= toggle.row and row <= last then
-      fill(cells, toggle.x1, toggle.x2, theme.hover_bg)
-    end
-    if toggle and row == toggle.row then
-      local glyph = cfg.position == "right" and glyphs.toggle_right or glyphs.toggle_left
-      put(cells, toggle.x or toggle.x1 + 1, glyph, { fg = on and theme.accent or theme.dim }, cols)
-    end
-    if toggle and row >= toggle.row and row <= math.min(toggle.row + 1, strip_rows) then
-      hits[row] = { kind = "toggle", x1 = toggle.x1, x2 = toggle.x2 }
-    else
-      hits[row] = { kind = "strip" }
-    end
-    line(row, cells)
-  end
-
-  for i = 1, list_rows do
-    local row = strip_rows + i
-    local entry = plan[i + scroll]
-    local cells, hit
-    if not entry or entry.kind == "space" then
-      cells, hit = new_line(cols, theme.bg, theme.fg), { kind = "space" }
-    elseif entry.kind == "header" then
+  for row = 1, view.rows do
+    local spec = plan.rows[row]
+    local cells = nil
+    if spec == nil then
+      cells = nil
+    elseif spec.kind == "strip" then
+      cells = new_line(cols, theme.bg, theme.fg)
+      if spec.lit then
+        fill(cells, spec.toggle.x1, spec.toggle.x2, theme.hover_bg)
+      end
+      if spec.glyph then
+        local glyph = cfg.position == "right" and glyphs.toggle_right or glyphs.toggle_left
+        local on = plan.rows[spec.toggle.row] and plan.rows[spec.toggle.row].lit
+        put(cells, spec.toggle.x or spec.toggle.x1 + 1, glyph, { fg = on and theme.accent or theme.dim }, cols)
+      end
+    elseif spec.kind == "space" then
+      cells = new_line(cols, theme.bg, theme.fg)
+    elseif spec.kind == "header" then
       cells = chrome_row(ctx, glyphs.private, g.icon_x, "Private", theme.private_accent, theme.private_accent)
-      hit = { kind = "space" }
-    elseif entry.kind == "separator" then
+    elseif spec.kind == "separator" then
       cells = new_line(cols, theme.bg, theme.fg)
       for x = g.card_x1, g.card_x2 do
         put(cells, x, glyphs.rule, { fg = theme.separator }, x)
       end
-      hit = { kind = "separator" }
-    else
-      local item = entry.item
-      local st = {
-        hovered = hovered_id == item.tab_id,
-        dragging = view.drag and view.drag.active and view.drag.tab_id == item.tab_id or false,
-        focused = view.focus_index == entry.slot,
-        pointer_x = view.hover and view.hover.x or nil,
-      }
-      local spans
-      cells, spans = card_row(item, ctx, st, entry.part, entry.rows_in_card or 1)
-      hit = {
-        kind = "tab",
-        id = item.tab_id,
-        slot = entry.slot,
-        part = entry.part,
-        x1 = g.card_x1,
-        x2 = g.card_x2,
-        pinned = item.is_pinned,
-        spans = spans,
-      }
+    elseif spec.kind == "card" then
+      cells = card_row(spec.item, ctx, spec.st, spec.part, spec.rows_in_card, spec.spans)
+    elseif spec.kind == "ghost" then
+      if spec.shape == "rail" then
+        cells = new_line(cols, spec.hovered and theme.hover_bg or theme.bg, theme.fg)
+        put(cells, g.icon_x, glyphs.new_tab, { fg = theme.accent }, cols)
+      elseif spec.shape == "card" then
+        cells = ghost_rows(ctx, spec.hovered)[spec.index]
+      else
+        cells = chrome_row(
+          ctx,
+          glyphs.new_tab,
+          g.icon_x,
+          cfg.new_tab_label,
+          spec.hovered and theme.fg or theme.new_tab_fg,
+          theme.accent,
+          spec.hovered and theme.hover_bg or theme.bg
+        )
+      end
+    elseif spec.kind == "footer" then
+      local entry = spec.entry
+      local fg = entry.fg or theme.meta_fg or theme.dim
+      local bg = entry.bg or theme.bg
+      if spec.hovered then
+        fg, bg = theme.hover_fg, theme.hover_bg
+      end
+      cells = chrome_row(ctx, entry.icon, g.icon_x, util.sanitize(entry.text or ""), fg, entry.icon_fg or fg, bg)
     end
-    local fade = nil
-    if (i == fade_first and scroll > 0) or (i == fade_last and scroll < max_scroll) then
-      fade = 0.5
-    end
-    if view.drag and view.drag.outside then
-      local edge = cfg.position == "right" and 1 or cols
-      cells[edge] = { ch = " ", fg = theme.fg, bg = theme.accent }
-    end
-    local thumb = cfg.scroll_indicator ~= "never"
-      and cfg.scroll_indicator ~= false
-      and total > list_rows
-      and (not rail or cols >= 7)
-    if thumb then
-      local len = math.max(1, math.floor(list_rows * list_rows / total))
-      local start = 1 + math.floor(scroll * (list_rows - len) / math.max(max_scroll, 1) + 0.5)
-      if i >= start and i < start + len then
-        local lit = cfg.scroll_indicator == "always"
-          or view.hover ~= nil
-          or (view.drag and view.drag.active)
-          or view.user_scrolled
+    if cells then
+      if spec.thumb then
         cells[cols] = {
           ch = glyphs.scroll,
-          fg = lit and theme.scroll_fg or (theme.scroll_idle_fg or theme.scroll_fg),
+          fg = spec.thumb_lit and theme.scroll_fg or (theme.scroll_idle_fg or theme.scroll_fg),
           bg = theme.bg,
         }
       end
-    end
-    line(row, cells, fade)
-    hits[row] = hit
-  end
-
-  if ghost_h > 0 then
-    local base = strip_rows + list_rows
-    local hovered = view.hover and view.hover.y > base and view.hover.y <= base + ghost_h or false
-    if rail then
-      if base + 1 <= view.rows then
-        local cells = new_line(cols, hovered and theme.hover_bg or theme.bg, theme.fg)
-        put(cells, g.icon_x, glyphs.new_tab, { fg = theme.accent }, cols)
-        line(base + 1, cells)
-        hits[base + 1] = { kind = "new_tab", x1 = g.card_x1, x2 = g.card_x2 }
+      if view.drag and view.drag.outside and spec.kind ~= "strip" and spec.kind ~= "footer" then
+        local edge = cfg.position == "right" and 1 or cols
+        cells[edge] = { ch = " ", fg = theme.fg, bg = theme.accent }
       end
-    elseif ghost_h == 3 then
-      local rows = ghost_rows(ctx, hovered)
-      for i = 1, 3 do
-        if base + i <= view.rows then
-          line(base + i, rows[i])
-          hits[base + i] = { kind = "new_tab", x1 = g.card_x1, x2 = g.card_x2 }
-        end
-      end
-    else
-      local cells = chrome_row(
-        ctx,
-        glyphs.new_tab,
-        g.icon_x,
-        cfg.new_tab_label,
-        hovered and theme.fg or theme.new_tab_fg,
-        theme.accent,
-        hovered and theme.hover_bg or theme.bg
-      )
-      if base + 1 <= view.rows then
-        line(base + 1, cells)
-        hits[base + 1] = { kind = "new_tab", x1 = g.card_x1, x2 = g.card_x2 }
-      end
+      painted[row] = cells
+      fades[row] = spec.fade
     end
   end
 
-  for i, entry in ipairs(footer) do
-    local row = view.rows - #footer + i
-    if row >= 1 then
-      local fg = entry.fg or theme.meta_fg or theme.dim
-      local bg = entry.bg or theme.bg
-      if view.hover and view.hover.y == row and entry.id then
-        fg, bg = theme.hover_fg, theme.hover_bg
-      end
-      local cells = chrome_row(ctx, entry.icon, g.icon_x, util.sanitize(entry.text or ""), fg, entry.icon_fg or fg, bg)
-      line(row, cells)
-      hits[row] = { kind = "footer", id = entry.id, entry = entry, x1 = g.card_x1, x2 = g.card_x2 }
-    end
-  end
-  if framed(cfg) then
+  if layout.framed(cfg) then
     M.frame_edge(painted, cols, theme, glyphs, view.rows)
   end
   local frame = {
     cells = painted,
     fades = fades,
-    hits = hits,
+    hits = plan.hits,
     cols = cols,
     rows = view.rows,
     theme = theme,
     grid = g,
-    total_rows = total,
-    scroll = scroll,
+    total_rows = plan.total,
+    scroll = plan.scroll,
   }
   if view.popover then
     M.composite(frame, view.popover)
