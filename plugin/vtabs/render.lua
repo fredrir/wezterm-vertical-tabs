@@ -266,32 +266,40 @@ local function card_row(item, ctx, st, part, rows_in_card, spans)
   local icon_fg = st.dragging and fg or theme.meta_fg or theme.dim
   fill(cells, g.card_x1, g.card_x2, bg)
 
+  local rail = ctx.rail == true
+  local carries_icon = part == (rows_in_card >= 3 and "icon" or "title")
   local mark, mark_fg = marker(item, theme, st, glyphs)
-  if part == "title" then
+  -- in the rail the marker rides the icon so the pair reads as one row of the same card
+  if rail and carries_icon or not rail and part == "title" then
     put(cells, g.gutter, mark, { fg = mark_fg }, g.gutter)
   elseif (item.is_active or st.dragging) and needs_bar(theme) then
     put(cells, g.gutter, glyphs.active, { fg = item.is_private and theme.private_accent or theme.accent }, g.gutter)
   end
 
-  if part == "icon" or (part == "title" and g.title_x1 == nil) then
-    if item.icon ~= "" and (cfg.icons or g.title_x1 == nil) then
-      put(
-        cells,
-        g.icon_x,
-        util.sanitize(item.icon),
-        { fg = item.is_private and theme.private_accent or icon_fg },
-        g.icon_x
-      )
+  local function paint_icon()
+    put(
+      cells,
+      g.icon_x,
+      util.sanitize(item.icon),
+      { fg = item.is_private and theme.private_accent or icon_fg },
+      g.icon_x
+    )
+  end
+
+  if rail then
+    if carries_icon and item.icon ~= "" then
+      paint_icon()
+    end
+    return cells
+  end
+
+  if part == "icon" then
+    if cfg.icons and item.icon ~= "" then
+      paint_icon()
     end
   elseif part == "title" then
-    if cfg.icons and item.icon ~= "" and rows_in_card < 3 then
-      put(
-        cells,
-        g.icon_x,
-        util.sanitize(item.icon),
-        { fg = item.is_private and theme.private_accent or icon_fg },
-        g.icon_x
-      )
+    if cfg.icons and item.icon ~= "" and carries_icon then
+      paint_icon()
     end
     local title = util.truncate(util.sanitize(item.title), g.title_budget, glyphs.ellipsis)
     local title_fg = item.is_active and not st.dragging and (theme.title_active or fg) or fg
@@ -307,8 +315,6 @@ local function card_row(item, ctx, st, part, rows_in_card, spans)
       end
       put(cells, g.close_x, glyph, { fg = glyph_fg }, g.close_x)
     end
-  elseif g.meta_x1 == nil then
-    return cells
   else
     local meta = util.sanitize(item.meta or "")
     local sep = cfg.meta_sep ~= nil and cfg.meta_sep or glyphs.meta_sep
@@ -471,7 +477,7 @@ function M.render(view)
   local glyphs = view.glyphs
   local plan = layout.plan(view)
   local g = plan.grid
-  local ctx = { theme = theme, cfg = cfg, cols = cols, glyphs = glyphs, grid = g }
+  local ctx = { theme = theme, cfg = cfg, cols = cols, glyphs = glyphs, grid = g, rail = plan.rail }
   local painted, fades = {}, {}
 
   for row = 1, view.rows do

@@ -1376,8 +1376,11 @@ test("P2 rail: grid, cards and chrome at 5 and 9 cols", function()
         unpinned = unpinned or row
       end
     end
-    eq(r.hits[unpinned + 1].part, "gap", "a rail card is an icon row plus a gap row")
-    eq(r.hits[unpinned + 1].slot, r.hits[unpinned].slot, "both rows carry the same slot")
+    eq(r.hits[unpinned + 1].part, "meta", "a rail card keeps the expanded card's rows")
+    eq(r.hits[unpinned + 2].part, "gap", "gap and all")
+    eq(r.hits[unpinned + 1].slot, r.hits[unpinned].slot, "every row of the slot carries it")
+    eq(r.hits[unpinned + 2].slot, r.hits[unpinned].slot)
+    eq(usub(rows[unpinned + 1], icon_x, icon_x), " ", "but only the icon row paints")
     eq(r.hits[first + 1].part, nil, "a pinned rail entry keeps no gap, so the block stays solid")
     for row = 1, v.rows do
       assert(not rows[row]:find("▙", 1, true), "no chamfer at " .. cols .. " cols")
@@ -1391,6 +1394,54 @@ test("P2 rail: grid, cards and chrome at 5 and 9 cols", function()
     end
     eq(usub(rows[ghost], icon_x, icon_x), "+", "the ghost shrinks to a bare +")
     assert(second, "the second card is a separate hit record")
+  end
+end)
+
+test("item 2: a rail slot occupies exactly the rows the expanded card does", function()
+  local layout = require "vtabs.layout"
+  for _, height in ipairs { "card", "tall" } do
+    local function planned(rail, cols)
+      local v = p1_view { rows = 20, cols = cols, opts = { separator = "gap", width = math.max(cols, 8) } }
+      v.cfg.tab_height = height
+      v.rail = rail
+      v.strip = { rows = 2, toggle = { row = 1, x = 2, x1 = 1, x2 = 4 } }
+      return v, layout.plan(v)
+    end
+    local wide_v, wide = planned(false, 28)
+    local rail_v, rail = planned(true, 5)
+    local carded = 0
+    for row = 1, 20 do
+      local a, b = wide.hits[row], rail.hits[row]
+      eq(b.kind == "tab", a.kind == "tab", height .. ": row " .. row .. " is a card in both modes or neither")
+      if a.kind == "tab" and b.kind == "tab" then
+        carded = carded + 1
+        eq(b.slot, a.slot, height .. ": row " .. row .. " slot")
+        eq(b.part, a.part, height .. ": row " .. row .. " part")
+        eq(b.x1, 1, "the whole rail row is the card")
+        eq(b.x2, rail_v.cols)
+      end
+    end
+    assert(carded >= 7, height .. ": the comparison actually covered the cards")
+
+    local wide_rows = frame_rows(wide_v)
+    local rail_rows = frame_rows(rail_v)
+    local wide_icon, rail_icon
+    for row = 1, 20 do
+      if usub(wide_rows[row], wide.grid.icon_x, wide.grid.icon_x) == "v" then
+        wide_icon = wide_icon or row
+      end
+      if usub(rail_rows[row], rail.grid.icon_x, rail.grid.icon_x) == "v" then
+        rail_icon = rail_icon or row
+      end
+    end
+    eq(rail_icon, wide_icon, height .. ": the rail icon lands on the expanded card's icon row")
+    local slot_top
+    for row = 1, 20 do
+      if rail.hits[row].kind == "tab" and rail.hits[row].slot == rail.hits[rail_icon].slot then
+        slot_top = slot_top or row
+      end
+    end
+    eq(rail_icon - slot_top + 1, layout.icon_row(height == "tall" and 3 or 2), height .. ": middle of the card")
   end
 end)
 
