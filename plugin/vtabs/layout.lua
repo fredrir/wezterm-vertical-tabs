@@ -131,15 +131,21 @@ local function card_span(item, cfg, st, g, part)
   return nil
 end
 
-local function card_rows(item, cfg, rail)
+---A rail slot is the expanded slot with the columns taken away, so rows survive the toggle.
+local function card_rows(item, cfg)
   local dense = item.is_pinned and cfg.pinned_style ~= "full"
   local armed_dense = item.armed_pinned == true and cfg.pinned_style ~= "full"
   local full = cfg.tab_height == "tall" and 3 or 2
-  local one_row = dense or rail or cfg.meta == false
+  local one_row = dense or cfg.meta == false
   if item.armed_pinned ~= nil then
-    one_row = armed_dense or rail or cfg.meta == false
+    one_row = armed_dense or cfg.meta == false
   end
   return one_row and 1 or full, dense
+end
+
+---The card row the icon sits on: the middle one, which is where the expanded card paints it too.
+function M.icon_row(rows_in_card)
+  return math.ceil(math.max(rows_in_card, 1) / 2)
 end
 
 ---Everything about a frame that does not depend on colour: the grid, the plan, the rows, the hits.
@@ -172,7 +178,7 @@ function M.plan(view)
   local slot = 0
   local function push(item)
     slot = slot + 1
-    local rows_in_card, dense = card_rows(item, cfg, rail)
+    local rows_in_card, dense = card_rows(item, cfg)
     local function row(part)
       plan[#plan + 1] = { kind = "tab", item = item, slot = slot, part = part, rows_in_card = rows_in_card }
     end

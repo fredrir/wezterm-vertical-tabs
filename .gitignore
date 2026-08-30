@@ -7,3 +7,4 @@ plugin/*.src.rock
 
 .dev-build.log
 .claude/worktrees/
+.claude/team/

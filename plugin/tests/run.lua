@@ -836,12 +836,48 @@ test("P1 ghost card: outlined, sticky, exactly cols wide idle and hovered", func
     eq(r.hits[row].x2, 27)
   end
   local hover = frame_rows(p1_view { hover = { x = 5, y = 9 }, opts = { separator = "gap" } })
-  eq(usub(hover[8], 3, 3), "─", "solid border on hover")
+  for row = 8, 10 do
+    eq(hover[row], idle[row], "hover redraws no glyph, only recolours row " .. row)
+  end
   eq(util.width(hover[8]), 28)
   local tight = render.render(p1_view { rows = 6, opts = { separator = "gap" } })
   eq(tight.hits[6].kind, "new_tab", "degrades to a single row")
   local tiny = render.render(p1_view { rows = 2, opts = { separator = "gap" } })
   eq(tiny.hits[2].kind ~= "new_tab", true, "and drops out entirely rather than starving the list")
+end)
+
+test("item 7: the ghost card's hover is one border step and no inline band", function()
+  local function ghost(over)
+    local v = p1_view(over)
+    local rows, r = frame_rows(v)
+    local top
+    for row = 1, v.rows do
+      if r.hits[row] and r.hits[row].kind == "new_tab" then
+        top = top or row
+      end
+    end
+    return top, rows, r, v
+  end
+  local top, idle_rows, idle = ghost { rows = 20, opts = { separator = "gap" } }
+  local hover_top, hover_rows, hovered, v = ghost { rows = 20, hover = { x = 5, y = 19 }, opts = { separator = "gap" } }
+  eq(hover_top, top, "hover moves nothing")
+  for i = 0, 2 do
+    eq(hover_rows[top + i], idle_rows[top + i], "hover redraws no glyph on ghost row " .. i)
+  end
+  eq(usub(idle_rows[top], 2, 2), "╭", "and the corners stay closed")
+  eq(usub(idle_rows[top], 27, 27), "╮")
+  eq(usub(idle_rows[top + 2], 2, 2), "╰")
+  eq(usub(idle_rows[top + 2], 27, 27), "╯")
+  assert(idle.rows[top]:find(ansi.fg(v.theme.border_idle), 1, true), "the idle border is border_idle")
+  assert(hovered.rows[top]:find(ansi.fg(v.theme.border), 1, true), "hover is the one step up to border")
+  assert(not hovered.rows[top]:find(ansi.fg(v.theme.accent), 1, true), "never the accent while the step shows")
+  assert(not hovered.rows[top + 1]:find(ansi.bg(v.theme.hover_bg), 1, true), "the label keeps the page behind it")
+  assert(not idle.rows[top + 1]:find(ansi.bg(v.theme.hover_bg), 1, true), "in both states")
+
+  local flat = p1_view { rows = 20, hover = { x = 5, y = 19 }, opts = { separator = "gap" } }
+  flat.theme.border = flat.theme.border_idle
+  local flat_r = render.render(flat)
+  assert(flat_r.rows[top]:find(ansi.fg(flat.theme.accent), 1, true), "a step too small to see falls back to the accent")
 end)
 
 test("P1 strip: reserve rows, toggle span, never over a list row", function()
@@ -1271,7 +1307,7 @@ test("P1 screenshots: icon weight, chamfer, toggle surface, dashed ghost", funct
       top = top or row
     end
   end
-  eq(usub(over_rows[top], 3, 4), "──", "hovered ghost border is solid")
+  eq(usub(over_rows[top], 3, 4), "╌╌", "and the hovered ghost stays dashed")
 end)
 
 local function popover_rect(over)
@@ -1386,8 +1422,11 @@ test("P2 rail: grid, cards and chrome at 5 and 9 cols", function()
         unpinned = unpinned or row
       end
     end
-    eq(r.hits[unpinned + 1].part, "gap", "a rail card is an icon row plus a gap row")
-    eq(r.hits[unpinned + 1].slot, r.hits[unpinned].slot, "both rows carry the same slot")
+    eq(r.hits[unpinned + 1].part, "meta", "a rail card keeps the expanded card's rows")
+    eq(r.hits[unpinned + 2].part, "gap", "gap and all")
+    eq(r.hits[unpinned + 1].slot, r.hits[unpinned].slot, "every row of the slot carries it")
+    eq(r.hits[unpinned + 2].slot, r.hits[unpinned].slot)
+    eq(usub(rows[unpinned + 1], icon_x, icon_x), " ", "but only the icon row paints")
     eq(r.hits[first + 1].part, nil, "a pinned rail entry keeps no gap, so the block stays solid")
     for row = 1, v.rows do
       assert(not rows[row]:find("▙", 1, true), "no chamfer at " .. cols .. " cols")
@@ -1402,6 +1441,72 @@ test("P2 rail: grid, cards and chrome at 5 and 9 cols", function()
     eq(usub(rows[ghost], icon_x, icon_x), "+", "the ghost shrinks to a bare +")
     assert(second, "the second card is a separate hit record")
   end
+end)
+
+test("item 2: a rail slot occupies exactly the rows the expanded card does", function()
+  local layout = require "vtabs.layout"
+  for _, height in ipairs { "card", "tall" } do
+    local function planned(rail, cols)
+      local v = p1_view { rows = 20, cols = cols, opts = { separator = "gap", width = math.max(cols, 8) } }
+      v.cfg.tab_height = height
+      v.rail = rail
+      v.strip = { rows = 2, toggle = { row = 1, x = 2, x1 = 1, x2 = 4 } }
+      return v, layout.plan(v)
+    end
+    local wide_v, wide = planned(false, 28)
+    local rail_v, rail = planned(true, 5)
+    local carded = 0
+    for row = 1, 20 do
+      local a, b = wide.hits[row], rail.hits[row]
+      eq(b.kind == "tab", a.kind == "tab", height .. ": row " .. row .. " is a card in both modes or neither")
+      if a.kind == "tab" and b.kind == "tab" then
+        carded = carded + 1
+        eq(b.slot, a.slot, height .. ": row " .. row .. " slot")
+        eq(b.part, a.part, height .. ": row " .. row .. " part")
+        eq(b.x1, 1, "the whole rail row is the card")
+        eq(b.x2, rail_v.cols)
+      end
+    end
+    assert(carded >= 7, height .. ": the comparison actually covered the cards")
+
+    local wide_rows = frame_rows(wide_v)
+    local rail_rows = frame_rows(rail_v)
+    local wide_icon, rail_icon
+    for row = 1, 20 do
+      if usub(wide_rows[row], wide.grid.icon_x, wide.grid.icon_x) == "v" then
+        wide_icon = wide_icon or row
+      end
+      if usub(rail_rows[row], rail.grid.icon_x, rail.grid.icon_x) == "v" then
+        rail_icon = rail_icon or row
+      end
+    end
+    eq(rail_icon, wide_icon, height .. ": the rail icon lands on the expanded card's icon row")
+    local slot_top
+    for row = 1, 20 do
+      if rail.hits[row].kind == "tab" and rail.hits[row].slot == rail.hits[rail_icon].slot then
+        slot_top = slot_top or row
+      end
+    end
+    eq(rail_icon - slot_top + 1, layout.icon_row(height == "tall" and 3 or 2), height .. ": middle of the card")
+  end
+end)
+
+test("P2 rail: the private header and a footer survive having no title column", function()
+  local v = p1_view {
+    rows = 16,
+    cols = 5,
+    private = true,
+    footer = { { icon = "f", text = "main - 3 dirty", id = "git" } },
+    opts = { separator = "gap" },
+  }
+  v.rail = true
+  local rows, r = frame_rows(v)
+  for row = 1, v.rows do
+    eq(util.width(rows[row]), 5, "rail row " .. row)
+  end
+  eq(usub(rows[1], 3, 3), v.glyphs.private, "the header keeps its glyph")
+  eq(r.hits[v.rows].kind, "footer")
+  eq(usub(rows[v.rows], 3, 3), "f", "and the footer keeps its icon")
 end)
 
 test("P2 rail: the thumb needs 7 columns", function()
@@ -1858,6 +1963,8 @@ test("P1 frames are written for design review", function()
   dump_frame("hover", dumped { rows = 20, hover = { x = 5, y = hover_row }, opts = design })
   -- identical to hover.txt on purpose: they differ only in close_hover_fg, which stripping removes
   dump_frame("hover-close", dumped { rows = 20, hover = { x = 26, y = hover_row }, opts = design })
+  -- identical to the ghost in tabs.txt on purpose: the hover moves colour only, and stripping removes it
+  dump_frame("new-tab-hover", dumped { rows = 20, hover = { x = 5, y = 19 }, opts = design })
   dump_frame("drag", dumped { rows = 20, drag = { tab_id = 3, over_index = 1, active = true }, opts = design })
   dump_frame("private", dumped { rows = 20, private = true, opts = design })
   dump_frame(
