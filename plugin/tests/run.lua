@@ -1506,6 +1506,25 @@ test("an unreachable contrast gate stops at the target colour instead of mixing 
   assert(rgb(reachable.dim) ~= rgb(reachable.fg), "and dim is still dimmer than fg")
 end)
 
+-- bug-hunter regression pins ------------------------------------------------
+
+test("a mux window resize is not a divider drag, even though the pane size arrives a poll late", function()
+  local win, gui = setup_window(1)
+  sidebar.ensure(gui)
+  local sb = mark_ready(win.tab_list[1])
+  eq(sb.cols, 28)
+  -- A mux client learns the new window size before the server sends back the new pane sizes.
+  win.cols = win.cols + 40
+  geometry.correct(gui)
+  for _, tab in ipairs(win.tab_list) do
+    tab:adjust_x_size(40)
+  end
+  eq(sb.cols, 48, "adjust_x_size gave the sidebar half of the delta")
+  eq(geometry.desired(gui:window_id()), 28, "the drift was adopted as the user's width")
+  geometry.correct(gui)
+  eq(sb.cols, 28)
+end)
+
 os.remove(state.file)
 print(string.format("%d passed, %d failed", passed, failed))
 os.exit(failed == 0 and 0 or 1)
