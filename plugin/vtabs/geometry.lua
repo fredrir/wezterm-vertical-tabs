@@ -12,31 +12,54 @@ local MIN_CONTENT = 20
 local OBSERVE_MS = 400
 local SETTLE_MS = 1000
 local STUCK_TRIES = 3
+-- A mux applies an adjust a poll late. Re-issuing it meanwhile stacks adjusts that all land, and
+-- the overshoot then reads as a divider drag and is adopted, so one is outstanding at a time.
+local ADJUST_WAIT_MS = 1000
+-- `window-resized` fires once per frame of a drag; correcting per frame costs an adjust and a
+-- repaint each. The leading edge is corrected, the rest waits for the poll after the drag stops.
+local RESIZE_QUIET_MS = 150
 
 local session = state.session
 local adopted = {}
+local adopted_for = {}
 local observed = {}
 local checked = {}
 local unreachable = {}
 local settling = {}
 local attempted = {}
+local in_flight = {}
+local resized_at = {}
+local rail_reserve = {}
 
 ---Target width: the rail when collapsed, else what the user last dragged it to, else `cfg.width`.
 function M.desired(window_id)
   local cfg = config.get()
   if cfg.collapsed == "rail" and state.is_collapsed(window_id) then
+    if cfg.rail_titlebar == "widen" then
+      return math.max(cfg.rail_width, rail_reserve[window_id] or 0)
+    end
     return cfg.rail_width
   end
   return adopted[window_id] or cfg.width
 end
 
+---The macOS light reserve the last frame measured; the rail is widened to it so the lights land on
+---the sidebar rather than on the shell. `view` writes it, because only a render has a cell size.
+function M.set_rail_cols(window_id, cols)
+  rail_reserve[window_id] = (cols or 0) > 0 and cols or nil
+end
+
 function M.forget_window(window_id)
   adopted[window_id] = nil
+  adopted_for[window_id] = nil
   observed[window_id] = nil
   checked[window_id] = nil
   unreachable[window_id] = nil
   settling[window_id] = nil
   attempted[window_id] = nil
+  in_flight[window_id] = nil
+  resized_at[window_id] = nil
+  rail_reserve[window_id] = nil
 end
 
 ---A mux client sees the new window size a poll before the new pane sizes; no adoption until both land.
@@ -44,7 +67,32 @@ function M.settle(window_id, at)
   settling[window_id] = at or util.now_ms()
 end
 
-M.reset = M.forget_window
+---The sidebar reporting its own new size is proof the adjust landed, so the next one need not wait.
+function M.landed(window_id)
+  in_flight[window_id] = nil
+end
+
+---True on the first resize event of a burst. A drag is one burst, so it corrects once at the start
+---and once from the poll after it stops, rather than once per frame in between.
+function M.on_resize(window_id)
+  local now = util.now_ms()
+  local last = resized_at[window_id]
+  resized_at[window_id] = now
+  M.settle(window_id, now)
+  return last == nil or now - last >= RESIZE_QUIET_MS
+end
+
+---A config reload only invalidates a dragged width when `width` itself changed; every edit to
+---`wezterm.lua` reloads, and the plugin watches its own files too. The settle stamp is kept either
+---way, or the first pair of observations after the reload would look steady and adopt what it finds.
+function M.reset(window_id)
+  local width = config.get().width
+  local keep = adopted_for[window_id] == width and adopted[window_id] or nil
+  M.forget_window(window_id)
+  adopted[window_id], adopted_for[window_id] = keep, keep and width or nil
+  settling[window_id] = util.now_ms()
+end
+
 table.insert(state.forget_hooks, M.forget_window)
 
 ---Columns, dpi and cell width of a pane; the last two tell a divider drag from a font or DPI change.
@@ -136,6 +184,7 @@ function M.correct(gui_window)
   end
   -- A divider drag moves the sidebar within a tab whose own width, pixels and cells all stay put.
   -- A rail width is ours, not a drag, and the width either side of a toggle is not comparable.
+  -- A width seen while our own adjust is still in flight is that adjust landing, never a drag.
   local steady = seen
     and not collapsed
     and seen.collapsed == false
@@ -144,9 +193,11 @@ function M.correct(gui_window)
     and seen.dpi == dpi
     and seen.cell == cell
     and seen.tab_cols == tab_cols
+    and in_flight[wid] == nil
     and now - (settling[wid] or 0) >= SETTLE_MS
   if steady and seen.cols ~= cols then
     adopted[wid] = fits(cols, tab_cols)
+    adopted_for[wid] = cfg.width
     unreachable[wid] = nil
     return false
   end
@@ -155,13 +206,28 @@ function M.correct(gui_window)
   local want = M.desired(wid)
   local target = fits(want, tab_cols, collapsed and want or MIN_WIDTH)
   local attempt = { tab_id = tab_id, tab_cols = tab_cols, target = target, cols = cols }
+  if target == cols then
+    attempted[wid] = nil
+    in_flight[wid] = nil
+    return false
+  end
+  if same_attempt(unreachable[wid], attempt) then
+    attempted[wid] = nil
+    return false
+  end
+  -- One copy of an adjust outstanding at a time: a mux applies it a poll late, and the duplicate
+  -- lands too, overshooting into a width the drag heuristic would then adopt. A *different* target
+  -- means the situation moved on, so that one goes out at once.
+  local pending = in_flight[wid]
+  if pending and now - pending.at < ADJUST_WAIT_MS and same_attempt(pending.attempt, attempt) then
+    return false
+  end
   local last = attempted[wid]
-  -- A mux applies the adjust a poll late, so a width counts as unreachable only after it sits still.
+  -- A mux applies the adjust a poll late, so a width counts as unreachable only after it sits still
+  -- across attempts we actually made; a wait for one still in flight is not evidence of anything.
   attempt.stuck = (last and same_attempt(last, attempt) and last.cols == cols) and last.stuck + 1 or 0
   if attempt.stuck >= STUCK_TRIES then
     unreachable[wid] = attempt
-  end
-  if target == cols or same_attempt(unreachable[wid], attempt) then
     attempted[wid] = nil
     return false
   end
@@ -182,6 +248,7 @@ function M.correct(gui_window)
   end
   attempted[wid] = attempt
   settling[wid] = now
+  in_flight[wid] = { at = now, attempt = attempt }
   return true
 end
 

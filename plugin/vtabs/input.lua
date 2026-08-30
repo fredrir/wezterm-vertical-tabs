@@ -522,7 +522,9 @@ function M.handle(gui_window, pane, name, value)
     sidebar.ensure(gui_window)
     view.sync(gui_window, { force = true })
   elseif ev.t == "resize" then
-    -- The sidebar reporting its own new size is the one signal that is never a poll behind the mux.
+    -- The sidebar reporting its own new size is the one signal that is never a poll behind the mux,
+    -- so it is also the proof that the adjust in flight has landed.
+    geometry.landed(gui_window:window_id())
     geometry.correct(gui_window)
     view.sync(gui_window, { force = true })
   elseif ev.t == "mouse" then

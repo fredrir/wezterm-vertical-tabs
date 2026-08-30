@@ -236,11 +236,15 @@ local function rect_for(gui_window, dims, resolved, cfg)
   return rect
 end
 
+---A rail has no room beside the lights, so its toggle centres below them; without telling
+---`strip_geometry` which mode it is in, the toggle lands at column 11 of a 5-column pane.
 local function strip_for(gui_window, cfg, dims)
   local facts = chrome_for(gui_window, cfg)
+  local wid = gui_window:window_id()
   local window = util.try(function()
     return gui_window:get_dimensions()
   end) or {}
+  local rail = state.is_collapsed(wid) and cfg.collapsed == "rail" or nil
   local g = platform.strip_geometry(dims, {
     is_mac = platform.is_mac or facts.preview,
     integrated_buttons = facts.integrated_buttons,
@@ -250,7 +254,11 @@ local function strip_for(gui_window, cfg, dims)
     padding_top = cfg.padding.top,
     toggle_button = cfg.toggle_button,
     card_x1 = cfg.padding.left + 1,
+    rail = rail,
+    rail_width = rail and cfg.rail_width or nil,
   })
+  -- `desired` has no cell size of its own, so the reserve a frame measured is handed to geometry.
+  geometry.set_rail_cols(wid, g.cols)
   local toggle = nil
   if cfg.toggle_button and g.rows > 0 then
     toggle = { row = g.toggle_row, x = g.toggle_x, x1 = math.max(1, g.toggle_x - 1), x2 = g.toggle_x + 2 }

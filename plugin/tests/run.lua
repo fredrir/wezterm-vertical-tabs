@@ -2625,7 +2625,7 @@ test("split Left puts the sidebar in first, split Right in second, so a right si
   config.setup { backend = { path = "/bin/wez-vtabs" } }
 end)
 
-test("a divider drag with an unchanged window becomes the desired width until config reload", function()
+test("a divider drag survives a config reload, unless the reload changed width itself", function()
   local win, gui = setup_window(1)
   sidebar.ensure(gui)
   local tab = win.tab_list[1]
@@ -2636,9 +2636,62 @@ test("a divider drag with an unchanged window becomes the desired width until co
   eq(geometry.desired(gui:window_id()), 34)
   eq(geometry.correct(gui), false)
   eq(sb.cols, 34)
+  -- Every edit to wezterm.lua reloads, and the plugin watches its own files too, so a reload that
+  -- says nothing about the width must not throw the drag away.
   geometry.reset(gui:window_id())
-  assert(geometry.correct(gui), "config reload drops the adopted width")
-  eq(sb.cols, 28)
+  eq(geometry.desired(gui:window_id()), 34, "an unrelated reload keeps it")
+  eq(geometry.correct(gui), false, "and nothing is re-asserted")
+  config.setup { width = 30, backend = { path = "/bin/wez-vtabs" } }
+  geometry.reset(gui:window_id())
+  eq(geometry.desired(gui:window_id()), 30, "changing width itself drops it")
+  assert(geometry.correct(gui))
+  eq(sb.cols, 30)
+  config.setup { backend = { path = "/bin/wez-vtabs" } }
+end)
+
+test("an adjust the mux has not applied yet is issued once, and its landing is never adopted", function()
+  local win, gui = setup_window(1)
+  sidebar.ensure(gui)
+  local tab = win.tab_list[1]
+  local wid = gui:window_id()
+  mark_ready(tab)
+  eq(geometry.correct(gui), false, "baseline recorded")
+  local issued = 0
+  -- A remote mux acknowledges the adjust and applies it a poll or more later.
+  gui.perform_action = function(_, action)
+    if action.action == "AdjustPaneSize" then
+      issued = issued + 1
+    end
+  end
+  win:resize(30)
+  assert(geometry.correct(gui), "the window resize is corrected")
+  for _ = 1, 4 do
+    eq(geometry.correct(gui), false, "and not re-issued while the mux has not applied it")
+  end
+  eq(issued, 1, "one AdjustPaneSize, not one per poll; the duplicates all land and overshoot")
+
+  -- The width it eventually lands on is ours, so it must never read as a divider drag.
+  geometry.settle(wid, 0)
+  tab:set_split(24)
+  eq(geometry.correct(gui), false)
+  eq(geometry.desired(wid), 28, "the landing is not adopted")
+
+  -- The sidebar reporting its own size is proof it landed, so the next target goes out at once.
+  geometry.landed(wid)
+  gui.perform_action = nil
+  assert(geometry.correct(gui), "and the retry is not blocked once it has")
+  config.setup { backend = { path = "/bin/wez-vtabs" } }
+end)
+
+test("a window drag corrects on the first frame of the burst and leaves the rest to the poll", function()
+  local win, gui = setup_window(1)
+  local wid = gui:window_id()
+  geometry.forget_window(wid)
+  assert(geometry.on_resize(wid), "the first frame is corrected")
+  for _ = 1, 10 do
+    eq(geometry.on_resize(wid), false, "every frame after it costs nothing")
+  end
+  eq(#win.actions, 0, "so a drag issues no adjust per frame at all")
 end)
 
 test("correction with several content panes activates the sidebar and restores focus", function()
@@ -3773,6 +3826,61 @@ test("view hands the renderer a strip and a private-aware theme", function()
   render_mod.render = original
   eq(rgb(seen.theme.accent), rgb(seen.theme.private_accent), "a private window recolours")
   state.set_private(gui:window_id(), false)
+  view_mod.invalidate_theme()
+  config.setup(legacy { backend = { path = "/bin/wez-vtabs" } })
+end)
+
+test('rail_titlebar = "widen" widens the rail to the reserve and keeps its toggle inside the pane', function()
+  local win, gui = setup_window(1)
+  sidebar.ensure(gui)
+  local sb = mark_ready(win.tab_list[1])
+  local wid = gui:window_id()
+  sb.get_dimensions = function(self)
+    return { cols = self.cols, viewport_rows = 30, pixel_width = self.cols * 10, pixel_height = 570 }
+  end
+  local was_mac = platform.is_mac
+  platform.is_mac = false
+  local seen = nil
+  local render_mod = require "vtabs.render"
+  local original = render_mod.render
+  render_mod.render = function(frame)
+    seen = frame
+    return original(frame)
+  end
+  local function railed(opts)
+    config.setup(util.merge({ meta = "auto", titlebar = "macos", backend = { path = "/bin/wez-vtabs" } }, opts))
+    view_mod.invalidate_theme()
+    view_mod.sync(gui, { force = true })
+    return seen.strip
+  end
+
+  sidebar.set_collapsed(gui, true)
+  local geom = railed {}
+  eq(geom.cols, 7, "the lights need 7 columns at a 10 pt cell")
+  eq(geometry.desired(wid), 7, "so the rail is widened to them, not left at rail_width 5")
+  assert(geometry.correct(gui), "and corrected to it")
+  eq(sb.cols, 7)
+
+  geom = railed {}
+  assert(geom.toggle.x2 <= sb.cols, "the toggle span ends inside the rail, at " .. geom.toggle.x2)
+  local toggle_row = nil
+  for row, h in pairs(state.session.hits[sb:pane_id()]) do
+    if h.kind == "toggle" then
+      toggle_row = row
+      assert(h.x2 <= sb.cols, "and so does its hit record, at " .. h.x2)
+      assert(h.x1 >= 1, "which is what makes it clickable at all")
+    end
+  end
+  assert(toggle_row, "the rail still records a toggle")
+
+  railed { rail_titlebar = "none" }
+  eq(geometry.desired(wid), 5, "opting out leaves rail_width alone")
+  railed { rail_titlebar = "band" }
+  eq(geometry.desired(wid), 5, "and so does banding instead")
+
+  render_mod.render = original
+  platform.is_mac = was_mac
+  sidebar.set_collapsed(gui, false)
   view_mod.invalidate_theme()
   config.setup(legacy { backend = { path = "/bin/wez-vtabs" } })
 end)
