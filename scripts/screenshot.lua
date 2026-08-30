@@ -33,6 +33,7 @@ local VARIANTS = {
   tooltip = { hover = "follow", tooltip = true, tooltip_delay_ms = 3000 },
   anim = { animations = true, animation = { expand_ms = 600, collapse_ms = 600 } },
   padded = base,
+  confirm = { confirm_close = true },
   macos = { titlebar = "macos" },
   ["macos-rail"] = { titlebar = "macos", collapsed = "rail" },
 }
@@ -69,6 +70,11 @@ local probes = {
   end,
   focus = function(window, pane)
     window:perform_action(vtabs.action.focus_sidebar, pane)
+  end,
+  -- `popover_in` is 90 ms, shorter than one `import`; stretching it keeps the blend and the
+  -- zero stagger while giving the capture a window it can hit.
+  slow_popover = function()
+    require("vtabs.anim").PHASES.popover_in.ms = 900
   end,
 }
 

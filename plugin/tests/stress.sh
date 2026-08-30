@@ -515,6 +515,96 @@ sleep 1.5
 no_dupes "the footer-hook trace"
 echo "ok: the rail renders with a footer hook and keeps repainting"
 
+
+# ------------------------------------------------- reports A, B and C -----
+# A. "1 -> 3 via the shortcut is laggy and passes through tab 2". The shortcut is
+#    `actions.action.activate_tab(n)` -> `activate_index` -> `model.ordered(model.build(...))`,
+#    which reads a title, an icon, unseen output and a cwd for EVERY tab just to turn an index
+#    into a tab id. `watch_active` samples the active tab at 10 ms so a pass-through is visible.
+same_window=$(busiest_window_tabs)
+first=$(echo "$same_window" | cut -d' ' -f1)
+third=$(echo "$same_window" | cut -d' ' -f3)
+[ -n "$third" ] || third=$(echo "$same_window" | cut -d' ' -f2)
+cli activate-tab --tab-id "$first" >/dev/null
+sleep 1
+first_content=$(content_of "$first")
+watch_mark=$(mark)
+vtest "$first_content" watch_active
+sleep 0.3
+switch=$(probe_line "$first_content" activate_2 "activate 2")
+sleep 2.5
+trace_line=$(since "$watch_mark" | sed -n 's/.*e2e: active trace //p' | tail -1)
+echo "  switch cost: $switch"
+echo "  active trace: $trace_line"
+[ -n "$switch" ] || fail "the activate probe never answered"
+build_ms=$(printf '%s' "$switch" | sed -n 's/.*build \([0-9]*\).*/\1/p')
+act_ms=$(printf '%s' "$switch" | sed -n 's/.*activate \([0-9]*\).*/\1/p')
+[ "${build_ms:-0}" -lt 300 ] ||
+  fail "resolving a tab index cost ${build_ms}ms of model.build before anything was activated"
+[ "${act_ms:-0}" -lt 400 ] || fail "activating a tab by index took ${act_ms}ms"
+# One transition, or two when the sampler starts before the switch: never three.
+hops=$(printf '%s' "$trace_line" | wc -w | tr -d ' ')
+[ "${hops:-0}" -le 2 ] ||
+  fail "switching by index passed through $((hops - 1)) tabs: $trace_line"
+no_dupes "a tab switch by index"
+echo "ok: a tab switch by index costs ${build_ms}ms of lookup and lands on one tab"
+
+divider_drag() {
+  # B. "mouse resizing of the sidebar glitches". A divider drag never fires `window-resized`; the
+  #    poll only sees the sidebar's own column count change. Every `AdjustPaneSize` the plugin
+  #    issues is logged by the wrapper in wezterm-e2e.lua, so the fight is countable.
+  cli activate-tab --tab-id "$first" >/dev/null
+  want_width "$first" 28 "before the divider drag"
+  sleep 2
+  drag_mark=$(mark)
+  drag_sb=$(sidebar_of "$first")
+  for step in 1 2 3 4; do
+    cli adjust-pane-size --pane-id "$drag_sb" --amount 3 Right >/dev/null 2>&1 || true
+    sleep 0.1
+  done
+  sleep 0.4
+  mid=$(width_of "$first")
+  adjusts=$(since "$drag_mark" | grep -c "e2e: adjust at" || true)
+  echo "  divider drag: 4 steps of +3 cols -> $mid cols, plugin issued $adjusts adjusts"
+  # The plugin must not fight a drag it can see: it may adopt the new width, never undo it.
+  [ "$mid" -ge 34 ] ||
+    fail "the plugin pulled the divider back mid-drag: 12 cols dragged, sidebar is $mid"
+  sleep 3
+  settled=$(settled_width "$first")
+  echo "  divider drag settled at $settled cols"
+  [ "$settled" -ge 34 ] || fail "the dragged width was undone after the drag: $settled cols"
+  no_dupes "a divider drag"
+  echo "ok: a four-step divider drag is adopted, not fought ($adjusts adjusts)"
+  # Put the width back so the rest of the run starts from the configured one.
+  cli adjust-pane-size --pane-id "$(sidebar_of "$first")" --amount $((settled - 28)) Left >/dev/null 2>&1 || true
+  sleep 3
+}
+soft divider_drag
+
+# C. A user's split keybinding while the sidebar holds focus. Nothing should end up inside the
+#    sidebar's column, and whatever does must not be mistaken for content.
+split_mark=$(mark)
+cli activate-tab --tab-id "$first" >/dev/null
+sleep 1
+before_panes=$(list | python3 -c 'import json,sys; t='"$first"'; print(sum(1 for p in json.load(sys.stdin) if p["tab_id"]==t))')
+vtest "$first_content" split_sidebar
+sleep 2.5
+echo "  after splitting the sidebar: $(probe_line "$first_content" probe_tree tree)"
+geometry
+after_panes=$(list | python3 -c 'import json,sys; t='"$first"'; print(sum(1 for p in json.load(sys.stdin) if p["tab_id"]==t))')
+if [ "$after_panes" -gt "$before_panes" ]; then
+  max_panes=$after_panes
+  # The sidebar must keep its width and its role, and the strip must keep repainting.
+  want_width "$first" 28 "after splitting the sidebar pane"
+  renders "$(sidebar_of "$first")" "a split sidebar pane"
+  no_warnings "$split_mark" "splitting the sidebar pane"
+  not_frozen "$(sidebar_of "$first")" "$first" "a split sidebar pane"
+  max_panes=2
+  echo "ok: splitting the sidebar leaves it at 28 cols, rendering and repainting"
+else
+  echo "ok: the sidebar pane refuses to split"
+fi
+
 # Both groups below pin bugs that are still open; `VTABS_STRESS_SOFT=1` prints XFAIL for them
 # and lets the run continue.
 close_confirmation() {

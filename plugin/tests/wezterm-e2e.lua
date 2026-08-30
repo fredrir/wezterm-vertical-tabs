@@ -58,9 +58,77 @@ vtabs.apply_to_config(config, {
   collapsed = os.getenv "VTABS_E2E_COLLAPSED" or nil,
 })
 
+-- Every `AdjustPaneSize` the plugin issues, timestamped. `geometry.sync` and the event handlers all
+-- reach `correct` through this table field, so one wrapper sees them all.
+local geometry_mod = require "vtabs.geometry"
+local real_correct = geometry_mod.correct
+geometry_mod.correct = function(window)
+  local util = require "vtabs.util"
+  local did = real_correct(window)
+  if did then
+    wezterm.log_info("e2e: adjust at " .. tostring(util.now_ms()))
+  end
+  return did
+end
+
 local probes = {
   toggle = function(window)
     vtabs.toggle_sidebar(window)
+  end,
+  -- Which tab is active, sampled at 10 ms for two seconds: a switch that passes through a tab
+  -- shows up as an extra entry.
+  watch_active = function(window)
+    local util = require "vtabs.util"
+    local seen, t0, last = {}, util.now_ms(), nil
+    local step
+    step = function()
+      local ok, id = pcall(function()
+        return window:mux_window():active_tab():tab_id()
+      end)
+      if ok and id ~= last then
+        seen[#seen + 1] = string.format("%d@%d", id, util.now_ms() - t0)
+        last = id
+      end
+      if util.now_ms() - t0 < 2000 then
+        wezterm.time.call_after(0.01, step)
+      else
+        wezterm.log_info("e2e: active trace " .. table.concat(seen, " "))
+      end
+    end
+    step()
+  end,
+  -- A user's split keybinding while the sidebar holds focus under `hover = "follow"`.
+  split_sidebar = function(window)
+    local sidebar = require "vtabs.sidebar"
+    local sb = sidebar.find(window:mux_window():active_tab())
+    if not sb then
+      wezterm.log_info "e2e: split sidebar none"
+      return
+    end
+    sb:activate()
+    window:perform_action(wezterm.action.SplitVertical { domain = "CurrentPaneDomain" }, sb)
+    wezterm.log_info("e2e: split sidebar " .. tostring(sb:pane_id()))
+  end,
+  -- The pane tree as the plugin classifies it, next to what the mux reports.
+  probe_tree = function(window)
+    local sidebar = require "vtabs.sidebar"
+    local out = {}
+    for _, info in ipairs(window:mux_window():tabs_with_info()) do
+      local sb = sidebar.find(info.tab)
+      local content = sidebar.classify(info.tab)
+      local parts = {}
+      for _, pi in ipairs(info.tab:panes_with_info()) do
+        parts[#parts + 1] = string.format("%d@%d,%d+%dx%d", pi.pane:pane_id(), pi.left, pi.top, pi.width, pi.height)
+      end
+      out[#out + 1] = string.format(
+        "tab%d sb=%s content=%d [%s]",
+        info.tab:tab_id(),
+        tostring(sb and sb:pane_id()),
+        #content,
+        table.concat(parts, " ")
+      )
+    end
+    wezterm.log_info("e2e: tree " .. table.concat(out, " | "))
   end,
   toggle_ms = function(window)
     local util = require "vtabs.util"
@@ -307,6 +375,32 @@ local probes = {
     wezterm.log_info("e2e: active pane " .. tostring(pane and pane:pane_id()))
   end,
 }
+
+-- `activate_<n>` switches to the n-th rendered tab the way the `tab_<n>` keybinding does, and
+-- splits the cost into the model build the index lookup needs and the activation itself.
+for i = 0, 7 do
+  probes["activate_" .. i] = function(window)
+    local actions = require "vtabs.actions"
+    local model = require "vtabs.model"
+    local util = require "vtabs.util"
+    local t0 = util.now_ms()
+    local items = model.ordered(model.build(window))
+    local t1 = util.now_ms()
+    local item = items[i + 1]
+    actions.activate_index(window, i)
+    local t2 = util.now_ms()
+    wezterm.log_info(
+      string.format(
+        "e2e: activate %d build %d activate %d tabs %d target %s",
+        i,
+        t1 - t0,
+        t2 - t1,
+        #items,
+        tostring(item and item.tab_id)
+      )
+    )
+  end
+end
 
 -- Test-only hook: a pane printing SetUserVar=vtabs_test=<base64 name> triggers a probe.
 wezterm.on("user-var-changed", function(window, _, name, value)
