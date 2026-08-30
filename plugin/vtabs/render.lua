@@ -259,7 +259,8 @@ local function fit_meta(text, budget, glyphs)
   if util.width(text) <= budget then
     return text
   end
-  local sep = " " .. glyphs.meta_sep .. " "
+  -- The separator carries its own padding now, so it is matched verbatim.
+  local sep = glyphs.meta_sep
   local head, tail, at, from = "", text, nil, 1
   while true do
     local i = text:find(sep, from, true)

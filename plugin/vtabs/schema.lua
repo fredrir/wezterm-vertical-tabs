@@ -138,6 +138,14 @@ M.options = {
     help = "what the second card row shows",
   },
   {
+    key = "meta_sep",
+    type = "string",
+    default = "  ",
+    label = "Meta separator",
+    group = "cards",
+    help = "between the process and the path on the meta line",
+  },
+  {
     key = "row_gap",
     type = "number",
     default = 1,

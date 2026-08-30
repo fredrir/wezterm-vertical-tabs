@@ -117,7 +117,7 @@ local function header(gui_window, tab_id, budget, level)
   end
   local process = util.basename(meta.process)
   if meta.domain or process then
-    local text = table.concat({ meta.domain, process }, " · ")
+    local text = table.concat({ meta.domain, process }, config.get().meta_sep)
     lines[#lines + 1] = { text = util.truncate(text, budget, config.get().ellipsis), tone = "meta", drop = DROP.meta }
   end
   if level == "root" and #lines > 0 then

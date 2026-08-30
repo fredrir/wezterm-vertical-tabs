@@ -32,6 +32,7 @@ return config
 | `padding`                 | `{ top = 1, left = 1, right = 1 }`                                | `{ top, left, right }` |
 | `tab_height`              | `"card"`                                                          | `"card"` (`2`) \| `"row"` (`1`) |
 | `meta`                    | `"auto"`                                                          | `"auto"` \| `"cwd"` \| `"process"` \| `false` |
+| `meta_sep`                | `"  "`                                                            | string |
 | `row_gap`                 | `1`                                                               | number >= `0` |
 | `new_tab_button`          | `"ghost"`                                                         | `"ghost"` \| `"row"` \| `false` |
 | `new_tab_label`           | `"New tab"`                                                       | string |

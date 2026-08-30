@@ -10,7 +10,7 @@ local function glyph(name, fallback)
 end
 
 M.defaults = {
-  default = glyph("cod_terminal", ">"),
+  default = glyph("md_console_line", ">"),
   zsh = glyph("md_console_line", "$"),
   bash = glyph("md_console_line", "$"),
   fish = glyph("md_fish", "$"),

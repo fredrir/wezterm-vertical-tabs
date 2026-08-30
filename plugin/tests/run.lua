@@ -1006,8 +1006,12 @@ test("P1 sibling paths stay distinguishable on the meta line", function()
   local win_rows = frame_rows(windows)
   eq(util.width(win_rows[2]), 28)
   eq(util.width(win_rows[5]), 28)
+  local sep = config.get().meta_sep
   local composite = p1_view {
-    items = sibling_items("nvim · ~/work/acme/services/api", "SSH:archie · ~/work/acme/services/web"),
+    items = sibling_items(
+      "nvim" .. sep .. "~/work/acme/services/api",
+      "SSH:archie" .. sep .. "~/work/acme/services/web"
+    ),
     opts = { separator = "gap" },
   }
   local comp = frame_rows(composite)
@@ -3025,9 +3029,14 @@ test("the macOS strip reserves the traffic lights from the pane's own cell size"
   local g = strip_geom(RETINA)
   eq(g.cols, math.ceil(70 / (235 / 28)), "70 px of buttons, never a hardcoded column count")
   eq(g.cols, 9)
-  eq(g.rows, 3, "max(reserve 2, toggle 2) + padding_top 1")
-  eq(g.toggle_row, 2)
+  eq(g.rows, 3, "max(reserve 2, toggle 1) + padding_top 1")
+  -- The reserve is a row COUNT; the toggle must line up with the lights' centre, not sit below it.
+  eq(g.toggle_row, 1, "beside the lights at a retina cell height")
   eq(g.toggle_x, 11, "clear of the reserve")
+  local small = strip_geom { cols = 28, viewport_rows = 30, pixel_width = 235, pixel_height = 270 }
+  eq(small.rows_reserved, 4, "a small font reserves more rows")
+  eq(small.toggle_row, 2, "and the centre moves down with them, never past the reserve")
+  assert(small.toggle_row <= small.rows_reserved, "always inside the reserve")
   local wide = strip_geom { cols = 28, viewport_rows = 30, pixel_width = 560, pixel_height = 570 }
   eq(wide.cols, 4, "bigger cells need fewer of them")
 end)
@@ -3116,8 +3125,8 @@ test("the meta line names the cwd for shells and the process for anything else",
   local home = wezterm.home_dir
   eq(meta_of { process = "/bin/zsh", cwd = { file_path = "/tmp/work" } }, "~/work", "home_dir collapses to ~")
   eq(meta_of { process = "/usr/bin/fish", cwd = { file_path = "/etc" } }, "/etc")
-  eq(meta_of { process = "/usr/bin/nvim", cwd = { file_path = "/tmp/work" } }, "nvim · work")
-  eq(meta_of { process = "/usr/bin/cargo", cwd = { file_path = "/srv/api" } }, "cargo · api")
+  eq(meta_of { process = "/usr/bin/nvim", cwd = { file_path = "/tmp/work" } }, "nvim  work", "no separator glyph")
+  eq(meta_of { process = "/usr/bin/cargo", cwd = { file_path = "/srv/api" } }, "cargo  api")
   if home and home ~= "" then
     eq(meta_of { process = "/bin/bash", cwd = { file_path = home .. "/projects/api" } }, "~/projects/api")
     eq(meta_of { process = "/bin/bash", cwd = { file_path = home } }, "~")
@@ -3136,7 +3145,7 @@ test("ssh names the remote user only when the pane reports one, never the local 
   eq(url, "admin@buildbox", "and it is parsed out of the string form too")
   eq(meta_of { process = "/usr/bin/ssh", cwd = false }, "ssh", "nothing resolvable falls back to the process")
   -- get_foreground_process_name is nil off the local domain, so the domain carries the line.
-  eq(meta_of { domain = "SSH:archie", cwd = { file_path = "/home/x/api" } }, "SSH:archie · /home/x/api")
+  eq(meta_of { domain = "SSH:archie", cwd = { file_path = "/home/x/api" } }, "SSH:archie  /home/x/api")
   eq(meta_of { domain = "local", process = nil, cwd = { file_path = "/srv" } }, "/srv")
 end)
 
@@ -3144,6 +3153,7 @@ test("meta = cwd, process and false force one column or none", function()
   local pane = { process = "/usr/bin/nvim", cwd = { file_path = "/tmp/work" } }
   eq(meta_of(pane, { meta = "cwd" }), "~/work")
   eq(meta_of(pane, { meta = "process" }), "nvim")
+  eq(meta_of(pane, { meta_sep = " · " }), "nvim · work", "the separator is configurable")
   eq(meta_of(pane, { meta = false }), nil)
   eq(meta_of(pane, { tab_height = "row" }), nil, "a one-row card has no meta to resolve")
 end)
