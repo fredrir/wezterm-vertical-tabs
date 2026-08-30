@@ -66,7 +66,18 @@ content_of() { list | python3 -c 'import json,sys; t='"$1"'; print([p["pane_id"]
 tab_ids() { list | python3 -c 'import json,sys; print(" ".join(str(t) for t in sorted({p["tab_id"] for p in json.load(sys.stdin)})))'; }
 tab_count() { tab_ids | wc -w | tr -d ' '; }
 sidebar_text() { cli get-text --pane-id "$1"; }
-active_title() { sidebar_text "$1" | python3 -c 'import sys; rows=[l for l in sys.stdin.read().split("\n") if "▎" in l]; print(rows[0].split("▎",1)[1].split()[0] if rows else "")'; }
+# The active card is two rows, both marked; take the first word that is not chrome.
+active_title() { sidebar_text "$1" | python3 -c '
+import sys
+CHROME = set("\u258e\u2599\u259b\u2590\u2022\u203a\u2715\u2b1a")
+for line in sys.stdin.read().split("\n"):
+    if "\u258e" not in line:
+        continue
+    for word in line.split("\u258e", 1)[1].split():
+        if not set(word) <= CHROME:
+            print(word); raise SystemExit
+print("")
+'; }
 row_of() { sidebar_text "$1" | python3 -c 'import sys; rows=sys.stdin.read().split("\n"); print(next(i+1 for i,l in enumerate(rows) if "'"$2"'" in l))'; }
 click() { cli send-text --no-paste --pane-id "$1" "$(printf '\033[<%s;%s;%sM\033[<%s;%s;%sm' "$4" "$2" "$3" "$4" "$2" "$3")"; }
 geometry() { list | python3 -c 'import json,sys; [print("  win", p["window_id"], "tab", p["tab_id"], "pane", p["pane_id"], p["title"], "left", p["left_col"], "cols", p["size"]["cols"]) for p in json.load(sys.stdin)]'; }
@@ -95,19 +106,54 @@ sidebar_text "$sb1" | grep -c "one" >/dev/null || fail "first sidebar does not l
 sidebar_text "$sb1" | grep -c "two" >/dev/null || fail "first sidebar does not list tab two"
 echo "ok: both sidebars render both tabs"
 
+width_of() { list | python3 -c 'import json,sys; t='"$1"'; print([p["size"]["cols"] for p in json.load(sys.stdin) if p["tab_id"]==t and '"$is_sb"'][0])'; }
+settle_width() { # tab_id
+  for _ in $(seq 1 24); do
+    [ "$(width_of "$1")" -eq 28 ] && return 0
+    sleep 0.25
+  done
+  return 1
+}
 toggle() { vtest "$1" toggle; }
+# collapsed = "rail" keeps the pane and narrows it, so the toggle stays reachable. Only the active
+# tab is corrected on the spot; background tabs follow when they are activated (P0 0.3).
+cli activate-tab --tab-id "$first_tab"
 toggle "$(content_of "$first_tab")"
-sleep 1.5
-[ -z "$(sidebar_panes)" ] || fail "toggle did not remove sidebars"
+for _ in $(seq 1 20); do
+  [ "$(width_of "$first_tab")" -eq 5 ] && break
+  sleep 0.25
+done
+if [ "$(width_of "$first_tab")" -ne 5 ]; then
+  m=$(mark); vtest "$(content_of "$first_tab")" probe_desired; sleep 1
+  since "$m" | grep -o "e2e: desired width .*" | tail -1
+  fail "toggle did not narrow the sidebar to the rail ($(width_of "$first_tab") cols)"
+fi
+cli activate-tab --tab-id "$second_tab"
+for _ in $(seq 1 20); do
+  [ "$(width_of "$second_tab")" -eq 5 ] && break
+  sleep 0.25
+done
+[ "$(width_of "$second_tab")" -eq 5 ] || fail "a background tab did not join the rail once activated"
+cli activate-tab --tab-id "$first_tab"
+[ "$(sidebar_panes | wc -l | tr -d ' ')" -eq 2 ] || fail "the rail dropped a sidebar pane"
 [ "$(tab_count)" -eq 2 ] || fail "toggle closed a tab"
 toggle "$(content_of "$first_tab")"
-sleep 2.5
+if ! settle_width "$first_tab"; then
+  m=$(mark); vtest "$(content_of "$first_tab")" probe_desired; sleep 1
+  since "$m" | grep -o "e2e: desired width .*" | tail -1
+  fail "toggle did not restore the full width ($(width_of "$first_tab") cols)"
+fi
 [ "$(sidebar_panes | wc -l | tr -d ' ')" -eq 2 ] || fail "toggle did not restore sidebars"
+# Background tabs keep the rail width until they are activated (P0 0.3's lazy correction).
+cli activate-tab --tab-id "$second_tab"
+settle_width "$second_tab" || fail "a background tab did not leave the rail once activated"
+cli activate-tab --tab-id "$first_tab"
+settle_width "$first_tab" || fail "the first tab did not come back to full width"
 sb1=$(sidebar_of "$first_tab")
 sb2=$(sidebar_of "$second_tab")
 sleep 1
 sidebar_text "$sb1" | grep -c "one" >/dev/null || fail "restored sidebar does not render"
-echo "ok: toggle hides and restores sidebars without touching content"
+echo "ok: toggle collapses to the rail and back without touching content"
 
 click "$sb2" 5 "$(row_of "$sb2" two)" 0
 sleep 1
@@ -231,15 +277,7 @@ fi
 
 # Resize last: WezTerm hands the sidebar half of every new column, so a failure here moves the
 # inner edge and would break every gesture that follows.
-width_of() { list | python3 -c 'import json,sys; t='"$1"'; print([p["size"]["cols"] for p in json.load(sys.stdin) if p["tab_id"]==t and '"$is_sb"'][0])'; }
 total_cols() { list | python3 -c 'import json,sys; print(max(p["left_col"]+p["size"]["cols"] for p in json.load(sys.stdin)))'; }
-settle_width() { # tab_id
-  for _ in $(seq 1 24); do
-    [ "$(width_of "$1")" -eq 28 ] && return 0
-    sleep 0.25
-  done
-  return 1
-}
 grow_tab=$(tab_ids | cut -d' ' -f2)
 other_tab=$(tab_ids | cut -d' ' -f1)
 before_cols=$(total_cols)
@@ -307,4 +345,29 @@ sleep 1.5
 echo "ok: right click keeps the sidebar and content panes alive at their sizes"
 
 list | python3 -c 'import json,sys; [print("  pane", p["pane_id"], p["title"], "left", p["left_col"], "cols", p["size"]["cols"]) for p in json.load(sys.stdin)]'
+# The check above ends with a right press+release on a card, which is what opens a popover.
+pop_sb="$rc_sb"
+pop_content="$rc_content"
+pop_content_cols=$(cols_of "$pop_content")
+for _ in $(seq 1 24); do
+  sidebar_text "$pop_sb" | grep -q "Switch to tab" && break
+  sleep 0.25
+done
+sidebar_text "$pop_sb" | grep -q "Switch to tab" || { sidebar_text "$pop_sb" | head -20; fail "right click did not open the popover in the sidebar"; }
+sidebar_text "$pop_sb" | grep -q "Close tab" || fail "the popover is missing its items"
+[ "$(cols_of "$pop_content")" -eq "$pop_content_cols" ] || fail "the popover resized the content pane"
+cli get-text --pane-id "$pop_content" | grep -q "Switch to tab" && fail "the popover leaked into the content pane"
+echo "ok: right click draws the popover inside the sidebar, content untouched"
+
+pop_switch=$(row_of "$pop_sb" "Switch to tab")
+click "$pop_sb" 6 "$pop_switch" 0
+for _ in $(seq 1 24); do
+  sidebar_text "$pop_sb" | grep -q "Switch to tab" || break
+  sleep 0.25
+done
+sidebar_text "$pop_sb" | grep -q "Switch to tab" && fail "the popover stayed open after an item click"
+# Title-independent: "Switch to tab" focuses that tab's content pane.
+[ "$(active_pane "$pop_content")" = "$pop_content" ] || fail "the item did not switch to its tab (active pane: $(active_pane "$pop_content"))"
+echo "ok: clicking a popover item runs it and closes the popover"
+
 echo "all e2e checks passed"

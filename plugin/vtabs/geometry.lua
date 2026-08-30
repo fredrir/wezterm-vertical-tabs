@@ -127,13 +127,18 @@ function M.correct(gui_window)
   local tab_id = tab:tab_id()
   local px = window_px(gui_window)
   local now = util.now_ms()
+  local collapsed = state.is_collapsed(wid)
   local seen = observed[wid]
-  observed[wid] = { tab_id = tab_id, cols = cols, px = px, dpi = dpi, cell = cell, tab_cols = tab_cols }
+  observed[wid] =
+    { tab_id = tab_id, cols = cols, px = px, dpi = dpi, cell = cell, tab_cols = tab_cols, collapsed = collapsed }
   if seen and seen.tab_cols ~= tab_cols then
     settling[wid] = now
   end
   -- A divider drag moves the sidebar within a tab whose own width, pixels and cells all stay put.
+  -- A rail width is ours, not a drag, and the width either side of a toggle is not comparable.
   local steady = seen
+    and not collapsed
+    and seen.collapsed == false
     and seen.tab_id == tab_id
     and seen.px == px
     and seen.dpi == dpi

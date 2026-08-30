@@ -339,12 +339,22 @@ function M.rename_tab(gui_window, tab_id)
   popover.run(gui_window, "rename")
 end
 
+---A toggle changes the target width, and nothing else would drive the resize until the next poll.
+local function resize_now(gui_window)
+  local geometry = require "vtabs.geometry"
+  local view = require "vtabs.view"
+  geometry.correct(gui_window)
+  view.sync(gui_window, { force = true })
+end
+
 function M.toggle_sidebar(gui_window)
   sidebar.toggle(gui_window)
+  resize_now(gui_window)
 end
 
 function M.show_sidebar(gui_window, shown)
   sidebar.set_collapsed(gui_window, not shown)
+  resize_now(gui_window)
 end
 
 function M.focus_sidebar(gui_window)
