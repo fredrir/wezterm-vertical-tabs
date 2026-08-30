@@ -66,18 +66,19 @@ content_of() { list | python3 -c 'import json,sys; t='"$1"'; print([p["pane_id"]
 tab_ids() { list | python3 -c 'import json,sys; print(" ".join(str(t) for t in sorted({p["tab_id"] for p in json.load(sys.stdin)})))'; }
 tab_count() { tab_ids | wc -w | tr -d ' '; }
 sidebar_text() { cli get-text --pane-id "$1"; }
-# The active card is two rows, both marked; take the first word that is not chrome.
-active_title() { sidebar_text "$1" | python3 -c '
-import sys
-CHROME = set("\u258e\u2599\u259b\u2590\u2022\u203a\u2715\u2b1a")
-for line in sys.stdin.read().split("\n"):
-    if "\u258e" not in line:
-        continue
-    for word in line.split("\u258e", 1)[1].split():
-        if not set(word) <= CHROME:
-            print(word); raise SystemExit
-print("")
-'; }
+# Reads the active tab title from the plugin side; the card's chrome is theme-dependent.
+probe_line() {
+  m=$(mark)
+  vtest "$1" "$2"
+  for _ in $(seq 1 25); do
+    v=$(since "$m" | sed -n "s/.*e2e: $3 //p" | tail -1)
+    [ -n "$v" ] && { echo "$v"; return 0; }
+    sleep 0.2
+  done
+  echo ""
+}
+tab_of_pane() { list | python3 -c 'import json,sys; s='"$1"'; print([p["tab_id"] for p in json.load(sys.stdin) if p["pane_id"]==s][0])'; }
+active_title() { probe_line "$(content_of "$(tab_of_pane "$1")")" probe_active_title "active title"; }
 row_of() { sidebar_text "$1" | python3 -c 'import sys; rows=sys.stdin.read().split("\n"); print(next(i+1 for i,l in enumerate(rows) if "'"$2"'" in l))'; }
 click() { cli send-text --no-paste --pane-id "$1" "$(printf '\033[<%s;%s;%sM\033[<%s;%s;%sm' "$4" "$2" "$3" "$4" "$2" "$3")"; }
 geometry() { list | python3 -c 'import json,sys; [print("  win", p["window_id"], "tab", p["tab_id"], "pane", p["pane_id"], p["title"], "left", p["left_col"], "cols", p["size"]["cols"]) for p in json.load(sys.stdin)]'; }
@@ -326,7 +327,7 @@ echo "ok: a background tab's sidebar is corrected to 28 when it is activated"
 rc_tab=$(tab_ids | cut -d' ' -f1)
 rc_sb=$(sidebar_of "$rc_tab")
 rc_content=$(content_of "$rc_tab")
-rc_row=$(sidebar_text "$rc_sb" | python3 -c 'import sys; rows=sys.stdin.read().split("\n"); print(next(i+1 for i,l in enumerate(rows) if "▎" in l))')
+rc_row=$(row_of "$rc_sb" "$(active_title "$rc_sb")")
 rc_cols=$(list | python3 -c 'import json,sys; p='"$rc_content"'; print([q["size"]["cols"] for q in json.load(sys.stdin) if q["pane_id"]==p][0])')
 # The menu is a GUI tab overlay: the CLI never sees it, so this only asserts nothing is destroyed.
 active_pane() {

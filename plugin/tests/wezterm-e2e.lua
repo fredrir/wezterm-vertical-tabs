@@ -93,6 +93,9 @@ local probes = {
     )
   end,
   -- A tab overlay (the tab menu) replaces the tab's panes, so this reports the overlay's pane id.
+  probe_active_title = function(window)
+    wezterm.log_info("e2e: active title " .. tostring(window:active_tab():get_title()))
+  end,
   probe_active = function(window)
     local pane = window:active_pane()
     wezterm.log_info("e2e: active pane " .. tostring(pane and pane:pane_id()))
