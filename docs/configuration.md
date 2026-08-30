@@ -101,7 +101,7 @@ return config
 | `popover.follow_pointer` | the pointer selects the row it is over inside the menu; over the scrim the keyboard selection stands |
 | `popover.fade_ms` | the menu's own colour fade in, over its rows only; `0` disables it, and nothing fades on close |
 | `popover.overflow` | `"clip"` keeps the menu inside the sidebar. `"grow"` is not implemented yet |
-| `confirm_close` | the question is a popover level in the sidebar, never wezterm's own overlay, which the release after the click that opened it would dismiss; the overlay is the fallback only when no sidebar can draw the question |
+| `confirm_close` | the question is a popover level in the sidebar, never wezterm's own overlay, which the release after the click that opened it would dismiss. Asked from a key binding it takes the sidebar pane so `Enter` and `Esc` reach it, and hands focus back on close. The overlay is the fallback only when no sidebar can draw the question |
 | `show_index` | renders on the meta line with 2-row cards, inline with `meta = false` |
 | `titlebar` | `"macos"` forces the traffic-light reserve on any platform, for previews and screenshots; it changes nothing about the real window buttons |
 | `tooltip` | `"auto"` is off in `"press"` mode, where hover never reaches the sidebar |
@@ -184,7 +184,8 @@ the tab's content pane, which then takes focus back.
 | drop on a gap row                          | insert below that tab                                                            |
 | click the toggle `«`                       | hide the sidebar; `toggle_sidebar` brings it back                                |
 | right click a tab                          | action popover, drawn inside the sidebar                                         |
-| click away from an open popover            | dismiss without switching tabs                                                   |
+| click away from an open popover            | dismiss without switching tabs; a click level with an item but outside the menu counts as away |
+| click a destructive menu item              | runs on release, and only if the release is still on the same item               |
 | wheel over an open popover                 | move its selection                                                               |
 | move the pointer inside an open popover    | select the row under it (`popover.follow_pointer`)                               |
 | footer row                                 | calls the entry's `on_click`                                                     |

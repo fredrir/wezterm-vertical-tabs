@@ -4650,7 +4650,10 @@ test("the ✕ on a busy tab asks in the sidebar, and closes only when Close is c
   view_mod.sync(gui, { force = true })
   local row = popover_row(sb, "confirm_close")
   assert(row, "the confirm level offers Close")
-  mouse(gui, sb, "down", "left", state.session.hits[sb:pane_id()][row].x1 + 1, row)
+  local col = state.session.hits[sb:pane_id()][row].x1 + 1
+  mouse(gui, sb, "down", "left", col, row)
+  eq(#win.tab_list, 3, "a destructive item arms on the press, like the ✕ it came from")
+  mouse(gui, sb, "up", "left", col, row)
   eq(#win.tab_list, 2, "and choosing it closes the tab")
   eq(popover.get(gui:window_id()), nil)
 end)
@@ -4683,6 +4686,27 @@ test("the menu's close items raise the same confirm level, and Cancel leaves the
   assert(asked, "the question names the first victim, then how many more follow it")
   popover.run(others_gui, "confirm_close")
   eq(#others.tab_list, 1, "and Close takes them all")
+end)
+
+test("a destructive menu item runs on the release, and only over the item it was pressed on", function()
+  local win, gui, sb = open_popover(3)
+  local before = #win.tab_list
+  local rows = {}
+  for row, h in pairs(state.session.hits[sb:pane_id()]) do
+    if h.kind == "popover" and h.id then
+      rows[h.id] = row
+    end
+  end
+  assert(rows.close and rows.activate, "the menu offers a destructive item and a plain one")
+  local col = state.session.hits[sb:pane_id()][rows.close].x1 + 2
+  mouse(gui, sb, "down", "left", col, rows.close)
+  eq(#win.tab_list, before, "the press alone closes nothing")
+  assert(popover.get(gui:window_id()), "and leaves the menu up")
+  mouse(gui, sb, "up", "left", col, rows.activate)
+  eq(#win.tab_list, before, "a release over a different item runs neither")
+  mouse(gui, sb, "down", "left", col, rows.close)
+  mouse(gui, sb, "up", "left", col, rows.close)
+  eq(#win.tab_list, before - 1, "pressed and released on the same item, it runs")
 end)
 
 test("a tab the skip list names closes without a question, and so does confirm_close = false", function()
