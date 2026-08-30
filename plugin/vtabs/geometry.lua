@@ -8,13 +8,14 @@ local util = require "vtabs.util"
 local M = {}
 
 local MIN_WIDTH = 8
-local EDGE_MARGIN = 20
+local MIN_CONTENT = 20
 local OBSERVE_MS = 400
 
 local session = state.session
 local adopted = {}
 local observed = {}
 local checked = {}
+local unreachable = {}
 
 function M.desired(window_id)
   return adopted[window_id] or config.get().width
@@ -24,16 +25,21 @@ function M.forget_window(window_id)
   adopted[window_id] = nil
   observed[window_id] = nil
   checked[window_id] = nil
+  unreachable[window_id] = nil
 end
 
 M.reset = M.forget_window
 table.insert(state.forget_hooks, M.forget_window)
 
-local function pane_cols(pane)
+---Columns, dpi and cell width of a pane; the last two tell a divider drag from a font or DPI change.
+local function pane_metrics(pane)
   local d = util.try(function()
     return pane:get_dimensions()
   end)
-  return d and d.cols or nil
+  if type(d) ~= "table" or not d.cols or d.cols < 1 then
+    return nil
+  end
+  return d.cols, d.dpi, d.pixel_width and d.pixel_width // d.cols or nil
 end
 
 local function window_px(gui_window)
@@ -59,11 +65,13 @@ local function tab_metrics(tab)
   return cols, zoomed
 end
 
----Only a plausible sidebar width may be latched; a stale or oversized read must not stick.
-local function plausible(cols, tab_cols)
-  local ceiling = tab_cols and math.max(MIN_WIDTH, tab_cols - EDGE_MARGIN) or nil
+---Width the split can actually hold: `adjust_node_at_cursor` clamps `first.cols` to `[1, width-2]`.
+local function fits(cols, tab_cols)
   local out = math.max(cols, MIN_WIDTH)
-  return ceiling and math.min(out, ceiling) or out
+  if not tab_cols then
+    return out
+  end
+  return math.min(out, math.max(MIN_WIDTH, tab_cols - MIN_CONTENT))
 end
 
 ---`AdjustPaneSize` shifts the split node's FIRST child: `Right` by `+n`, `Left` by `-n`.
@@ -72,6 +80,10 @@ local function direction_for(position, delta)
     return "Right"
   end
   return "Left"
+end
+
+local function same_attempt(a, b)
+  return a and b and a.tab_id == b.tab_id and a.tab_cols == b.tab_cols and a.target == b.target
 end
 
 ---Re-asserts the sidebar width on the active tab; background tabs are corrected once they activate.
@@ -84,7 +96,10 @@ function M.correct(gui_window)
     return false
   end
   local sb = tab and sidebar.find(tab)
-  local cols = sb and sidebar.is_ready(sb) and pane_cols(sb)
+  if not sb or not sidebar.is_ready(sb) then
+    return false
+  end
+  local cols, dpi, cell = pane_metrics(sb)
   if not cols then
     return false
   end
@@ -95,14 +110,17 @@ function M.correct(gui_window)
   local tab_id = tab:tab_id()
   local px = window_px(gui_window)
   local seen = observed[wid]
-  observed[wid] = { tab_id = tab_id, cols = cols, px = px }
-  if seen and seen.tab_id == tab_id and seen.px == px and seen.cols ~= cols then
-    adopted[wid] = plausible(cols, tab_cols)
+  observed[wid] = { tab_id = tab_id, cols = cols, px = px, dpi = dpi, cell = cell }
+  local steady = seen and seen.tab_id == tab_id and seen.px == px and seen.dpi == dpi and seen.cell == cell
+  if steady and seen.cols ~= cols then
+    adopted[wid] = fits(cols, tab_cols)
+    unreachable[wid] = nil
     return false
   end
 
-  local delta = M.desired(wid) - cols
-  if delta == 0 then
+  local target = fits(M.desired(wid), tab_cols)
+  local attempt = { tab_id = tab_id, tab_cols = tab_cols, target = target }
+  if target == cols or same_attempt(unreachable[wid], attempt) then
     return false
   end
   local content = sidebar.classify(tab)
@@ -111,15 +129,19 @@ function M.correct(gui_window)
   if restore then
     sb:activate()
   end
-  local adjusted = util.try(function()
-    return gui_window:perform_action(act.AdjustPaneSize { direction_for(cfg.position, delta), math.abs(delta) }, sb)
-      or true
+  util.try(function()
+    gui_window:perform_action(
+      act.AdjustPaneSize { direction_for(cfg.position, target - cols), math.abs(target - cols) },
+      sb
+    )
   end)
   if restore then
     restore:activate()
   end
-  observed[wid].cols = pane_cols(sb) or cols
-  return adjusted ~= nil
+  local now = pane_metrics(sb) or cols
+  observed[wid].cols = now
+  unreachable[wid] = now == cols and attempt or nil
+  return now ~= cols
 end
 
 ---Per-poll entry point: corrects at once when the active tab changed, otherwise at most every 400 ms.

@@ -21,6 +21,7 @@ function M.pane(tab, opts)
     process = opts.process or "/bin/zsh",
     domain = opts.domain or "local",
     sent = {},
+    pasted = {},
     title = opts.title or "zsh",
     cols = opts.cols or 80,
   }, Pane)
@@ -53,7 +54,8 @@ function Pane:has_unseen_output()
   return false
 end
 function Pane:get_dimensions()
-  return { cols = self.cols, viewport_rows = 24 }
+  local cell = self.cell_width or 10
+  return { cols = self.cols, viewport_rows = 24, pixel_width = self.cols * cell, dpi = self.dpi or 96 }
 end
 function Pane:send_text(text)
   self.sent[#self.sent + 1] = text
@@ -61,6 +63,9 @@ function Pane:send_text(text)
   if title then
     self.title = title
   end
+end
+function Pane:paste(text)
+  self.pasted[#self.pasted + 1] = text
 end
 function Pane:activate()
   self._tab.active = self
