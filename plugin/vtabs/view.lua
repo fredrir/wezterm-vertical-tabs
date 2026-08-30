@@ -1,3 +1,4 @@
+local ansi = require "vtabs.ansi"
 local config = require "vtabs.config"
 local state = require "vtabs.state"
 local sidebar = require "vtabs.sidebar"
@@ -147,6 +148,41 @@ local function footer_for(cfg, mux_win)
 end
 
 ---Re-renders sidebars in the window; inactive tabs refresh lazily, frames are sent only when changed.
+---Rows whose painted text changed, each with its own CUP; a full frame when the cache cannot be trusted.
+---@return string|nil `nil` when nothing changed
+function M.payload_for(pid, result, dims, force)
+  local cache = session.frames[pid]
+  local stale = force
+    or cache == nil
+    or cache.cols ~= dims.cols
+    or cache.rows ~= dims.viewport_rows
+    or cache.n ~= result.rows_n
+  if stale then
+    return result.data
+  end
+  local parts = {}
+  for row = 1, result.rows_n do
+    if cache.text[row] ~= result.rows[row] then
+      parts[#parts + 1] = ansi.cup(row, 1) .. result.rows[row]
+    end
+  end
+  if #parts == 0 then
+    return nil
+  end
+  return ansi.HIDE_CURSOR .. table.concat(parts) .. ansi.RESET
+end
+
+---Drops the row cache for a pane, forcing the next sync to repaint it whole.
+function M.invalidate_frames(pane_id)
+  if pane_id then
+    session.frames[pane_id] = nil
+  else
+    for id in pairs(session.frames) do
+      session.frames[id] = nil
+    end
+  end
+end
+
 function M.sync(gui_window, opts)
   opts = opts or {}
   local cfg = config.get()
@@ -193,12 +229,11 @@ function M.sync(gui_window, opts)
           session.scroll[wid] = result.scroll
         end
         session.hits[pid] = result.hits
-        session.dims[pid] = { cols = dims.cols, rows = dims.viewport_rows, strip_rows = strip.rows }
-        if opts.force or session.frames[pid] ~= result.data then
-          if sidebar.send(sb, { t = "frame", data = result.data }) then
-            session.frames[pid] = result.data
-            session.sent_at[pid] = now
-          end
+        session.dims[pid] = { cols = dims.cols, rows = dims.viewport_rows }
+        local payload = M.payload_for(pid, result, dims, opts.force)
+        if payload and sidebar.send(sb, { t = "frame", data = payload }) then
+          session.frames[pid] = { cols = dims.cols, rows = dims.viewport_rows, text = result.rows, n = result.rows_n }
+          session.sent_at[pid] = now
         end
       end
     end

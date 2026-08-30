@@ -96,7 +96,7 @@ local function on_drag(gui_window, pane, ev, cfg)
   end
   if drag.active then
     local dims = session.dims[pid] or { cols = cfg.width, rows = ev.y }
-    drag.over_index = hit.drop_slot(hits, ev.y, dims.rows, dims.strip_rows or 0)
+    drag.over_index = hit.drop_slot(hits, ev.y, dims.rows)
     drag.outside = cfg.tear_off and dx >= TEAR_OFF_TRAVEL and hit.on_inner_edge(ev.x, dims.cols, cfg.position)
   end
   session.hover[wid] = { x = ev.x, y = ev.y, at = drag.at }

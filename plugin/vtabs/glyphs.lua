@@ -21,6 +21,7 @@ local CHROME = {
   frame_h = { "─", "-", group = "ghost_frame" },
   frame_dash = { "╌", "-", group = "ghost_frame" },
   frame_v = { "│", "|", group = "ghost_frame" },
+  rule = { "─", "-", group = "marks" },
 }
 
 ---East Asian Ambiguous: width flips with unicode_version / treat_east_asian_ambiguous_width_as_wide.
@@ -55,9 +56,9 @@ local function group_members(group)
   return keys
 end
 
----Resolves chrome glyphs against the window's config: never returns a glyph wider than one cell.
----@param base table icons.resolve output; process icons and close/pin/private/new_tab come from here
----@param effective table|nil window:effective_config()
+---Resolves the chrome glyphs for one window against its effective config.
+---@param base table icons.resolve output; process icons pass through untouched
+---@param effective table|nil window:effective_config(), or nil for the width backstop only
 function M.resolve(base, effective)
   base = base or {}
   effective = effective or {}
@@ -70,12 +71,11 @@ function M.resolve(base, effective)
   end
   out.corners = "chamfer"
 
-  local substituted = false
+  local by_width = false
   local function fall_back(key)
     local spec = CHROME[key]
     if spec and out[key] ~= spec[2] then
       out[key] = spec[2]
-      substituted = true
     end
   end
   local function fall_back_group(group)
@@ -90,8 +90,8 @@ function M.resolve(base, effective)
     fall_back_group "bar"
   end
 
+  -- only this flag selects ambiguous width; unicode_version alone never does
   local wide_ambiguous = effective.treat_east_asian_ambiguous_width_as_wide == true
-    or (effective.unicode_version ~= nil and effective.unicode_version ~= 9)
   if wide_ambiguous then
     for key in pairs(CHROME) do
       if ambiguous(out[key]) then
@@ -104,6 +104,7 @@ function M.resolve(base, effective)
   for key in pairs(CHROME) do
     if util.width(out[key]) ~= 1 then
       fall_back(key)
+      by_width = true
     end
   end
   for _, key in ipairs(group_members "ghost_frame") do
@@ -115,14 +116,14 @@ function M.resolve(base, effective)
   for _, key in ipairs { "close", "pinned", "private", "new_tab" } do
     if out[key] and util.width(out[key]) ~= 1 then
       out[key] = ({ close = "x", pinned = "*", private = "~", new_tab = "+" })[key]
-      substituted = true
+      by_width = true
     end
   end
   if out.chamfer_top == CHROME.chamfer_top[2] then
     out.corners = "square"
   end
 
-  if substituted then
+  if by_width then
     util.warn_once("glyph-width", "some glyphs are not one cell wide; using ASCII")
   end
   return out

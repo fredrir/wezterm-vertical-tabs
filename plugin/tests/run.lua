@@ -41,6 +41,7 @@ end
 local wezterm = require "wezterm"
 local util = require "vtabs.util"
 local config = require "vtabs.config"
+local ansi = require "vtabs.ansi"
 local render = require "vtabs.render"
 local theme = require "vtabs.theme"
 local keys = require "vtabs.keys"
@@ -312,10 +313,10 @@ test("hit helpers: drop slot, double click, pin block", function()
     { kind = "new_tab" },
     { kind = "space" },
   }
-  eq(hit.drop_slot(hits, 3, 5, 1), 2)
-  eq(hit.drop_slot(hits, 4, 5, 1), 3)
-  eq(hit.drop_slot(hits, 5, 5, 1), 3)
-  eq(hit.drop_slot(hits, 1, 5, 1), 1)
+  eq(hit.drop_slot(hits, 3, 5), 2)
+  eq(hit.drop_slot(hits, 4, 5), 3)
+  eq(hit.drop_slot(hits, 5, 5), 3)
+  eq(hit.drop_slot(hits, 1, 5), 1)
   eq(hit.on_inner_edge(28, 28, "left"), true)
   eq(hit.on_inner_edge(27, 28, "left"), false)
   eq(hit.on_inner_edge(1, 28, "right"), true)
@@ -645,10 +646,14 @@ local function frame_rows(v)
   return rows, r
 end
 
-local FRAME_DIR = "/tmp/vtabs-team/p1-frames"
+---Design frames are written only when asked for, so `just check` touches nothing outside the repo.
+local FRAME_DIR = os.getenv "VTABS_DUMP_FRAMES"
 
 local function dump_frame(name, v)
   local rows = frame_rows(v)
+  if not FRAME_DIR or FRAME_DIR == "" then
+    return rows
+  end
   os.execute("mkdir -p " .. FRAME_DIR)
   local f = io.open(FRAME_DIR .. "/" .. name .. ".txt", "w")
   if not f then
@@ -770,10 +775,10 @@ test("P1 hits: one record per row with spans on both card rows", function()
   eq(hit.in_card(r.hits[3], 1), false, "col 1 is page, not card")
   eq(hit.in_card(r.hits[3], 28), false, "col 28 is the thumb channel")
   eq(hit.in_card(r.hits[3], 2), true)
-  eq(hit.drop_slot(r.hits, 3, 10, 0), 2, "title row drops at its own slot")
-  eq(hit.drop_slot(r.hits, 4, 10, 0), 2, "meta row too")
-  eq(hit.drop_slot(r.hits, 5, 10, 0), 3, "gap row drops below the card")
-  eq(hit.drop_slot(r.hits, 9, 10, 0), 4, "below the last card")
+  eq(hit.drop_slot(r.hits, 3, 10), 2, "title row drops at its own slot")
+  eq(hit.drop_slot(r.hits, 4, 10), 2, "meta row too")
+  eq(hit.drop_slot(r.hits, 5, 10), 3, "gap row drops below the card")
+  eq(hit.drop_slot(r.hits, 9, 10), 4, "below the last card")
 end)
 
 test("P1 ghost card: outlined, sticky, exactly cols wide idle and hovered", function()
@@ -868,8 +873,9 @@ test("P1 glyph guard: groups substitute together, N glyphs survive", function()
   eq(wide.toggle_left, "«")
   eq(wide.frame_tl, "+", "ghost frame substitutes as a unit")
   eq(wide.frame_dash, "-", "including its neutral member")
-  local v9 = glyphs.resolve(base, { unicode_version = 14 })
-  eq(v9.frame_tl, "+")
+  local v14 = glyphs.resolve(base, { unicode_version = 14 })
+  eq(v14.frame_tl, "╭", "unicode_version alone does not select ambiguous width")
+  eq(v14.active, "▎")
   local ascii = p1_view { opts = { separator = "gap" } }
   ascii.glyphs = wide
   local rows = frame_rows(ascii)
@@ -966,6 +972,14 @@ test("P1 sibling paths stay distinguishable on the meta line", function()
   assert(first:find("api", 1, true), "basename kept: " .. first)
   assert(second:find("web", 1, true), "basename kept: " .. second)
   eq(util.width(rows[2]), 28)
+  local windows = p1_view {
+    items = sibling_items([[C:\Users\me\work\acme\api]], [[C:\Users\me\work\acme\web]]),
+    opts = { separator = "gap" },
+  }
+  -- routed to shorten_path; it splits on "/" only, so windows siblings still collapse (util.lua)
+  local win_rows = frame_rows(windows)
+  eq(util.width(win_rows[2]), 28)
+  eq(util.width(win_rows[5]), 28)
   local composite = p1_view {
     items = sibling_items("nvim · ~/work/acme/services/api", "SSH:archie · ~/work/acme/services/web"),
     opts = { separator = "gap" },
@@ -974,6 +988,99 @@ test("P1 sibling paths stay distinguishable on the meta line", function()
   assert(usub(comp[2], 6, 25):find("api", 1, true), "the tail after the separator is the path")
   assert(usub(comp[5], 6, 25):find("web", 1, true))
   eq(util.width(comp[5]), 28)
+end)
+
+test("P1 fuzz: every CUP row and hit key stays inside the pane", function()
+  local function row_keys(data)
+    local rows = {}
+    for r in data:gmatch "\27%[(%d+);1H" do
+      rows[#rows + 1] = tonumber(r)
+    end
+    return rows
+  end
+  local checked = 0
+  for _, rows in ipairs { 1, 2, 3, 4, 5, 6, 8, 12, 20 } do
+    for _, strip_n in ipairs { 0, 1, 2, 3, 5 } do
+      for _, n in ipairs { 0, 1, 3, 8 } do
+        for _, footer_n in ipairs { 0, 1, 3 } do
+          local list = {}
+          for i = 1, n do
+            list[i] = {
+              tab_id = i,
+              index = i,
+              is_active = i == 1,
+              is_pinned = i == 2,
+              title = "t" .. i,
+              meta = "~/p" .. i,
+              icon = "t",
+              has_unseen = false,
+            }
+          end
+          local footer = {}
+          for i = 1, footer_n do
+            footer[i] = "f" .. i
+          end
+          local v = p1_view { items = list, rows = rows, footer = footer }
+          v.strip = { rows = strip_n, toggle = strip_n > 0 and { row = 1, x = 2, x1 = 1, x2 = 4 } or nil }
+          local r = render.render(v)
+          checked = checked + 1
+          for _, row in ipairs(row_keys(r.data)) do
+            assert(row >= 1 and row <= rows, string.format("CUP row %d outside 1..%d", row, rows))
+          end
+          for row in pairs(r.hits) do
+            assert(row >= 1 and row <= rows, string.format("hit row %d outside 1..%d", row, rows))
+          end
+          for row in pairs(r.rows) do
+            assert(row >= 1 and row <= rows, string.format("row text %d outside 1..%d", row, rows))
+          end
+        end
+      end
+    end
+  end
+  assert(checked >= 200, "fuzzed " .. checked .. " layouts")
+end)
+
+test("P2 row diff: only changed rows are sent, and they rejoin the same frame", function()
+  local view_mod = require "vtabs.view"
+  local dims = { cols = 28, viewport_rows = 20 }
+  local base = render.render(p1_view { rows = 20 })
+  state.session.frames[901] = nil
+  eq(view_mod.payload_for(901, base, dims, false), base.data, "a cold pane gets the whole frame")
+  state.session.frames[901] = { cols = 28, rows = 20, text = base.rows, n = base.rows_n }
+  eq(view_mod.payload_for(901, base, dims, false), nil, "an unchanged frame sends nothing")
+
+  local hovered = render.render(p1_view { rows = 20, hover = { x = 5, y = 6 } })
+  local payload = view_mod.payload_for(901, hovered, dims, false)
+  assert(payload, "hover changed something")
+  local sent = 0
+  for _ in payload:gmatch "\27%[%d+;1H" do
+    sent = sent + 1
+  end
+  assert(sent <= 3, "hover moved " .. sent .. " rows")
+  assert(#payload < #hovered.data, "diff is smaller than the frame")
+
+  local joined = { ansi.HIDE_CURSOR }
+  for row = 1, hovered.rows_n do
+    joined[#joined + 1] = ansi.cup(row, 1) .. hovered.rows[row]
+  end
+  joined[#joined + 1] = ansi.RESET
+  eq(table.concat(joined), hovered.data, "rows rejoin byte-for-byte into the full frame")
+
+  eq(view_mod.payload_for(901, hovered, { cols = 30, viewport_rows = 20 }, false), hovered.data, "dims change repaints")
+  eq(view_mod.payload_for(901, hovered, dims, true), hovered.data, "force repaints")
+  state.session.frames[901] = nil
+end)
+
+test("P2 row diff: a colour-only change is still re-sent", function()
+  local view_mod = require "vtabs.view"
+  local dims = { cols = 28, viewport_rows = 20 }
+  local plain = render.render(p1_view { rows = 20, hover = { x = 5, y = 6 } })
+  state.session.frames[902] = { cols = 28, rows = 20, text = plain.rows, n = plain.rows_n }
+  local on_close = render.render(p1_view { rows = 20, hover = { x = 26, y = 6 } })
+  local payload = view_mod.payload_for(902, on_close, dims, false)
+  assert(payload, "close_hover_fg is a real change even though the text matches")
+  eq(strip(plain.rows[6]), strip(on_close.rows[6]), "same glyphs, different colour")
+  state.session.frames[902] = nil
 end)
 
 test("P1 frames are written for design review", function()
@@ -1034,15 +1141,16 @@ test("P1 frames are written for design review", function()
     "overflow",
     dumped { items = many, rows = 16, scroll = 4, footer = { { icon = "⚑", text = "main · 3 dirty" } }, opts = design }
   )
-  os.execute("mkdir -p " .. FRAME_DIR)
-  local f = io.open(FRAME_DIR .. "/collapsed.txt", "w")
-  if f then
-    f:write "collapsed = today's detach: the sidebar pane is closed, so no frame is rendered.\n"
-    f:close()
+  if FRAME_DIR and FRAME_DIR ~= "" then
+    local f = io.open(FRAME_DIR .. "/collapsed.txt", "w")
+    if f then
+      f:write "collapsed = today's detach: the sidebar pane is closed, so no frame is rendered.\n"
+      f:close()
+    end
+    local probe = io.open(FRAME_DIR .. "/tabs.txt")
+    assert(probe, "frames written")
+    probe:close()
   end
-  local probe = io.open(FRAME_DIR .. "/tabs.txt")
-  assert(probe, "frames written")
-  probe:close()
 end)
 
 -- implementer-1: identity, persistence, backend protocol ----------------------
@@ -2621,7 +2729,7 @@ test("a drop on a gap row lands below its card, a drop on the title row lands on
   local sb = sidebar.find(win.tab_list[1])
   local hits = state.session.hits[sb:pane_id()]
   local dims = state.session.dims[sb:pane_id()]
-  eq(hit.drop_slot(hits, 6, dims.rows, dims.strip_rows), 2, "title row")
+  eq(hit.drop_slot(hits, 6, dims.rows), 2, "title row")
   eq(hit.drop_slot(hits, 7, dims.rows, dims.strip_rows), 2, "meta row")
   eq(hit.drop_slot(hits, 8, dims.rows, dims.strip_rows), 3, "gap row drops below")
   eq(hit.drop_slot(hits, 1, dims.rows, dims.strip_rows), 1, "inside the strip")
