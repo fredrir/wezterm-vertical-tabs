@@ -658,6 +658,16 @@ rescue_case() {
   cli activate-tab --tab-id "$first" >/dev/null
   sleep 1
   before_sb=$(sidebar_of "$first")
+  # The rescue refuses a sidebar that has not echoed its token, and correctly does nothing. Splitting
+  # before then would read as a miss, so wait for ready rather than for the marker title.
+  n=0
+  while [ "$n" -lt 40 ]; do
+    case "$(probe_line "$first_content" probe_ranks ranks)" in
+      *"$before_sb:backend=true,ready=true"*) break ;;
+    esac
+    n=$((n + 1)); sleep 0.5
+  done
+  [ "$n" -lt 40 ] || { geometry; fail "sidebar $before_sb never authenticated before $1"; }
   before_width=$(settled_width "$first")
   before_panes=$(panes_in "$first")
   echo "  before $1: $(probe_line "$first_content" probe_ranks ranks)"
@@ -782,8 +792,19 @@ close_confirmation() {
   sleep 0.5
   vtest "$hot_content" confirm_on
   sleep 0.5
-  victim=$(tab_ids | cut -d' ' -f2)
-  wait_attached "$victim" 12
+  # A tab that already carries a sidebar, so the check measures the confirmation rather than how
+  # long a lazy attach took under load. Falls back to the second tab and waits.
+  victim=$(list | python3 -c '
+import json,sys,collections
+marked=collections.defaultdict(int)
+tabs=set()
+for p in json.load(sys.stdin):
+    tabs.add(p["tab_id"])
+    if p["title"].startswith("wez-vtabs:"): marked[p["tab_id"]] += 1
+ready=sorted(t for t in tabs if marked[t] == 1)
+print(ready[1] if len(ready) > 1 else "")')
+  [ -n "$victim" ] || victim=$(tab_ids | cut -d' ' -f2)
+  wait_attached "$victim" 30
   cli set-tab-title --tab-id "$victim" victim
   cli send-text --no-paste --pane-id "$(content_of "$victim")" "sleep 1000
   "
