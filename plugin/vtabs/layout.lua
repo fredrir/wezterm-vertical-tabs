@@ -1,5 +1,6 @@
 local util = require "vtabs.util"
 local KIND = require("vtabs.hit").KIND
+local BUTTONS = require("vtabs.actions").strip
 
 local M = {}
 
@@ -57,11 +58,15 @@ local function action_stride(strip)
   end
   return math.max(2, math.floor(require("vtabs.platform").BUTTON_PITCH_PT / cell_w + 0.5))
 end
-local ACTION_DEFAULT = { "toggle", "new_tab", "settings" }
-local ACTION_BUILTIN = { toggle = true, new_tab = true, settings = true, search = true }
--- `search` has no built-in behaviour, so it is drawn only when a hook answers it; `settings` opens
--- the page, and a hook only overrides where it goes.
-local ACTION_HOOKED = { search = true }
+---Which ids exist and which are painted unasked are `actions.strip`'s to say; the painter only
+---derives its two lookups from it, so the two files cannot disagree about the button set again.
+local ACTION_DEFAULT, ACTION_BY_ID = {}, {}
+for _, button in ipairs(BUTTONS) do
+  ACTION_BY_ID[button.id] = button
+  if button.default then
+    ACTION_DEFAULT[#ACTION_DEFAULT + 1] = button.id
+  end
+end
 
 local function resolved_actions(cfg)
   local wanted = cfg.strip_actions
@@ -71,18 +76,18 @@ local function resolved_actions(cfg)
   local hooks = cfg.hooks or {}
   local out = {}
   for _, entry in ipairs(wanted) do
+    local button = ACTION_BY_ID[entry]
     if type(entry) == "table" and entry.on_click then
       out[#out + 1] = { id = entry.id or "custom", icon = entry.icon }
     elseif entry == "toggle" then
       if cfg.toggle_button then
         out[#out + 1] = { id = "toggle" }
       end
-    elseif ACTION_HOOKED[entry] then
-      if hooks[entry] then
+    elseif button then
+      -- no `action` means no built-in behaviour, so the glyph is drawn only when a hook answers it
+      if button.action or hooks[entry] then
         out[#out + 1] = { id = entry }
       end
-    elseif ACTION_BUILTIN[entry] then
-      out[#out + 1] = { id = entry }
     end
   end
   return out
