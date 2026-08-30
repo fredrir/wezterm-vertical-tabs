@@ -131,19 +131,27 @@ local function card_span(item, cfg, st, g, part)
   return nil
 end
 
----A rail slot is the expanded slot with the columns taken away, so rows survive the toggle.
+---Blank card rows above and below the content block, by `tab_height`.
+local PADS = { row = 0, card = 1, tall = 2 }
+
+---`tab_height` decides the pads, `meta` decides the content lines; a rail slot is the expanded slot
+---with the columns taken away, so a tab keeps its rows across the toggle.
 local function card_rows(item, cfg)
   local dense = item.is_pinned and cfg.pinned_style ~= "full"
   local armed_dense = item.armed_pinned == true and cfg.pinned_style ~= "full"
-  local full = cfg.tab_height == "tall" and 3 or 2
-  local one_row = dense or cfg.meta == false
+  local one_row = dense
   if item.armed_pinned ~= nil then
-    one_row = armed_dense or cfg.meta == false
+    one_row = armed_dense
   end
-  return one_row and 1 or full, dense
+  if one_row then
+    return 1, dense, 0, 1
+  end
+  local pads = PADS[cfg.tab_height] or 1
+  local content = cfg.meta == false and 1 or 2
+  return 2 * pads + content, dense, pads, content
 end
 
----The card row the icon sits on: the middle one, which is where the expanded card paints it too.
+---The card row the title and icon sit on: the middle of the pad/content/pad block.
 function M.icon_row(rows_in_card)
   return math.ceil(math.max(rows_in_card, 1) / 2)
 end
@@ -161,9 +169,6 @@ function M.plan(view)
     footer[#footer + 1] = footer_entry(entry)
   end
   local ghost_h = M.new_tab_rows(cfg, view.rows, strip_rows, #footer)
-  if rail and ghost_h > 0 then
-    ghost_h = 1
-  end
   local list_rows = math.max(view.rows - strip_rows - ghost_h - #footer, 0)
 
   local ordered = M.apply_drag(view.items, view.drag)
@@ -178,16 +183,28 @@ function M.plan(view)
   local slot = 0
   local function push(item)
     slot = slot + 1
-    local rows_in_card, dense = card_rows(item, cfg)
+    local rows_in_card, dense, pads, content = card_rows(item, cfg)
+    local n = 0
     local function row(part)
-      plan[#plan + 1] = { kind = "tab", item = item, slot = slot, part = part, rows_in_card = rows_in_card }
+      n = n + 1
+      plan[#plan + 1] = {
+        kind = "tab",
+        item = item,
+        slot = slot,
+        part = part,
+        rows_in_card = rows_in_card,
+        row_in_card = n,
+      }
+    end
+    for _ = 1, pads do
+      row "pad"
     end
     row "title"
-    if rows_in_card == 3 then
-      row "icon"
-    end
-    if rows_in_card >= 2 then
+    if content >= 2 then
       row "meta"
+    end
+    for _ = 1, pads do
+      row "pad"
     end
     if not dense or item.armed_pinned ~= nil then
       for _ = 1, cfg.row_gap do
@@ -315,6 +332,7 @@ function M.plan(view)
         item = item,
         part = entry.part,
         rows_in_card = entry.rows_in_card or 1,
+        row_in_card = entry.row_in_card or 1,
         st = st,
         spans = spans,
         fade = fade,
@@ -337,7 +355,8 @@ function M.plan(view)
   if ghost_h > 0 then
     local base = strip_rows + list_rows
     local hovered = view.hover ~= nil and view.hover.y > base and view.hover.y <= base + ghost_h
-    local shape = rail and "rail" or (ghost_h == 3 and "card" or "row")
+    -- the rail draws the same outlined card; only a window too short for it falls back to a bare glyph
+    local shape = ghost_h == 3 and "card" or (rail and "rail" or "row")
     for i = 1, ghost_h do
       local row = base + i
       if row <= view.rows then

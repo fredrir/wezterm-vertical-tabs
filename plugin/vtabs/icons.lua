@@ -45,7 +45,8 @@ M.defaults = {
   mux = glyph("md_lan_connect", "@"),
   pinned = glyph("md_pin", "*"),
   private = glyph("md_incognito", "~"),
-  close = glyph("cod_close", "x"),
+  -- the Material close is drawn at icon size; the codicon read too thin next to the title
+  close = glyph("md_close", "✖"),
   new_tab = glyph("cod_add", "+"),
   unseen = glyph("md_circle_medium", "•"),
   focus = "›",
