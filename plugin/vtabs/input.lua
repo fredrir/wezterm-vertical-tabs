@@ -12,22 +12,27 @@ local util = require "vtabs.util"
 local M = {}
 
 local DRAG_TIMEOUT_MS = 3000
-local DRAG_START_ROWS = 1
+local DRAG_START_ROWS = 3
 local DRAG_START_COLS = 2
+local DRAG_DWELL_MS = 120
 local TEAR_OFF_TRAVEL = 3
 
 local session = state.session
+local pending_menu = {}
 
 local function blur(gui_window)
   actions.blur_sidebar(gui_window)
 end
 
+---Press keeps the sidebar as the tab's active pane so the drag and the release reach it too.
 local function on_down(gui_window, pane, ev, cfg)
   local wid = gui_window:window_id()
-  local h = hit.at(session.hits[pane:pane_id()], ev.y)
+  local pid = pane:pane_id()
+  local h = hit.at(session.hits[pid], ev.y)
   local now = util.now_ms()
   session.hover[wid] = { x = ev.x, y = ev.y, at = now }
   session.drag[wid] = nil
+  pending_menu[wid] = nil
   state.set_focus(wid, false)
   if cfg.debug then
     util.log("down hit=%s tab=%s slot=%s", h.kind, tostring(h.tab_id), tostring(h.slot))
@@ -41,8 +46,16 @@ local function on_down(gui_window, pane, ev, cfg)
       if hit.in_close(h, ev.x) then
         actions.close_tab(gui_window, h.tab_id)
       else
-        actions.activate_tab(gui_window, h.tab_id)
-        session.drag[wid] = { tab_id = h.tab_id, origin_x = ev.x, origin_y = ev.y, active = false, at = now }
+        local focused = actions.activate_tab(gui_window, h.tab_id, "sidebar")
+        session.drag[wid] = {
+          tab_id = h.tab_id,
+          origin_x = ev.x,
+          origin_y = ev.y,
+          pane_id = focused and focused:pane_id() or pid,
+          active = false,
+          began = now,
+          at = now,
+        }
       end
     elseif h.kind == "new_tab" then
       actions.new_tab(gui_window)
@@ -54,49 +67,61 @@ local function on_down(gui_window, pane, ev, cfg)
   elseif ev.b == "middle" and h.kind == "tab" then
     actions.close_tab(gui_window, h.tab_id)
   elseif ev.b == "right" and h.kind == "tab" then
-    menu.open(gui_window, h.tab_id)
-    return
+    pending_menu[wid] = { tab_id = h.tab_id, at = now }
   end
-  blur(gui_window)
 end
 
 local function on_drag(gui_window, pane, ev, cfg)
   local wid = gui_window:window_id()
+  local pid = pane:pane_id()
   local drag = session.drag[wid]
-  if not drag or ev.b ~= "left" then
+  local hits = session.hits[pid]
+  if not drag or ev.b ~= "left" or drag.pane_id ~= pid or not hits then
     return
   end
   drag.at = util.now_ms()
   local dx = math.abs(ev.x - drag.origin_x)
-  if not drag.active and (math.abs(ev.y - drag.origin_y) >= DRAG_START_ROWS or dx >= DRAG_START_COLS) then
+  local dy = math.abs(ev.y - drag.origin_y)
+  local past_threshold = dy >= DRAG_START_ROWS or dx >= DRAG_START_COLS
+  if not drag.active and past_threshold and drag.at - drag.began >= DRAG_DWELL_MS then
     drag.active = true
   end
   if drag.active then
-    local pid = pane:pane_id()
     local dims = session.dims[pid] or { cols = cfg.width, rows = ev.y }
-    drag.over_index = hit.drop_slot(session.hits[pid], ev.y, dims.rows, cfg.padding.top)
+    drag.over_index = hit.drop_slot(hits, ev.y, dims.rows, cfg.padding.top)
     drag.outside = cfg.tear_off and dx >= TEAR_OFF_TRAVEL and hit.on_inner_edge(ev.x, dims.cols, cfg.position)
   end
   session.hover[wid] = { x = ev.x, y = ev.y, at = drag.at }
 end
 
+---The menu is opened from the release: a selector overlay cancels itself if a button is still held.
 local function on_up(gui_window, pane, ev, cfg)
   local wid = gui_window:window_id()
+  local pid = pane:pane_id()
   local drag = session.drag[wid]
+  local menu_for = pending_menu[wid]
   session.drag[wid] = nil
-  if not drag or not drag.active then
+  pending_menu[wid] = nil
+  if ev.b == "right" then
+    if menu_for then
+      menu.open(gui_window, menu_for.tab_id)
+    end
     return
   end
-  local dims = session.dims[pane:pane_id()] or { cols = cfg.width }
-  local travelled = math.abs(ev.x - drag.origin_x) >= TEAR_OFF_TRAVEL
-  if drag.outside or (cfg.tear_off and travelled and hit.on_inner_edge(ev.x, dims.cols, cfg.position)) then
-    if actions.tear_off(gui_window, drag.tab_id) then
-      return
+  if drag and drag.active and drag.pane_id == pid and session.hits[pid] then
+    local dims = session.dims[pid] or { cols = cfg.width }
+    local travelled = math.abs(ev.x - drag.origin_x) >= TEAR_OFF_TRAVEL
+    if drag.outside or (cfg.tear_off and travelled and hit.on_inner_edge(ev.x, dims.cols, cfg.position)) then
+      if actions.tear_off(gui_window, drag.tab_id) then
+        return
+      end
+    elseif drag.over_index then
+      actions.move_tab_to_slot(gui_window, drag.tab_id, drag.over_index)
     end
-  elseif drag.over_index then
-    actions.move_tab_to_slot(gui_window, drag.tab_id, drag.over_index)
   end
-  blur(gui_window)
+  if cfg.hover == "press" then
+    blur(gui_window)
+  end
 end
 
 local function on_wheel(gui_window, ev, cfg)
@@ -109,11 +134,24 @@ local function on_wheel(gui_window, ev, cfg)
   session.user_scrolled[wid] = true
 end
 
+---Motion only needs a repaint when it crosses a row or the close-button span of the row it is on.
+local function hover_moved(previous, ev, pid)
+  if not previous or previous.y ~= ev.y then
+    return true
+  end
+  local h = hit.at(session.hits[pid], ev.y)
+  return hit.in_close(h, previous.x) ~= hit.in_close(h, ev.x)
+end
+
 function M.mouse(gui_window, pane, ev)
   local cfg = config.get()
   local wid = gui_window:window_id()
   if ev.k == "move" then
+    local moved = hover_moved(session.hover[wid], ev, pane:pane_id())
     session.hover[wid] = { x = ev.x, y = ev.y, at = util.now_ms() }
+    if not moved then
+      return
+    end
   elseif ev.k == "down" then
     on_down(gui_window, pane, ev, cfg)
   elseif ev.k == "drag" then
@@ -152,7 +190,7 @@ local KEYS = {
     actions.rename_tab(gui_window, id)
   end),
   m = with_focused(function(gui_window, id)
-    menu.open(gui_window, id)
+    menu.open(gui_window, id, { keep_focus = true })
   end),
   J = with_focused(function(gui_window, id, index)
     actions.move_tab_to_slot(gui_window, id, index + 1)
@@ -246,6 +284,12 @@ function M.tick(gui_window)
   local drag = session.drag[wid]
   if drag and now - drag.at > DRAG_TIMEOUT_MS then
     session.drag[wid] = nil
+    if cfg.hover == "press" then
+      blur(gui_window)
+    end
+  end
+  if pending_menu[wid] and now - pending_menu[wid].at > DRAG_TIMEOUT_MS then
+    pending_menu[wid] = nil
   end
   local active = util.active_tab(gui_window)
   local active_id = active and active:tab_id() or nil

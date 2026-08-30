@@ -692,6 +692,127 @@ test("correction is skipped while a tab drag is in flight", function()
   eq(sidebar.find(win.tab_list[1]).cols, 28)
 end)
 
+local view_mod = require "vtabs.view"
+
+local function drag_setup()
+  local win, gui = setup_window(3)
+  sidebar.ensure(gui)
+  for _, tab in ipairs(win.tab_list) do
+    mark_ready(tab)
+  end
+  win.active_tab_ref = win.tab_list[1]
+  view_mod.sync(gui, { force = true })
+  return win, gui
+end
+
+local function mouse(gui, sb, kind, button, x, y)
+  input.handle(gui, sb, "vtabs", string.format('{"t":"mouse","k":"%s","b":"%s","x":%d,"y":%d}', kind, button, x, y))
+end
+
+---Presses row `y` and reports the drag, with the dwell already elapsed unless `hold` says otherwise.
+local function press_row(gui, sb, y, hold)
+  mouse(gui, sb, "down", "left", 5, y)
+  local drag = state.session.drag[gui:window_id()]
+  if drag and not hold then
+    drag.began = drag.began - 200
+  end
+  return drag
+end
+
+test("press keeps the sidebar of the clicked tab focused and points the drag at it", function()
+  local win, gui = drag_setup()
+  local sb1 = sidebar.find(win.tab_list[1])
+  local drag = press_row(gui, sb1, 4)
+  eq(win.active_tab_ref, win.tab_list[3])
+  eq(win.tab_list[3].active, sidebar.find(win.tab_list[3]), "sidebar holds focus, not the shell")
+  eq(drag.pane_id, sidebar.find(win.tab_list[3]):pane_id())
+end)
+
+test("one row of drift never arms a drag; three rows plus the dwell reorders on release", function()
+  local win, gui = drag_setup()
+  local sb1 = sidebar.find(win.tab_list[1])
+  local ids = {}
+  for i, t in ipairs(win.tab_list) do
+    ids[i] = t.id
+  end
+  press_row(gui, sb1, 4)
+  local sb3 = sidebar.find(win.tab_list[3])
+  mouse(gui, sb3, "drag", "left", 5, 3)
+  eq(state.session.drag[gui:window_id()].active, false, "one row is jitter")
+  mouse(gui, sb3, "up", "left", 5, 3)
+  eq(win.tab_list[3].id, ids[3], "order untouched")
+
+  press_row(gui, sb1, 4)
+  mouse(gui, sb3, "drag", "left", 5, 1)
+  assert(state.session.drag[gui:window_id()].active, "three rows arms the drag")
+  mouse(gui, sb3, "up", "left", 5, 1)
+  eq(win.tab_list[1].id, ids[3], "dragged tab took the first slot")
+end)
+
+test("a drag that starts before the dwell elapses is jitter", function()
+  local win, gui = drag_setup()
+  local sb1 = sidebar.find(win.tab_list[1])
+  press_row(gui, sb1, 4, "hold")
+  local sb3 = sidebar.find(win.tab_list[3])
+  mouse(gui, sb3, "drag", "left", 5, 1)
+  eq(state.session.drag[gui:window_id()].active, false)
+end)
+
+test("drag events from a pane other than the drag origin are dropped", function()
+  local win, gui = drag_setup()
+  local sb1 = sidebar.find(win.tab_list[1])
+  press_row(gui, sb1, 4)
+  local sb2 = sidebar.find(win.tab_list[2])
+  mouse(gui, sb2, "drag", "left", 5, 1)
+  eq(state.session.drag[gui:window_id()].active, false)
+end)
+
+test("a drag whose pane has no hit map is dropped instead of dropping at slot 1", function()
+  local win, gui = drag_setup()
+  local sb1 = sidebar.find(win.tab_list[1])
+  local drag = press_row(gui, sb1, 2)
+  state.session.hits[sb1:pane_id()] = nil
+  mouse(gui, sb1, "drag", "left", 5, 5)
+  eq(drag.active, false)
+  eq(drag.over_index, nil)
+end)
+
+test("right click opens the menu on release, never while the button is held", function()
+  local win, gui = drag_setup()
+  local sb1 = sidebar.find(win.tab_list[1])
+  local before = #win.actions
+  mouse(gui, sb1, "down", "right", 5, 3)
+  eq(#win.actions, before, "nothing opens under a held button")
+  mouse(gui, sb1, "up", "right", 5, 3)
+  eq(last_action(win).action, "InputSelector")
+end)
+
+test("hover=press restores content focus on release, hover=follow keeps the sidebar", function()
+  local win, gui = drag_setup()
+  local tab = win.tab_list[1]
+  local sb1 = sidebar.find(tab)
+  press_row(gui, sb1, 2)
+  eq(tab.active, sb1)
+  mouse(gui, sb1, "up", "left", 5, 2)
+  eq(tab.active, sb1, "follow leaves the sidebar active")
+  config.setup { hover = "press", backend = { path = "/bin/wez-vtabs" } }
+  press_row(gui, sb1, 2)
+  mouse(gui, sb1, "up", "left", 5, 2)
+  assert(tab.active ~= sb1, "press mode hands focus back")
+  config.setup { backend = { path = "/bin/wez-vtabs" } }
+end)
+
+test("mouse move repaints on a row change and stays quiet inside the row", function()
+  local win, gui = drag_setup()
+  local sb1 = sidebar.find(win.tab_list[1])
+  local sent = #sb1.sent
+  mouse(gui, sb1, "move", "none", 5, 3)
+  local repainted = #sb1.sent
+  assert(repainted > sent, "crossing into a row repaints")
+  mouse(gui, sb1, "move", "none", 6, 3)
+  eq(#sb1.sent, repainted, "same row, same spans, no frame")
+end)
+
 os.remove(state.file)
 print(string.format("%d passed, %d failed", passed, failed))
 os.exit(failed == 0 and 0 or 1)

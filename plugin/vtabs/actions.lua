@@ -36,16 +36,18 @@ local function spawn_env(gui_window)
   return nil
 end
 
-function M.activate_tab(gui_window, tab_id)
+---`focus` picks which pane of the activated tab keeps input: "sidebar" or, by default, the content.
+function M.activate_tab(gui_window, tab_id, focus)
   local tab = M.tab_by_id(gui_window, tab_id)
   if not tab then
-    return
+    return nil
   end
   tab:activate()
-  local content = sidebar.content_pane(tab)
-  if content then
-    content:activate()
+  local target = (focus == "sidebar" and sidebar.find(tab)) or sidebar.content_pane(tab)
+  if target then
+    target:activate()
   end
+  return target
 end
 
 ---Moves a tab to a physical index (0-based), leaving the active tab as it was.

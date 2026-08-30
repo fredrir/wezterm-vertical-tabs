@@ -37,6 +37,7 @@ return config
 | `scroll_indicator`        | `true`                                                            | right-edge thumb when tabs overflow                                                                                                             |
 | `wheel`                   | `"scroll"`                                                        | `"scroll"` the list or `"switch"` tabs                                                                                                          |
 | `tear_off`                | `true`                                                            | drag a tab onto the sidebar's inner edge (3+ columns of travel) to move it to a new window                                                      |
+| `hover`                   | `"follow"`                                                       | `"follow"`: the sidebar is the tab's active pane while the pointer is over it (sets `pane_focus_follows_mouse = true` when you left it unset — this is a global wezterm option); `"press"`: only from press to release |
 | `hover_timeout_ms`        | `6000`                                                            | clear hover highlight after inactivity (`0` = never); terminals report no mouse-leave                                                           |
 | `double_click_ms`         | `400`                                                             | double-click on empty space opens a new tab                                                                                                     |
 | `ellipsis`                | `"…"`                                                             | used when truncating titles                                                                                                                     |
@@ -109,12 +110,18 @@ is not in keyboard mode returns focus to the content pane.
 | ------------------------------------------ | -------------------------------------------------------------------------------- |
 | left click                                 | switch tab                                                                       |
 | click `✕` / middle click                   | close tab                                                                        |
-| right click                                | context menu (overlay in the current pane)                                       |
-| drag                                       | reorder; dropping across the separator pins/unpins, the list previews the result |
+| right click                                | context menu on release (overlay in the current pane)                            |
+| drag                                       | reorder after 3 rows of travel and 120 ms; dropping across the separator pins/unpins, the list previews the result |
 | drag to the inner edge                     | move tab to a new window (edge highlights while armed)                           |
 | double-click empty space / click "New Tab" | new tab                                                                          |
 | wheel                                      | scroll list (or switch tabs with `wheel = "switch"`)                             |
 | footer row                                 | calls the entry's `on_click`                                                     |
+
+| focus                | behaviour                                                                                  |
+| -------------------- | ------------------------------------------------------------------------------------------ |
+| `hover = "follow"`   | pointer over the sidebar = sidebar focused; keys that are not sidebar bindings are forwarded to the tab's content pane, which then takes focus back |
+| `hover = "press"`    | the sidebar holds focus from press to release only                                          |
+| press                | never hands focus to the content pane, so the drag and the release reach the sidebar        |
 
 
 ## Public API

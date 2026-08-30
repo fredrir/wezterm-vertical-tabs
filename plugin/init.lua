@@ -221,6 +221,9 @@ function M.apply_to_config(config, opts)
     config.enable_tab_bar = false
   end
   config.status_update_interval = math.min(config.status_update_interval or 1000, cfg.poll_ms)
+  if cfg.hover == "follow" and config.pane_focus_follows_mouse == nil then
+    config.pane_focus_follows_mouse = true
+  end
   if cfg.skip_close_confirmation then
     config.skip_close_confirmation_for_processes_named = config.skip_close_confirmation_for_processes_named
       or { "bash", "sh", "zsh", "fish", "tmux", "nu", "cmd.exe", "pwsh.exe", "powershell.exe" }

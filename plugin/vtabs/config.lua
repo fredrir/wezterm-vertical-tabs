@@ -21,6 +21,7 @@ M.defaults = {
   scroll_indicator = true,
   wheel = "scroll", -- "scroll" | "switch"
   tear_off = true, -- drop on the sidebar's inner edge to move the tab to a new window
+  hover = "follow", -- "follow": sidebar holds focus while hovered | "press": only press → release
   hover_timeout_ms = 6000,
   double_click_ms = 400,
   ellipsis = "…",
@@ -58,6 +59,7 @@ local VALID = {
   pinned_style = { compact = true, full = true },
   separator = { rule = true, gap = true, none = true },
   wheel = { scroll = true, switch = true },
+  hover = { follow = true, press = true },
 }
 
 local current = nil
