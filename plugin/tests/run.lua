@@ -41,6 +41,7 @@ end
 local wezterm = require "wezterm"
 local util = require "vtabs.util"
 local config = require "vtabs.config"
+local anim = require "vtabs.anim"
 local ansi = require "vtabs.ansi"
 local render = require "vtabs.render"
 local theme = require "vtabs.theme"
@@ -660,7 +661,12 @@ local function dump_frame(name, v)
   if not f then
     return rows
   end
-  f:write "0        1         2\n1234567890123456789012345678\n"
+  local tens, ones = {}, {}
+  for x = 1, v.cols do
+    tens[x] = x % 10 == 0 and tostring(x // 10) or " "
+    ones[x] = tostring(x % 10)
+  end
+  f:write(table.concat(tens), "\n", table.concat(ones), "\n")
   for _, line in ipairs(rows) do
     f:write(line, "\n")
   end
@@ -1230,6 +1236,206 @@ test("P1 screenshots: icon weight, chamfer, toggle surface, dashed ghost", funct
   eq(usub(over_rows[top], 3, 4), "──", "hovered ghost border is solid")
 end)
 
+local function popover_rect(over)
+  local rect = {
+    x = 3,
+    y = 6,
+    w = 24,
+    h = 5,
+    scrim = 0.5,
+    rows = {
+      { spans = { { x = 2, text = "Close tab", bold = true } }, hit = { kind = "popover", id = "close" } },
+      { spans = { { x = 2, text = "Pin tab" } }, hit = { kind = "popover", id = "pin" } },
+      { spans = { { x = 2, text = "Rename" } }, hit = { kind = "popover", id = "rename", disabled = true } },
+      { spans = { { x = 2, text = "" } } },
+      { spans = { { x = 2, text = "Move to new window" } }, hit = { kind = "popover", id = "tear_off" } },
+    },
+  }
+  for k, v in pairs(over or {}) do
+    rect[k] = v
+  end
+  return rect
+end
+
+test("P2 composite: the popover owns its rows and scrims the rest", function()
+  local v = p1_view { rows = 20 }
+  v.popover = popover_rect()
+  local r = render.render(v)
+  local rows = {}
+  for row = 1, v.rows do
+    rows[row] = row_text(r.data, row)
+  end
+  for row = 1, v.rows do
+    eq(util.width(rows[row]), 28, "row " .. row .. " stays cols wide")
+  end
+  assert(rows[6]:find("Close tab", 1, true), "first item painted at the rect origin")
+  eq(usub(rows[6], 4, 12), "Close tab", "span x is relative to the rect")
+  eq(r.hits[6].kind, "popover")
+  eq(r.hits[6].id, "close")
+  eq(r.hits[8].disabled, true)
+  eq(r.hits[9].kind, "popover", "a row with no hit is inert, not a scrim")
+  eq(r.hits[9].id, nil)
+  for _, row in ipairs { 1, 5, 11, 20 } do
+    eq(r.hits[row].kind, "scrim", "row " .. row .. " outside the rect")
+    eq(r.hits[row].id, nil)
+  end
+end)
+
+test("P2 composite: the scrim fades foreground and background", function()
+  local plain = render.render(p1_view { rows = 20 })
+  local v = p1_view { rows = 20 }
+  v.popover = popover_rect()
+  local scrimmed = render.render(v)
+  local active_row
+  for row = 1, 20 do
+    if plain.hits[row] and plain.hits[row].kind == "tab" and plain.hits[row].id == 2 then
+      active_row = active_row or row
+    end
+  end
+  assert(active_row and active_row < 6, "the active card sits above the popover")
+  assert(scrimmed.rows[active_row] ~= plain.rows[active_row], "a scrimmed row repaints")
+  eq(strip(scrimmed.rows[active_row]), strip(plain.rows[active_row]), "same glyphs, dimmer colours")
+  local theme_bg = string.format("48;2;%d;%d;%d", v.theme.bg[1], v.theme.bg[2], v.theme.bg[3])
+  local card_bg = string.format("48;2;%d;%d;%d", v.theme.active_bg[1], v.theme.active_bg[2], v.theme.active_bg[3])
+  assert(plain.rows[active_row]:find(card_bg, 1, true), "the card paints its own bg unscrimmed")
+  assert(not scrimmed.rows[active_row]:find(card_bg, 1, true), "and a faded one under the scrim")
+  assert(not scrimmed.rows[active_row]:find(theme_bg .. "m" .. "%s*$"), "still not flat page bg")
+end)
+
+test("P2 composite: spans are clamped to the rect", function()
+  local v = p1_view { rows = 20 }
+  v.popover = popover_rect {
+    rows = { { spans = { { x = 1, text = string.rep("wide", 40) } }, hit = { kind = "popover", id = "x" } } },
+    h = 1,
+  }
+  local r = render.render(v)
+  eq(util.width(row_text(r.data, 6)), 28, "an over-long span truncates, it does not widen the row")
+  eq(usub(row_text(r.data, 6), 27, 28), "  ", "and stops at the rect edge")
+end)
+
+test("P2 rail: grid, cards and chrome at 5 and 9 cols", function()
+  for _, cols in ipairs { 5, 9 } do
+    local v = p1_view { rows = 16, cols = cols, opts = { width = math.max(cols, 8) } }
+    v.rail = true
+    v.strip = { rows = 2, toggle = { row = 1, x = math.ceil(cols / 2), x1 = 1, x2 = cols } }
+    local r = render.render(v)
+    local rows = {}
+    for row = 1, v.rows do
+      rows[row] = row_text(r.data, row)
+    end
+    for row = 1, v.rows do
+      eq(util.width(rows[row]), cols, cols .. "-col rail row " .. row)
+    end
+    local icon_x = math.ceil(cols / 2)
+    local first, second
+    for row = 1, v.rows do
+      local h = r.hits[row]
+      if h and h.kind == "tab" and h.part == "title" then
+        first = first or row
+        if first and row > first then
+          second = second or row
+        end
+      end
+    end
+    eq(usub(rows[first], icon_x, icon_x), "~", "icon centred at ceil(cols/2)")
+    eq(r.hits[first].x1, 1, "the whole rail is the card")
+    eq(r.hits[first].x2, cols)
+    eq(hit.span(r.hits[first], icon_x), nil, "a rail card has no close span, by construction")
+    local unpinned
+    for row = 1, v.rows do
+      local h = r.hits[row]
+      if h and h.kind == "tab" and h.part == "title" and not h.pinned then
+        unpinned = unpinned or row
+      end
+    end
+    eq(r.hits[unpinned + 1].part, "gap", "a rail card is an icon row plus a gap row")
+    eq(r.hits[unpinned + 1].slot, r.hits[unpinned].slot, "both rows carry the same slot")
+    eq(r.hits[first + 1].part, nil, "a pinned rail entry keeps no gap, so the block stays solid")
+    for row = 1, v.rows do
+      assert(not rows[row]:find("▙", 1, true), "no chamfer at " .. cols .. " cols")
+      assert(not rows[row]:find("╭", 1, true), "no ghost frame at " .. cols .. " cols")
+    end
+    local ghost
+    for row = 1, v.rows do
+      if r.hits[row] and r.hits[row].kind == "new_tab" then
+        ghost = ghost or row
+      end
+    end
+    eq(usub(rows[ghost], icon_x, icon_x), "+", "the ghost shrinks to a bare +")
+    assert(second, "the second card is a separate hit record")
+  end
+end)
+
+test("P2 rail: the thumb needs 7 columns", function()
+  local many = {}
+  for i = 1, 30 do
+    many[i] = {
+      tab_id = i,
+      index = i,
+      is_active = i == 1,
+      is_pinned = false,
+      title = "t" .. i,
+      meta = "~/p",
+      icon = "t",
+      has_unseen = false,
+    }
+  end
+  local narrow = p1_view { rows = 10, cols = 5, items = many }
+  narrow.rail = true
+  assert(not render.render(narrow).data:find("▐", 1, true), "5 cols has no column to spare")
+  local wide = p1_view { rows = 10, cols = 9, items = many }
+  wide.rail = true
+  assert(render.render(wide).data:find("▐", 1, true), "9 cols draws the thumb")
+end)
+
+test("P2 anim: one command per phase, within the backend's bounds", function()
+  local frame = render.render(p1_view { rows = 12 })
+  local cmd, rows = anim.build("expand_in", frame, { id = 4, anchor = "#1e1e2e" })
+  assert(cmd, "built")
+  eq(cmd.t, "anim")
+  eq(cmd.id, 4)
+  eq(cmd.ms, 220)
+  eq(cmd.ease, "outCubic")
+  eq(cmd.dir, "in")
+  eq(cmd.fps, 30)
+  eq(cmd.anchor, "#1e1e2e")
+  eq(#cmd.rows, #rows, "one entry per selected row")
+  eq(cmd.rows[1].delay, 0, "expand staggers top to bottom")
+  eq(cmd.rows[2].delay, 12)
+  assert(cmd.rows[#cmd.rows].delay <= 120, "capped")
+  assert(#cmd.data <= anim.MAX_DATA, "inside the 8 KiB bound")
+  assert(cmd.data:find("\27[1;1H", 1, true), "carries its rows with their CUPs")
+
+  local out = anim.build("collapse_out", frame, { id = 5, anchor = "#1e1e2e" })
+  eq(out.ms, 160)
+  eq(out.ease, "inOutQuad")
+  eq(out.dir, "out")
+  eq(out.rows[#out.rows].delay, 0, "collapse staggers bottom to top")
+  assert(out.rows[1].delay > 0)
+
+  eq(anim.build("hover", frame, { id = 6, anchor = "#1e1e2e", rows = { 3 } }).ms, 60)
+  eq(#anim.build("hover", frame, { id = 6, anchor = "#1e1e2e", rows = { 3 } }).rows, 1, "explicit row list wins")
+end)
+
+test("P2 anim: refuses what the backend would refuse", function()
+  local frame = render.render(p1_view { rows = 12 })
+  local _, why = anim.build("nope", frame, { anchor = "#1e1e2e" })
+  eq(why, "phase")
+  _, why = anim.build("hover", frame, { anchor = "1e1e2e" })
+  eq(why, "anchor")
+  _, why = anim.build("hover", frame, { anchor = "#1e1e2e", rows = { 999 } })
+  eq(why, "empty")
+  local wide = { rows = {}, rows_n = 200 }
+  for row = 1, 200 do
+    wide.rows[row] = "x"
+  end
+  _, why = anim.build("hover", wide, { anchor = "#1e1e2e" })
+  eq(why, "rows")
+  local heavy = { rows = { [1] = string.rep("y", anim.MAX_DATA + 1) }, rows_n = 1 }
+  _, why = anim.build("hover", heavy, { anchor = "#1e1e2e" })
+  eq(why, "size")
+end)
+
 test("P1 frames are written for design review", function()
   -- the shared fixture pins row_gap and separator for positional tests; frames want the shipped values
   local design = { row_gap = config.defaults.row_gap, separator = config.defaults.separator }
@@ -1258,6 +1464,15 @@ test("P1 frames are written for design review", function()
   local base = dumped { rows = 20, opts = design }
   local hover_row = base.strip.rows + 6
   dump_frame("tabs", base)
+  local pop = dumped { rows = 20, opts = design }
+  pop.popover = popover_rect()
+  dump_frame("popover-open", pop)
+  for _, cols in ipairs { 5, 9 } do
+    local rail = p1_view { rows = 16, cols = cols, opts = design }
+    rail.rail = true
+    rail.strip = { rows = 2, toggle = { row = 1, x = math.ceil(cols / 2), x1 = 1, x2 = cols } }
+    dump_frame("rail-" .. cols, rail)
+  end
   dump_frame("hover", dumped { rows = 20, hover = { x = 5, y = hover_row }, opts = design })
   -- identical to hover.txt on purpose: they differ only in close_hover_fg, which stripping removes
   dump_frame("hover-close", dumped { rows = 20, hover = { x = 26, y = hover_row }, opts = design })
