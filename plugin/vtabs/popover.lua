@@ -348,6 +348,11 @@ function M.point_at(gui_window, record, x)
   if not pop or not config.get().popover.follow_pointer then
     return false
   end
+  -- Cancel stays selected at the confirm level: a pointer that happens to rest over Close must not
+  -- arm a destructive answer the user never chose.
+  if pop.level == "confirm" then
+    return false
+  end
   if not record or record.kind ~= "popover" or record.id == nil then
     return false
   end

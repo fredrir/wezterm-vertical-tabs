@@ -37,16 +37,25 @@ local function spawn_env(gui_window)
 end
 
 ---`focus` picks which pane of the activated tab keeps input: "sidebar" or, by default, the content.
+---Sidebars attach lazily on activation and widths are corrected on the active tab only, so leaving
+---both to the next poll costs a frame of a tab with no sidebar, or one at the wrong width -- and on
+---a mux, a round trip on top of it. The switch does its own, in the same action.
 function M.activate_tab(gui_window, tab_id, focus)
   local tab = M.tab_by_id(gui_window, tab_id)
   if not tab then
     return nil
   end
   tab:activate()
-  local target = (focus == "sidebar" and sidebar.find(tab)) or sidebar.content_pane(tab)
+  local hidden = state.is_collapsed(gui_window:window_id()) and config.get().collapsed == "hidden"
+  local sb = sidebar.find(tab)
+  if not sb and not hidden then
+    sb = sidebar.attach(tab)
+  end
+  local target = (focus == "sidebar" and sb) or sidebar.content_pane(tab)
   if target then
     target:activate()
   end
+  require("vtabs.geometry").correct(gui_window)
   return target
 end
 

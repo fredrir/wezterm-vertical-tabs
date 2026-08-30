@@ -171,6 +171,20 @@ end
 
 ---The fixture pins the geometry the positional tests count on, so schema default changes cannot
 ---silently move every row index in this file.
+---Runs `fn` with the clock moved on, so a width can be observed as having sat still since.
+local function later(ms, fn)
+  local real = util.now_ms
+  local base = real()
+  util.now_ms = function()
+    return base + ms
+  end
+  local ok, err = pcall(fn)
+  util.now_ms = real
+  if not ok then
+    error(err, 0)
+  end
+end
+
 local function view(over)
   local opts = over and over.opts or {}
   opts.row_gap = opts.row_gap or 0
@@ -647,6 +661,41 @@ test("collapsed = hidden detaches, expand re-attaches", function()
   for _, tab in ipairs(win.tab_list) do
     eq(sidebars_in(tab), 1, "and gets one when visited")
   end
+  config.setup { backend = { path = "/bin/wez-vtabs" } }
+end)
+
+test("switching to a tab attaches its sidebar and corrects its width in the same action", function()
+  local win, gui = setup_window(3)
+  sidebar.ensure(gui)
+  mark_ready(win.tab_list[1])
+  local target = win.tab_list[3]
+  eq(sidebars_in(target), 0, "a background tab has no sidebar until it is activated")
+  actions.activate_tab(gui, target.id)
+  eq(win.active_tab_ref, target)
+  eq(sidebars_in(target), 1, "the switch attaches one without waiting for the poll")
+  eq(sidebars_in(win.tab_list[1]), 1, "and does not touch the tab it came from")
+
+  -- A tab whose sidebar drifted is put right by the same call, not a poll later.
+  local sb = mark_ready(target)
+  win.active_tab_ref = win.tab_list[1]
+  geometry.reset(gui:window_id())
+  target:set_split(18)
+  eq(sb.cols, 18)
+  local before = #win.actions
+  actions.activate_tab(gui, target.id)
+  eq(sb.cols, 28, "the width is corrected on arrival")
+  assert(#win.actions > before, "which took an AdjustPaneSize")
+  config.setup { backend = { path = "/bin/wez-vtabs" } }
+end)
+
+test("a switch while collapsed to hidden attaches nothing, since hidden means no pane at all", function()
+  local win, gui = setup_window(2)
+  config.setup { meta = "auto", collapsed = "hidden", backend = { path = "/bin/wez-vtabs" } }
+  state.set_collapsed(gui:window_id(), true)
+  local target = win.tab_list[2]
+  actions.activate_tab(gui, target.id)
+  eq(sidebars_in(target), 0, "no sidebar is spawned only to be detached again")
+  state.set_collapsed(gui:window_id(), false)
   config.setup { backend = { path = "/bin/wez-vtabs" } }
 end)
 
@@ -2856,7 +2905,11 @@ test("a divider drag survives a config reload, unless the reload changed width i
   local sb = mark_ready(tab)
   eq(geometry.correct(gui), false, "baseline recorded")
   tab:set_split(34)
-  eq(geometry.correct(gui), false, "drag adopted, not fought")
+  eq(geometry.correct(gui), false, "a divider still moving is neither adopted nor fought")
+  eq(geometry.desired(gui:window_id()), 28, "nothing is taken from a width that is still changing")
+  later(400, function()
+    eq(geometry.correct(gui), false, "and once the hand comes off, it is adopted")
+  end)
   eq(geometry.desired(gui:window_id()), 34)
   eq(geometry.correct(gui), false)
   eq(sb.cols, 34)
@@ -2972,14 +3025,25 @@ test("an adopted width is clamped to a plausible sidebar", function()
   mark_ready(tab)
   eq(geometry.correct(gui), false, "baseline recorded")
   tab:set_split(78)
-  eq(geometry.correct(gui), false, "drag adopted")
+  eq(geometry.correct(gui), false, "the divider is still moving")
+  later(400, function()
+    eq(geometry.correct(gui), false, "drag adopted once it stops")
+  end)
   eq(geometry.desired(gui:window_id()), 60, "clamped to tab width minus the content margin")
   geometry.reset(gui:window_id())
   assert(geometry.correct(gui), "a reset re-asserts cfg.width")
 
-  eq(geometry.correct(gui), false, "baseline recorded")
+  -- Past the floor that follows the reset's own adjust, where a width is still ours.
+  later(400, function()
+    eq(geometry.correct(gui), false, "baseline recorded")
+  end)
   tab:set_split(1)
-  eq(geometry.correct(gui), false, "drag adopted")
+  later(800, function()
+    eq(geometry.correct(gui), false, "the divider is still moving")
+  end)
+  later(1200, function()
+    eq(geometry.correct(gui), false, "drag adopted once it stops")
+  end)
   eq(geometry.desired(gui:window_id()), 8, "clamped to the minimum width")
 end)
 
@@ -3005,6 +3069,135 @@ test("an unreachable width is attempted until it stops moving, then left alone",
   eq(#win.actions, settled, "no AdjustPaneSize and no activate once it is known unreachable")
   win:resize(40)
   assert(geometry.correct(gui), "a window resize unblocks the retry")
+end)
+
+test("two content panes side by side each keep MIN_CONTENT, not 20 columns between them", function()
+  local win, gui = setup_window(1)
+  sidebar.ensure(gui)
+  local tab = win.tab_list[1]
+  local sb = mark_ready(tab)
+  local content = sidebar.content_pane(tab)
+  config.setup { meta = "auto", width = 40, backend = { path = "/bin/wez-vtabs" } }
+  win:resize(73 - win.cols)
+  sb.left, sb.width = 0, sb.cols
+  content.left, content.width = sb.cols + 1, content.cols
+  geometry.reset(gui:window_id())
+  geometry.correct(gui)
+  local one_band = sb.cols
+  assert(one_band > 20, "one shell can give the sidebar most of a 73-column tab, got " .. one_band)
+
+  -- A second shell beside the first: the guard was satisfied by their combined width, so the
+  -- sidebar kept its 40 and the two shells were dealt 20 and 11.
+  local beside = fake.pane(tab, { cols = 12 })
+  tab.pane_list[#tab.pane_list + 1] = beside
+  beside.left, beside.width = content.left + 20, 12
+  geometry.reset(gui:window_id())
+  geometry.correct(gui)
+  assert(sb.cols < one_band, "the second band costs the sidebar width, got " .. sb.cols)
+  assert(sb.cols <= 73 - 40, "and leaves 20 columns for each of them, got " .. sb.cols)
+
+  -- Stacked panes share one band, so they cost nothing extra.
+  beside.left = content.left
+  geometry.reset(gui:window_id())
+  geometry.correct(gui)
+  eq(sb.cols, one_band, "a pane stacked under another shares its column band")
+  config.setup { backend = { path = "/bin/wez-vtabs" } }
+end)
+
+test("an adjust the mux applies in pieces is never adopted, however long the pieces take", function()
+  local win, gui = setup_window(1)
+  sidebar.ensure(gui)
+  local tab = win.tab_list[1]
+  local sb = mark_ready(tab)
+  local wid = gui:window_id()
+  eq(geometry.correct(gui), false, "baseline recorded")
+
+  -- A mux that moves the divider part of the way and finishes later. Each piece looks exactly like
+  -- a hand on the divider: same tab width, same pixels, same cells, sitting still between polls.
+  gui.perform_action = function(_, action)
+    if action.action == "AdjustPaneSize" then
+      local half = math.max(1, math.floor(action.arg[2] / 2))
+      local delta = action.arg[1] == "Right" and half or -half
+      tab:set_split(sb.cols + delta)
+    end
+  end
+  -- The reported bug in miniature: collapse to the rail, expand again, and the restore lands in
+  -- pieces because the mux is slow.
+  sidebar.set_collapsed(gui, true)
+  later(400, function()
+    assert(geometry.correct(gui), "collapsing asks for the rail")
+  end)
+  sidebar.set_collapsed(gui, false)
+  later(800, function()
+    assert(geometry.correct(gui), "expanding asks for the sidebar back")
+  end)
+  assert(sb.cols ~= 28, "and the mux applied only part of it, at " .. sb.cols)
+
+  -- The backend reports its own new size, so the next adjust need not wait its turn. That must not
+  -- make a width we are still driving towards look like the user's.
+  geometry.landed(wid)
+  for _, at in ipairs { 1200, 1600, 2000 } do
+    later(at, function()
+      geometry.correct(gui)
+    end)
+    eq(geometry.desired(wid), 28, "the width is still ours at " .. at .. " ms, never adopted")
+  end
+  gui.perform_action = nil
+  later(2400, function()
+    geometry.correct(gui)
+  end)
+  eq(sb.cols, 28, "and it restores once the mux keeps up")
+  config.setup { backend = { path = "/bin/wez-vtabs" } }
+end)
+
+test("the sidebar is activated before an adjust even in a tab with one content pane", function()
+  local win, gui = setup_window(1)
+  sidebar.ensure(gui)
+  local tab = win.tab_list[1]
+  local sb = mark_ready(tab)
+  local content = sidebar.content_pane(tab)
+  eq(#sidebar.classify(tab), 1, "one content pane, which used to skip the activation")
+  content:activate()
+  geometry.reset(gui:window_id())
+  tab:set_split(18)
+  local seen = nil
+  local real = getmetatable(gui).perform_action
+  gui.perform_action = function(self, action, pane)
+    if action.action == "AdjustPaneSize" then
+      seen = tab.active
+    end
+    return real(self, action, pane)
+  end
+  assert(geometry.correct(gui), "the width is corrected")
+  eq(seen, sb, "with the sidebar active, so AdjustPaneSize moves the right child")
+  eq(tab.active, content, "and focus handed straight back")
+  gui.perform_action = nil
+end)
+
+test("a column wezterm dealt during a window drag is not adopted once the metrics settle", function()
+  local win, gui = setup_window(1)
+  sidebar.ensure(gui)
+  local tab = win.tab_list[1]
+  local sb = mark_ready(tab)
+  local wid = gui:window_id()
+  later(400, function()
+    eq(geometry.correct(gui), false, "baseline recorded")
+  end)
+
+  -- A window drag is one burst: only its leading edge corrects, and wezterm deals the sidebar half
+  -- of every new column. The last deal lands after the pixels and the tab width have stopped.
+  geometry.on_resize(wid)
+  win:resize(30)
+  later(800, function()
+    geometry.correct(gui)
+  end)
+  -- Now nothing is moving but the deal itself, which every metric test reads as a divider drag.
+  later(900, function()
+    geometry.correct(gui)
+  end)
+  eq(geometry.desired(wid), 28, "the deal is wezterm's, not the user's")
+  assert(sb.cols == 28, "and the width is put back, at " .. sb.cols)
+  config.setup { backend = { path = "/bin/wez-vtabs" } }
 end)
 
 test("a font or dpi change is corrected, not adopted as a divider drag", function()
@@ -3501,6 +3694,9 @@ test("the two-step mux resize is corrected, and a real divider drag is still ado
   eq(geometry.correct(gui), false, "baseline on the settled window")
   tab:set_split(34)
   eq(geometry.correct(gui), false, "same tab width, same pixels: this one is a drag")
+  later(400, function()
+    eq(geometry.correct(gui), false, "taken once it settles")
+  end)
   eq(geometry.desired(gui:window_id()), 34)
 end)
 
@@ -5051,6 +5247,57 @@ test("the menu is as wide as its widest row wants, clamped to the sidebar", func
   eq(popover.width_for(cfg, 80, menu, { string.rep("x", 40) }), 45, "a header can widen it too")
   eq(config.setup({ popover = { width = "wide" } }).popover.width, "auto", "a bad value resets")
   config.setup { backend = { path = "/bin/wez-vtabs" } }
+end)
+
+test("the menu shows the key bound to an item, which no binding ever carried before", function()
+  local bindings = keys.build {}
+  local named = 0
+  for _, b in ipairs(bindings) do
+    if b.vtabs then
+      named = named + 1
+    end
+  end
+  eq(named, #bindings, "every binding names itself, or the hints have nothing to match on")
+
+  local win, gui = setup_window(1)
+  local menu = popover.items(gui, win.tab_list[1].id)
+  local close = nil
+  for _, item in ipairs(menu) do
+    if item.id == "close" then
+      close = item
+    end
+  end
+  assert(close, "the menu offers Close tab")
+  assert(close.hint and close.hint ~= "", "and shows the key bound to it, got " .. tostring(close.hint))
+  assert(close.hint:find "W", "which is the close_tab binding: " .. close.hint)
+
+  -- wezterm rejects a key entry carrying a field it does not know, so the name never reaches it.
+  local cfg = { keys = {} }
+  keys.apply(cfg, config.setup {})
+  assert(#cfg.keys > 0)
+  for _, b in ipairs(cfg.keys) do
+    eq(b.vtabs, nil, "no binding handed to wezterm carries the name")
+  end
+  config.setup { backend = { path = "/bin/wez-vtabs" } }
+end)
+
+test("the pointer never moves the confirm level's selection away from Cancel", function()
+  local win, gui, sb = open_popover(3)
+  make_busy(win.tab_list[1])
+  popover.run(gui, "close")
+  local pop = popover.get(gui:window_id())
+  eq(pop.level, "confirm")
+  eq(pop.index, 2, "Cancel")
+  view_mod.sync(gui, { force = true })
+  local before = #win.tab_list
+  for row, h in pairs(state.session.hits[sb:pane_id()]) do
+    if h.kind == "popover" and h.id then
+      mouse(gui, sb, "move", "none", h.x1 + 2, row)
+    end
+  end
+  eq(popover.get(gui:window_id()).index, 2, "a pointer resting on Close never arms it")
+  eq(#win.tab_list, before)
+  popover.close(gui)
 end)
 
 test("the popover title wraps on a space, then a slash, then hard", function()
