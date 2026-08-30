@@ -252,7 +252,15 @@ case "$drifted" in
   "") fail "no window-resized event observed" ;;
   *" 28"*) fail "resize did not widen any sidebar; the observer saw '$drifted'" ;;
 esac
-settle_width "$grow_tab" || { geometry; fail "the active tab's sidebar stayed $(width_of "$grow_tab") cols after the window grew"; }
+if ! settle_width "$grow_tab"; then
+  # A desired width other than 28 means correct() mistook the resize for a divider drag.
+  desired_mark=$(mark)
+  vtest "$(content_of "$grow_tab")" probe_desired
+  sleep 1.5
+  geometry
+  fail "the active tab's sidebar stayed $(width_of "$grow_tab") cols after the window grew;\
+ $(since "$desired_mark" | grep -o 'e2e: desired width .*' | tail -1)"
+fi
 echo "ok: window grew $before_cols -> $(total_cols) cols; wezterm dealt the sidebar [$drifted] and correct() put it back to 28"
 
 cli activate-tab --tab-id "$other_tab"

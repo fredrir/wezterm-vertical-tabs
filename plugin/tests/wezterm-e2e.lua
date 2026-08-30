@@ -55,6 +55,10 @@ local probes = {
     local dims = window:get_dimensions()
     window:set_inner_size(dims.pixel_width + 300, dims.pixel_height)
   end,
+  probe_desired = function(window)
+    local geometry = require "vtabs.geometry"
+    wezterm.log_info("e2e: desired width " .. tostring(geometry.desired(window:window_id())))
+  end,
   -- A tab overlay (the tab menu) replaces the tab's panes, so this reports the overlay's pane id.
   probe_active = function(window)
     local pane = window:active_pane()
