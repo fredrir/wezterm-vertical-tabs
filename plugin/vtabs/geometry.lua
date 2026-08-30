@@ -226,7 +226,9 @@ function M.correct(gui_window)
       -- Moving, and not by us: the user is on the divider. Correcting now fights their hand.
       return false
     end
-    adopted[wid] = fits(cols, tab_cols, nil, bands)
+    -- One band, deliberately: what they dragged to is their preference, and a second shell open at
+    -- that moment must not rewrite it. The bands clamp the target below, every time it is computed.
+    adopted[wid] = fits(cols, tab_cols, nil, 1)
     adopted_for[wid] = cfg.width
     unreachable[wid] = nil
     return false

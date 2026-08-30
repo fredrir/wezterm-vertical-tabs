@@ -51,11 +51,13 @@ function M.activate_tab(gui_window, tab_id, focus)
   if not sb and not hidden then
     sb = sidebar.attach(tab)
   end
+  -- Correction activates the sidebar to land its adjust and hands focus back; doing it before the
+  -- switch's own activation keeps that dance from being the last word on which pane holds input.
+  require("vtabs.geometry").correct(gui_window)
   local target = (focus == "sidebar" and sb) or sidebar.content_pane(tab)
   if target then
     target:activate()
   end
-  require("vtabs.geometry").correct(gui_window)
   return target
 end
 
@@ -496,13 +498,15 @@ function M.move_relative(gui_window, delta)
   end
 end
 
-local SPLIT = { Right = true, Left = true, Top = true, Bottom = true }
+-- WezTerm's own `SplitPane` names them Top/Bottom; Up/Down is what everyone types.
+local SPLIT = { Right = "Right", Left = "Left", Top = "Top", Bottom = "Bottom", Up = "Top", Down = "Bottom" }
 
 ---Splits the tab's content pane, never the sidebar. WezTerm's own `SplitPane` acts on whichever
 ---pane is active, which under `hover = "follow"` is the sidebar whenever the pointer is over it.
 function M.split(gui_window, direction)
-  if not SPLIT[direction] then
-    util.warn("split direction must be Right, Left, Top or Bottom, got %s", tostring(direction))
+  local where = SPLIT[direction]
+  if not where then
+    util.warn("split direction must be Right, Left, Top/Up or Bottom/Down, got %s", tostring(direction))
     return nil
   end
   local content = active_content_pane(gui_window)
@@ -510,7 +514,7 @@ function M.split(gui_window, direction)
     return nil
   end
   local ok, pane = pcall(function()
-    return content:split { direction = direction }
+    return content:split { direction = where }
   end)
   if not ok or not pane then
     util.warn("split failed: %s", tostring(pane):match "^[^\n]*")
