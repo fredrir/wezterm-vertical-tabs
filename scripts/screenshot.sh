@@ -38,7 +38,10 @@ strip-macos|Catppuccin Mocha|macos|scene|always
 rail-macos|Catppuccin Mocha|macos-rail|probe:toggle|rail_widened
 rail-macos-plain|Catppuccin Mocha|macos-rail-plain|probe:toggle|rail_width
 settings|Catppuccin Mocha|default|settings|settings_tab
-settings-behaviour|Catppuccin Mocha|default|settings_behaviour|settings_locked"
+settings-behaviour|Catppuccin Mocha|default|settings_behaviour|settings_locked
+zen|Catppuccin Mocha|zen|scene|always
+zen-square|Catppuccin Mocha|zen-square|scene|always
+zen-rail|Catppuccin Mocha|zen-rail|probe:toggle|always"
 
 cli() { wezterm cli --no-auto-start "$@"; }
 # A gui busy with a spawn or a resize can answer an empty body; every helper here parses this, and
