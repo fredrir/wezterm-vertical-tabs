@@ -15,13 +15,13 @@ sb1=$(sidebar_panes | head -1)
 [ -n "$sb1" ] || fail "no sidebar pane after startup"
 first_tab=$(list | python3 -c 'import json,sys; s='"$sb1"'; print([p["tab_id"] for p in json.load(sys.stdin) if p["pane_id"]==s][0])')
 sleep 1
-echo "ok: sidebar pane $sb1 present"
+ok "sidebar pane $sb1 present"
 cli set-tab-title --tab-id "$first_tab" one
 
 cli spawn --pane-id "$(content_of "$first_tab")" >/dev/null
 sleep 1.5
 [ "$(sidebar_panes | wc -l | tr -d ' ')" -eq 2 ] || fail "second tab did not get a sidebar"
-echo "ok: sidebar attached to spawned tab"
+ok "sidebar attached to spawned tab"
 list | python3 -c 'import json,sys; [print("  win", p["window_id"], "tab", p["tab_id"], "pane", p["pane_id"], p["title"], "left", p["left_col"], "cols", p["size"]["cols"]) for p in json.load(sys.stdin)]'
 second_tab=$(tab_ids | cut -d' ' -f2)
 cli set-tab-title --tab-id "$second_tab" two
@@ -29,7 +29,7 @@ sleep 1
 sb2=$(sidebar_of "$second_tab")
 sidebar_text "$sb1" | grep -c "one" >/dev/null || fail "first sidebar does not list tab one"
 sidebar_text "$sb1" | grep -c "two" >/dev/null || fail "first sidebar does not list tab two"
-echo "ok: both sidebars render both tabs"
+ok "both sidebars render both tabs"
 
 settle_width() { # tab_id
   for _ in $(seq 1 24); do
@@ -59,7 +59,7 @@ sb1=$(sidebar_of "$first_tab")
 sb2=$(sidebar_of "$second_tab")
 sleep 1
 sidebar_text "$sb1" | grep -c "one" >/dev/null || fail "restored sidebar does not render"
-echo "ok: toggle hides and restores sidebars without touching content"
+ok "toggle hides and restores sidebars without touching content"
 
 # collapsed = "rail" is the shipped default: the pane stays and only narrows. Background tabs
 # follow when they are next activated (P0 0.3's lazy width correction).
@@ -88,7 +88,7 @@ settle_width "$second_tab" || fail "a background tab did not leave the rail once
 cli activate-tab --tab-id "$first_tab"
 vtest "$(content_of "$first_tab")" hidden_mode
 sleep 0.5
-echo "ok: the rail narrows every sidebar and restores them"
+ok "the rail narrows every sidebar and restores them"
 
 
 click "$sb2" 5 "$(row_of "$sb2" two)" 0
@@ -97,21 +97,21 @@ sleep 1
 click "$sb2" 5 "$(row_of "$sb2" one)" 0
 sleep 1
 [ "$(active_title "$sb1")" = "one" ] || fail "click on 'one' did not activate it (active: $(active_title "$sb1"))"
-echo "ok: left click switches tabs"
+ok "left click switches tabs"
 
 click "$sb1" 5 "$(row_of "$sb1" two)" 1
 sleep 1.5
 [ "$(tab_count)" -eq 1 ] || fail "middle click did not close tab two"
 sidebar_text "$sb1" | grep -c "two" >/dev/null && fail "closed tab still rendered"
 [ "$(active_title "$sb1")" = "one" ] || fail "wrong tab closed (active: $(active_title "$sb1"))"
-echo "ok: middle click closes the clicked tab, not the active one"
+ok "middle click closes the clicked tab, not the active one"
 
 click "$sb1" 5 "$(row_of "$sb1" "New tab")" 0
 sleep 1.5
 [ "$(tab_count)" -eq 2 ] || fail "click on the New tab card did not spawn a tab"
 third_tab=$(tab_ids | cut -d' ' -f2)
 sidebar_of "$third_tab" >/dev/null || fail "new tab has no sidebar"
-echo "ok: new tab button spawns tab with sidebar"
+ok "new tab button spawns tab with sidebar"
 
 cli set-tab-title --tab-id "$third_tab" three
 sleep 1
@@ -129,7 +129,7 @@ sb3=$(sidebar_of "$third_tab")
 drag "$sb1" "$sb1" 5 "$(row_of "$sb1" one)" 5 "$(row_of "$sb1" three)"
 sleep 1.5
 [ "$(row_of "$sb1" three)" -lt "$(row_of "$sb1" one)" ] || fail "drag did not reorder tabs"
-echo "ok: drag reorders tabs"
+ok "drag reorders tabs"
 
 drag "$sb1" "$sb3" 5 "$(row_of "$sb1" three)" 28 "$(row_of "$sb1" three)"
 for _ in $(seq 1 16); do
@@ -151,7 +151,7 @@ for _ in $(seq 1 16); do
   sleep 0.5
 done
 sidebar_text "$sbm" | grep -c "three" >/dev/null || { geometry; sidebar_text "$sbm" | head -5; fail "new window sidebar does not list the moved tab"; }
-echo "ok: drag to edge moves tab to a new window with its own sidebar"
+ok "drag to edge moves tab to a new window with its own sidebar"
 
 cli send-text --no-paste --pane-id "$(content_of "$moved_tab")" "exit
 "
@@ -162,7 +162,7 @@ done
 [ "$(tab_count)" -eq 1 ] || { geometry; fail "tab left with only a sidebar was not closed"; }
 [ "$(window_count)" -eq 1 ] || fail "empty window did not close"
 [ "$(active_title "$sb1")" = "one" ] || fail "orphan cleanup closed the wrong tab"
-echo "ok: orphaned sidebar tab closed"
+ok "orphaned sidebar tab closed"
 
 cli spawn --pane-id "$(content_of "$first_tab")" >/dev/null
 for _ in $(seq 1 20); do
@@ -239,11 +239,11 @@ if ! settle_width "$grow_tab"; then
   fail "the active tab's sidebar stayed $(width_of "$grow_tab") cols after the window grew;\
  $(since "$desired_mark" | grep -o 'e2e: desired width .*' | tail -1)"
 fi
-echo "ok: window grew $before_cols -> $(total_cols) cols; wezterm dealt the sidebar [$drifted] and correct() put it back to 28"
+ok "window grew $before_cols -> $(total_cols) cols; wezterm dealt the sidebar [$drifted] and correct() put it back to 28"
 
 cli activate-tab --tab-id "$other_tab"
 settle_width "$other_tab" || { geometry; fail "the background tab's sidebar stayed $(width_of "$other_tab") cols once it was activated"; }
-echo "ok: a background tab's sidebar is corrected to 28 when it is activated"
+ok "a background tab's sidebar is corrected to 28 when it is activated"
 
 rc_tab=$(tab_ids | cut -d' ' -f1)
 rc_sb=$(sidebar_of "$rc_tab")
@@ -274,7 +274,7 @@ sleep 1.5
 [ "$(width_of "$rc_tab")" -eq 28 ] || { geometry; fail "the sidebar changed size while the menu was open"; }
 [ "$(cols_of "$rc_content")" -eq "$rc_cols" ] || { geometry; fail "the content pane changed size while the menu was open"; }
 [ "$(active_pane "$rc_content")" != no-answer ] || fail "the window stopped answering after the menu opened"
-echo "ok: right click keeps the sidebar and content panes alive at their sizes"
+ok "right click keeps the sidebar and content panes alive at their sizes"
 
 list | python3 -c 'import json,sys; [print("  pane", p["pane_id"], p["title"], "left", p["left_col"], "cols", p["size"]["cols"]) for p in json.load(sys.stdin)]'
 # The check above ends with a right press+release on a card, which is what opens a popover.
@@ -289,7 +289,7 @@ sidebar_text "$pop_sb" | grep -q "Switch to tab" || { sidebar_text "$pop_sb" | h
 sidebar_text "$pop_sb" | grep -q "Close tab" || fail "the popover is missing its items"
 [ "$(cols_of "$pop_content")" -eq "$pop_content_cols" ] || fail "the popover resized the content pane"
 cli get-text --pane-id "$pop_content" | grep -q "Switch to tab" && fail "the popover leaked into the content pane"
-echo "ok: right click draws the popover inside the sidebar, content untouched"
+ok "right click draws the popover inside the sidebar, content untouched"
 
 pop_switch=$(row_of "$pop_sb" "Switch to tab")
 click "$pop_sb" 6 "$pop_switch" 0
@@ -300,6 +300,6 @@ done
 sidebar_text "$pop_sb" | grep -q "Switch to tab" && fail "the popover stayed open after an item click"
 # Title-independent: "Switch to tab" focuses that tab's content pane.
 [ "$(active_pane "$pop_content")" = "$pop_content" ] || fail "the item did not switch to its tab (active pane: $(active_pane "$pop_content"))"
-echo "ok: clicking a popover item runs it and closes the popover"
+ok "clicking a popover item runs it and closes the popover"
 
 echo "all e2e checks passed"
