@@ -279,11 +279,12 @@ local function apply_padding(config, cfg)
     return
   end
   -- The frame margin is what supplies the air on every side while zen is on, so it supersedes the
-  -- asymmetric edge-to-edge padding rather than fighting it.
+  -- asymmetric edge-to-edge padding rather than fighting it. The inset rides along in the same key:
+  -- the card is grown by it, so the padding has to absorb it or the gutter grows instead.
   local frame = require "vtabs.frame"
   if frame.enabled(cfg) then
-    local m = frame.margin(cfg)
-    config.window_padding = { left = m, right = m, top = m, bottom = m }
+    local pad = frame.margin(cfg) + frame.inset(cfg)
+    config.window_padding = { left = pad, right = pad, top = pad, bottom = pad }
     return
   end
   if not cfg.edge_to_edge then
@@ -337,11 +338,10 @@ function M.apply_to_config(config, opts)
   if cfg.hover == "follow" and config.pane_focus_follows_mouse == nil then
     config.pane_focus_follows_mouse = true
   end
-  -- A background layer makes every pane transparent, and `inactive_pane_hsb` has nothing left to
-  -- dim, so under the frame it is noise in the config rather than a setting.
-  local zen = require("vtabs.frame").enabled(cfg)
   -- The sidebar is chrome, not a pane to focus; wezterm would otherwise dim whichever one is idle.
-  if not zen and cfg.dim_inactive_panes == false and config.inactive_pane_hsb == nil then
+  -- A background layer does not excuse this: wezterm skips only the pane's *default* fill, and goes
+  -- on dimming every explicit-bg cell -- which is every cell the sidebar paints.
+  if cfg.dim_inactive_panes == false and config.inactive_pane_hsb == nil then
     config.inactive_pane_hsb = { brightness = 1.0, saturation = 1.0, hue = 1.0 }
   end
   apply_split(config, cfg)
