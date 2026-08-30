@@ -8,6 +8,8 @@ local state = require "vtabs.state"
 local hit = require "vtabs.hit"
 local glyphs = require "vtabs.glyphs"
 local sidebar = require "vtabs.sidebar"
+local layout = require "vtabs.layout"
+local actions = require "vtabs.actions"
 
 local test, eq, usub, strip, row_text = H.test, H.eq, H.usub, H.strip, H.row_text
 local frame_rows, p1_view, attach_all, mark_ready = H.frame_rows, H.p1_view, H.attach_all, H.mark_ready
@@ -279,6 +281,127 @@ test("addendum 2 §8: the rail keeps only what fits, centred", function()
   reserved.strip = { rows = 4, cols = 9, toggle_row = 3 }
   local _, rr = frame_rows(reserved)
   eq(#rr.hits[3].spans, 1, "under the lights there is only room for the first")
+end)
+
+---The strip's button set, painted through `layout.strip_actions` with the rail off so nothing is
+---truncated. Returns the ids left to right.
+local function painted(strip_actions, hooks, toggle_button)
+  local cfg = {
+    strip_actions = strip_actions,
+    hooks = hooks,
+    toggle_button = toggle_button,
+    padding = { top = 0, left = 1, right = 1 },
+  }
+  local g = layout.grid(cfg, 28)
+  local list = layout.strip_actions(cfg, { rows = 2, cols = 9, toggle_row = 1, cell_w = 8.4 }, g, false, 28)
+  local ids = {}
+  for i, action in ipairs(list) do
+    ids[i] = tostring(action.id)
+  end
+  return table.concat(ids, ","), list
+end
+
+test("the strip paints the declared default set, and each gate on its own terms", function()
+  local hook = function() end
+  eq(painted(nil, {}, true), "toggle,new_tab,settings", "the unasked set is actions.strip's defaults")
+  eq(painted({}, {}, true), "toggle,new_tab,settings", "an empty list is not a request for nothing")
+  eq(painted("not a table", {}, true), "toggle,new_tab,settings", "and neither is a malformed one")
+  eq(painted(nil, {}, false), "new_tab,settings", "toggle_button = false drops only the toggle")
+  -- The bug this pair exists for: `settings` has an action, so it paints unhooked; `search` has
+  -- none, so it is only ever a hook's glyph. Gating both on `hooked` made the default cog inert.
+  eq(painted({ "settings" }, {}, true), "settings", "settings needs no hook")
+  eq(painted({ "search" }, {}, true), "", "search without a hook paints nothing")
+  eq(painted({ "search" }, { search = hook }, true), "search", "and with one it paints")
+  eq(painted({ "bogus" }, { bogus = hook }, true), "", "a hook cannot invent a button")
+  eq(painted({ "new_tab", "toggle" }, {}, true), "new_tab,toggle", "the requested order is kept")
+  local _, custom = painted({ { id = "c1", on_click = hook, icon = "*" } }, {}, true)
+  eq(custom[1].id, "c1")
+  eq(custom[1].icon, "*", "a custom entry brings its own glyph")
+  eq(painted({ { id = "c2" } }, {}, true), "", "a table with no on_click is not a button")
+  eq(painted({ 42 }, {}, true), "", "and neither is a number")
+end)
+
+test("every strip button the painter draws is one a click can actually run", function()
+  -- D1's live bug was a painted glyph with no branch behind it, so the invariant is the crossing:
+  -- for every id `layout` paints, `actions` must hold a runnable row, or a hook must answer it, or
+  -- the entry carried its own on_click. Reachability is read off actions.lua, not restated here.
+  local by_id, defaults = {}, {}
+  for _, button in ipairs(actions.strip) do
+    by_id[button.id] = button
+    if button.default then
+      defaults[#defaults + 1] = button.id
+    end
+  end
+  local hook = function() end
+  local ENTRIES = {
+    "toggle",
+    "new_tab",
+    "settings",
+    "search",
+    "bogus",
+    { id = "c1", on_click = hook, icon = "*" },
+    { id = "c2" },
+    { on_click = hook },
+    42,
+  }
+  local HOOKS = {
+    {},
+    { search = hook },
+    { settings = hook },
+    { search = hook, settings = hook, new_tab = hook, toggle = hook },
+  }
+
+  local function runnable(id, strip_actions, hooks)
+    local button = by_id[id]
+    if button and button.action and actions.resolve(button.action) then
+      return true
+    end
+    if type(hooks[id]) == "function" then
+      return true
+    end
+    for _, entry in ipairs(type(strip_actions) == "table" and strip_actions or {}) do
+      if type(entry) == "table" and (entry.id or "custom") == id and type(entry.on_click) == "function" then
+        return true
+      end
+    end
+    return false
+  end
+
+  local checked = 0
+  local function sweep(list, hooks, toggle_button)
+    local _, drawn = painted(list, hooks, toggle_button)
+    checked = checked + 1
+    local asked = type(list) == "table" and list or {}
+    local wanted = #asked > 0 and asked or defaults
+    local at = 0
+    for _, action in ipairs(drawn) do
+      assert(runnable(action.id, list, hooks), "painted " .. tostring(action.id) .. " with nothing behind it")
+      -- the painted sequence is a subsequence of the requested one: nothing invented, order kept
+      local found = false
+      while at < #wanted and not found do
+        at = at + 1
+        local entry = wanted[at]
+        found = entry == action.id or (type(entry) == "table" and (entry.id or "custom") == action.id)
+      end
+      assert(found, tostring(action.id) .. " was painted out of the order it was asked for")
+    end
+  end
+
+  for _, hooks in ipairs(HOOKS) do
+    for _, toggle_button in ipairs { true, false } do
+      sweep(nil, hooks, toggle_button)
+      sweep({}, hooks, toggle_button)
+      sweep("not a table", hooks, toggle_button)
+      for _, a in ipairs(ENTRIES) do
+        sweep({ a }, hooks, toggle_button)
+        for _, b in ipairs(ENTRIES) do
+          sweep({ a, b }, hooks, toggle_button)
+          sweep({ a, b, "settings" }, hooks, toggle_button)
+        end
+      end
+    end
+  end
+  eq(checked, 1392, "the sweep covers every combination it claims to")
 end)
 
 test("P1 scroll: thumb by state, edge fade, footer below the ghost card", function()
