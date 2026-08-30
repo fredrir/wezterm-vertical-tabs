@@ -42,6 +42,7 @@ return config
 | `titlebar`                | `"auto"`                                                                     | `"auto"` \| `"integrate"` \| `"plain"` \| `"macos"` |
 | `context`                 | `"popover"`                                                                  | `"popover"` \| `false` |
 | `popover`                 | `{ width = "auto", follow_pointer = true, fade_ms = 90, overflow = "clip" }` | see below |
+| `strip_actions`           | `{ "toggle", "new_tab" }`                                                    | `"toggle"` \| `"new_tab"` \| `"settings"` \| `"search"` \| `{ id, icon, on_click }` |
 | `toggle_button`           | `true`                                                                       | `true` \| `false` |
 | `close_button`            | `"hover"`                                                                    | `"hover"` \| `"always"` \| `"never"` |
 | `confirm_close`           | `true`                                                                       | `true` \| `false` |
@@ -89,7 +90,7 @@ return config
 | `width` | re-asserted on the active tab after every resize, one `AdjustPaneSize` at a time so a lagging mux is not overshot; a divider drag is adopted and survives config reloads until `width` itself changes. A window drag corrects on its first frame and again once it stops, never per frame |
 | `collapsed` | `"rail"` keeps the pane and narrows it, so the toggle stays reachable |
 | `padding` | cells inside the sidebar pane, painted in its own colour; `left = 2` replaces the window padding `edge_to_edge` removes, and mirrors to `right = 2` with `position = "right"`. It is unconditional, so setting `window_padding` yourself leaves one extra cell of air |
-| `edge_to_edge` | zeroes wezterm's window padding on the sides the sidebar touches, so its background reaches the window edge; the far side keeps wezterm's `1cell`, and top/bottom are window-global, so the content pane loses its half cell too. The split line stays: pair with `theme = { split = "hidden" }` for a seamless edge |
+| `edge_to_edge` | zeroes wezterm's window padding on the sides the sidebar touches, so its background reaches the window edge; the far side keeps wezterm's `1cell`, and top/bottom are window-global, so the content pane loses its half cell too. It only ever fills in a `window_padding` you left unset, so one set **after** `apply_to_config` wins. The split line stays: pair with `theme = { split = "hidden" }` for a seamless edge |
 | `tab_height` | pad rows around the card's content; independent of `meta` |
 | `meta` | off by default; opt in with `"auto"`, `"cwd"` or `"process"`. The popover header always shows cwd and domain, whatever this says |
 | `rail_width` | raised to the traffic-light reserve on macOS with `INTEGRATED_BUTTONS`: `ceil(70pt / cell width)`, so 9 columns at an 8 pt cell and 6 at 12 pt, the same on a 2x display |

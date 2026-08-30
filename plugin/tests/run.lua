@@ -3709,6 +3709,10 @@ test("the window padding is zeroed on the sides the sidebar touches, and never w
   eq(config.setup({ position = "right" }).padding.right, 2, "and it mirrors to the side that touches")
   eq(config.setup({ position = "right" }).padding.left, 1)
   eq(config.setup({ position = "right", padding = { right = 4 } }).padding.right, 4, "yours wins")
+  eq(config.setup({ position = "right", padding = { right = 4 } }).padding.left, 2, "untouched, unmirrored")
+  eq(config.setup({ position = "right", padding = 3 }).padding.right, 2, "a padding that is not a table")
+  eq(config.setup({ position = "right", padding = { left = -5 } }).padding.left, 1, "and one out of range")
+  eq(config.setup({ position = "right", padding = { left = -5 } }).padding.right, 2, "both come back mirrored")
   config.setup(legacy { backend = { path = "/bin/wez-vtabs" } })
 end)
 
@@ -3968,6 +3972,36 @@ test("the close span closes and the toggle span collapses the sidebar", function
   sidebar.set_collapsed(gui, false)
 end)
 
+test("an armed ✕ closes only where it was pressed, and any drag cancels it", function()
+  local win, gui = drag_setup()
+  local sb = sidebar.find(win.tab_list[1])
+  local a, b = win.tab_list[1], win.tab_list[3]
+  -- Only the active or hovered card offers a ✕, so hover the second one to arm its span.
+  mouse(gui, sb, "move", "none", 26, title_row(sb, b.id))
+  local row_a, row_b = title_row(sb, a.id), title_row(sb, b.id)
+  eq(hit.span(state.session.hits[sb:pane_id()][row_b], 26), "close", "both cards show one")
+  local before = #win.tab_list
+
+  mouse(gui, sb, "down", "left", 26, row_a)
+  mouse(gui, sb, "up", "left", 26, row_b)
+  eq(#win.tab_list, before, "a release over another card's ✕ closes neither of them")
+
+  mouse(gui, sb, "down", "left", 26, row_a)
+  mouse(gui, sb, "up", "left", 26, row_a)
+  eq(#win.tab_list, before - 1, "the same ✕ pressed and released closes exactly one tab")
+
+  -- WezTerm drops the pointer capture on release, so a release outside still arrives here with
+  -- translated coordinates; motion is the only signal that the gesture stopped being a click.
+  local c = win.tab_list[#win.tab_list]
+  mouse(gui, sb, "move", "none", 26, title_row(sb, c.id))
+  local row_c = title_row(sb, c.id)
+  local kept = #win.tab_list
+  mouse(gui, sb, "down", "left", 26, row_c)
+  mouse(gui, sb, "drag", "left", 26, row_c)
+  mouse(gui, sb, "up", "left", 26, row_c)
+  eq(#win.tab_list, kept, "a flick between press and release cancels the close")
+end)
+
 test("a click in a pinned entry's pin span toggles the pin instead of activating", function()
   local win, gui = drag_setup()
   local first = win.tab_list[1]
@@ -4166,7 +4200,8 @@ test("the schema describes every option the defaults expose, and nothing it does
       local option = schema.by_key[path]
       assert(option, "no descriptor for " .. path)
       seen[path] = true
-      if type(value) == "table" and not option.open then
+      -- A list's entries are values, not options; only containers hold more descriptors.
+      if type(value) == "table" and not option.open and option.type ~= "list" then
         walk(value, path, seen)
       end
     end
@@ -4385,7 +4420,7 @@ test("the ✕ on a busy tab asks in the sidebar, and closes only when Close is c
   view_mod.sync(gui, { force = true })
   local row = popover_row(sb, "confirm_close")
   assert(row, "the confirm level offers Close")
-  mouse(gui, sb, "down", "left", 5, row)
+  mouse(gui, sb, "down", "left", state.session.hits[sb:pane_id()][row].x1 + 1, row)
   eq(#win.tab_list, 2, "and choosing it closes the tab")
   eq(popover.get(gui:window_id()), nil)
 end)
@@ -4454,6 +4489,7 @@ test("the menu opens at the column that asked for it, and its hits are pane colu
   end
   local narrow = rect_at(3)
   eq(narrow.x, 3, "a click on the card's own gutter opens flush with it")
+  eq(rect_at(4).x, 4, "one column right of it opens one column right: the menu tracks the click")
   local mid = rect_at(12)
   local first_col = cfg.padding.left + 1
   local last_col = 28 - cfg.padding.right - mid.w + 1
@@ -4473,8 +4509,8 @@ test("the menu opens at the column that asked for it, and its hits are pane colu
   end
   assert(#rows >= 2, "the menu painted items")
   local second = rows[2]
-  eq(second.hit.x1, placed.x + 1, "the span starts inside the left border, in absolute columns")
-  eq(second.hit.x2, placed.x + placed.w - 2)
+  eq(second.hit.x1, placed.x, "the span is the rect's own columns, absolute")
+  eq(second.hit.x2, placed.x + placed.w - 1)
   view_mod.sync(gui, { force = true })
   local live = state.session.hits[sb:pane_id()]
   local found = nil
@@ -4486,6 +4522,72 @@ test("the menu opens at the column that asked for it, and its hits are pane colu
   assert(found, "and the live frame carries them too")
   assert(found.hit.x1 > 1, "a click at column 1 is scrim, not the first item")
   popover.close(gui)
+end)
+
+test("a click level with an item but beside the menu dismisses it, and never runs it", function()
+  local win, gui, sb = open_popover(3)
+  local before = #win.tab_list
+  local hits = state.session.hits[sb:pane_id()]
+  local close_row, spare = nil, nil
+  for row, h in pairs(hits) do
+    if h.kind == "popover" and h.id == "close" then
+      close_row = row
+    end
+  end
+  assert(close_row, "the menu offers Close tab")
+  local rect = hits[close_row]
+  for col = 1, 28 do
+    if col < rect.x1 or col > rect.x2 then
+      spare = spare or col
+    end
+  end
+  assert(spare, "and the sidebar has columns the menu does not own on that row")
+  mouse(gui, sb, "down", "left", spare, close_row)
+  eq(#win.tab_list, before, "the tab survives a click that only shares the row")
+  eq(popover.get(gui:window_id()), nil, "and the menu is dismissed like any click away")
+end)
+
+test("a menu is painted at every width the schema allows, and never opens without being painted", function()
+  local win, gui = drag_setup()
+  local sb = sidebar.find(win.tab_list[1])
+  local resolved = theme.resolve({}, fake.palette)
+  for _, cols in ipairs { 8, 9, 10, 14, 20, 28 } do
+    config.setup { meta = "auto", width = cols, backend = { path = "/bin/wez-vtabs" } }
+    popover.close(gui)
+    popover.open(gui, win.tab_list[1].id, 3, 2)
+    local rect = popover.rect(gui, 24, cols, resolved, config.get())
+    assert(rect, "a menu at " .. cols .. " columns, however cramped")
+    assert(rect.x >= 1 and rect.x + rect.w - 1 <= cols, "inside the pane at " .. cols)
+    for _, row in ipairs(rect.rows) do
+      eq(row.hit.x1, rect.x, "every row carries the rect's columns at " .. cols)
+    end
+  end
+  popover.close(gui)
+
+  -- Belt and braces for the same failure: a level that is open but unpainted must not eat clicks.
+  config.setup { meta = "auto", backend = { path = "/bin/wez-vtabs" } }
+  view_mod.sync(gui, { force = true })
+  local active = win.active_tab_ref
+  popover.open(gui, win.tab_list[3].id, 3, 2)
+  eq(popover.get(gui:window_id()) ~= nil, true)
+  mouse(gui, sb, "down", "left", 5, title_row(sb, win.tab_list[3].id))
+  eq(popover.get(gui:window_id()), nil, "the first click dismisses a menu nothing painted")
+  eq(win.active_tab_ref, win.tab_list[3], "and is handled as the click it was")
+  win.active_tab_ref = active
+end)
+
+test("a busy tab in a sidebar too narrow to ask falls back to wezterm's own confirmation", function()
+  local win, gui = drag_setup()
+  local sb = sidebar.find(win.tab_list[1])
+  make_busy(win.tab_list[1])
+  local narrow = sb.cols
+  sb.cols = 10
+  local acted = #win.actions
+  actions.request_close(gui, win.tab_list[1].id, 3, 2)
+  eq(popover.get(gui:window_id()), nil, "no unreadable question is opened")
+  assert(#win.actions > acted, "wezterm is asked instead")
+  eq(win.actions[#win.actions].action.arg.confirm, true, "with its own overlay, which a key can use")
+  sb.cols = narrow
 end)
 
 test("the selected menu row is an accent fill that clears 4.5 on all ten palettes", function()

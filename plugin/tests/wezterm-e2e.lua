@@ -57,7 +57,9 @@ if os.getenv "VTABS_E2E_MACOS" then
 end
 
 vtabs.apply_to_config(config, {
-  titlebar = os.getenv "VTABS_E2E_MACOS" and "integrate" or nil,
+  -- `"macos"` is the plugin's own preview seam: it claims the reserve without asking wezterm for a
+  -- button style this platform does not have, which `"integrate"` warns about on every reload.
+  titlebar = os.getenv "VTABS_E2E_MACOS" and "macos" or nil,
   poll_ms = 200,
   debug = true,
   confirm_close = false,

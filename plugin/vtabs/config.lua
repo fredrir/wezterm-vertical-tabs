@@ -9,18 +9,42 @@ M.defaults = schema.defaults()
 
 local current = nil
 
+local function in_enum(option, value)
+  for _, allowed in ipairs(option.enum) do
+    if value == allowed then
+      return true
+    end
+  end
+  return false
+end
+
+---A list entry is either one of the option's named ids or a caller-supplied `{ id, ... }` entry.
+local function list_ok(option, value)
+  if type(value) ~= "table" then
+    return false
+  end
+  for _, entry in ipairs(value) do
+    if type(entry) == "table" then
+      if type(entry.id) ~= "string" then
+        return false
+      end
+    elseif option.of ~= "enum" or not in_enum(option, entry) then
+      return false
+    end
+  end
+  return true
+end
+
 local function type_ok(option, value)
   local kind = option.type
   if kind == "any" then
     return true
   end
   if kind == "enum" then
-    for _, allowed in ipairs(option.enum) do
-      if value == allowed then
-        return true
-      end
-    end
-    return false
+    return in_enum(option, value)
+  end
+  if kind == "list" then
+    return list_ok(option, value)
   end
   return type(value) == kind
 end
@@ -38,6 +62,9 @@ end
 local function reason(option, value)
   if option.type == "enum" then
     return string.format("invalid %s=%s, using default", option.key, tostring(value))
+  end
+  if option.type == "list" then
+    return string.format("%s must be a list of %s, using default", option.key, table.concat(option.enum, ", "))
   end
   if option.type == "number" then
     local kind = option.integer and "whole number" or "number"
@@ -90,15 +117,11 @@ function M.setup(opts)
   local cfg = util.merge(M.defaults, opts)
   validate(cfg)
 
-  -- `tab_height` decides the pad rows and `meta` whether there is a second content line; they are
-  -- independent, so neither key rewrites the other any more.
-
-  -- The sidebar's own gutter replaces the window padding `edge_to_edge` removes, so the wider one
-  -- belongs on whichever side touches the window edge.
-  if cfg.position == "right" then
-    local given = opts.padding or {}
-    -- A fresh table: `merge` shares the one in `defaults` whenever the user passed no padding.
-    cfg.padding = { top = cfg.padding.top, left = given.left or 1, right = given.right or 2 }
+  -- The gutter that replaces the window padding `edge_to_edge` removes belongs on the side touching
+  -- the window edge, so an untouched pair mirrors. A fresh table: `merge` shares `defaults`'.
+  local pad, shipped = cfg.padding, M.defaults.padding
+  if cfg.position == "right" and pad.left == shipped.left and pad.right == shipped.right then
+    cfg.padding = { top = pad.top, left = shipped.right, right = shipped.left }
   end
   if cfg.popover.width ~= "auto" and type(cfg.popover.width) ~= "number" then
     util.warn 'popover.width must be "auto" or a number, using auto'
