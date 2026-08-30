@@ -21,6 +21,7 @@ function M.pane(tab, opts)
     process = opts.process or "/bin/zsh",
     domain = opts.domain or "local",
     sent = {},
+    pasted = {},
     title = opts.title or "zsh",
     cols = opts.cols or 80,
   }, Pane)
@@ -53,7 +54,8 @@ function Pane:has_unseen_output()
   return false
 end
 function Pane:get_dimensions()
-  return { cols = self.cols, viewport_rows = 24 }
+  local cell = self.cell_width or 10
+  return { cols = self.cols, viewport_rows = 24, pixel_width = self.cols * cell, dpi = self.dpi or 96 }
 end
 function Pane:send_text(text)
   self.sent[#self.sent + 1] = text
@@ -61,6 +63,9 @@ function Pane:send_text(text)
   if title then
     self.title = title
   end
+end
+function Pane:paste(text)
+  self.pasted[#self.pasted + 1] = text
 end
 function Pane:activate()
   self._tab.active = self
@@ -134,6 +139,31 @@ function Tab:set_split(first_cols)
   for _, p in ipairs(rest) do
     p.cols = self:width() - first_cols - 1
   end
+end
+
+---True when the root split is the nearest horizontal node above the active leaf, which is what
+---`adjust_pane_size` walks up to. Only leaf 1 and the two-leaf shape can prove that here.
+function Tab:root_split_holds_active()
+  return #self.pane_list == 2 or self.active == self.pane_list[1]
+end
+
+---Pane rectangles and zoom state, left to right across the one modelled horizontal split.
+function Tab:panes_with_info()
+  local out = {}
+  local first = self.pane_list[1]
+  for i, p in ipairs(self.pane_list) do
+    out[i] = {
+      index = i - 1,
+      is_active = p == self.active,
+      is_zoomed = p.zoomed == true,
+      left = i == 1 and 0 or first.cols + 1,
+      top = 0,
+      width = p.cols,
+      height = 24,
+      pane = p,
+    }
+  end
+  return out
 end
 
 ---Mirrors `mux/src/tab.rs adjust_x_size`: one column at a time, alternating first and second.
@@ -295,10 +325,9 @@ function Gui:perform_action(action, pane)
       self._mux:remove_tab(tab)
     end
   elseif name == "AdjustPaneSize" then
-    -- Delta lands on the split node above the ACTIVE leaf: first.cols += delta, second = width - first - 1.
     local tab = self._mux.active_tab_ref
     local dir, amount = action.arg[1], action.arg[2]
-    if dir == "Left" or dir == "Right" then
+    if (dir == "Left" or dir == "Right") and tab:root_split_holds_active() then
       local delta = dir == "Right" and amount or -amount
       local width = tab:width()
       tab:set_split(math.max(1, math.min(tab.pane_list[1].cols + delta, width - 2)))

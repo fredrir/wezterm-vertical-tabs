@@ -14,12 +14,13 @@ local DEAD_AFTER_MS = 20000
 local READY_TIMEOUT_MS = 12000
 local ADOPT_RETRY_MS = 2000
 local ADOPT_TRIES = 5
+local ADOPT_WINDOW_MS = 30000
 local FAILED_DOMAIN_MS = 60000
 local PRUNE_MS = 30000
 local PIN_GRACE_MS = 3000
 
 ---Title the backend sets on itself; adoption evidence only, any process can set a title.
-local MARKER = "^wez%-vtabs:%x+$"
+local MARKER = "^wez%-vtabs"
 
 local session = state.session
 
@@ -71,8 +72,7 @@ local function claim_echoed_token(pane, pid)
   return true
 end
 
----True once the backend in `pane` echoed a token this process minted for it. The only trusted state:
----nothing may close a tab or pane, take its events or send it frames until this holds.
+---True once the backend in `pane` echoed a token this process minted for it: the only trusted state.
 function M.is_ready(pane)
   if not pane or tab_id_of(pane) == nil then
     return false
@@ -90,12 +90,28 @@ function M.is_ready(pane)
   return false
 end
 
-M.is_sidebar = M.is_ready
-
 local RANK = { none = 0, marker = 1, mapped = 2, ready = 3 }
+
+local tick = 0
+local classified = {}
+
+---Title and domain reads cross into the mux; one answer per pane per poll is enough.
+local function has_marker_cached(pane, pid)
+  local seen = session.marker[pid]
+  if seen and seen.tick == tick then
+    return seen.value
+  end
+  local value = M.has_marker(pane) and not M.is_overlay(pane)
+  session.marker[pid] = { tick = tick, value = value }
+  return value
+end
 
 ---How strong a pane's claim to the sidebar role is; a marker alone is the weakest and authorises nothing.
 local function sidebar_rank(pane)
+  local pid = pane:pane_id()
+  if session.ready[pid] then
+    return RANK.ready
+  end
   local tab_id = tab_id_of(pane)
   if tab_id == nil then
     return RANK.none
@@ -103,23 +119,27 @@ local function sidebar_rank(pane)
   if M.is_ready(pane) then
     return RANK.ready
   end
-  if state.sidebar_pane_id(tab_id) == pane:pane_id() then
+  if state.sidebar_pane_id(tab_id) == pid then
     return RANK.mapped
   end
-  if M.has_marker(pane) and not M.is_overlay(pane) and not session.given_up[pane:pane_id()] then
-    return RANK.marker
+  if session.given_up[pid] or not has_marker_cached(pane, pid) then
+    return RANK.none
   end
-  return RANK.none
+  return RANK.marker
 end
 
 function M.is_backend(pane)
   return pane ~= nil and sidebar_rank(pane) > RANK.none
 end
 
----Splits a tab into { content = Pane[], sidebar = Pane|nil }. Exactly one pane can be the sidebar --
----the best claim wins -- so a pane that fakes the title cannot make a tab look empty.
+---Splits a tab into { content = Pane[], sidebar = Pane|nil }; only the best claim holds the role.
 function M.classify(tab)
+  local tab_id = tab:tab_id()
   local panes = tab:panes()
+  local seen = classified[tab_id]
+  if seen and seen.tick == tick and seen.n == #panes then
+    return seen.content, seen.sb
+  end
   local sb, best = nil, RANK.none
   for _, p in ipairs(panes) do
     local rank = sidebar_rank(p)
@@ -134,6 +154,7 @@ function M.classify(tab)
       content[#content + 1] = p
     end
   end
+  classified[tab_id] = { tick = tick, n = #panes, content = content, sb = sb }
   return content, sb
 end
 
@@ -249,6 +270,44 @@ local function theme_bg(tab)
   return string.format("#%02x%02x%02x", rgb[1], rgb[2], rgb[3])
 end
 
+---Domain the sidebar would be spawned in for this tab.
+local function attach_domain(cfg, base)
+  if cfg.domain ~= "CurrentPaneDomain" then
+    return cfg.domain
+  end
+  return util.try(function()
+    return base:get_domain_name()
+  end)
+end
+
+---"auto" adopts only where this plugin spawns backends itself; see docs/limitations.md.
+local function may_adopt(cfg, domain, host, place)
+  if cfg.adopt ~= "auto" then
+    return cfg.adopt == true
+  end
+  return backend.is_local(domain, host)
+    or session.spawned_domains[place] == true
+    or backend.resolve_path(cfg, domain, host) ~= nil
+end
+
+---A candidate must sit in the very domain this plugin would have spawned the sidebar in.
+local function adoptable(tab, sb)
+  local cfg = config.get()
+  local base = M.content_pane(tab) or tab:active_pane()
+  if not base then
+    return false
+  end
+  local domain = attach_domain(cfg, base)
+  local pane_domain = util.try(function()
+    return sb:get_domain_name()
+  end)
+  if domain == nil or domain ~= pane_domain then
+    return false
+  end
+  local host = cwd_host(base)
+  return may_adopt(cfg, domain, host, domain .. "@" .. (host or ""))
+end
+
 local function domain_failed(place, now)
   local at = session.failed_domains[place]
   if not at then
@@ -274,12 +333,7 @@ function M.attach(tab)
   if not base or M.is_overlay(base) then
     return nil
   end
-  local pane_domain = cfg.domain
-  if cfg.domain == "CurrentPaneDomain" then
-    pane_domain = util.try(function()
-      return base:get_domain_name()
-    end)
-  end
+  local pane_domain = attach_domain(cfg, base)
   if not pane_domain then
     util.warn_once("domain-" .. tab_id, "cannot determine domain for tab %d; sidebar skipped", tab_id)
     return nil
@@ -329,6 +383,7 @@ function M.attach(tab)
   session.seen[pid] = now
   session.spawned[pid] = now
   session.pane_domain[pid] = place
+  session.spawned_domains[place] = true
   M.auth(sb)
   base:activate()
   if not backend.is_local(pane_domain, host) then
@@ -341,7 +396,7 @@ end
 local function adopt(tab, sb, now)
   local pid = sb:pane_id()
   state.set_sidebar(tab:tab_id(), pid, util.random_token())
-  session.adopted[pid] = true
+  session.adopted[pid] = now
   session.auth_tries[pid] = 1
   session.seen[pid] = now
   M.auth(sb)
@@ -352,19 +407,26 @@ local function await_auth(gui_window, tab, sb, now)
   local pid = sb:pane_id()
   if state.sidebar_pane_id(tab:tab_id()) ~= pid then
     -- classify ranks a ready or mapped pane above a marker, so this tab has neither
-    if M.has_marker(sb) and not M.is_overlay(sb) then
+    if not M.has_marker(sb) or M.is_overlay(sb) then
+      return
+    end
+    if adoptable(tab, sb) then
       adopt(tab, sb, now)
+    else
+      -- not ours to take over: let it be content so the tab still gets a sidebar
+      session.given_up[sb:pane_id()] = true
     end
     return
   end
   if session.adopted[pid] then
     local tries = session.auth_tries[pid] or 0
-    if tries >= ADOPT_TRIES then
+    if tries >= ADOPT_TRIES or now - session.adopted[pid] > ADOPT_WINDOW_MS then
       -- it kept the marker but never echoed: hand the tab back and treat the pane as content
       util.warn_once("adopt-" .. pid, "pane %d never authenticated; not a sidebar", pid)
       session.given_up[pid] = true
       session.adopted[pid] = nil
       state.set_sidebar(tab:tab_id(), nil)
+      classified[tab:tab_id()] = nil
     elseif now - (session.authed_at[pid] or 0) > ADOPT_RETRY_MS then
       session.auth_tries[pid] = tries + 1
       M.auth(sb)
@@ -524,6 +586,8 @@ function M.ensure(gui_window)
   local private = state.is_private(wid)
   local now = util.now_ms()
   local seen = {}
+  tick = tick + 1
+  classified = {}
   local tabs = mux_win:tabs_with_info()
 
   resolve_pins(tabs, now)
@@ -537,7 +601,9 @@ function M.ensure(gui_window)
       if sb then
         -- the tab still exists; forgetting it would strand a sidebar that authenticates later
         seen[tab_id] = true
-        if M.is_ready(sb) and #tab:panes() == 1 then
+        if not M.is_ready(sb) then
+          await_auth(gui_window, tab, sb, now)
+        elseif #tab:panes() == 1 then
           M.close_orphan(gui_window, tab, sb)
         end
       end

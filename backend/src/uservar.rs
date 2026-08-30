@@ -1,3 +1,6 @@
+use std::io::Read;
+use std::time::{SystemTime, UNIX_EPOCH};
+
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 
@@ -13,6 +16,22 @@ pub fn b64(bytes: &[u8]) -> String {
 
 pub fn set_user_var(name: &str, value: &str) -> String {
     format!("\x1b]1337;SetUserVar={name}={}\x07", b64(value.as_bytes()))
+}
+
+/// Per-process id for the title; never the auth token, which window titles would leak to the desktop.
+pub fn nonce() -> String {
+    let mut bytes = [0u8; 4];
+    if let Ok(mut f) = std::fs::File::open("/dev/urandom") {
+        let _ = f.read_exact(&mut bytes);
+    }
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.subsec_nanos())
+        .unwrap_or(0);
+    format!(
+        "{:08x}",
+        u32::from_le_bytes(bytes) ^ std::process::id() ^ nanos
+    )
 }
 
 /// Pane title the plugin looks for when a mux outlives the GUI; hex only, so it cannot break the OSC.
@@ -53,6 +72,13 @@ mod tests {
             "\x1b]0;wez-vtabs:e\x07\x1b]2;wez-vtabs:e\x07"
         );
         assert!(title_marker("").starts_with("\x1b]0;wez-vtabs:0\x07"));
+    }
+
+    #[test]
+    fn nonce_is_eight_hex_digits() {
+        let n = nonce();
+        assert_eq!(n.len(), 8);
+        assert!(n.bytes().all(|b| b.is_ascii_hexdigit()));
     }
 
     #[test]

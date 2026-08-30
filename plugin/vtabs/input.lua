@@ -209,16 +209,34 @@ KEYS.space, KEYS.d, KEYS.delete = KEYS.enter, KEYS.x, KEYS.x
 
 local FORWARD_MAX_RAW = 64
 local FORWARD_MAX_BYTES = 16
-local FORWARD_MIN_GAP_MS = 50
-local FORWARD_TTL_MS = 60000
-local forwarded_at = {}
+local FORWARD_BURST = 20
+local FORWARD_PER_SEC = 60
+local PASTE_MAX_RAW = 96 * 1024
+local PASTE_MAX_BYTES = 64 * 1024
+local BUDGET_TTL_MS = 60000
+local budget = {}
+
+---Token bucket per source pane: fast typing and auto-repeat pass, a synthetic flood does not.
+local function affordable(pid, now, cost)
+  local b = budget[pid]
+  if not b then
+    b = { tokens = FORWARD_BURST, at = now }
+    budget[pid] = b
+  end
+  b.tokens = math.min(FORWARD_BURST, b.tokens + (now - b.at) * FORWARD_PER_SEC / 1000)
+  b.at = now
+  if b.tokens < cost then
+    return false
+  end
+  b.tokens = b.tokens - cost
+  return true
+end
 
 -- ESC-prefixed key shapes: CSI (params, intermediates, final 0x40-0x7e), SS3, and the alt-key form.
 local KEY_SHAPES = { "^\27%[[\48-\63]*[\32-\47]*[\64-\126]$", "^\27O.$", "^\27.$" }
 local PASTE_BRACKETS = { "\27[200~", "\27[201~" }
 
----`text` when it is structurally one key press, else nil. The backend emits exactly these shapes
----per key, so nothing legitimate is rejected and nothing chainable into a command line survives.
+---`text` when it is structurally one key press, else nil.
 function M.safe_key_bytes(text)
   if type(text) ~= "string" or text == "" or #text > FORWARD_MAX_BYTES then
     return nil
@@ -254,30 +272,25 @@ local function decoded_key(ev)
   return code >= 32 and code ~= 127 and key or nil
 end
 
----A key at a sidebar that is not in keyboard mode is the user typing at their shell: hand it over.
-local function forward_key(gui_window, pane, ev, cfg)
+---The content pane a hovered sidebar may hand input to, or nil when any part of that claim fails.
+local function handover_target(gui_window, pane, cfg)
   local wid = gui_window:window_id()
-  local pid = pane:pane_id()
   local tab = util.try(function()
     return pane:tab()
   end)
   local active = util.active_tab(gui_window)
   if not sidebar.is_ready(pane) or not tab or not active or tab:tab_id() ~= active:tab_id() then
-    return
+    return nil
   end
   if cfg.hover == "press" and not session.drag[wid] then
-    return
-  end
-  local now = util.now_ms()
-  if now - (forwarded_at[pid] or 0) < FORWARD_MIN_GAP_MS then
-    if cfg.debug then
-      util.log("key forward rate-limited on pane %d", pid)
-    end
-    return
+    return nil
   end
   local content = sidebar.content_pane(tab)
-  if not content or content:pane_id() == pid or sidebar.is_backend(content) or sidebar.is_overlay(content) then
-    return
+  if not content or content:pane_id() == pane:pane_id() then
+    return nil
+  end
+  if sidebar.is_backend(content) or sidebar.is_overlay(content) then
+    return nil
   end
   local domain = util.try(function()
     return pane:get_domain_name()
@@ -285,17 +298,55 @@ local function forward_key(gui_window, pane, ev, cfg)
   if domain == nil or domain ~= util.try(function()
     return content:get_domain_name()
   end) then
-    return
+    return nil
   end
-  forwarded_at[pid] = now
-  local text = M.safe_key_bytes(decoded_key(ev))
-  if text and not pcall(function()
-    content:send_text(text)
-  end) then
-    return
+  return content
+end
+
+---Focus follows the handover whether or not bytes went with it, so no second key is lost the same way.
+local function hand_over(gui_window, content, deliver)
+  if deliver then
+    pcall(deliver)
   end
   content:activate()
-  state.set_focus(wid, false)
+  state.set_focus(gui_window:window_id(), false)
+end
+
+---A key at a sidebar that is not in keyboard mode is the user typing at their shell: hand it over.
+local function forward_key(gui_window, pane, ev, cfg)
+  local content = handover_target(gui_window, pane, cfg)
+  if not content then
+    return
+  end
+  local text = M.safe_key_bytes(decoded_key(ev))
+  local pid = pane:pane_id()
+  if text and not affordable(pid, util.now_ms(), 1) then
+    if cfg.debug then
+      util.log("key forward over budget on pane %d", pid)
+    end
+    text = nil
+  end
+  hand_over(gui_window, content, text and function()
+    content:send_text(text)
+  end)
+end
+
+---A bracketed paste captured by the backend, delivered whole so the shell brackets it once.
+local function forward_paste(gui_window, pane, ev, cfg)
+  local content = handover_target(gui_window, pane, cfg)
+  if not content then
+    return
+  end
+  local text = nil
+  if type(ev.data) == "string" and #ev.data <= PASTE_MAX_RAW then
+    text = util.base64_decode(ev.data)
+  end
+  if text and (text == "" or #text > PASTE_MAX_BYTES or not affordable(pane:pane_id(), util.now_ms(), 1)) then
+    text = nil
+  end
+  hand_over(gui_window, content, text and function()
+    content:paste(text)
+  end)
 end
 
 function M.key(gui_window, pane, ev)
@@ -337,7 +388,7 @@ end
 ---Entry point for the `user-var-changed` event; only registered sidebar panes are trusted.
 function M.handle(gui_window, pane, name, value)
   local cfg = config.get()
-  if name ~= cfg.backend.uservar or not sidebar.is_sidebar(pane) then
+  if name ~= cfg.backend.uservar or not sidebar.is_ready(pane) then
     return
   end
   local ok, ev = pcall(wezterm.json_parse, value)
@@ -361,6 +412,9 @@ function M.handle(gui_window, pane, name, value)
     M.mouse(gui_window, pane, ev)
   elseif ev.t == "key" then
     M.key(gui_window, pane, ev)
+  elseif ev.t == "paste" then
+    forward_paste(gui_window, pane, ev, cfg)
+    view.sync(gui_window)
   end
 end
 
@@ -383,9 +437,9 @@ function M.tick(gui_window)
   if pending_menu[wid] and now - pending_menu[wid].at > DRAG_TIMEOUT_MS then
     pending_menu[wid] = nil
   end
-  for pid, at in pairs(forwarded_at) do
-    if now - at > FORWARD_TTL_MS then
-      forwarded_at[pid] = nil
+  for pid, b in pairs(budget) do
+    if now - b.at > BUDGET_TTL_MS then
+      budget[pid] = nil
     end
   end
   local active = util.active_tab(gui_window)

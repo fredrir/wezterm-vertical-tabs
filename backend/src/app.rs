@@ -5,7 +5,7 @@ use crate::event::Event;
 use crate::log::Logger;
 use crate::parser::Input;
 use crate::terminal;
-use crate::uservar::{TOKEN_VAR, set_user_var, title_marker};
+use crate::uservar::{TOKEN_VAR, set_user_var};
 
 const CLEAR_SCREEN: &str = "\x1b[2J\x1b[H";
 
@@ -27,6 +27,9 @@ impl<W: Write> App<W> {
         let json = event.to_json();
         self.log.log(match event {
             Event::Key { .. } => "event key".to_string(),
+            Event::Paste { data, .. } => {
+                format!("event paste {} bytes", data.as_ref().map_or(0, String::len))
+            }
             _ => format!("event {json}"),
         });
         self.write(set_user_var(&self.var, &json).as_bytes())
@@ -38,6 +41,7 @@ impl<W: Write> App<W> {
             Input::Mouse(m) => self.emit(&Event::from(m))?,
             Input::Focus(focused) => self.emit(&Event::Focus { focused })?,
             Input::Key { name, mods, raw } => self.emit(&Event::key(name, mods, &raw))?,
+            Input::Paste(data) => self.emit(&Event::paste(data))?,
             Input::Command(cmd) => return self.run(cmd),
         }
         Ok(true)
@@ -48,10 +52,7 @@ impl<W: Write> App<W> {
             Command::Frame { data } => self.write(data.as_bytes())?,
             Command::Clear => self.write(CLEAR_SCREEN.as_bytes())?,
             Command::Ping { n } => self.emit(&Event::Pong { n })?,
-            Command::Auth { token } => {
-                self.write(title_marker(&token).as_bytes())?;
-                self.write(set_user_var(TOKEN_VAR, &token).as_bytes())?
-            }
+            Command::Auth { token } => self.write(set_user_var(TOKEN_VAR, &token).as_bytes())?,
             Command::Quit => return Ok(false),
         }
         Ok(true)
@@ -127,9 +128,8 @@ mod tests {
             token: "abc".into(),
         }))
         .unwrap();
-        let mut expected = title_marker("abc").into_bytes();
-        expected.extend_from_slice(set_user_var("vtabs_token", "abc").as_bytes());
-        assert_eq!(a.out, expected);
+        // the token never goes in the title: window titles are readable by the whole desktop
+        assert_eq!(a.out, set_user_var("vtabs_token", "abc").as_bytes());
     }
 
     #[test]

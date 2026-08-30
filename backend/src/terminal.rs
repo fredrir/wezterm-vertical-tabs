@@ -2,8 +2,8 @@ use std::io::{self, IsTerminal, Write};
 
 use crossterm::{cursor, execute, terminal};
 
-const ENABLE_MODES: &str = "\x1b[?1000h\x1b[?1002h\x1b[?1003h\x1b[?1006h\x1b[?1004h";
-const DISABLE_MODES: &str = "\x1b[?1004l\x1b[?1006l\x1b[?1003l\x1b[?1002l\x1b[?1000l";
+const ENABLE_MODES: &str = "\x1b[?1000h\x1b[?1002h\x1b[?1003h\x1b[?1006h\x1b[?1004h\x1b[?2004h";
+const DISABLE_MODES: &str = "\x1b[?2004l\x1b[?1004l\x1b[?1006l\x1b[?1003l\x1b[?1002l\x1b[?1000l";
 
 /// Restores the terminal on drop, including during panic unwinding.
 pub struct TerminalGuard {

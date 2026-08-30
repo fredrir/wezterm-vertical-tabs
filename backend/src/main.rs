@@ -9,7 +9,9 @@ use wez_vertical_tabs_backend::log::Logger;
 use wez_vertical_tabs_backend::parser::Parser;
 use wez_vertical_tabs_backend::signal;
 use wez_vertical_tabs_backend::terminal::{self, TerminalGuard};
-use wez_vertical_tabs_backend::uservar::{DEFAULT_VAR, ROLE, ROLE_VAR, set_user_var, title_marker};
+use wez_vertical_tabs_backend::uservar::{
+    DEFAULT_VAR, ROLE, ROLE_VAR, nonce, set_user_var, title_marker,
+};
 
 const SIZE_POLL: Duration = Duration::from_millis(250);
 const WINCH_CHECK: Duration = Duration::from_millis(100);
@@ -23,6 +25,7 @@ fn spawn_stdin_reader() -> Receiver<Vec<u8>> {
         let mut buf = vec![0u8; READ_BUF];
         loop {
             match stdin.read(&mut buf) {
+                Err(err) if err.kind() == io::ErrorKind::Interrupted => continue,
                 Ok(0) | Err(_) => break,
                 Ok(n) => {
                     if tx.send(buf[..n].to_vec()).is_err() {
@@ -54,8 +57,8 @@ fn run() -> io::Result<()> {
         size,
     };
     app.write(set_user_var(ROLE_VAR, ROLE).as_bytes())?;
-    // Placeholder marker: the plugin can find this pane again before it has authenticated it.
-    app.write(title_marker("0").as_bytes())?;
+    // Marker only: it lets the plugin find this pane again, it proves nothing and carries no token.
+    app.write(title_marker(&nonce()).as_bytes())?;
     app.emit(&Event::ready(size.0, size.1))?;
 
     let rx = spawn_stdin_reader();

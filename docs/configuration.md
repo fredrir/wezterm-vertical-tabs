@@ -111,7 +111,8 @@ the tab's content pane, which then takes focus back.
 | source               | a sidebar pane this process authenticated, in the window's active tab   |
 | target               | that same tab's content pane, same domain, not an overlay              |
 | payload              | structurally one key press: a single UTF-8 codepoint, or one `ESC`-prefixed sequence (CSI / SS3 / alt-key), <= 16 bytes, never a paste bracket |
-| rate                 | one forward per source pane per 50 ms                                  |
+| rate                 | token bucket per source pane: 20 burst, 60/s sustained; over budget the key is dropped but focus still moves |
+| paste                | a `paste` event is decoded and delivered whole with `pane:paste`, <= 64 KiB |
 
 ## Mouse
 
@@ -131,6 +132,7 @@ the tab's content pane, which then takes focus back.
 | `hover = "follow"`   | pointer over the sidebar = sidebar focused; keys that are not sidebar bindings are forwarded to the tab's content pane, which then takes focus back |
 | `hover = "press"`    | the sidebar holds focus from press to release only                                          |
 | press                | never hands focus to the content pane, so the drag and the release reach the sidebar        |
+| window title         | while the sidebar is the active pane the plugin titles the window after the content pane; a `format-window-title` handler you register *before* `apply_to_config` wins, one registered after it never runs |
 
 
 ## Public API

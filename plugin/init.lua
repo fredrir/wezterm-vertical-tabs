@@ -87,10 +87,13 @@ M.toggle_sidebar = reported("toggle_sidebar", actions.toggle_sidebar)
 M.show_sidebar = reported("show_sidebar", actions.show_sidebar)
 M.sync = reported("sync", view.sync)
 M.invalidate_theme = view.invalidate_theme
-M.is_sidebar_pane = sidebar.is_backend
+M.is_sidebar_pane = sidebar.is_ready
 
 function M.is_private_window(window)
-  return state.is_private(window:window_id())
+  local wid = util.try(function()
+    return window:window_id()
+  end)
+  return wid ~= nil and state.is_private(wid)
 end
 
 local registered = false
@@ -143,7 +146,6 @@ local function register_events(cfg)
       local wid = window:window_id()
       view.invalidate_theme(wid)
       geometry.reset(wid)
-      geometry.correct(window)
       view.sync(window, { force = true })
     end)
   )
@@ -154,6 +156,11 @@ local function register_events(cfg)
       view.sync(window)
     end)
   )
+
+  -- Only the first handler registered for this event is ever called, so a user's own one wins.
+  wezterm.on("format-window-title", function(tab, pane, tabs, panes)
+    return view.window_title(tab, pane, tabs, panes)
+  end)
 
   wezterm.on("gui-attached", function()
     for _, mux_win in ipairs(wezterm.mux.all_windows()) do

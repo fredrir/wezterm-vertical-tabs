@@ -390,7 +390,7 @@ test("a sidebar with a new pane id but a known token is re-adopted, not duplicat
   sb.id = sb.id + 1000
   tab.id = tab.id + 1000
   sb.vars = { vtabs_token = token }
-  eq(sidebar.is_sidebar(sb), true)
+  eq(sidebar.is_ready(sb), true)
   sidebar.ensure(gui)
   eq(sidebars_in(tab), 1)
   eq(#tab:panes(), 2)
@@ -402,7 +402,7 @@ test("a pane spoofing vtabs_role or vtabs_token is never a sidebar", function()
   local tab = win.tab_list[1]
   local content = sidebar.content_pane(tab)
   content.vars = { vtabs_role = "sidebar", vtabs_token = state.token_for(sidebar.find(tab):pane_id()) }
-  eq(sidebar.is_sidebar(content), false)
+  eq(sidebar.is_ready(content), false)
   sidebar.ensure(gui)
   eq(#win.tab_list, 1, "tab not closed as orphan")
   local before = #win.actions
@@ -687,7 +687,7 @@ test("a backend pane that outlived the GUI is adopted, not duplicated", function
   restart_vm()
   sidebar.ensure(gui)
   eq(#tab:panes(), panes, "no second sidebar split")
-  eq(sidebar.is_sidebar(sb), false, "not trusted before the echo")
+  eq(sidebar.is_ready(sb), false, "not trusted before the echo")
   local token = state.token_for(sb:pane_id())
   assert(token, "fresh token minted")
   assert(sb.sent[#sb.sent]:find(token, 1, true), "re-authed with it")
@@ -702,7 +702,7 @@ test("a pane faking the title marker is never trusted and closes nothing", funct
   local liar = fake.pane(tab, { title = "wez-vtabs:dead" })
   table.insert(tab.pane_list, 1, liar)
   sidebar.ensure(gui)
-  eq(sidebar.is_sidebar(liar), false, "adoption is not trust")
+  eq(sidebar.is_ready(liar), false, "adoption is not trust")
   local sent = #liar.sent
   require("vtabs.view").sync(gui, { force = true })
   eq(#liar.sent, sent, "no frames")
@@ -834,6 +834,75 @@ test("an adopted pane that never authenticates is handed back to content", funct
   eq(sidebars_in(tab), 1, "a real sidebar was attached instead")
 end)
 
+local function marker_tab(win, domain)
+  local tab = win.tab_list[1]
+  for _, p in ipairs(tab.pane_list) do
+    p.domain = domain or p.domain
+  end
+  local liar = fake.pane(tab, { title = "wez-vtabs:00", domain = domain or "local" })
+  table.insert(tab.pane_list, 1, liar)
+  return tab, liar
+end
+
+test("a marker pane in another domain is never adopted", function()
+  local win, gui = setup_window(1)
+  local tab, liar = marker_tab(win)
+  liar.domain = "desktop"
+  sidebar.ensure(gui)
+  eq(#liar.sent, 0, "never auth'd")
+  sidebar.ensure(gui)
+  eq(sidebar.is_backend(liar), false, "treated as content")
+  eq(sidebars_in(tab), 1, "the tab still gets a real sidebar")
+end)
+
+test("adopt=auto skips domains this process never spawned a backend in", function()
+  local win, gui = setup_window(1)
+  config.setup { backend = { path = { ["local"] = "/bin/wez-vtabs" } } }
+  local tab, liar = marker_tab(win, "desktop")
+  sidebar.ensure(gui)
+  eq(#liar.sent, 0, "never auth'd")
+  sidebar.ensure(gui)
+  eq(sidebar.is_backend(liar), false, "treated as content")
+  eq(sidebars_in(tab), 1)
+end)
+
+test("adopt=true takes over the same pane", function()
+  local win, gui = setup_window(1)
+  config.setup { adopt = true, backend = { path = { ["local"] = "/bin/wez-vtabs" } } }
+  local _, liar = marker_tab(win, "desktop")
+  sidebar.ensure(gui)
+  assert(liar.sent[1] and liar.sent[1]:find '"auth"', "auth sent")
+  eq(sidebar.is_ready(liar), false, "still needs the echo")
+  config.setup { backend = { path = "/bin/wez-vtabs" } }
+end)
+
+test("adopt=false never auths a marker pane", function()
+  local win, gui = setup_window(1)
+  config.setup { adopt = false, backend = { path = "/bin/wez-vtabs" } }
+  local tab, liar = marker_tab(win)
+  sidebar.ensure(gui)
+  eq(#liar.sent, 0, "never auth'd")
+  sidebar.ensure(gui)
+  eq(sidebars_in(tab), 1, "falls back to a fresh sidebar")
+  config.setup { backend = { path = "/bin/wez-vtabs" } }
+end)
+
+test("an adopted pane is abandoned once its window closes", function()
+  local win, gui = setup_window(1)
+  local _, liar = marker_tab(win)
+  sidebar.ensure(gui)
+  assert(#liar.sent > 0, "adopted")
+  local real_now = util.now_ms
+  local clock = real_now()
+  util.now_ms = function()
+    return clock
+  end
+  clock = clock + 31000
+  sidebar.ensure(gui)
+  util.now_ms = real_now
+  eq(state.sidebar_pane_id(win.tab_list[1].id) ~= liar:pane_id(), true, "unmapped after 30 s")
+end)
+
 -- ===================== implementer-2: interaction / geometry / focus =====================
 
 local function rgb(c)
@@ -874,7 +943,7 @@ end)
 test("window growth drifts the sidebar 50/50; correct claws it back in one AdjustPaneSize", function()
   local win, gui = setup_window(1)
   sidebar.ensure(gui)
-  local sb = sidebar.find(win.tab_list[1])
+  local sb = mark_ready(win.tab_list[1])
   eq(sb.cols, 28)
   win:resize(40)
   eq(sb.cols, 48, "adjust_x_size gave the sidebar half of the delta")
@@ -895,7 +964,7 @@ test("split Left puts the sidebar in first, split Right in second, so a right si
   local gui = win.gui
   sidebar.ensure(gui)
   local tab = win.tab_list[1]
-  local sb = sidebar.find(tab)
+  local sb = mark_ready(tab)
   eq(sb.split_args.direction, "Right")
   eq(sb.cols, 28)
   win:resize(-20)
@@ -911,7 +980,7 @@ test("a divider drag with an unchanged window becomes the desired width until co
   local win, gui = setup_window(1)
   sidebar.ensure(gui)
   local tab = win.tab_list[1]
-  local sb = sidebar.find(tab)
+  local sb = mark_ready(tab)
   eq(geometry.correct(gui), false, "baseline recorded")
   tab:set_split(34)
   eq(geometry.correct(gui), false, "drag adopted, not fought")
@@ -927,6 +996,7 @@ test("correction with several content panes activates the sidebar and restores f
   local win, gui = setup_window(1)
   sidebar.ensure(gui)
   local tab = win.tab_list[1]
+  mark_ready(tab)
   local extra = fake.pane(tab, { cols = sidebar.content_pane(tab).cols })
   tab.pane_list[#tab.pane_list + 1] = extra
   extra:activate()
@@ -936,9 +1006,112 @@ test("correction with several content panes activates the sidebar and restores f
   eq(sidebar.find(tab).cols, 28)
 end)
 
+test("a sidebar that only carries the title marker is never resized", function()
+  local win, gui = setup_window(1)
+  sidebar.ensure(gui)
+  local tab = win.tab_list[1]
+  local sb = sidebar.find(tab)
+  win:resize(20)
+  local before = #win.actions
+  eq(geometry.correct(gui), false, "an unauthenticated pane is not corrected")
+  eq(#win.actions, before, "no AdjustPaneSize")
+  eq(sb.cols, 38)
+  mark_ready(tab)
+  assert(geometry.correct(gui), "the same pane is corrected once it echoes its token")
+  eq(sb.cols, 28)
+end)
+
+test("a zoomed pane suspends adoption and correction until it is unzoomed", function()
+  local win, gui = setup_window(1)
+  sidebar.ensure(gui)
+  local tab = win.tab_list[1]
+  local sb = mark_ready(tab)
+  eq(geometry.correct(gui), false, "baseline recorded")
+  sb.zoomed = true
+  sb.cols = tab:width()
+  local before = #win.actions
+  eq(geometry.correct(gui), false, "zoom is not a divider drag")
+  eq(#win.actions, before, "no AdjustPaneSize while zoomed")
+  eq(geometry.desired(gui:window_id()), 28, "full-window zoom width not latched")
+  sb.zoomed = false
+  sb.cols = 28
+  eq(geometry.correct(gui), false, "unzoom restores the width it had")
+  eq(geometry.desired(gui:window_id()), 28)
+end)
+
+test("an adopted width is clamped to a plausible sidebar", function()
+  local win, gui = setup_window(1)
+  sidebar.ensure(gui)
+  local tab = win.tab_list[1]
+  mark_ready(tab)
+  eq(geometry.correct(gui), false, "baseline recorded")
+  tab:set_split(78)
+  eq(geometry.correct(gui), false, "drag adopted")
+  eq(geometry.desired(gui:window_id()), 60, "clamped to tab width minus the content margin")
+  geometry.reset(gui:window_id())
+  assert(geometry.correct(gui), "a reset re-asserts cfg.width")
+  eq(geometry.correct(gui), false, "baseline recorded")
+  tab:set_split(1)
+  eq(geometry.correct(gui), false, "drag adopted")
+  eq(geometry.desired(gui:window_id()), 8, "clamped to the minimum width")
+end)
+
+test("an unreachable width is attempted until it stops moving, then left alone", function()
+  local win, gui = setup_window(1)
+  sidebar.ensure(gui)
+  local tab = win.tab_list[1]
+  local sb = mark_ready(tab)
+  win:resize(-71)
+  eq(tab:width(), 9, "a window too narrow to hold the sidebar")
+  assert(geometry.correct(gui), "first attempt moves it as far as the split allows")
+  eq(sb.cols, 7, "clamped to width - 2")
+  local attempts = #win.actions
+  eq(geometry.correct(gui), false, "the attempt that changes nothing is the last one")
+  eq(#win.actions, attempts + 1)
+  local settled = #win.actions
+  eq(geometry.correct(gui), false)
+  eq(geometry.correct(gui), false)
+  eq(#win.actions, settled, "no AdjustPaneSize and no activate once it is known unreachable")
+  win:resize(40)
+  assert(geometry.correct(gui), "a window resize unblocks the retry")
+end)
+
+test("a font or dpi change is corrected, not adopted as a divider drag", function()
+  local win, gui = setup_window(1)
+  sidebar.ensure(gui)
+  local tab = win.tab_list[1]
+  local sb = mark_ready(tab)
+  eq(geometry.correct(gui), false, "baseline recorded")
+  for _, p in ipairs(tab:panes()) do
+    p.cell_width = 14
+  end
+  tab:set_split(20)
+  assert(geometry.correct(gui), "a wider cell is not the user dragging the divider")
+  eq(geometry.desired(gui:window_id()), 28, "cfg.width still wins")
+  eq(sb.cols, 28)
+end)
+
+test("geometry.sync corrects on a tab change and rate-gates otherwise", function()
+  local win, gui = setup_window(2)
+  sidebar.ensure(gui)
+  for _, tab in ipairs(win.tab_list) do
+    mark_ready(tab)
+  end
+  local first, second = win.tab_list[1], win.tab_list[2]
+  win.active_tab_ref = first
+  assert(geometry.sync(gui, first.id) == false, "nothing to correct")
+  win:resize(20)
+  eq(geometry.sync(gui, first.id), false, "same tab inside the observe window is skipped")
+  eq(sidebar.find(first).cols, 38)
+  win.active_tab_ref = second
+  assert(geometry.sync(gui, second.id), "a tab change corrects at once")
+  eq(sidebar.find(second).cols, 28)
+end)
+
 test("correction is skipped while a tab drag is in flight", function()
   local win, gui = setup_window(1)
   sidebar.ensure(gui)
+  mark_ready(win.tab_list[1])
   win:resize(20)
   state.session.drag[gui:window_id()] = { tab_id = win.tab_list[1].id }
   eq(geometry.correct(gui), false)
@@ -1107,13 +1280,32 @@ test("raw carrying an OSC or bracketed-paste introducer is dropped, focus still 
   eq(#content2.sent, 0, "bracketed paste never reaches the shell")
 end)
 
-test("a burst from one sidebar pane is rate-limited to one forward", function()
+test("fast typing is forwarded whole; a flood is cut off at the burst budget", function()
+  local _, gui, tab, sb, content = key_setup()
+  for _ = 1, 25 do
+    input.handle(gui, sb, "vtabs", '{"t":"key","key":"a","raw":"YQ=="}')
+  end
+  eq(#content.sent, 20, "20 keys of burst, no refill inside one stub tick")
+  eq(tab.active, content, "focus stays handed over across the dropped tail")
+end)
+
+test("a paste event is delivered whole to the content pane", function()
+  local _, gui, tab, sb, content = key_setup()
+  input.handle(gui, sb, "vtabs", '{"t":"paste","data":"aGVsbG8gd29ybGQ="}')
+  eq(content.pasted[#content.pasted], "hello world")
+  eq(#content.sent, 0, "a paste is not typed key by key")
+  eq(tab.active, content)
+end)
+
+test("a paste is refused when it is oversized, malformed or from a background tab", function()
   local _, gui, _, sb, content = key_setup()
-  input.handle(gui, sb, "vtabs", '{"t":"key","key":"a","raw":"YQ=="}')
-  eq(content.sent[#content.sent], "a")
-  local n = #content.sent
-  input.handle(gui, sb, "vtabs", '{"t":"key","key":"b","raw":"Yg=="}')
-  eq(#content.sent, n, "second key in the same window dropped")
+  input.handle(gui, sb, "vtabs", '{"t":"paste","data":"!!!!"}')
+  eq(#content.pasted, 0, "malformed base64 dropped")
+  local win2, gui2 = drag_setup()
+  win2.active_tab_ref = win2.tab_list[1]
+  local other = win2.tab_list[2]
+  input.handle(gui2, sidebar.find(other), "vtabs", '{"t":"paste","data":"aGk="}')
+  eq(#sidebar.content_pane(other).pasted, 0, "background tab dropped")
 end)
 
 test("without raw only a lone printable key is forwarded", function()
@@ -1240,6 +1432,29 @@ test("close_others restores the kept tab once, not after every close", function(
   eq(#win.tab_list, 1)
   eq(win.active_tab_ref.id, kept)
   eq(switches, 4, "three closes plus one restore")
+end)
+
+test("the window title names the content pane while the sidebar holds focus", function()
+  local view_only = require "vtabs.view"
+  local sb = { pane_id = 7, title = "wez-vtabs:deadbeef" }
+  local shell = { pane_id = 8, title = "nvim" }
+  local tab = { tab_id = 3, tab_index = 1, tab_title = "" }
+  eq(view_only.window_title(tab, sb, { tab }, { sb, shell }), "nvim")
+  eq(view_only.window_title(tab, sb, { tab, tab }, { sb, shell }), "[2/2] nvim")
+  eq(view_only.window_title(tab, shell, { tab }, { sb, shell }), nil, "wezterm's default is left alone")
+  eq(view_only.window_title(tab, sb, { tab }, { sb }), nil, "no content pane, no opinion")
+  eq(view_only.window_title(nil, nil, nil, nil), nil)
+end)
+
+test("an unreachable contrast gate stops at the target colour instead of mixing past it", function()
+  for _, p in ipairs { palette("#2b2b2b", "#4a4a4a"), palette("#ffffff", "#cccccc") } do
+    local t = theme.resolve({}, p)
+    assert(theme.contrast(t.fg, t.bg) < 3.0, "the fixture ceiling is below the dim gate")
+    eq(rgb(t.dim), rgb(t.fg), "dim lands on fg, never past it")
+  end
+  local reachable = theme.resolve({}, palette("#002b36", "#839496"))
+  assert(theme.contrast(reachable.dim, reachable.bg) >= 3.0, "a reachable gate is still met")
+  assert(rgb(reachable.dim) ~= rgb(reachable.fg), "and dim is still dimmer than fg")
 end)
 
 os.remove(state.file)
