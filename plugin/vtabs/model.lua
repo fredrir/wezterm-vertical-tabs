@@ -9,7 +9,9 @@ local M = {}
 local function title_for(tab, pane, cfg)
   if cfg.title then
     local ok, custom = pcall(cfg.title, tab, pane)
-    if ok and custom and custom ~= "" then
+    if not ok then
+      util.warn_once("hook-title", "title hook failed: %s", tostring(custom))
+    elseif custom and custom ~= "" then
       return custom
     end
   end
@@ -17,23 +19,28 @@ local function title_for(tab, pane, cfg)
   if title ~= "" then
     return title
   end
-  local ok, pane_title = pcall(function()
+  local pane_title = util.try(function()
     return pane:get_title()
   end)
-  if ok and pane_title and pane_title ~= "" then
+  if pane_title and pane_title ~= "" then
     return pane_title
   end
   return "tab " .. tostring(tab:tab_id())
 end
 
-local function has_unseen(pane)
-  local ok, unseen = pcall(function()
-    return pane:has_unseen_output()
-  end)
-  return ok and unseen == true
+local function included(cfg, tab, mux_win)
+  if not cfg.hooks.filter then
+    return true
+  end
+  local ok, keep = pcall(cfg.hooks.filter, tab, mux_win)
+  if not ok then
+    util.warn_once("hook-filter", "filter hook failed: %s", tostring(keep))
+    return true
+  end
+  return keep ~= false
 end
 
----Builds the ordered list of sidebar items for a window.
+---Builds the list of visible sidebar items for a window, in physical order.
 function M.build(gui_window)
   local cfg = config.get()
   local mux_win = gui_window:mux_window()
@@ -41,12 +48,7 @@ function M.build(gui_window)
   local items = {}
   for _, info in ipairs(mux_win:tabs_with_info()) do
     local tab = info.tab
-    local include = true
-    if cfg.hooks.filter then
-      local ok, keep = pcall(cfg.hooks.filter, tab, mux_win)
-      include = not ok or keep ~= false
-    end
-    local pane = include and sidebar.content_pane(tab) or nil
+    local pane = included(cfg, tab, mux_win) and sidebar.content_pane(tab) or nil
     if pane then
       local tab_id = tab:tab_id()
       items[#items + 1] = {
@@ -55,9 +57,11 @@ function M.build(gui_window)
         is_active = info.is_active,
         is_pinned = state.is_pinned(tab_id),
         is_private = private,
-        title = title_for(tab, pane, cfg),
-        icon = cfg.icons and icons.for_pane(pane, cfg.icon_map) or "",
-        has_unseen = has_unseen(pane),
+        title = util.sanitize(title_for(tab, pane, cfg)),
+        icon = cfg.icons and icons.for_pane(pane, cfg.glyphs) or "",
+        has_unseen = util.try(function()
+          return pane:has_unseen_output()
+        end) == true,
       }
     end
   end
@@ -66,14 +70,9 @@ end
 
 ---Rendered order: pinned first, then the rest, both in physical order.
 function M.ordered(items)
-  local pinned, rest = {}, {}
-  for _, item in ipairs(items) do
-    if item.is_pinned then
-      pinned[#pinned + 1] = item
-    else
-      rest[#rest + 1] = item
-    end
-  end
+  local pinned, rest = util.partition(items, function(item)
+    return item.is_pinned
+  end)
   for _, item in ipairs(rest) do
     pinned[#pinned + 1] = item
   end
@@ -89,6 +88,12 @@ function M.find(items, tab_id)
   return nil
 end
 
-M.util = util
+function M.ids(items)
+  local ids = {}
+  for i, item in ipairs(items) do
+    ids[i] = item.tab_id
+  end
+  return ids
+end
 
 return M

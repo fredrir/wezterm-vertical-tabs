@@ -6,91 +6,56 @@ local model = require "vtabs.model"
 local view = require "vtabs.view"
 local actions = require "vtabs.actions"
 local menu = require "vtabs.menu"
+local hit = require "vtabs.hit"
 local util = require "vtabs.util"
 
 local M = {}
 
+local DRAG_TIMEOUT_MS = 3000
+local DRAG_START_ROWS = 1
+local DRAG_START_COLS = 2
+local TEAR_OFF_TRAVEL = 3
+
 local session = state.session
-
-local function hit_at(pane, y)
-  local hits = session.hits[pane:pane_id()]
-  return hits and hits[y] or { kind = "space" }
-end
-
-local function in_close(hit, x)
-  return hit.close ~= nil and x >= hit.close.from and x <= hit.close.to
-end
-
-local function is_double_click(wid, key, now, cfg)
-  local last = session.last_click[wid]
-  session.last_click[wid] = { key = key, at = now }
-  return last ~= nil and last.key == key and now - last.at <= cfg.double_click_ms
-end
 
 local function blur(gui_window)
   actions.blur_sidebar(gui_window)
 end
 
-local function outside_sidebar(x, cols, cfg)
-  if not cfg.tear_off then
-    return false
-  end
-  if cfg.position == "left" then
-    return cfg.tear_off == "edge" and x >= cols or x > cols
-  end
-  return cfg.tear_off == "edge" and x <= 1 or x < 1
-end
-
-local function drag_target(pane, y, cfg)
-  local hit = hit_at(pane, y)
-  if hit.kind == "tab" then
-    return hit.slot
-  end
-  local dims = session.dims[pane:pane_id()] or { rows = y }
-  local last_slot = 0
-  for row = 1, dims.rows do
-    local h = hit_at(pane, row)
-    if h.kind == "tab" then
-      last_slot = math.max(last_slot, h.slot)
-      if row > y then
-        return h.slot
-      end
-    end
-  end
-  return y < cfg.padding.top + 1 and 1 or last_slot + 1
-end
-
 local function on_down(gui_window, pane, ev, cfg)
   local wid = gui_window:window_id()
-  local hit = hit_at(pane, ev.y)
+  local h = hit.at(session.hits[pane:pane_id()], ev.y)
   local now = util.now_ms()
-  if cfg.debug then
-    util.log("down hit=%s tab=%s slot=%s", hit.kind, tostring(hit.tab_id), tostring(hit.slot))
-  end
   session.hover[wid] = { x = ev.x, y = ev.y, at = now }
   session.drag[wid] = nil
   state.set_focus(wid, false)
+  if cfg.debug then
+    util.log("down hit=%s tab=%s slot=%s", h.kind, tostring(h.tab_id), tostring(h.slot))
+  end
+  local target = h.kind == "tab" and ("tab:" .. h.tab_id) or h.kind
+  local double, last = hit.double_click(session.last_click[wid], target, now, cfg.double_click_ms)
+  session.last_click[wid] = last
 
   if ev.b == "left" then
-    if hit.kind == "tab" then
-      if in_close(hit, ev.x) then
-        actions.close_tab(gui_window, hit.tab_id)
+    if h.kind == "tab" then
+      if hit.in_close(h, ev.x) then
+        actions.close_tab(gui_window, h.tab_id)
       else
-        actions.activate_tab(gui_window, hit.tab_id)
-        session.drag[wid] = { tab_id = hit.tab_id, origin_x = ev.x, origin_y = ev.y, active = false, at = now }
+        actions.activate_tab(gui_window, h.tab_id)
+        session.drag[wid] = { tab_id = h.tab_id, origin_x = ev.x, origin_y = ev.y, active = false, at = now }
       end
-    elseif hit.kind == "new_tab" then
+    elseif h.kind == "new_tab" then
       actions.new_tab(gui_window)
-    elseif hit.kind == "space" and is_double_click(wid, "space", now, cfg) then
+    elseif h.kind == "footer" and h.entry.on_click then
+      pcall(h.entry.on_click, gui_window, h.entry)
+    elseif h.kind == "space" and double then
       actions.new_tab(gui_window)
     end
-  elseif ev.b == "middle" and hit.kind == "tab" then
-    actions.close_tab(gui_window, hit.tab_id)
-  elseif ev.b == "right" then
-    if hit.kind == "tab" then
-      menu.open(gui_window, hit.tab_id)
-      return
-    end
+  elseif ev.b == "middle" and h.kind == "tab" then
+    actions.close_tab(gui_window, h.tab_id)
+  elseif ev.b == "right" and h.kind == "tab" then
+    menu.open(gui_window, h.tab_id)
+    return
   end
   blur(gui_window)
 end
@@ -103,13 +68,14 @@ local function on_drag(gui_window, pane, ev, cfg)
   end
   drag.at = util.now_ms()
   local dx = math.abs(ev.x - drag.origin_x)
-  if not drag.active and (math.abs(ev.y - drag.origin_y) >= 1 or dx >= 2) then
+  if not drag.active and (math.abs(ev.y - drag.origin_y) >= DRAG_START_ROWS or dx >= DRAG_START_COLS) then
     drag.active = true
   end
   if drag.active then
-    local dims = session.dims[pane:pane_id()] or { cols = cfg.width }
-    drag.over_index = drag_target(pane, ev.y, cfg)
-    drag.outside = dx >= 3 and outside_sidebar(ev.x, dims.cols, cfg)
+    local pid = pane:pane_id()
+    local dims = session.dims[pid] or { cols = cfg.width, rows = ev.y }
+    drag.over_index = hit.drop_slot(session.hits[pid], ev.y, dims.rows, cfg.padding.top)
+    drag.outside = cfg.tear_off and dx >= TEAR_OFF_TRAVEL and hit.on_inner_edge(ev.x, dims.cols, cfg.position)
   end
   session.hover[wid] = { x = ev.x, y = ev.y, at = drag.at }
 end
@@ -122,9 +88,11 @@ local function on_up(gui_window, pane, ev, cfg)
     return
   end
   local dims = session.dims[pane:pane_id()] or { cols = cfg.width }
-  local travelled = math.abs(ev.x - drag.origin_x) >= 3
-  if drag.outside or (travelled and outside_sidebar(ev.x, dims.cols, cfg)) then
-    actions.tear_off(gui_window, drag.tab_id)
+  local travelled = math.abs(ev.x - drag.origin_x) >= TEAR_OFF_TRAVEL
+  if drag.outside or (cfg.tear_off and travelled and hit.on_inner_edge(ev.x, dims.cols, cfg.position)) then
+    if actions.tear_off(gui_window, drag.tab_id) then
+      return
+    end
   elseif drag.over_index then
     actions.move_tab_to_slot(gui_window, drag.tab_id, drag.over_index)
   end
@@ -138,7 +106,6 @@ local function on_wheel(gui_window, ev, cfg)
     return
   end
   session.scroll[wid] = (session.scroll[wid] or 0) + ev.dy
-  session.user_scrolled = session.user_scrolled or {}
   session.user_scrolled[wid] = true
 end
 
@@ -159,11 +126,48 @@ function M.mouse(gui_window, pane, ev)
   view.sync(gui_window)
 end
 
-local function focused_tab_id(gui_window, index)
-  local items = model.ordered(model.build(gui_window))
-  local item = items[index]
-  return item and item.tab_id or nil, #items
+local MOVE = { down = 1, j = 1, tab = 1, up = -1, k = -1 }
+
+local function with_focused(fn)
+  return function(gui_window, items, index)
+    local item = items[index]
+    if item then
+      fn(gui_window, item.tab_id, index)
+    end
+  end
 end
+
+local KEYS = {
+  enter = with_focused(function(gui_window, id)
+    actions.activate_tab(gui_window, id)
+    blur(gui_window)
+  end),
+  x = with_focused(function(gui_window, id)
+    actions.close_tab(gui_window, id)
+  end),
+  p = with_focused(function(gui_window, id)
+    actions.toggle_pin(gui_window, id)
+  end),
+  r = with_focused(function(gui_window, id)
+    actions.rename_tab(gui_window, id)
+  end),
+  m = with_focused(function(gui_window, id)
+    menu.open(gui_window, id)
+  end),
+  J = with_focused(function(gui_window, id, index)
+    actions.move_tab_to_slot(gui_window, id, index + 1)
+    session.focus_index[gui_window:window_id()] = index + 1
+  end),
+  K = with_focused(function(gui_window, id, index)
+    actions.move_tab_to_slot(gui_window, id, index - 1)
+    session.focus_index[gui_window:window_id()] = math.max(index - 1, 1)
+  end),
+  n = function(gui_window)
+    actions.new_tab(gui_window)
+    blur(gui_window)
+  end,
+}
+KEYS.space, KEYS.d, KEYS.delete = KEYS.enter, KEYS.x, KEYS.x
 
 function M.key(gui_window, ev)
   local wid = gui_window:window_id()
@@ -171,71 +175,39 @@ function M.key(gui_window, ev)
     blur(gui_window)
     return
   end
-  session.focus_index = session.focus_index or {}
-  local index = session.focus_index[wid] or 1
+  local items = model.ordered(model.build(gui_window))
+  local count = math.max(#items, 1)
+  local index = math.max(1, math.min(session.focus_index[wid] or 1, count))
   local key = ev.key
+  local shift = util.contains(ev.mods, "shift")
   local ctrl = util.contains(ev.mods, "ctrl")
-  local _, count = focused_tab_id(gui_window, index)
 
   if key == "escape" or key == "q" or (ctrl and key == "c") then
     blur(gui_window)
-  elseif key == "down" or key == "j" or key == "tab" then
-    session.focus_index[wid] = math.min(index + 1, math.max(count, 1))
-  elseif key == "up" or key == "k" then
+  elseif key == "tab" and shift then
     session.focus_index[wid] = math.max(index - 1, 1)
+  elseif MOVE[key] then
+    session.focus_index[wid] = math.max(1, math.min(index + MOVE[key], count))
   elseif key == "home" or key == "g" then
     session.focus_index[wid] = 1
   elseif key == "end" or key == "G" then
-    session.focus_index[wid] = math.max(count, 1)
-  elseif key == "enter" or key == "space" then
-    local id = focused_tab_id(gui_window, index)
-    if id then
-      actions.activate_tab(gui_window, id)
+    session.focus_index[wid] = count
+  elseif key:match "^[1-9]$" then
+    local item = items[tonumber(key)]
+    if item then
+      actions.activate_tab(gui_window, item.tab_id)
+      blur(gui_window)
     end
-    blur(gui_window)
-  elseif key == "x" or key == "d" or key == "delete" then
-    local id = focused_tab_id(gui_window, index)
-    if id then
-      actions.close_tab(gui_window, id)
-    end
-  elseif key == "p" then
-    local id = focused_tab_id(gui_window, index)
-    if id then
-      actions.toggle_pin(gui_window, id)
-    end
-  elseif key == "n" then
-    actions.new_tab(gui_window)
-    blur(gui_window)
-  elseif key == "r" then
-    local id = focused_tab_id(gui_window, index)
-    if id then
-      actions.rename_tab(gui_window, id)
-    end
-  elseif key == "m" then
-    local id = focused_tab_id(gui_window, index)
-    if id then
-      menu.open(gui_window, id)
-    end
-  elseif key == "J" then
-    local id = focused_tab_id(gui_window, index)
-    if id then
-      actions.move_tab_to_slot(gui_window, id, index + 1)
-      session.focus_index[wid] = math.min(index + 1, count)
-    end
-  elseif key == "K" then
-    local id = focused_tab_id(gui_window, index)
-    if id then
-      actions.move_tab_to_slot(gui_window, id, index - 1)
-      session.focus_index[wid] = math.max(index - 1, 1)
-    end
+  elseif KEYS[key] then
+    KEYS[key](gui_window, items, index)
   end
   view.sync(gui_window)
 end
 
----Entry point for the `user-var-changed` event.
+---Entry point for the `user-var-changed` event; only registered sidebar panes are trusted.
 function M.handle(gui_window, pane, name, value)
   local cfg = config.get()
-  if name ~= cfg.backend.uservar then
+  if name ~= cfg.backend.uservar or not sidebar.is_sidebar(pane) then
     return
   end
   local ok, ev = pcall(wezterm.json_parse, value)
@@ -245,14 +217,16 @@ function M.handle(gui_window, pane, name, value)
   if not ok or type(ev) ~= "table" then
     return
   end
-  if ev.t == "ready" or ev.t == "resize" then
+  session.seen[pane:pane_id()] = util.now_ms()
+  if cfg.debug then
+    util.log("handle: %s from pane %d", tostring(ev.t), pane:pane_id())
+  end
+  if ev.t == "ready" then
+    sidebar.auth(pane)
     sidebar.ensure(gui_window)
     view.sync(gui_window, { force = true })
-  elseif ev.t == "focus" then
-    if not ev["in"] then
-      session.hover[gui_window:window_id()] = nil
-      view.sync(gui_window)
-    end
+  elseif ev.t == "resize" then
+    view.sync(gui_window, { force = true })
   elseif ev.t == "mouse" then
     M.mouse(gui_window, pane, ev)
   elseif ev.t == "key" then
@@ -270,17 +244,14 @@ function M.tick(gui_window)
     session.hover[wid] = nil
   end
   local drag = session.drag[wid]
-  if drag and now - drag.at > 3000 then
+  if drag and now - drag.at > DRAG_TIMEOUT_MS then
     session.drag[wid] = nil
   end
-  local active = gui_window:mux_window():active_tab()
+  local active = util.active_tab(gui_window)
   local active_id = active and active:tab_id() or nil
-  session.last_active = session.last_active or {}
   if session.last_active[wid] ~= active_id then
     session.last_active[wid] = active_id
-    if session.user_scrolled then
-      session.user_scrolled[wid] = nil
-    end
+    session.user_scrolled[wid] = nil
   end
 end
 

@@ -26,4 +26,11 @@ vtabs.apply_to_config(config, {
   icons = false,
 })
 
+-- Test-only hook: a pane printing SetUserVar=vtabs_test=<base64 name> triggers a plugin action.
+wezterm.on("user-var-changed", function(window, _, name, value)
+  if name == "vtabs_test" and value == "toggle" then
+    vtabs.toggle_sidebar(window)
+  end
+end)
+
 return config

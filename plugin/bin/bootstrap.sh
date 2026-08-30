@@ -1,11 +1,13 @@
 #!/bin/sh
-# Locates the wez-vtabs backend: explicit path, cached download, GitHub release, or cargo build.
+# Locates the wez-vtabs backend: explicit path, cached download, verified GitHub release, or cargo build.
 set -u
 
 name="wez-vtabs"
 data="${XDG_DATA_HOME:-$HOME/.local/share}/wez-vtabs"
 target="${VTABS_TARGET:-}"
 version="${VTABS_VERSION:-dev}"
+PATH="$HOME/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
+export PATH
 
 if [ -n "${VTABS_BIN:-}" ] && [ -x "$VTABS_BIN" ]; then
   exec "$VTABS_BIN"
@@ -21,17 +23,43 @@ if [ -z "$target" ]; then
   esac
 fi
 
+safe() { printf '%s' "$1" | grep -Eq '^[A-Za-z0-9._-]+$'; }
+if ! safe "$target" || ! safe "$version"; then
+  printf 'invalid VTABS_TARGET or VTABS_VERSION\n'
+  exit 1
+fi
+
 bin="$data/bin/$name-$target-$version"
 [ -x "$bin" ] && exec "$bin"
 mkdir -p "$data/bin"
 
-if [ "$version" != dev ] && [ -n "${VTABS_REPO:-}" ] && command -v curl >/dev/null 2>&1; then
-  url="https://github.com/$VTABS_REPO/releases/download/v$version/$name-$target"
-  printf 'downloading %s\n' "$url"
-  if curl -fsSL -o "$bin.tmp" "$url"; then
-    chmod +x "$bin.tmp" && mv "$bin.tmp" "$bin" && exec "$bin"
+sha256() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$1" | cut -d' ' -f1
+  else
+    shasum -a 256 "$1" | cut -d' ' -f1
   fi
-  rm -f "$bin.tmp"
+}
+
+download() {
+  base="https://github.com/$VTABS_REPO/releases/download/v$version"
+  tmp=$(mktemp "$data/bin/.$name.XXXXXX") || return 1
+  sums="$tmp.sums"
+  printf 'downloading %s\n' "$base/$name-$target"
+  if curl -fsSL -o "$tmp" "$base/$name-$target" && curl -fsSL -o "$sums" "$base/SHA256SUMS"; then
+    expected=$(grep " $name-$target\$" "$sums" | cut -d' ' -f1)
+    actual=$(sha256 "$tmp")
+    if [ -n "$expected" ] && [ "$expected" = "$actual" ]; then
+      chmod +x "$tmp" && mv "$tmp" "$bin" && rm -f "$sums" && return 0
+    fi
+    printf 'checksum mismatch\n'
+  fi
+  rm -f "$tmp" "$sums"
+  return 1
+}
+
+if [ "$version" != dev ] && [ -n "${VTABS_REPO:-}" ] && command -v curl >/dev/null 2>&1; then
+  download && exec "$bin"
   printf 'download failed\n'
 fi
 
@@ -43,5 +71,6 @@ if [ "${VTABS_BUILD:-1}" = 1 ] && [ -f "${VTABS_SRC:-}/Cargo.toml" ] && command 
   printf 'build failed\n'
 fi
 
-printf 'backend not found\ninstall cargo or set backend.path\n'
-while :; do sleep 3600; done
+printf 'backend not found\ninstall cargo or set backend.path, then press Enter to retry\n'
+read -r _
+exec "$0"

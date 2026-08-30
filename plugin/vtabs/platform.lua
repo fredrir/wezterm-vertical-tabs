@@ -6,10 +6,9 @@ local M = {
   triple = triple,
   is_mac = triple:find "apple%-darwin" ~= nil,
   is_windows = triple:find "windows" ~= nil,
-  is_linux = triple:find "linux" ~= nil,
 }
 
-M.SUPER = M.is_mac and "CMD" or "CTRL"
-M.SUPER_SHIFT = M.SUPER .. "|SHIFT"
+M.SUPER = M.is_mac and "CMD" or "CTRL|SHIFT"
+M.SUPER2 = M.is_mac and "CMD|SHIFT" or "CTRL|SHIFT|ALT"
 
 return M

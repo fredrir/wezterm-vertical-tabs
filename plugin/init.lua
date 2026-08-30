@@ -37,20 +37,27 @@ backend.root = root
 
 local M = {}
 
+M.version = require "vtabs.version"
 M.action = actions.action
-M.actions = actions
-M.is_sidebar_pane = sidebar.is_sidebar
-M.toggle = sidebar.toggle
+M.toggle_sidebar = actions.toggle_sidebar
+M.show_sidebar = actions.show_sidebar
 M.sync = view.sync
+M.invalidate_theme = view.invalidate_theme
+M.is_sidebar_pane = sidebar.is_sidebar
 
 function M.is_private_window(window)
   return state.is_private(window:window_id())
 end
 
 local function alive(window)
-  return type(window) ~= "userdata" or pcall(function()
+  return pcall(function()
     return window:mux_window()
   end)
+end
+
+-- WezTerm reports closed windows with this text; there is no structured error to match.
+local function window_gone(err)
+  return tostring(err):find("not found in mux", 1, true) ~= nil
 end
 
 local function guarded(name, fn)
@@ -59,7 +66,7 @@ local function guarded(name, fn)
       return
     end
     local ok, err = pcall(fn, window, ...)
-    if not ok and not tostring(err):find("not found in mux", 1, true) then
+    if not ok and not window_gone(err) then
       util.warn("%s: %s", name, tostring(err))
     end
   end
@@ -67,19 +74,20 @@ end
 
 local registered = false
 
-local function register_events()
+local function register_events(cfg)
   if registered then
     return
   end
   registered = true
 
   local last_poll = {}
+  local min_gap = math.max(50, math.floor(cfg.poll_ms / 4))
   wezterm.on(
     "update-status",
     guarded("update-status", function(window)
       local wid = window:window_id()
       local now = util.now_ms()
-      if last_poll[wid] and now - last_poll[wid] < 100 then
+      if last_poll[wid] and now - last_poll[wid] < min_gap then
         return
       end
       last_poll[wid] = now
@@ -118,18 +126,20 @@ local function register_events()
     end)
   )
 
-  wezterm.on(
-    "gui-attached",
-    guarded("gui-attached", function()
-      for _, mux_win in ipairs(wezterm.mux.all_windows()) do
-        local gui = mux_win:gui_window()
-        if gui then
+  wezterm.on("gui-attached", function()
+    for _, mux_win in ipairs(wezterm.mux.all_windows()) do
+      local gui = mux_win:gui_window()
+      if gui then
+        local ok, err = pcall(function()
           sidebar.ensure(gui)
           view.sync(gui, { force = true })
+        end)
+        if not ok and not window_gone(err) then
+          util.warn("gui-attached: %s", tostring(err))
         end
       end
-    end)
-  )
+    end
+  end)
 end
 
 ---@param config Config
@@ -143,10 +153,12 @@ function M.apply_to_config(config, opts)
   if cfg.skip_close_confirmation then
     config.skip_close_confirmation_for_processes_named = config.skip_close_confirmation_for_processes_named
       or { "bash", "sh", "zsh", "fish", "tmux", "nu", "cmd.exe", "pwsh.exe", "powershell.exe" }
-    table.insert(config.skip_close_confirmation_for_processes_named, "wez-vtabs")
+    if not util.contains(config.skip_close_confirmation_for_processes_named, "wez-vtabs") then
+      table.insert(config.skip_close_confirmation_for_processes_named, "wez-vtabs")
+    end
   end
   keys.apply(config, cfg)
-  register_events()
+  register_events(cfg)
   return config
 end
 

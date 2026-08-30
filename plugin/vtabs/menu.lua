@@ -3,17 +3,9 @@ local act = wezterm.action
 local state = require "vtabs.state"
 local sidebar = require "vtabs.sidebar"
 local actions = require "vtabs.actions"
+local util = require "vtabs.util"
 
 local M = {}
-
-local function tab_by_id(gui_window, tab_id)
-  for _, info in ipairs(gui_window:mux_window():tabs_with_info()) do
-    if info.tab:tab_id() == tab_id then
-      return info.tab
-    end
-  end
-  return nil
-end
 
 local handlers = {
   activate = actions.activate_tab,
@@ -27,12 +19,15 @@ local handlers = {
   end,
 }
 
+---Opens the tab menu as an overlay in the current content pane, without switching tabs.
 function M.open(gui_window, tab_id)
-  local tab = tab_by_id(gui_window, tab_id)
-  local content = tab and sidebar.content_pane(tab)
-  if not content then
+  local tab = actions.tab_by_id(gui_window, tab_id)
+  local current = util.active_tab(gui_window)
+  local content = current and sidebar.content_pane(current)
+  if not tab or not content then
     return
   end
+  local title = tab:get_title()
   local choices = {
     { id = "activate", label = "Switch to tab" },
     { id = "pin", label = state.is_pinned(tab_id) and "Unpin tab" or "Pin tab" },
@@ -45,7 +40,7 @@ function M.open(gui_window, tab_id)
   content:activate()
   gui_window:perform_action(
     act.InputSelector {
-      title = tab:get_title() ~= "" and tab:get_title() or "Tab",
+      title = title ~= "" and title or "Tab",
       choices = choices,
       fuzzy = false,
       action = wezterm.action_callback(function(window, _, id)

@@ -44,7 +44,7 @@ impl Event {
     }
 
     pub fn to_json(&self) -> String {
-        serde_json::to_string(self).unwrap_or_default()
+        serde_json::to_string(self).expect("event serializes")
     }
 }
 

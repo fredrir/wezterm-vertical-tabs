@@ -47,44 +47,50 @@ M.defaults = {
   private = glyph("md_incognito", "~"),
   close = glyph("cod_close", "x"),
   new_tab = glyph("cod_add", "+"),
-  unseen = glyph("md_circle_medium", "*"),
-  drag = glyph("md_drag_vertical", "="),
+  unseen = glyph("md_circle_medium", "•"),
+  focus = "›",
+  active = "▎",
+  scroll = "▐",
 }
 
+---Merges user overrides once; patterns are kept in a stable order.
+function M.resolve(icon_map)
+  local map = util.merge(M.defaults, icon_map or {})
+  local patterns = {}
+  for _, key in ipairs(util.sorted_keys(icon_map or {})) do
+    if type(key) == "string" and key:find "[%^%$%*%+%?%[]" then
+      patterns[#patterns + 1] = { pattern = key, icon = icon_map[key] }
+    end
+  end
+  map.patterns = patterns
+  return map
+end
+
 local function process_key(pane)
-  local ok, name = pcall(function()
+  local name = util.try(function()
     return pane:get_foreground_process_name()
   end)
-  if not ok or not name or name == "" then
+  if not name or name == "" then
     return nil
   end
   local base = util.basename(name)
-  if base then
-    base = base:gsub("^%-", "")
-  end
-  return base
+  return base and base:gsub("^%-", "") or nil
 end
 
----Picks an icon for a pane from its foreground process, with user overrides.
-function M.for_pane(pane, icon_map)
-  local map = util.merge(M.defaults, icon_map or {})
+---Picks an icon for a pane from its foreground process.
+function M.for_pane(pane, glyphs)
   local key = process_key(pane)
-  if key and map[key] then
-    return map[key]
-  end
   if key then
-    for pattern, icon in pairs(icon_map or {}) do
-      if type(pattern) == "string" and pattern:find "[%^%$%*%+%?%[]" and key:match(pattern) then
-        return icon
+    if glyphs[key] then
+      return glyphs[key]
+    end
+    for _, entry in ipairs(glyphs.patterns) do
+      if key:match(entry.pattern) then
+        return entry.icon
       end
     end
   end
-  return map.default
-end
-
-function M.get(name, icon_map)
-  local map = util.merge(M.defaults, icon_map or {})
-  return map[name] or ""
+  return glyphs.default
 end
 
 return M

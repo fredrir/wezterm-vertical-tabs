@@ -50,6 +50,9 @@ pub enum Button {
 
 impl Button {
     fn from_sgr(cb: u32) -> Self {
+        if cb & 128 != 0 {
+            return Button::None;
+        }
         match cb & 3 {
             0 => Button::Left,
             1 => Button::Middle,
@@ -81,12 +84,23 @@ pub enum Input {
 #[derive(Default)]
 pub struct Parser {
     buf: Vec<u8>,
+    stalled_flushes: u32,
 }
+
+/// Flushes arrive every ~30ms while input is pending; give up on a stalled prefix after this many.
+const STALL_LIMIT: u32 = 10;
 
 enum Step {
     Token(Input, usize),
     Skip(usize),
     Incomplete,
+}
+
+/// `timed_out`: no bytes for ~30ms (bare ESC → escape). `stalled`: a prefix has waited ~300ms.
+#[derive(Clone, Copy)]
+struct Wait {
+    timed_out: bool,
+    stalled: bool,
 }
 
 impl Parser {
@@ -96,23 +110,33 @@ impl Parser {
 
     pub fn feed(&mut self, bytes: &[u8]) -> Vec<Input> {
         self.buf.extend_from_slice(bytes);
-        self.drain(false)
+        if self.buf.len() > MAX_LINE {
+            self.buf.clear();
+        }
+        self.stalled_flushes = 0;
+        self.drain(false, false)
     }
 
-    /// Called after a quiet period: a dangling ESC becomes the escape key.
+    /// Called after a quiet period: a bare ESC becomes the escape key; a stalled prefix is abandoned.
     pub fn flush(&mut self) -> Vec<Input> {
-        self.drain(true)
+        self.stalled_flushes = self.stalled_flushes.saturating_add(1);
+        let stalled = self.stalled_flushes >= STALL_LIMIT;
+        if stalled {
+            self.stalled_flushes = 0;
+        }
+        self.drain(true, stalled)
     }
 
     pub fn has_pending(&self) -> bool {
         !self.buf.is_empty()
     }
 
-    fn drain(&mut self, timed_out: bool) -> Vec<Input> {
+    fn drain(&mut self, timed_out: bool, stalled: bool) -> Vec<Input> {
         let mut out = Vec::new();
         let mut pos = 0;
         while pos < self.buf.len() {
-            match parse_one(&self.buf[pos..], timed_out) {
+            let wait = Wait { timed_out, stalled };
+            match parse_one(&self.buf[pos..], wait) {
                 Step::Token(input, n) => {
                     push_coalesced(&mut out, input);
                     pos += n;
@@ -139,10 +163,10 @@ fn push_coalesced(out: &mut Vec<Input>, input: Input) {
     out.push(input);
 }
 
-fn parse_one(bytes: &[u8], timed_out: bool) -> Step {
+fn parse_one(bytes: &[u8], wait: Wait) -> Step {
     match bytes[0] {
-        b'{' => parse_command_line(bytes),
-        ESC => parse_escape(bytes, timed_out),
+        b'{' => parse_command_line(bytes, wait),
+        ESC => parse_escape(bytes, wait),
         _ => parse_plain(bytes),
     }
 }
@@ -174,10 +198,10 @@ fn utf8_len(lead: u8) -> usize {
     }
 }
 
-fn parse_command_line(bytes: &[u8]) -> Step {
+fn parse_command_line(bytes: &[u8], wait: Wait) -> Step {
     let Some(end) = bytes.iter().position(|&b| b == b'\n') else {
-        return if bytes.len() > MAX_LINE {
-            Step::Skip(bytes.len())
+        return if bytes.len() > MAX_LINE || wait.stalled {
+            Step::Skip(1)
         } else {
             Step::Incomplete
         };
@@ -189,17 +213,17 @@ fn parse_command_line(bytes: &[u8]) -> Step {
     }
 }
 
-fn parse_escape(bytes: &[u8], timed_out: bool) -> Step {
+fn parse_escape(bytes: &[u8], wait: Wait) -> Step {
     match bytes.get(1) {
         None => {
-            if timed_out {
+            if wait.timed_out {
                 Step::Token(key("escape", Mods::default()), 1)
             } else {
                 Step::Incomplete
             }
         }
-        Some(b'[') => parse_csi(bytes, timed_out),
-        Some(b'O') => parse_ss3(bytes, timed_out),
+        Some(b'[') => parse_csi(bytes, wait),
+        Some(b'O') => parse_ss3(bytes, wait),
         Some(&ESC | &b'{') => Step::Token(key("escape", Mods::default()), 1),
         Some(_) => match parse_plain(&bytes[1..]) {
             Step::Token(Input::Key { name, mods }, n) => {
@@ -212,9 +236,9 @@ fn parse_escape(bytes: &[u8], timed_out: bool) -> Step {
     }
 }
 
-fn parse_ss3(bytes: &[u8], timed_out: bool) -> Step {
+fn parse_ss3(bytes: &[u8], wait: Wait) -> Step {
     let Some(&final_byte) = bytes.get(2) else {
-        return escape_or_wait(timed_out);
+        return escape_or_wait(wait);
     };
     let name = match final_byte {
         b'A' => "up",
@@ -228,18 +252,32 @@ fn parse_ss3(bytes: &[u8], timed_out: bool) -> Step {
     Step::Token(key(name, Mods::default()), 3)
 }
 
-fn parse_csi(bytes: &[u8], timed_out: bool) -> Step {
-    let Some(rel) = bytes[2..].iter().position(|b| (0x40..=0x7e).contains(b)) else {
-        return escape_or_wait(timed_out);
+/// Scans CSI parameter/intermediate bytes for the final byte; `{`/`}` and controls abort the sequence.
+fn csi_end(bytes: &[u8]) -> Result<Option<usize>, ()> {
+    for (i, &b) in bytes.iter().enumerate().skip(2) {
+        match b {
+            0x20..=0x3f => continue,
+            b'{' | b'}' => return Err(()),
+            0x40..=0x7e => return Ok(Some(i)),
+            _ => return Err(()),
+        }
+    }
+    Ok(None)
+}
+
+fn parse_csi(bytes: &[u8], wait: Wait) -> Step {
+    let end = match csi_end(bytes) {
+        Ok(Some(end)) => end,
+        Ok(None) => return escape_or_wait(wait),
+        Err(()) => return Step::Token(key("escape", Mods::default()), 1),
     };
-    let end = 2 + rel;
     let final_byte = bytes[end];
     let body = &bytes[2..end];
     let consumed = end + 1;
     let token = match (body.first(), final_byte) {
         (Some(b'<'), b'M' | b'm') => sgr_mouse(&body[1..], final_byte == b'M'),
-        (_, b'I') => Some(Input::Focus(true)),
-        (_, b'O') => Some(Input::Focus(false)),
+        (None, b'I') => Some(Input::Focus(true)),
+        (None, b'O') => Some(Input::Focus(false)),
         (_, b'~') => tilde_key(body),
         (_, b'A' | b'B' | b'C' | b'D' | b'H' | b'F') => letter_key(body, final_byte),
         _ => None,
@@ -250,8 +288,9 @@ fn parse_csi(bytes: &[u8], timed_out: bool) -> Step {
     }
 }
 
-fn escape_or_wait(timed_out: bool) -> Step {
-    if timed_out {
+/// An `ESC [`/`ESC O` introducer promises more bytes, so only a long stall turns it into escape.
+fn escape_or_wait(wait: Wait) -> Step {
+    if wait.stalled {
         Step::Token(key("escape", Mods::default()), 1)
     } else {
         Step::Incomplete
@@ -275,6 +314,9 @@ fn sgr_mouse(body: &[u8], press: bool) -> Option<Input> {
     let (x, y) = (x as u16, y as u16);
     let mods = Mods::from_sgr(cb);
     let mouse = if cb & 64 != 0 {
+        if cb & 3 >= 2 {
+            return None;
+        }
         let dy = if cb & 1 == 0 { -1 } else { 1 };
         Mouse {
             kind: MouseKind::Wheel,
@@ -648,5 +690,104 @@ mod tests {
     #[test]
     fn unknown_csi_skipped() {
         assert_eq!(feed(b"\x1b[?1;2c\x1b[A"), vec![plain("up")]);
+    }
+
+    fn flush_until_stalled(p: &mut Parser) -> Vec<Input> {
+        let mut out = Vec::new();
+        for _ in 0..STALL_LIMIT {
+            out.extend(p.flush());
+        }
+        out
+    }
+
+    #[test]
+    fn brace_is_not_a_csi_terminator() {
+        let out = feed(b"\x1b[{\"t\":\"clear\"}\n");
+        assert_eq!(out[0], key("escape", Mods::default()));
+        assert_eq!(out[1], key("[", Mods::default()));
+        assert_eq!(out[2], Input::Command(Command::Clear));
+        assert_eq!(out.len(), 3);
+    }
+
+    #[test]
+    fn split_sgr_survives_a_short_timeout() {
+        let mut p = Parser::new();
+        assert!(p.feed(b"\x1b[<0;").is_empty());
+        assert!(p.flush().is_empty());
+        assert!(p.flush().is_empty());
+        let out = p.feed(b"3;2M");
+        assert_eq!(
+            out,
+            vec![mouse(
+                MouseKind::Press,
+                Button::Left,
+                3,
+                2,
+                0,
+                Mods::default()
+            )]
+        );
+    }
+
+    #[test]
+    fn stalled_csi_prefix_becomes_escape() {
+        let mut p = Parser::new();
+        assert!(p.feed(b"\x1b[").is_empty());
+        let out = flush_until_stalled(&mut p);
+        assert_eq!(
+            out,
+            vec![key("escape", Mods::default()), key("[", Mods::default())]
+        );
+        assert!(!p.has_pending());
+    }
+
+    #[test]
+    fn stray_brace_is_dropped_after_stall() {
+        let mut p = Parser::new();
+        assert!(p.feed(b"{\x1b[<0;3;2M").is_empty());
+        let out = flush_until_stalled(&mut p);
+        assert_eq!(
+            out,
+            vec![mouse(
+                MouseKind::Press,
+                Button::Left,
+                3,
+                2,
+                0,
+                Mods::default()
+            )]
+        );
+    }
+
+    #[test]
+    fn extra_buttons_are_none_not_left_or_middle() {
+        let out = feed(b"\x1b[<128;5;3M\x1b[<129;5;3M");
+        assert_eq!(
+            out,
+            vec![
+                mouse(MouseKind::Press, Button::None, 5, 3, 0, Mods::default()),
+                mouse(MouseKind::Press, Button::None, 5, 3, 0, Mods::default()),
+            ]
+        );
+    }
+
+    #[test]
+    fn horizontal_wheel_is_ignored() {
+        assert!(feed(b"\x1b[<66;5;3M\x1b[<67;5;3M").is_empty());
+    }
+
+    #[test]
+    fn focus_requires_empty_params() {
+        assert!(feed(b"\x1b[5I").is_empty());
+        assert_eq!(feed(b"\x1b[I"), vec![Input::Focus(true)]);
+    }
+
+    #[test]
+    fn oversized_line_is_dropped_without_key_flood() {
+        let mut p = Parser::new();
+        let mut big = vec![b'{'];
+        big.resize(MAX_LINE + 2, b'x');
+        assert!(p.feed(&big).is_empty());
+        assert!(!p.has_pending());
     }
 }

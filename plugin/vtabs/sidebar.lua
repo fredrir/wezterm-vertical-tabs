@@ -7,49 +7,68 @@ local util = require "vtabs.util"
 
 local M = {}
 
-local function pane_tab_id(pane)
-  local ok, tab = pcall(function()
+local ATTACH_RETRY_MS = 5000
+local PING_AFTER_MS = 8000
+local DEAD_AFTER_MS = 20000
+
+local session = state.session
+
+local function tab_id_of(pane)
+  local tab = util.try(function()
     return pane:tab()
   end)
-  if ok and tab then
-    return tab:tab_id()
-  end
-  return nil
+  return tab and tab:tab_id() or nil
+end
+
+local function user_vars(pane)
+  return util.try(function()
+    return pane:get_user_vars()
+  end) or {}
 end
 
 ---GUI-managed panes (connection UI, debug overlay) cannot host splits.
 function M.is_overlay(pane)
-  local ok, domain = pcall(function()
+  local domain = util.try(function()
     return pane:get_domain_name()
   end)
-  return not ok or type(domain) ~= "string" or domain:find "TermWiz" ~= nil
+  return type(domain) ~= "string" or domain:find "TermWiz" ~= nil
 end
 
+---Only panes the plugin registered count; user vars alone are never trusted.
 function M.is_sidebar(pane)
   if not pane then
     return false
   end
-  local ok, vars = pcall(function()
-    return pane:get_user_vars()
-  end)
-  if ok and vars and vars.vtabs_role == "sidebar" then
+  local tab_id = tab_id_of(pane)
+  return tab_id ~= nil and state.sidebar_pane_id(tab_id) == pane:pane_id()
+end
+
+---True once the backend in `pane` has echoed the token it was given over stdin.
+function M.is_ready(pane)
+  local pid = pane:pane_id()
+  if session.ready[pid] then
     return true
   end
-  local tab_id = pane_tab_id(pane)
-  return tab_id ~= nil and state.sidebar_pane_id(tab_id) == pane:pane_id()
+  local token = state.token_for(pid)
+  if token and user_vars(pane).vtabs_token == token then
+    session.ready[pid] = true
+    session.seen[pid] = util.now_ms()
+    return true
+  end
+  return false
 end
 
 ---Splits a tab's panes into { content = Pane[], sidebar = Pane|nil }.
 function M.classify(tab)
-  local content, sidebar = {}, nil
+  local content, sb = {}, nil
   for _, p in ipairs(tab:panes()) do
     if M.is_sidebar(p) then
-      sidebar = sidebar or p
+      sb = sb or p
     else
       content[#content + 1] = p
     end
   end
-  return content, sidebar
+  return content, sb
 end
 
 function M.find(tab)
@@ -63,7 +82,7 @@ function M.content_pane(tab)
     return active
   end
   local content = M.classify(tab)
-  local remembered = state.session.content_pane[tab:tab_id()]
+  local remembered = session.content_pane[tab:tab_id()]
   for _, p in ipairs(content) do
     if p:pane_id() == remembered then
       return p
@@ -73,46 +92,75 @@ function M.content_pane(tab)
 end
 
 local function cwd_path(pane)
-  local ok, cwd = pcall(function()
+  local cwd = util.try(function()
     return pane:get_current_working_dir()
   end)
-  if not ok or not cwd then
+  if not cwd then
     return nil
   end
   if type(cwd) == "string" then
-    return cwd:gsub("^file://[^/]*", "")
+    return (cwd:gsub("^file://[^/]*", ""))
   end
   return cwd.file_path
 end
 
 function M.tab_meta(tab, pane)
-  local ok, domain = pcall(function()
-    return pane:get_domain_name()
-  end)
   local title = tab:get_title()
   return {
     cwd = cwd_path(pane),
-    domain = ok and domain or nil,
+    domain = util.try(function()
+      return pane:get_domain_name()
+    end),
     title = title ~= "" and title or nil,
     pinned = state.is_pinned(tab:tab_id()),
   }
 end
 
-local attaching = {}
+function M.send(pane, message)
+  return pcall(function()
+    pane:send_text(wezterm.json_encode(message) .. "\n")
+  end)
+end
+
+function M.auth(pane)
+  local token = state.token_for(pane:pane_id())
+  if token then
+    M.send(pane, { t = "auth", token = token })
+  end
+end
+
+local function is_local(pane)
+  local domain = util.try(function()
+    return pane:get_domain_name()
+  end)
+  return domain == "local"
+end
+
+---Mux-domain splits can grow the tab past the window; re-sending the window size makes the mux refit it.
+local function fit_to_window(tab)
+  pcall(function()
+    local gui = tab:window():gui_window()
+    if gui then
+      local dims = gui:get_dimensions()
+      gui:set_inner_size(dims.pixel_width, dims.pixel_height)
+    end
+  end)
+end
 
 ---Splits off the sidebar pane; guarded because splits are async on mux domains.
 function M.attach(tab)
   local cfg = config.get()
   local tab_id = tab:tab_id()
   local now = util.now_ms()
-  if attaching[tab_id] and now - attaching[tab_id] < 5000 then
+  local pending = session.attaching[tab_id]
+  if pending and now - pending < ATTACH_RETRY_MS then
     return nil
   end
   local base = M.content_pane(tab)
   if not base or M.is_overlay(base) then
     return nil
   end
-  attaching[tab_id] = now
+  session.attaching[tab_id] = now
   local domain = cfg.domain == "CurrentPaneDomain" and "CurrentPaneDomain" or { DomainName = cfg.domain }
   local ok, sb = pcall(function()
     return base:split {
@@ -128,26 +176,40 @@ function M.attach(tab)
     util.warn("sidebar split failed: %s", tostring(sb):match "^[^\n]*")
     return nil
   end
-  attaching[tab_id] = nil
-  state.set_sidebar(tab_id, sb:pane_id())
+  session.attaching[tab_id] = nil
+  local token = util.random_token()
+  state.set_sidebar(tab_id, sb:pane_id(), token)
+  session.seen[sb:pane_id()] = now
+  M.auth(sb)
   base:activate()
-  M.fit_to_window(tab)
+  if not is_local(base) then
+    fit_to_window(tab)
+  end
   return sb
 end
 
----Mux-domain splits can grow the tab past the window; re-sending the window size makes the mux refit it.
-function M.fit_to_window(tab)
-  pcall(function()
-    local gui = tab:window():gui_window()
-    if gui then
-      local dims = gui:get_dimensions()
-      gui:set_inner_size(dims.pixel_width, dims.pixel_height)
+---CloseCurrentPane/CloseCurrentTab act on the active pane/tab, so targets are activated first.
+function M.detach(gui_window, tab)
+  local sb = M.find(tab)
+  if sb then
+    state.forget_pane(sb:pane_id())
+    local content = M.content_pane(tab)
+    local previous = gui_window:mux_window():active_tab()
+    sb:activate()
+    gui_window:perform_action(act.CloseCurrentPane { confirm = false }, sb)
+    if content then
+      content:activate()
     end
-  end)
+    if previous and previous:tab_id() ~= tab:tab_id() then
+      previous:activate()
+    end
+  end
+  state.set_sidebar(tab:tab_id(), nil)
 end
 
 ---Closes a tab that only holds a sidebar without disturbing the active tab.
 function M.close_orphan(gui_window, tab, sb)
+  state.forget_pane(sb:pane_id())
   local previous = gui_window:mux_window():active_tab()
   local switching = previous and previous:tab_id() ~= tab:tab_id()
   if switching then
@@ -159,25 +221,40 @@ function M.close_orphan(gui_window, tab, sb)
   end
 end
 
-local function record_closed_tabs(wid, seen)
-  local known = state.session.known_tabs or {}
-  state.session.known_tabs = state.session.known_tabs or {}
-  local previous = known[wid] or {}
+---Pings idle sidebars; replaces one whose backend stopped answering.
+local function check_liveness(gui_window, tab, sb, now)
+  local pid = sb:pane_id()
+  local seen = session.seen[pid] or now
+  session.seen[pid] = seen
+  local idle = now - seen
+  if idle > DEAD_AFTER_MS then
+    util.warn("sidebar %d unresponsive, restarting", pid)
+    M.detach(gui_window, tab)
+    return false
+  end
+  if idle > PING_AFTER_MS and (session.pinged[pid] or 0) < seen then
+    session.pinged[pid] = now
+    M.send(sb, { t = "ping" })
+  end
+  return true
+end
+
+local function record_closed_tabs(wid, seen, private)
+  local previous = session.known_tabs[wid] or {}
   for tab_id in pairs(previous) do
     if not seen[tab_id] then
-      local meta = state.session.tab_meta[tab_id]
-      local moving = state.session.moving and state.session.moving[tab_id]
-      if meta and not moving then
+      local meta = session.tab_meta[tab_id]
+      if meta and not session.moving[tab_id] and not private then
         state.push_closed(meta)
       end
-      state.session.tab_meta[tab_id] = nil
-      if state.session.moving then
-        state.session.moving[tab_id] = nil
+      local pid = state.sidebar_pane_id(tab_id)
+      if pid then
+        state.forget_pane(pid)
       end
       state.forget_tab(tab_id)
     end
   end
-  state.session.known_tabs[wid] = seen
+  session.known_tabs[wid] = seen
 end
 
 ---Makes every tab match the collapsed/expanded state and closes tabs left with only a sidebar.
@@ -185,6 +262,8 @@ function M.ensure(gui_window)
   local mux_win = gui_window:mux_window()
   local wid = gui_window:window_id()
   local collapsed = state.is_collapsed(wid)
+  local private = state.is_private(wid)
+  local now = util.now_ms()
   local seen = {}
 
   for _, info in ipairs(mux_win:tabs_with_info()) do
@@ -199,33 +278,32 @@ function M.ensure(gui_window)
       seen[tab_id] = true
       local active = tab:active_pane()
       if active and not M.is_sidebar(active) then
-        state.session.content_pane[tab_id] = active:pane_id()
+        session.content_pane[tab_id] = active:pane_id()
       end
-      state.session.tab_meta[tab_id] = M.tab_meta(tab, M.content_pane(tab))
-      if collapsed and sb then
-        M.detach(gui_window, tab)
-      elseif not collapsed and not sb then
+      session.tab_meta[tab_id] = M.tab_meta(tab, M.content_pane(tab))
+      if collapsed then
+        if sb then
+          M.detach(gui_window, tab)
+        end
+      elseif sb then
+        if M.is_ready(sb) then
+          check_liveness(gui_window, tab, sb, now)
+        elseif now - (session.seen[sb:pane_id()] or now) > DEAD_AFTER_MS then
+          util.warn("sidebar %d never became ready, restarting", sb:pane_id())
+          M.detach(gui_window, tab)
+        end
+      else
         M.attach(tab)
       end
     end
   end
-  record_closed_tabs(wid, seen)
-
-  local active_tab = mux_win:active_tab()
-  if active_tab and not state.has_focus(wid) then
-    local active = active_tab:active_pane()
-    if active and M.is_sidebar(active) then
-      local content = M.content_pane(active_tab)
-      if content then
-        content:activate()
-      end
-    end
-  end
+  record_closed_tabs(wid, seen, private)
 end
 
 function M.set_collapsed(gui_window, collapsed)
-  state.set_collapsed(gui_window:window_id(), collapsed)
-  state.set_focus(gui_window:window_id(), false)
+  local wid = gui_window:window_id()
+  state.set_collapsed(wid, collapsed)
+  state.set_focus(wid, false)
   M.ensure(gui_window)
 end
 

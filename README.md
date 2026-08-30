@@ -14,4 +14,4 @@ Apply the plugin after your own key bindings so its defaults can be overridden o
 
 ## Configuration
 
-See [configuration.md](docs/configuration) for configuration options.
+See [configuration.md](docs/configuration) for configuration options

@@ -4,11 +4,14 @@ local config = require "vtabs.config"
 local state = require "vtabs.state"
 local sidebar = require "vtabs.sidebar"
 local model = require "vtabs.model"
+local hit = require "vtabs.hit"
 local util = require "vtabs.util"
 
 local M = {}
 
-local function tab_by_id(gui_window, tab_id)
+local session = state.session
+
+function M.tab_by_id(gui_window, tab_id)
   for _, info in ipairs(gui_window:mux_window():tabs_with_info()) do
     if info.tab:tab_id() == tab_id then
       return info.tab, info.index
@@ -18,40 +21,40 @@ local function tab_by_id(gui_window, tab_id)
 end
 
 local function active_content_pane(gui_window)
-  local tab = gui_window:mux_window():active_tab()
+  local tab = util.active_tab(gui_window)
   return tab and sidebar.content_pane(tab) or nil
 end
 
+local function visible(gui_window)
+  return model.ordered(model.build(gui_window))
+end
+
 local function spawn_env(gui_window)
-  local cfg = config.get()
   if state.is_private(gui_window:window_id()) then
-    return cfg.private.env
+    return config.get().private.env
   end
   return nil
 end
 
 function M.activate_tab(gui_window, tab_id)
-  local tab = tab_by_id(gui_window, tab_id)
-  if tab then
-    tab:activate()
-    local content = sidebar.content_pane(tab)
-    if content then
-      content:activate()
-    end
-    if config.get().debug then
-      local active = gui_window:mux_window():active_tab()
-      util.log("activate_tab %s -> active now %s", tostring(tab_id), tostring(active and active:tab_id()))
-    end
+  local tab = M.tab_by_id(gui_window, tab_id)
+  if not tab then
+    return
+  end
+  tab:activate()
+  local content = sidebar.content_pane(tab)
+  if content then
+    content:activate()
   end
 end
 
----Moves a tab to a physical index (0-based) without leaving it active unless it already was.
+---Moves a tab to a physical index (0-based), leaving the active tab as it was.
 function M.move_tab_to_index(gui_window, tab_id, index)
-  local tab, current = tab_by_id(gui_window, tab_id)
+  local tab, current = M.tab_by_id(gui_window, tab_id)
   if not tab or current == index then
     return
   end
-  local previous = gui_window:mux_window():active_tab()
+  local previous = util.active_tab(gui_window)
   local content = sidebar.content_pane(tab)
   if not content then
     return
@@ -63,16 +66,31 @@ function M.move_tab_to_index(gui_window, tab_id, index)
   end
 end
 
-local function desired_order(gui_window)
-  return model.ordered(model.build(gui_window))
+---Applies a new order for the visible tabs; hidden tabs keep their relative positions.
+function M.reorder(gui_window, visible_ids)
+  local wanted = {}
+  for _, id in ipairs(visible_ids) do
+    wanted[id] = true
+  end
+  local order = {}
+  local next_visible = 1
+  for _, info in ipairs(gui_window:mux_window():tabs_with_info()) do
+    local id = info.tab:tab_id()
+    if wanted[id] then
+      order[#order + 1] = visible_ids[next_visible]
+      next_visible = next_visible + 1
+    else
+      order[#order + 1] = id
+    end
+  end
+  for i, id in ipairs(order) do
+    M.move_tab_to_index(gui_window, id, i - 1)
+  end
 end
 
 ---Physically reorders tabs so the pinned block comes first.
 function M.normalize_order(gui_window)
-  local order = desired_order(gui_window)
-  for i, item in ipairs(order) do
-    M.move_tab_to_index(gui_window, item.tab_id, i - 1)
-  end
+  M.reorder(gui_window, model.ids(visible(gui_window)))
 end
 
 function M.set_pinned(gui_window, tab_id, pinned)
@@ -84,61 +102,77 @@ function M.toggle_pin(gui_window, tab_id)
   M.set_pinned(gui_window, tab_id, not state.is_pinned(tab_id))
 end
 
----Moves a tab to a slot in the rendered (pinned-first) order, pinning or unpinning as it crosses the separator.
+---Moves a tab to a slot in the rendered order, pinning or unpinning as it crosses the separator.
 function M.move_tab_to_slot(gui_window, tab_id, slot)
   local items = model.build(gui_window)
-  local pinned_count = 0
+  local pinned_others = 0
   for _, item in ipairs(items) do
     if item.is_pinned and item.tab_id ~= tab_id then
-      pinned_count = pinned_count + 1
+      pinned_others = pinned_others + 1
     end
   end
-  local should_pin = slot <= pinned_count
+  local should_pin = hit.should_pin(slot, pinned_others, state.is_pinned(tab_id))
   if state.is_pinned(tab_id) ~= should_pin then
     state.set_pinned(tab_id, should_pin)
-  end
-  local order = {}
-  for _, item in ipairs(model.ordered(model.build(gui_window))) do
-    if item.tab_id ~= tab_id then
-      order[#order + 1] = item.tab_id
+    for _, item in ipairs(items) do
+      if item.tab_id == tab_id then
+        item.is_pinned = should_pin
+      end
     end
   end
-  table.insert(order, math.max(1, math.min(slot, #order + 1)), tab_id)
-  for i, id in ipairs(order) do
-    M.move_tab_to_index(gui_window, id, i - 1)
+  local ids = {}
+  for _, item in ipairs(model.ordered(items)) do
+    if item.tab_id ~= tab_id then
+      ids[#ids + 1] = item.tab_id
+    end
   end
+  table.insert(ids, math.max(1, math.min(slot, #ids + 1)), tab_id)
+  M.reorder(gui_window, ids)
 end
 
----Closes a tab that may not be active: activate, close, then restore the previous tab.
-function M.close_tab(gui_window, tab_id, confirm)
-  local tab = tab_by_id(gui_window, tab_id)
+---True when WezTerm would prompt before closing any of these panes.
+local function needs_prompt(gui_window, panes)
+  local skip = util.try(function()
+    return gui_window:effective_config().skip_close_confirmation_for_processes_named
+  end) or {}
+  for _, p in ipairs(panes) do
+    local name = util.basename(util.try(function()
+      return p:get_foreground_process_name()
+    end))
+    if not name or not util.contains(skip, name) then
+      return true
+    end
+  end
+  return false
+end
+
+---Closes any tab: activates it, closes, and restores the previous tab unless a prompt is showing.
+function M.close_tab(gui_window, tab_id)
+  local tab = M.tab_by_id(gui_window, tab_id)
   if not tab then
     return
   end
-  local content = sidebar.content_pane(tab)
-  if not content then
+  local content, _ = sidebar.classify(tab)
+  if #content == 0 then
     return
   end
-  state.session.tab_meta[tab_id] = sidebar.tab_meta(tab, content)
-  if confirm == nil then
-    confirm = config.get().confirm_close ~= false
-  end
-  local previous = gui_window:mux_window():active_tab()
+  session.tab_meta[tab_id] = sidebar.tab_meta(tab, content[1])
+  local confirm = config.get().confirm_close ~= false and needs_prompt(gui_window, content)
+  local previous = util.active_tab(gui_window)
   local switching = previous and previous:tab_id() ~= tab_id
   if switching then
     tab:activate()
   end
-  gui_window:perform_action(act.CloseCurrentTab { confirm = confirm }, content)
+  gui_window:perform_action(act.CloseCurrentTab { confirm = confirm }, content[1])
   if switching and not confirm then
     previous:activate()
   end
 end
 
 function M.close_others(gui_window, tab_id)
-  for _, info in ipairs(gui_window:mux_window():tabs_with_info()) do
-    local id = info.tab:tab_id()
-    if id ~= tab_id and not state.is_pinned(id) then
-      M.close_tab(gui_window, id)
+  for _, item in ipairs(visible(gui_window)) do
+    if item.tab_id ~= tab_id and not item.is_pinned then
+      M.close_tab(gui_window, item.tab_id)
     end
   end
 end
@@ -148,10 +182,10 @@ function M.new_tab(gui_window, spawn)
   local mux_win = gui_window:mux_window()
   local current = active_content_pane(gui_window)
   if current and not spawn.domain then
-    local ok, domain = pcall(function()
+    local domain = util.try(function()
       return current:get_domain_name()
     end)
-    if ok and domain then
+    if domain then
       spawn.domain = { DomainName = domain }
     end
   end
@@ -159,15 +193,17 @@ function M.new_tab(gui_window, spawn)
     spawn.cwd = sidebar.tab_meta(mux_win:active_tab(), current).cwd
   end
   spawn.set_environment_variables = spawn.set_environment_variables or spawn_env(gui_window)
+  local title = spawn.title
+  spawn.title = nil
   local ok, tab, pane = pcall(function()
     return mux_win:spawn_tab(spawn)
   end)
   if not ok then
-    util.warn("spawn_tab failed: %s", tostring(tab))
+    util.warn("spawn_tab failed: %s", tostring(tab):match "^[^\n]*")
     return nil
   end
-  if spawn.title then
-    tab:set_title(spawn.title)
+  if title then
+    tab:set_title(title)
   end
   if not state.is_collapsed(gui_window:window_id()) then
     sidebar.attach(tab)
@@ -186,7 +222,14 @@ function M.reopen_closed(gui_window)
     domain = entry.domain and { DomainName = entry.domain } or nil,
     title = entry.title,
   })
-  if tab and entry.pinned then
+  if not tab and entry.domain then
+    tab = M.new_tab(gui_window, { cwd = entry.cwd, title = entry.title })
+  end
+  if not tab then
+    state.push_closed(entry)
+    return
+  end
+  if entry.pinned then
     M.set_pinned(gui_window, tab:tab_id(), true)
   end
 end
@@ -196,10 +239,10 @@ function M.new_window(gui_window, private)
   local current = active_content_pane(gui_window)
   local spawn = {}
   if current then
-    local ok, domain = pcall(function()
+    local domain = util.try(function()
       return current:get_domain_name()
     end)
-    if ok and domain then
+    if domain then
       spawn.domain = { DomainName = domain }
     end
   end
@@ -210,7 +253,7 @@ function M.new_window(gui_window, private)
     return wezterm.mux.spawn_window(spawn)
   end)
   if not ok then
-    util.warn("spawn_window failed: %s", tostring(tab))
+    util.warn("spawn_window failed: %s", tostring(tab):match "^[^\n]*")
     return
   end
   if private then
@@ -220,9 +263,9 @@ function M.new_window(gui_window, private)
   pane:activate()
 end
 
----Moves the tab's panes into a new window; extra panes are re-split via the wezterm CLI.
+---Moves a single-pane tab into a new window, keeping title, pin and private state.
 function M.tear_off(gui_window, tab_id)
-  local tab = tab_by_id(gui_window, tab_id)
+  local tab = M.tab_by_id(gui_window, tab_id)
   if not tab then
     return
   end
@@ -230,52 +273,45 @@ function M.tear_off(gui_window, tab_id)
   if #content == 0 then
     return
   end
+  if #content > 1 then
+    util.try(function()
+      gui_window:toast_notification("vtabs", "move to new window needs a single pane", nil, 3000)
+    end)
+    return
+  end
   local private = state.is_private(gui_window:window_id())
   local title = tab:get_title()
-  state.session.moving = state.session.moving or {}
-  state.session.moving[tab_id] = true
+  local pinned = state.is_pinned(tab_id)
+  session.moving[tab_id] = true
   local ok, new_tab, new_win = pcall(function()
     return content[1]:move_to_new_window()
   end)
-  if not ok then
-    util.warn("tear-off failed: %s", tostring(new_tab))
-    state.session.moving[tab_id] = nil
+  if not ok or not new_tab then
+    util.warn("tear-off failed: %s", tostring(new_tab):match "^[^\n]*")
+    session.moving[tab_id] = nil
     return
   end
-  local anchor = content[1]:pane_id()
-  for i = 2, #content do
-    local direction = i % 2 == 0 and "--right" or "--bottom"
-    wezterm.run_child_process {
-      "wezterm",
-      "cli",
-      "split-pane",
-      direction,
-      "--pane-id",
-      tostring(anchor),
-      "--move-pane-id",
-      tostring(content[i]:pane_id()),
-    }
+  if private and new_win then
+    state.set_private(new_win:window_id(), true)
   end
-  if new_tab and new_win then
-    if private then
-      state.set_private(new_win:window_id(), true)
-    end
-    if state.is_pinned(tab_id) then
-      state.set_pinned(new_tab:tab_id(), true)
-    end
-    if title ~= "" then
-      new_tab:set_title(title)
-    end
-    sidebar.attach(new_tab)
-    content[1]:activate()
+  if pinned then
+    state.set_pinned(new_tab:tab_id(), true)
+  end
+  if title ~= "" then
+    new_tab:set_title(title)
+  end
+  sidebar.attach(new_tab)
+  if title ~= "" then
+    new_tab:set_title(title)
   end
   sidebar.ensure(gui_window)
+  return true
 end
 
 function M.rename_tab(gui_window, tab_id)
-  local tab = tab_by_id(gui_window, tab_id)
-  local content = tab and sidebar.content_pane(tab)
-  if not content then
+  local tab = M.tab_by_id(gui_window, tab_id)
+  local content = active_content_pane(gui_window)
+  if not tab or not content then
     return
   end
   gui_window:perform_action(
@@ -296,48 +332,58 @@ function M.toggle_sidebar(gui_window)
   sidebar.toggle(gui_window)
 end
 
+function M.show_sidebar(gui_window, shown)
+  sidebar.set_collapsed(gui_window, not shown)
+end
+
 function M.focus_sidebar(gui_window)
   local wid = gui_window:window_id()
-  local tab = gui_window:mux_window():active_tab()
+  local tab = util.active_tab(gui_window)
   local sb = tab and sidebar.find(tab)
   if not sb then
     return
   end
-  local items = model.ordered(model.build(gui_window))
-  local _, index = model.find(items, tab:tab_id())
-  state.session.focus_index = state.session.focus_index or {}
-  state.session.focus_index[wid] = index or 1
+  local _, index = model.find(visible(gui_window), tab:tab_id())
+  session.focus_index[wid] = index or 1
   state.set_focus(wid, true)
   sb:activate()
 end
 
 function M.blur_sidebar(gui_window)
-  local wid = gui_window:window_id()
-  state.set_focus(wid, false)
+  state.set_focus(gui_window:window_id(), false)
   local content = active_content_pane(gui_window)
   if content then
     content:activate()
   end
 end
 
+---Cycles through visible tabs only, wrapping at both ends.
 function M.activate_relative(gui_window, delta)
-  local content = active_content_pane(gui_window)
-  if content then
-    gui_window:perform_action(act.ActivateTabRelative(delta), content)
+  local items = visible(gui_window)
+  if #items == 0 then
+    return
+  end
+  local current = util.active_tab(gui_window)
+  local _, index = model.find(items, current and current:tab_id())
+  local target = ((index or 1) - 1 + delta) % #items + 1
+  M.activate_tab(gui_window, items[target].tab_id)
+end
+
+---Activates the visible tab at a 0-based index; -1 selects the last one.
+function M.activate_index(gui_window, index)
+  local items = visible(gui_window)
+  local item = index < 0 and items[#items + 1 + index] or items[index + 1]
+  if item then
+    M.activate_tab(gui_window, item.tab_id)
   end
 end
 
 function M.move_relative(gui_window, delta)
-  local content = active_content_pane(gui_window)
-  if content then
-    gui_window:perform_action(act.MoveTabRelative(delta), content)
-  end
-end
-
-function M.activate_index(gui_window, index)
-  local content = active_content_pane(gui_window)
-  if content then
-    gui_window:perform_action(act.ActivateTab(index), content)
+  local items = visible(gui_window)
+  local current = util.active_tab(gui_window)
+  local _, index = model.find(items, current and current:tab_id())
+  if index then
+    M.move_tab_to_slot(gui_window, current:tab_id(), math.max(1, math.min(index + delta, #items)))
   end
 end
 
@@ -346,17 +392,16 @@ function M.activate_pane_direction(gui_window, direction)
   if not content then
     return
   end
-  local tab = content:tab()
-  local ok, target = pcall(function()
-    return tab:get_pane_direction(direction)
+  local target = util.try(function()
+    return content:tab():get_pane_direction(direction)
   end)
-  if ok and target and not sidebar.is_sidebar(target) then
+  if target and not sidebar.is_sidebar(target) then
     target:activate()
   end
 end
 
 local function current_tab_id(gui_window)
-  local tab = gui_window:mux_window():active_tab()
+  local tab = util.active_tab(gui_window)
   return tab and tab:tab_id() or nil
 end
 
@@ -369,43 +414,32 @@ local function callback(fn)
   end)
 end
 
+local function on_current_tab(fn)
+  return callback(function(window)
+    local id = current_tab_id(window)
+    if id then
+      fn(window, id)
+    end
+  end)
+end
+
 M.action = {
   toggle_sidebar = callback(M.toggle_sidebar),
   focus_sidebar = callback(M.focus_sidebar),
   new_tab = callback(function(window)
     M.new_tab(window)
   end),
-  close_tab = callback(function(window)
-    local id = current_tab_id(window)
-    if id then
-      M.close_tab(window, id)
-    end
-  end),
+  close_tab = on_current_tab(M.close_tab),
   reopen_closed = callback(M.reopen_closed),
-  pin_tab = callback(function(window)
-    local id = current_tab_id(window)
-    if id then
-      M.toggle_pin(window, id)
-    end
-  end),
+  pin_tab = on_current_tab(M.toggle_pin),
   private_window = callback(function(window)
     M.new_window(window, true)
   end),
   new_window = callback(function(window)
     M.new_window(window, false)
   end),
-  tear_off = callback(function(window)
-    local id = current_tab_id(window)
-    if id then
-      M.tear_off(window, id)
-    end
-  end),
-  rename_tab = callback(function(window)
-    local id = current_tab_id(window)
-    if id then
-      M.rename_tab(window, id)
-    end
-  end),
+  tear_off = on_current_tab(M.tear_off),
+  rename_tab = on_current_tab(M.rename_tab),
   next_tab = callback(function(window)
     M.activate_relative(window, 1)
   end),
@@ -418,18 +452,16 @@ M.action = {
   move_tab_down = callback(function(window)
     M.move_relative(window, 1)
   end),
+  activate_tab = function(index)
+    return callback(function(window)
+      M.activate_index(window, index)
+    end)
+  end,
+  activate_pane_direction = function(direction)
+    return callback(function(window)
+      M.activate_pane_direction(window, direction)
+    end)
+  end,
 }
-
-function M.action.activate_tab(index)
-  return callback(function(window)
-    M.activate_index(window, index)
-  end)
-end
-
-function M.action.activate_pane_direction(direction)
-  return callback(function(window)
-    M.activate_pane_direction(window, direction)
-  end)
-end
 
 return M

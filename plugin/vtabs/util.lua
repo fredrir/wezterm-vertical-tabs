@@ -22,11 +22,20 @@ function M.merge(base, override)
   return out
 end
 
+---Calls `fn(...)` and returns its result, or nil when it errors.
+function M.try(fn, ...)
+  local ok, value = pcall(fn, ...)
+  if ok then
+    return value
+  end
+  return nil
+end
+
 function M.now_ms()
-  local ok, t = pcall(function()
+  local t = M.try(function()
     return tonumber(wezterm.time.now():format "%s%.3f")
   end)
-  if ok and t then
+  if t then
     return math.floor(t * 1000)
   end
   return os.time() * 1000
@@ -42,6 +51,9 @@ end
 ---Truncates `s` to `max` display columns, appending `ellipsis` when cut.
 function M.truncate(s, max, ellipsis)
   ellipsis = ellipsis or "…"
+  if max <= 0 then
+    return ""
+  end
   if M.width(s) <= max then
     return s
   end
@@ -49,15 +61,21 @@ function M.truncate(s, max, ellipsis)
   if budget <= 0 then
     return ""
   end
-  local out = ""
-  for _, code in utf8.codes(s) do
-    local ch = utf8.char(code)
-    if M.width(out .. ch) > budget then
-      break
-    end
-    out = out .. ch
+  local offsets = {}
+  for pos in utf8.codes(s) do
+    offsets[#offsets + 1] = pos
   end
-  return out .. ellipsis
+  offsets[#offsets + 1] = #s + 1
+  local lo, hi = 1, #offsets
+  while lo < hi do
+    local mid = (lo + hi + 1) // 2
+    if M.width(s:sub(1, offsets[mid] - 1)) <= budget then
+      lo = mid
+    else
+      hi = mid - 1
+    end
+  end
+  return s:sub(1, offsets[lo] - 1) .. ellipsis
 end
 
 function M.pad_right(s, cols)
@@ -66,6 +84,16 @@ function M.pad_right(s, cols)
     return s
   end
   return s .. string.rep(" ", cols - w)
+end
+
+---Removes control characters so foreign titles cannot inject escapes into the sidebar.
+function M.sanitize(s)
+  if type(s) ~= "string" then
+    return ""
+  end
+  s = s:gsub("[%z\1-\31\127]", "")
+  s = s:gsub("\194[\128-\159]", "")
+  return s
 end
 
 function M.basename(path)
@@ -84,13 +112,34 @@ function M.contains(list, value)
   return false
 end
 
-function M.index_of(list, value)
-  for i, v in ipairs(list or {}) do
-    if v == value then
-      return i
+---Splits a list into two by predicate, preserving order.
+function M.partition(list, pred)
+  local yes, no = {}, {}
+  for _, v in ipairs(list) do
+    if pred(v) then
+      yes[#yes + 1] = v
+    else
+      no[#no + 1] = v
     end
   end
-  return nil
+  return yes, no
+end
+
+function M.sorted_keys(t)
+  local keys = {}
+  for k in pairs(t) do
+    keys[#keys + 1] = k
+  end
+  table.sort(keys, function(a, b)
+    return tostring(a) < tostring(b)
+  end)
+  return keys
+end
+
+function M.active_tab(gui_window)
+  return M.try(function()
+    return gui_window:mux_window():active_tab()
+  end)
 end
 
 function M.log(fmt, ...)
@@ -99,6 +148,27 @@ end
 
 function M.warn(fmt, ...)
   wezterm.log_warn("vtabs: " .. string.format(fmt, ...))
+end
+
+local warned = {}
+
+---Warns once per key; user hooks that keep failing should not spam the log.
+function M.warn_once(key, fmt, ...)
+  if warned[key] then
+    return
+  end
+  warned[key] = true
+  M.warn(fmt, ...)
+end
+
+function M.random_token()
+  local seed = os.time() + math.floor(os.clock() * 1000000) + M.now_ms()
+  math.randomseed(seed)
+  local parts = {}
+  for _ = 1, 4 do
+    parts[#parts + 1] = string.format("%08x", math.random(0, 0x7fffffff))
+  end
+  return table.concat(parts)
 end
 
 return M

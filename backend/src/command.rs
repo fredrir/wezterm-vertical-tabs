@@ -8,4 +8,5 @@ pub enum Command {
     Clear,
     Quit,
     Ping,
+    Auth { token: String },
 }

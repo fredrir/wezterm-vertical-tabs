@@ -31,6 +31,7 @@ cleanup() {
       fi
     done
   fi
+  [ -n "${VTABS_E2E_LOG:-}" ] && cp "$log" "$VTABS_E2E_LOG"
   rm -rf "$home"
   grep -i "vtabs: \(user-var\|update-status\|window-\)\|WARN\|ERROR" "$log" | grep -v "Broken pipe" | tail -20
   rm -f "$log"
@@ -82,6 +83,21 @@ sidebar_text "$sb1" | grep -c "one" >/dev/null || fail "first sidebar does not l
 sidebar_text "$sb1" | grep -c "two" >/dev/null || fail "first sidebar does not list tab two"
 echo "ok: both sidebars render both tabs"
 
+toggle() { cli send-text --no-paste --pane-id "$1" "printf '\\033]1337;SetUserVar=vtabs_test=dG9nZ2xl\\a'
+"; }
+toggle "$(content_of "$first_tab")"
+sleep 1.5
+[ -z "$(sidebar_panes)" ] || fail "toggle did not remove sidebars"
+[ "$(tab_count)" -eq 2 ] || fail "toggle closed a tab"
+toggle "$(content_of "$first_tab")"
+sleep 2.5
+[ "$(sidebar_panes | wc -l | tr -d ' ')" -eq 2 ] || fail "toggle did not restore sidebars"
+sb1=$(sidebar_of "$first_tab")
+sb2=$(sidebar_of "$second_tab")
+sleep 1
+sidebar_text "$sb1" | grep -c "one" >/dev/null || fail "restored sidebar does not render"
+echo "ok: toggle hides and restores sidebars without touching content"
+
 click "$sb2" 5 "$(row_of "$sb2" two)" 0
 sleep 1
 [ "$(active_title "$sb2")" = "two" ] || fail "click on 'two' did not activate it (active: $(active_title "$sb2"))"
@@ -121,7 +137,7 @@ first_window=$(list | python3 -c 'import json,sys; t='"$first_tab"'; print([p["w
 moved_tab=$(list | python3 -c 'import json,sys; w='"$first_window"'; print([p["tab_id"] for p in json.load(sys.stdin) if p["window_id"]!=w][0])')
 sbm=$(sidebar_of "$moved_tab") || fail "torn-off tab has no sidebar in its new window"
 sleep 2
-geometry() { list | python3 -c 'import json,sys; [print("  win", p["window_id"], "tab", p["tab_id"], "pane", p["pane_id"], p["title"], "left", p["left_col"], "cols", p["size"]["cols"]) for p in json.load(sys.stdin)]'; }
+geometry() { list | python3 -c 'import json,sys; [print("  win", p["window_id"], "tab", p["tab_id"], "title", repr(p["tab_title"]), "pane", p["pane_id"], p["title"], "left", p["left_col"], "cols", p["size"]["cols"]) for p in json.load(sys.stdin)]'; }
 sidebar_text "$sbm" | grep -c "three" >/dev/null || { geometry; sidebar_text "$sbm" | head -5; fail "new window sidebar does not list the moved tab"; }
 echo "ok: drag to edge moves tab to a new window with its own sidebar"
 

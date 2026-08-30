@@ -4,6 +4,7 @@ use base64::engine::general_purpose::STANDARD;
 pub const DEFAULT_VAR: &str = "vtabs";
 pub const ROLE_VAR: &str = "vtabs_role";
 pub const ROLE: &str = "sidebar";
+pub const TOKEN_VAR: &str = "vtabs_token";
 
 pub fn set_user_var(name: &str, value: &str) -> String {
     format!("\x1b]1337;SetUserVar={name}={}\x07", STANDARD.encode(value))

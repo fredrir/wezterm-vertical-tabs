@@ -6,10 +6,27 @@ pub struct Logger {
     file: Option<File>,
 }
 
+/// Refuses symlinks and keeps the log owner-readable only.
+fn open_private(path: &std::ffi::OsStr) -> Option<File> {
+    if std::fs::symlink_metadata(path)
+        .map(|m| m.file_type().is_symlink())
+        .unwrap_or(false)
+    {
+        return None;
+    }
+    let mut options = OpenOptions::new();
+    options.create(true).append(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    options.open(path).ok()
+}
+
 impl Logger {
     pub fn from_env() -> Self {
-        let file = std::env::var_os("VTABS_LOG")
-            .and_then(|path| OpenOptions::new().create(true).append(true).open(path).ok());
+        let file = std::env::var_os("VTABS_LOG").and_then(|path| open_private(&path));
         Self { file }
     }
 

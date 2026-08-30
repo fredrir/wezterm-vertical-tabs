@@ -40,8 +40,11 @@ All events carry `"t"`. Columns/rows are 1-based cell coordinates.
 - `mods` is omitted when empty.
 - Key names: a single printable character (as typed), or one of
   `enter escape tab backspace delete up down left right home end pageup pagedown space`.
-  Control characters map to their letter with `"ctrl"` in `mods` (`0x03` → `c` + ctrl).
+  Control characters map to their letter with `"ctrl"` in `mods` (`0x03` → `c` + ctrl;
+  `0x00` → `space` + ctrl; `0x1c`–`0x1f` → `\ ] ^ _` + ctrl; `0x08` → `backspace`).
   A bare `ESC` that is not followed by more bytes within ~30ms is `escape`.
+  An `ESC [` / `ESC O` introducer waits ~300ms for its final byte before giving up.
+  Buttons 8+ report `"b":"none"`; horizontal wheel events are dropped.
 
 ## Commands (Lua → backend)
 
@@ -66,10 +69,13 @@ The backend reads stdin as a byte stream and demultiplexes:
 - UTF-8 printable text maps to single-character key events.
 
 Command lines may be split across multiple reads; the parser must buffer.
+A `{` line without a newline is dropped after ~300ms of silence or 1 MiB, and
+the whole buffer is cleared past 1 MiB. `{`, `}` and control bytes never
+terminate a CSI sequence; they abort it and are parsed on their own.
 
 ## Environment
 
 | variable        | meaning                                                                         |
 | --------------- | ------------------------------------------------------------------------------- |
 | `VTABS_USERVAR` | user var name for events (default `vtabs`)                                      |
-| `VTABS_LOG`     | append debug log lines to this file (default: no logging). Never log to stderr. |
+| `VTABS_LOG`     | append debug log lines to this file (default: no logging; 0600, symlinks refused, key names redacted). Never log to stderr. |
