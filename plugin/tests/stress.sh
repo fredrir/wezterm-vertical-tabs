@@ -652,15 +652,16 @@ print(rest[-1]["pane_id"] if len(rest)>1 else "")'
 }
 panes_in() { list | python3 -c 'import json,sys; t='"$1"'; print(sum(1 for p in json.load(sys.stdin) if p["tab_id"]==t))'; }
 
-split_net() {
+# One rescue, asserted end to end. $1 is the probe that performs the split.
+rescue_case() {
   split_mark=$(mark)
   cli activate-tab --tab-id "$first" >/dev/null
   sleep 1
   before_sb=$(sidebar_of "$first")
   before_width=$(settled_width "$first")
   before_panes=$(panes_in "$first")
-  echo "  before the split: $(probe_line "$first_content" probe_ranks ranks)"
-  vtest "$first_content" split_sidebar
+  echo "  before $1: $(probe_line "$first_content" probe_ranks ranks)"
+  vtest "$first_content" "$1"
   sleep 4
   max_panes=$((before_panes + 1))
   echo "  after the split: $(probe_line "$first_content" probe_tree tree)"
@@ -692,7 +693,16 @@ split_net() {
   not_frozen "$before_sb" "$first" "a rescued split"
   no_warnings "$split_mark" "rescuing a split off the sidebar"
   no_dupes "the split rescue"
-  echo "ok: a split off the sidebar is moved to the content side, sidebar intact at $before_width cols"
+  echo "ok: $1 is moved to the content side, sidebar intact at $before_width cols"
+}
+
+split_net() {
+  # Vertical halves the sidebar's rows and stays inside its columns; horizontal halves its columns
+  # and the new pane reaches past them. Only the second exercises the edge test.
+  rescue_case split_sidebar
+  restore_split_panes
+  rescue_case split_sidebar_h
+  restore_split_panes
 
   # `vtabs.action.split` targets the content pane even with the sidebar focused, so nothing has to
   # be rescued at all.

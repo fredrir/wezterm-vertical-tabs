@@ -63,7 +63,8 @@ for png in "$shots"/*-sidebar.png; do
   hashed=$((hashed + 1))
 done
 # Every state the run was asked for, so a state that stops rendering is a diff, not a silent gap.
-sed -n 's/^\([a-z0-9-]*\)|.*/\1/p' "$root/scripts/screenshot.sh" | sort >"$out/shots/roster"
+sed 's/^STATES="//' "$root/scripts/screenshot.sh" |
+  sed -n 's/^\([a-z0-9-]*\)|.*/\1/p' | sort >"$out/shots/roster"
 echo "$hashed" >"$out/shots/count"
 echo "    $hashed of $(wc -l <"$out/shots/roster" | tr -d ' ') states hashed"
 [ "$hashed" -gt 0 ] || { echo "  no screenshot state rendered; refusing to record an empty baseline"; exit 1; }
