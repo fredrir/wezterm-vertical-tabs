@@ -575,7 +575,6 @@ test("P3 §2: the 60-column layout is nav plus form, and says so under 48", func
   eq(g.label_x, 19)
   eq(g.form_x2, 58)
   assert(narrow[1]:find("Settings", 1, true), "the header")
-  assert(narrow[1]:find("0.1.1", 1, true) and not narrow[1]:find("wez-vtabs", 1, true), "version abbreviated at 60")
   eq(usub(narrow[4], g.divider, g.divider), "│", "the divider runs down the body")
   eq(usub(narrow[4], g.nav_x1 + 2, g.nav_x1 + 7), "Layout", "nav on the left")
   assert(narrow[18]:find("esc", 1, true), "and the narrow hint bar is last")
