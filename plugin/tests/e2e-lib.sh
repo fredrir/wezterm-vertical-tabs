@@ -73,7 +73,17 @@ since() { tail -n "+$(($1 + 1))" "$log"; }
 # Runs a probe defined in wezterm-e2e.lua by making the pane print an OSC 1337 SetUserVar.
 vtest() { cli send-text --no-paste --pane-id "$1" "printf '\\033]1337;SetUserVar=vtabs_test=$(printf %s "$2" | base64)\\a'
 "; }
-list() { cli list --format json; }
+# A gui busy with a resize can answer an empty body; every helper below parses this, so retry here.
+list() {
+  for _ in 1 2 3 4 5; do
+    body=$(cli list --format json 2>/dev/null || true)
+    case "$body" in
+      \[*) printf '%s' "$body"; return 0 ;;
+    esac
+    sleep 0.3
+  done
+  fail "wezterm cli list stopped answering"
+}
 is_sb='(p["title"].startswith("wez-vtabs") or (p["left_col"]==0 and p["size"]["cols"]==28))'
 # Marker title only: a pane the backend already claimed. Never guesses from geometry.
 is_marked='p["title"].startswith("wez-vtabs")'
@@ -202,6 +212,7 @@ import json,sys,collections
 panes=json.load(sys.stdin)
 by=collections.defaultdict(list)
 for p in panes: by[p["tab_id"]].append(p)
+if not panes: print("    (no panes)")
 for t in sorted(by):
     ps=by[t]
     sb=[p for p in ps if '"$is_sb"']
