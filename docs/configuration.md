@@ -29,7 +29,7 @@ return config
 | `rail_titlebar`           | `"widen"`                                                         | `"widen"` \| `"band"` \| `"none"` |
 | `hide_native_tab_bar`     | `true`                                                            | `true` \| `false` |
 | `poll_ms`                 | `500`                                                             | number >= `50` |
-| `padding`                 | `{ top = 1, left = 1, right = 1 }`                                | `{ top, left, right }` |
+| `padding`                 | `{ top = 1, left = 2, right = 1 }`                                | `{ top, left, right }` |
 | `edge_to_edge`            | `true`                                                            | `true` \| `false` |
 | `tab_height`              | `"card"`                                                          | `"card"` (`2`) \| `"row"` (`1`) \| `"tall"` (`3`) |
 | `meta`                    | `false`                                                           | `"auto"` \| `"cwd"` \| `"process"` \| `false` |
@@ -87,11 +87,11 @@ return config
 | ------ | ---- |
 | `width` | re-asserted on the active tab after every resize; a divider drag is adopted until the config reloads |
 | `collapsed` | `"rail"` keeps the pane and narrows it, so the toggle stays reachable |
-| `padding` | cells inside the sidebar pane, painted in its own colour, so the card never touches the window edge |
+| `padding` | cells inside the sidebar pane, painted in its own colour; `left = 2` replaces the window padding `edge_to_edge` removes, and mirrors to `right = 2` with `position = "right"` |
 | `edge_to_edge` | zeroes wezterm's window padding on the sides the sidebar touches, so its background reaches the window edge; the far side keeps wezterm's `1cell`, and top/bottom are window-global, so the content pane loses its half cell too. The split line stays: pair with `theme = { split = "hidden" }` for a seamless edge |
 | `tab_height` | pad rows around the card's content; independent of `meta` |
 | `meta` | off by default; opt in with `"auto"`, `"cwd"` or `"process"`. The popover header always shows cwd and domain, whatever this says |
-| `rail_width` | raised to the traffic-light reserve (typically 9) on macOS with `INTEGRATED_BUTTONS` |
+| `rail_width` | raised to the traffic-light reserve on macOS with `INTEGRATED_BUTTONS`: `ceil(70pt / cell width)`, so 9 columns at an 8 pt cell and 6 at 12 pt, the same on a 2x display |
 | `close_button` | treated as `"always"` when `hover = "press"`, where no background row is ever hovered |
 | `context` | `false` removes the mouse trigger only; `m` in keyboard mode still opens the popover |
 | `confirm_close` | the question is a popover level in the sidebar, never wezterm's own overlay, which the release after the click that opened it would dismiss; the overlay is the fallback only when no sidebar can draw the question |

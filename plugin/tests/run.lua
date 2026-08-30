@@ -179,6 +179,8 @@ local function view(over)
   if opts.meta == nil then
     opts.meta = false
   end
+  -- §1 slides the grid one column right; these frames still state the old landmarks explicitly.
+  opts.padding = opts.padding or { top = 1, left = 1, right = 1 }
   local cfg = config.setup(opts)
   local v = {
     cols = 28,
@@ -451,6 +453,27 @@ test("ensure attaches one authenticated sidebar per tab and sends auth", functio
   end
   sidebar.ensure(gui)
   eq(sidebars_in(win.tab_list[1]), 1, "no duplicate on second ensure")
+end)
+
+test("attach refuses a tab that already has a sidebar, so a direct caller cannot double it", function()
+  local win, gui = setup_window(1)
+  sidebar.ensure(gui)
+  local tab = win.tab_list[1]
+  mark_ready(tab)
+  eq(sidebars_in(tab), 1)
+  local panes = #tab.pane_list
+  -- new_tab, new_window and tear_off call attach outside ensure, and a poll can attach first.
+  eq(sidebar.attach(tab), nil, "an attached tab refuses a second split")
+  eq(sidebars_in(tab), 1)
+  eq(#tab.pane_list, panes, "and no pane was added")
+  -- The loser of that race would keep its marker and be demoted to content for good.
+  state.session.attaching[tab:tab_id()] = nil
+  eq(sidebar.attach(tab), nil, "the refusal is not the pending guard")
+  eq(#tab.pane_list, panes)
+  local before = #win.tab_list
+  actions.new_tab(gui)
+  eq(#win.tab_list, before + 1)
+  eq(sidebars_in(win.tab_list[#win.tab_list]), 1, "and the path that spawns a tab still gets one")
 end)
 
 test("a sidebar with a new pane id but a known token is re-adopted, not duplicated", function()
@@ -3461,7 +3484,7 @@ end)
 
 local platform = require "vtabs.platform"
 
--- Retina-ish: 8.4 px cells across, 19 px down, so 70/8.4 -> 9 cols and 28/19 -> 2 rows.
+-- 8.4 pt cells across, 19 pt down, so 70/8.4 -> 9 cols and 28/19 -> 2 rows. No `dpi`, so 1x.
 local RETINA = { cols = 28, viewport_rows = 30, pixel_width = 235, pixel_height = 570 }
 
 local function strip_geom(dims, over)
@@ -3480,6 +3503,35 @@ local function strip_geom(dims, over)
   end
   return platform.strip_geometry(dims, opts)
 end
+
+test("the reserve is ceil(70pt / cell width): 9 cols at 8pt, 8 at 9pt, 7 at 10-11pt, 6 at 12pt", function()
+  local want = { [8] = 9, [9] = 8, [10] = 7, [11] = 7, [12] = 6 }
+  for cell, cols in pairs(want) do
+    local g = strip_geom { cols = 28, viewport_rows = 30, pixel_width = 28 * cell, pixel_height = 570 }
+    eq(g.cols, cols, cell .. " pt cells")
+    eq(g.cols, math.ceil(70 / cell), "and it is the formula, not a table")
+    assert(g.cols <= 9, "9 is the widest reserve a readable cell can produce, never 11")
+    eq(g.toggle_x, g.cols + 2, "11 is the toggle column at a 9-column reserve, not the reserve")
+  end
+end)
+
+test("a 2x display doubles the pixels and keeps the points, so the reserve does not move", function()
+  local one_x = strip_geom(RETINA)
+  local two_x = strip_geom {
+    cols = RETINA.cols,
+    viewport_rows = RETINA.viewport_rows,
+    pixel_width = RETINA.pixel_width * 2,
+    pixel_height = RETINA.pixel_height * 2,
+    dpi = platform.POINT_DPI * 2,
+  }
+  eq(two_x.cols, one_x.cols, "the lights are 70 points wide on both")
+  eq(two_x.rows_reserved, one_x.rows_reserved)
+  eq(two_x.toggle_row, one_x.toggle_row)
+  eq(two_x.toggle_x, one_x.toggle_x)
+  eq(two_x.cols, 9)
+  -- Device pixels alone would halve it, which is the bug this pins.
+  eq(math.ceil(70 / (RETINA.pixel_width * 2 / RETINA.cols)), 5)
+end)
 
 test("the macOS strip reserves the traffic lights from the pane's own cell size", function()
   local g = strip_geom(RETINA)
@@ -3582,7 +3634,10 @@ test("the window padding is zeroed on the sides the sidebar touches, and never w
   local mine = { left = 8, right = 8, top = 8, bottom = 8 }
   eq(padding({}, mine), mine, "a user value is never overwritten")
   eq(padding { edge_to_edge = false }, nil, "and the opt-out never touches it")
-  eq(config.defaults.padding.left, 1, "the sidebar keeps its own gutter, painted in the page colour")
+  eq(config.defaults.padding.left, 2, "the air the window padding no longer gives, in the page colour")
+  eq(config.setup({ position = "right" }).padding.right, 2, "and it mirrors to the side that touches")
+  eq(config.setup({ position = "right" }).padding.left, 1)
+  eq(config.setup({ position = "right", padding = { right = 4 } }).padding.right, 4, "yours wins")
   config.setup(legacy { backend = { path = "/bin/wez-vtabs" } })
 end)
 
@@ -3827,7 +3882,7 @@ end)
 -- P1-spec §7, verbatim. Injected values in other tests cannot keep a wrong default green.
 local P1_DEFAULTS = {
   width = 28,
-  padding = { top = 1, left = 1, right = 1 },
+  padding = { top = 1, left = 2, right = 1 },
   edge_to_edge = true,
   row_gap = 1,
   tab_height = "card",
@@ -4627,7 +4682,7 @@ test("collapsed = hidden bands the window so the macOS lights clear the shell", 
   state.set_collapsed(gui:window_id(), true)
   assert(view_mod.apply_titlebar_band(gui), "collapsing applies the band")
   local padded = gui:get_config_overrides().window_padding
-  eq(padded.top, platform.TITLEBAR_PX, "the band is the light reserve")
+  eq(padded.top, platform.TITLEBAR_PAD, "the band is the light reserve, in dpi-scaled points")
   eq(padded.left, 4, "the user's other sides are kept")
   eq(padded.bottom, 2)
   eq(view_mod.apply_titlebar_band(gui), false, "and it is idempotent")

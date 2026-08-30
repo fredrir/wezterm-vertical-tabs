@@ -367,12 +367,20 @@ local function domain_failed(place, now)
 end
 
 ---Splits off the sidebar pane; guarded because splits are async on mux domains.
+---`new_tab`, `new_window` and `tear_off` call this directly, and a poll landing inside their await
+---can attach first and clear the pending guard, so the tab is asked again here. A second split
+---would stick: the loser keeps its marker but `classify` demotes it to content for good.
 function M.attach(tab)
   local cfg = config.get()
   local tab_id = tab:tab_id()
   local now = util.now_ms()
   local pending = session.attaching[tab_id]
   if pending and now - pending < ATTACH_RETRY_MS then
+    return nil
+  end
+  -- The per-poll cache predates the panes a split added, so it cannot answer this.
+  classified[tab_id] = nil
+  if M.find(tab) then
     return nil
   end
   local base = M.content_pane(tab)
