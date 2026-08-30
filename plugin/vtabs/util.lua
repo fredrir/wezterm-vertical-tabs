@@ -196,7 +196,7 @@ function M.base64_decode(s)
   end
   local out, acc, bits = {}, 0, 0
   for i = 1, #body do
-    acc = acc * 64 + B64_VALUE[body:sub(i, i)]
+    acc = ((acc << 6) | B64_VALUE[body:sub(i, i)]) & 0xffffff
     bits = bits + 6
     if bits >= 8 then
       bits = bits - 8

@@ -213,15 +213,30 @@ local FORWARD_MIN_GAP_MS = 50
 local FORWARD_TTL_MS = 60000
 local forwarded_at = {}
 
----Bytes worth typing at a shell: one key press, no OSC/DCS/APC introducer, no bracketed paste.
-local function safe_bytes(text)
-  if not text or text == "" or #text > FORWARD_MAX_BYTES then
+-- ESC-prefixed key shapes: CSI (params, intermediates, final 0x40-0x7e), SS3, and the alt-key form.
+local KEY_SHAPES = { "^\27%[[\48-\63]*[\32-\47]*[\64-\126]$", "^\27O.$", "^\27.$" }
+local PASTE_BRACKETS = { "\27[200~", "\27[201~" }
+
+---`text` when it is structurally one key press, else nil. The backend emits exactly these shapes
+---per key, so nothing legitimate is rejected and nothing chainable into a command line survives.
+function M.safe_key_bytes(text)
+  if type(text) ~= "string" or text == "" or #text > FORWARD_MAX_BYTES then
     return nil
   end
-  if text:find "\27[%]PX%^_]" or text:find("\27[200~", 1, true) or text:find("\27[201~", 1, true) then
-    return nil
+  for _, bracket in ipairs(PASTE_BRACKETS) do
+    if text:find(bracket, 1, true) then
+      return nil
+    end
   end
-  return text
+  if utf8.len(text) == 1 then
+    return text
+  end
+  for _, shape in ipairs(KEY_SHAPES) do
+    if text:find(shape) then
+      return text
+    end
+  end
+  return nil
 end
 
 local function decoded_key(ev)
@@ -261,7 +276,7 @@ local function forward_key(gui_window, pane, ev, cfg)
     return
   end
   local content = sidebar.content_pane(tab)
-  if not content or content:pane_id() == pid or sidebar.is_sidebar(content) or sidebar.is_overlay(content) then
+  if not content or content:pane_id() == pid or sidebar.is_backend(content) or sidebar.is_overlay(content) then
     return
   end
   local domain = util.try(function()
@@ -273,7 +288,7 @@ local function forward_key(gui_window, pane, ev, cfg)
     return
   end
   forwarded_at[pid] = now
-  local text = safe_bytes(decoded_key(ev))
+  local text = M.safe_key_bytes(decoded_key(ev))
   if text and not pcall(function()
     content:send_text(text)
   end) then

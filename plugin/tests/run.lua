@@ -1078,6 +1078,55 @@ test("without raw only a lone printable key is forwarded", function()
   eq(content3.sent[1], "z")
 end)
 
+-- Verbatim backend output; the strings match backend/src/event.rs `key_events`.
+test("safe_key_bytes takes one key press per shape and refuses a command line", function()
+  for _, ok in ipairs { "x", "\u{e6}", "\r", "\n", "\t", "\8", "\3", "\127", "\0", "\27" } do
+    eq(input.safe_key_bytes(ok), ok, "accepts " .. #ok .. " byte(s)")
+  end
+  for _, seq in ipairs { "\27[A", "\27[1;5D", "\27[3~", "\27OH", "\27b" } do
+    eq(input.safe_key_bytes(seq), seq, "accepts an ESC-prefixed key")
+  end
+  for _, bad in ipairs {
+    "id > /tmp/pwn\r",
+    "ab",
+    "\27[Ax",
+    "\27]0;x\7",
+    "\27[200~",
+    "\27[201~",
+    "\27P0q",
+    string.rep("x", 17),
+    "",
+  } do
+    eq(input.safe_key_bytes(bad), nil, "rejects " .. string.format("%q", bad))
+  end
+  eq(input.safe_key_bytes(nil), nil)
+  eq(input.safe_key_bytes "\xff\xfe", nil, "invalid utf-8 is not one codepoint")
+end)
+
+test("a raw payload carrying a whole command line never reaches the content pane", function()
+  local _, gui, tab, sb, content = key_setup()
+  input.handle(gui, sb, "vtabs", '{"t":"key","key":"x","raw":"aWQgPiAvdG1wL3B3bg0="}')
+  eq(#content.sent, 0, "the probe payload is dropped")
+  eq(tab.active, content)
+  local _, gui2, _, sb2, content2 = key_setup(2)
+  input.handle(gui2, sb2, "vtabs", '{"t":"key","key":"up","raw":"G1tB"}')
+  eq(content2.sent[#content2.sent], "\27[A", "a real arrow key still gets through")
+end)
+
+test("backend-shaped key events reach the content pane as the exact bytes they carried", function()
+  local _, gui, tab, sb, content = key_setup()
+  input.handle(gui, sb, "vtabs", '{"t":"key","key":"enter","raw":"DQ=="}')
+  eq(content.sent[#content.sent], "\r")
+  eq(tab.active, content)
+  local _, gui2, _, sb2, content2 = key_setup(2)
+  input.handle(gui2, sb2, "vtabs", '{"t":"key","key":"c","mods":["ctrl"],"raw":"Aw=="}')
+  eq(content2.sent[#content2.sent], "\3", "ctrl chords are forwarded verbatim when raw is present")
+  local _, gui3, tab3, sb3, content3 = key_setup(3)
+  input.handle(gui3, sb3, "vtabs", '{"t":"key","key":"escape"}')
+  eq(#content3.sent, 0, "a key the backend could not capture sends nothing")
+  eq(tab3.active, content3, "focus still returns to the shell")
+end)
+
 test("a key from a background tab's sidebar is never forwarded", function()
   local win, gui = drag_setup()
   win.active_tab_ref = win.tab_list[1]
