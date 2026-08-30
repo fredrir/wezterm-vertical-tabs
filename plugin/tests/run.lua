@@ -349,7 +349,7 @@ end
 local function sidebars_in(tab)
   local n = 0
   for _, p in ipairs(tab:panes()) do
-    if sidebar.is_sidebar(p) then
+    if sidebar.is_backend(p) then
       n = n + 1
     end
   end
@@ -413,6 +413,7 @@ test("orphaned sidebar closes its tab without touching the active tab", function
   local win, gui = setup_window(2)
   sidebar.ensure(gui)
   local victim = win.tab_list[2]
+  mark_ready(victim)
   table.remove(victim.pane_list, 2)
   sidebar.ensure(gui)
   eq(#win.tab_list, 1)
@@ -422,6 +423,9 @@ end)
 test("collapse detaches, expand re-attaches", function()
   local win, gui = setup_window(2)
   sidebar.ensure(gui)
+  for _, tab in ipairs(win.tab_list) do
+    mark_ready(tab)
+  end
   sidebar.set_collapsed(gui, true)
   for _, tab in ipairs(win.tab_list) do
     eq(sidebars_in(tab), 0)
@@ -575,6 +579,207 @@ test("a sidebar that never becomes ready is left in place and its domain not ret
   end
   eq(warned, 1, "warned once")
   state.session.failed_domains["desktop@"] = nil
+end)
+
+-- implementer-1: identity, persistence, backend protocol ----------------------
+
+local function write_state(body)
+  local f = assert(io.open(state.file, "w"))
+  f:write(body)
+  f:close()
+end
+
+local function read_state()
+  local f = assert(io.open(state.file, "r"))
+  local body = f:read "a"
+  f:close()
+  return body
+end
+
+---A fresh Lua VM against the same mux: no GLOBAL, no session, the file is all that is left.
+local function restart_vm(body)
+  if body then
+    write_state(body)
+  else
+    os.remove(state.file)
+  end
+  wezterm.GLOBAL.vtabs = nil
+  for _, tbl in pairs(state.session) do
+    for k in pairs(tbl) do
+      tbl[k] = nil
+    end
+  end
+  state.reload()
+end
+
+local function count_log(needle)
+  local n = 0
+  for _, line in ipairs(wezterm.log) do
+    if line:find(needle, 1, true) then
+      n = n + 1
+    end
+  end
+  return n
+end
+
+test("the state file holds only a version, pins and closed tabs", function()
+  restart_vm()
+  state.set_pinned(31, true)
+  state.push_closed { cwd = "/tmp", domain = "local" }
+  local body = read_state()
+  assert(body:find '"version"', "version written")
+  assert(not body:find("token", 1, true), "no token on disk")
+  assert(not body:find("sidebars", 1, true), "no pane ids on disk")
+  assert(not body:find("private", 1, true), "no window ids on disk")
+  state.set_pinned(31, false)
+  eq(state.pop_closed().cwd, "/tmp")
+end)
+
+test("a corrupt state file warns once and starts empty", function()
+  restart_vm "not json at all"
+  local warned = count_log "state file unreadable"
+  assert(warned >= 1, "warned")
+  eq(state.pins_pending(), false)
+  eq(state.pop_closed(), nil)
+  restart_vm "still not json"
+  eq(count_log "state file unreadable", warned, "warned once")
+end)
+
+test("pins are restored only when a backend pane survived the mux", function()
+  local win, gui = setup_window(1)
+  local tab = win.tab_list[1]
+  restart_vm(string.format('{"version":1,"pinned":{"%d":true},"closed":[]}', tab.id))
+  assert(state.pins_pending(), "pins held back")
+  eq(state.is_pinned(tab.id), false)
+  local ghost = fake.pane(tab, { title = "wez-vtabs:abcd" })
+  table.insert(tab.pane_list, 1, ghost)
+  sidebar.ensure(gui)
+  eq(state.is_pinned(tab.id), true, "adopted after proof the mux lived")
+  eq(state.pins_pending(), false)
+end)
+
+test("pins are discarded when nothing survived", function()
+  local win, gui = setup_window(1)
+  local tab = win.tab_list[1]
+  restart_vm(string.format('{"version":1,"pinned":{"%d":true},"closed":[]}', tab.id))
+  sidebar.ensure(gui)
+  eq(state.is_pinned(tab.id), false)
+  local real_now = util.now_ms
+  util.now_ms = function()
+    return real_now() + 5000
+  end
+  sidebar.ensure(gui)
+  util.now_ms = real_now
+  eq(state.pins_pending(), false, "dropped after the grace period")
+  eq(state.is_pinned(tab.id), false)
+end)
+
+test("a backend pane that outlived the GUI is adopted, not duplicated", function()
+  local win, gui = setup_window(1)
+  sidebar.ensure(gui)
+  local tab = win.tab_list[1]
+  local sb = mark_ready(tab)
+  sb:send_text "\27]2;wez-vtabs:abcd\7"
+  eq(sb:get_title(), "wez-vtabs:abcd", "OSC 2 sets the pane title")
+  local panes = #tab:panes()
+  win:reattach()
+  restart_vm()
+  sidebar.ensure(gui)
+  eq(#tab:panes(), panes, "no second sidebar split")
+  eq(sidebar.is_sidebar(sb), false, "not trusted before the echo")
+  local token = state.token_for(sb:pane_id())
+  assert(token, "fresh token minted")
+  assert(sb.sent[#sb.sent]:find(token, 1, true), "re-authed with it")
+  sb.vars.vtabs_token = token
+  eq(sidebar.is_ready(sb), true)
+  eq(sidebars_in(tab), 1)
+end)
+
+test("a pane faking the title marker is never trusted and closes nothing", function()
+  local win, gui = setup_window(1)
+  local tab = win.tab_list[1]
+  local liar = fake.pane(tab, { title = "wez-vtabs:dead" })
+  table.insert(tab.pane_list, 1, liar)
+  sidebar.ensure(gui)
+  eq(sidebar.is_sidebar(liar), false, "adoption is not trust")
+  local sent = #liar.sent
+  require("vtabs.view").sync(gui, { force = true })
+  eq(#liar.sent, sent, "no frames")
+  table.remove(tab.pane_list, 2)
+  local tabs = #win.tab_list
+  sidebar.ensure(gui)
+  eq(#win.tab_list, tabs, "tab kept: classification alone never closes")
+  local acted = #win.actions
+  input.handle(gui, liar, "vtabs", '{"t":"mouse","k":"down","b":"middle","x":3,"y":3}')
+  eq(#win.actions, acted, "events ignored")
+end)
+
+test("an orphan tab is closed only once its sidebar echoed a token", function()
+  local win, gui = setup_window(2)
+  sidebar.ensure(gui)
+  local victim = win.tab_list[2]
+  local sb = sidebar.find(victim)
+  table.remove(victim.pane_list, 2)
+  sidebar.ensure(gui)
+  eq(#win.tab_list, 2, "unauthenticated sidebar keeps its tab")
+  sb.vars.vtabs_token = state.token_for(sb:pane_id())
+  sidebar.ensure(gui)
+  eq(#win.tab_list, 1)
+end)
+
+test("collapsing leaves an unauthenticated sidebar alone", function()
+  local win, gui = setup_window(1)
+  sidebar.ensure(gui)
+  local tab = win.tab_list[1]
+  sidebar.set_collapsed(gui, true)
+  eq(#tab:panes(), 2, "not closed without a token")
+  mark_ready(tab)
+  sidebar.ensure(gui)
+  eq(#tab:panes(), 1)
+  sidebar.set_collapsed(gui, false)
+end)
+
+test("a failed domain is retried after a minute", function()
+  local win, gui = setup_window(1)
+  state.session.failed_domains["local@"] = util.now_ms() - 61000
+  sidebar.ensure(gui)
+  eq(sidebars_in(win.tab_list[1]), 1)
+  eq(state.session.failed_domains["local@"], nil, "expired entry dropped")
+end)
+
+test("windows the mux forgot are dropped from state", function()
+  state.set_collapsed(4242, true)
+  state.session.hover[4242] = { x = 1, y = 1 }
+  state.forget_windows_except { [1] = true }
+  eq(state.is_collapsed(4242), false)
+  eq(state.session.hover[4242], nil)
+end)
+
+test("tokens do not repeat and are 16 bytes of hex", function()
+  local a, b = util.random_token(), util.random_token()
+  assert(a ~= b, "distinct")
+  eq(#a, 32)
+  assert(a:match "^%x+$", "hex only")
+end)
+
+test("the backend is told the sidebar background", function()
+  local cfg = config.setup { backend = { path = "/bin/wez-vtabs" } }
+  eq(backend.env(cfg, "local", nil, "#1e1e2e").VTABS_BG, "#1e1e2e")
+  eq(backend.env(cfg, "local", nil, "red").VTABS_BG, nil)
+  eq(backend.env(cfg, "local").VTABS_BG, nil)
+  local win = setup_window(1)
+  sidebar.ensure(win.gui)
+  local sb = sidebar.find(win.tab_list[1])
+  assert(sb.split_args.set_environment_variables.VTABS_BG:match "^#%x%x%x%x%x%x$", "hex background passed")
+end)
+
+test("a marker title never reaches the rendered tab list", function()
+  local win, gui = setup_window(1)
+  sidebar.ensure(gui)
+  local tab = win.tab_list[1]
+  tab:set_title "wez-vtabs:abcd"
+  local built = model.build(gui)
+  eq(built[1].title:find "wez%-vtabs", nil)
 end)
 
 os.remove(state.file)
