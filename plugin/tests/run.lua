@@ -558,24 +558,60 @@ test("a pane split off the sidebar is moved to the content side, not left in its
   eq(sidebars_in(tab), 1, "and the sidebar is never the pane that moves")
 end)
 
-test("a zoomed pane suspends the split rescue, since every pane then reports the full width", function()
+test("a sidebar split sideways is rescued too, not just one split below it", function()
   local win, gui = setup_window(1)
   sidebar.ensure(gui)
   local tab = win.tab_list[1]
   local sb = mark_ready(tab)
   local content = sidebar.content_pane(tab)
+  -- A Left/Right split halves the sidebar's own node, so the intruder starts where the sidebar now
+  -- ends and reaches past it: it never fitted inside the sidebar's box, and was missed.
+  local stuck = fake.pane(tab, { cols = 14 })
+  tab.pane_list[#tab.pane_list + 1] = stuck
+  sb.left, sb.width = 0, 14
+  stuck.left, stuck.width = 14, 14
+  content.left, content.width = 29, content.cols
+  local calls = with_cli(function()
+    assert(sidebar.rescue_splits(gui, tab), "a sideways split is an intruder too")
+  end)
+  eq(#calls, 1)
+  assert(calls[1]:find("--move-pane-id " .. stuck:pane_id(), 1, true), calls[1])
+
+  -- Mirrored: with the sidebar on the right, the intruder ends where the sidebar begins.
+  config.setup { meta = "auto", position = "right", backend = { path = "/bin/wez-vtabs" } }
+  sb.left, sb.width = 66, 14
+  stuck.left, stuck.width = 52, 14
+  content.left, content.width = 0, 51
+  calls = with_cli(function()
+    assert(sidebar.rescue_splits(gui, tab), "and on the other side")
+  end)
+  eq(#calls, 1)
+  assert(calls[1]:find("--pane-id " .. content:pane_id(), 1, true), calls[1])
+  config.setup { meta = "auto", backend = { path = "/bin/wez-vtabs" } }
+end)
+
+test("a pane that only claims the sidebar role never relocates anything", function()
+  local win, gui = setup_window(1)
+  sidebar.ensure(gui)
+  local tab = win.tab_list[1]
+  local sb = sidebar.find(tab)
+  local content = sidebar.content_pane(tab)
   local stuck = fake.pane(tab, { cols = sb.cols })
   tab.pane_list[#tab.pane_list + 1] = stuck
+  sb.left, sb.width = 0, sb.cols
   stuck.left, stuck.width = 0, sb.cols
-  sb.left, sb.width, sb.zoomed = 0, sb.cols, true
   content.left, content.width = sb.cols + 1, content.cols
+  -- Never authenticated: it holds the role by its title alone.
   eq(
     with_cli(function()
-      eq(sidebar.rescue_splits(gui, tab), false, "nothing is moved on a guess")
+      eq(sidebar.rescue_splits(gui, tab), false, "an unauthenticated sidebar decides nothing")
     end)[1],
     nil
   )
-  sb.zoomed = nil
+  mark_ready(tab)
+  assert(#with_cli(function()
+    sidebar.rescue_splits(gui, tab)
+  end) > 0, "and once it has authenticated, it does")
 end)
 
 test("split targets the content pane, whichever pane the pointer left active", function()
@@ -595,6 +631,10 @@ test("split targets the content pane, whichever pane the pointer left active", f
   eq(pane._tab, tab)
   eq(sidebars_in(tab), 1, "and splitting never doubles the sidebar")
   assert(content ~= nil)
+  local down = actions.split(gui, "Down")
+  assert(down, "Down is taken as an alias")
+  eq(down.split_args.direction, "Bottom", "for wezterm's own name")
+  eq(actions.split(gui, "Up").split_args.direction, "Top")
   local warned = #wezterm.log
   eq(actions.split(gui, "Sideways"), nil, "an unknown direction is refused")
   assert(#wezterm.log > warned, "and says so")
@@ -3201,6 +3241,53 @@ test("a column wezterm dealt during a window drag is not adopted once the metric
   end)
   eq(geometry.desired(wid), 28, "the deal is wezterm's, not the user's")
   assert(sb.cols == 28, "and the width is put back, at " .. sb.cols)
+  config.setup { backend = { path = "/bin/wez-vtabs" } }
+end)
+
+test("a width the content bands clamp is still the width the user asked for, not a new one", function()
+  local win, gui = setup_window(1)
+  sidebar.ensure(gui)
+  local tab = win.tab_list[1]
+  local sb = mark_ready(tab)
+  local wid = gui:window_id()
+  local content = sidebar.content_pane(tab)
+  sb.left, sb.width = 0, sb.cols
+  content.left, content.width = sb.cols + 1, content.cols
+  later(400, function()
+    geometry.correct(gui)
+  end)
+  -- The user drags the divider out to 40 and it is adopted, with one content band.
+  tab:set_split(40)
+  later(800, function()
+    eq(geometry.correct(gui), false, "still moving")
+  end)
+  later(1200, function()
+    eq(geometry.correct(gui), false, "adopted once it stops")
+  end)
+  eq(geometry.desired(wid), 40, "the drag is theirs")
+
+  -- More bands beside it: 40 no longer leaves each of them MIN_CONTENT, so the width is clamped.
+  -- That is a clamp, not an adoption -- what they asked for is remembered, not rewritten.
+  for i = 1, 2 do
+    local beside = fake.pane(tab, { cols = 8 })
+    tab.pane_list[#tab.pane_list + 1] = beside
+    beside.left, beside.width = content.left + i * 9, 8
+  end
+  later(1600, function()
+    geometry.correct(gui)
+  end)
+  later(2000, function()
+    geometry.correct(gui)
+  end)
+  eq(geometry.desired(wid), 40, "the clamp does not overwrite the width they asked for")
+
+  -- Close them and the width they asked for is what the plugin goes back to.
+  table.remove(tab.pane_list, #tab.pane_list)
+  table.remove(tab.pane_list, #tab.pane_list)
+  later(2000, function()
+    geometry.correct(gui)
+  end)
+  eq(geometry.desired(wid), 40, "still theirs, once the room comes back")
   config.setup { backend = { path = "/bin/wez-vtabs" } }
 end)
 

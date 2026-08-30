@@ -536,9 +536,11 @@ local function cli_move(pane_id, target_id)
   return cli(args, "cli-move", "wezterm cli split-pane --move-pane-id unavailable; a split sidebar is left as is")
 end
 
----Panes sharing the sidebar's own columns. Only a split of the sidebar node can put one there: the
----sidebar is a top-level split, so every content pane is on the other side of it.
-local function intruders(tab, sb)
+---Panes on the sidebar's side of the top-level split. Only a split of the sidebar node can put one
+---there, so the test is which side of the sidebar's own edge a pane starts (or ends) on -- not
+---whether it fits inside the sidebar's box, which a Left/Right split of the sidebar never does.
+---`panes_with_info` reports the unzoomed layout (`mux/src/tab.rs:88`), so zoom does not enter it.
+local function intruders(tab, sb, position)
   local infos = util.try(function()
     return tab:panes_with_info()
   end)
@@ -551,18 +553,20 @@ local function intruders(tab, sb)
       box = info
     end
   end
-  -- A zoomed pane is reported at the tab's full size, which no column test can read.
-  if not box or box.is_zoomed then
+  if not box then
     return {}
   end
-  local left, right = box.left or 0, (box.left or 0) + (box.width or 0)
+  local edge = (box.left or 0) + (box.width or 0)
   local out = {}
   for _, info in ipairs(infos) do
-    if
-      info.pane:pane_id() ~= sb:pane_id()
-      and (info.left or 0) >= left
-      and (info.left or 0) + (info.width or 0) <= right
-    then
+    local left = info.left or 0
+    local inside
+    if position == "right" then
+      inside = left + (info.width or 0) >= (box.left or 0)
+    else
+      inside = left <= edge
+    end
+    if info.pane:pane_id() ~= sb:pane_id() and inside then
       out[#out + 1] = info.pane
     end
   end
@@ -573,10 +577,11 @@ end
 ---which leaves a shell in a column too narrow to use. Move it to the content side instead.
 function M.rescue_splits(gui_window, tab)
   local content, sb = M.classify(tab)
-  if not sb or #content < 2 then
+  -- A pane that only claims the role by its title must never decide that another one moves.
+  if not sb or not M.is_ready(sb) or #content < 2 then
     return false
   end
-  local stuck = intruders(tab, sb)
+  local stuck = intruders(tab, sb, config.get().position)
   if #stuck == 0 then
     return false
   end
@@ -586,7 +591,8 @@ function M.rescue_splits(gui_window, tab)
   end
   local host = nil
   for _, pane in ipairs(content) do
-    if not inside[pane:pane_id()] then
+    -- The destination is a real shell of this tab: never an overlay, never another backend.
+    if not inside[pane:pane_id()] and not M.is_backend(pane) and not M.is_overlay(pane) then
       host = pane
       break
     end
