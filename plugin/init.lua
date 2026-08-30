@@ -135,12 +135,15 @@ local function register_events(cfg)
     end)
   )
 
+  -- Fires once per frame of a window drag; the poll picks up the last one, so only the first frame
+  -- of a burst pays for a correction and a repaint.
   wezterm.on(
     "window-resized",
     guarded("window-resized", function(window)
-      geometry.settle(window:window_id())
-      geometry.correct(window)
-      view.sync(window)
+      if geometry.on_resize(window:window_id()) then
+        geometry.correct(window)
+        view.sync(window)
+      end
     end)
   )
 

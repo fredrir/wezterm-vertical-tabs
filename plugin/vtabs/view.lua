@@ -237,8 +237,11 @@ local function rect_for(gui_window, dims, resolved, cfg)
   return rect
 end
 
+---A rail has no room beside the lights, so its toggle centres below them; without telling
+---`strip_geometry` which mode it is in, the toggle lands off the end of the rail.
 local function strip_for(gui_window, cfg, dims, rail)
   local facts = chrome_for(gui_window, cfg)
+  local wid = gui_window:window_id()
   local window = util.try(function()
     return gui_window:get_dimensions()
   end) or {}
@@ -252,10 +255,11 @@ local function strip_for(gui_window, cfg, dims, rail)
     padding_top = cfg.padding.top,
     toggle_button = cfg.toggle_button,
     card_x1 = cfg.padding.left + 1,
-    -- without these the rail branch never fires and the toggle is placed off the end of the rail
     rail = rail or nil,
     rail_width = rail and cfg.rail_width or nil,
   })
+  -- `desired` has no cell size of its own, so the reserve a frame measured is handed to geometry.
+  geometry.set_rail_cols(wid, g.cols)
   local toggle = nil
   if cfg.toggle_button and g.rows > 0 then
     toggle = { row = g.toggle_row, x = g.toggle_x, x1 = math.max(1, g.toggle_x - 1), x2 = g.toggle_x + 2 }

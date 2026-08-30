@@ -2742,7 +2742,7 @@ test("split Left puts the sidebar in first, split Right in second, so a right si
   config.setup { backend = { path = "/bin/wez-vtabs" } }
 end)
 
-test("a divider drag with an unchanged window becomes the desired width until config reload", function()
+test("a divider drag survives a config reload, unless the reload changed width itself", function()
   local win, gui = setup_window(1)
   sidebar.ensure(gui)
   local tab = win.tab_list[1]
@@ -2753,9 +2753,62 @@ test("a divider drag with an unchanged window becomes the desired width until co
   eq(geometry.desired(gui:window_id()), 34)
   eq(geometry.correct(gui), false)
   eq(sb.cols, 34)
+  -- Every edit to wezterm.lua reloads, and the plugin watches its own files too, so a reload that
+  -- says nothing about the width must not throw the drag away.
   geometry.reset(gui:window_id())
-  assert(geometry.correct(gui), "config reload drops the adopted width")
-  eq(sb.cols, 28)
+  eq(geometry.desired(gui:window_id()), 34, "an unrelated reload keeps it")
+  eq(geometry.correct(gui), false, "and nothing is re-asserted")
+  config.setup { width = 30, backend = { path = "/bin/wez-vtabs" } }
+  geometry.reset(gui:window_id())
+  eq(geometry.desired(gui:window_id()), 30, "changing width itself drops it")
+  assert(geometry.correct(gui))
+  eq(sb.cols, 30)
+  config.setup { backend = { path = "/bin/wez-vtabs" } }
+end)
+
+test("an adjust the mux has not applied yet is issued once, and its landing is never adopted", function()
+  local win, gui = setup_window(1)
+  sidebar.ensure(gui)
+  local tab = win.tab_list[1]
+  local wid = gui:window_id()
+  mark_ready(tab)
+  eq(geometry.correct(gui), false, "baseline recorded")
+  local issued = 0
+  -- A remote mux acknowledges the adjust and applies it a poll or more later.
+  gui.perform_action = function(_, action)
+    if action.action == "AdjustPaneSize" then
+      issued = issued + 1
+    end
+  end
+  win:resize(30)
+  assert(geometry.correct(gui), "the window resize is corrected")
+  for _ = 1, 4 do
+    eq(geometry.correct(gui), false, "and not re-issued while the mux has not applied it")
+  end
+  eq(issued, 1, "one AdjustPaneSize, not one per poll; the duplicates all land and overshoot")
+
+  -- The width it eventually lands on is ours, so it must never read as a divider drag.
+
+  tab:set_split(24)
+  eq(geometry.correct(gui), false)
+  eq(geometry.desired(wid), 28, "the landing is not adopted")
+
+  -- The sidebar reporting its own size is proof it landed, so the next target goes out at once.
+  geometry.landed(wid)
+  gui.perform_action = nil
+  assert(geometry.correct(gui), "and the retry is not blocked once it has")
+  config.setup { backend = { path = "/bin/wez-vtabs" } }
+end)
+
+test("a window drag corrects on the first frame of the burst and leaves the rest to the poll", function()
+  local win, gui = setup_window(1)
+  local wid = gui:window_id()
+  geometry.forget_window(wid)
+  assert(geometry.on_resize(wid), "the first frame is corrected")
+  for _ = 1, 10 do
+    eq(geometry.on_resize(wid), false, "every frame after it costs nothing")
+  end
+  eq(#win.actions, 0, "so a drag issues no adjust per frame at all")
 end)
 
 test("correction with several content panes activates the sidebar and restores focus", function()
@@ -2816,7 +2869,7 @@ test("an adopted width is clamped to a plausible sidebar", function()
   eq(geometry.desired(gui:window_id()), 60, "clamped to tab width minus the content margin")
   geometry.reset(gui:window_id())
   assert(geometry.correct(gui), "a reset re-asserts cfg.width")
-  geometry.settle(gui:window_id(), 0)
+
   eq(geometry.correct(gui), false, "baseline recorded")
   tab:set_split(1)
   eq(geometry.correct(gui), false, "drag adopted")
@@ -3337,7 +3390,7 @@ test("the two-step mux resize is corrected, and a real divider drag is still ado
   eq(geometry.desired(gui:window_id()), 28, "nothing was adopted")
 
   geometry.reset(gui:window_id())
-  geometry.settle(gui:window_id(), 0)
+
   eq(geometry.correct(gui), false, "baseline on the settled window")
   tab:set_split(34)
   eq(geometry.correct(gui), false, "same tab width, same pixels: this one is a drag")
@@ -3811,6 +3864,10 @@ test("the window padding is zeroed on the sides the sidebar touches, and never w
   eq(config.setup({ position = "right" }).padding.left, 2)
   eq(config.defaults.padding.bottom, 1, "and one row below, the same air the cards get between them")
   eq(config.setup({ position = "right", padding = { right = 4 } }).padding.right, 4, "yours wins")
+  eq(config.setup({ position = "right", padding = { right = 4 } }).padding.left, 2, "untouched, unmirrored")
+  eq(config.setup({ position = "right", padding = 3 }).padding.right, 2, "a padding that is not a table")
+  eq(config.setup({ position = "right", padding = { left = -5 } }).padding.left, 2, "and one out of range")
+  eq(config.setup({ position = "right", padding = { left = -5 } }).padding.right, 2, "both come back mirrored")
   config.setup(legacy { backend = { path = "/bin/wez-vtabs" } })
 end)
 
@@ -3932,6 +3989,63 @@ test("view hands the renderer a strip and a private-aware theme", function()
   config.setup(legacy { backend = { path = "/bin/wez-vtabs" } })
 end)
 
+test('rail_titlebar = "widen" widens the rail to the reserve and keeps its toggle inside the pane', function()
+  local win, gui = setup_window(1)
+  sidebar.ensure(gui)
+  local sb = mark_ready(win.tab_list[1])
+  local wid = gui:window_id()
+  sb.get_dimensions = function(self)
+    return { cols = self.cols, viewport_rows = 30, pixel_width = self.cols * 10, pixel_height = 570 }
+  end
+  local was_mac = platform.is_mac
+  platform.is_mac = false
+  local seen = nil
+  local render_mod = require "vtabs.render"
+  local original = render_mod.render
+  render_mod.render = function(frame)
+    seen = frame
+    return original(frame)
+  end
+  local function railed(opts)
+    config.setup(util.merge({ meta = "auto", titlebar = "macos", backend = { path = "/bin/wez-vtabs" } }, opts))
+    view_mod.invalidate_theme()
+    view_mod.sync(gui, { force = true })
+    return seen.strip
+  end
+
+  sidebar.set_collapsed(gui, true)
+  local geom = railed {}
+  eq(geom.cols, 7, "the lights need 7 columns at a 10 pt cell")
+  eq(geometry.desired(wid), 7, "so the rail is widened to them, not left at rail_width 5")
+  assert(geometry.correct(gui), "and corrected to it")
+  eq(sb.cols, 7)
+
+  geom = railed {}
+  assert(geom.toggle.x2 <= sb.cols, "the toggle span ends inside the rail, at " .. geom.toggle.x2)
+  local toggle_row = nil
+  for row, h in pairs(state.session.hits[sb:pane_id()]) do
+    if h.kind == "action" or h.kind == "toggle" then
+      toggle_row = row
+      for _, span in ipairs(h.spans or { h }) do
+        assert(span.x2 <= sb.cols, "and so does its hit record, at " .. tostring(span.x2))
+        assert(span.x1 >= 1, "which is what makes it clickable at all")
+      end
+    end
+  end
+  assert(toggle_row, "the rail still records the strip's own target")
+
+  railed { rail_titlebar = "none" }
+  eq(geometry.desired(wid), 5, "opting out leaves rail_width alone")
+  railed { rail_titlebar = "band" }
+  eq(geometry.desired(wid), 5, "and so does banding instead")
+
+  render_mod.render = original
+  platform.is_mac = was_mac
+  sidebar.set_collapsed(gui, false)
+  view_mod.invalidate_theme()
+  config.setup(legacy { backend = { path = "/bin/wez-vtabs" } })
+end)
+
 test('titlebar = "macos" previews the light reserve on a machine that has none', function()
   local win, gui = setup_window(1)
   sidebar.ensure(gui)
@@ -4019,6 +4133,36 @@ test("the close span closes and the toggle span collapses the sidebar", function
   mouse(gui, sb1, "down", "left", toggle_x, 1)
   assert(state.is_collapsed(gui:window_id()), "the toggle hides the sidebar")
   sidebar.set_collapsed(gui, false)
+end)
+
+test("an armed ✕ closes only where it was pressed, and any drag cancels it", function()
+  local win, gui = drag_setup()
+  local sb = sidebar.find(win.tab_list[1])
+  local a, b = win.tab_list[1], win.tab_list[3]
+  -- Only the active or hovered card offers a ✕, so hover the second one to arm its span.
+  mouse(gui, sb, "move", "none", 26, title_row(sb, b.id))
+  local row_a, row_b = title_row(sb, a.id), title_row(sb, b.id)
+  eq(hit.span(state.session.hits[sb:pane_id()][row_b], 26), "close", "both cards show one")
+  local before = #win.tab_list
+
+  mouse(gui, sb, "down", "left", 26, row_a)
+  mouse(gui, sb, "up", "left", 26, row_b)
+  eq(#win.tab_list, before, "a release over another card's ✕ closes neither of them")
+
+  mouse(gui, sb, "down", "left", 26, row_a)
+  mouse(gui, sb, "up", "left", 26, row_a)
+  eq(#win.tab_list, before - 1, "the same ✕ pressed and released closes exactly one tab")
+
+  -- WezTerm drops the pointer capture on release, so a release outside still arrives here with
+  -- translated coordinates; motion is the only signal that the gesture stopped being a click.
+  local c = win.tab_list[#win.tab_list]
+  mouse(gui, sb, "move", "none", 26, title_row(sb, c.id))
+  local row_c = title_row(sb, c.id)
+  local kept = #win.tab_list
+  mouse(gui, sb, "down", "left", 26, row_c)
+  mouse(gui, sb, "drag", "left", 26, row_c)
+  mouse(gui, sb, "up", "left", 26, row_c)
+  eq(#win.tab_list, kept, "a flick between press and release cancels the close")
 end)
 
 test("a click in a pinned entry's pin span toggles the pin instead of activating", function()
@@ -4286,7 +4430,8 @@ test("the schema describes every option the defaults expose, and nothing it does
       local option = schema.by_key[path]
       assert(option, "no descriptor for " .. path)
       seen[path] = true
-      if type(value) == "table" and not option.open then
+      -- A list's entries are values, not options; only containers hold more descriptors.
+      if type(value) == "table" and not option.open and option.type ~= "list" then
         walk(value, path, seen)
       end
     end
@@ -4505,7 +4650,7 @@ test("the ✕ on a busy tab asks in the sidebar, and closes only when Close is c
   view_mod.sync(gui, { force = true })
   local row = popover_row(sb, "confirm_close")
   assert(row, "the confirm level offers Close")
-  mouse(gui, sb, "down", "left", 5, row)
+  mouse(gui, sb, "down", "left", state.session.hits[sb:pane_id()][row].x1 + 1, row)
   eq(#win.tab_list, 2, "and choosing it closes the tab")
   eq(popover.get(gui:window_id()), nil)
 end)
@@ -4574,6 +4719,7 @@ test("the menu opens at the column that asked for it, and its hits are pane colu
   end
   local narrow = rect_at(3)
   eq(narrow.x, 3, "a click on the card's own gutter opens flush with it")
+  eq(rect_at(4).x, 4, "one column right of it opens one column right: the menu tracks the click")
   local mid = rect_at(12)
   local first_col = cfg.padding.left + 1
   local last_col = 28 - cfg.padding.right - mid.w + 1
@@ -4593,8 +4739,8 @@ test("the menu opens at the column that asked for it, and its hits are pane colu
   end
   assert(#rows >= 2, "the menu painted items")
   local second = rows[2]
-  eq(second.hit.x1, placed.x + 1, "the span starts inside the left border, in absolute columns")
-  eq(second.hit.x2, placed.x + placed.w - 2)
+  eq(second.hit.x1, placed.x, "the span is the rect's own columns, absolute")
+  eq(second.hit.x2, placed.x + placed.w - 1)
   view_mod.sync(gui, { force = true })
   local live = state.session.hits[sb:pane_id()]
   local found = nil
@@ -4606,6 +4752,72 @@ test("the menu opens at the column that asked for it, and its hits are pane colu
   assert(found, "and the live frame carries them too")
   assert(found.hit.x1 > 1, "a click at column 1 is scrim, not the first item")
   popover.close(gui)
+end)
+
+test("a click level with an item but beside the menu dismisses it, and never runs it", function()
+  local win, gui, sb = open_popover(3)
+  local before = #win.tab_list
+  local hits = state.session.hits[sb:pane_id()]
+  local close_row, spare = nil, nil
+  for row, h in pairs(hits) do
+    if h.kind == "popover" and h.id == "close" then
+      close_row = row
+    end
+  end
+  assert(close_row, "the menu offers Close tab")
+  local rect = hits[close_row]
+  for col = 1, 28 do
+    if col < rect.x1 or col > rect.x2 then
+      spare = spare or col
+    end
+  end
+  assert(spare, "and the sidebar has columns the menu does not own on that row")
+  mouse(gui, sb, "down", "left", spare, close_row)
+  eq(#win.tab_list, before, "the tab survives a click that only shares the row")
+  eq(popover.get(gui:window_id()), nil, "and the menu is dismissed like any click away")
+end)
+
+test("a menu is painted at every width the schema allows, and never opens without being painted", function()
+  local win, gui = drag_setup()
+  local sb = sidebar.find(win.tab_list[1])
+  local resolved = theme.resolve({}, fake.palette)
+  for _, cols in ipairs { 8, 9, 10, 14, 20, 28 } do
+    config.setup { meta = "auto", width = cols, backend = { path = "/bin/wez-vtabs" } }
+    popover.close(gui)
+    popover.open(gui, win.tab_list[1].id, 3, 2)
+    local rect = popover.rect(gui, 24, cols, resolved, config.get())
+    assert(rect, "a menu at " .. cols .. " columns, however cramped")
+    assert(rect.x >= 1 and rect.x + rect.w - 1 <= cols, "inside the pane at " .. cols)
+    for _, row in ipairs(rect.rows) do
+      eq(row.hit.x1, rect.x, "every row carries the rect's columns at " .. cols)
+    end
+  end
+  popover.close(gui)
+
+  -- Belt and braces for the same failure: a level that is open but unpainted must not eat clicks.
+  config.setup { meta = "auto", backend = { path = "/bin/wez-vtabs" } }
+  view_mod.sync(gui, { force = true })
+  local active = win.active_tab_ref
+  popover.open(gui, win.tab_list[3].id, 3, 2)
+  eq(popover.get(gui:window_id()) ~= nil, true)
+  mouse(gui, sb, "down", "left", 5, title_row(sb, win.tab_list[3].id))
+  eq(popover.get(gui:window_id()), nil, "the first click dismisses a menu nothing painted")
+  eq(win.active_tab_ref, win.tab_list[3], "and is handled as the click it was")
+  win.active_tab_ref = active
+end)
+
+test("a busy tab in a sidebar too narrow to ask falls back to wezterm's own confirmation", function()
+  local win, gui = drag_setup()
+  local sb = sidebar.find(win.tab_list[1])
+  make_busy(win.tab_list[1])
+  local narrow = sb.cols
+  sb.cols = 10
+  local acted = #win.actions
+  actions.request_close(gui, win.tab_list[1].id, 3, 2)
+  eq(popover.get(gui:window_id()), nil, "no unreadable question is opened")
+  assert(#win.actions > acted, "wezterm is asked instead")
+  eq(win.actions[#win.actions].action.arg.confirm, true, "with its own overlay, which a key can use")
+  sb.cols = narrow
 end)
 
 test("the selected menu row is an accent fill that clears 4.5 on all ten palettes", function()

@@ -278,6 +278,18 @@ M.options = {
     group = "behaviour",
   },
   {
+    key = "strip_actions",
+    type = "list",
+    of = "enum",
+    enum = { "toggle", "new_tab", "settings", "search" },
+    default = { "toggle", "new_tab" },
+    shown = '`{ "toggle", "new_tab" }`',
+    label = "Strip actions",
+    group = "chrome",
+    values = '`"toggle"` \\| `"new_tab"` \\| `"settings"` \\| `"search"` \\| `{ id, icon, on_click }`',
+    help = "icon buttons in the top strip, in the order given",
+  },
+  {
     key = "toggle_button",
     type = "boolean",
     default = true,

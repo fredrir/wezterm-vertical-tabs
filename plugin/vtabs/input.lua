@@ -54,11 +54,20 @@ end
 ---Press keeps the sidebar as the tab's active pane so the drag and the release reach it too.
 ---While a popover is open it takes the whole sidebar: left acts, right retargets, middle is inert.
 local function on_popover_down(gui_window, pane, h, ev)
+  -- Nothing the menu painted is under this click, so it is not on screen at all: dismiss it and let
+  -- the click through, or a pane too narrow to draw it would swallow every click until Esc.
+  if h.kind ~= "popover" and h.kind ~= "scrim" then
+    popover.close(gui_window)
+    view.invalidate_frames(pane:pane_id())
+    return true
+  end
+  -- A row the menu owns still has columns the menu does not; those are click-away, not the item.
+  local inside = h.kind == "popover" and hit.in_card(h, ev.x)
   if ev.b == "left" then
-    if h.kind == "scrim" then
+    if h.kind == "scrim" or not inside then
       popover.close(gui_window)
       view.invalidate_frames(pane:pane_id())
-    elseif h.kind == "popover" and h.id and not h.disabled then
+    elseif h.id and not h.disabled then
       popover.run(gui_window, h.id)
       view.invalidate_frames(pane:pane_id())
     end
@@ -134,6 +143,9 @@ end
 local function on_drag(gui_window, pane, ev, cfg)
   local wid = gui_window:window_id()
   local pid = pane:pane_id()
+  -- Motion cancels an armed close: wezterm drops the capture on release, so a release over the
+  -- content pane still arrives here with translated coordinates that could land back on the ✕.
+  pending_close[wid] = nil
   if popover.get(wid) then
     return
   end
@@ -549,7 +561,9 @@ function M.handle(gui_window, pane, name, value)
     sidebar.ensure(gui_window)
     view.sync(gui_window, { force = true })
   elseif ev.t == "resize" then
-    -- The sidebar reporting its own new size is the one signal that is never a poll behind the mux.
+    -- The sidebar reporting its own new size is the one signal that is never a poll behind the mux,
+    -- so it is also the proof that the adjust in flight has landed.
+    geometry.landed(gui_window:window_id())
     geometry.correct(gui_window)
     view.sync(gui_window, { force = true })
   elseif ev.t == "mouse" then

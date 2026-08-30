@@ -230,10 +230,21 @@ end
 
 ---A popover needs an expanded, authenticated sidebar to be drawn in; without one there is nothing
 ---to ask in, and wezterm's overlay survives a keyboard close.
+-- Two six-cell items, their left margin and a border either side: below this the question cannot be
+-- read, and an unreadable confirmation is worse than wezterm's own.
+local CONFIRM_COLS = 15
+local CONFIRM_ROWS = 5
+
 local function can_confirm(gui_window)
   local tab = util.active_tab(gui_window)
   local sb = tab and sidebar.find(tab)
-  return sb ~= nil and sidebar.is_ready(sb) and not state.is_collapsed(gui_window:window_id())
+  if not sb or not sidebar.is_ready(sb) or state.is_collapsed(gui_window:window_id()) then
+    return false
+  end
+  local d = util.try(function()
+    return sb:get_dimensions()
+  end)
+  return type(d) == "table" and (d.cols or 0) >= CONFIRM_COLS and (d.viewport_rows or 0) >= CONFIRM_ROWS
 end
 
 ---WezTerm's `CloseCurrentTab { confirm = true }` opens a per-tab overlay that the mouse-up after
