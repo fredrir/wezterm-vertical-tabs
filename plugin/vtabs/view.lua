@@ -190,7 +190,7 @@ function M.apply_titlebar_band(gui_window)
   return true
 end
 
-local function strip_for(gui_window, cfg, dims)
+local function strip_for(gui_window, cfg, dims, rail)
   local facts = chrome_for(gui_window, cfg)
   local window = util.try(function()
     return gui_window:get_dimensions()
@@ -204,12 +204,15 @@ local function strip_for(gui_window, cfg, dims)
     padding_top = cfg.padding.top,
     toggle_button = cfg.toggle_button,
     card_x1 = cfg.padding.left + 1,
+    -- without these the rail branch never fires and the toggle is placed off the end of the rail
+    rail = rail or nil,
+    rail_width = rail and cfg.rail_width or nil,
   })
   local toggle = nil
   if cfg.toggle_button and g.rows > 0 then
     toggle = { row = g.toggle_row, x = g.toggle_x, x1 = math.max(1, g.toggle_x - 1), x2 = g.toggle_x + 2 }
   end
-  return { rows = g.rows, cols = g.cols, toggle = toggle }
+  return { rows = g.rows, cols = g.cols, toggle = toggle, toggle_row = g.toggle_row }
 end
 
 local function theme_for(gui_window, cfg)
@@ -317,7 +320,8 @@ function M.sync(gui_window, opts)
       local due = is_active or opts.force or now - (session.sent_at[pid] or 0) >= INACTIVE_REFRESH_MS
       local dims = due and dims_of(sb) or nil
       if dims then
-        local strip = strip_for(gui_window, cfg, dims)
+        local rail = state.is_collapsed(wid) and cfg.collapsed == "rail" or nil
+        local strip = strip_for(gui_window, cfg, dims, rail)
         -- a title or cwd that breaks one render must not stop the other sidebars in this window
         local ok, result = pcall(render.render, {
           cols = dims.cols,
@@ -334,7 +338,7 @@ function M.sync(gui_window, opts)
           ensure_visible = not session.user_scrolled[wid] and active_tab_id or nil,
           focus_index = is_active and focus_index or nil,
           private = state.is_private(wid),
-          rail = state.is_collapsed(wid) and cfg.collapsed == "rail" or nil,
+          rail = rail,
           popover = is_active and popover.rect(gui_window, dims.viewport_rows, dims.cols, resolved, cfg) or nil,
           footer = footer,
         })

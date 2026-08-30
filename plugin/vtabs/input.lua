@@ -8,11 +8,36 @@ local geometry = require "vtabs.geometry"
 local actions = require "vtabs.actions"
 local popover = require "vtabs.popover"
 local hit = require "vtabs.hit"
+local layout = require "vtabs.layout"
 local util = require "vtabs.util"
 
 local M = {}
 
 local DRAG_TIMEOUT_MS = 3000
+
+---Runs the strip button under the pointer. `settings` and `search` are the user's to define, so they
+---reach `hooks`; a table entry in `strip_actions` carries its own callback.
+local function strip_action(gui_window, id)
+  if id == nil then
+    return
+  end
+  if id == "toggle" then
+    return actions.toggle_sidebar(gui_window)
+  end
+  if id == "new_tab" then
+    return actions.new_tab(gui_window)
+  end
+  local cfg = config.get()
+  local hook = (cfg.hooks or {})[id]
+  if type(hook) == "function" then
+    return util.try(hook, gui_window)
+  end
+  for _, entry in ipairs(cfg.strip_actions or {}) do
+    if type(entry) == "table" and (entry.id or "custom") == id and type(entry.on_click) == "function" then
+      return util.try(entry.on_click, gui_window)
+    end
+  end
+end
 local DRAG_START_ROWS = 3
 local DRAG_START_COLS = 2
 local DRAG_DWELL_MS = 120
@@ -90,8 +115,8 @@ local function on_down(gui_window, pane, ev, cfg)
           at = now,
         }
       end
-    elseif h.kind == "toggle" and hit.in_card(h, ev.x) then
-      actions.toggle_sidebar(gui_window)
+    elseif h.kind == "action" and hit.in_card(h, ev.x) then
+      strip_action(gui_window, hit.span(h, ev.x))
     elseif h.kind == "new_tab" then
       actions.new_tab(gui_window)
     elseif h.kind == "footer" and h.entry and h.entry.on_click then
@@ -120,7 +145,9 @@ local function on_drag(gui_window, pane, ev, cfg)
   drag.at = util.now_ms()
   local dx = math.abs(ev.x - drag.origin_x)
   local dy = math.abs(ev.y - drag.origin_y)
-  local past_threshold = dy >= DRAG_START_ROWS or dx >= DRAG_START_COLS
+  -- a short card must not put its neighbour out of reach: never ask for more than one slot of travel
+  local rows_needed = math.max(2, math.min(DRAG_START_ROWS, layout.slot_rows(cfg) - 1))
+  local past_threshold = dy >= rows_needed or dx >= DRAG_START_COLS
   if not drag.active and past_threshold and drag.at - drag.began >= DRAG_DWELL_MS then
     drag.active = true
   end

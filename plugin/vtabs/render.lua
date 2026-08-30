@@ -272,6 +272,9 @@ local function card_row(item, ctx, st, part, rows_in_card, spans, row_in_card)
   if part == "title" then
     local mark, mark_fg = marker(item, theme, st, glyphs)
     put(cells, g.gutter, mark, { fg = mark_fg }, g.gutter)
+  elseif (item.is_active or st.dragging) and needs_bar(theme) then
+    -- the bar runs the card's full height: one cell is too little to carry the active state alone
+    put(cells, g.gutter, glyphs.active, { fg = item.is_private and theme.private_accent or theme.accent }, g.gutter)
   end
 
   local function paint_icon()
@@ -333,6 +336,17 @@ local function card_row(item, ctx, st, part, rows_in_card, spans, row_in_card)
     end
   end
   return cells
+end
+
+---A strip action's glyph: the user's icon, the mirrored toggle, or the icon map's entry for the id.
+local function action_glyph(action, cfg, glyphs)
+  if action.icon then
+    return util.sanitize(action.icon)
+  end
+  if action.id == "toggle" then
+    return cfg.position == "right" and glyphs.toggle_right or glyphs.toggle_left
+  end
+  return glyphs[action.id] or glyphs.new_tab
 end
 
 local function chrome_row(ctx, glyph, glyph_x, text, text_fg, glyph_fg, bg)
@@ -485,13 +499,14 @@ function M.render(view)
       cells = nil
     elseif spec.kind == "strip" then
       cells = new_line(cols, theme.bg, theme.fg)
-      if spec.lit then
-        fill(cells, spec.toggle.x1, spec.toggle.x2, theme.hover_bg)
-      end
-      if spec.glyph then
-        local glyph = cfg.position == "right" and glyphs.toggle_right or glyphs.toggle_left
-        local on = plan.rows[spec.toggle.row] and plan.rows[spec.toggle.row].lit
-        put(cells, spec.toggle.x or spec.toggle.x1 + 1, glyph, { fg = on and theme.accent or theme.dim }, cols)
+      for _, action in ipairs(spec.actions or {}) do
+        local on = spec.lit_id == action.id
+        if on then
+          fill(cells, action.x1, action.x2, theme.hover_bg)
+        end
+        if spec.glyph then
+          put(cells, action.x, action_glyph(action, cfg, glyphs), { fg = on and theme.accent or theme.dim }, cols)
+        end
       end
     elseif spec.kind == "space" then
       cells = new_line(cols, theme.bg, theme.fg)

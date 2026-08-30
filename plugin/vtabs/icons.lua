@@ -48,6 +48,8 @@ M.defaults = {
   -- the Material close is drawn at icon size; the codicon read too thin next to the title
   close = glyph("md_close", "✖"),
   new_tab = glyph("cod_add", "+"),
+  settings = glyph("md_cog", "⚙"),
+  search = glyph("cod_search", "/"),
   unseen = glyph("md_circle_medium", "•"),
   focus = "›",
   active = "▎",

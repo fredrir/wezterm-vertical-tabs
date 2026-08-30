@@ -41,6 +41,72 @@ function M.rail_grid(cols)
   }
 end
 
+local ACTION_STRIDE = 3
+local ACTION_DEFAULT = { "toggle", "new_tab" }
+local ACTION_BUILTIN = { toggle = true, new_tab = true, settings = true, search = true }
+-- `settings` and `search` have no built-in behaviour, so they are drawn only when a hook answers them
+local ACTION_HOOKED = { settings = true, search = true }
+
+local function resolved_actions(cfg)
+  local wanted = cfg.strip_actions
+  if type(wanted) ~= "table" or #wanted == 0 then
+    wanted = ACTION_DEFAULT
+  end
+  local hooks = cfg.hooks or {}
+  local out = {}
+  for _, entry in ipairs(wanted) do
+    if type(entry) == "table" and entry.on_click then
+      out[#out + 1] = { id = entry.id or "custom", icon = entry.icon }
+    elseif entry == "toggle" then
+      if cfg.toggle_button then
+        out[#out + 1] = { id = "toggle" }
+      end
+    elseif ACTION_HOOKED[entry] then
+      if hooks[entry] then
+        out[#out + 1] = { id = entry }
+      end
+    elseif ACTION_BUILTIN[entry] then
+      out[#out + 1] = { id = entry }
+    end
+  end
+  return out
+end
+
+---Action glyphs and their 3-column hit spans, left to right on the lights' own row. They sit beside
+---the traffic lights where there are any, and otherwise on the sidebar's trailing edge, which is the
+---only place a toolbar fits without eating the list's margin.
+function M.strip_actions(cfg, strip, g, rail, cols)
+  local list = resolved_actions(cfg)
+  local row = strip and (strip.toggle_row or (strip.toggle and strip.toggle.row))
+  if #list == 0 or row == nil then
+    return {}, nil
+  end
+  local reserve = strip.cols or 0
+  local base
+  if rail then
+    local width = g.card_x2
+    if reserve == 0 and width >= 9 and 2 + ACTION_STRIDE * (#list - 1) + 1 <= width - 1 then
+      base = 2
+    else
+      list = { list[1] }
+      base = math.ceil(width / 2)
+    end
+  elseif reserve > 0 then
+    -- two clear of the last light, whatever the cell width made the reserve
+    base = reserve + 2
+  else
+    base = (strip.toggle and strip.toggle.x) or g.card_x1
+  end
+  local out = {}
+  for i, action in ipairs(list) do
+    local x = base + ACTION_STRIDE * (i - 1)
+    if x - 1 >= 1 and x + 1 <= cols then
+      out[#out + 1] = { id = action.id, icon = action.icon, x = x, x1 = x - 1, x2 = x + 1 }
+    end
+  end
+  return out, row
+end
+
 ---Reorders items so the dragged one sits at the hovered slot in the pinned-first sequence.
 function M.apply_drag(items, drag)
   if not drag or not drag.over_index or not drag.active then
@@ -149,6 +215,13 @@ local function card_rows(item, cfg)
   local pads = PADS[cfg.tab_height] or 1
   local content = cfg.meta == false and 1 or 2
   return 2 * pads + content, dense, pads, content
+end
+
+---Rows an unpinned tab owns, gap included: the shortest travel that can land on another slot.
+function M.slot_rows(cfg)
+  local pads = PADS[cfg.tab_height] or 1
+  local content = cfg.meta == false and 1 or 2
+  return 2 * pads + content + math.max(cfg.row_gap or 0, 0)
 end
 
 ---The card row the title and icon sit on: the middle of the pad/content/pad block.
@@ -280,24 +353,34 @@ function M.plan(view)
   end
 
   local rows, hits = {}, {}
-  local toggle = view.strip and view.strip.toggle
-  local toggle_last = toggle and math.min(toggle.row + 1, strip_rows) or 0
-  local toggle_on = toggle
-      and view.hover ~= nil
-      and view.hover.y >= toggle.row
-      and view.hover.y <= toggle_last
-      and view.hover.x >= toggle.x1
-      and view.hover.x <= toggle.x2
-    or false
+  local actions, action_row = M.strip_actions(cfg, view.strip, g, rail, cols)
+  -- two rows tall, so the target stays comfortable wherever the lights' centre lands
+  local band_last = action_row and math.min(action_row + 1, strip_rows) or 0
+  local lit_id = nil
+  if view.hover and action_row and view.hover.y >= action_row and view.hover.y <= band_last then
+    for _, action in ipairs(actions) do
+      if view.hover.x >= action.x1 and view.hover.x <= action.x2 then
+        lit_id = action.id
+      end
+    end
+  end
   for row = 1, strip_rows do
-    local in_toggle = toggle ~= nil and row >= toggle.row and row <= toggle_last
+    local in_band = #actions > 0 and action_row ~= nil and row >= action_row and row <= band_last
     rows[row] = {
       kind = "strip",
-      toggle = toggle,
-      lit = toggle_on and in_toggle,
-      glyph = toggle ~= nil and row == toggle.row,
+      actions = in_band and actions or nil,
+      lit_id = in_band and lit_id or nil,
+      glyph = action_row ~= nil and row == action_row,
     }
-    hits[row] = in_toggle and { kind = "toggle", x1 = toggle.x1, x2 = toggle.x2 } or { kind = "strip" }
+    if in_band then
+      local spans = {}
+      for _, action in ipairs(actions) do
+        spans[#spans + 1] = { id = action.id, x1 = action.x1, x2 = action.x2 }
+      end
+      hits[row] = { kind = "action", x1 = actions[1].x1, x2 = actions[#actions].x2, spans = spans }
+    else
+      hits[row] = { kind = "strip" }
+    end
   end
 
   for i = 1, list_rows do
@@ -387,6 +470,7 @@ function M.plan(view)
     scroll = scroll,
     max_scroll = max_scroll,
     hovered_id = hovered_id,
+    actions = actions,
     rows = rows,
     hits = hits,
   }

@@ -113,9 +113,9 @@ function M.resolve(base, effective)
       break
     end
   end
-  for _, key in ipairs { "close", "pinned", "private", "new_tab" } do
+  for _, key in ipairs { "close", "pinned", "private", "new_tab", "settings", "search" } do
     if out[key] and util.width(out[key]) ~= 1 then
-      out[key] = ({ close = "x", pinned = "*", private = "~", new_tab = "+" })[key]
+      out[key] = ({ close = "x", pinned = "*", private = "~", new_tab = "+", settings = "*", search = "/" })[key]
       by_width = true
     end
   end
