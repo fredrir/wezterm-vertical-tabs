@@ -175,7 +175,7 @@ function M.apply_titlebar_band(gui_window)
       left = user.left,
       right = user.right,
       bottom = user.bottom,
-      top = platform.TITLEBAR_PX,
+      top = platform.TITLEBAR_PAD,
     }
   else
     merged.window_padding = banding_saved[wid]

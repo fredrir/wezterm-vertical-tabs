@@ -91,7 +91,7 @@ return config
 | `edge_to_edge` | zeroes wezterm's window padding on the sides the sidebar touches, so its background reaches the window edge; the far side keeps wezterm's `1cell`, and top/bottom are window-global, so the content pane loses its half cell too. The split line stays: pair with `theme = { split = "hidden" }` for a seamless edge |
 | `tab_height` | pad rows around the card's content; independent of `meta` |
 | `meta` | off by default; opt in with `"auto"`, `"cwd"` or `"process"`. The popover header always shows cwd and domain, whatever this says |
-| `rail_width` | raised to the traffic-light reserve (typically 9) on macOS with `INTEGRATED_BUTTONS` |
+| `rail_width` | raised to the traffic-light reserve on macOS with `INTEGRATED_BUTTONS`: `ceil(70pt / cell width)`, so 9 columns at an 8 pt cell and 6 at 12 pt, the same on a 2x display |
 | `close_button` | treated as `"always"` when `hover = "press"`, where no background row is ever hovered |
 | `context` | `false` removes the mouse trigger only; `m` in keyboard mode still opens the popover |
 | `confirm_close` | the question is a popover level in the sidebar, never wezterm's own overlay, which the release after the click that opened it would dismiss; the overlay is the fallback only when no sidebar can draw the question |
