@@ -737,7 +737,7 @@ test("P1 grid: landmarks derive from cols and padding", function()
   eq(usub(rows[1], 6, 13), "dotfiles", "title at title_x1")
   eq(usub(rows[3], 2, 2), "▎", "active accent bar in the gutter")
   eq(usub(rows[4], 2, 2), "▎", "and on the meta row")
-  eq(usub(rows[4], 6, 25), "~/projects/wez-plug…", "meta at meta_x1, truncated to its budget")
+  eq(usub(rows[4], 6, 25), "~/p/wez-plugins     ", "meta at meta_x1, elided in the middle")
   local wide = frame_rows(p1_view { opts = { width = 40, separator = "gap" }, cols = 40 })
   eq(usub(wide[1], 6, 13), "dotfiles", "title column does not move with width")
 end)
@@ -947,6 +947,33 @@ test("P1 edge fade lands on a painted row, never on a gap", function()
   eq(r.hits[1].part, "gap", "first list row is a gap at this offset")
   local plain = render.render(p1_view { items = many, rows = 12, scroll = 0 })
   assert(r.data ~= plain.data, "a scrolled frame differs from the unscrolled one")
+end)
+
+test("P1 sibling paths stay distinguishable on the meta line", function()
+  local function sibling_items(a, b)
+    return {
+      { tab_id = 1, index = 1, is_active = false, is_pinned = false, title = "api", meta = a, icon = "t" },
+      { tab_id = 2, index = 2, is_active = false, is_pinned = false, title = "web", meta = b, icon = "t" },
+    }
+  end
+  local v = p1_view {
+    items = sibling_items("~/work/acme/services/api", "~/work/acme/services/web"),
+    opts = { separator = "gap" },
+  }
+  local rows = frame_rows(v)
+  local first, second = usub(rows[2], 6, 25), usub(rows[5], 6, 25)
+  assert(first ~= second, "siblings must not collapse to their shared parent")
+  assert(first:find("api", 1, true), "basename kept: " .. first)
+  assert(second:find("web", 1, true), "basename kept: " .. second)
+  eq(util.width(rows[2]), 28)
+  local composite = p1_view {
+    items = sibling_items("nvim · ~/work/acme/services/api", "SSH:archie · ~/work/acme/services/web"),
+    opts = { separator = "gap" },
+  }
+  local comp = frame_rows(composite)
+  assert(usub(comp[2], 6, 25):find("api", 1, true), "the tail after the separator is the path")
+  assert(usub(comp[5], 6, 25):find("web", 1, true))
+  eq(util.width(comp[5]), 28)
 end)
 
 test("P1 frames are written for design review", function()
