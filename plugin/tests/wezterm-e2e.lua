@@ -76,11 +76,97 @@ local probes = {
     local dims = window:get_dimensions()
     window:set_inner_size(dims.pixel_width + 300, dims.pixel_height)
   end,
+  shrink = function(window)
+    local dims = window:get_dimensions()
+    window:set_inner_size(dims.pixel_width - 300, dims.pixel_height)
+  end,
+  -- A drag: ten resizes 100 ms apart, the way `window-resized` really arrives.
+  drag_shrink = function(window)
+    local n, step = 0, nil
+    step = function()
+      n = n + 1
+      local ok = pcall(function()
+        local d = window:get_dimensions()
+        window:set_inner_size(d.pixel_width - 30, d.pixel_height)
+      end)
+      if ok and n < 10 then
+        wezterm.time.call_after(0.1, step)
+      end
+    end
+    step()
+  end,
+  drag_grow = function(window)
+    local n, step = 0, nil
+    step = function()
+      n = n + 1
+      local ok = pcall(function()
+        local d = window:get_dimensions()
+        window:set_inner_size(d.pixel_width + 30, d.pixel_height)
+      end)
+      if ok and n < 10 then
+        wezterm.time.call_after(0.1, step)
+      end
+    end
+    step()
+  end,
+  new_tab = function(window)
+    require("vtabs.actions").new_tab(window)
+  end,
+  tear_off = function(window)
+    require("vtabs.actions").tear_off(window, window:mux_window():active_tab():tab_id())
+  end,
+  reload = function()
+    wezterm.reload_configuration()
+  end,
   rail_mode = function()
     require("vtabs.config").get().collapsed = "rail"
   end,
   hidden_mode = function()
     require("vtabs.config").get().collapsed = "hidden"
+  end,
+  -- geometry's caches are module-locals; upvalues are the only way to trace them from outside.
+  probe_geom = function(window)
+    local geometry = require "vtabs.geometry"
+    local wid = window:window_id()
+    local out = {}
+    for i = 1, 40 do
+      local name, value = debug.getupvalue(geometry.correct, i)
+      if not name then
+        break
+      end
+      if type(value) == "table" and value[wid] ~= nil then
+        local v = value[wid]
+        if type(v) == "table" then
+          local parts = {}
+          for _, k in ipairs { "tab_id", "cols", "tab_cols", "target", "stuck", "collapsed", "px" } do
+            if v[k] ~= nil then
+              parts[#parts + 1] = k .. "=" .. tostring(v[k])
+            end
+          end
+          out[#out + 1] = name .. "{" .. table.concat(parts, ",") .. "}"
+        else
+          out[#out + 1] = name .. "=" .. tostring(v)
+        end
+      end
+    end
+    wezterm.log_info("e2e: geom " .. tostring(geometry.desired(wid)) .. " | " .. table.concat(out, " "))
+  end,
+  -- One line per tab: the sidebar panes the plugin itself sees, so a duplicate is visible plugin-side.
+  probe_panes = function(window)
+    local sidebar = require "vtabs.sidebar"
+    local out = {}
+    for _, info in ipairs(window:mux_window():tabs_with_info()) do
+      local marked, total = 0, 0
+      for _, p in ipairs(info.tab:panes()) do
+        total = total + 1
+        if sidebar.has_marker(p) then
+          marked = marked + 1
+        end
+      end
+      local sb = sidebar.find(info.tab)
+      out[#out + 1] = string.format("%d:%d/%d/%s", info.tab:tab_id(), marked, total, tostring(sb and sb:pane_id()))
+    end
+    wezterm.log_info("e2e: panes " .. table.concat(out, " "))
   end,
   probe_desired = function(window)
     local geometry = require "vtabs.geometry"

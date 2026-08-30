@@ -1,87 +1,11 @@
 #!/bin/sh
 # Drives a throwaway WezTerm instance and exercises the sidebar through the CLI.
-set -eu
-root=$(cd "$(dirname "$0")/../.." && pwd)
-bin="${VTABS_BIN:-}"
-if [ -z "$bin" ]; then
-  # No override: build, so the run tests the working tree and not a stale binary.
-  (cd "$root/backend" && cargo build --locked --release) || { echo "backend build failed"; exit 1; }
-  bin="$root/backend/target/release/wez-vtabs"
-fi
-[ -x "$bin" ] || { echo "backend binary not found: $bin"; exit 1; }
-log=$(mktemp -t vtabs-e2e.XXXXXX)
-
 mode="${1:-local}"
-home=$(mktemp -d /tmp/vte2e.XXXXXX)
-if [ "$mode" = mux ]; then
-  export VTABS_E2E_MUX="$home/mux.sock"
-  launch="connect e2emux"
-else
-  launch="start --always-new-process"
-fi
-echo "mode: $mode"
-# Isolated HOME keeps sockets and the mux pid file away from the real wezterm.
-# shellcheck disable=SC2086
-mkdir -p "$home/run"
-HOME="$home" XDG_RUNTIME_DIR="$home/run" VTABS_ROOT="$root" VTABS_BIN="$bin" VTABS_E2E_COLLAPSED=hidden WEZTERM_LOG=info wezterm --config-file "$root/plugin/tests/wezterm-e2e.lua" \
-  $launch --class vtabs-e2e >"$log" 2>&1 &
-pid=$!
-cleanup() {
-  set +e
-  kill $pid 2>/dev/null || true; wait $pid 2>/dev/null || true
-  if [ "$mode" = mux ]; then
-    sleep 1
-    for p in $(pgrep -x wezterm-mux-server); do
-      if ps -p "$p" -E -o command= | grep -c "$home" >/dev/null; then
-        kill "$p" || true
-      fi
-    done
-  fi
-  [ -n "${VTABS_E2E_LOG:-}" ] && cp "$log" "$VTABS_E2E_LOG"
-  rm -rf "$home"
-  grep -i "vtabs: \(user-var\|update-status\|window-\)\|WARN\|ERROR" "$log" | grep -v "Broken pipe" | tail -20
-  rm -f "$log"
-}
-trap cleanup EXIT
-
-export WEZTERM_UNIX_SOCKET="$home/run/wezterm/gui-sock-$pid"
-for _ in $(seq 1 50); do
-  [ -S "$WEZTERM_UNIX_SOCKET" ] && wezterm cli --no-auto-start list >/dev/null 2>&1 && break
-  sleep 0.2
-done
-sleep 2
-
-fail() { echo "FAIL: $*"; exit 1; }
-cli() { wezterm cli --no-auto-start "$@"; }
-mark() { wc -l <"$log" | tr -d ' '; }
-since() { tail -n "+$(($1 + 1))" "$log"; }
-# Runs a probe defined in wezterm-e2e.lua by making the pane print an OSC 1337 SetUserVar.
-vtest() { cli send-text --no-paste --pane-id "$1" "printf '\\033]1337;SetUserVar=vtabs_test=$(printf %s "$2" | base64)\\a'
-"; }
-list() { cli list --format json; }
-is_sb='(p["title"].startswith("wez-vtabs") or (p["left_col"]==0 and p["size"]["cols"]==28))'
-sidebar_panes() { list | python3 -c 'import json,sys; print("\n".join(str(p["pane_id"]) for p in json.load(sys.stdin) if '"$is_sb"'))'; }
-sidebar_of() { list | python3 -c 'import json,sys; t='"$1"'; print([p["pane_id"] for p in json.load(sys.stdin) if p["tab_id"]==t and '"$is_sb"'][0])'; }
-content_of() { list | python3 -c 'import json,sys; t='"$1"'; print([p["pane_id"] for p in json.load(sys.stdin) if p["tab_id"]==t and not '"$is_sb"'][0])'; }
-tab_ids() { list | python3 -c 'import json,sys; print(" ".join(str(t) for t in sorted({p["tab_id"] for p in json.load(sys.stdin)})))'; }
-tab_count() { tab_ids | wc -w | tr -d ' '; }
-sidebar_text() { cli get-text --pane-id "$1"; }
-# Reads the active tab title from the plugin side; the card's chrome is theme-dependent.
-probe_line() {
-  m=$(mark)
-  vtest "$1" "$2"
-  for _ in $(seq 1 25); do
-    v=$(since "$m" | sed -n "s/.*e2e: $3 //p" | tail -1)
-    [ -n "$v" ] && { echo "$v"; return 0; }
-    sleep 0.2
-  done
-  echo ""
-}
-tab_of_pane() { list | python3 -c 'import json,sys; s='"$1"'; print([p["tab_id"] for p in json.load(sys.stdin) if p["pane_id"]==s][0])'; }
-active_title() { probe_line "$(content_of "$(tab_of_pane "$1")")" probe_active_title "active title"; }
-row_of() { sidebar_text "$1" | python3 -c 'import sys; rows=sys.stdin.read().split("\n"); print(next(i+1 for i,l in enumerate(rows) if "'"$2"'" in l))'; }
-click() { cli send-text --no-paste --pane-id "$1" "$(printf '\033[<%s;%s;%sM\033[<%s;%s;%sm' "$4" "$2" "$3" "$4" "$2" "$3")"; }
-geometry() { list | python3 -c 'import json,sys; [print("  win", p["window_id"], "tab", p["tab_id"], "pane", p["pane_id"], p["title"], "left", p["left_col"], "cols", p["size"]["cols"]) for p in json.load(sys.stdin)]'; }
+# The detach/attach contract comes first; the rail is exercised further down.
+export VTABS_E2E_COLLAPSED=hidden
+. "$(dirname "$0")/e2e-lib.sh"
+e2e_launch
+trap e2e_cleanup EXIT
 
 for _ in $(seq 1 40); do
   [ -n "$(sidebar_panes 2>/dev/null)" ] && break
@@ -107,7 +31,6 @@ sidebar_text "$sb1" | grep -c "one" >/dev/null || fail "first sidebar does not l
 sidebar_text "$sb1" | grep -c "two" >/dev/null || fail "first sidebar does not list tab two"
 echo "ok: both sidebars render both tabs"
 
-width_of() { list | python3 -c 'import json,sys; t='"$1"'; print([p["size"]["cols"] for p in json.load(sys.stdin) if p["tab_id"]==t and '"$is_sb"'][0])'; }
 settle_width() { # tab_id
   for _ in $(seq 1 24); do
     [ "$(width_of "$1")" -eq 28 ] && return 0
@@ -115,7 +38,6 @@ settle_width() { # tab_id
   done
   return 1
 }
-cols_of() { list | python3 -c 'import json,sys; p='"$1"'; print([q["size"]["cols"] for q in json.load(sys.stdin) if q["pane_id"]==p][0])'; }
 toggle() { vtest "$1" toggle; }
 # Detach/attach contract; the harness default is the rail, so ask for hidden explicitly.
 vtest "$(content_of "$first_tab")" hidden_mode
@@ -208,7 +130,6 @@ sleep 1.5
 [ "$(row_of "$sb1" three)" -lt "$(row_of "$sb1" one)" ] || fail "drag did not reorder tabs"
 echo "ok: drag reorders tabs"
 
-window_count() { list | python3 -c 'import json,sys; print(len({p["window_id"] for p in json.load(sys.stdin)}))'; }
 drag "$sb1" "$sb3" 5 "$(row_of "$sb1" three)" 28 "$(row_of "$sb1" three)"
 for _ in $(seq 1 16); do
   [ "$(window_count)" -eq 2 ] && break
@@ -291,7 +212,6 @@ fi
 
 # Resize last: WezTerm hands the sidebar half of every new column, so a failure here moves the
 # inner edge and would break every gesture that follows.
-total_cols() { list | python3 -c 'import json,sys; print(max(p["left_col"]+p["size"]["cols"] for p in json.load(sys.stdin)))'; }
 grow_tab=$(tab_ids | cut -d' ' -f2)
 other_tab=$(tab_ids | cut -d' ' -f1)
 before_cols=$(total_cols)
