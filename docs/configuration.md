@@ -70,7 +70,7 @@ return config
 | `skip_close_confirmation` | `true`                                                            | `true` \| `false` |
 | `private.env`             | `{ HISTFILE = "", fish_private_mode = "1", VTABS_PRIVATE = "1" }` | table |
 | `keys`                    | `{}`                                                              | table \| `false` |
-| `theme`                   | `{ elevation = 0, split = "auto" }`                               | see Theme |
+| `theme`                   | `{ elevation = 0.06, split = "auto" }`                            | see Theme |
 | `hooks.filter`            | `nil`                                                             | `fun(tab, mux_window): boolean` |
 | `hooks.footer`            | `nil`                                                             | `fun(mux_window): rows` |
 | `hooks.theme`             | `nil`                                                             | `fun(window, theme): theme` |
@@ -95,7 +95,7 @@ return config
 | `animations` | colour only: expand and collapse fade around one hard width snap, never a slide |
 | `dim_inactive_panes` | wezterm dims the idle pane by default, which makes the sidebar change shade as focus moves |
 | `theme.split` | `"auto"` leaves wezterm's divider; `"hidden"` or a colour repaints **every** split in the window, not just the sidebar's |
-| `theme.elevation` | `0` = the terminal background exactly, `0.06` = the pre-P1 tint; capped at `0.3` |
+| `theme.elevation` | `0.06` = the default tint, `0` = seamless with the terminal background; capped at `0.3`. `theme.content_bg` stays untinted, which is what `frame` paints its gutter with |
 | `adopt` | `"auto"` adopts only where this plugin spawns backends; see `docs/limitations.md` |
 | `backend.path` | keyed by host or domain; `host` comes from the pane's OSC 7 cwd |
 

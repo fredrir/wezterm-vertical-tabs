@@ -511,7 +511,7 @@ M.options = {
     type = "table",
     container = true,
     open = true,
-    shown = '`{ elevation = 0, split = "auto" }`',
+    shown = '`{ elevation = 0.06, split = "auto" }`',
     label = "Theme",
     group = "theme",
     values = "see Theme",
@@ -520,7 +520,7 @@ M.options = {
   {
     key = "theme.elevation",
     type = "number",
-    default = 0,
+    default = 0.06,
     min = 0,
     max = 0.3,
     docs = false,

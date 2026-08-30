@@ -151,9 +151,9 @@ function M.correct(gui_window)
     return false
   end
 
-  -- A rail is deliberately narrower than any sidebar, so the floor must not raise it back.
+  -- A rail is deliberately narrower than any sidebar, so the floor is the rail's own width.
   local want = M.desired(wid)
-  local target = fits(want, tab_cols, math.min(MIN_WIDTH, want))
+  local target = fits(want, tab_cols, collapsed and want or MIN_WIDTH)
   local attempt = { tab_id = tab_id, tab_cols = tab_cols, target = target, cols = cols }
   local last = attempted[wid]
   -- A mux applies the adjust a poll late, so a width counts as unreachable only after it sits still.

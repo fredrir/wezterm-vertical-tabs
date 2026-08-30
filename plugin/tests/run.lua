@@ -116,8 +116,11 @@ test("use_scheme_tab_bar is a deprecated no-op: the sidebar keeps the terminal b
   local p = palette("#1e1e2e", "#cdd6f4")
   p.tab_bar =
     { background = "#000000", inactive_tab_hover = { bg_color = "#333333" }, active_tab = { bg_color = "#555555" } }
-  eq(theme.resolve({}, p).bg[1], 30, "no background is borrowed")
-  eq(theme.resolve({ use_scheme_tab_bar = true }, p).bg[1], 30)
+  local seamless = theme.resolve({ elevation = 0 }, p).bg[1]
+  eq(theme.resolve({}, p).bg[1] > seamless, true, "the page is the terminal background plus the tint")
+  local borrowed = theme.resolve({ use_scheme_tab_bar = true }, p).bg
+  local plain = theme.resolve({}, p).bg
+  eq(table.concat(borrowed, ","), table.concat(plain, ","), "nothing is borrowed")
   local warned = 0
   for _, line in ipairs(wezterm.log) do
     if line:find("use_scheme_tab_bar is deprecated", 1, true) then
@@ -2057,11 +2060,12 @@ local function rgb(c)
   return table.concat(c, ",")
 end
 
-test("theme bg is the terminal background; elevation restores the raised tint", function()
+test("the page is tinted by default and elevation = 0 makes it seamless", function()
   local t = theme.resolve({}, fake.palette)
-  eq(rgb(t.bg), "30,30,46")
-  local raised = theme.resolve({ elevation = 0.06 }, fake.palette)
-  assert(raised.bg[1] > t.bg[1] and raised.bg[3] > t.bg[3], "elevation lifts bg toward fg")
+  local seamless = theme.resolve({ elevation = 0 }, fake.palette)
+  eq(rgb(seamless.bg), "30,30,46", "0 is exactly the terminal background")
+  assert(t.bg[1] > seamless.bg[1] and t.bg[3] > seamless.bg[3], "the default tint lifts it toward fg")
+  eq(rgb(t.bg), rgb(theme.resolve({ elevation = 0.06 }, fake.palette).bg), "and it is 0.06")
 end)
 
 test("the accent chain is cursor_bg, then tab_bar active, then ansi[5], each behind both gates", function()
@@ -3212,7 +3216,8 @@ test("view hands the renderer a strip and a private-aware theme", function()
   eq(seen.strip.toggle.x1, 1, "the span reaches one column left of the glyph")
   eq(seen.strip.toggle.x2, 4, "four columns wide")
   eq(type(seen.user_scrolled), "boolean")
-  eq(rgb(seen.theme.bg), "30,30,46", "the fixture palette reaches the renderer")
+  eq(rgb(seen.theme.content_bg), "30,30,46", "the fixture palette reaches the renderer")
+  assert(rgb(seen.theme.bg) ~= "30,30,46", "and the page carries the default tint")
 
   state.set_private(gui:window_id(), true)
   view_mod.invalidate_theme()
@@ -3521,7 +3526,7 @@ test("every enum rejects a value outside it and every range rejects the wrong si
   eq(config.setup({ width = 4 }).width, 28, "below min")
   eq(config.setup({ width = "wide" }).width, 28, "wrong type")
   eq(config.setup({ row_gap = -1 }).row_gap, 1)
-  eq(config.setup({ theme = { elevation = 2 } }).theme.elevation, 0, "above max")
+  eq(config.setup({ theme = { elevation = 2 } }).theme.elevation, 0.06, "above max")
   eq(config.setup({ toggle_button = "yes" }).toggle_button, true)
   eq(config.setup({ padding = { top = -1 } }).padding.top, 1, "nested keys validate too")
   eq(config.setup({ width = 40 }).width, 40, "a valid value survives")
@@ -3581,25 +3586,20 @@ test("the new surfaces are overridable like every other theme key", function()
   eq(over.scrim, 0.5)
 end)
 
-test("the sidebar page colour is the terminal background byte for byte, light and dark", function()
-  for _, name in ipairs { "Catppuccin Mocha", "Catppuccin Latte", "Solarized Light" } do
-    for _, p in ipairs(palettes) do
-      if p.name == name then
-        local t = theme.resolve({}, p)
-        eq(rgb(t.bg), hex(p.background), "no tint on " .. name)
-      end
-    end
-  end
-  -- Only an explicit elevation moves it, and only a little: 1.0 would paint the sidebar in fg.
-  local latte
+test("the sidebar page is tinted by default; the frame gutter keeps the terminal background", function()
   for _, p in ipairs(palettes) do
-    if p.name == "Catppuccin Latte" then
-      latte = p
-    end
+    local t = theme.resolve({}, p)
+    local where = " on " .. p.name
+    assert(rgb(t.bg) ~= hex(p.background), "the default tint is visible" .. where)
+    eq(rgb(t.content_bg), hex(p.background), "content_bg is never tinted" .. where)
+    eq(rgb(t.bg), rgb(theme.mix(t.content_bg, t.fg, 0.06 * (theme.luminance(t.bg) < 0.5 and 1 or 1))), where)
   end
-  assert(rgb(theme.resolve({ elevation = 0.06 }, latte).bg) ~= hex(latte.background))
-  eq(config.setup({ theme = { elevation = 1 } }).theme.elevation, 0, "out of range, reset")
-  eq(config.setup({ theme = { elevation = 0.06 } }).theme.elevation, 0.06)
+  eq(config.setup({}).theme.elevation, 0.06, "the shipped default")
+  local seamless = theme.resolve({ elevation = 0 }, palettes[1])
+  eq(rgb(seamless.bg), hex(palettes[1].background), "0 is still the seamless option")
+  -- Out of range resets to the default rather than painting the sidebar in the foreground.
+  eq(config.setup({ theme = { elevation = 1 } }).theme.elevation, 0.06)
+  eq(config.setup({ theme = { elevation = 0 } }).theme.elevation, 0)
   config.setup { backend = { path = "/bin/wez-vtabs" } }
 end)
 
@@ -3885,17 +3885,18 @@ test("the active title is accent-tinted where the scheme can carry it, else it k
       barred[p.name] = true
     end
   end
-  -- The two schemes whose own fg cannot reach 4.0 on the card keep the accent bar instead.
-  eq(rgb(util.sorted_keys(barred)), rgb { "Solarized Dark", "Solarized Light" })
+  -- The schemes whose own fg cannot reach 4.0 on the tinted card keep the accent bar instead.
+  eq(rgb(util.sorted_keys(barred)), rgb { "One Dark", "Solarized Dark", "Solarized Light" })
 end)
 
 test("content_bg is the untinted terminal background, whatever elevation does to the page", function()
   for _, p in ipairs(palettes) do
-    local t = theme.resolve({ elevation = 0.06 }, p)
+    local t = theme.resolve({}, p)
     eq(rgb(t.content_bg), hex(p.background), "on " .. p.name)
     assert(rgb(t.bg) ~= rgb(t.content_bg), "the page is tinted, the gutter is not")
   end
-  eq(rgb(theme.resolve({}, palettes[1]).content_bg), rgb(theme.resolve({}, palettes[1]).bg))
+  local seamless = theme.resolve({ elevation = 0 }, palettes[1])
+  eq(rgb(seamless.content_bg), rgb(seamless.bg), "they coincide only at elevation 0")
 end)
 
 test("tall cards and the frame are configurable, and false is the frame default", function()
@@ -3906,6 +3907,23 @@ test("tall cards and the frame are configurable, and false is the frame default"
   local framed = config.setup { frame = { margin = 1, corners = "chamfer" } }
   eq(framed.frame.margin, 1)
   eq(framed.frame.corners, "chamfer")
+  config.setup { backend = { path = "/bin/wez-vtabs" } }
+end)
+
+test("a rail is corrected to exactly rail_width, below the 8-column sidebar floor", function()
+  for _, width in ipairs { 3, 5, 7 } do
+    local win, gui = setup_window(1)
+    config.setup { backend = { path = "/bin/wez-vtabs" }, rail_width = width }
+    sidebar.ensure(gui)
+    local sb = mark_ready(win.tab_list[1])
+    sidebar.set_collapsed(gui, true)
+    eq(geometry.desired(gui:window_id()), width)
+    assert(geometry.correct(gui), "one correction at rail_width " .. width)
+    eq(sb.cols, width, "the sidebar floor must not raise a deliberate rail")
+    sidebar.set_collapsed(gui, false)
+    assert(geometry.correct(gui))
+    eq(sb.cols, 28, "and expanding still lands on cfg.width")
+  end
   config.setup { backend = { path = "/bin/wez-vtabs" } }
 end)
 

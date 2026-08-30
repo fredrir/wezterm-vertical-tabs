@@ -6,6 +6,8 @@ local M = {}
 local ACCENT_MIN = 3.0
 local ACCENT_VS_FG_MIN = 1.2
 local QUIET_TITLE_MIN = 5.0
+-- Matches the shipped `theme.elevation`; a caller passing `{}` gets the page the plugin paints.
+local DEFAULT_ELEVATION = 0.06
 
 local function parse(color)
   if type(color) == "table" then
@@ -121,7 +123,7 @@ function M.resolve(user, palette, opts)
 
   local base_bg = first(palette.background, "#1e1e2e")
   local fg = first(user.fg, palette.foreground, "#cdd6f4")
-  local bg = first(user.bg) or mix(base_bg, fg, tonumber(user.elevation) or 0)
+  local bg = first(user.bg) or mix(base_bg, fg, tonumber(user.elevation) or DEFAULT_ELEVATION)
 
   -- A 6% darken on a light scheme reads far louder than a 6% lighten on near-black.
   local k = luminance(bg) < 0.5 and 1.0 or 0.6
