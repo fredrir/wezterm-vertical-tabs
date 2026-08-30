@@ -488,10 +488,10 @@ function M.paint(frame)
   }
 end
 
----Renders the sidebar: layout decides every row and hit, this paints them.
+---Lays a frame out into cells without encoding it. `render` encodes the result; the settings page
+---blits the same cells into its preview box, so the preview is the real thing and not a mock-up.
 ---@param view VtabsRenderInput
----@return table `{ data, rows, rows_n, hits, total_rows, scroll }`
-function M.render(view)
+function M.cells(view)
   local cfg, theme, cols = view.cfg, view.theme, view.cols
   local glyphs = view.glyphs
   local plan = layout.plan(view)
@@ -586,7 +586,14 @@ function M.render(view)
   if view.popover then
     M.composite(frame, view.popover)
   end
-  return M.paint(frame)
+  return frame
+end
+
+---Renders the sidebar: layout decides every row and hit, this paints them.
+---@param view VtabsRenderInput
+---@return table `{ data, rows, rows_n, hits, total_rows, scroll }`
+function M.render(view)
+  return M.paint(M.cells(view))
 end
 
 return M
