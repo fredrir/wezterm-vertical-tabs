@@ -76,9 +76,21 @@ local probes = {
     local dims = window:get_dimensions()
     window:set_inner_size(dims.pixel_width + 300, dims.pixel_height)
   end,
+  rail_mode = function()
+    require("vtabs.config").get().collapsed = "rail"
+  end,
+  hidden_mode = function()
+    require("vtabs.config").get().collapsed = "hidden"
+  end,
   probe_desired = function(window)
     local geometry = require "vtabs.geometry"
-    wezterm.log_info("e2e: desired width " .. tostring(geometry.desired(window:window_id())))
+    local state = require "vtabs.state"
+    wezterm.log_info(
+      "e2e: desired width "
+        .. tostring(geometry.desired(window:window_id()))
+        .. " collapsed "
+        .. tostring(state.is_collapsed(window:window_id()))
+    )
   end,
   -- A tab overlay (the tab menu) replaces the tab's panes, so this reports the overlay's pane id.
   probe_active = function(window)
