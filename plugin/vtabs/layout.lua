@@ -46,10 +46,11 @@ function M.has_text(g)
 end
 
 local ACTION_STRIDE = 3
-local ACTION_DEFAULT = { "toggle", "new_tab" }
+local ACTION_DEFAULT = { "toggle", "new_tab", "settings" }
 local ACTION_BUILTIN = { toggle = true, new_tab = true, settings = true, search = true }
--- `settings` and `search` have no built-in behaviour, so they are drawn only when a hook answers them
-local ACTION_HOOKED = { settings = true, search = true }
+-- `search` has no built-in behaviour, so it is drawn only when a hook answers it; `settings` opens
+-- the page, and a hook only overrides where it goes.
+local ACTION_HOOKED = { search = true }
 
 local function resolved_actions(cfg)
   local wanted = cfg.strip_actions

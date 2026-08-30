@@ -317,6 +317,12 @@ function M.pane_for_token(token)
   return nil
 end
 
+---A token for a backend pane that is not a tab's sidebar - the settings page. The bridge trusts
+---the echo, not the role, so registration is the same; only the tab mapping is not.
+function M.set_token(pane_id, token)
+  data.tokens[key(pane_id)] = token
+end
+
 function M.set_sidebar(tab_id, pane_id, token)
   local old = data.sidebars[key(tab_id)]
   if old and old ~= pane_id then

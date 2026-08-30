@@ -205,6 +205,7 @@ local MODULES = {
   "popover",
   "render",
   "schema",
+  "settings",
   "sidebar",
   "state",
   "theme",

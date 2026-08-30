@@ -9,6 +9,7 @@ local actions = require "vtabs.actions"
 local popover = require "vtabs.popover"
 local hit = require "vtabs.hit"
 local layout = require "vtabs.layout"
+local settings = require "vtabs.settings"
 local util = require "vtabs.util"
 
 local M = {}
@@ -543,6 +544,15 @@ function M.handle(gui_window, pane, name, value)
   session.seen[pane:pane_id()] = util.now_ms()
   if cfg.debug then
     util.log("handle: %s from pane %d", tostring(ev.t), pane:pane_id())
+  end
+  -- the settings page shares the bridge but none of the sidebar's hit map; it answers for itself
+  if sidebar.is_settings(pane) then
+    if ev.t == "ready" then
+      sidebar.auth(pane)
+    elseif ev.t == "key" then
+      settings.key(gui_window, ev)
+    end
+    return
   end
   if ev.t == "ready" then
     sidebar.auth(pane)
