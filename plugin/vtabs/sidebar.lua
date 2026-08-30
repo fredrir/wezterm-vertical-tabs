@@ -23,6 +23,9 @@ local PIN_GRACE_MS = 3000
 ---Title the backend sets on itself; adoption evidence only, any process can set a title.
 local MARKER = "^wez%-vtabs:%x+$"
 
+---Same backend, other role: a settings pane is content, never a tab list.
+local SETTINGS_MARKER = "^wez%-vtabs%-settings:%x+$"
+
 local session = state.session
 
 local function tab_id_of(pane)
@@ -46,14 +49,29 @@ function M.is_overlay(pane)
   return type(domain) ~= "string" or domain:find "TermWiz" ~= nil
 end
 
+local function pane_title(pane)
+  return util.try(function()
+    return pane:get_title()
+  end)
+end
+
+---Any title this backend sets, in any role: kept out of the tab list whatever the pane is doing.
 function M.marker(title)
+  if type(title) ~= "string" then
+    return false
+  end
+  return title:match(MARKER) ~= nil or title:match(SETTINGS_MARKER) ~= nil
+end
+
+---Adoption evidence, sidebar role only.
+function M.has_marker(pane)
+  local title = pane_title(pane)
   return type(title) == "string" and title:match(MARKER) ~= nil
 end
 
-function M.has_marker(pane)
-  return M.marker(util.try(function()
-    return pane:get_title()
-  end))
+function M.is_settings(pane)
+  local title = pane and pane_title(pane)
+  return type(title) == "string" and title:match(SETTINGS_MARKER) ~= nil
 end
 
 ---Re-points the map when the mux renumbers panes; only this process knows the token it minted.
@@ -102,7 +120,7 @@ local function has_marker_cached(pane, pid)
   if seen and seen.tick == tick then
     return seen.value
   end
-  local value = M.has_marker(pane) and not M.is_overlay(pane)
+  local value = M.has_marker(pane) and not M.is_overlay(pane) and not M.is_settings(pane)
   session.marker[pid] = { tick = tick, value = value }
   return value
 end
@@ -125,7 +143,7 @@ local function sidebar_rank(pane, pure)
   end
   local marker
   if pure then
-    marker = M.has_marker(pane) and not M.is_overlay(pane)
+    marker = M.has_marker(pane) and not M.is_overlay(pane) and not M.is_settings(pane)
   else
     marker = has_marker_cached(pane, pid)
   end
@@ -656,6 +674,10 @@ local function ensure_window(gui_window)
   tick = tick + 1
   classified = {}
   local tabs = mux_win:tabs_with_info()
+  local active_tab = util.try(function()
+    return mux_win:active_tab()
+  end)
+  local active_id = active_tab and active_tab:tab_id() or nil
 
   resolve_pins(tabs, now)
   prune_windows(now)
@@ -691,7 +713,8 @@ local function ensure_window(gui_window)
         else
           await_auth(gui_window, tab, sb, now)
         end
-      else
+      elseif tab_id == active_id then
+        -- background tabs attach when they are first activated: 20 splits at once cost ~460 ms
         M.attach(tab)
       end
     end

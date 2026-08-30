@@ -23,7 +23,7 @@ echo "mode: $mode"
 # Isolated HOME keeps sockets and the mux pid file away from the real wezterm.
 # shellcheck disable=SC2086
 mkdir -p "$home/run"
-HOME="$home" XDG_RUNTIME_DIR="$home/run" VTABS_ROOT="$root" VTABS_BIN="$bin" WEZTERM_LOG=info wezterm --config-file "$root/plugin/tests/wezterm-e2e.lua" \
+HOME="$home" XDG_RUNTIME_DIR="$home/run" VTABS_ROOT="$root" VTABS_BIN="$bin" VTABS_E2E_COLLAPSED=hidden WEZTERM_LOG=info wezterm --config-file "$root/plugin/tests/wezterm-e2e.lua" \
   $launch --class vtabs-e2e >"$log" 2>&1 &
 pid=$!
 cleanup() {
@@ -114,20 +114,43 @@ settle_width() { # tab_id
   done
   return 1
 }
+cols_of() { list | python3 -c 'import json,sys; p='"$1"'; print([q["size"]["cols"] for q in json.load(sys.stdin) if q["pane_id"]==p][0])'; }
 toggle() { vtest "$1" toggle; }
-# collapsed = "rail" keeps the pane and narrows it, so the toggle stays reachable. Only the active
-# tab is corrected on the spot; background tabs follow when they are activated (P0 0.3).
+# Detach/attach contract; the harness default is the rail, so ask for hidden explicitly.
+vtest "$(content_of "$first_tab")" hidden_mode
+sleep 0.5
+toggle "$(content_of "$first_tab")"
+sleep 1.5
+[ -z "$(sidebar_panes)" ] || fail "toggle did not remove sidebars"
+[ "$(tab_count)" -eq 2 ] || fail "toggle closed a tab"
+toggle "$(content_of "$first_tab")"
+sleep 2.5
+# expand splits the active tab only; the other one attaches when it is next activated
+[ "$(sidebar_panes | wc -l | tr -d ' ')" -eq 1 ] || fail "expand split more than the active tab"
+cli activate-tab --tab-id "$second_tab"
+sleep 1.5
 cli activate-tab --tab-id "$first_tab"
+sleep 1.5
+[ "$(sidebar_panes | wc -l | tr -d ' ')" -eq 2 ] || fail "toggle did not restore sidebars"
+sb1=$(sidebar_of "$first_tab")
+sb2=$(sidebar_of "$second_tab")
+sleep 1
+sidebar_text "$sb1" | grep -c "one" >/dev/null || fail "restored sidebar does not render"
+echo "ok: toggle hides and restores sidebars without touching content"
+
+# collapsed = "rail" is the shipped default: the pane stays and only narrows. Background tabs
+# follow when they are next activated (P0 0.3's lazy width correction).
+vtest "$(content_of "$first_tab")" rail_mode
+sleep 0.5
 toggle "$(content_of "$first_tab")"
 for _ in $(seq 1 20); do
   [ "$(width_of "$first_tab")" -eq 5 ] && break
   sleep 0.25
 done
-if [ "$(width_of "$first_tab")" -ne 5 ]; then
-  m=$(mark); vtest "$(content_of "$first_tab")" probe_desired; sleep 1
-  since "$m" | grep -o "e2e: desired width .*" | tail -1
-  fail "toggle did not narrow the sidebar to the rail ($(width_of "$first_tab") cols)"
-fi
+[ "$(width_of "$first_tab")" -eq 5 ] || fail "the rail did not narrow the sidebar ($(width_of "$first_tab") cols)"
+[ "$(sidebar_panes | wc -l | tr -d ' ')" -eq 2 ] || fail "the rail dropped a sidebar pane"
+[ "$(tab_count)" -eq 2 ] || fail "the rail closed a tab"
+[ "$(cols_of "$(content_of "$first_tab")")" -gt 90 ] || fail "the content pane did not take the freed columns"
 cli activate-tab --tab-id "$second_tab"
 for _ in $(seq 1 20); do
   [ "$(width_of "$second_tab")" -eq 5 ] && break
@@ -135,25 +158,15 @@ for _ in $(seq 1 20); do
 done
 [ "$(width_of "$second_tab")" -eq 5 ] || fail "a background tab did not join the rail once activated"
 cli activate-tab --tab-id "$first_tab"
-[ "$(sidebar_panes | wc -l | tr -d ' ')" -eq 2 ] || fail "the rail dropped a sidebar pane"
-[ "$(tab_count)" -eq 2 ] || fail "toggle closed a tab"
 toggle "$(content_of "$first_tab")"
-if ! settle_width "$first_tab"; then
-  m=$(mark); vtest "$(content_of "$first_tab")" probe_desired; sleep 1
-  since "$m" | grep -o "e2e: desired width .*" | tail -1
-  fail "toggle did not restore the full width ($(width_of "$first_tab") cols)"
-fi
-[ "$(sidebar_panes | wc -l | tr -d ' ')" -eq 2 ] || fail "toggle did not restore sidebars"
-# Background tabs keep the rail width until they are activated (P0 0.3's lazy correction).
+settle_width "$first_tab" || fail "the rail did not restore the full width ($(width_of "$first_tab") cols)"
 cli activate-tab --tab-id "$second_tab"
 settle_width "$second_tab" || fail "a background tab did not leave the rail once activated"
 cli activate-tab --tab-id "$first_tab"
-settle_width "$first_tab" || fail "the first tab did not come back to full width"
-sb1=$(sidebar_of "$first_tab")
-sb2=$(sidebar_of "$second_tab")
-sleep 1
-sidebar_text "$sb1" | grep -c "one" >/dev/null || fail "restored sidebar does not render"
-echo "ok: toggle collapses to the rail and back without touching content"
+vtest "$(content_of "$first_tab")" hidden_mode
+sleep 0.5
+echo "ok: the rail narrows every sidebar and restores them"
+
 
 click "$sb2" 5 "$(row_of "$sb2" two)" 0
 sleep 1
@@ -315,7 +328,6 @@ rc_sb=$(sidebar_of "$rc_tab")
 rc_content=$(content_of "$rc_tab")
 rc_row=$(sidebar_text "$rc_sb" | python3 -c 'import sys; rows=sys.stdin.read().split("\n"); print(next(i+1 for i,l in enumerate(rows) if "▎" in l))')
 rc_cols=$(list | python3 -c 'import json,sys; p='"$rc_content"'; print([q["size"]["cols"] for q in json.load(sys.stdin) if q["pane_id"]==p][0])')
-cols_of() { list | python3 -c 'import json,sys; p='"$1"'; print([q["size"]["cols"] for q in json.load(sys.stdin) if q["pane_id"]==p][0])'; }
 # The menu is a GUI tab overlay: the CLI never sees it, so this only asserts nothing is destroyed.
 active_pane() {
   m=$(mark)

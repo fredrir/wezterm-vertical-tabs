@@ -244,10 +244,6 @@ local function marker(item, theme, st, glyphs)
   return " ", theme.fg
 end
 
-local function on_surface(item, st)
-  return st.dragging or st.focused or item.is_active or st.hovered
-end
-
 local function shows_close(item, cfg, st)
   if cfg.close_button == "never" or st.dragging then
     return false
@@ -294,7 +290,7 @@ local function card_row(item, ctx, st, part, rows_in_card)
     return cells, nil
   end
   local fg, bg = row_colors(item, theme, st)
-  local surface = on_surface(item, st)
+  local icon_fg = st.dragging and fg or theme.meta_fg or theme.dim
   fill(cells, g.card_x1, g.card_x2, bg)
 
   local mark, mark_fg = marker(item, theme, st, glyphs)
@@ -307,11 +303,23 @@ local function card_row(item, ctx, st, part, rows_in_card)
   local spans = nil
   if part == "title" and g.title_x1 == nil then
     if item.icon ~= "" then
-      put(cells, g.icon_x, util.sanitize(item.icon), { fg = item.is_private and theme.private_accent or fg }, g.icon_x)
+      put(
+        cells,
+        g.icon_x,
+        util.sanitize(item.icon),
+        { fg = item.is_private and theme.private_accent or icon_fg },
+        g.icon_x
+      )
     end
   elseif part == "title" then
     if cfg.icons and item.icon ~= "" then
-      put(cells, g.icon_x, util.sanitize(item.icon), { fg = item.is_private and theme.private_accent or fg }, g.icon_x)
+      put(
+        cells,
+        g.icon_x,
+        util.sanitize(item.icon),
+        { fg = item.is_private and theme.private_accent or icon_fg },
+        g.icon_x
+      )
     end
     local title = util.truncate(util.sanitize(item.title), g.title_budget, glyphs.ellipsis)
     put(cells, g.title_x1, title, { fg = fg, bold = item.is_active }, g.title_x2)
@@ -346,7 +354,7 @@ local function card_row(item, ctx, st, part, rows_in_card)
     end
   end
 
-  if surface and rows_in_card >= 2 and glyphs.corners == "chamfer" then
+  if (item.is_active or st.dragging) and rows_in_card >= 2 and glyphs.corners == "chamfer" then
     local ch = part == "title" and glyphs.chamfer_top or glyphs.chamfer_bottom
     cells[g.card_x2] = { ch = ch, fg = bg, bg = theme.bg }
   end
@@ -385,8 +393,13 @@ local function ghost_rows(ctx, hovered)
       put(cells, g.card_x2, glyphs.frame_v, { fg = border_fg }, g.card_x2)
     else
       put(cells, g.card_x1, i == 1 and glyphs.frame_tl or glyphs.frame_bl, { fg = border_fg }, g.card_x1)
-      for x = g.card_x1 + 1, g.card_x2 - 1 do
-        put(cells, x, line, { fg = border_fg }, x)
+      local first, last = g.card_x1 + 1, g.card_x2 - 1
+      for x = first, last do
+        -- the cells either side of a corner never gap: on Latte closure carries the card, not contrast
+        local corner = x <= first + 1 or x >= last - 1
+        if hovered or corner or (x - first) % 2 == 1 then
+          put(cells, x, line, { fg = border_fg }, x)
+        end
       end
       put(cells, g.card_x2, i == 1 and glyphs.frame_tr or glyphs.frame_br, { fg = border_fg }, g.card_x2)
     end
@@ -626,10 +639,18 @@ function M.render(view)
   for row = 1, strip_rows do
     local cells = new_line(cols, theme.bg, theme.fg)
     local toggle = view.strip and view.strip.toggle
+    local last = toggle and math.min(toggle.row + 1, strip_rows) or 0
+    local on = toggle
+      and view.hover
+      and view.hover.y >= toggle.row
+      and view.hover.y <= last
+      and view.hover.x >= toggle.x1
+      and view.hover.x <= toggle.x2
+    if toggle and on and row >= toggle.row and row <= last then
+      fill(cells, toggle.x1, toggle.x2, theme.hover_bg)
+    end
     if toggle and row == toggle.row then
       local glyph = cfg.position == "right" and glyphs.toggle_right or glyphs.toggle_left
-      local on = view.hover and view.hover.y >= toggle.row and view.hover.y <= math.min(toggle.row + 1, strip_rows)
-      on = on and view.hover.x >= toggle.x1 and view.hover.x <= toggle.x2
       put(cells, toggle.x or toggle.x1 + 1, glyph, { fg = on and theme.accent or theme.dim }, cols)
     end
     if toggle and row >= toggle.row and row <= math.min(toggle.row + 1, strip_rows) then
