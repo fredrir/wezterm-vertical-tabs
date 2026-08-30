@@ -30,10 +30,12 @@ rename|Catppuccin Mocha|default|key:r|in_sidebar:esc cancel
 rail|Catppuccin Mocha|rail|probe:toggle|rail_width
 tooltip|Catppuccin Mocha|tooltip|dwell|tooltip_only
 anim-mid|Catppuccin Mocha|anim|toggle_fast|animating
+popover-mid|Catppuccin Mocha|anim|rclick_mid|animating
+confirm|Catppuccin Mocha|confirm|confirm_close|in_sidebar:Cancel
 new-tab-hover|Catppuccin Mocha|default|hover_new_tab|always
 padded|Catppuccin Mocha|padded|scene|always
 strip-macos|Catppuccin Mocha|macos|scene|always
-strip-macos-rail|Catppuccin Mocha|macos-rail|probe:toggle|rail_width"
+rail-macos|Catppuccin Mocha|macos-rail|probe:toggle|rail_width"
 
 cli() { wezterm cli --no-auto-start "$@"; }
 list() { cli list --format json; }
@@ -42,7 +44,11 @@ sidebars() { pick 'print("\n".join(str(p["pane_id"]) for p in json.load(sys.stdi
 tab_ids() { pick 'print(" ".join(str(t) for t in sorted({p["tab_id"] for p in json.load(sys.stdin)})))'; }
 content_of() { pick "t=$1;print([p['pane_id'] for p in json.load(sys.stdin) if p['tab_id']==t and not p['title'].startswith('wez-vtabs')][0])"; }
 sidebar_of() { pick "t=$1;print([p['pane_id'] for p in json.load(sys.stdin) if p['tab_id']==t and p['title'].startswith('wez-vtabs')][0])"; }
-active_sidebar() { sidebar_of "$(tab_ids | cut -d' ' -f2)"; }
+# The popover only paints in the active tab's sidebar, so a step that switches tabs says so here.
+shot_tab=""
+active_sidebar() { sidebar_of "${shot_tab:-$(tab_ids | cut -d' ' -f2)}"; }
+# Pixel centre of a sidebar column, so a click lands inside a three-column span.
+col_x() { echo $((X + WIDTH * (2 * $1 - 1) / (2 * cols))); }
 sidebar_text() { cli get-text --pane-id "$(active_sidebar)"; }
 probe() { cli send-text --no-paste --pane-id "$1" "printf '\\033]1337;SetUserVar=vtabs_shot=$(printf %s "$2" | base64)\\a'
 "; }
@@ -75,6 +81,8 @@ card_y() { # y pixel of the card whose title is $1, from the sidebar's own text
   echo $((Y + HEIGHT * (2 * row + 1) / 68))
 }
 
+# How long to let the click settle before the shot; a mid-animation state shortens it.
+click_settle=1.5
 point_at() { # button ("" = move only), title
   focus_window || return 1
   x=$((X + WIDTH * 5 / cols))
@@ -84,7 +92,7 @@ point_at() { # button ("" = move only), title
   sleep 0.8
   xdotool mousemove --sync "$x" "$y"
   sleep 1
-  [ -z "$1" ] || { xdotool click "$1"; sleep 1.5; }
+  [ -z "$1" ] || { xdotool click "$1"; sleep "$click_settle"; }
 }
 
 build_scene() { # three tabs: one pinned, one with unseen output, tab 2 active
@@ -113,6 +121,7 @@ build_scene() { # three tabs: one pinned, one with unseen output, tab 2 active
 # Each step leaves the window in the state to shoot. `quick` skips the settle before capture.
 step() {
   quick=
+  shot_tab=
   case $1 in
     scene) ;;
     hover) point_at "" logs || echo "  no X window; hover skipped" ;;
@@ -124,6 +133,16 @@ step() {
       sleep 4
       ;;
     rclick) point_at 3 logs ;;
+    # `popover_in` really runs for 90 ms, which `import` cannot catch; the probe stretches it 10x
+    # so the shot lands at the same 44% blend a 40 ms capture of the real fade would.
+    rclick_mid)
+      probe "$(content_of "$(tab_ids | cut -d' ' -f2)")" slow_popover
+      sleep 1
+      click_settle=0.4
+      point_at 3 logs || return 1
+      click_settle=1.5
+      quick=1
+      ;;
     rclick_space)
       point_at 3 logs
       xdotool key Down Down Down Return
@@ -134,6 +153,26 @@ step() {
       probe "$(content_of "$(tab_ids | cut -d' ' -f2)")" focus
       sleep 1.5
       xdotool key "${1#key:}"
+      sleep 1.5
+      ;;
+    # The x only asks when closing would prompt, so the victim tab has to be busy first.
+    confirm_close)
+      logs_tab=$(tab_ids | cut -d' ' -f3)
+      cli send-text --no-paste --pane-id "$(content_of "$logs_tab")" "sleep 1000
+"
+      sleep 1.5
+      cli activate-tab --tab-id "$logs_tab"
+      shot_tab=$logs_tab
+      sleep 1
+      focus_window || return 1
+      # `close_x = card_x2 - 1`; at width 28 with padding.right = 2 that is column 25.
+      x=$(col_x 25)
+      y=$(card_y logs)
+      xdotool mousemove --sync "$x" $((y - 3 * HEIGHT / 34))
+      sleep 0.8
+      xdotool mousemove --sync "$x" "$y"
+      sleep 1
+      xdotool click 1
       sleep 1.5
       ;;
     probe:*)
@@ -228,12 +267,21 @@ shoot() { # state, scheme, opts variant, step, check
   rm -rf "$home"
 }
 
-only=${1:-}
-[ -z "$only" ] || echo "$STATES" | cut -d'|' -f1 | grep -qx "$only" ||
-  { echo "unknown state: $only; one of $(echo "$STATES" | cut -d'|' -f1 | tr '\n' ' ')"; exit 1; }
+# Any number of state names; none means all. Only the requested states are re-shot, so a run
+# never disturbs the PNGs it was not asked for.
+only=$*
+for want_state in $only; do
+  echo "$STATES" | cut -d'|' -f1 | grep -qx "$want_state" ||
+    { echo "unknown state: $want_state; one of $(echo "$STATES" | cut -d'|' -f1 | tr '\n' ' ')"; exit 1; }
+done
 echo "$STATES" | while IFS='|' read -r state scheme variant setup want; do
   [ -n "$state" ] || continue
-  [ -z "$only" ] || [ "$only" = "$state" ] || continue
+  if [ -n "$only" ]; then
+    case " $only " in
+      *" $state "*) ;;
+      *) continue ;;
+    esac
+  fi
   shoot "$state" "$scheme" "$variant" "$setup" "$want"
 done
 echo "shots in $out"

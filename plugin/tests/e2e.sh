@@ -261,8 +261,6 @@ active_pane() {
   done
   echo "no-answer"
 }
-press() { cli send-text --no-paste --pane-id "$1" "$(printf '\033[<%s;%s;%sM' "$4" "$2" "$3")"; }
-release() { cli send-text --no-paste --pane-id "$1" "$(printf '\033[<%s;%s;%sm' "$4" "$2" "$3")"; }
 [ "$(active_pane "$rc_content")" != no-answer ] || fail "the active-pane probe never answered"
 press "$rc_sb" 5 "$rc_row" 2
 sleep 1

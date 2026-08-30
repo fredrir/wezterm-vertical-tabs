@@ -2764,7 +2764,7 @@ test("an adjust the mux has not applied yet is issued once, and its landing is n
   eq(issued, 1, "one AdjustPaneSize, not one per poll; the duplicates all land and overshoot")
 
   -- The width it eventually lands on is ours, so it must never read as a divider drag.
-  geometry.settle(wid, 0)
+
   tab:set_split(24)
   eq(geometry.correct(gui), false)
   eq(geometry.desired(wid), 28, "the landing is not adopted")
@@ -2845,7 +2845,7 @@ test("an adopted width is clamped to a plausible sidebar", function()
   eq(geometry.desired(gui:window_id()), 60, "clamped to tab width minus the content margin")
   geometry.reset(gui:window_id())
   assert(geometry.correct(gui), "a reset re-asserts cfg.width")
-  geometry.settle(gui:window_id(), 0)
+
   eq(geometry.correct(gui), false, "baseline recorded")
   tab:set_split(1)
   eq(geometry.correct(gui), false, "drag adopted")
@@ -3366,7 +3366,7 @@ test("the two-step mux resize is corrected, and a real divider drag is still ado
   eq(geometry.desired(gui:window_id()), 28, "nothing was adopted")
 
   geometry.reset(gui:window_id())
-  geometry.settle(gui:window_id(), 0)
+
   eq(geometry.correct(gui), false, "baseline on the settled window")
   tab:set_split(34)
   eq(geometry.correct(gui), false, "same tab width, same pixels: this one is a drag")

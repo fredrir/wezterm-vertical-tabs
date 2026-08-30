@@ -40,19 +40,10 @@ end)
 
 -- The traffic-light reserve and the rail's own strip geometry are keyed off the target triple,
 -- so they can only be exercised anywhere else by lying to `platform` about the platform.
--- `integrated_title_button_style = "MacOsNative"` is rejected off macOS, so the two facts
--- `chrome_for` reads from the effective config are forced at the one place that consumes them.
+-- `titlebar = "macos"` claims the reserve for the strip; `platform.is_mac` is what the titlebar
+-- band reads, and `integrated_title_button_style = "MacOsNative"` is rejected off macOS.
 if os.getenv "VTABS_E2E_MACOS" then
-  local platform = require "vtabs.platform"
-  platform.is_mac = true
-  local real = platform.strip_geometry
-  platform.strip_geometry = function(dims, opts)
-    opts = opts or {}
-    opts.is_mac = true
-    opts.integrated_buttons = true
-    opts.native_button_style = true
-    return real(dims, opts)
-  end
+  require("vtabs.platform").is_mac = true
   config.window_decorations = "INTEGRATED_BUTTONS|RESIZE"
 end
 
@@ -69,9 +60,77 @@ vtabs.apply_to_config(config, {
   collapsed = os.getenv "VTABS_E2E_COLLAPSED" or nil,
 })
 
+-- Every `AdjustPaneSize` the plugin issues, timestamped. `geometry.sync` and the event handlers all
+-- reach `correct` through this table field, so one wrapper sees them all.
+local geometry_mod = require "vtabs.geometry"
+local real_correct = geometry_mod.correct
+geometry_mod.correct = function(window)
+  local util = require "vtabs.util"
+  local did = real_correct(window)
+  if did then
+    wezterm.log_info("e2e: adjust at " .. tostring(util.now_ms()))
+  end
+  return did
+end
+
 local probes = {
   toggle = function(window)
     vtabs.toggle_sidebar(window)
+  end,
+  -- Which tab is active, sampled at 10 ms for two seconds: a switch that passes through a tab
+  -- shows up as an extra entry.
+  watch_active = function(window)
+    local util = require "vtabs.util"
+    local seen, t0, last = {}, util.now_ms(), nil
+    local step
+    step = function()
+      local ok, id = pcall(function()
+        return window:mux_window():active_tab():tab_id()
+      end)
+      if ok and id ~= last then
+        seen[#seen + 1] = string.format("%d@%d", id, util.now_ms() - t0)
+        last = id
+      end
+      if util.now_ms() - t0 < 2000 then
+        wezterm.time.call_after(0.01, step)
+      else
+        wezterm.log_info("e2e: active trace " .. table.concat(seen, " "))
+      end
+    end
+    step()
+  end,
+  -- A user's split keybinding while the sidebar holds focus under `hover = "follow"`.
+  split_sidebar = function(window)
+    local sidebar = require "vtabs.sidebar"
+    local sb = sidebar.find(window:mux_window():active_tab())
+    if not sb then
+      wezterm.log_info "e2e: split sidebar none"
+      return
+    end
+    sb:activate()
+    window:perform_action(wezterm.action.SplitVertical { domain = "CurrentPaneDomain" }, sb)
+    wezterm.log_info("e2e: split sidebar " .. tostring(sb:pane_id()))
+  end,
+  -- The pane tree as the plugin classifies it, next to what the mux reports.
+  probe_tree = function(window)
+    local sidebar = require "vtabs.sidebar"
+    local out = {}
+    for _, info in ipairs(window:mux_window():tabs_with_info()) do
+      local sb = sidebar.find(info.tab)
+      local content = sidebar.classify(info.tab)
+      local parts = {}
+      for _, pi in ipairs(info.tab:panes_with_info()) do
+        parts[#parts + 1] = string.format("%d@%d,%d+%dx%d", pi.pane:pane_id(), pi.left, pi.top, pi.width, pi.height)
+      end
+      out[#out + 1] = string.format(
+        "tab%d sb=%s content=%d [%s]",
+        info.tab:tab_id(),
+        tostring(sb and sb:pane_id()),
+        #content,
+        table.concat(parts, " ")
+      )
+    end
+    wezterm.log_info("e2e: tree " .. table.concat(out, " | "))
   end,
   toggle_ms = function(window)
     local util = require "vtabs.util"
@@ -150,6 +209,13 @@ local probes = {
         .. tostring(again and again:pane_id())
     )
   end,
+  -- Two polls landing inside one mux lag: the second reads the same stale `cols` as the first.
+  double_correct = function(window)
+    local geometry = require "vtabs.geometry"
+    local a = geometry.correct(window)
+    local b = geometry.correct(window)
+    wezterm.log_info("e2e: double correct " .. tostring(a) .. " " .. tostring(b))
+  end,
   reload = function()
     wezterm.reload_configuration()
   end,
@@ -166,6 +232,32 @@ local probes = {
   confirm_off = function()
     require("vtabs.config").get().confirm_close = false
   end,
+  -- Whether the active tab would ask before closing, and every input to that answer.
+  probe_confirm = function(window)
+    local actions = require "vtabs.actions"
+    local sidebar = require "vtabs.sidebar"
+    local util = require "vtabs.util"
+    local cfg = require("vtabs.config").get()
+    local tab = window:mux_window():active_tab()
+    local content = sidebar.classify(tab)
+    local procs = {}
+    for _, p in ipairs(content) do
+      procs[#procs + 1] = tostring(util.basename(util.try(function()
+        return p:get_foreground_process_name()
+      end)))
+    end
+    wezterm.log_info(
+      string.format(
+        "e2e: confirm cfg %s needs %s procs %s skip %s",
+        tostring(cfg.confirm_close),
+        tostring(actions.needs_confirm(window, tab:tab_id(), "close")),
+        table.concat(procs, ","),
+        table.concat(util.try(function()
+          return window:effective_config().skip_close_confirmation_for_processes_named
+        end) or {}, ",")
+      )
+    )
+  end,
   footer_hook = function()
     require("vtabs.config").get().hooks.footer = function()
       return { { id = "e2e_footer", text = "e2e footer" } }
@@ -176,6 +268,32 @@ local probes = {
   end,
   private_window = function(window)
     require("vtabs.actions").new_window(window, true)
+  end,
+  -- The traffic-light reserve the active sidebar's own dimensions imply, next to the pane it got.
+  probe_reserve = function(window)
+    local platform = require "vtabs.platform"
+    local sidebar = require "vtabs.sidebar"
+    local cfg = require("vtabs.config").get()
+    local sb = sidebar.find(window:mux_window():active_tab())
+    local d = sb and sb:get_dimensions()
+    local g = d
+      and platform.strip_geometry(d, {
+        is_mac = true,
+        integrated_buttons = true,
+        native_button_style = true,
+        position = cfg.position,
+        padding_top = cfg.padding.top,
+        toggle_button = cfg.toggle_button,
+        card_x1 = cfg.padding.left + 1,
+      })
+    wezterm.log_info(
+      string.format(
+        "e2e: reserve %s toggle_x %s pane %s",
+        tostring(g and g.cols),
+        tostring(g and g.toggle_x),
+        tostring(d and d.cols)
+      )
+    )
   end,
   -- The hit map is the only source for the columns a click has to land on; labels move, spans do not.
   probe_hits = function(window)
@@ -259,6 +377,32 @@ local probes = {
     wezterm.log_info("e2e: active pane " .. tostring(pane and pane:pane_id()))
   end,
 }
+
+-- `activate_<n>` switches to the n-th rendered tab the way the `tab_<n>` keybinding does, and
+-- splits the cost into the model build the index lookup needs and the activation itself.
+for i = 0, 7 do
+  probes["activate_" .. i] = function(window)
+    local actions = require "vtabs.actions"
+    local model = require "vtabs.model"
+    local util = require "vtabs.util"
+    local t0 = util.now_ms()
+    local items = model.ordered(model.build(window))
+    local t1 = util.now_ms()
+    local item = items[i + 1]
+    actions.activate_index(window, i)
+    local t2 = util.now_ms()
+    wezterm.log_info(
+      string.format(
+        "e2e: activate %d build %d activate %d tabs %d target %s",
+        i,
+        t1 - t0,
+        t2 - t1,
+        #items,
+        tostring(item and item.tab_id)
+      )
+    )
+  end
+end
 
 -- Test-only hook: a pane printing SetUserVar=vtabs_test=<base64 name> triggers a probe.
 wezterm.on("user-var-changed", function(window, _, name, value)
