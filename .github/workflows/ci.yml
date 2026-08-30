@@ -36,7 +36,7 @@ jobs:
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           version: latest
-          args: --check init.lua vtabs tests
+          args: --check plugin/init.lua plugin/vtabs plugin/tests
       - run: luarocks install luacheck
       - run: luacheck init.lua vtabs tests
       - run: lua tests/run.lua
