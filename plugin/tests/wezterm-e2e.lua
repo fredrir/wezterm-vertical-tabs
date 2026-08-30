@@ -164,6 +164,40 @@ local probes = {
   settings = function(window)
     require("vtabs.actions").open_settings(window)
   end,
+  -- What `correct` would aim for right now: `fits` clamps the adopted width so every content band
+  -- keeps MIN_CONTENT, so a split tab legitimately holds less than `desired`.
+  probe_target = function(window)
+    local geometry = require "vtabs.geometry"
+    local sidebar = require "vtabs.sidebar"
+    local fits, tab_metrics
+    for i = 1, 60 do
+      local name, value = debug.getupvalue(geometry.correct, i)
+      if not name then
+        break
+      end
+      if name == "fits" then
+        fits = value
+      elseif name == "tab_metrics" then
+        tab_metrics = value
+      end
+    end
+    local tab = window:mux_window():active_tab()
+    local sb = sidebar.find(tab)
+    local cols, _, bands = nil, nil, nil
+    if tab_metrics then
+      cols, _, bands = tab_metrics(tab, sb and sb:pane_id())
+    end
+    local want = geometry.desired(window:window_id())
+    wezterm.log_info(
+      string.format(
+        "e2e: target %s want %s tab_cols %s bands %s",
+        tostring(fits and cols and fits(want, cols, nil, bands)),
+        tostring(want),
+        tostring(cols),
+        tostring(bands)
+      )
+    )
+  end,
   probe_tree = function(window)
     local sidebar = require "vtabs.sidebar"
     local out = {}

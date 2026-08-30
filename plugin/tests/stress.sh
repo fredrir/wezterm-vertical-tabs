@@ -267,6 +267,11 @@ if [ "$mode" = mux ]; then
 fi
 
 # Width helpers every group below uses, so they must sit outside the fast-mode guard.
+# What `correct` is aiming for right now, and the width the user dragged to. With a split content
+# pane `fits` charges MIN_CONTENT per band, so the target is below `desired` and that is correct.
+target_now() { probe_line "$1" probe_target target | sed -n 's/^\([0-9-]*\) .*/\1/p'; }
+desired_now() { probe_line "$1" probe_target target | sed -n 's/^[0-9-]* want \([0-9-]*\) .*/\1/p'; }
+
 settled_width() { # tab_id -> the width once three reads in a row agree, else the last one seen
   last=""; same=0
   for _ in $(seq 1 32); do
@@ -460,7 +465,10 @@ if [ -z "${VTABS_STRESS_FAST:-}" ]; then
       vtest "$hot_content" drag_shrink
       sleep 5
       trace "after a shrink drag with the content split"
-      want_width "$hot" "$dragged" "a resize drag over a split content pane"
+      echo "  split-band target: $(probe_line "$hot_content" probe_target target)"
+      want_width "$hot" "$(target_now "$hot_content")" "a resize drag over a split content pane"
+      [ "$(desired_now "$hot_content")" = "$dragged" ] ||
+        fail "the drag width was forgotten: desired is $(desired_now "$hot_content"), want $dragged"
       [ "$(list | python3 -c 'import json,sys; t='"$hot"'; print(sum(1 for p in json.load(sys.stdin) if p["tab_id"]==t))')" -eq 3 ] ||
         { geometry; fail "the resize drag lost a content pane"; }
       after_active=$(probe_line "$hot_content" probe_active "active pane")
@@ -469,11 +477,16 @@ if [ -z "${VTABS_STRESS_FAST:-}" ]; then
       no_warnings "$split_mark" "a resize drag over a split content pane"
       vtest "$hot_content" drag_grow
       sleep 5
-      want_width "$hot" "$dragged" "a grow drag over a split content pane"
+      echo "  split-band target: $(probe_line "$hot_content" probe_target target)"
+      want_width "$hot" "$(target_now "$hot_content")" "a grow drag over a split content pane"
+      [ "$(desired_now "$hot_content")" = "$dragged" ] ||
+        fail "the drag width was forgotten: desired is $(desired_now "$hot_content"), want $dragged"
       no_dupes "the split-content drag"
       echo "ok: a resize drag over split content keeps the width, the panes and the focus"
       cli kill-pane --pane-id "$extra" >/dev/null 2>&1 || true
-      sleep 2
+      sleep 3
+      # One band again: the clamp lifts and the dragged width has to come back in full.
+      want_width "$hot" "$dragged" "closing the extra content band"
       max_panes=2
     fi
   }
