@@ -4,7 +4,7 @@ set -eu
 root=$(cd "$(dirname "$0")/../.." && pwd)
 bin="${VTABS_BIN:-$root/backend/target/release/wez-vtabs}"
 [ -x "$bin" ] || { echo "backend binary not found: $bin"; exit 1; }
-log=$(mktemp -t vtabs-e2e)
+log=$(mktemp -t vtabs-e2e.XXXXXX)
 
 mode="${1:-local}"
 home=$(mktemp -d /tmp/vte2e.XXXXXX)
