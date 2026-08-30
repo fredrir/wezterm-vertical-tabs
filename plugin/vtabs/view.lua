@@ -5,6 +5,7 @@ local model = require "vtabs.model"
 local render = require "vtabs.render"
 local geometry = require "vtabs.geometry"
 local theme = require "vtabs.theme"
+local platform = require "vtabs.platform"
 local util = require "vtabs.util"
 
 local M = {}
@@ -12,6 +13,7 @@ local M = {}
 local INACTIVE_REFRESH_MS = 1000
 
 local themes = {}
+local chrome = {}
 local session = state.session
 
 ---WezTerm titles the window after its active pane; under `hover = "follow"` that is the sidebar.
@@ -44,12 +46,51 @@ end
 function M.invalidate_theme(window_id)
   if window_id then
     themes[window_id] = nil
+    chrome[window_id] = nil
   else
-    themes = {}
+    themes, chrome = {}, {}
   end
 end
 
 table.insert(state.forget_hooks, M.invalidate_theme)
+
+---macOS only shows its window buttons for `TITLE`/`INTEGRATED_BUTTONS`, and only keeps
+---`INTEGRATED_BUTTONS` when the button style is native; both decide whether cells are reserved.
+local function chrome_for(gui_window, cfg)
+  local wid = gui_window:window_id()
+  if not chrome[wid] then
+    local effective = util.try(function()
+      return gui_window:effective_config()
+    end) or {}
+    local decorations = tostring(effective.window_decorations or "")
+    local asked = cfg.titlebar == "integrate"
+      or (cfg.titlebar == "auto" and decorations:find("INTEGRATED_BUTTONS", 1, true) ~= nil)
+    local native = effective.integrated_title_button_style == nil
+      or effective.integrated_title_button_style == "MacOsNative"
+    if platform.is_mac and asked and not native then
+      util.warn_once("button-style", "integrated_title_button_style must be MacOsNative to reserve cells")
+    end
+    chrome[wid] = { integrated_buttons = asked, native_button_style = native }
+  end
+  return chrome[wid]
+end
+
+local function strip_for(gui_window, cfg, dims)
+  local facts = chrome_for(gui_window, cfg)
+  local window = util.try(function()
+    return gui_window:get_dimensions()
+  end) or {}
+  return platform.strip_geometry(dims, {
+    is_mac = platform.is_mac,
+    integrated_buttons = facts.integrated_buttons,
+    native_button_style = facts.native_button_style,
+    is_full_screen = window.is_full_screen == true,
+    position = cfg.position,
+    padding_top = cfg.padding.top,
+    toggle_button = cfg.toggle_button,
+    card_x1 = cfg.padding.left + 1,
+  })
+end
 
 local function theme_for(gui_window, cfg)
   local wid = gui_window:window_id()
@@ -58,7 +99,7 @@ local function theme_for(gui_window, cfg)
       return gui_window:effective_config()
     end)
     local palette = effective and effective.resolved_palette or {}
-    local resolved = theme.resolve(cfg.theme, palette)
+    local resolved = theme.resolve(cfg.theme, palette, { private = state.is_private(wid) })
     if cfg.hooks.theme then
       local ok, custom = pcall(cfg.hooks.theme, gui_window, resolved)
       if not ok then
@@ -78,7 +119,7 @@ local function dims_of(pane)
     return pane:get_dimensions()
   end)
   if d and d.cols and d.viewport_rows then
-    return d.cols, d.viewport_rows
+    return d
   end
   return nil
 end
@@ -119,14 +160,12 @@ function M.sync(gui_window, opts)
       local pid = sb:pane_id()
       local is_active = info.tab:tab_id() == active_tab_id
       local due = is_active or opts.force or now - (session.sent_at[pid] or 0) >= INACTIVE_REFRESH_MS
-      local cols, rows
-      if due then
-        cols, rows = dims_of(sb)
-      end
-      if cols then
+      local dims = due and dims_of(sb) or nil
+      if dims then
         local result = render.render {
-          cols = cols,
-          rows = rows,
+          cols = dims.cols,
+          rows = dims.viewport_rows,
+          strip = strip_for(gui_window, cfg, dims),
           items = items,
           theme = resolved,
           cfg = cfg,
@@ -134,6 +173,7 @@ function M.sync(gui_window, opts)
           hover = is_active and session.hover[wid] or nil,
           drag = is_active and session.drag[wid] or nil,
           scroll = session.scroll[wid] or 0,
+          user_scrolled = session.user_scrolled[wid] == true,
           ensure_visible = not session.user_scrolled[wid] and active_tab_id or nil,
           focus_index = is_active and focus_index or nil,
           footer = footer,
@@ -142,7 +182,7 @@ function M.sync(gui_window, opts)
           session.scroll[wid] = result.scroll
         end
         session.hits[pid] = result.hits
-        session.dims[pid] = { cols = cols, rows = rows }
+        session.dims[pid] = { cols = dims.cols, rows = dims.viewport_rows }
         if opts.force or session.frames[pid] ~= result.data then
           if sidebar.send(sb, { t = "frame", data = result.data }) then
             session.frames[pid] = result.data

@@ -2035,6 +2035,42 @@ test("meta is resolved at most once per poll_ms per tab", function()
   config.setup(legacy { backend = { path = "/bin/wez-vtabs" } })
 end)
 
+test("view hands the renderer a strip and a private-aware theme", function()
+  config.setup(
+    legacy { backend = { path = "/bin/wez-vtabs" }, toggle_button = true, padding = { top = 1, left = 1, right = 1 } }
+  )
+  local win = fake.window()
+  win:add_tab { title = "t1" }
+  local gui = win.gui
+  sidebar.ensure(gui)
+  mark_ready(win.tab_list[1])
+  local seen = nil
+  local render_mod = require "vtabs.render"
+  local original = render_mod.render
+  render_mod.render = function(frame)
+    seen = frame
+    return original(frame)
+  end
+  view_mod.invalidate_theme()
+  view_mod.sync(gui, { force = true })
+  assert(seen, "the renderer was called")
+  eq(type(seen.strip), "table")
+  eq(seen.strip.rows, 2, "no macOS reserve in the fake, so toggle row plus padding")
+  eq(seen.strip.cols, 0)
+  eq(seen.strip.toggle_row, 1)
+  eq(type(seen.user_scrolled), "boolean")
+  eq(rgb(seen.theme.bg), "30,30,46", "the fixture palette reaches the renderer")
+
+  state.set_private(gui:window_id(), true)
+  view_mod.invalidate_theme()
+  view_mod.sync(gui, { force = true })
+  render_mod.render = original
+  eq(rgb(seen.theme.accent), rgb(seen.theme.private_accent), "a private window recolours")
+  state.set_private(gui:window_id(), false)
+  view_mod.invalidate_theme()
+  config.setup(legacy { backend = { path = "/bin/wez-vtabs" } })
+end)
+
 os.remove(state.file)
 print(string.format("%d passed, %d failed", passed, failed))
 os.exit(failed == 0 and 0 or 1)
