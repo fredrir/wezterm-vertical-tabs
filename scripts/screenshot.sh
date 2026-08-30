@@ -40,8 +40,18 @@ rail-macos-plain|Catppuccin Mocha|macos-rail-plain|probe:toggle|rail_width
 settings|Catppuccin Mocha|default|settings|settings_tab
 settings-behaviour|Catppuccin Mocha|default|settings_behaviour|settings_locked
 zen|Catppuccin Mocha|zen|scene|zen_frame
+<<<<<<< HEAD
 zen-square|Catppuccin Mocha|zen-square|scene|zen_frame
 zen-rail|Catppuccin Mocha|zen-rail|probe:toggle|zen_frame"
+||||||| 9d1e320
+zen|Catppuccin Mocha|zen|scene|always
+zen-square|Catppuccin Mocha|zen-square|scene|always
+zen-rail|Catppuccin Mocha|zen-rail|probe:toggle|always"
+=======
+zen-square|Catppuccin Mocha|zen-square|scene|always
+zen-rail|Catppuccin Mocha|zen-rail|probe:toggle|always
+zen-statusline|Catppuccin Mocha|zen|statusline|zen_statusline"
+>>>>>>> worktree-agent-a4d446494178b65c1
 
 cli() { wezterm cli --no-auto-start "$@"; }
 # A gui busy with a spawn or a resize can answer an empty body; every helper here parses this, and
@@ -73,6 +83,7 @@ active_sidebar() { sidebar_of "${shot_tab:-$(tab_ids | cut -d' ' -f2)}"; }
 col_x() { echo $((X + WIDTH * (2 * $1 - 1) / (2 * cols))); }
 sidebar_text() { cli get-text --pane-id "$(active_sidebar)"; }
 pane_text() { cli get-text --pane-id "$1"; }
+pane_cols() { pick "p=$1;print([q['size']['cols'] for q in json.load(sys.stdin) if q['pane_id']==p][0])"; }
 probe() { cli send-text --no-paste --pane-id "$1" "printf '\\033]1337;SetUserVar=vtabs_shot=$(printf %s "$2" | base64)\\a'
 "; }
 
@@ -225,6 +236,18 @@ step() {
       shot_tab=$(pick 'print([p["tab_id"] for p in json.load(sys.stdin) if p["title"].startswith("wez-vtabs-settings")][0])' 2>/dev/null || echo "")
       sleep 1
       ;;
+    # A tmux/vim status line, reduced to what makes it damage the frame: one full-width row of
+    # explicit-bg cells on the content pane's last row. `sleep` holds it there past the capture,
+    # and `quick` keeps the pre-shot `clear` from wiping it.
+    statusline)
+      bar_pane=$(content_of "$(tab_ids | cut -d' ' -f2)")
+      bar=$(awk -v n="$(pane_cols "$bar_pane")" 'BEGIN{while(n-->0)printf " "}')
+      # `clear` runs after the echo of the line that carries it, so only the bar is left on screen.
+      cli send-text --no-paste --pane-id "$bar_pane" "clear; printf '\\033[999;1H\\033[48;5;33m$bar\\033[0m'; sleep 300
+"
+      sleep 2.5
+      quick=1
+      ;;
     toggle_fast)
       focus_window
       probe "$(content_of "$(tab_ids | cut -d' ' -f2)")" toggle
@@ -232,6 +255,38 @@ step() {
       quick=1
       ;;
   esac
+}
+
+# --- zen frame sampling ----------------------------------------------------
+# `frame.margin` and `frame.radius` defaults; the shots never set them, and the corner assertions
+# below are sized from the radius (an 8 px arc leaves ~8 tint pixels in an 8x8 corner box).
+frame_margin=8
+frame_radius=8
+dominant() { # png x y w h — the most common colour in a region, as RRGGBB
+  magick "$1" -crop "$4x$5+$2+$3" +repage -depth 8 -format %c histogram:info: |
+    sort -rn | sed -n 's/.*#\([0-9A-Fa-f]\{6\}\).*/\1/p' | head -1
+}
+colour_count() { # png x y w h hex — how many pixels of that exact colour the region holds
+  magick "$1" -crop "$4x$5+$2+$3" +repage -depth 8 -format %c histogram:info: |
+    awk -v want="#$6" '{n=$1; sub(/:$/,"",n); if ($3==want) {print n; f=1}} END{if(!f) print 0}'
+}
+# The same rectangle `frame.lua M.rect` computes: the card starts one divider column right of the
+# sidebar and is `frame.margin` in from every window edge.
+zen_rect() { # png — sets WIN_W WIN_H CARD_X CARD_Y CARD_W CARD_H SB_W TINT
+  size=$(magick identify -format "%w %h" "$1" 2>/dev/null || true)
+  [ -n "$size" ] || return 1
+  WIN_W=${size% *}
+  WIN_H=${size#* }
+  grid=$((WIN_W - 2 * frame_margin))
+  SB_W=$((sidebar_cols * grid / cols))
+  CARD_X=$((frame_margin + (sidebar_cols + 1) * grid / cols))
+  CARD_Y=$frame_margin
+  CARD_W=$((WIN_W - frame_margin - CARD_X))
+  CARD_H=$((WIN_H - 2 * frame_margin))
+  TINT=$(dominant "$1" 0 0 "$WIN_W" "$frame_margin")
+}
+corner_tint() { # png corner_x corner_y — tint pixels left in the arc's corner box
+  colour_count "$1" "$2" "$3" "$frame_radius" "$frame_radius" "$TINT"
 }
 
 # Loud checks: a state whose feature has not landed must not leave a stale or misleading PNG.
@@ -278,6 +333,7 @@ check() {
     # cells, and anything between the two (a dim, a compositing alpha) shows up as a seam.
     zen_frame)
       png=$out/$state.png
+<<<<<<< HEAD
       [ -s "$png" ] || fail_state "no window shot to read the frame from"
       # `%` opens a format escape, so the centre is an fx expression rather than a percentage.
       read -r corner middle <<EOF
@@ -294,6 +350,59 @@ EOF
       [ "$gutter" = "$bar" ] ||
         fail_state "the sidebar is $bar where the frame is $gutter; they must be one surface"
       echo "  zen frame $corner, terminal $middle, one surface at $bar"
+||||||| 9d1e320
+      [ -s "$png" ] || fail_state "no window shot to read the frame from"
+      read -r corner middle <<EOF
+$(magick "$png" -format "%[pixel:p{4,4}] %[pixel:p{50%,50%}]" info:)
+EOF
+      [ -n "$corner" ] && [ -n "$middle" ] || fail_state "could not sample the window shot"
+      [ "$corner" != "$middle" ] ||
+        fail_state "the frame tint and the terminal background are the same colour ($corner)"
+      echo "  zen frame $corner, terminal $middle"
+=======
+      [ -s "$png" ] || { fail_state "no window shot to read the frame from"; return 1; }
+      zen_rect "$png" || { fail_state "could not sample the window shot"; return 1; }
+      middle=$(dominant "$png" $((CARD_X + CARD_W / 4)) $((CARD_Y + CARD_H / 2)) \
+        $((CARD_W / 2)) $((CARD_H / 4)))
+      [ -n "$TINT" ] && [ -n "$middle" ] || { fail_state "could not sample the window shot"; return 1; }
+      [ "$TINT" != "$middle" ] ||
+        fail_state "the frame tint and the terminal background are the same colour (#$TINT)"
+      echo "  zen frame #$TINT, terminal #$middle"
+      # The sidebar hides the frame image by painting every cell with an explicit bg of the same
+      # colour the frame is filled with, so the seam between the two is only invisible while the
+      # two bytes match exactly. Anything else draws a rectangle around the sidebar.
+      interior=$(dominant "$png" "$frame_margin" "$frame_margin" "$SB_W" "$CARD_H")
+      bottom=$(dominant "$png" 0 $((WIN_H - frame_margin)) "$WIN_W" "$frame_margin")
+      [ "$bottom" = "$TINT" ] ||
+        fail_state "the frame margin is not one colour (top $TINT, bottom $bottom)"
+      # Soft until implementer-2 lands the fix for the (3,3,6) mismatch; make it `fail_state` then.
+      [ "$interior" = "$TINT" ] ||
+        xfail_state "the sidebar interior is #$interior, the frame margin #$TINT"
+      ;;
+    # A full-width explicit-bg bottom row is opaque, so it squares the two corners it covers. That
+    # is accepted damage (P1-addendum-3 §"Apps that paint an explicit background"); what the check
+    # pins is that it stays local — the top corners keep their arc and the band below is untouched.
+    zen_statusline)
+      png=$out/$state.png
+      [ -s "$png" ] || { fail_state "no window shot to read the frame from"; return 1; }
+      zen_rect "$png" || { fail_state "could not sample the window shot"; return 1; }
+      bottom_y=$((CARD_Y + CARD_H - frame_radius))
+      right_x=$((CARD_X + CARD_W - frame_radius))
+      bl=$(corner_tint "$png" "$CARD_X" "$bottom_y")
+      br=$(corner_tint "$png" "$right_x" "$bottom_y")
+      tl=$(corner_tint "$png" "$CARD_X" "$CARD_Y")
+      tr=$(corner_tint "$png" "$right_x" "$CARD_Y")
+      echo "  corner tint px: tl $tl tr $tr bl $bl br $br (tint #$TINT)"
+      [ "$tl" -gt 0 ] || fail_state "the top-left corner lost its arc; the damage is not local"
+      [ "$tr" -gt 0 ] || fail_state "the top-right corner lost its arc; the damage is not local"
+      [ "$bl" -eq 0 ] || fail_state "the bar left $bl tint px in the bottom-left corner; it never reached it"
+      [ "$br" -eq 0 ] || fail_state "the bar left $br tint px in the bottom-right corner; it never reached it"
+      # Below the card is the frame's own band: no cell reaches it, so an opaque row cannot mark it.
+      band_h=$((WIN_H - CARD_Y - CARD_H))
+      band=$(colour_count "$png" 0 $((CARD_Y + CARD_H)) "$WIN_W" "$band_h" "$TINT")
+      [ "$band" -eq $((WIN_W * band_h)) ] ||
+        fail_state "the band below the card is $band of $((WIN_W * band_h)) px tint; the bar bled into it"
+>>>>>>> worktree-agent-a4d446494178b65c1
       ;;
     # An option the host set in wezterm.lua cannot be edited here; the badge is the whole point of
     # the Behaviour frame, so a page that merely reached the group does not pass.
@@ -324,6 +433,11 @@ fail_state() {
   echo "FAIL: $state — $1"
   rm -f "$out/$state.png" "$out/$state-sidebar.png"
   cp "$home/log" "$out/$state.log"
+}
+# A check that pins a defect someone else is fixing: loud, but it keeps the PNG, so the shot still
+# reaches the baseline and design review instead of vanishing until the fix lands.
+xfail_state() {
+  echo "XFAIL: $state — $1"
 }
 
 capture() {
