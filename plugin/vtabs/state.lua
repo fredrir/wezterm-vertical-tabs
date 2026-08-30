@@ -361,7 +361,13 @@ function M.forget_pane(pane_id)
   M.session.given_up[pane_id] = nil
 end
 
+---Modules with their own per-window caches register a cleaner here; state must not require them.
+M.forget_hooks = {}
+
 function M.forget_window(window_id)
+  for _, fn in ipairs(M.forget_hooks) do
+    fn(window_id)
+  end
   for _, name in ipairs(WINDOW_SESSION) do
     M.session[name][window_id] = nil
   end

@@ -44,39 +44,53 @@ backend.root = root
 
 local M = {}
 
-M.version = require "vtabs.version"
-M.action = actions.action
-M.toggle_sidebar = actions.toggle_sidebar
-M.show_sidebar = actions.show_sidebar
-M.sync = view.sync
-M.invalidate_theme = view.invalidate_theme
-M.is_sidebar_pane = sidebar.is_sidebar
-
-function M.is_private_window(window)
-  return state.is_private(window:window_id())
-end
-
 local function alive(window)
   return pcall(function()
     return window:mux_window()
   end)
 end
 
--- WezTerm reports closed windows with this text; there is no structured error to match.
+-- WezTerm reports a window, tab or pane that left mid-call with these texts; nothing structured.
+local GONE = { "not found in mux", "is not valid" }
+
 local function window_gone(err)
-  return tostring(err):find("not found in mux", 1, true) ~= nil
+  local text = tostring(err)
+  for _, needle in ipairs(GONE) do
+    if text:find(needle, 1, true) then
+      return true
+    end
+  end
+  return false
 end
 
-local function guarded(name, fn)
+local function reported(name, fn)
   return function(window, ...)
-    if not alive(window) then
-      return
-    end
     local ok, err = pcall(fn, window, ...)
     if not ok and not window_gone(err) then
       util.warn("%s: %s", name, tostring(err))
     end
   end
+end
+
+local function guarded(name, fn)
+  local report = reported(name, fn)
+  return function(window, ...)
+    if alive(window) then
+      report(window, ...)
+    end
+  end
+end
+
+M.version = require "vtabs.version"
+M.action = actions.action
+M.toggle_sidebar = reported("toggle_sidebar", actions.toggle_sidebar)
+M.show_sidebar = reported("show_sidebar", actions.show_sidebar)
+M.sync = reported("sync", view.sync)
+M.invalidate_theme = view.invalidate_theme
+M.is_sidebar_pane = sidebar.is_backend
+
+function M.is_private_window(window)
+  return state.is_private(window:window_id())
 end
 
 local registered = false
@@ -88,27 +102,10 @@ local function register_events(cfg)
   registered = true
 
   local last_poll = {}
-  local tracked = 0
   local min_gap = math.max(50, math.floor(cfg.poll_ms / 4))
-
-  ---Windows leave without an event; per-window tables are dropped once one goes missing from the mux.
-  local function prune_windows()
-    local live = {}
-    for _, mux_win in ipairs(wezterm.mux.all_windows()) do
-      live[mux_win:window_id()] = true
-    end
-    tracked = 0
-    for wid in pairs(last_poll) do
-      if live[wid] then
-        tracked = tracked + 1
-      else
-        last_poll[wid] = nil
-        geometry.forget_window(wid)
-        view.invalidate_theme(wid)
-        state.forget_window(wid)
-      end
-    end
-  end
+  table.insert(state.forget_hooks, function(wid)
+    last_poll[wid] = nil
+  end)
 
   wezterm.on(
     "update-status",
@@ -118,13 +115,7 @@ local function register_events(cfg)
       if last_poll[wid] and now - last_poll[wid] < min_gap then
         return
       end
-      if last_poll[wid] == nil then
-        tracked = tracked + 1
-      end
       last_poll[wid] = now
-      if tracked > #wezterm.mux.all_windows() then
-        prune_windows()
-      end
       sidebar.ensure(window)
       input.tick(window)
       view.sync(window)
