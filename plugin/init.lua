@@ -186,17 +186,19 @@ end
 
 local MODULES = {
   "actions",
+  "anim",
   "ansi",
   "backend",
   "config",
   "geometry",
+  "glyphs",
   "hit",
   "icons",
   "input",
   "keys",
   "model",
-  "popover",
   "platform",
+  "popover",
   "render",
   "schema",
   "sidebar",
@@ -207,13 +209,32 @@ local MODULES = {
   "view",
 }
 
+---Every `vtabs/*.lua`, read from disk when wezterm can list it so the static list cannot drift.
+function M.module_names()
+  local found = util.try(function()
+    return wezterm.read_dir(root .. "/vtabs")
+  end)
+  if type(found) ~= "table" or #found == 0 then
+    return MODULES
+  end
+  local names = {}
+  for _, path in ipairs(found) do
+    local name = tostring(path):match "([^/\\]+)%.lua$"
+    if name then
+      names[#names + 1] = name
+    end
+  end
+  table.sort(names)
+  return #names > 0 and names or MODULES
+end
+
 ---Edits to the plugin reload the config like edits to the user's own files do.
 local function watch_plugin_files()
   if not root or not wezterm.add_to_config_reload_watch_list then
     return
   end
   wezterm.add_to_config_reload_watch_list(root .. "/init.lua")
-  for _, name in ipairs(MODULES) do
+  for _, name in ipairs(M.module_names()) do
     wezterm.add_to_config_reload_watch_list(root .. "/vtabs/" .. name .. ".lua")
   end
 end

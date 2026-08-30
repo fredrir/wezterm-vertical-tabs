@@ -7,6 +7,7 @@ local model = require "vtabs.model"
 local render = require "vtabs.render"
 local geometry = require "vtabs.geometry"
 local popover = require "vtabs.popover"
+local anim = require "vtabs.anim"
 local theme = require "vtabs.theme"
 local platform = require "vtabs.platform"
 local glyphs = require "vtabs.glyphs"
@@ -53,6 +54,39 @@ function M.window_title(tab, pane, tabs, panes)
     return string.format("[%d/%d] %s", (tab.tab_index or 0) + 1, count, title)
   end
   return title
+end
+
+---Fades the active tab's sidebar through one phase; the width still changes in a single step.
+function M.animate(gui_window, phase)
+  local cfg = config.get()
+  if cfg.animations == "off" then
+    return false
+  end
+  local tab = util.active_tab(gui_window)
+  local sb = tab and sidebar.find(tab)
+  if not sb or not sidebar.is_ready(sb) then
+    return false
+  end
+  local domain = util.try(function()
+    return sb:get_domain_name()
+  end)
+  if cfg.animations == "auto" and domain ~= "local" then
+    return false
+  end
+  local cached = session.frames[sb:pane_id()]
+  if not cached or not cached.text then
+    return false
+  end
+  local resolved = themes[gui_window:window_id()]
+  local page = resolved and resolved.bg
+  if not page then
+    return false
+  end
+  local command = anim.build(phase, { rows = cached.text, rows_n = cached.n }, {
+    anchor = string.format("#%02x%02x%02x", page[1], page[2], page[3]),
+    fps = cfg.animation.fps,
+  })
+  return command ~= nil and sidebar.send(sb, command) or false
 end
 
 function M.invalidate_theme(window_id)

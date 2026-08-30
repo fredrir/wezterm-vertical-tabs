@@ -3927,6 +3927,72 @@ test("a rail is corrected to exactly rail_width, below the 8-column sidebar floo
   config.setup { backend = { path = "/bin/wez-vtabs" } }
 end)
 
+test("every vtabs module is on the config-reload watch list", function()
+  local vtabs = dofile(here .. "/../init.lua")
+  local watched = {}
+  for _, name in ipairs(vtabs.module_names()) do
+    watched[name] = true
+  end
+  local listing = io.popen('ls "' .. here .. '/../vtabs"')
+  local missing = {}
+  local seen = 0
+  for line in listing:lines() do
+    local name = line:match "^(.+)%.lua$"
+    if name then
+      seen = seen + 1
+      if not watched[name] then
+        missing[#missing + 1] = name
+      end
+    end
+  end
+  listing:close()
+  assert(seen > 10, "the listing found the modules")
+  eq(table.concat(missing, ","), "", "modules not watched, so edits to them would not reload")
+end)
+
+test("a toggle sends the fade around its single resize, and only on a local domain", function()
+  local win, gui = setup_window(1)
+  sidebar.ensure(gui)
+  local tab = win.tab_list[1]
+  local sb = mark_ready(tab)
+  view_mod.sync(gui, { force = true })
+  local function anims_since(n)
+    local out = {}
+    for i = n + 1, #sb.sent do
+      local phase = sb.sent[i]:match '"t":"anim".-"phase":"([%a_]+)"' or sb.sent[i]:match '"phase":"([%a_]+)"'
+      if sb.sent[i]:find('"anim"', 1, true) then
+        out[#out + 1] = phase or "?"
+      end
+    end
+    return out
+  end
+  local before = #sb.sent
+  local actions_before = #win.actions
+  actions.toggle_sidebar(gui)
+  local sent = anims_since(before)
+  assert(#sent >= 1, "the collapse is animated")
+  local resizes = 0
+  for i = actions_before + 1, #win.actions do
+    if win.actions[i].action.action == "AdjustPaneSize" then
+      resizes = resizes + 1
+    end
+  end
+  eq(resizes, 1, "one pane resize per toggle, whatever the fade does")
+
+  before = #sb.sent
+  sb.domain = "SSH:archie"
+  actions.toggle_sidebar(gui)
+  eq(#anims_since(before), 0, "animations = auto is off for a remote domain")
+  sb.domain = "local"
+
+  config.setup { backend = { path = "/bin/wez-vtabs" }, animations = false }
+  before = #sb.sent
+  actions.toggle_sidebar(gui)
+  eq(#anims_since(before), 0, "and off entirely when asked")
+  config.setup { backend = { path = "/bin/wez-vtabs" } }
+  sidebar.set_collapsed(gui, false)
+end)
+
 os.remove(state.file)
 print(string.format("%d passed, %d failed", passed, failed))
 os.exit(failed == 0 and 0 or 1)

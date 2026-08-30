@@ -340,21 +340,24 @@ function M.rename_tab(gui_window, tab_id)
 end
 
 ---A toggle changes the target width, and nothing else would drive the resize until the next poll.
-local function resize_now(gui_window)
+---The fade brackets that single resize; the sidebar never slides.
+local function resize_now(gui_window, collapsing)
   local geometry = require "vtabs.geometry"
   local view = require "vtabs.view"
+  view.animate(gui_window, collapsing and "collapse_out" or "expand_out")
   geometry.correct(gui_window)
   view.sync(gui_window, { force = true })
+  view.animate(gui_window, collapsing and "collapse_in" or "expand_in")
 end
 
 function M.toggle_sidebar(gui_window)
   sidebar.toggle(gui_window)
-  resize_now(gui_window)
+  resize_now(gui_window, state.is_collapsed(gui_window:window_id()))
 end
 
 function M.show_sidebar(gui_window, shown)
   sidebar.set_collapsed(gui_window, not shown)
-  resize_now(gui_window)
+  resize_now(gui_window, not shown)
 end
 
 function M.focus_sidebar(gui_window)
