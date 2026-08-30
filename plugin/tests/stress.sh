@@ -743,10 +743,18 @@ split_net() {
 # Outside the group on purpose: `soft` runs it in a subshell, so a failed assertion skips the rest
 # of the group and would otherwise strand its extra panes in every later pane-count assertion.
 restore_split_panes() {
-  for p in $(list | python3 -c 'import json,sys; t='"$first"'; print(" ".join(str(q["pane_id"]) for q in sorted((r for r in json.load(sys.stdin) if r["tab_id"]==t and not '"$is_marked"'), key=lambda r: r["top_row"])[1:]))'); do
-    cli kill-pane --pane-id "$p" >/dev/null 2>&1 || true
+  # One at a time and re-read between kills: a pane that is still starting does not always die on
+  # the first ask, and the ids shift as the tab relayouts.
+  n=0
+  while [ "$n" -lt 8 ] && [ "$(panes_in "$first")" -gt 2 ]; do
+    n=$((n + 1))
+    victim=$(lowest_content "$first")
+    [ -n "$victim" ] || break
+    cli kill-pane --pane-id "$victim" >/dev/null 2>&1 || true
+    sleep 1.5
   done
-  sleep 3
+  left=$(panes_in "$first")
+  [ "$left" -le 2 ] || { geometry; echo "  warn: tab $first still holds $left panes after cleanup"; }
   max_panes=2
   no_dupes_settled "closing the rescued splits" 8
 }
