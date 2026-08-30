@@ -31,6 +31,7 @@ end
 
 local config_mod = require "vtabs.config"
 local backend = require "vtabs.backend"
+local settings = require "vtabs.settings"
 local sidebar = require "vtabs.sidebar"
 local view = require "vtabs.view"
 local geometry = require "vtabs.geometry"
@@ -299,7 +300,19 @@ end
 ---@param config Config
 ---@param opts table|nil
 function M.apply_to_config(config, opts)
-  local cfg = config_mod.setup(opts)
+  -- read before this function writes any of its own: a non-nil entry means the host owns that key
+  config_mod.host_config = {
+    window_decorations = config.window_decorations,
+    pane_focus_follows_mouse = config.pane_focus_follows_mouse,
+    inactive_pane_hsb = config.inactive_pane_hsb,
+    colors_split = config.colors and config.colors.split or nil,
+    window_padding = config.window_padding,
+  }
+  -- defaults <- settings.json <- opts, so wezterm.lua always outranks the file
+  local stored = util.try(function()
+    return settings.load(config_mod.setup(opts))
+  end)
+  local cfg = config_mod.setup(opts, stored)
   if cfg.hide_native_tab_bar then
     config.enable_tab_bar = false
   end

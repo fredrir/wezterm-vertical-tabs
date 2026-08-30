@@ -5002,6 +5002,122 @@ test("P3 A2c: every trigger reaches actions.open_settings, and only one place sp
   config.setup(legacy { backend = { path = "/bin/wez-vtabs" } })
 end)
 
+test("P3 A5: settings.json holds only what differs, versioned, and never a symlink", function()
+  local settings = require "vtabs.settings"
+  local schema_mod = require "vtabs.schema"
+  local dir = "/tmp/vtabs-settings-" .. tostring(os.time()) .. tostring(math.random(1e6))
+  os.execute("mkdir -p " .. dir)
+  local path = dir .. "/settings.json"
+  local function with_path(over)
+    local opts = { backend = { path = "/bin/wez-vtabs" }, settings = { path = path } }
+    for k, v in pairs(over or {}) do
+      opts[k] = v
+    end
+    return config.setup(opts)
+  end
+
+  -- A5a: only the non-default keys, and the file names its version
+  local cfg = with_path { width = 32, meta = "cwd" }
+  assert(settings.save(cfg), "the file was written")
+  local f = assert(io.open(path, "r"))
+  local written = wezterm.json_parse(f:read "a")
+  f:close()
+  eq(written.version, 1)
+  eq(written.options.width, 32)
+  eq(written.options.meta, "cwd")
+  eq(written.options.row_gap, nil, "a key still at its default is not written")
+  eq(written.options.position, nil)
+  eq(schema_mod.get(written.options, "settings.path"), path, "but a key the user moved is")
+
+  -- A4c: the file moves a default, opts still wins over it
+  local stored = settings.load(with_path {})
+  eq(stored.width, 32, "the file is read back")
+  eq(config.setup({ backend = { path = "/bin/wez-vtabs" } }, stored).width, 32, "and layers under opts")
+  eq(config.setup({ width = 40, backend = { path = "/bin/wez-vtabs" } }, stored).width, 40, "which always wins")
+
+  -- A5c: unknown keys go, but not the children of an open container
+  local body = wezterm.json_encode {
+    version = 1,
+    options = {
+      width = 30,
+      nonsense = 1,
+      icon_map = { totallymade_up = "x" },
+      theme = { made_up = "#ffffff" },
+      keys = { made_up = { key = "z" } },
+    },
+  }
+  local out = assert(io.open(path, "w"))
+  out:write(body)
+  out:close()
+  local before = #wezterm.log
+  local kept = settings.load(with_path {})
+  eq(kept.width, 30)
+  eq(kept.nonsense, nil, "A5c: an unknown key is dropped")
+  eq(kept.icon_map.totallymade_up, "x", "A5c: but icon_map is open")
+  eq(kept.theme.made_up, "#ffffff", "and so are theme")
+  eq(kept.keys.made_up.key, "z", "and keys")
+  assert(#wezterm.log > before, "with one warning")
+
+  -- A5d: a version we do not know is ignored outright
+  out = assert(io.open(path, "w"))
+  out:write(wezterm.json_encode { version = 99, options = { width = 30 } })
+  out:close()
+  eq(settings.load(with_path {}), nil, "A5d")
+  out = assert(io.open(path, "w"))
+  out:write "{ not json at all"
+  out:close()
+  eq(settings.load(with_path {}), nil, "corrupt is ignored too")
+
+  -- A5f: the descriptor is `any`, so a table survives validation
+  local table_cfg = config.setup { settings = { persist = false }, backend = { path = "/bin/wez-vtabs" } }
+  eq(table_cfg.settings.persist, false, "A5f: the table is kept, not reset to the default")
+  eq(settings.persists(table_cfg), false, "and persist = false never writes")
+  eq(settings.save(table_cfg), false)
+
+  os.remove(path)
+  os.execute("rmdir " .. dir)
+  config.setup(legacy { backend = { path = "/bin/wez-vtabs" } })
+end)
+
+test("P3 A4a/A6a: opts keys are recorded as locked, and replace re-derives the glyphs", function()
+  local settings = require "vtabs.settings"
+  local cfg = config.setup {
+    width = 30,
+    theme = { accent = "#f5c2e7" },
+    backend = { path = "/bin/wez-vtabs" },
+  }
+  assert(config.explicit.width, "A4a: a key the user wrote is explicit")
+  assert(config.explicit["theme.accent"], "A4a: nested too")
+  assert(not config.explicit.row_gap, "and one they left alone is not")
+  eq(config.explicit["backend.path"], true)
+
+  -- A6a: glyphs are derived from icon_map, so replace must not carry a stale table over
+  local edited = util.merge(cfg, { icon_map = { close = "Z" } })
+  edited.glyphs = cfg.glyphs
+  eq(config.replace(edited).glyphs.close, "Z", "A6a: config.replace re-derives cfg.glyphs")
+  eq(config.get().glyphs.close, "Z")
+
+  -- A5e: nothing here arms a timer
+  local before = #wezterm.log
+  settings.persists(config.get())
+  eq(#wezterm.log, before)
+  config.setup(legacy { backend = { path = "/bin/wez-vtabs" } })
+end)
+
+test("P3 A4b: the host's own wezterm keys are recorded before the plugin writes any", function()
+  local vtabs = dofile(here .. "/../init.lua")
+  local hosted =
+    { keys = {}, window_padding = { left = 8, right = 8, top = 8, bottom = 8 }, window_decorations = "TITLE" }
+  vtabs.apply_to_config(hosted, { backend = { path = "/bin/wez-vtabs" } })
+  eq(config.host_config.window_padding.left, 8, "A4b: the host's value, not the one we would write")
+  eq(config.host_config.window_decorations, "TITLE")
+  local bare = { keys = {} }
+  vtabs.apply_to_config(bare, { backend = { path = "/bin/wez-vtabs" } })
+  eq(config.host_config.window_padding, nil, "and nil where the host left it alone")
+  eq(config.host_config.colors_split, nil)
+  config.setup(legacy { backend = { path = "/bin/wez-vtabs" } })
+end)
+
 test("collapsed = rail keeps the pane and narrows it to rail_width", function()
   local win, gui = setup_window(1)
   sidebar.ensure(gui)
