@@ -13,6 +13,7 @@ local PING_AFTER_MS = 8000
 local DEAD_AFTER_MS = 20000
 local READY_TIMEOUT_MS = 12000
 local ADOPT_RETRY_MS = 2000
+local ADOPT_TRIES = 5
 local FAILED_DOMAIN_MS = 60000
 local PRUNE_MS = 30000
 local PIN_GRACE_MS = 3000
@@ -91,25 +92,45 @@ end
 
 M.is_sidebar = M.is_ready
 
----Panes that play the sidebar role for layout purposes; a marker alone authorises nothing.
-function M.is_backend(pane)
-  if not pane then
-    return false
-  end
+local RANK = { none = 0, marker = 1, mapped = 2, ready = 3 }
+
+---How strong a pane's claim to the sidebar role is; a marker alone is the weakest and authorises nothing.
+local function sidebar_rank(pane)
   local tab_id = tab_id_of(pane)
   if tab_id == nil then
-    return false
+    return RANK.none
   end
-  return M.is_ready(pane) or state.sidebar_pane_id(tab_id) == pane:pane_id() or M.has_marker(pane)
+  if M.is_ready(pane) then
+    return RANK.ready
+  end
+  if state.sidebar_pane_id(tab_id) == pane:pane_id() then
+    return RANK.mapped
+  end
+  if M.has_marker(pane) and not M.is_overlay(pane) and not session.given_up[pane:pane_id()] then
+    return RANK.marker
+  end
+  return RANK.none
 end
 
----Splits a tab's panes into { content = Pane[], sidebar = Pane|nil }.
+function M.is_backend(pane)
+  return pane ~= nil and sidebar_rank(pane) > RANK.none
+end
+
+---Splits a tab into { content = Pane[], sidebar = Pane|nil }. Exactly one pane can be the sidebar --
+---the best claim wins -- so a pane that fakes the title cannot make a tab look empty.
 function M.classify(tab)
-  local content, sb = {}, nil
-  for _, p in ipairs(tab:panes()) do
-    if M.is_backend(p) then
-      sb = sb or p
-    else
+  local panes = tab:panes()
+  local sb, best = nil, RANK.none
+  for _, p in ipairs(panes) do
+    local rank = sidebar_rank(p)
+    if rank > best then
+      sb, best = p, rank
+    end
+  end
+  local sb_id = sb and sb:pane_id()
+  local content = {}
+  for _, p in ipairs(panes) do
+    if p:pane_id() ~= sb_id then
       content[#content + 1] = p
     end
   end
@@ -122,11 +143,12 @@ function M.find(tab)
 end
 
 function M.content_pane(tab)
+  local content, sb = M.classify(tab)
+  local sb_id = sb and sb:pane_id()
   local active = tab:active_pane()
-  if active and not M.is_backend(active) then
+  if active and active:pane_id() ~= sb_id then
     return active
   end
-  local content = M.classify(tab)
   local remembered = session.content_pane[tab:tab_id()]
   for _, p in ipairs(content) do
     if p:pane_id() == remembered then
@@ -320,21 +342,31 @@ local function adopt(tab, sb, now)
   local pid = sb:pane_id()
   state.set_sidebar(tab:tab_id(), pid, util.random_token())
   session.adopted[pid] = true
+  session.auth_tries[pid] = 1
   session.seen[pid] = now
   M.auth(sb)
 end
 
----A pane that never echoes its token is never trusted; adopted panes are retried, never given up on.
+---A pane that never echoes its token is never trusted; an adopted one is retried a few times, then left.
 local function await_auth(gui_window, tab, sb, now)
   local pid = sb:pane_id()
   if state.sidebar_pane_id(tab:tab_id()) ~= pid then
+    -- classify ranks a ready or mapped pane above a marker, so this tab has neither
     if M.has_marker(sb) and not M.is_overlay(sb) then
       adopt(tab, sb, now)
     end
     return
   end
   if session.adopted[pid] then
-    if now - (session.authed_at[pid] or 0) > ADOPT_RETRY_MS then
+    local tries = session.auth_tries[pid] or 0
+    if tries >= ADOPT_TRIES then
+      -- it kept the marker but never echoed: hand the tab back and treat the pane as content
+      util.warn_once("adopt-" .. pid, "pane %d never authenticated; not a sidebar", pid)
+      session.given_up[pid] = true
+      session.adopted[pid] = nil
+      state.set_sidebar(tab:tab_id(), nil)
+    elseif now - (session.authed_at[pid] or 0) > ADOPT_RETRY_MS then
+      session.auth_tries[pid] = tries + 1
       M.auth(sb)
     end
     return
@@ -505,14 +537,14 @@ function M.ensure(gui_window)
       if sb then
         -- the tab still exists; forgetting it would strand a sidebar that authenticates later
         seen[tab_id] = true
-        if M.is_ready(sb) then
+        if M.is_ready(sb) and #tab:panes() == 1 then
           M.close_orphan(gui_window, tab, sb)
         end
       end
     else
       seen[tab_id] = true
       local active = tab:active_pane()
-      if active and not M.is_backend(active) then
+      if active and (not sb or active:pane_id() ~= sb:pane_id()) then
         session.content_pane[tab_id] = active:pane_id()
       end
       session.tab_meta[tab_id] = M.tab_meta(tab, M.content_pane(tab))

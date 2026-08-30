@@ -111,7 +111,9 @@ local function write_file(tbl)
     util.warn_once("state-file", "cannot write %s", M.file)
     return
   end
-  shell { "chmod", "600", tmp }
+  if not platform.is_windows and not shell { "chmod", "600", tmp } then
+    util.warn_once("state-chmod", "cannot restrict %s to 0600", M.file)
+  end
   f:write(body)
   f:close()
   if os.rename(tmp, M.file) then
@@ -182,6 +184,7 @@ M.session = {
   adopted = {},
   spawned = {},
   authed_at = {},
+  auth_tries = {},
   pane_domain = {},
   failed_domains = {},
   given_up = {},
@@ -200,7 +203,7 @@ local WINDOW_SESSION = {
 }
 
 local PANE_SESSION =
-  { "hits", "frames", "dims", "ready", "seen", "pinged", "sent_at", "adopted", "spawned", "authed_at" }
+  { "hits", "frames", "dims", "ready", "seen", "pinged", "sent_at", "adopted", "spawned", "authed_at", "auth_tries" }
 
 local function save(persist)
   if wezterm.GLOBAL then

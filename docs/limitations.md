@@ -31,13 +31,19 @@
 
 ## Sidebar identity
 
-| Evidence | Grants | Notes |
+| Evidence | Rank | Grants |
 | --- | --- | --- |
-| pane echoed a token this process minted for it | frames, events, close | only trusted state |
-| pane title `wez-vtabs:<hex>` | adoption: re-auth with a fresh token | any process can set a title |
-| plugin split the pane this process | layout only, until the echo | |
+| pane echoed a token this process minted for it | 3 | frames, events, close |
+| plugin split the pane in this process | 2 | layout only, until the echo |
+| pane title `wez-vtabs:<hex>` | 1 | adoption: one `auth`, 5 tries, then back to content |
+| anything else | 0 | content |
 
-A pane that fakes the title marker is adopted as a sidebar and then waits for an
-echo it cannot produce: it is never sent frames, its events are ignored, its tab
-is never closed, and no keystroke is ever forwarded to it. It does cost that tab
-its sidebar.
+One pane per tab holds the role: the highest rank wins and every other pane is
+content, so a faked title can neither empty a tab nor displace a live sidebar.
+
+A pane that fakes the title marker is sent an `auth` command on its own stdin,
+so it can echo the token and become the tab's sidebar. It then receives frames
+(every tab's title and cwd in this window) and its events drive tab management
+for that window. This is not a security boundary and is not meant to be: any
+process running as you already has full mux control through `wezterm cli`, and a
+backend spawned in a remote tab's domain is trusted by design.

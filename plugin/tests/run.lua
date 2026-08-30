@@ -783,6 +783,57 @@ test("a marker title never reaches the rendered tab list", function()
   eq(built[1].title:find "wez%-vtabs", nil)
 end)
 
+test("a content pane faking the marker cannot empty its own tab", function()
+  local win, gui = setup_window(2)
+  sidebar.ensure(gui)
+  local tab = win.tab_list[1]
+  local sb = mark_ready(tab)
+  local shell = sidebar.content_pane(tab)
+  shell.title = "wez-vtabs:00"
+  sidebar.ensure(gui)
+  eq(#win.tab_list, 2, "tab kept")
+  eq(sidebar.find(tab):pane_id(), sb:pane_id(), "the ready pane stays the sidebar")
+  eq(sidebar.content_pane(tab):pane_id(), shell:pane_id(), "the liar stays content")
+  eq(state.token_for(sb:pane_id()) ~= nil, true, "token not revoked")
+end)
+
+test("a marker pane before the sidebar in pane order does not steal the role", function()
+  local win, gui = setup_window(1)
+  sidebar.ensure(gui)
+  local tab = win.tab_list[1]
+  local sb = mark_ready(tab)
+  local token = state.token_for(sb:pane_id())
+  local liar = fake.pane(tab, { title = "wez-vtabs:00" })
+  table.insert(tab.pane_list, 1, liar)
+  eq(sidebar.find(tab):pane_id(), sb:pane_id(), "ranked above a bare marker")
+  sidebar.ensure(gui)
+  eq(state.token_for(sb:pane_id()), token, "token kept")
+  local sent = #sb.sent
+  require("vtabs.view").sync(gui, { force = true })
+  assert(#sb.sent > sent, "frames still go to the real sidebar")
+  eq(#liar.sent, 0, "the liar is never written to")
+end)
+
+test("an adopted pane that never authenticates is handed back to content", function()
+  local win, gui = setup_window(1)
+  local tab = win.tab_list[1]
+  local liar = fake.pane(tab, { title = "wez-vtabs:00" })
+  table.insert(tab.pane_list, 1, liar)
+  local real_now = util.now_ms
+  local clock = real_now()
+  util.now_ms = function()
+    return clock
+  end
+  for _ = 1, 10 do
+    clock = clock + 3000
+    sidebar.ensure(gui)
+  end
+  util.now_ms = real_now
+  eq(state.sidebar_pane_id(tab.id) ~= liar:pane_id(), true, "unmapped after the retry budget")
+  assert(#liar.sent <= 5, "auth attempts bounded, got " .. #liar.sent)
+  eq(sidebars_in(tab), 1, "a real sidebar was attached instead")
+end)
+
 -- ===================== implementer-2: interaction / geometry / focus =====================
 
 local function rgb(c)
