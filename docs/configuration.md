@@ -43,7 +43,7 @@ return config
 | `titlebar`                | `"auto"`                                                                     | `"auto"` \| `"integrate"` \| `"plain"` \| `"macos"` |
 | `context`                 | `"popover"`                                                                  | `"popover"` \| `false` |
 | `popover`                 | `{ width = "auto", follow_pointer = true, fade_ms = 90, overflow = "clip" }` | see below |
-| `strip_actions`           | `{ "toggle", "new_tab" }`                                                    | `"toggle"` \| `"new_tab"` \| `"settings"` \| `"search"` \| `{ id, icon, on_click }` |
+| `strip_actions`           | `{ "toggle", "new_tab", "settings" }`                                        | `"toggle"` \| `"new_tab"` \| `"settings"` \| `"search"` \| `{ id, icon, on_click }` |
 | `toggle_button`           | `true`                                                                       | `true` \| `false` |
 | `close_button`            | `"hover"`                                                                    | `"hover"` \| `"always"` \| `"never"` |
 | `confirm_close`           | `true`                                                                       | `true` \| `false` |
