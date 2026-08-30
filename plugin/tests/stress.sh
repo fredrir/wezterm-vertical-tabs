@@ -271,9 +271,13 @@ want_width() { # tab_id want label — waits for the wanted width, then fails wi
 
 vtest "$hot_content" rail_mode
 sleep 0.5
-hot=$(tab_ids | cut -d' ' -f1)
-other=$(tab_ids | cut -d' ' -f2)
+same_window=$(busiest_window_tabs)
+hot=$(echo "$same_window" | cut -d' ' -f1)
+other=$(echo "$same_window" | cut -d' ' -f2)
 hot_content=$(content_of "$hot")
+cli activate-tab --tab-id "$hot" >/dev/null
+vtest "$(content_of "$hot")" rail_mode
+sleep 0.5
 cli activate-tab --tab-id "$hot" >/dev/null
 want_width "$hot" 28 "before the resize traces"
 trace "baseline $(total_cols) cols"
@@ -367,8 +371,9 @@ echo "ok: rail, activate a background tab, expand leaves every sidebar at 28"
 
 # G. A divider drag is the one width the plugin must adopt and keep. `cli adjust-pane-size` moves
 #    the split exactly the way dragging the divider does, so this is the real gesture.
-hot=$(tab_ids | cut -d' ' -f1)
-other=$(tab_ids | cut -d' ' -f2)
+same_window=$(busiest_window_tabs)
+hot=$(echo "$same_window" | cut -d' ' -f1)
+other=$(echo "$same_window" | cut -d' ' -f2)
 hot_content=$(content_of "$hot")
 cli activate-tab --tab-id "$hot" >/dev/null
 want_width "$hot" 28 "before the drag trace"
@@ -418,6 +423,7 @@ echo "ok: rail and back, and a tab switch, all return to the dragged width"
 split_mark=$(mark)
 extra=$(cli split-pane --pane-id "$hot_content" --right 2>/dev/null || echo "")
 if [ -n "$extra" ]; then
+  max_panes=3
   sleep 2
   before_active=$(probe_line "$hot_content" probe_active "active pane")
   trace "content split in two"
@@ -438,6 +444,7 @@ if [ -n "$extra" ]; then
   echo "ok: a resize drag over split content keeps the width, the panes and the focus"
   cli kill-pane --pane-id "$extra" >/dev/null 2>&1 || true
   sleep 2
+  max_panes=2
 fi
 
 # I. The rail in a private window: `render` takes its private branch there, and a throw leaves the

@@ -40,10 +40,20 @@ end)
 
 -- The traffic-light reserve and the rail's own strip geometry are keyed off the target triple,
 -- so they can only be exercised anywhere else by lying to `platform` about the platform.
+-- `integrated_title_button_style = "MacOsNative"` is rejected off macOS, so the two facts
+-- `chrome_for` reads from the effective config are forced at the one place that consumes them.
 if os.getenv "VTABS_E2E_MACOS" then
-  require("vtabs.platform").is_mac = true
+  local platform = require "vtabs.platform"
+  platform.is_mac = true
+  local real = platform.strip_geometry
+  platform.strip_geometry = function(dims, opts)
+    opts = opts or {}
+    opts.is_mac = true
+    opts.integrated_buttons = true
+    opts.native_button_style = true
+    return real(dims, opts)
+  end
   config.window_decorations = "INTEGRATED_BUTTONS|RESIZE"
-  config.integrated_title_button_style = "MacOsNative"
 end
 
 vtabs.apply_to_config(config, {

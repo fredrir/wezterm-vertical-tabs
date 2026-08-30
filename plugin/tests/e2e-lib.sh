@@ -115,12 +115,14 @@ for p in json.load(sys.stdin):
     if '"$is_marked"': n[p["tab_id"]]+=1
 print(" ".join("%d:%d"%(t,c) for t,c in sorted(n.items()) if c>1))'
 }
-# Tabs holding more than two panes at all; catches a second sidebar before its title lands.
+# Tabs holding more panes than a sidebar plus the content; catches a second sidebar before its
+# title lands. `max_panes` rises while a check deliberately splits the content.
+max_panes=2
 fat_tabs() {
   list | python3 -c '
 import json,sys,collections
 n=collections.Counter(p["tab_id"] for p in json.load(sys.stdin))
-print(" ".join("%d:%d"%(t,c) for t,c in sorted(n.items()) if c>2))'
+print(" ".join("%d:%d"%(t,c) for t,c in sorted(n.items()) if c>'"$max_panes"'))'
 }
 # Asserts the invariant after one step. $1 labels the step in the failure text.
 no_dupes() {
@@ -141,6 +143,16 @@ no_dupes_settled() {
 
 # Sidebar panes on a tab whose title the backend has claimed.
 marked_of() { list | python3 -c 'import json,sys; t='"$1"'; print(sum(1 for p in json.load(sys.stdin) if p["tab_id"]==t and '"$is_marked"'))'; }
+window_of() { list | python3 -c 'import json,sys; t='"$1"'; print([p["window_id"] for p in json.load(sys.stdin) if p["tab_id"]==t][0])'; }
+# Tabs of the window holding the most of them; collapse state is per window, so width checks that
+# span two tabs have to stay inside one.
+busiest_window_tabs() {
+  list | python3 -c '
+import json,sys,collections
+by=collections.defaultdict(set)
+for p in json.load(sys.stdin): by[p["window_id"]].add(p["tab_id"])
+print(" ".join(str(t) for t in sorted(max(by.values(), key=len))))'
+}
 # Waits for a tab's lazy attach, asserting the invariant on every look.
 wait_attached() { # tab_id [seconds]
   n=$((${2:-8} * 4))
