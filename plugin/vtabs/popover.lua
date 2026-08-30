@@ -14,6 +14,13 @@ local MAX_TITLE_ROWS = 3
 local MAX_HINT_COLS = 8
 local FRAME_ROWS = 2
 local MIN_ITEM_ROWS = 4
+local MIN_W = 16
+-- Interior columns a row spends on anything but its label: borders, marker, both margins, and the
+-- gap a hint needs on top of that.
+local LABEL_PAD = 5
+local HINT_PAD = 6
+-- Every row's text starts here, so header lines and item labels share one left margin.
+local TEXT_REL = 4
 
 local MODS = { CTRL = "^", SHIFT = "⇧", ALT = "⌥", OPT = "⌥", CMD = "⌘", SUPER = "❖" }
 
@@ -112,15 +119,28 @@ function M.items(gui_window, tab_id)
   return out
 end
 
----What the confirm level asks, named after the tab or the number of tabs it would take.
-local function question(gui_window, pop)
+---The tabs the confirm level would actually take; `close_others` keeps the one it is anchored on.
+local function victims(gui_window, pop)
   if pop.confirm == "close_others" then
-    local n = pop.count or 0
-    return string.format("Close %d other tab%s?", n, n == 1 and "" or "s")
+    return actions.others(gui_window, pop.tab_id)
   end
-  local item = model.find(model.build(gui_window), pop.tab_id)
-  local title = item and item.title or ""
-  return string.format("Close %s?", title ~= "" and title or "tab")
+  return { pop.tab_id }
+end
+
+---What the confirm level asks: `Close <title>?`, then `and N others` when more than one would go.
+---The title names the first tab that would close, never the one `close_others` keeps.
+local function question(gui_window, pop)
+  if pop.level ~= "confirm" then
+    return nil
+  end
+  local ids = victims(gui_window, pop)
+  local first = ids[1] and model.find(model.build(gui_window), ids[1])
+  local title = first and first.title or ""
+  local lines = { string.format("Close %s?", title ~= "" and title or "tab") }
+  if #ids > 1 then
+    lines[2] = string.format("and %d other%s", #ids - 1, #ids == 2 and "" or "s")
+  end
+  return lines
 end
 
 local function items_for(gui_window, pop)
@@ -135,13 +155,17 @@ local function header(gui_window, pop, budget)
   local meta = session.tab_meta[tab_id] or {}
   local item = model.find(model.build(gui_window), tab_id)
   local lines = {}
-  local head = level == "confirm" and question(gui_window, pop) or (item and item.title or "tab")
-  for i, line in ipairs(M.wrap(head, budget, MAX_TITLE_ROWS)) do
-    lines[#lines + 1] = { text = line, tone = "fg", drop = i == 1 and DROP.title or DROP.title_extra }
-  end
   if level == "confirm" then
+    for _, ask in ipairs(question(gui_window, pop)) do
+      for i, line in ipairs(M.wrap(ask, budget, MAX_TITLE_ROWS)) do
+        lines[#lines + 1] = { text = line, tone = "fg", drop = i == 1 and DROP.title or DROP.title_extra }
+      end
+    end
     lines[#lines + 1] = { text = "", tone = "meta", drop = DROP.separator }
     return lines
+  end
+  for i, line in ipairs(M.wrap(item and item.title or "tab", budget, MAX_TITLE_ROWS)) do
+    lines[#lines + 1] = { text = line, tone = "fg", drop = i == 1 and DROP.title or DROP.title_extra }
   end
   if meta.cwd then
     lines[#lines + 1] = { text = util.shorten_path(meta.cwd, budget), tone = "meta", drop = DROP.cwd }
@@ -175,6 +199,31 @@ local function drop_to(lines, keep)
   return out
 end
 
+local function label_width(entry)
+  local w = util.width(entry.label or "")
+  if entry.hint then
+    return w + util.width(entry.hint) + HINT_PAD
+  end
+  return w + LABEL_PAD
+end
+
+---§6.3: as wide as its widest row wants, clamped to the columns the sidebar can spare.
+function M.width_for(cfg, cols, items, head)
+  local avail = cols - (cfg.padding.left or 0) - (cfg.padding.right or 0)
+  local natural = MIN_W
+  for _, entry in ipairs(items) do
+    natural = math.max(natural, label_width(entry))
+  end
+  for _, line in ipairs(head or {}) do
+    natural = math.max(natural, util.width(line) + LABEL_PAD)
+  end
+  local want = cfg.popover.width
+  if type(want) ~= "number" then
+    want = natural
+  end
+  return math.max(math.min(want, avail), math.min(MIN_W, avail))
+end
+
 ---Rule 1 then rule 2: below the anchor, else above it, else nil.
 local function place(anchor, height, rows)
   if anchor + height <= rows then
@@ -194,8 +243,8 @@ local function scroll_for(index, visible, count)
 end
 
 ---Where the popover sits and how much header it can afford (§1.9's five rules, in order).
-function M.layout(gui_window, pop, rows, cols)
-  local budget = cols - 6
+function M.layout(gui_window, pop, rows, w)
+  local budget = w - LABEL_PAD
   local items = items_for(gui_window, pop)
   local full = header(gui_window, pop, budget)
   local anchor = math.max(0, math.min(pop.anchor_row or 0, rows))
@@ -225,11 +274,12 @@ end
 
 M.MIN_ROWS = FRAME_ROWS + MIN_ITEM_ROWS
 
-function M.open(gui_window, tab_id, anchor_row)
+function M.open(gui_window, tab_id, anchor_row, anchor_col)
   local wid = gui_window:window_id()
   session.popover[wid] = {
     tab_id = tab_id,
     anchor_row = anchor_row or 0,
+    anchor_col = anchor_col,
     level = "root",
     index = 1,
     at = util.now_ms(),
@@ -273,6 +323,32 @@ function M.move(gui_window, delta)
   end
 end
 
+---§6.6: the pointer selects the row it is over, but only inside the menu — a pointer that wandered
+---onto the scrim must not erase a keyboard selection.
+---@return boolean true when the selection moved and the frame has to be repainted
+function M.point_at(gui_window, record, x)
+  local pop = session.popover[gui_window:window_id()]
+  if not pop or not config.get().popover.follow_pointer then
+    return false
+  end
+  if not record or record.kind ~= "popover" or record.id == nil then
+    return false
+  end
+  if record.x1 and (x < record.x1 or x > record.x2) then
+    return false
+  end
+  for i, entry in ipairs(items_for(gui_window, pop)) do
+    if entry.id == record.id then
+      if entry.disabled or pop.index == i then
+        return false
+      end
+      pop.index = i
+      return true
+    end
+  end
+  return false
+end
+
 ---First-letter jump to the next enabled item starting with `ch`.
 function M.jump(gui_window, ch)
   local pop = session.popover[gui_window:window_id()]
@@ -301,13 +377,14 @@ function M.selected(gui_window)
 end
 
 ---Raises the open popover to its confirm level; Cancel is selected, so a stray Enter is harmless.
-function M.to_confirm(gui_window, kind)
+function M.to_confirm(gui_window, kind, from_root)
   local pop = session.popover[gui_window:window_id()]
   if not pop then
     return false
   end
   pop.level, pop.confirm = "confirm", kind
   pop.count = kind == "close_others" and #actions.others(gui_window, pop.tab_id) or nil
+  pop.from_root = from_root or nil
   pop.index = 2
   return true
 end
@@ -338,7 +415,7 @@ function M.run(gui_window, id)
         return false
       end
       if entry.confirm and actions.needs_confirm(gui_window, tab_id, entry.confirm) then
-        return M.to_confirm(gui_window, entry.confirm)
+        return M.to_confirm(gui_window, entry.confirm, true)
       end
       if entry.level == "rename" then
         local tab = actions.tab_by_id(gui_window, tab_id)
@@ -444,14 +521,16 @@ function M.commit_rename(gui_window)
   M.close(gui_window)
 end
 
--- Escaping a confirm is cancelling it, so only rename steps back to the menu it came from.
+-- A confirm the user reached through the menu has a menu to go back to; one raised by the ✕ does not.
 local STEPS_BACK = { rename = true }
 
 ---`Esc` steps back a level before it closes.
 function M.back(gui_window)
   local pop = session.popover[gui_window:window_id()]
-  if pop and STEPS_BACK[pop.level] then
+  if pop and (STEPS_BACK[pop.level] or (pop.level == "confirm" and pop.from_root)) then
     pop.level, pop.buffer, pop.cursor = "root", nil, nil
+    pop.confirm, pop.count, pop.from_root = nil, nil, nil
+    pop.index = 1
     return true
   end
   return M.close(gui_window)
@@ -462,27 +541,41 @@ local function frame_row(w, left, fill, right, theme)
 end
 
 ---Right-aligns `hint` so it ends at the interior's last column.
-local function item_row(entry, w, selected, theme)
-  local txt_x1, txt_x2 = 3, w - 2
-  local fg = theme.fg
-  if entry.disabled then
+---`x` is the rect's absolute left column: hit records are read against pane columns, and the rect no
+---longer starts where the sidebar's padding does.
+local function item_row(entry, w, selected, theme, x)
+  local txt_x2 = w - 2
+  local fg, hint_fg = theme.fg, theme.disabled_fg
+  -- The selected row is an accent fill: `hover_bg` on `surface_raised` scored 1.01-1.10 against the
+  -- panel it sat on. Its ink covers the destructive tint too — red on accent is unreadable.
+  if selected then
+    fg, hint_fg = theme.popover_sel_fg, theme.popover_sel_hint
+  elseif entry.disabled then
     fg = theme.disabled_fg
-  elseif selected and (entry.id == "close" or entry.id == "confirm_close") then
-    fg = theme.close_hover_fg
   end
   local spans = {
     { x = 1, text = "│", fg = theme.border },
     { x = w, text = "│", fg = theme.border },
-    { x = txt_x1 + 1, text = util.sanitize(entry.label), fg = fg },
+    { x = TEXT_REL, text = util.truncate(util.sanitize(entry.label), txt_x2 - TEXT_REL + 1), fg = fg },
   }
+  if selected then
+    -- An accent bar on an accent field would be invisible, so the marker takes the ink colour.
+    spans[#spans + 1] = { x = 2, text = "▎", fg = fg }
+  end
   if entry.hint then
     local hint = util.sanitize(entry.hint)
-    spans[#spans + 1] = { x = txt_x2 - util.width(hint) + 1, text = hint, fg = theme.disabled_fg }
+    spans[#spans + 1] = { x = txt_x2 - util.width(hint) + 1, text = hint, fg = hint_fg }
   end
   return {
-    bg = selected and theme.hover_bg or nil,
+    bg = selected and theme.popover_sel_bg or nil,
     spans = spans,
-    hit = { kind = "popover", id = entry.id, x1 = 2, x2 = w - 1, disabled = entry.disabled or nil },
+    hit = {
+      kind = "popover",
+      id = entry.id,
+      x1 = (x or 1) + 1,
+      x2 = (x or 1) + w - 2,
+      disabled = entry.disabled or nil,
+    },
   }
 end
 
@@ -530,11 +623,14 @@ function M.rect(gui_window, rows, cols, theme, cfg)
   if not pop then
     return nil
   end
-  local x = cfg.padding.left + 1
-  local w = (cols - cfg.padding.right) - x + 1
+  local first_col = cfg.padding.left + 1
+  local w = M.width_for(cfg, cols, items_for(gui_window, pop), question(gui_window, pop))
   if w < 8 or rows < 3 then
     return nil
   end
+  -- §6.4: the menu opens at the column that asked for it and slides back inside the sidebar's own.
+  local anchor_col = pop.anchor_col or first_col
+  local x = math.max(first_col, math.min(anchor_col, cols - cfg.padding.right - w + 1))
   local body = {}
   local placed
   if pop.level == "rename" then
@@ -545,7 +641,7 @@ function M.rect(gui_window, rows, cols, theme, cfg)
       body[#body + 1] = row
     end
   else
-    placed = M.layout(gui_window, pop, rows, cols)
+    placed = M.layout(gui_window, pop, rows, w)
     for _, line in ipairs(placed.lines) do
       body[#body + 1] = text_row(line.text, line.tone == "fg" and theme.fg or theme.meta_fg, w, theme)
     end
@@ -553,7 +649,7 @@ function M.rect(gui_window, rows, cols, theme, cfg)
     for i = 1, placed.visible do
       local entry = placed.items[i + (placed.scroll or 0)]
       if entry then
-        body[#body + 1] = item_row(entry, w, i + (placed.scroll or 0) == pop.index, theme)
+        body[#body + 1] = item_row(entry, w, i + (placed.scroll or 0) == pop.index, theme, x)
       end
     end
   end

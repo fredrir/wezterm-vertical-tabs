@@ -20,6 +20,7 @@ local INACTIVE_REFRESH_MS = 1000
 local themes = {}
 local chrome = {}
 local banding, banding_saved = {}, {}
+local popover_rect = {}
 local session = state.session
 
 ---WezTerm titles the window after its active pane; under `hover = "follow"` that is the sidebar.
@@ -57,35 +58,72 @@ function M.window_title(tab, pane, tabs, panes)
   return title
 end
 
----Fades the active tab's sidebar through one phase; the width still changes in a single step.
-function M.animate(gui_window, phase)
+---Everything a fade needs, or nil when this window cannot play one.
+local function fade_context(gui_window)
   local cfg = config.get()
   if cfg.animations == "off" then
-    return false
+    return nil
   end
   local tab = util.active_tab(gui_window)
   local sb = tab and sidebar.find(tab)
   if not sb or not sidebar.is_ready(sb) then
-    return false
+    return nil
   end
   local domain = util.try(function()
     return sb:get_domain_name()
   end)
   if cfg.animations == "auto" and domain ~= "local" then
-    return false
+    return nil
   end
   local cached = session.frames[sb:pane_id()]
   if not cached or not cached.text then
-    return false
+    return nil
   end
   local resolved = themes[gui_window:window_id()]
-  local page = resolved and resolved.bg
-  if not page then
+  if not resolved or not resolved.bg then
+    return nil
+  end
+  return cfg, sb, cached, resolved
+end
+
+local function hex(rgb)
+  return string.format("#%02x%02x%02x", rgb[1], rgb[2], rgb[3])
+end
+
+-- The configured duration is the fade the user sees; the pre-resize phase keeps its own constant.
+local PHASE_MS = { expand_in = "expand_ms", collapse_in = "collapse_ms" }
+
+---Fades the active tab's sidebar through one phase; the width still changes in a single step.
+function M.animate(gui_window, phase)
+  local cfg, sb, cached, resolved = fade_context(gui_window)
+  if not cfg then
     return false
   end
+  local key = PHASE_MS[phase]
   local command = anim.build(phase, { rows = cached.text, rows_n = cached.n }, {
-    anchor = string.format("#%02x%02x%02x", page[1], page[2], page[3]),
+    anchor = hex(resolved.bg),
     fps = cfg.animation.fps,
+    ms = key and cfg.animation[key] or nil,
+  })
+  return command ~= nil and sidebar.send(sb, command) or false
+end
+
+---The menu rises out of the sidebar surface in one colour fade over its own rows; nothing on close.
+function M.animate_popover(gui_window)
+  local rect = popover_rect[gui_window:window_id()]
+  local cfg, sb, cached, resolved = fade_context(gui_window)
+  if not rect or not cfg or cfg.popover.fade_ms <= 0 then
+    return false
+  end
+  local rows = {}
+  for row = rect.y, rect.y + rect.h - 1 do
+    rows[#rows + 1] = row
+  end
+  local command = anim.build("popover_in", { rows = cached.text, rows_n = cached.n }, {
+    anchor = hex(resolved.bg),
+    fps = cfg.animation.fps,
+    ms = cfg.popover.fade_ms,
+    rows = rows,
   })
   return command ~= nil and sidebar.send(sb, command) or false
 end
@@ -94,8 +132,9 @@ function M.invalidate_theme(window_id)
   if window_id then
     themes[window_id] = nil
     chrome[window_id] = nil
+    popover_rect[window_id] = nil
   else
-    themes, chrome = {}, {}
+    themes, chrome, popover_rect = {}, {}, {}
   end
 end
 
@@ -188,6 +227,13 @@ function M.apply_titlebar_band(gui_window)
     gui_window:set_config_overrides(merged)
   end)
   return true
+end
+
+---Remembered so the fade can be played over exactly the rows the menu took.
+local function rect_for(gui_window, dims, resolved, cfg)
+  local rect = popover.rect(gui_window, dims.viewport_rows, dims.cols, resolved, cfg)
+  popover_rect[gui_window:window_id()] = rect
+  return rect
 end
 
 local function strip_for(gui_window, cfg, dims)
@@ -335,7 +381,7 @@ function M.sync(gui_window, opts)
           focus_index = is_active and focus_index or nil,
           private = state.is_private(wid),
           rail = state.is_collapsed(wid) and cfg.collapsed == "rail" or nil,
-          popover = is_active and popover.rect(gui_window, dims.viewport_rows, dims.cols, resolved, cfg) or nil,
+          popover = is_active and rect_for(gui_window, dims, resolved, cfg) or nil,
           footer = footer,
         })
         if not ok then

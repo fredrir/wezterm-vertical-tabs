@@ -21,6 +21,17 @@
   process.
 - "Move to new window" (drag to the inner edge, menu, or `tear_off`) only works
   for tabs with a single content pane; multi-pane tabs show a notification.
+- The action menu is composited into the sidebar pane's own cells. A plugin has
+  no surface above the content pane, so the menu can never be drawn over the
+  editor; it opens at the column that was clicked and slides back inside the
+  sidebar's own columns rather than overlapping anything. Widening the pane
+  while the menu is open would move the editor rather than cover it, at one
+  reflow each way.
+- Tab-close confirmation is the plugin's own popover level, not WezTerm's
+  `CloseCurrentTab { confirm = true }` overlay: that overlay replaces the tab's
+  panes and is dismissed by the mouse release that follows the click which asked
+  for it, so it is unusable from a sidebar click. WezTerm's overlay is still
+  used when no sidebar can draw the question.
 - Private windows unset shell history via environment variables; shells whose
   rc files re-set `HISTFILE` will still write history. Closed private tabs are
   not recorded for reopening. This is not an isolation boundary.

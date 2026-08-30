@@ -94,6 +94,8 @@ local function scrim_for(bg, fg)
   return pct / 100
 end
 
+local WHITE, BLACK = { 255, 255, 255 }, { 0, 0, 0 }
+
 local function accent_candidate(color, bg, fg)
   local rgb = first(color)
   if rgb and M.contrast(rgb, bg) >= ACCENT_MIN and M.contrast(rgb, fg) >= ACCENT_VS_FG_MIN then
@@ -150,6 +152,12 @@ function M.resolve(user, palette, opts)
   local scroll_fg = first(user.scroll_fg) or ensure_contrast(lift(0.22), bg, fg, 2.0)
   local unseen = first(ansi[4])
 
+  -- A saturated fill is the one selection construction that clears 4.5 on every scheme; the ink is
+  -- pure black or white, a deliberate exception to the no-absolutes rule, confined to that one row.
+  local sel_bg = first(user.popover_sel_bg) or accent
+  local sel_fg = first(user.popover_sel_fg)
+    or (M.contrast(WHITE, sel_bg) >= M.contrast(BLACK, sel_bg) and WHITE or BLACK)
+
   return {
     bg = bg,
     fg = fg,
@@ -183,6 +191,9 @@ function M.resolve(user, palette, opts)
     surface_raised = raised,
     scrim = scrim,
     disabled_fg = first(user.disabled_fg) or mix(meta_fg, raised, 0.45),
+    popover_sel_bg = sel_bg,
+    popover_sel_fg = sel_fg,
+    popover_sel_hint = first(user.popover_sel_hint) or ensure_contrast(mix(sel_fg, sel_bg, 0.40), sel_bg, sel_fg, 3.0),
   }
 end
 
