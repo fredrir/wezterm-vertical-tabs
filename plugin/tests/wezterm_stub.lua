@@ -25,9 +25,11 @@ M.executable_dir = "/usr/local/bin"
 function M.hostname()
   return "macie"
 end
+-- Paths the fake `test -L` should report as symlinks, so the refusal can be pinned.
+M.symlinks = {}
 function M.run_child_process(args)
   if type(args) == "table" and args[1] == "test" then
-    return false, "", ""
+    return M.symlinks[args[3]] == true, "", ""
   end
   return true, "", ""
 end

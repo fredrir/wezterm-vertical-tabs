@@ -250,9 +250,35 @@ function M.close(gui_window)
   return true
 end
 
+---Per-window page state: which group, which field, the scroll, the filter, what is being edited.
+---`page` is pure - state in, frame out - so the registry lives here, with the rest of the host.
+local pages = {}
+
+function M.page_state(wid)
+  pages[wid] = pages[wid] or { group = 1, focus = 1, scroll = 0, filter = "" }
+  return pages[wid]
+end
+
+table.insert(state.forget_hooks, function(wid)
+  pages[wid] = nil
+end)
+
+---True when the event carries no modifier. The wire sends `mods` as a JSON array, so comparing it
+---as a string silently treats every chord as bare.
+local function bare(ev)
+  local mods = ev.mods
+  if mods == nil then
+    return true
+  end
+  if type(mods) == "table" then
+    return #mods == 0
+  end
+  return mods == "" or mods == "NONE"
+end
+
 ---Keys the page answers itself; everything else is the backend's business.
 function M.key(gui_window, ev)
-  if ev.key == "escape" or (ev.key == "q" and (ev.mods == nil or ev.mods == "" or ev.mods == "NONE")) then
+  if ev.key == "escape" or (ev.key == "q" and bare(ev)) then
     M.close(gui_window)
     return true
   end

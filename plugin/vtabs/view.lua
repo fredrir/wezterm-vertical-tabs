@@ -3,6 +3,8 @@ local ansi = require "vtabs.ansi"
 local config = require "vtabs.config"
 local state = require "vtabs.state"
 local sidebar = require "vtabs.sidebar"
+local settings = require "vtabs.settings"
+local page = require "vtabs.page"
 local model = require "vtabs.model"
 local render = require "vtabs.render"
 local geometry = require "vtabs.geometry"
@@ -343,6 +345,38 @@ function M.invalidate_frames(pane_id)
   end
 end
 
+---The settings page: the same bridge, the same row-diff, its own frame producer.
+local function sync_settings(gui_window, cfg, resolved, opts, now)
+  local _, pane = settings.find(gui_window:mux_window())
+  if not pane or not sidebar.is_ready(pane) then
+    return
+  end
+  local pid = pane:pane_id()
+  local dims = dims_of(pane)
+  if not dims or dims.cols == 0 then
+    return
+  end
+  local ok, result = pcall(page.paint, {
+    cols = dims.cols,
+    rows = dims.viewport_rows,
+    cfg = cfg,
+    theme = resolved,
+    glyphs = chrome_for(gui_window, cfg).glyphs,
+    st = settings.page_state(gui_window:window_id()),
+  })
+  if not ok then
+    util.warn_once("settings-render", "settings page render failed: %s", tostring(result):match "^[^\n]*")
+    return
+  end
+  session.hits[pid] = result.hits
+  session.dims[pid] = { cols = dims.cols, rows = dims.viewport_rows }
+  local payload = M.payload_for(pid, result, dims, opts.force)
+  if payload and sidebar.send(pane, { t = "frame", data = payload }) then
+    session.frames[pid] = { cols = dims.cols, rows = dims.viewport_rows, text = result.rows, n = result.rows_n }
+    session.sent_at[pid] = now
+  end
+end
+
 function M.sync(gui_window, opts)
   opts = opts or {}
   local cfg = config.get()
@@ -359,6 +393,7 @@ function M.sync(gui_window, opts)
   local focus_index = state.has_focus(wid) and session.focus_index[wid] or nil
   local now = util.now_ms()
   geometry.sync(gui_window, active_tab_id)
+  sync_settings(gui_window, cfg, resolved, opts, now)
 
   for _, info in ipairs(mux_win:tabs_with_info()) do
     local sb = sidebar.find(info.tab)

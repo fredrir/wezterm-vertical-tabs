@@ -111,19 +111,105 @@ local function lock_for(key, value)
   return nil
 end
 
+---Every widget in one table: how it reads, how a step moves it, and what Enter does to it. Adding
+---a control is adding a row here, not a branch in three functions.
+local WIDGETS = {
+  toggle = {
+    text = function(row)
+      return row.value and "[ on ]" or "[ off ]"
+    end,
+    step = function(row)
+      return not row.value
+    end,
+    activate = function(row)
+      return "commit", not row.value
+    end,
+  },
+  picker = {
+    text = function(row)
+      return "‹ " .. tostring(row.value) .. " ›"
+    end,
+    step = function(row, delta)
+      local enum = row.option and row.option.enum
+      if not enum or #enum == 0 then
+        return row.value
+      end
+      local at = 1
+      for i, allowed in ipairs(enum) do
+        at = allowed == row.value and i or at
+      end
+      return enum[((at - 1 + delta) % #enum) + 1]
+    end,
+  },
+  stepper = {
+    text = function(row)
+      return "‹ " .. tostring(row.value) .. " ›"
+    end,
+    step = function(row, delta)
+      local option = row.option or {}
+      local next_value = (tonumber(row.value) or 0) + delta
+      if option.integer then
+        next_value = math.floor(next_value + 0.5)
+      end
+      if option.min and next_value < option.min then
+        next_value = option.min
+      end
+      if option.max and next_value > option.max then
+        next_value = option.max
+      end
+      return next_value
+    end,
+  },
+  colour = {
+    text = function(row)
+      return "██ " .. tostring(row.value)
+    end,
+    activate = function(row)
+      return "edit", tostring(row.value)
+    end,
+  },
+  text = {
+    text = function(row)
+      return string.format("%q", tostring(row.value))
+    end,
+    activate = function(row)
+      return "edit", tostring(row.value)
+    end,
+  },
+  recorder = {
+    text = function(row)
+      if type(row.value) == "table" then
+        return (row.value.mods and row.value.mods .. "+" or "") .. tostring(row.value.key)
+      end
+      return row.value == false and "off" or tostring(row.value)
+    end,
+    activate = function()
+      return "record"
+    end,
+  },
+  entries = {
+    text = function(row)
+      local n = row.entries or count_entries(row.value)
+      return n == 1 and "1 entry" or (tostring(n) .. " entries")
+    end,
+  },
+  locked = {
+    text = function(row)
+      return type(row.value) == "function" and "fun()" or tostring(row.value)
+    end,
+  },
+}
+
+M.WIDGETS = WIDGETS
+
 ---The widget a descriptor's own facts ask for. The page never names an option.
 local function widget_for(option, key, value)
   if type(value) == "function" then
     return "locked"
   end
-  if option and option.type == "boolean" then
-    return "toggle"
-  end
-  if option and option.type == "enum" then
-    return "picker"
-  end
-  if option and option.type == "number" then
-    return "stepper"
+  local by_type = { boolean = "toggle", enum = "picker", number = "stepper" }
+  if option and by_type[option.type] then
+    return by_type[option.type]
   end
   if key:match "^keys%." then
     return "recorder"
@@ -140,10 +226,7 @@ local function widget_for(option, key, value)
   if looks_like_colour(key, value) then
     return "colour"
   end
-  if type(value) == "string" then
-    return "text"
-  end
-  return "locked"
+  return type(value) == "string" and "text" or "locked"
 end
 
 local function field(key, option, cfg, group, opts)
@@ -214,74 +297,20 @@ function M.group_label(group)
   return GROUP_LABELS[group] or (group:sub(1, 1):upper() .. group:sub(2))
 end
 
----How a value reads in the value column, by widget.
+---How a value reads in the value column.
 function M.value_text(row)
-  local value = row.value
-  if row.widget == "toggle" then
-    return value and "[ on ]" or "[ off ]"
-  end
-  if row.widget == "picker" then
-    return "‹ " .. tostring(value) .. " ›"
-  end
-  if row.widget == "stepper" then
-    return "‹ " .. tostring(value) .. " ›"
-  end
-  if row.widget == "entries" then
-    local n = row.entries or count_entries(value)
-    return n == 1 and "1 entry" or (tostring(n) .. " entries")
-  end
-  if row.widget == "recorder" then
-    if type(value) == "table" then
-      return tostring(value.mods and (value.mods .. "+") or "") .. tostring(value.key)
-    end
-    return value == false and "off" or tostring(value)
-  end
-  if type(value) == "function" then
-    return "fun()"
-  end
-  if row.widget == "colour" then
-    return "██ " .. tostring(value)
-  end
-  if type(value) == "string" then
-    return string.format("%q", value)
-  end
-  return tostring(value)
+  return (WIDGETS[row.widget] or WIDGETS.locked).text(row)
 end
 
----Steps a stepper or picker by `delta`, staying inside the descriptor's own bounds so the page can
----never offer a value `config.validate` would reject.
+---Steps a widget by `delta`, staying inside the descriptor's own bounds so the page can never
+---offer a value `config.validate` would reject.
 function M.step(row, delta)
-  local option = row.option
-  if row.widget == "stepper" then
-    local n = tonumber(row.value) or 0
-    local step = option and option.integer and 1 or 1
-    local next_value = n + delta * step
-    if option and option.integer then
-      next_value = math.floor(next_value + 0.5)
-    end
-    if option and option.min and next_value < option.min then
-      next_value = option.min
-    end
-    if option and option.max and next_value > option.max then
-      next_value = option.max
-    end
-    return next_value
+  local widget = WIDGETS[row.widget]
+  if not widget or not widget.step then
+    return row.value
   end
-  if row.widget == "picker" and option and option.enum then
-    local at = 1
-    for i, allowed in ipairs(option.enum) do
-      if allowed == row.value then
-        at = i
-      end
-    end
-    local n = #option.enum
-    local next_at = ((at - 1 + delta) % n) + 1
-    return option.enum[next_at]
-  end
-  if row.widget == "toggle" then
-    return not row.value
-  end
-  return row.value
+  -- an explicit branch: `and/or` would swallow a toggle stepping to false
+  return widget.step(row, delta)
 end
 
 ---How an edit reaches the running window: most keys are ours to swap, a few are WezTerm's own, and
@@ -628,6 +657,235 @@ function M.paint_preview(cells, index, frame, g, theme, glyphs)
       cells[g.preview_x1 + 1 + x] = { ch = cell.ch, fg = cell.fg, bg = cell.bg, bold = cell.bold }
     end
   end
+end
+
+local function deep_copy(value)
+  if type(value) ~= "table" then
+    return value
+  end
+  local out = {}
+  for k, v in pairs(value) do
+    out[k] = deep_copy(v)
+  end
+  return out
+end
+
+---The WezTerm key each overridable option maps to, and the value to write. `init.apply_*` is the
+---boot-time twin of this; here it is one key at a time, live.
+local OVERRIDES = {
+  edge_to_edge = function(cfg)
+    if cfg.edge_to_edge == false then
+      return "window_padding", nil
+    end
+    local band = cfg.edge_to_edge == "sides" and "0.5cell" or 0
+    local padding = { left = 0, right = 0, top = band, bottom = band }
+    padding[cfg.position == "left" and "right" or "left"] = "1cell"
+    return "window_padding", padding
+  end,
+  dim_inactive_panes = function(cfg)
+    if cfg.dim_inactive_panes ~= false then
+      return "inactive_pane_hsb", nil
+    end
+    return "inactive_pane_hsb", { brightness = 1.0, saturation = 1.0, hue = 1.0 }
+  end,
+  hover = function(cfg)
+    return "pane_focus_follows_mouse", cfg.hover == "follow" or nil
+  end,
+}
+
+---Applies one edit. Most keys are ours to swap outright; a few are WezTerm's, and those are only
+---ours where the host left them nil; a few only exist while `apply_to_config` runs.
+---@return string mode "instant" | "override" | "reload" | "locked"
+function M.commit(gui_window, row, value)
+  local mode = M.apply_mode(row)
+  if mode == "locked" or row.locked then
+    return "locked"
+  end
+  local next_cfg = deep_copy(config.get())
+  schema.set(next_cfg, row.key, value)
+  config.replace(next_cfg)
+  local build = OVERRIDES[row.key]
+  if build and gui_window then
+    local key, wezterm_value = build(next_cfg)
+    util.try(function()
+      local overrides = gui_window:get_config_overrides() or {}
+      overrides[key] = wezterm_value
+      gui_window:set_config_overrides(overrides)
+    end)
+  end
+  return mode
+end
+
+---Field the page is focused on, or nil.
+function M.focused(view)
+  local plan = M.plan(view)
+  return plan.fields and plan.fields[plan.focus] or nil, plan
+end
+
+---One entry per key, so a binding is a row here rather than a branch. Each gets the page context
+---and returns true when it consumed the key.
+local KEYS = {}
+
+local function move(delta)
+  return function(ctx)
+    ctx.st.focus = math.max(math.min((ctx.st.focus or 1) + delta, math.max(#ctx.shown, 1)), 1)
+    return true
+  end
+end
+
+KEYS.j = move(1)
+KEYS.downarrow = move(1)
+KEYS.k = move(-1)
+KEYS.uparrow = move(-1)
+
+KEYS.tab = function(ctx)
+  ctx.st.group = ((ctx.st.group or 1) % math.max(#ctx.groups, 1)) + 1
+  ctx.st.focus, ctx.st.scroll = 1, 0
+  return true
+end
+
+local function nudge(delta)
+  return function(ctx)
+    if ctx.row and not ctx.row.locked then
+      M.commit(ctx.window, ctx.row, M.step(ctx.row, delta))
+    end
+    return true
+  end
+end
+
+KEYS.leftarrow = nudge(-1)
+KEYS.rightarrow = nudge(1)
+
+KEYS.enter = function(ctx)
+  local row = ctx.row
+  if not row or row.locked then
+    return true
+  end
+  local widget = WIDGETS[row.widget]
+  if not widget or not widget.activate then
+    return true
+  end
+  local what, value = widget.activate(row)
+  if what == "commit" then
+    M.commit(ctx.window, row, value)
+  elseif what == "edit" then
+    ctx.st.editing = { key = row.key, buffer = value }
+  elseif what == "record" then
+    ctx.st.armed = row.key
+  end
+  return true
+end
+
+KEYS[" "] = KEYS.enter
+KEYS.space = KEYS.enter
+
+KEYS.r = function(ctx)
+  if ctx.row and not ctx.row.locked then
+    M.commit(ctx.window, ctx.row, ctx.row.default)
+  end
+  return true
+end
+
+KEYS.c = function(ctx)
+  util.try(function()
+    ctx.window:copy_to_clipboard(M.as_lua())
+  end)
+  return true
+end
+
+KEYS["/"] = function(ctx)
+  ctx.st.filtering, ctx.st.filter, ctx.st.focus = true, "", 1
+  return true
+end
+
+---A one-line text buffer: the same three keys whether it is a field being edited or the filter.
+local function type_into(st, slot, key, on_commit, on_cancel)
+  if key == "escape" then
+    return on_cancel(st)
+  end
+  if key == "enter" then
+    return on_commit(st)
+  end
+  if key == "backspace" then
+    st[slot] = st[slot]:sub(1, -2)
+    return true
+  end
+  if type(key) == "string" and utf8.len(key) == 1 then
+    st[slot] = st[slot] .. key
+  end
+  return true
+end
+
+---One key from the page's own pane. Returns true when the page consumed it.
+function M.key(gui_window, view, ev)
+  local st = view.st
+  local row, plan = M.focused(view)
+  local ctx = { window = gui_window, st = st, row = row, shown = plan.fields or {}, groups = plan.groups or {} }
+  if st.editing then
+    return type_into(st.editing, "buffer", ev.key, function()
+      if row then
+        M.commit(gui_window, row, st.editing.buffer)
+      end
+      st.editing = nil
+      return true
+    end, function()
+      st.editing = nil
+      return true
+    end)
+  end
+  if st.filtering then
+    st.focus = 1
+    return type_into(st, "filter", ev.key, function()
+      st.filtering = nil
+      return true
+    end, function()
+      st.filtering, st.filter = nil, ""
+      return true
+    end)
+  end
+  local handler = KEYS[ev.key]
+  return handler ~= nil and handler(ctx) or false
+end
+
+---One entry per span id, so a click target is a row here as well.
+local SPANS = {
+  nav = function(ctx, h)
+    for i, group in ipairs(ctx.groups) do
+      if group == h.nav then
+        ctx.st.group, ctx.st.focus, ctx.st.scroll = i, 1, 0
+      end
+    end
+    return true
+  end,
+  inc = nudge(1),
+  dec = nudge(-1),
+  value = function(ctx)
+    return KEYS.enter(ctx)
+  end,
+  field = function()
+    return true
+  end,
+}
+
+---A click, routed by the column the hit record says it landed in.
+function M.click(gui_window, view, h, x)
+  local span = require("vtabs.hit").span(h, x)
+  if not span then
+    return false
+  end
+  if span ~= "nav" then
+    view.st.focus = h.index or view.st.focus
+  end
+  local row, plan = M.focused(view)
+  local ctx = {
+    window = gui_window,
+    st = view.st,
+    row = row,
+    shown = plan.fields or {},
+    groups = plan.groups or {},
+  }
+  local handler = SPANS[span]
+  return handler ~= nil and handler(ctx, h) or false
 end
 
 return M

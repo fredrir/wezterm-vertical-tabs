@@ -115,6 +115,17 @@ function M.setup(opts, stored)
   -- `tab_height` decides the pad rows and `meta` whether there is a second content line; they are
   -- independent, so neither key rewrites the other any more.
 
+  M.normalise(cfg, opts)
+  cfg.glyphs = icons.resolve(cfg.icon_map)
+  current = cfg
+  return cfg
+end
+
+---Cross-key rules every resolved config obeys, whoever built it: `setup` on boot and `replace`
+---when the settings page swaps one in. Keeping them here is what stops a page edit of `hover`
+---leaving `close_button` on a value the sidebar can never show.
+function M.normalise(cfg, opts)
+  opts = opts or {}
   -- The sidebar's own gutter replaces the window padding `edge_to_edge` removes, so the wider one
   -- belongs on whichever side touches the window edge.
   if cfg.position == "right" then
@@ -141,9 +152,6 @@ function M.setup(opts, stored)
     util.warn 'tear_off="outside" is not supported, using edge'
     cfg.tear_off = true
   end
-
-  cfg.glyphs = icons.resolve(cfg.icon_map)
-  current = cfg
   return cfg
 end
 
@@ -155,6 +163,7 @@ end
 ---never carried over: a stale one keeps the old icons after an `icon_map` change.
 function M.replace(tbl)
   validate(tbl)
+  M.normalise(tbl)
   tbl.glyphs = icons.resolve(tbl.icon_map)
   current = tbl
   return current
