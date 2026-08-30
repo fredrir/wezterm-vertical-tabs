@@ -29,9 +29,9 @@ return config
 | `rail_titlebar`           | `"widen"`                                                                    | `"widen"` \| `"band"` \| `"none"` |
 | `hide_native_tab_bar`     | `true`                                                                       | `true` \| `false` |
 | `poll_ms`                 | `500`                                                                        | number >= `50` |
-| `padding`                 | `{ top = 1, left = 2, right = 2, bottom = 1 }`                               | `{ top, left, right, bottom }` |
+| `padding`                 | `{ top = 0, left = 1, right = 1, bottom = 0 }`                               | `{ top, left, right, bottom }` |
 | `settings`                | `true`                                                                       | `true` \| `false` \| table |
-| `edge_to_edge`            | `true`                                                                       | `true` \| `"sides"` \| `false` |
+| `edge_to_edge`            | `"sides"`                                                                    | `true` \| `"sides"` \| `false` |
 | `tab_height`              | `"card"`                                                                     | `"card"` (`3`) \| `"row"` (`1`) \| `"tall"` (`5`) |
 | `meta`                    | `false`                                                                      | `"auto"` \| `"cwd"` \| `"process"` \| `false` |
 | `meta_sep`                | `"  "`                                                                       | string |

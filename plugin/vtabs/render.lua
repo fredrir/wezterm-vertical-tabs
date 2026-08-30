@@ -345,6 +345,9 @@ local function action_glyph(action, cfg, glyphs)
   if action.id == "toggle" then
     return cfg.position == "right" and glyphs.toggle_right or glyphs.toggle_left
   end
+  if action.id == "new_tab" then
+    return glyphs.strip_new_tab or glyphs.new_tab
+  end
   return glyphs[action.id] or glyphs.new_tab
 end
 
@@ -412,6 +415,12 @@ function M.frame_edge(painted, cols, theme, glyphs, rows)
     end
   end
 end
+
+-- The settings page is another frame producer for a pane the bridge already drives, so it builds
+-- its cells with the same three primitives and hands them to `paint`.
+M.new_line = new_line
+M.put = put
+M.fill = fill
 
 ---Overlays a popover rect on a laid-out frame and scrims every row it does not own.
 ---@param frame table `render.render`'s internal frame: cells, hits, cols, rows, theme

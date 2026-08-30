@@ -51,14 +51,17 @@ function M.strip_geometry(dims, opts)
   end
   -- Rail mode centres the toggle *below* the lights: at 9 columns there is no column 11.
   local rail = opts.rail == true
+  local pad_top = math.max(opts.padding_top or 0, 0)
   local toggle_row
   if rail then
     toggle_row = cols > 0 and rows + 1 or 1
   elseif rows > 0 then
-    -- `rows` is a count, not an index: derive the row from the lights' centre and clamp into it.
-    toggle_row = math.max(1, math.min(math.ceil(M.BUTTON_CENTER_PT / cell_h), rows))
+    -- With a half-cell of window padding, pane row n is centred at n * cell_h, so the row nearest
+    -- the lights' centre is round(), not ceil() - which lands a whole row low from 10 pt cells up.
+    toggle_row = math.max(1, math.min(math.floor(M.BUTTON_CENTER_PT / cell_h + 0.5), rows))
   else
-    toggle_row = 1
+    -- no lights to line up with, so padding.top is air above the strip, not below it
+    toggle_row = pad_top + 1
   end
   local width = math.max(opts.rail_width or 0, cols)
   local toggle_x
@@ -67,7 +70,13 @@ function M.strip_geometry(dims, opts)
   else
     toggle_x = cols > 0 and cols + 2 or (opts.card_x1 or 2)
   end
-  local strip_rows = math.max(rows, opts.toggle_button and toggle_row or 0) + (opts.padding_top or 0)
+  local strip_rows
+  if rows > 0 then
+    -- the lights own the top of the pane, so the padding lands under the reserve, not over it
+    strip_rows = math.max(rows, opts.toggle_button and toggle_row or 0) + pad_top
+  else
+    strip_rows = pad_top + (opts.toggle_button and 1 or 0)
+  end
   return {
     rows = strip_rows,
     rows_reserved = rows,

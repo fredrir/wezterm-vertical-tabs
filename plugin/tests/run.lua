@@ -196,9 +196,9 @@ local function view(over)
   local cfg = config.setup(opts)
   local v = {
     cols = 28,
-    -- two more rows than the old fixture: padding.bottom takes the last and the ghost's page row the
-    -- one above it, so the list keeps the seven rows every positional test in this file counts on
-    rows = 12,
+    -- one more row than the original fixture: the ghost's page row takes it, so the list keeps the
+    -- seven rows every positional test in this file counts on
+    rows = 11,
     items = items(),
     theme = theme.resolve({}, palette("#1e1e2e", "#cdd6f4")),
     cfg = cfg,
@@ -259,7 +259,6 @@ test("layout: pinned block, separator, padded cards, ghost card", function()
   for row = 9, 11 do
     eq(r.hits[row].kind, "new_tab", "ghost row " .. row)
   end
-  eq(r.hits[12].kind, "space", "and padding.bottom below it")
   assert(strip(r.data):find "New tab")
   assert(strip(r.data):find "…", "long title truncated")
   local sep = render.render(view { opts = { separator = "none" } })
@@ -271,29 +270,29 @@ test("close column is reserved so hover does not reflow the title", function()
   local hovered = render.render(view { hover = { x = 5, y = 7 } })
   local a, b = row_text(plain.data, 7), row_text(hovered.data, 7)
   eq(a:sub(1, 20), b:sub(1, 20))
-  eq(hit.span(hovered.hits[7], 24), "close", "close span on the title row")
-  eq(hit.span(hovered.hits[7], 26), "close")
-  eq(hit.span(hovered.hits[7], 23), nil)
-  eq(hit.span(hovered.hits[7], 27), nil)
-  eq(hit.span(hovered.hits[6], 25), nil, "a pad row offers no sub-target")
-  eq(usub(b, 25, 25), "✖", "glyph sits one col inside the card edge")
-  eq(hit.span(plain.hits[4], 25), "close", "active card shows close")
-  eq(hit.span(plain.hits[7], 25), nil, "idle card does not")
+  eq(hit.span(hovered.hits[7], 25), "close", "close span on the title row")
+  eq(hit.span(hovered.hits[7], 27), "close")
+  eq(hit.span(hovered.hits[7], 24), nil)
+  eq(hit.span(hovered.hits[7], 28), nil)
+  eq(hit.span(hovered.hits[6], 26), nil, "a pad row offers no sub-target")
+  eq(usub(b, 26, 26), "✖", "glyph sits one col inside the card edge")
+  eq(hit.span(plain.hits[4], 26), "close", "active card shows close")
+  eq(hit.span(plain.hits[7], 26), nil, "idle card does not")
   local meta = render.render(view { opts = { meta = "auto" }, hover = { x = 5, y = 4 } })
   eq(meta.hits[5].part, "meta")
-  eq(hit.span(meta.hits[5], 25), "close", "and on the meta row when there is one")
+  eq(hit.span(meta.hits[5], 26), "close", "and on the meta row when there is one")
 end)
 
 test("unseen marker survives hover and always-close", function()
   local r = render.render(view { hover = { x = 5, y = 7 }, opts = { close_button = "always" } })
-  eq(usub(row_text(r.data, 7), 3, 3), "•", "unseen dot survives in the gutter")
+  eq(usub(row_text(r.data, 7), 2, 2), "•", "unseen dot survives in the gutter")
 end)
 
 test("pinned entries are one dense row with a pin span, never a close span", function()
   local r = render.render(view { hover = { x = 27, y = 1 } })
-  eq(hit.span(r.hits[1], 25), "pin")
-  eq(hit.span(r.hits[1], 25) == "close", false, "never a close span")
-  eq(usub(row_text(r.data, 1), 25, 25), "*", "pin glyph in the close column")
+  eq(hit.span(r.hits[1], 26), "pin")
+  eq(hit.span(r.hits[1], 26) == "close", false, "never a close span")
+  eq(usub(row_text(r.data, 1), 26, 26), "*", "pin glyph in the close column")
   eq(r.hits[2].kind, "separator", "no pad or gap row after a dense entry")
   local full = render.render(view { opts = { pinned_style = "full" }, hover = { x = 27, y = 2 } })
   eq(full.hits[1].part, "pad", "pinned_style=full gives the pinned entry a padded card")
@@ -323,10 +322,9 @@ test("scroll clamps, ensure_visible follows active, footer is sticky", function(
   end
   local r = render.render(view { items = many, rows = 10, scroll = 999, footer = { "space: work" } })
   eq(r.total_rows, 90, "3 rows per card")
-  eq(r.scroll, 86, "clamped to max_scroll")
-  eq(r.hits[9].kind, "footer", "footer is the last row of content, below the ghost card")
-  eq(r.hits[10].kind, "space", "with padding.bottom under it")
-  eq(r.hits[6].kind, "new_tab")
+  eq(r.scroll, 85, "clamped to max_scroll")
+  eq(r.hits[10].kind, "footer", "footer is the last row, below the ghost card")
+  eq(r.hits[7].kind, "new_tab")
   r = render.render(view { items = many, rows = 10, scroll = 0, ensure_visible = 25 })
   local rows_seen = 0
   for row = 1, 10 do
@@ -964,24 +962,24 @@ end)
 
 test("P1 grid: landmarks derive from cols and padding", function()
   local rows = frame_rows(p1_view { opts = { separator = "gap" } })
-  eq(usub(rows[1], 5, 5), "~", "icon at icon_x")
-  eq(usub(rows[1], 7, 14), "dotfiles", "title at title_x1")
-  eq(usub(rows[4], 5, 5), "v", "the icon rides the centred title row")
-  eq(usub(rows[4], 3, 3), " ", "theme.title_active is hue-distinct here, so no bar")
-  eq(usub(rows[3], 3, 3), " ", "and a pad row carries nothing at all")
+  eq(usub(rows[1], 4, 4), "~", "icon at icon_x")
+  eq(usub(rows[1], 6, 13), "dotfiles", "title at title_x1")
+  eq(usub(rows[4], 4, 4), "v", "the icon rides the centred title row")
+  eq(usub(rows[4], 2, 2), " ", "theme.title_active is hue-distinct here, so no bar")
+  eq(usub(rows[3], 2, 2), " ", "and a pad row carries nothing at all")
   local metaed = frame_rows(p1_view { opts = { separator = "gap", meta = "auto" } })
-  eq(usub(metaed[5], 7, 25), "~/p/wez-plugins    ", "meta at meta_x1, elided in the middle")
+  eq(usub(metaed[5], 6, 25), "~/p/wez-plugins     ", "meta at meta_x1, elided in the middle")
   local wide = frame_rows(p1_view { opts = { width = 40, separator = "gap" }, cols = 40 })
-  eq(usub(wide[1], 7, 14), "dotfiles", "title column does not move with width")
+  eq(usub(wide[1], 6, 13), "dotfiles", "title column does not move with width")
 end)
 
 test("P1 chamfer: the card's own first and last row, right side only", function()
   local rows = frame_rows(p1_view { rows = 13, opts = { separator = "gap" } })
-  eq(usub(rows[4], 26, 26), " ", "the active card is square")
+  eq(usub(rows[4], 27, 27), " ", "the active card is square")
   local hovered_rows = frame_rows(p1_view { rows = 13, hover = { x = 5, y = 7 }, opts = { separator = "gap" } })
-  eq(usub(hovered_rows[6], 26, 26), "▙", "a hovered card chamfers on its first row")
-  eq(usub(hovered_rows[7], 26, 26), " ", "never on the title row, which is no longer an edge")
-  eq(usub(hovered_rows[8], 26, 26), "▛", "and closes on its last")
+  eq(usub(hovered_rows[6], 27, 27), "▙", "a hovered card chamfers on its first row")
+  eq(usub(hovered_rows[7], 27, 27), " ", "never on the title row, which is no longer an edge")
+  eq(usub(hovered_rows[8], 27, 27), "▛", "and closes on its last")
   assert(usub(rows[4], 2, 2) ~= "▙", "col 2 is the gutter, never a chamfer")
   local one_row =
     frame_rows(p1_view { rows = 12, hover = { x = 5, y = 3 }, opts = { tab_height = "row", separator = "gap" } })
@@ -998,15 +996,15 @@ test("P1 hits: one record per row across the whole card", function()
     eq(r.hits[row].kind, "tab", "row " .. row)
     eq(r.hits[row].id, 2)
     eq(r.hits[row].slot, 2)
-    eq(r.hits[row].x1, 3)
-    eq(r.hits[row].x2, 26)
+    eq(r.hits[row].x1, 2)
+    eq(r.hits[row].x2, 27)
   end
   eq(r.hits[3].part, "pad")
   eq(r.hits[4].part, "title")
   eq(r.hits[5].part, "pad")
-  eq(hit.in_card(r.hits[3], 2), false, "cols 1-2 are page, not card")
-  eq(hit.in_card(r.hits[3], 27), false, "cols 27-28 are the right pad and the thumb channel")
-  eq(hit.in_card(r.hits[3], 3), true)
+  eq(hit.in_card(r.hits[3], 1), false, "col 1 is page, not card")
+  eq(hit.in_card(r.hits[3], 28), false, "col 28 is the thumb channel")
+  eq(hit.in_card(r.hits[3], 2), true)
   eq(hit.drop_slot(r.hits, 3, 10), 2, "a pad row drops at its own slot")
   eq(hit.drop_slot(r.hits, 4, 10), 2, "the title row too")
   eq(hit.drop_slot(r.hits, 9, 10), 4, "below the last card")
@@ -1023,26 +1021,25 @@ end)
 
 test("P1 ghost card: outlined, sticky, exactly cols wide idle and hovered", function()
   local idle, r = frame_rows(p1_view { opts = { separator = "gap" } })
-  eq(usub(idle[9], 3, 3), "╭")
-  eq(usub(idle[9], 26, 26), "╮")
-  eq(usub(idle[10], 5, 5), "+")
-  eq(usub(idle[10], 7, 14), "New tab ", "label at title_x1")
-  eq(usub(idle[11], 3, 3), "╰")
-  eq(usub(idle[11], 26, 26), "╯")
+  eq(usub(idle[9], 2, 2), "╭")
+  eq(usub(idle[9], 27, 27), "╮")
+  eq(usub(idle[10], 4, 4), "+")
+  eq(usub(idle[10], 6, 13), "New tab ", "label at title_x1")
+  eq(usub(idle[11], 2, 2), "╰")
+  eq(usub(idle[11], 27, 27), "╯")
   for row = 9, 11 do
     eq(r.hits[row].kind, "new_tab")
-    eq(r.hits[row].x1, 3)
-    eq(r.hits[row].x2, 26)
+    eq(r.hits[row].x1, 2)
+    eq(r.hits[row].x2, 27)
   end
-  eq(r.hits[8].kind, "space", "a page row above it")
-  eq(r.hits[12].kind, "space", "and padding.bottom below")
+  eq(r.hits[8].kind, "space", "a page row above it, matching the gap between cards")
   local hover = frame_rows(p1_view { hover = { x = 5, y = 10 }, opts = { separator = "gap" } })
   for row = 9, 11 do
     eq(hover[row], idle[row], "hover redraws no glyph, only recolours row " .. row)
   end
   eq(util.width(hover[8]), 28)
   local tight = render.render(p1_view { rows = 6, opts = { separator = "gap" } })
-  eq(tight.hits[5].kind, "new_tab", "degrades to a single row, still above padding.bottom")
+  eq(tight.hits[6].kind, "new_tab", "degrades to a single row")
   local tiny = render.render(p1_view { rows = 2, opts = { separator = "gap" } })
   eq(tiny.hits[2].kind ~= "new_tab", true, "and drops out entirely rather than starving the list")
 end)
@@ -1065,10 +1062,10 @@ test("item 7: the ghost card's hover is one border step and no inline band", fun
   for i = 0, 2 do
     eq(hover_rows[top + i], idle_rows[top + i], "hover redraws no glyph on ghost row " .. i)
   end
-  eq(usub(idle_rows[top], 3, 3), "╭", "and the corners stay closed")
-  eq(usub(idle_rows[top], 26, 26), "╮")
-  eq(usub(idle_rows[top + 2], 3, 3), "╰")
-  eq(usub(idle_rows[top + 2], 26, 26), "╯")
+  eq(usub(idle_rows[top], 2, 2), "╭", "and the corners stay closed")
+  eq(usub(idle_rows[top], 27, 27), "╮")
+  eq(usub(idle_rows[top + 2], 2, 2), "╰")
+  eq(usub(idle_rows[top + 2], 27, 27), "╯")
   assert(idle.rows[top]:find(ansi.fg(v.theme.border_idle), 1, true), "the idle border is border_idle")
   assert(hovered.rows[top]:find(ansi.fg(v.theme.ghost_border_hover), 1, true), "hover takes the half step to hue")
   assert(not hovered.rows[top]:find(ansi.fg(v.theme.accent), 1, true), "but never all the way to the accent")
@@ -1085,34 +1082,34 @@ end)
 test("P1 strip: reserve rows, action cluster, never over a list row", function()
   local v = p1_view { strip = { rows = 3, cols = 0, toggle_row = 2 }, opts = { separator = "gap" } }
   local rows, r = frame_rows(v)
-  eq(usub(rows[2], 19, 19), "«", "with no lights the cluster right-aligns on card_x2")
-  eq(usub(rows[2], 22, 22), "+")
-  eq(usub(rows[2], 25, 25), "⚙", "with the last glyph one column inside the card edge")
+  eq(usub(rows[2], 20, 20), "❮", "with no lights the cluster right-aligns on card_x2")
+  eq(usub(rows[2], 23, 23), "✚")
+  eq(usub(rows[2], 26, 26), "⚙", "with the last glyph over the close column")
   eq(r.hits[1].kind, "strip")
   eq(r.hits[1].x1, nil, "strip reserve is not clickable")
   eq(r.hits[2].kind, "action")
-  eq(r.hits[2].x1, 18)
-  eq(r.hits[2].x2, 26)
-  eq(hit.span(r.hits[2], 18), "toggle", "the cluster keeps its order, so the toggle is still first")
-  eq(hit.span(r.hits[2], 20), "toggle")
-  eq(hit.span(r.hits[2], 21), "new_tab", "the spans are contiguous, with no dead cell between")
-  eq(hit.span(r.hits[2], 24), "settings")
-  eq(hit.span(r.hits[2], 26), "settings")
-  eq(hit.span(r.hits[2], 17), nil)
+  eq(r.hits[2].x1, 19)
+  eq(r.hits[2].x2, 27)
+  eq(hit.span(r.hits[2], 19), "toggle", "the cluster keeps its order, so the toggle is still first")
+  eq(hit.span(r.hits[2], 21), "toggle")
+  eq(hit.span(r.hits[2], 22), "new_tab", "the spans are contiguous, with no dead cell between")
+  eq(hit.span(r.hits[2], 25), "settings")
+  eq(hit.span(r.hits[2], 27), "settings")
+  eq(hit.span(r.hits[2], 18), nil)
   local two = frame_rows(p1_view {
     strip = { rows = 3, cols = 0, toggle_row = 2 },
     opts = { separator = "gap", strip_actions = { "toggle", "new_tab" } },
   })
-  eq(usub(two[2], 22, 22), "«", "a shorter cluster still ends one span inside card_x2")
-  eq(usub(two[2], 25, 25), "+")
+  eq(usub(two[2], 23, 23), "❮", "a shorter cluster still ends over the close column")
+  eq(usub(two[2], 26, 26), "✚")
   eq(r.hits[3].kind, "action", "the band is 2 rows and stays inside the strip")
   eq(r.hits[4].kind, "tab", "the list starts below the strip")
   local right = frame_rows(p1_view {
     strip = { rows = 2, cols = 0, toggle_row = 1 },
     opts = { position = "right", separator = "gap" },
   })
-  eq(usub(right[1], 3, 3), "»", "position=right mirrors the cluster to card_x1 and flips the glyph")
-  eq(usub(right[1], 6, 6), "+")
+  eq(usub(right[1], 2, 2), "❯", "position=right mirrors the cluster to card_x1 and flips the glyph")
+  eq(usub(right[1], 5, 5), "✚")
 end)
 
 test("addendum 2 A8a: every action column derives from the reserve, whatever it measures", function()
@@ -1128,8 +1125,8 @@ test("addendum 2 A8a: every action column derives from the reserve, whatever it 
     }
     local rows, r = frame_rows(v)
     local base = reserve + 2
-    eq(usub(rows[1], base, base), "«", reserve .. ": first glyph two columns clear of the last light")
-    eq(usub(rows[1], base + 3, base + 3), "+")
+    eq(usub(rows[1], base, base), "❮", reserve .. ": first glyph two columns clear of the last light")
+    eq(usub(rows[1], base + 3, base + 3), "✚")
     eq(usub(rows[1], base + 6, base + 6), "⚙")
     local spans = r.hits[1].spans
     eq(#spans, 4)
@@ -1157,22 +1154,22 @@ test("addendum 2 A8d: hovering one action lights only its own three columns", fu
   local idle = render.render(base)
   local lit = render.render(p1_view {
     strip = { rows = 3, cols = 0, toggle_row = 2 },
-    hover = { x = 25, y = 2 },
+    hover = { x = 26, y = 2 },
     opts = { separator = "gap" },
   })
   assert(not idle.rows[2]:find(ansi.bg(base.theme.hover_bg), 1, true), "nothing is lit while the pointer is away")
   local body = strip(lit.rows[2])
-  eq(usub(body, 25, 25), "⚙", "the hovered glyph is still its own")
+  eq(usub(body, 26, 26), "⚙", "the hovered glyph is still its own")
   local plan = require("vtabs.layout").plan(p1_view {
     strip = { rows = 3, cols = 0, toggle_row = 2 },
-    hover = { x = 25, y = 2 },
+    hover = { x = 26, y = 2 },
     opts = { separator = "gap" },
   })
   eq(plan.rows[2].lit_id, "settings", "and only that action is lit")
   eq(plan.rows[3].lit_id, "settings", "on both rows of the band")
   local off = require("vtabs.layout").plan(p1_view {
     strip = { rows = 3, cols = 0, toggle_row = 2 },
-    hover = { x = 17, y = 2 },
+    hover = { x = 18, y = 2 },
     opts = { separator = "gap" },
   })
   eq(off.rows[2].lit_id, nil, "a column between the cluster and the list lights nothing")
@@ -1183,7 +1180,7 @@ test("addendum 2 §8: the rail keeps only what fits, centred", function()
   narrow.rail = true
   narrow.strip = { rows = 2, cols = 0, toggle_row = 1 }
   local rows, r = frame_rows(narrow)
-  eq(usub(rows[1], 3, 3), "«", "one action, centred at ceil(width / 2)")
+  eq(usub(rows[1], 3, 3), "❮", "one action, centred at ceil(width / 2)")
   eq(#r.hits[1].spans, 1)
   local wide = p1_view {
     rows = 16,
@@ -1194,8 +1191,8 @@ test("addendum 2 §8: the rail keeps only what fits, centred", function()
   wide.strip = { rows = 2, cols = 0, toggle_row = 1 }
   local wide_rows, wr = frame_rows(wide)
   eq(#wr.hits[1].spans, 2, "nine columns hold the pair")
-  eq(usub(wide_rows[1], 2, 2), "«")
-  eq(usub(wide_rows[1], 5, 5), "+")
+  eq(usub(wide_rows[1], 2, 2), "❮")
+  eq(usub(wide_rows[1], 5, 5), "✚")
   local reserved = p1_view { rows = 16, cols = 9, opts = { separator = "gap", width = 9 } }
   reserved.rail = true
   reserved.strip = { rows = 4, cols = 9, toggle_row = 3 }
@@ -1219,9 +1216,8 @@ test("P1 scroll: thumb by state, edge fade, footer below the ghost card", functi
   end
   local v = p1_view { items = many, rows = 12, scroll = 4, footer = { "space: work" } }
   local rows, r = frame_rows(v)
-  eq(r.hits[11].kind, "footer", "the footer sits above padding.bottom, not on the pane's last row")
-  eq(r.hits[12].kind, "space")
-  eq(r.hits[8].kind, "new_tab")
+  eq(r.hits[12].kind, "footer", "the footer keeps the pane's last row")
+  eq(r.hits[9].kind, "new_tab")
   local thumb_rows = 0
   for row = 1, 8 do
     if usub(rows[row], 28, 28) == "▐" then
@@ -1252,7 +1248,7 @@ test("P1 glyph guard: groups substitute together, N glyphs survive", function()
   eq(wide.ellipsis, "...")
   eq(wide.chamfer_top, "▙", "neutral block glyphs survive")
   eq(wide.scroll, "▐")
-  eq(wide.toggle_left, "<", "the ambiguous guillemets substitute quietly instead of tripping the width backstop")
+  eq(wide.toggle_left, "❮", "the heavy ornament is EAW Neutral, so ambiguous-as-wide leaves it alone")
   eq(wide.frame_tl, "+", "ghost frame substitutes as a unit")
   eq(wide.frame_dash, "-", "including its neutral member")
   local v14 = glyphs.resolve(base, { unicode_version = 14 })
@@ -1268,7 +1264,7 @@ end)
 
 test("P1 private window: header, inert hit, accent shift", function()
   local rows, r = frame_rows(p1_view { private = true, opts = { separator = "gap" } })
-  eq(usub(rows[1], 7, 13), "Private")
+  eq(usub(rows[1], 6, 12), "Private")
   eq(r.hits[1].kind, "space", "the header is inert")
   eq(r.hits[2].kind, "space")
   eq(r.hits[3].id, 1, "the list starts below it")
@@ -1288,16 +1284,16 @@ end)
 
 test("P1 pin span exists only while the glyph is drawn", function()
   local idle = render.render(p1_view { opts = { separator = "gap" } })
-  eq(hit.span(idle.hits[1], 25), nil, "no invisible click target on a dense row")
+  eq(hit.span(idle.hits[1], 26), nil, "no invisible click target on a dense row")
   local hovered = render.render(p1_view { hover = { x = 5, y = 1 }, opts = { separator = "gap" } })
-  eq(hit.span(hovered.hits[1], 25), "pin")
+  eq(hit.span(hovered.hits[1], 26), "pin")
 end)
 
 test("P1 hover=press shows the close button on every card", function()
   local press = render.render(p1_view { opts = { separator = "gap", hover = "press" } })
-  eq(hit.span(press.hits[7], 25), "close", "an idle card still offers close in press mode")
+  eq(hit.span(press.hits[7], 26), "close", "an idle card still offers close in press mode")
   local follow = render.render(p1_view { opts = { separator = "gap", hover = "follow" } })
-  eq(hit.span(follow.hits[7], 25), nil)
+  eq(hit.span(follow.hits[7], 26), nil)
 end)
 
 test("P1 rule separator goes through the glyph guard", function()
@@ -1305,7 +1301,7 @@ test("P1 rule separator goes through the glyph guard", function()
   local v = p1_view { opts = { separator = "rule" } }
   v.glyphs = glyphs.resolve(base, { treat_east_asian_ambiguous_width_as_wide = true })
   local rows = frame_rows(v)
-  eq(usub(rows[2], 3, 3), "-", "ascii rule when the box glyph is unsafe")
+  eq(usub(rows[2], 2, 2), "-", "ascii rule when the box glyph is unsafe")
   eq(util.width(rows[2]), 28)
 end)
 
@@ -1577,15 +1573,15 @@ test("P1 screenshots: icon weight, chamfer, toggle surface, dashed ghost", funct
   end
   assert(active_row and hover_row, "found both cards")
 
-  eq(usub(rows[active_row], 26, 26), " ", "the active card is square")
-  eq(usub(rows[hover_row - 1], 26, 26), "▙", "and the hovered one carries the chamfer on its edges")
-  eq(usub(rows[hover_row + 1], 26, 26), "▛")
+  eq(usub(rows[active_row], 27, 27), " ", "the active card is square")
+  eq(usub(rows[hover_row - 1], 27, 27), "▙", "and the hovered one carries the chamfer on its edges")
+  eq(usub(rows[hover_row + 1], 27, 27), "▛")
 
   assert(r.rows[active_row]:find(ansi.fg(v.theme.meta_fg), 1, true), "icon paints at meta weight")
 
   local lit = render.render(p1_view {
     rows = 20,
-    hover = { x = 22, y = 1 },
+    hover = { x = 23, y = 1 },
     strip = { rows = 2, cols = 0, toggle_row = 1 },
   })
   assert(lit.rows[1]:find(ansi.bg(v.theme.hover_bg), 1, true), "the toggle span reads as a button when hovered")
@@ -1597,13 +1593,13 @@ test("P1 screenshots: icon weight, chamfer, toggle surface, dashed ghost", funct
       ghost_top = ghost_top or row
     end
   end
-  eq(usub(rows[ghost_top], 4, 5), "╌╌", "every cell between the corners is dashed")
-  eq(usub(rows[ghost_top], 24, 25), "╌╌", "at both ends")
-  eq(usub(rows[ghost_top], 6, 7), "╌╌", "and in between: the dash lives inside the glyph")
-  eq(usub(rows[ghost_top + 1], 3, 3), "╎", "the sides are dashed too")
-  eq(usub(rows[ghost_top + 1], 26, 26), "╎")
-  eq(usub(rows[ghost_top + 2], 4, 5), "╌╌", "the bottom rail closes the same way")
-  eq(usub(rows[ghost_top + 2], 24, 25), "╌╌")
+  eq(usub(rows[ghost_top], 3, 4), "╌╌", "every cell between the corners is dashed")
+  eq(usub(rows[ghost_top], 25, 26), "╌╌", "at both ends")
+  eq(usub(rows[ghost_top], 5, 6), "╌╌", "and in between: the dash lives inside the glyph")
+  eq(usub(rows[ghost_top + 1], 2, 2), "╎", "the sides are dashed too")
+  eq(usub(rows[ghost_top + 1], 27, 27), "╎")
+  eq(usub(rows[ghost_top + 2], 3, 4), "╌╌", "the bottom rail closes the same way")
+  eq(usub(rows[ghost_top + 2], 25, 26), "╌╌")
   local over = render.render(p1_view { rows = 20, hover = { x = 5, y = 19 } })
   local over_rows = {}
   for row = 1, 20 do
@@ -1615,7 +1611,7 @@ test("P1 screenshots: icon weight, chamfer, toggle surface, dashed ghost", funct
       top = top or row
     end
   end
-  eq(usub(over_rows[top], 4, 5), "╌╌", "and the hovered ghost stays dashed")
+  eq(usub(over_rows[top], 3, 4), "╌╌", "and the hovered ghost stays dashed")
 end)
 
 local function popover_rect(over)
@@ -2004,7 +2000,7 @@ test("addendum 5: the bar is gated on hue distance from fg, not on contrast", fu
     local v = p1_view { opts = { separator = "gap" } }
     v.theme.title_active = title
     local rows = frame_rows(v)
-    return usub(rows[4], 3, 3), usub(rows[3], 3, 3)
+    return usub(rows[4], 2, 2), usub(rows[3], 2, 2)
   end
   local fg = p1_view({}).theme.fg
 
@@ -2039,7 +2035,7 @@ test("addendum 5: the three degenerate palettes keep the bar, Nord does not", fu
     v.theme = resolved
     v.theme.title_active = case[2] and resolved.fg or { resolved.fg[1] - 26, resolved.fg[2] - 26, resolved.fg[3] - 26 }
     local rows = frame_rows(v)
-    eq(usub(rows[4], 3, 3) == "▎", case[2], case[1] .. " bar")
+    eq(usub(rows[4], 2, 2) == "▎", case[2], case[1] .. " bar")
   end
 end)
 
@@ -2050,7 +2046,7 @@ test("addendum 5: no palette loses both discriminators", function()
     local v = p1_view { opts = { separator = "gap" } }
     v.theme = resolved
     local rows = frame_rows(v)
-    local bar = usub(rows[4], 3, 3) == "▎"
+    local bar = usub(rows[4], 2, 2) == "▎"
     local title = resolved.title_active or resolved.fg
     local delta = 0
     for i = 1, 3 do
@@ -2065,7 +2061,7 @@ test("addendum 5: the active tab's dot comes from has_unseen, not from being act
   quiet[2].has_unseen = false
   local v = p1_view { items = quiet, opts = { separator = "gap" } }
   v.theme.title_active = { 137, 180, 250 }
-  eq(usub(frame_rows(v)[4], 3, 3), " ", "an active tab with nothing unseen keeps a blank gutter")
+  eq(usub(frame_rows(v)[4], 2, 2), " ", "an active tab with nothing unseen keeps a blank gutter")
 end)
 
 test("addendum 5: an active tab with unseen output shows the dot once the bar is gone", function()
@@ -2074,7 +2070,7 @@ test("addendum 5: an active tab with unseen output shows the dot once the bar is
   local v = p1_view { items = unseen_items, opts = { separator = "gap" } }
   v.theme.title_active = { 137, 180, 250 }
   local rows = frame_rows(v)
-  eq(usub(rows[4], 3, 3), "•", "the freed gutter finally reaches an active tab")
+  eq(usub(rows[4], 2, 2), "•", "the freed gutter finally reaches an active tab")
 end)
 
 test("addendum 6: tab_height = tall pads the card instead of adding an icon row", function()
@@ -2094,7 +2090,7 @@ test("addendum 6: tab_height = tall pads the card instead of adding an icon row"
   eq(r.hits[first + 3].part, "pad")
   eq(r.hits[first + 4].part, "pad")
   eq(r.hits[first + 2].slot, r.hits[first].slot, "all five rows are one card")
-  eq(usub(rows[first + 2], 5, 5), "v", "and the icon rides the title, not a row of its own")
+  eq(usub(rows[first + 2], 4, 4), "v", "and the icon rides the title, not a row of its own")
   eq(layout.icon_row(5), 3, "which is where icon_row points")
   for row = 1, v.rows do
     eq(util.width(rows[row]), 28, "tall row " .. row)
@@ -2127,7 +2123,7 @@ test("addendum 2 A3a/A4a: the content block is centred at every tab_height, with
     eq(count, case.rows, label .. ": rows per card")
     eq(title - first + 1, case.title, label .. ": the title row is the middle of the block")
     eq(layout.icon_row(case.rows), case.title, label .. ": icon_row agrees")
-    eq(usub(painted[title], 5, 5), "v", label .. ": the icon rides the title")
+    eq(usub(painted[title], 4, 4), "v", label .. ": the icon rides the title")
     if case.meta == false then
       for _, item in ipairs(v.items) do
         for row = first, first + count - 1 do
@@ -2148,7 +2144,7 @@ test("addendum 2 A3c: show_index rides the title when there is no meta line", fu
       title = title or row
     end
   end
-  eq(usub(rows[title], 7, 15), "3  claude", "the index is inline with the title")
+  eq(usub(rows[title], 6, 14), "3  claude", "the index is inline with the title")
   local metaed, mr = frame_rows(p1_view { rows = 20, opts = { separator = "gap", show_index = true, meta = "auto" } })
   local meta_row
   for row = 1, 20 do
@@ -2157,8 +2153,8 @@ test("addendum 2 A3c: show_index rides the title when there is no meta line", fu
       meta_row = meta_row or row
     end
   end
-  eq(usub(metaed[meta_row - 1], 7, 12), "claude", "with a meta line the title keeps its own row")
-  assert(usub(metaed[meta_row], 7, 9):find "3", "and the index goes back to the meta line")
+  eq(usub(metaed[meta_row - 1], 6, 11), "claude", "with a meta line the title keeps its own row")
+  assert(usub(metaed[meta_row], 6, 8):find "3", "and the index goes back to the meta line")
 end)
 
 test("addendum 2 A4c: the close glyph is the heavy multiplication x and measures one cell", function()
@@ -2217,14 +2213,14 @@ test("addendum 2: frame paints the inner edge and chamfers the page away", funct
       card = card or row
     end
   end
-  eq(r.hits[card].x2, 25, "the card grid gives up one column to the frame")
+  eq(r.hits[card].x2, 26, "the card grid gives up one column to the frame")
   local plain_card
   for row = 1, 20 do
     if plain.hits[row] and plain.hits[row].kind == "tab" and plain.hits[row].part == "title" then
       plain_card = plain_card or row
     end
   end
-  eq(plain.hits[plain_card].x2, 26, "and keeps it when frame is off")
+  eq(plain.hits[plain_card].x2, 27, "and keeps it when frame is off")
 end)
 
 test("addendum 2: frame = false changes nothing", function()
@@ -2245,7 +2241,7 @@ test("addendum: the ghost card closes at every width and on both rails", functio
       end
     end
     assert(top, cols .. " cols has a ghost card")
-    local x1, x2 = 3, cols - 2
+    local x1, x2 = 2, cols - 1
     for _, row in ipairs { top, top + 2 } do
       local line = rows[row]
       eq(usub(line, x1, x1), row == top and "╭" or "╰", cols .. " cols: corner")
@@ -2303,10 +2299,10 @@ test("layout: the grid, plan and scroll are pure and inspectable", function()
   local layout = require "vtabs.layout"
   local v = p1_view { rows = 20, opts = { separator = "gap" } }
   local l = layout.plan(v)
-  eq(l.grid.card_x1, 3)
-  eq(l.grid.card_x2, 26)
-  eq(l.grid.icon_x, 5)
-  eq(l.grid.title_x1, 7)
+  eq(l.grid.card_x1, 2)
+  eq(l.grid.card_x2, 27)
+  eq(l.grid.icon_x, 4)
+  eq(l.grid.title_x1, 6)
   eq(l.rail, false)
   eq(l.strip_rows, v.strip.rows)
   eq(l.plan[1].kind, "tab", "the pinned entry leads the plan")
@@ -2383,7 +2379,7 @@ test("P1 frames are written for design review", function()
     "strip-macos",
     p1_view {
       rows = 20,
-      strip = { rows = 4, cols = 9, toggle_row = 1 },
+      strip = { rows = 2, cols = 9, toggle_row = 1 },
       opts = design,
     }
   )
@@ -3925,7 +3921,7 @@ end)
 test("the P1 defaults and their aliases pass validation without warning", function()
   local before = #wezterm.log
   local cfg = config.setup {}
-  eq(cfg.padding.top, 1)
+  eq(cfg.padding.top, 0)
   eq(cfg.row_gap, 0)
   eq(cfg.tab_height, "card")
   eq(cfg.meta, false)
@@ -4088,21 +4084,22 @@ end)
 
 test("the strip is toggle plus padding when nothing is reserved", function()
   local linux = { is_mac = false }
-  eq(strip_geom(RETINA, linux).rows, 2, "toggle row plus padding_top")
-  eq(strip_geom(RETINA, { is_mac = false, toggle_button = false }).rows, 1)
+  eq(strip_geom(RETINA, linux).rows, 2, "padding_top sits above the toggle row, not below it")
+  eq(strip_geom(RETINA, linux).toggle_row, 2, "so the glyphs never touch the window edge")
+  eq(strip_geom(RETINA, { is_mac = false, toggle_button = false }).rows, 1, "padding without a toggle is still padding")
   eq(strip_geom(RETINA, { is_mac = false, padding_top = 0 }).rows, 1, "no padding, just the toggle row")
+  eq(strip_geom(RETINA, { is_mac = false, padding_top = 0 }).toggle_row, 1)
   eq(strip_geom(RETINA, { is_mac = false, toggle_button = false, padding_top = 0 }).rows, 0)
-  eq(strip_geom(RETINA, linux).toggle_row, 1)
   eq(strip_geom(RETINA, linux).toggle_x, 2, "card_x1")
   eq(strip_geom(RETINA, { is_mac = false, card_x1 = 4 }).toggle_x, 4)
 end)
 
-test("the shipped padding gives the toggle a two-row hit span outside macOS", function()
+test("the shipped padding gives the toggle a one-row strip outside macOS", function()
   local g = strip_geom(RETINA, { is_mac = false, padding_top = config.defaults.padding.top })
-  eq(g.rows, 2, "toggle row plus the shipped padding.top")
+  eq(g.rows, 1, "the shipped padding.top is 0: the window's half-cell is the air above")
   eq(g.toggle_row, 1)
-  eq(math.min(g.toggle_row + 1, g.rows), 2, "the span covers both strip rows")
-  assert(g.toggle_row + 1 <= g.rows, "P1-spec §9: toggle_row + 1 <= rows")
+  eq(math.min(g.toggle_row + 1, g.rows), 1, "so the hit band is the one row there is")
+  assert(g.toggle_row <= g.rows, "P1-spec §9: the toggle row is inside the strip")
 end)
 
 test("the toggle span never reaches past the strip into the first card row", function()
@@ -4150,14 +4147,16 @@ test("the window padding is zeroed on the sides the sidebar touches, and never w
   end
   local left = padding {}
   eq(left.left, 0, "the sidebar's own edge, so its background reaches it")
-  eq(left.top, 0)
-  eq(left.bottom, 0)
   eq(left.right, "1cell", "the far side keeps wezterm's own default")
+  eq(left.top, "0.5cell", '"sides" is the default: the terminal keeps its own top and bottom half-cell')
+  eq(left.bottom, "0.5cell")
   local right = padding { position = "right" }
   eq(right.right, 0, "mirrored for a right sidebar")
   eq(right.left, "1cell")
-  eq(right.top, 0)
-  eq(right.bottom, 0)
+  local flush = padding { edge_to_edge = true }
+  eq(flush.left, 0, "true reaches every edge the sidebar touches")
+  eq(flush.top, 0, "at the cost of the content pane's own top and bottom")
+  eq(flush.bottom, 0)
   local sides = padding { edge_to_edge = "sides" }
   eq(sides.left, 0, '"sides" still gives the sidebar its own edge')
   eq(sides.right, "1cell")
@@ -4166,10 +4165,10 @@ test("the window padding is zeroed on the sides the sidebar touches, and never w
   local mine = { left = 8, right = 8, top = 8, bottom = 8 }
   eq(padding({}, mine), mine, "a user value is never overwritten")
   eq(padding { edge_to_edge = false }, nil, "and the opt-out never touches it")
-  eq(config.defaults.padding.left, 2, "the air the window padding no longer gives, in the page colour")
-  eq(config.setup({ position = "right" }).padding.right, 2, "two columns matches one row on either side")
-  eq(config.setup({ position = "right" }).padding.left, 2)
-  eq(config.defaults.padding.bottom, 1, "and one row below, the same air the cards get between them")
+  eq(config.defaults.padding.left, 1, "one column, so window 0 + sidebar 1 is the 10 px the top gets in 11")
+  eq(config.setup({ position = "right" }).padding.right, 1, "symmetric, so the mirror is a no-op")
+  eq(config.setup({ position = "right" }).padding.left, 1)
+  eq(config.defaults.padding.bottom, 0, "the window's half-cell is the air below, not a sidebar row")
   eq(config.setup({ position = "right", padding = { right = 4 } }).padding.right, 4, "yours wins")
   eq(config.setup({ position = "right", padding = { right = 4 } }).padding.left, 2, "untouched, unmirrored")
   eq(config.setup({ position = "right", padding = 3 }).padding.right, 2, "a padding that is not a table")
@@ -4277,9 +4276,9 @@ test("view hands the renderer a strip and a private-aware theme", function()
   view_mod.sync(gui, { force = true })
   assert(seen, "the renderer was called")
   eq(type(seen.strip), "table")
-  eq(seen.strip.rows, 2, "no macOS reserve in the fake, so toggle row plus padding")
+  eq(seen.strip.rows, 2, "no macOS reserve in the fake, so this padding.top plus the toggle row")
   eq(seen.strip.cols, 0)
-  eq(seen.strip.toggle.row, 1)
+  eq(seen.strip.toggle.row, 2, "and the padding is above the glyph, not below it")
   eq(seen.strip.toggle.x1, 1, "the span reaches one column left of the glyph")
   eq(seen.strip.toggle.x2, 4, "four columns wide")
   eq(type(seen.user_scrolled), "boolean")
@@ -4379,7 +4378,7 @@ test('titlebar = "macos" previews the light reserve on a machine that has none',
   eq(strip_of({}).cols, 0, "off macOS there is nothing to reserve")
   local preview = strip_of { titlebar = "macos" }
   eq(preview.cols, 7, "70 px of buttons over 10 px cells")
-  eq(preview.rows, 3, "two reserved rows plus padding.top")
+  eq(preview.rows, 2, "the two reserved rows, and padding.top is 0")
   eq(strip_of({ titlebar = "macos", position = "right" }).cols, 0, "the lights are on the left only")
   render_mod.render = original
   platform.is_mac = was_mac
@@ -4413,11 +4412,11 @@ test("the close span closes and the toggle span collapses the sidebar", function
   local sb1 = sidebar.find(win.tab_list[1])
   local hits = state.session.hits[sb1:pane_id()]
   local first = title_row(sb1, win.tab_list[1].id)
-  eq(hit.span(hits[first], 24), "close")
-  eq(hit.span(hits[first], 26), "close")
-  eq(hit.span(hits[first], 23), nil)
-  eq(hit.span(hits[first + 1], 25), "close", "the meta row carries the same span")
-  eq(hit.span(hits[first - 1], 25), nil, "the pad row does not")
+  eq(hit.span(hits[first], 25), "close")
+  eq(hit.span(hits[first], 27), "close")
+  eq(hit.span(hits[first], 24), nil)
+  eq(hit.span(hits[first + 1], 26), "close", "the meta row carries the same span")
+  eq(hit.span(hits[first - 1], 26), nil, "the pad row does not")
   eq(hits[1].kind, "action")
 
   eq(#win.tab_list, 3)
@@ -4544,8 +4543,8 @@ end)
 -- P1-spec §7, verbatim. Injected values in other tests cannot keep a wrong default green.
 local P1_DEFAULTS = {
   width = 28,
-  padding = { top = 1, left = 2, right = 2, bottom = 1 },
-  edge_to_edge = true,
+  padding = { top = 0, left = 1, right = 1, bottom = 0 },
+  edge_to_edge = "sides",
   row_gap = 0,
   tab_height = "card",
   meta = false,
@@ -4563,8 +4562,8 @@ local P1_DEFAULTS = {
 
 test("addendum 2 §1.5: padding.bottom gives the ghost the air the cards get, and edge_to_edge picks a band", function()
   local cfg = config.setup { backend = { path = "/bin/wez-vtabs" } }
-  eq(cfg.padding.bottom, cfg.row_gap == 0 and 1 or cfg.row_gap, "one row below, matching the card rhythm")
-  eq(cfg.padding.left, cfg.padding.right, "and two columns either side: a cell is twice as tall as it is wide")
+  eq(cfg.padding.bottom, 0, "the window's half-cell supplies the air below, not a sidebar row")
+  eq(cfg.padding.left, cfg.padding.right, "one column either side, so left and right air match")
   local v = p1_view { rows = 20, opts = { separator = "gap" } }
   local rows, r = frame_rows(v)
   local last_ghost
@@ -4587,12 +4586,50 @@ test("addendum 2 §1.5: padding.bottom gives the ghost the air the cards get, an
   end
   eq(deep.rows - deep_last, 3, "the ghost never claims a row padding.bottom reserved")
 
-  eq(config.setup({ edge_to_edge = "sides", backend = { path = "/bin/wez-vtabs" } }).edge_to_edge, "sides")
+  eq(config.setup({ edge_to_edge = true, backend = { path = "/bin/wez-vtabs" } }).edge_to_edge, true)
   eq(
     config.setup({ edge_to_edge = "top", backend = { path = "/bin/wez-vtabs" } }).edge_to_edge,
-    true,
+    "sides",
     "and nothing else"
   )
+  config.setup { backend = { path = "/bin/wez-vtabs" } }
+end)
+
+test("addendum 2 §1.6: the toggle row rounds to the lights' centre instead of ceiling past it", function()
+  -- 14 pt below the top edge, with a half-cell of window padding above: pane row n is centred at
+  -- n * cell_h, so round() is the nearest row and ceil() is a whole row low from 10 pt cells up
+  for _, case in ipairs { { 9, 2 }, { 10, 1 }, { 11, 1 }, { 12, 1 }, { 13, 1 } } do
+    local cell_h, want = case[1], case[2]
+    local g = strip_geom {
+      cols = 28,
+      viewport_rows = 30,
+      pixel_width = 28 * 8.4,
+      pixel_height = 30 * cell_h,
+    }
+    eq(g.toggle_row, want, cell_h .. " pt cells")
+    eq(g.toggle_row, math.max(1, math.min(math.floor(14 / cell_h + 0.5), g.rows_reserved)), "and it is the rule")
+    assert(g.toggle_row <= g.rows_reserved, cell_h .. ": never past the reserve")
+  end
+end)
+
+test("addendum 2 §1.6: the strip glyphs are heavy and one cell wide", function()
+  local resolved = glyphs.resolve(config.setup({ backend = { path = "/bin/wez-vtabs" } }).glyphs, {})
+  for _, pair in ipairs {
+    { "toggle_left", "❮" },
+    { "toggle_right", "❯" },
+    { "strip_new_tab", "✚" },
+    { "settings", "⚙" },
+  } do
+    eq(resolved[pair[1]], pair[2], pair[1])
+    eq(util.width(resolved[pair[1]]), 1, pair[1] .. " is one column, so the ASCII guard never fires")
+  end
+  local wide = glyphs.resolve(config.setup({ backend = { path = "/bin/wez-vtabs" } }).glyphs, {
+    treat_east_asian_ambiguous_width_as_wide = true,
+  })
+  eq(wide.toggle_left, "❮", "all four are EAW Neutral, so ambiguous-as-wide leaves them alone")
+  eq(wide.strip_new_tab, "✚")
+  eq(wide.settings, "⚙")
+  eq(resolved.new_tab, "+", "the ghost card keeps the light plus; only the strip goes heavy")
   config.setup { backend = { path = "/bin/wez-vtabs" } }
 end)
 
@@ -4765,8 +4802,8 @@ test("schema.defaults is a fresh deep copy each time, so setup cannot poison it"
   local a, b = schema.defaults(), schema.defaults()
   assert(a.padding ~= b.padding, "nested tables are not shared")
   a.padding.top = 99
-  eq(schema.defaults().padding.top, 1)
-  eq(config.defaults.padding.top, 1)
+  eq(schema.defaults().padding.top, 0)
+  eq(config.defaults.padding.top, 0)
 end)
 
 test("a key the schema does not know warns, including inside a closed container", function()
@@ -4803,7 +4840,7 @@ test("every enum rejects a value outside it and every range rejects the wrong si
   eq(config.setup({ row_gap = -1 }).row_gap, 0)
   eq(config.setup({ theme = { elevation = 2 } }).theme.elevation, 0.06, "above max")
   eq(config.setup({ toggle_button = "yes" }).toggle_button, true)
-  eq(config.setup({ padding = { top = -1 } }).padding.top, 1, "nested keys validate too")
+  eq(config.setup({ padding = { top = -1 } }).padding.top, 0, "nested keys validate too")
   eq(config.setup({ width = 40 }).width, 40, "a valid value survives")
   config.setup { backend = { path = "/bin/wez-vtabs" } }
 end)
@@ -4900,7 +4937,7 @@ test("cell counts and durations must be whole numbers", function()
   eq(config.setup({ row_gap = 1.5 }).row_gap, 0)
   eq(config.setup({ rail_width = 5.5 }).rail_width, 5)
   eq(config.setup({ poll_ms = 500.5 }).poll_ms, 500)
-  eq(config.setup({ padding = { top = 1.2 } }).padding.top, 1)
+  eq(config.setup({ padding = { top = 1.2 } }).padding.top, 0)
   eq(config.setup({ tooltip_delay_ms = 600.5 }).tooltip_delay_ms, 600)
   eq(config.setup({ animation = { fps = 30.5 } }).animation.fps, 30)
   eq(config.setup({ width = 32 }).width, 32, "a whole number survives")
@@ -5244,7 +5281,7 @@ test("the menu is as wide as its widest row wants, clamped to the sidebar", func
   local natural = popover.width_for(cfg, 80, menu, nil)
   eq(natural, 23, "the widest label is 18 cells and carries no hint")
   eq(popover.width_for(cfg, 28, menu, nil), 23, "the shipped 28-column sidebar still fits it whole")
-  eq(popover.width_for(cfg, 22, menu, nil), 18, "a narrower one caps it at the columns it can spare")
+  eq(popover.width_for(cfg, 22, menu, nil), 20, "a narrower one caps it at the columns it can spare")
   local fixed = util.merge(cfg, { popover = { width = 18 } })
   eq(popover.width_for(fixed, 80, menu, nil), 18, "a number is taken verbatim")
   eq(popover.width_for(util.merge(cfg, { popover = { width = 4 } }), 80, menu, nil), 16, "with a floor")
@@ -5765,7 +5802,7 @@ test("the rail flag reaches strip_geometry, so the toggle lands inside the rail"
     rows[row] = row_text(painted.data, row)
   end
   local x = math.ceil(seen.cols / 2)
-  eq(usub(rows[seen.strip.toggle_row], x, x), "«", "and §8 centres the one glyph that fits in the rail")
+  eq(usub(rows[seen.strip.toggle_row], x, x), "❮", "and §8 centres the one glyph that fits in the rail")
   sidebar.set_collapsed(gui, false)
   view_mod.invalidate_theme()
   config.setup(legacy { backend = { path = "/bin/wez-vtabs" } })

@@ -49,7 +49,9 @@ M.defaults = {
   -- title next to them. `icon_map = { close = wezterm.nerdfonts.md_close }` gets the codicon back.
   close = "✖",
   new_tab = glyph("cod_add", "+"),
-  settings = glyph("md_cog", "⚙"),
+  -- the strip sits beside macOS's solid traffic lights: heavy Unicode, not thin cell-sized PUA ink
+  strip_new_tab = "✚",
+  settings = "⚙",
   search = glyph("cod_search", "/"),
   unseen = glyph("md_circle_medium", "•"),
   focus = "›",
