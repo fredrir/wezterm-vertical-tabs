@@ -24,7 +24,7 @@ return config
 | `position`                | `"left"`                                                          | `"left"` or `"right"`                                                                                                                           |
 | `hide_native_tab_bar`     | `true`                                                            | sets `enable_tab_bar = false`                                                                                                                   |
 | `poll_ms`                 | `500`                                                             | upper bound for `status_update_interval`; drives sidebar refresh                                                                                |
-| `padding`                 | `{ top = 0, left = 1, right = 1 }`                                | cells of padding; `top` is added to the top strip, which owns the rows above the first card                                                      |
+| `padding`                 | `{ top = 1, left = 1, right = 1 }`                                | cells of padding; `top` is added to the top strip, which owns the rows above the first card                                                      |
 | `tab_height`              | `"card"`                                                          | `"card"` (or `2`): 2 painted rows per tab; `"row"` (or `1`): 1 row, same as `meta = false`                                                       |
 | `meta`                    | `"auto"`                                                          | second card row: `"auto"` (cwd for shells, `user@host` for ssh, `proc · dir` otherwise, `domain · cwd` on a mux), `"cwd"`, `"process"`, or `false` for 1-row cards |
 | `row_gap`                 | `1`                                                               | blank rows after each card; the gap row is part of the card's click target                                                                      |
@@ -181,7 +181,6 @@ WezTerm runs only the first `format-window-title` handler; register yours before
 | `hover_bg`       | `lift(0.06)`                                                                   |
 | `active_bg`      | `lift(0.12)` mixed 12% toward `accent`                                         |
 | `focus_bg`       | `bg` mixed 25% toward `accent`                                                 |
-| `drag_bg`        | `bg` mixed 35% toward `accent`                                                 |
 | `separator`      | `lift(0.10)`                                                                   |
 | `border`         | `lift(0.18)`, lifted to 2.5 against `bg` — hovered ghost card                  |
 | `border_idle`    | `lift(0.14)`, lifted to 2.0 against `bg` — dashed ghost card                   |
@@ -191,6 +190,7 @@ WezTerm runs only the first `format-window-title` handler; register yours before
 | `unseen_fg`      | `ansi[4]` when it clears 3.0 against `bg`, else `accent`                       |
 | `scroll_fg`      | `lift(0.22)`, lifted to 2.0 against `bg`                                       |
 | `scroll_idle_fg` | `scroll_fg` mixed 55% toward `bg`                                              |
+| `drag_bg`        | `bg` mixed 35% toward `accent`; a dragged card paints its whole text in `drag_fg` |
 | `private_accent` | `ansi[6]`; becomes `accent` for the whole window in a private window           |
 
 Also settable: `active_fg hover_fg pinned_fg drag_fg`. `use_scheme_tab_bar` is deprecated and
