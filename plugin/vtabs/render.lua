@@ -340,7 +340,8 @@ local function chrome_row(ctx, glyph, glyph_x, text, text_fg, glyph_fg, bg)
   if glyph and glyph ~= "" then
     put(cells, glyph_x, glyph, { fg = glyph_fg or text_fg }, glyph_x)
   end
-  if text and text ~= "" then
+  -- the rail has no title column at all, so its chrome rows are the glyph and nothing else
+  if text and text ~= "" and g.title_x1 ~= nil then
     put(cells, g.title_x1, util.truncate(text, math.max(g.card_x2 - g.title_x1 + 1, 0), ctx.glyphs.ellipsis), {
       fg = text_fg,
     }, g.card_x2)

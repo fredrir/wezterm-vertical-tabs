@@ -1481,6 +1481,24 @@ test("item 2: a rail slot occupies exactly the rows the expanded card does", fun
   end
 end)
 
+test("P2 rail: the private header and a footer survive having no title column", function()
+  local v = p1_view {
+    rows = 16,
+    cols = 5,
+    private = true,
+    footer = { { icon = "f", text = "main - 3 dirty", id = "git" } },
+    opts = { separator = "gap" },
+  }
+  v.rail = true
+  local rows, r = frame_rows(v)
+  for row = 1, v.rows do
+    eq(util.width(rows[row]), 5, "rail row " .. row)
+  end
+  eq(usub(rows[1], 3, 3), v.glyphs.private, "the header keeps its glyph")
+  eq(r.hits[v.rows].kind, "footer")
+  eq(usub(rows[v.rows], 3, 3), "f", "and the footer keeps its icon")
+end)
+
 test("P2 rail: the thumb needs 7 columns", function()
   local many = {}
   for i = 1, 30 do
