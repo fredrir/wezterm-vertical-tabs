@@ -30,9 +30,17 @@ macos_rail() {
   mac_hits=$(probe_line "$first_content" probe_hits hits)
   reserve=$(probe_line "$first_content" probe_reserve reserve)
   echo "  macOS rail: $rail_cols cols; reserve $reserve; hits: $mac_hits"
-  toggle_hit=$(printf '%s\n' "$mac_hits" | tr ' ' '\n' | grep '^toggle/' | head -1)
+  # The toggle is either a record of its own or a span inside an `action` record.
+  toggle_hit=$(printf '%s\n' "$mac_hits" | tr ' ' '\n' | grep -E '^toggle/|,toggle@' | head -1)
   [ -n "$toggle_hit" ] || { sidebar_text "$mac_sb"; fail "the macOS rail has no toggle hit row"; }
-  toggle_x2=$(printf '%s' "$toggle_hit" | cut -d/ -f4 | cut -d, -f1 | cut -d- -f2)
+  case "$toggle_hit" in
+    *,toggle@*)
+      toggle_span=${toggle_hit##*,toggle@}
+      toggle_x2=${toggle_span%%,*}
+      toggle_x2=${toggle_x2#*-}
+      ;;
+    *) toggle_x2=$(printf '%s' "$toggle_hit" | cut -d/ -f4 | cut -d, -f1 | cut -d- -f2) ;;
+  esac
   [ "$toggle_x2" -le "$rail_cols" ] ||
     fail "the rail's toggle ends at column $toggle_x2 of a $rail_cols-column rail; it cannot be clicked"
   reserve_cols=$(printf '%s' "$reserve" | cut -d' ' -f1)
@@ -554,8 +562,9 @@ divider_drag() {
   #    poll only sees the sidebar's own column count change. Every `AdjustPaneSize` the plugin
   #    issues is logged by the wrapper in wezterm-e2e.lua, so the fight is countable.
   cli activate-tab --tab-id "$first" >/dev/null
-  want_width "$first" 28 "before the divider drag"
   sleep 2
+  # The drag trace above adopts a width, so the baseline is whatever the sidebar sits at now.
+  base=$(settled_width "$first")
   drag_mark=$(mark)
   drag_sb=$(sidebar_of "$first")
   for step in 1 2 3 4; do
@@ -565,18 +574,19 @@ divider_drag() {
   sleep 0.4
   mid=$(width_of "$first")
   adjusts=$(since "$drag_mark" | grep -c "e2e: adjust at" || true)
-  echo "  divider drag: 4 steps of +3 cols -> $mid cols, plugin issued $adjusts adjusts"
+  echo "  divider drag: from $base cols, 4 steps of +3 -> $mid cols, plugin issued $adjusts adjusts"
   # The plugin must not fight a drag it can see: it may adopt the new width, never undo it.
-  [ "$mid" -ge 34 ] ||
-    fail "the plugin pulled the divider back mid-drag: 12 cols dragged, sidebar is $mid"
+  [ "$mid" -ge $((base + 6)) ] ||
+    fail "the plugin pulled the divider back mid-drag: 12 cols dragged from $base, sidebar is $mid"
   sleep 3
   settled=$(settled_width "$first")
   echo "  divider drag settled at $settled cols"
-  [ "$settled" -ge 34 ] || fail "the dragged width was undone after the drag: $settled cols"
+  [ "$settled" -ge $((base + 6)) ] ||
+    fail "the dragged width was undone after the drag: $base -> $settled cols"
   no_dupes "a divider drag"
   echo "ok: a four-step divider drag is adopted, not fought ($adjusts adjusts)"
-  # Put the width back so the rest of the run starts from the configured one.
-  cli adjust-pane-size --pane-id "$(sidebar_of "$first")" --amount $((settled - 28)) Left >/dev/null 2>&1 || true
+  # Hand the width back so the checks after this one start where they started.
+  cli adjust-pane-size --pane-id "$(sidebar_of "$first")" --amount $((settled - base)) Left >/dev/null 2>&1 || true
   sleep 3
 }
 soft divider_drag
@@ -587,6 +597,7 @@ split_mark=$(mark)
 cli activate-tab --tab-id "$first" >/dev/null
 sleep 1
 before_panes=$(list | python3 -c 'import json,sys; t='"$first"'; print(sum(1 for p in json.load(sys.stdin) if p["tab_id"]==t))')
+before_width=$(settled_width "$first")
 vtest "$first_content" split_sidebar
 sleep 2.5
 echo "  after splitting the sidebar: $(probe_line "$first_content" probe_tree tree)"
@@ -595,12 +606,12 @@ after_panes=$(list | python3 -c 'import json,sys; t='"$first"'; print(sum(1 for 
 if [ "$after_panes" -gt "$before_panes" ]; then
   max_panes=$after_panes
   # The sidebar must keep its width and its role, and the strip must keep repainting.
-  want_width "$first" 28 "after splitting the sidebar pane"
+  want_width "$first" "$before_width" "after splitting the sidebar pane"
   renders "$(sidebar_of "$first")" "a split sidebar pane"
   no_warnings "$split_mark" "splitting the sidebar pane"
   not_frozen "$(sidebar_of "$first")" "$first" "a split sidebar pane"
   max_panes=2
-  echo "ok: splitting the sidebar leaves it at 28 cols, rendering and repainting"
+  echo "ok: splitting the sidebar leaves it at $before_width cols, rendering and repainting"
 else
   echo "ok: the sidebar pane refuses to split"
 fi
