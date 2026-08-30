@@ -98,6 +98,8 @@ M.session = {
   focus_index = {},
   last_active = {},
   attaching = {},
+  pane_domain = {},
+  failed_domains = {},
 }
 
 local function save(persist)

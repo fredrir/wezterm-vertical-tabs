@@ -5,10 +5,12 @@
   `TogglePaneZoom` hides it until unzoomed.
 - Tabs spawned by bindings other than the plugin's get their sidebar on the
   next poll (`poll_ms`). Use `vtabs.action.new_tab` for an instant one.
-- The sidebar process runs in the tab's domain. For remote multiplexer domains
-  (ssh/tls mux) the bootstrap script and `cargo` fallback are not available on
-  the remote side; set `domain = "local"` to run the sidebar locally, or install
-  `wez-vtabs` remotely and point `backend.path` at it.
+- The sidebar process runs in the tab's domain; WezTerm cannot host a local
+  pane inside a remote-mux tab. On remote multiplexer domains (ssh/tls mux) the
+  plugin runs an inline bootstrap that downloads a release build for the remote
+  architecture; until a release exists, build `wez-vtabs` on the remote host and
+  point `backend.path[domain]` at it. A domain whose backend never answers gets
+  one warning and no further sidebars until the config is reloaded.
 - Pins, sidebar identities and closed-tab history persist to
   `$XDG_STATE_HOME/wez-vtabs/state.json` (default `~/.local/state`), so they
   survive restarts against a persistent mux server. Collapsed/focus state is

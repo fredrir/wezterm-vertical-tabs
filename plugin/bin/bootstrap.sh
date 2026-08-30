@@ -71,6 +71,5 @@ if [ "${VTABS_BUILD:-1}" = 1 ] && [ -f "${VTABS_SRC:-}/Cargo.toml" ] && command 
   printf 'build failed\n'
 fi
 
-printf 'backend not found\ninstall cargo or set backend.path, then press Enter to retry\n'
-read -r _
-exec "$0"
+printf 'backend not found: install cargo, publish a release, or set backend.path\n'
+exit 1

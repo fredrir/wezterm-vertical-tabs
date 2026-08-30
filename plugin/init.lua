@@ -4,23 +4,19 @@ local function usable(root)
   return package.searchpath("vtabs.config", root .. "/?.lua;" .. root .. "/?/init.lua") ~= nil
 end
 
+---Prefers the checkout the modules already resolve from, so a stale plugin clone never shadows it.
 local function plugin_root()
-  local stale
-  for _, p in ipairs(wezterm.plugin.list()) do
-    if p.url:find("wezterm-vertical-tabs", 1, true) then
-      local candidate = p.plugin_dir .. "/plugin"
-      if usable(candidate) then
-        return candidate
-      end
-      stale = stale or candidate
-    end
-  end
-
   local found = package.searchpath("vtabs.config", package.path)
   if found then
     return found:match "^(.*)[/\\]vtabs[/\\]config%.lua$"
   end
-  return stale
+  for _, p in ipairs(wezterm.plugin.list()) do
+    local candidate = p.plugin_dir .. "/plugin"
+    if p.url:find("vertical-tabs", 1, true) and usable(candidate) then
+      return candidate
+    end
+  end
+  return nil
 end
 
 local root = plugin_root()
@@ -152,6 +148,38 @@ local function register_events(cfg)
   end)
 end
 
+local MODULES = {
+  "actions",
+  "ansi",
+  "backend",
+  "config",
+  "hit",
+  "icons",
+  "input",
+  "keys",
+  "menu",
+  "model",
+  "platform",
+  "render",
+  "sidebar",
+  "state",
+  "theme",
+  "util",
+  "version",
+  "view",
+}
+
+---Edits to the plugin reload the config like edits to the user's own files do.
+local function watch_plugin_files()
+  if not root or not wezterm.add_to_config_reload_watch_list then
+    return
+  end
+  wezterm.add_to_config_reload_watch_list(root .. "/init.lua")
+  for _, name in ipairs(MODULES) do
+    wezterm.add_to_config_reload_watch_list(root .. "/vtabs/" .. name .. ".lua")
+  end
+end
+
 ---@param config Config
 ---@param opts table|nil
 function M.apply_to_config(config, opts)
@@ -167,7 +195,9 @@ function M.apply_to_config(config, opts)
       table.insert(config.skip_close_confirmation_for_processes_named, "wez-vtabs")
     end
   end
+  backend.register_local_domains(config)
   keys.apply(config, cfg)
+  watch_plugin_files()
   register_events(cfg)
   return config
 end

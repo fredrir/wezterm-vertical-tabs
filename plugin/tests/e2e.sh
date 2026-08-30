@@ -130,21 +130,34 @@ echo "ok: drag reorders tabs"
 
 window_count() { list | python3 -c 'import json,sys; print(len({p["window_id"] for p in json.load(sys.stdin)}))'; }
 drag "$sb1" 5 "$(row_of "$sb1" three)" 28 "$(row_of "$sb1" three)"
-sleep 2
-[ "$(window_count)" -eq 2 ] || fail "drag to edge did not tear tab off into a new window"
+for _ in $(seq 1 16); do
+  [ "$(window_count)" -eq 2 ] && break
+  sleep 0.5
+done
+[ "$(window_count)" -eq 2 ] || { geometry; fail "drag to edge did not tear tab off into a new window"; }
+sleep 1
 sidebar_text "$sb1" | grep -c "three" >/dev/null && fail "torn-off tab still listed in the first window"
 first_window=$(list | python3 -c 'import json,sys; t='"$first_tab"'; print([p["window_id"] for p in json.load(sys.stdin) if p["tab_id"]==t][0])')
 moved_tab=$(list | python3 -c 'import json,sys; w='"$first_window"'; print([p["tab_id"] for p in json.load(sys.stdin) if p["window_id"]!=w][0])')
+for _ in $(seq 1 16); do
+  sidebar_of "$moved_tab" >/dev/null 2>&1 && break
+  sleep 0.5
+done
 sbm=$(sidebar_of "$moved_tab") || fail "torn-off tab has no sidebar in its new window"
-sleep 2
-geometry() { list | python3 -c 'import json,sys; [print("  win", p["window_id"], "tab", p["tab_id"], "title", repr(p["tab_title"]), "pane", p["pane_id"], p["title"], "left", p["left_col"], "cols", p["size"]["cols"]) for p in json.load(sys.stdin)]'; }
+for _ in $(seq 1 16); do
+  sidebar_text "$sbm" | grep -c "three" >/dev/null && break
+  sleep 0.5
+done
 sidebar_text "$sbm" | grep -c "three" >/dev/null || { geometry; sidebar_text "$sbm" | head -5; fail "new window sidebar does not list the moved tab"; }
 echo "ok: drag to edge moves tab to a new window with its own sidebar"
 
 cli send-text --no-paste --pane-id "$(content_of "$moved_tab")" "exit
 "
-sleep 1.5
-[ "$(tab_count)" -eq 1 ] || fail "tab left with only a sidebar was not closed"
+for _ in $(seq 1 20); do
+  [ "$(tab_count)" -eq 1 ] && [ "$(window_count)" -eq 1 ] && break
+  sleep 0.5
+done
+[ "$(tab_count)" -eq 1 ] || { geometry; fail "tab left with only a sidebar was not closed"; }
 [ "$(window_count)" -eq 1 ] || fail "empty window did not close"
 [ "$(active_title "$sb1")" = "one" ] || fail "orphan cleanup closed the wrong tab"
 echo "ok: orphaned sidebar tab closed"

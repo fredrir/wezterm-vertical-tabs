@@ -10,6 +10,7 @@ local M = {}
 local ATTACH_RETRY_MS = 5000
 local PING_AFTER_MS = 8000
 local DEAD_AFTER_MS = 20000
+local READY_TIMEOUT_MS = 12000
 
 local session = state.session
 
@@ -160,6 +161,21 @@ function M.attach(tab)
   if not base or M.is_overlay(base) then
     return nil
   end
+  local pane_domain = cfg.domain == "CurrentPaneDomain" and util.try(function()
+    return base:get_domain_name()
+  end) or cfg.domain
+  if session.failed_domains[pane_domain] then
+    return nil
+  end
+  local args = backend.spawn_args(cfg, pane_domain)
+  if not args then
+    util.warn_once(
+      "backend-" .. tostring(pane_domain),
+      "no backend for domain %s; set backend.path",
+      tostring(pane_domain)
+    )
+    return nil
+  end
   session.attaching[tab_id] = now
   local domain = cfg.domain == "CurrentPaneDomain" and "CurrentPaneDomain" or { DomainName = cfg.domain }
   local ok, sb = pcall(function()
@@ -167,8 +183,8 @@ function M.attach(tab)
       direction = cfg.position == "left" and "Left" or "Right",
       top_level = true,
       size = cfg.width,
-      args = backend.spawn_args(cfg),
-      set_environment_variables = backend.env(cfg),
+      args = args,
+      set_environment_variables = backend.env(cfg, pane_domain),
       domain = domain,
     }
   end)
@@ -180,6 +196,7 @@ function M.attach(tab)
   local token = util.random_token()
   state.set_sidebar(tab_id, sb:pane_id(), token)
   session.seen[sb:pane_id()] = now
+  session.pane_domain[sb:pane_id()] = pane_domain
   M.auth(sb)
   base:activate()
   if not is_local(base) then
@@ -219,6 +236,14 @@ function M.close_orphan(gui_window, tab, sb)
   if switching then
     previous:activate()
   end
+end
+
+---A backend that never answers means the binary is missing there; stop retrying in that domain.
+function M.give_up(gui_window, tab, sb)
+  local domain = session.pane_domain[sb:pane_id()] or "local"
+  session.failed_domains[domain] = true
+  util.warn("sidebar backend not responding in domain %s; set backend.path for it", tostring(domain))
+  M.detach(gui_window, tab)
 end
 
 ---Pings idle sidebars; replaces one whose backend stopped answering.
@@ -288,9 +313,8 @@ function M.ensure(gui_window)
       elseif sb then
         if M.is_ready(sb) then
           check_liveness(gui_window, tab, sb, now)
-        elseif now - (session.seen[sb:pane_id()] or now) > DEAD_AFTER_MS then
-          util.warn("sidebar %d never became ready, restarting", sb:pane_id())
-          M.detach(gui_window, tab)
+        elseif now - (session.seen[sb:pane_id()] or now) > READY_TIMEOUT_MS then
+          M.give_up(gui_window, tab, sb)
         end
       else
         M.attach(tab)

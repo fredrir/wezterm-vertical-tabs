@@ -18,10 +18,12 @@ if mux_socket then
   config.default_domain = "e2emux"
 end
 
+config.unix_domains = config.unix_domains or {}
 vtabs.apply_to_config(config, {
   poll_ms = 200,
   debug = true,
   confirm_close = false,
+  domain = os.getenv "VTABS_E2E_DOMAIN" or "CurrentPaneDomain",
   backend = { path = os.getenv "VTABS_BIN" },
   icons = false,
 })

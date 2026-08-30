@@ -500,6 +500,49 @@ test("reopen_closed pushes the entry back when spawning fails", function()
   assert(state.pop_closed(), "entry restored")
 end)
 
+test("backend path resolves per domain and remote bootstrap is inline", function()
+  local cfg = config.setup { backend = { path = "/bin/wez-vtabs" } }
+  eq(backend.resolve_path(cfg, "local"), "/bin/wez-vtabs")
+  eq(backend.resolve_path(cfg, "desktop"), nil)
+  backend.register_local_domains { unix_domains = { { name = "localmux" } } }
+  eq(backend.resolve_path(cfg, "localmux"), "/bin/wez-vtabs")
+  eq(backend.env(cfg, "localmux").VTABS_TARGET, wezterm.target_triple)
+  cfg = config.setup { backend = { path = { ["local"] = "/l", desktop = "/d" } } }
+  eq(backend.resolve_path(cfg, "desktop"), "/d")
+  cfg = config.setup { backend = {
+    path = function(d)
+      return "/fn/" .. d
+    end,
+  } }
+  eq(backend.spawn_args(cfg, "x")[1], "/fn/x")
+  cfg = config.setup {}
+  local remote = backend.spawn_args(cfg, "desktop")
+  eq(remote[2], "-c")
+  assert(remote[3]:find("wez-vtabs", 1, true), "inline bootstrap script")
+  eq(backend.env(cfg, "desktop").VTABS_TARGET, nil)
+  eq(backend.env(cfg, "desktop").VTABS_BUILD, "0")
+end)
+
+test("a domain whose sidebar never becomes ready is abandoned after one warning", function()
+  local win, gui = setup_window(2)
+  for _, tab in ipairs(win.tab_list) do
+    tab.pane_list[1].domain = "desktop"
+  end
+  config.setup { backend = { path = { ["local"] = "/bin/wez-vtabs", desktop = "/usr/bin/wez-vtabs" } } }
+  sidebar.ensure(gui)
+  eq(sidebars_in(win.tab_list[1]), 1)
+  for _, tab in ipairs(win.tab_list) do
+    state.session.seen[sidebar.find(tab):pane_id()] = 0
+  end
+  sidebar.ensure(gui)
+  sidebar.ensure(gui)
+  eq(sidebars_in(win.tab_list[1]), 0)
+  eq(sidebars_in(win.tab_list[2]), 0)
+  eq(#win.tab_list, 2)
+  assert(state.session.failed_domains.desktop)
+  state.session.failed_domains.desktop = nil
+end)
+
 os.remove(state.file)
 print(string.format("%d passed, %d failed", passed, failed))
 os.exit(failed == 0 and 0 or 1)
