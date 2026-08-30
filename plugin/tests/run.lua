@@ -179,8 +179,6 @@ local function view(over)
   if opts.meta == nil then
     opts.meta = false
   end
-  -- §1 slides the grid one column right; these frames still state the old landmarks explicitly.
-  opts.padding = opts.padding or { top = 1, left = 1, right = 1 }
   local cfg = config.setup(opts)
   local v = {
     cols = 28,
@@ -270,7 +268,7 @@ end)
 
 test("unseen marker survives hover and always-close", function()
   local r = render.render(view { hover = { x = 5, y = 7 }, opts = { close_button = "always" } })
-  eq(usub(row_text(r.data, 7), 2, 2), "•", "unseen dot survives in the gutter")
+  eq(usub(row_text(r.data, 7), 3, 3), "•", "unseen dot survives in the gutter")
 end)
 
 test("pinned entries are one dense row with a pin span, never a close span", function()
@@ -805,15 +803,15 @@ end)
 
 test("P1 grid: landmarks derive from cols and padding", function()
   local rows = frame_rows(p1_view { opts = { separator = "gap" } })
-  eq(usub(rows[1], 4, 4), "~", "icon at icon_x")
-  eq(usub(rows[1], 6, 13), "dotfiles", "title at title_x1")
-  eq(usub(rows[4], 4, 4), "v", "the icon rides the centred title row")
-  eq(usub(rows[4], 2, 2), " ", "theme.title_active is hue-distinct here, so no bar")
-  eq(usub(rows[3], 2, 2), " ", "and a pad row carries nothing at all")
+  eq(usub(rows[1], 5, 5), "~", "icon at icon_x")
+  eq(usub(rows[1], 7, 14), "dotfiles", "title at title_x1")
+  eq(usub(rows[4], 5, 5), "v", "the icon rides the centred title row")
+  eq(usub(rows[4], 3, 3), " ", "theme.title_active is hue-distinct here, so no bar")
+  eq(usub(rows[3], 3, 3), " ", "and a pad row carries nothing at all")
   local metaed = frame_rows(p1_view { opts = { separator = "gap", meta = "auto" } })
-  eq(usub(metaed[5], 6, 25), "~/p/wez-plugins     ", "meta at meta_x1, elided in the middle")
+  eq(usub(metaed[5], 7, 25), "~/p/wez-plugins    ", "meta at meta_x1, elided in the middle")
   local wide = frame_rows(p1_view { opts = { width = 40, separator = "gap" }, cols = 40 })
-  eq(usub(wide[1], 6, 13), "dotfiles", "title column does not move with width")
+  eq(usub(wide[1], 7, 14), "dotfiles", "title column does not move with width")
 end)
 
 test("P1 chamfer: the card's own first and last row, right side only", function()
@@ -839,15 +837,15 @@ test("P1 hits: one record per row across the whole card", function()
     eq(r.hits[row].kind, "tab", "row " .. row)
     eq(r.hits[row].id, 2)
     eq(r.hits[row].slot, 2)
-    eq(r.hits[row].x1, 2)
+    eq(r.hits[row].x1, 3)
     eq(r.hits[row].x2, 27)
   end
   eq(r.hits[3].part, "pad")
   eq(r.hits[4].part, "title")
   eq(r.hits[5].part, "pad")
-  eq(hit.in_card(r.hits[3], 1), false, "col 1 is page, not card")
+  eq(hit.in_card(r.hits[3], 2), false, "cols 1-2 are page, not card")
   eq(hit.in_card(r.hits[3], 28), false, "col 28 is the thumb channel")
-  eq(hit.in_card(r.hits[3], 2), true)
+  eq(hit.in_card(r.hits[3], 3), true)
   eq(hit.drop_slot(r.hits, 3, 10), 2, "a pad row drops at its own slot")
   eq(hit.drop_slot(r.hits, 4, 10), 2, "the title row too")
   eq(hit.drop_slot(r.hits, 9, 10), 4, "below the last card")
@@ -864,15 +862,15 @@ end)
 
 test("P1 ghost card: outlined, sticky, exactly cols wide idle and hovered", function()
   local idle, r = frame_rows(p1_view { opts = { separator = "gap" } })
-  eq(usub(idle[8], 2, 2), "╭")
+  eq(usub(idle[8], 3, 3), "╭")
   eq(usub(idle[8], 27, 27), "╮")
-  eq(usub(idle[9], 4, 4), "+")
-  eq(usub(idle[9], 6, 13), "New tab ", "label at title_x1")
-  eq(usub(idle[10], 2, 2), "╰")
+  eq(usub(idle[9], 5, 5), "+")
+  eq(usub(idle[9], 7, 14), "New tab ", "label at title_x1")
+  eq(usub(idle[10], 3, 3), "╰")
   eq(usub(idle[10], 27, 27), "╯")
   for row = 8, 10 do
     eq(r.hits[row].kind, "new_tab")
-    eq(r.hits[row].x1, 2)
+    eq(r.hits[row].x1, 3)
     eq(r.hits[row].x2, 27)
   end
   local hover = frame_rows(p1_view { hover = { x = 5, y = 9 }, opts = { separator = "gap" } })
@@ -904,9 +902,9 @@ test("item 7: the ghost card's hover is one border step and no inline band", fun
   for i = 0, 2 do
     eq(hover_rows[top + i], idle_rows[top + i], "hover redraws no glyph on ghost row " .. i)
   end
-  eq(usub(idle_rows[top], 2, 2), "╭", "and the corners stay closed")
+  eq(usub(idle_rows[top], 3, 3), "╭", "and the corners stay closed")
   eq(usub(idle_rows[top], 27, 27), "╮")
-  eq(usub(idle_rows[top + 2], 2, 2), "╰")
+  eq(usub(idle_rows[top + 2], 3, 3), "╰")
   eq(usub(idle_rows[top + 2], 27, 27), "╯")
   assert(idle.rows[top]:find(ansi.fg(v.theme.border_idle), 1, true), "the idle border is border_idle")
   assert(hovered.rows[top]:find(ansi.fg(v.theme.ghost_border_hover), 1, true), "hover takes the half step to hue")
@@ -1004,7 +1002,7 @@ end)
 
 test("P1 private window: header, inert hit, accent shift", function()
   local rows, r = frame_rows(p1_view { private = true, opts = { separator = "gap" } })
-  eq(usub(rows[1], 6, 12), "Private")
+  eq(usub(rows[1], 7, 13), "Private")
   eq(r.hits[1].kind, "space", "the header is inert")
   eq(r.hits[2].kind, "space")
   eq(r.hits[3].id, 1, "the list starts below it")
@@ -1041,7 +1039,7 @@ test("P1 rule separator goes through the glyph guard", function()
   local v = p1_view { opts = { separator = "rule" } }
   v.glyphs = glyphs.resolve(base, { treat_east_asian_ambiguous_width_as_wide = true })
   local rows = frame_rows(v)
-  eq(usub(rows[2], 2, 2), "-", "ascii rule when the box glyph is unsafe")
+  eq(usub(rows[2], 3, 3), "-", "ascii rule when the box glyph is unsafe")
   eq(util.width(rows[2]), 28)
 end)
 
@@ -1333,12 +1331,12 @@ test("P1 screenshots: icon weight, chamfer, toggle surface, dashed ghost", funct
       ghost_top = ghost_top or row
     end
   end
-  eq(usub(rows[ghost_top], 3, 4), "╌╌", "every cell between the corners is dashed")
+  eq(usub(rows[ghost_top], 4, 5), "╌╌", "every cell between the corners is dashed")
   eq(usub(rows[ghost_top], 25, 26), "╌╌", "at both ends")
-  eq(usub(rows[ghost_top], 5, 6), "╌╌", "and in between: the dash lives inside the glyph")
-  eq(usub(rows[ghost_top + 1], 2, 2), "╎", "the sides are dashed too")
+  eq(usub(rows[ghost_top], 6, 7), "╌╌", "and in between: the dash lives inside the glyph")
+  eq(usub(rows[ghost_top + 1], 3, 3), "╎", "the sides are dashed too")
   eq(usub(rows[ghost_top + 1], 27, 27), "╎")
-  eq(usub(rows[ghost_top + 2], 3, 4), "╌╌", "the bottom rail closes the same way")
+  eq(usub(rows[ghost_top + 2], 4, 5), "╌╌", "the bottom rail closes the same way")
   eq(usub(rows[ghost_top + 2], 25, 26), "╌╌")
   local over = render.render(p1_view { rows = 20, hover = { x = 5, y = 19 } })
   local over_rows = {}
@@ -1351,7 +1349,7 @@ test("P1 screenshots: icon weight, chamfer, toggle surface, dashed ghost", funct
       top = top or row
     end
   end
-  eq(usub(over_rows[top], 3, 4), "╌╌", "and the hovered ghost stays dashed")
+  eq(usub(over_rows[top], 4, 5), "╌╌", "and the hovered ghost stays dashed")
 end)
 
 local function popover_rect(over)
@@ -1739,7 +1737,7 @@ test("addendum 5: the bar is gated on hue distance from fg, not on contrast", fu
     local v = p1_view { opts = { separator = "gap" } }
     v.theme.title_active = title
     local rows = frame_rows(v)
-    return usub(rows[4], 2, 2), usub(rows[3], 2, 2)
+    return usub(rows[4], 3, 3), usub(rows[3], 3, 3)
   end
   local fg = p1_view({}).theme.fg
 
@@ -1774,7 +1772,7 @@ test("addendum 5: the three degenerate palettes keep the bar, Nord does not", fu
     v.theme = resolved
     v.theme.title_active = case[2] and resolved.fg or { resolved.fg[1] - 26, resolved.fg[2] - 26, resolved.fg[3] - 26 }
     local rows = frame_rows(v)
-    eq(usub(rows[4], 2, 2) == "▎", case[2], case[1] .. " bar")
+    eq(usub(rows[4], 3, 3) == "▎", case[2], case[1] .. " bar")
   end
 end)
 
@@ -1785,7 +1783,7 @@ test("addendum 5: no palette loses both discriminators", function()
     local v = p1_view { opts = { separator = "gap" } }
     v.theme = resolved
     local rows = frame_rows(v)
-    local bar = usub(rows[4], 2, 2) == "▎"
+    local bar = usub(rows[4], 3, 3) == "▎"
     local title = resolved.title_active or resolved.fg
     local delta = 0
     for i = 1, 3 do
@@ -1800,7 +1798,7 @@ test("addendum 5: the active tab's dot comes from has_unseen, not from being act
   quiet[2].has_unseen = false
   local v = p1_view { items = quiet, opts = { separator = "gap" } }
   v.theme.title_active = { 137, 180, 250 }
-  eq(usub(frame_rows(v)[4], 2, 2), " ", "an active tab with nothing unseen keeps a blank gutter")
+  eq(usub(frame_rows(v)[4], 3, 3), " ", "an active tab with nothing unseen keeps a blank gutter")
 end)
 
 test("addendum 5: an active tab with unseen output shows the dot once the bar is gone", function()
@@ -1809,7 +1807,7 @@ test("addendum 5: an active tab with unseen output shows the dot once the bar is
   local v = p1_view { items = unseen_items, opts = { separator = "gap" } }
   v.theme.title_active = { 137, 180, 250 }
   local rows = frame_rows(v)
-  eq(usub(rows[4], 2, 2), "•", "the freed gutter finally reaches an active tab")
+  eq(usub(rows[4], 3, 3), "•", "the freed gutter finally reaches an active tab")
 end)
 
 test("addendum 6: tab_height = tall pads the card instead of adding an icon row", function()
@@ -1829,7 +1827,7 @@ test("addendum 6: tab_height = tall pads the card instead of adding an icon row"
   eq(r.hits[first + 3].part, "pad")
   eq(r.hits[first + 4].part, "pad")
   eq(r.hits[first + 2].slot, r.hits[first].slot, "all five rows are one card")
-  eq(usub(rows[first + 2], 4, 4), "v", "and the icon rides the title, not a row of its own")
+  eq(usub(rows[first + 2], 5, 5), "v", "and the icon rides the title, not a row of its own")
   eq(layout.icon_row(5), 3, "which is where icon_row points")
   for row = 1, v.rows do
     eq(util.width(rows[row]), 28, "tall row " .. row)
@@ -1862,7 +1860,7 @@ test("addendum 2 A3a/A4a: the content block is centred at every tab_height, with
     eq(count, case.rows, label .. ": rows per card")
     eq(title - first + 1, case.title, label .. ": the title row is the middle of the block")
     eq(layout.icon_row(case.rows), case.title, label .. ": icon_row agrees")
-    eq(usub(painted[title], 4, 4), "v", label .. ": the icon rides the title")
+    eq(usub(painted[title], 5, 5), "v", label .. ": the icon rides the title")
     if case.meta == false then
       for _, item in ipairs(v.items) do
         for row = first, first + count - 1 do
@@ -1883,7 +1881,7 @@ test("addendum 2 A3c: show_index rides the title when there is no meta line", fu
       title = title or row
     end
   end
-  eq(usub(rows[title], 6, 14), "3  claude", "the index is inline with the title")
+  eq(usub(rows[title], 7, 15), "3  claude", "the index is inline with the title")
   local metaed, mr = frame_rows(p1_view { rows = 20, opts = { separator = "gap", show_index = true, meta = "auto" } })
   local meta_row
   for row = 1, 20 do
@@ -1892,8 +1890,8 @@ test("addendum 2 A3c: show_index rides the title when there is no meta line", fu
       meta_row = meta_row or row
     end
   end
-  eq(usub(metaed[meta_row - 1], 6, 11), "claude", "with a meta line the title keeps its own row")
-  assert(usub(metaed[meta_row], 6, 8):find "3", "and the index goes back to the meta line")
+  eq(usub(metaed[meta_row - 1], 7, 12), "claude", "with a meta line the title keeps its own row")
+  assert(usub(metaed[meta_row], 7, 9):find "3", "and the index goes back to the meta line")
 end)
 
 test("addendum 2 A4c: the close glyph is the Material one and still measures one cell", function()
@@ -1972,7 +1970,7 @@ test("addendum: the ghost card closes at every width and on both rails", functio
       end
     end
     assert(top, cols .. " cols has a ghost card")
-    local x1, x2 = 2, cols - 1
+    local x1, x2 = 3, cols - 1
     for _, row in ipairs { top, top + 2 } do
       local line = rows[row]
       eq(usub(line, x1, x1), row == top and "╭" or "╰", cols .. " cols: corner")
@@ -1981,6 +1979,26 @@ test("addendum: the ghost card closes at every width and on both rails", functio
       assert(usub(line, x2 - 1, x2 - 1) ~= " ", cols .. " cols: gap beside the right corner on row " .. row)
     end
     eq(util.width(rows[top]), cols)
+  end
+  -- the rail grid leaves title_x1 nil, which the ghost label used to index blind
+  for _, cols in ipairs { 3, 5, 7, 9, 12 } do
+    local v = p1_view { rows = 18, cols = cols, opts = { separator = "gap", width = math.max(cols, 8) } }
+    v.rail = true
+    local rows, r = frame_rows(v)
+    local top
+    for row = 1, v.rows do
+      if r.hits[row] and r.hits[row].kind == "new_tab" then
+        top = top or row
+      end
+    end
+    assert(top, cols .. "-col rail has a ghost")
+    local mid = math.ceil(cols / 2)
+    eq(usub(rows[top], 1, 1), "╭", cols .. "-col rail: the ghost is the same card")
+    eq(usub(rows[top], cols, cols), "╮")
+    eq(usub(rows[top + 1], mid, mid), "+", "with the + centred")
+    for row = 1, v.rows do
+      eq(util.width(rows[row]), cols, cols .. "-col rail row " .. row)
+    end
   end
 end)
 
@@ -2010,10 +2028,10 @@ test("layout: the grid, plan and scroll are pure and inspectable", function()
   local layout = require "vtabs.layout"
   local v = p1_view { rows = 20, opts = { separator = "gap" } }
   local l = layout.plan(v)
-  eq(l.grid.card_x1, 2)
+  eq(l.grid.card_x1, 3)
   eq(l.grid.card_x2, 27)
-  eq(l.grid.icon_x, 4)
-  eq(l.grid.title_x1, 6)
+  eq(l.grid.icon_x, 5)
+  eq(l.grid.title_x1, 7)
   eq(l.rail, false)
   eq(l.strip_rows, v.strip.rows)
   eq(l.plan[1].kind, "tab", "the pinned entry leads the plan")
