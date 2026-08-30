@@ -19,6 +19,27 @@ luacheck init.lua vtabs tests
 stylua --check init.lua vtabs tests
 ```
 
+## Options
+
+`plugin/vtabs/schema.lua` is the single source of truth: `config.defaults`, validation and the
+options table in `configuration.md` all derive from it.
+
+```sh
+just docs                       # regenerate the options table
+lua scripts/gen-docs.lua --check  # fail when it is stale (run by `just lint`)
+```
+
+| descriptor field | meaning |
+| ---------------- | -------- |
+| `key` | dotted path, e.g. `padding.top`, `backend.repo` |
+| `type` | `number` `string` `boolean` `enum` `table` `function` `any` |
+| `default` | omitted when the option has none |
+| `enum` `min` `max` | validation; `alias` maps values users already write onto the canonical one |
+| `container` `open` | `open` containers (`theme`, `icon_map`, `keys`, `private.env`) do not enumerate their children |
+| `docs` | `false` hides the row from the generated table |
+| `shown` | overrides the rendered default cell, backticks included |
+| `label` `group` `help` | settings UI and docs text |
+
 ## End-to-end
 
 ```sh

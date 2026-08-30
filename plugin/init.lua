@@ -197,6 +197,7 @@ local MODULES = {
   "model",
   "platform",
   "render",
+  "schema",
   "sidebar",
   "state",
   "theme",

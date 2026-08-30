@@ -20,6 +20,11 @@ test:
 lint:
     cd backend && cargo fmt --check && cargo clippy --all-targets --locked -- -D warnings
     cd plugin && luacheck init.lua vtabs tests && stylua --check init.lua vtabs tests
+    lua scripts/gen-docs.lua --check
+
+# Regenerate the options table in docs/configuration.md from plugin/vtabs/schema.lua
+docs:
+    lua scripts/gen-docs.lua
 
 e2e mode="local": build
     sh plugin/tests/e2e.sh {{mode}}
