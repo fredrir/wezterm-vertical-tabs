@@ -22,7 +22,7 @@ local page = require "vtabs.page"
 local test, eq, usub, row_text, rgb = H.test, H.eq, H.usub, H.row_text, H.rgb
 local hex, page_rows, dump_lines, legacy, p1_view = H.hex, H.page_rows, H.dump_lines, H.legacy, H.p1_view
 local page_view, attach_all, mark_ready, window, RETINA = H.page_view, H.attach_all, H.mark_ready, H.window, H.RETINA
-local here = H.here
+local here, mouse = H.here, H.mouse
 
 test("P3 A1: the settings page carries the marker and is never taken for a sidebar", function()
   local settings = require "vtabs.settings"
@@ -124,6 +124,39 @@ test("P3 A2c: every trigger reaches actions.open_settings, and only one place sp
   popover.open(gui, win.tab_list[1]:tab_id(), 1)
   popover.run(gui, "settings")
   eq(calls, 3, "and the popover item")
+
+  -- The strip paints a ⚙ by default, so clicking it has to reach the page like everything else.
+  local sb = sidebar.find(win.tab_list[1])
+  local function click_settings()
+    view_mod.sync(gui, { force = true })
+    for y, h in pairs(state.session.hits[sb:pane_id()] or {}) do
+      for _, span in ipairs(h.spans or {}) do
+        if span.id == "settings" then
+          mouse(gui, sb, "down", "left", span.x1, y)
+          return true
+        end
+      end
+    end
+    return false
+  end
+  assert(click_settings(), "the strip paints a settings button by default")
+  eq(calls, 4, "and the strip button")
+
+  -- A hook is what points it somewhere else; the built-in is only the default destination.
+  local hooked = 0
+  config.setup {
+    meta = "auto",
+    backend = { path = "/bin/wez-vtabs" },
+    hooks = {
+      settings = function()
+        hooked = hooked + 1
+      end,
+    },
+  }
+  assert(click_settings(), "still painted with a hook set")
+  eq(hooked, 1, "the hook ran")
+  eq(calls, 4, "and the page was not opened behind it")
+
   settings.open = original
   config.setup(legacy { backend = { path = "/bin/wez-vtabs" } })
 end)

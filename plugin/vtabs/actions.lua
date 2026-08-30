@@ -547,53 +547,142 @@ local function on_current_tab(fn)
   end)
 end
 
-M.action = {
-  toggle_sidebar = callback(M.toggle_sidebar),
-  focus_sidebar = callback(M.focus_sidebar),
-  new_tab = callback(function(window)
-    M.new_tab(window)
-  end),
-  close_tab = on_current_tab(function(window, id)
-    M.request_close(window, id, nil, nil, true)
-  end),
-  reopen_closed = callback(M.reopen_closed),
-  open_settings = callback(M.open_settings),
-  pin_tab = on_current_tab(M.toggle_pin),
-  private_window = callback(function(window)
-    M.new_window(window, true)
-  end),
-  new_window = callback(function(window)
-    M.new_window(window, false)
-  end),
-  tear_off = on_current_tab(M.tear_off),
-  rename_tab = on_current_tab(M.rename_tab),
-  next_tab = callback(function(window)
-    M.activate_relative(window, 1)
-  end),
-  prev_tab = callback(function(window)
-    M.activate_relative(window, -1)
-  end),
-  move_tab_up = callback(function(window)
-    M.move_relative(window, -1)
-  end),
-  move_tab_down = callback(function(window)
-    M.move_relative(window, 1)
-  end),
-  activate_tab = function(index)
-    return callback(function(window)
-      M.activate_index(window, index)
-    end)
-  end,
-  activate_pane_direction = function(direction)
-    return callback(function(window)
-      M.activate_pane_direction(window, direction)
-    end)
-  end,
-  split = function(direction)
-    return callback(function(window)
-      M.split(window, direction)
-    end)
-  end,
+---One row per named behaviour, and the only place a name becomes one. `run(window, tab_id)` is the
+---whole contract; `needs = "tab"` means a caller holding no tab resolves the current one first.
+---Everything that dispatches by name reads this table -- the key bindings, the strip buttons and the
+---popover items -- so a name cannot mean one thing in one of them and nothing in another, which is
+---how the strip's ⚙ came to be painted by default and do nothing when clicked.
+M.dispatch = {
+  toggle_sidebar = { run = M.toggle_sidebar, label = "Toggle sidebar" },
+  focus_sidebar = { run = M.focus_sidebar, label = "Focus sidebar" },
+  new_tab = {
+    run = function(window)
+      M.new_tab(window)
+    end,
+    label = "New tab",
+  },
+  new_window = {
+    run = function(window)
+      M.new_window(window, false)
+    end,
+    label = "New window",
+  },
+  private_window = {
+    run = function(window)
+      M.new_window(window, true)
+    end,
+    label = "New private window",
+  },
+  reopen_closed = { run = M.reopen_closed, label = "Reopen closed tab" },
+  open_settings = { run = M.open_settings, label = "Settings…" },
+  next_tab = {
+    run = function(window)
+      M.activate_relative(window, 1)
+    end,
+    label = "Next tab",
+  },
+  prev_tab = {
+    run = function(window)
+      M.activate_relative(window, -1)
+    end,
+    label = "Previous tab",
+  },
+  move_tab_up = {
+    run = function(window)
+      M.move_relative(window, -1)
+    end,
+    label = "Move tab up",
+  },
+  move_tab_down = {
+    run = function(window)
+      M.move_relative(window, 1)
+    end,
+    label = "Move tab down",
+  },
+  activate_tab = { run = M.activate_tab, needs = "tab", label = "Switch to tab" },
+  pin_tab = { run = M.toggle_pin, needs = "tab", label = "Pin tab" },
+  tear_off = { run = M.tear_off, needs = "tab", label = "Move to new window" },
+  rename_tab = { run = M.rename_tab, needs = "tab", label = "Rename…" },
+  close_tab = {
+    run = function(window, id)
+      M.request_close(window, id, nil, nil, true)
+    end,
+    needs = "tab",
+    label = "Close tab",
+  },
+  -- `_now` skips the confirmation its caller has already resolved; `close_tab` is the one that asks.
+  -- `internal` keeps them off the key-binding surface: only a caller that already asked may use them.
+  close_tab_now = { run = M.close_tab, needs = "tab", label = "Close tab", internal = true },
+  close_others_now = { run = M.close_others, needs = "tab", label = "Close other tabs", internal = true },
 }
+
+---Names the user may write that are not the behaviour's own: `settings` is what the strip button and
+---the key binding are called.
+local ALIASES = { settings = "open_settings", toggle = "toggle_sidebar" }
+
+---The behaviour name a user-facing name stands for.
+function M.canonical(name)
+  return ALIASES[name] or name
+end
+
+---The dispatch row for a name, or nil when nothing answers to it.
+function M.resolve(name)
+  if type(name) ~= "string" then
+    return nil
+  end
+  return M.dispatch[ALIASES[name] or name]
+end
+
+---Runs a named behaviour. `tab_id` is optional: a row that needs one and is not given one takes the
+---window's current tab, and does nothing when there is none.
+function M.run(name, window, tab_id)
+  local row = M.resolve(name)
+  if not row then
+    return false
+  end
+  if row.needs ~= "tab" then
+    row.run(window)
+    return true
+  end
+  local id = tab_id or current_tab_id(window)
+  if not id then
+    return false
+  end
+  row.run(window, id)
+  return true
+end
+
+---The strip's buttons, in default order. `hooked` marks the ones a hook may point elsewhere, and an
+---id with no `action` has no built-in behaviour at all, so it is only drawn when a hook answers it.
+M.strip = {
+  { id = "toggle", action = "toggle_sidebar", default = true },
+  { id = "new_tab", action = "new_tab", default = true },
+  { id = "settings", action = "open_settings", default = true, hooked = true },
+  { id = "search", hooked = true },
+}
+
+M.action = {}
+for name, row in pairs(M.dispatch) do
+  if not row.internal then
+    M.action[name] = row.needs == "tab" and on_current_tab(row.run) or callback(row.run)
+  end
+end
+
+-- Parametrised: a name plus an argument, so they are factories rather than behaviours to dispatch.
+M.action.activate_tab = function(index)
+  return callback(function(window)
+    M.activate_index(window, index)
+  end)
+end
+M.action.activate_pane_direction = function(direction)
+  return callback(function(window)
+    M.activate_pane_direction(window, direction)
+  end)
+end
+M.action.split = function(direction)
+  return callback(function(window)
+    M.split(window, direction)
+  end)
+end
 
 return M

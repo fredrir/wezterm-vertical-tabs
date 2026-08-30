@@ -30,14 +30,14 @@ local DROP = { meta = 1, cwd = 2, title_extra = 3, separator = 4, title = 5 }
 
 local ITEMS = {
   { id = "activate", label = "Switch to tab", action = "activate_tab" },
-  { id = "pin", label = "Pin tab", action = "toggle_pin", key = "pin_tab" },
+  { id = "pin", label = "Pin tab", action = "pin_tab", key = "pin_tab" },
   { id = "rename", label = "Rename…", level = "rename" },
   { id = "space", label = "Move to space", hint = "▸", disabled = true },
   { id = "tear_off", label = "Move to new window", action = "tear_off" },
   { id = "duplicate", label = "Duplicate tab" },
   { id = "settings", label = "Settings…", action = "open_settings", key = "settings" },
-  { id = "close_others", label = "Close other tabs", action = "close_others", confirm = "close_others" },
-  { id = "close", label = "Close tab", action = "close_tab", key = "close_tab", confirm = "close" },
+  { id = "close_others", label = "Close other tabs", action = "close_others_now", confirm = "close_others" },
+  { id = "close", label = "Close tab", action = "close_tab_now", key = "close_tab", confirm = "close" },
 }
 
 -- Cancel is second so the confirm level can select it and a stray Enter does nothing.
@@ -429,7 +429,7 @@ function M.run(gui_window, id)
     end
     local kind = pop.confirm
     M.close(gui_window)
-    actions[kind == "close_others" and "close_others" or "close_tab"](gui_window, tab_id)
+    actions.run(kind == "close_others" and "close_others_now" or "close_tab_now", gui_window, tab_id)
     return true
   end
   for _, entry in ipairs(M.items(gui_window, tab_id)) do
@@ -455,7 +455,7 @@ function M.run(gui_window, id)
           domain = meta.domain and { DomainName = meta.domain } or nil,
         })
       elseif entry.action then
-        actions[entry.action](gui_window, tab_id)
+        actions.run(entry.action, gui_window, tab_id)
       end
       return true
     end

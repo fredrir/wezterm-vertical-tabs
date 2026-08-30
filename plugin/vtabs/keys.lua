@@ -37,8 +37,8 @@ function M.defaults()
   return keys
 end
 
+-- Second default chords for a behaviour; the behaviour's own renames live in `actions.canonical`.
 local ALIASES = {
-  settings = "open_settings",
   private_window_alt = "private_window",
   next_tab_alt = "next_tab",
   prev_tab_alt = "prev_tab",
@@ -55,7 +55,7 @@ local function action_for(name)
   if n then
     return actions.action.activate_tab(tonumber(n) - 1)
   end
-  local action = actions.action[name]
+  local action = actions.action[actions.canonical(name)]
   return type(action) == "table" and action or nil
 end
 
