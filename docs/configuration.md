@@ -101,8 +101,17 @@ move_tab_down activate_tab(index) activate_pane_direction(dir)`.
 `focus_sidebar` moves focus into the sidebar: `j`/`k`/arrows/`Tab`/`Shift+Tab`
 move, `g`/`G`/`Home`/`End` jump, `1`–`9` switch directly, `Enter`/`Space`
 switch, `x`/`d`/`Delete` close, `p` pin, `n` new tab, `r` rename, `m` menu,
-`J`/`K` reorder, `Esc`/`q`/`Ctrl+C` leave. Any other key while the sidebar
-is not in keyboard mode returns focus to the content pane.
+`J`/`K` reorder, `Esc`/`q`/`Ctrl+C` leave.
+
+Keys that reach the sidebar while it is *not* in keyboard mode are forwarded to
+the tab's content pane, which then takes focus back.
+
+| guard                | value                                                                 |
+| -------------------- | ---------------------------------------------------------------------- |
+| source               | a sidebar pane this process authenticated, in the window's active tab   |
+| target               | that same tab's content pane, same domain, not an overlay              |
+| payload              | one key press, <= 16 bytes, no OSC/DCS/APC introducer, no bracketed paste |
+| rate                 | one forward per source pane per 50 ms                                  |
 
 ## Mouse
 

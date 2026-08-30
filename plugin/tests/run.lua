@@ -813,6 +813,82 @@ test("mouse move repaints on a row change and stays quiet inside the row", funct
   eq(#sb1.sent, repainted, "same row, same spans, no frame")
 end)
 
+test("base64_decode round-trips and refuses malformed input", function()
+  eq(util.base64_decode "bA==", "l")
+  eq(util.base64_decode "G1tB", "\27[A")
+  eq(util.base64_decode "", "")
+  eq(util.base64_decode "bA", "l")
+  eq(util.base64_decode "b*==", nil)
+  eq(util.base64_decode "b", nil)
+  eq(util.base64_decode(nil), nil)
+end)
+
+local function key_setup(index)
+  local win, gui = drag_setup()
+  win.active_tab_ref = win.tab_list[index or 1]
+  local tab = win.active_tab_ref
+  return win, gui, tab, sidebar.find(tab), sidebar.content_pane(tab)
+end
+
+test("a key at a sidebar outside keyboard mode is typed into the content pane, which takes focus", function()
+  local _, gui, tab, sb, content = key_setup()
+  sb:activate()
+  local before = #content.sent
+  input.handle(gui, sb, "vtabs", '{"t":"key","key":"l","raw":"bA=="}')
+  eq(#content.sent, before + 1)
+  eq(content.sent[#content.sent], "l")
+  eq(tab.active, content, "focus handed back to the shell")
+end)
+
+test("raw carrying an OSC or bracketed-paste introducer is dropped, focus still returns", function()
+  local _, gui, tab, sb, content = key_setup(2)
+  local before = #content.sent
+  input.handle(gui, sb, "vtabs", '{"t":"key","key":"x","raw":"G10wOyE="}')
+  eq(#content.sent, before, "OSC introducer never reaches the shell")
+  eq(tab.active, content)
+  local _, gui2, _, sb2, content2 = key_setup(3)
+  input.handle(gui2, sb2, "vtabs", '{"t":"key","key":"x","raw":"G1syMDB+eA=="}')
+  eq(#content2.sent, 0, "bracketed paste never reaches the shell")
+end)
+
+test("a burst from one sidebar pane is rate-limited to one forward", function()
+  local _, gui, _, sb, content = key_setup()
+  input.handle(gui, sb, "vtabs", '{"t":"key","key":"a","raw":"YQ=="}')
+  eq(content.sent[#content.sent], "a")
+  local n = #content.sent
+  input.handle(gui, sb, "vtabs", '{"t":"key","key":"b","raw":"Yg=="}')
+  eq(#content.sent, n, "second key in the same window dropped")
+end)
+
+test("without raw only a lone printable key is forwarded", function()
+  local _, gui, tab, sb, content = key_setup()
+  input.handle(gui, sb, "vtabs", '{"t":"key","key":"enter"}')
+  eq(#content.sent, 0, "named keys send nothing")
+  eq(tab.active, content)
+  local _, gui2, _, sb2, content2 = key_setup(2)
+  input.handle(gui2, sb2, "vtabs", '{"t":"key","key":"c","mods":["ctrl"]}')
+  eq(#content2.sent, 0, "ctrl chords send nothing")
+  local _, gui3, _, sb3, content3 = key_setup(3)
+  input.handle(gui3, sb3, "vtabs", '{"t":"key","key":"z"}')
+  eq(content3.sent[1], "z")
+end)
+
+test("a key from a background tab's sidebar is never forwarded", function()
+  local win, gui = drag_setup()
+  win.active_tab_ref = win.tab_list[1]
+  local other = win.tab_list[2]
+  local content = sidebar.content_pane(other)
+  input.handle(gui, sidebar.find(other), "vtabs", '{"t":"key","key":"l","raw":"bA=="}')
+  eq(#content.sent, 0)
+end)
+
+test("a key from a sidebar in another domain than its content pane is dropped", function()
+  local _, gui, _, sb, content = key_setup()
+  sb.domain = "desktop"
+  input.handle(gui, sb, "vtabs", '{"t":"key","key":"l","raw":"bA=="}')
+  eq(#content.sent, 0)
+end)
+
 os.remove(state.file)
 print(string.format("%d passed, %d failed", passed, failed))
 os.exit(failed == 0 and 0 or 1)

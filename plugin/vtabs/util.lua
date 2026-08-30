@@ -161,6 +161,33 @@ function M.warn_once(key, fmt, ...)
   M.warn(fmt, ...)
 end
 
+local B64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+local B64_VALUE = {}
+for i = 1, #B64 do
+  B64_VALUE[B64:sub(i, i)] = i - 1
+end
+
+---Decodes standard base64 (padding optional); nil for anything malformed. WezTerm has no Lua helper.
+function M.base64_decode(s)
+  if type(s) ~= "string" or not s:match "^[A-Za-z0-9+/]*=?=?$" then
+    return nil
+  end
+  local body = (s:gsub("=+$", ""))
+  if #body % 4 == 1 then
+    return nil
+  end
+  local out, acc, bits = {}, 0, 0
+  for i = 1, #body do
+    acc = acc * 64 + B64_VALUE[body:sub(i, i)]
+    bits = bits + 6
+    if bits >= 8 then
+      bits = bits - 8
+      out[#out + 1] = string.char((acc >> bits) & 0xff)
+    end
+  end
+  return table.concat(out)
+end
+
 function M.random_token()
   local seed = os.time() + math.floor(os.clock() * 1000000) + M.now_ms()
   math.randomseed(seed)

@@ -207,10 +207,87 @@ local KEYS = {
 }
 KEYS.space, KEYS.d, KEYS.delete = KEYS.enter, KEYS.x, KEYS.x
 
-function M.key(gui_window, ev)
+local FORWARD_MAX_RAW = 64
+local FORWARD_MAX_BYTES = 16
+local FORWARD_MIN_GAP_MS = 50
+local FORWARD_TTL_MS = 60000
+local forwarded_at = {}
+
+---Bytes worth typing at a shell: one key press, no OSC/DCS/APC introducer, no bracketed paste.
+local function safe_bytes(text)
+  if not text or text == "" or #text > FORWARD_MAX_BYTES then
+    return nil
+  end
+  if text:find "\27[%]PX%^_]" or text:find("\27[200~", 1, true) or text:find("\27[201~", 1, true) then
+    return nil
+  end
+  return text
+end
+
+local function decoded_key(ev)
+  if type(ev.raw) == "string" then
+    return #ev.raw <= FORWARD_MAX_RAW and util.base64_decode(ev.raw) or nil
+  end
+  local key = ev.key
+  if type(key) ~= "string" or utf8.len(key) ~= 1 then
+    return nil
+  end
+  if util.contains(ev.mods, "ctrl") or util.contains(ev.mods, "alt") then
+    return nil
+  end
+  local code = utf8.codepoint(key)
+  return code >= 32 and code ~= 127 and key or nil
+end
+
+---A key at a sidebar that is not in keyboard mode is the user typing at their shell: hand it over.
+local function forward_key(gui_window, pane, ev, cfg)
+  local wid = gui_window:window_id()
+  local pid = pane:pane_id()
+  local tab = util.try(function()
+    return pane:tab()
+  end)
+  local active = util.active_tab(gui_window)
+  if not sidebar.is_ready(pane) or not tab or not active or tab:tab_id() ~= active:tab_id() then
+    return
+  end
+  if cfg.hover == "press" and not session.drag[wid] then
+    return
+  end
+  local now = util.now_ms()
+  if now - (forwarded_at[pid] or 0) < FORWARD_MIN_GAP_MS then
+    if cfg.debug then
+      util.log("key forward rate-limited on pane %d", pid)
+    end
+    return
+  end
+  local content = sidebar.content_pane(tab)
+  if not content or content:pane_id() == pid or sidebar.is_sidebar(content) or sidebar.is_overlay(content) then
+    return
+  end
+  local domain = util.try(function()
+    return pane:get_domain_name()
+  end)
+  if domain == nil or domain ~= util.try(function()
+    return content:get_domain_name()
+  end) then
+    return
+  end
+  forwarded_at[pid] = now
+  local text = safe_bytes(decoded_key(ev))
+  if text and not pcall(function()
+    content:send_text(text)
+  end) then
+    return
+  end
+  content:activate()
+  state.set_focus(wid, false)
+end
+
+function M.key(gui_window, pane, ev)
   local wid = gui_window:window_id()
   if not state.has_focus(wid) then
-    blur(gui_window)
+    forward_key(gui_window, pane, ev, config.get())
+    view.sync(gui_window)
     return
   end
   local items = model.ordered(model.build(gui_window))
@@ -268,7 +345,7 @@ function M.handle(gui_window, pane, name, value)
   elseif ev.t == "mouse" then
     M.mouse(gui_window, pane, ev)
   elseif ev.t == "key" then
-    M.key(gui_window, ev)
+    M.key(gui_window, pane, ev)
   end
 end
 
@@ -290,6 +367,11 @@ function M.tick(gui_window)
   end
   if pending_menu[wid] and now - pending_menu[wid].at > DRAG_TIMEOUT_MS then
     pending_menu[wid] = nil
+  end
+  for pid, at in pairs(forwarded_at) do
+    if now - at > FORWARD_TTL_MS then
+      forwarded_at[pid] = nil
+    end
   end
   local active = util.active_tab(gui_window)
   local active_id = active and active:tab_id() or nil
