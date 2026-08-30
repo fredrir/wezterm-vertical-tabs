@@ -123,11 +123,13 @@ test("a sidebar split sideways is rescued too, not just one split below it", fun
   local tab = win.tab_list[1]
   local sb = mark_ready(tab)
   local content = sidebar.content_pane(tab)
-  -- A Left/Right split halves the sidebar's own node, so the intruder starts where the sidebar now
-  -- ends and reaches past it: it never fitted inside the sidebar's box, and was missed.
+  -- A Left/Right split halves the sidebar's own node and puts a divider between the halves, so a
+  -- 28-column sidebar becomes 13 with the intruder at 14. Observed from wezterm, not derived: the
+  -- sidebar's own edge is then 13, *left* of the pane that just landed beside it, so any test
+  -- against the observed edge misses the one split shape that most needs rescuing.
   local stuck = fake.pane(tab, { cols = 14 })
   tab.pane_list[#tab.pane_list + 1] = stuck
-  sb.left, sb.width = 0, 14
+  sb.left, sb.width = 0, 13
   stuck.left, stuck.width = 14, 14
   content.left, content.width = 29, content.cols
   local calls = with_cli(function()
@@ -138,7 +140,7 @@ test("a sidebar split sideways is rescued too, not just one split below it", fun
 
   -- Mirrored: with the sidebar on the right, the intruder ends where the sidebar begins.
   config.setup { meta = "auto", position = "right", backend = { path = "/bin/wez-vtabs" } }
-  sb.left, sb.width = 66, 14
+  sb.left, sb.width = 67, 13
   stuck.left, stuck.width = 52, 14
   content.left, content.width = 0, 51
   calls = with_cli(function()
