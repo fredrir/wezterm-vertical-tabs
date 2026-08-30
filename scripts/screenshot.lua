@@ -15,8 +15,9 @@ config.window_decorations = "RESIZE"
 config.color_scheme = os.getenv "VTABS_SHOT_SCHEME" or "Catppuccin Mocha"
 config.font = wezterm.font "JetBrainsMono Nerd Font"
 config.font_size = 12
--- Zero padding makes the sidebar exactly `width / initial_cols` of the window, so the crop is exact.
-config.window_padding = { left = 0, right = 0, top = 0, bottom = 0 }
+-- `window_padding` is left unset on purpose: zeroing it here would hide whatever the plugin does
+-- with it, and edge-to-edge is exactly what the shots are meant to show. The `padded` variant sets
+-- it, so the pair proves the plugin leaves a user's own padding alone.
 
 -- Only the sandbox plumbing; everything a user could tune is left at its default.
 local opts = { backend = { path = os.getenv "VTABS_BIN", build = false } }
@@ -31,13 +32,38 @@ local VARIANTS = {
   rail = { collapsed = "rail" },
   tooltip = { hover = "follow", tooltip = true, tooltip_delay_ms = 3000 },
   anim = { animations = true, animation = { expand_ms = 600, collapse_ms = 600 } },
+  padded = base,
+  macos = { titlebar = "integrate" },
+  ["macos-rail"] = { titlebar = "integrate", collapsed = "rail" },
 }
 local variant = os.getenv "VTABS_SHOT_OPTS" or "default"
+if variant == "padded" then
+  config.window_padding = { left = 12, right = 12, top = 8, bottom = 8 }
+end
 for _, layer in ipairs { variant ~= "zeroconfig" and base or {}, VARIANTS[variant] or {} } do
   for k, v in pairs(layer) do
     opts[k] = v
   end
 end
+
+-- The traffic-light reserve is keyed off the target triple, so shooting it anywhere else means
+-- lying to `platform` about the platform. Only the reserve is faked; nothing else is patched.
+-- `integrated_title_button_style = "MacOsNative"` is rejected off macOS, so the two facts
+-- `chrome_for` reads from the effective config are forced at the one place that consumes them.
+if variant:find "^macos" then
+  local platform = require "vtabs.platform"
+  platform.is_mac = true
+  local real = platform.strip_geometry
+  platform.strip_geometry = function(dims, opts)
+    opts = opts or {}
+    opts.is_mac = true
+    opts.integrated_buttons = true
+    opts.native_button_style = true
+    return real(dims, opts)
+  end
+  config.window_decorations = "INTEGRATED_BUTTONS|RESIZE"
+end
+
 vtabs.apply_to_config(config, opts)
 
 local probes = {
