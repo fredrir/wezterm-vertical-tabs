@@ -12,3 +12,9 @@ serde_json = "1.0.151"
 [[bin]]
 name = "wez-vtabs"
 path = "src/main.rs"
+
+[profile.release]
+opt-level     = "z"
+lto           = "fat"
+codegen-units = 1
+strip         = true
