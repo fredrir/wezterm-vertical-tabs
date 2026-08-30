@@ -994,6 +994,18 @@ mod tests {
     }
 
     #[test]
+    fn a_stalled_anim_line_discards_like_a_frame() {
+        let mut p = Parser::new();
+        assert!(
+            p.feed(b"{\"t\":\"anim\",\"id\":1,\"data\":\"\x1b[3;1Hab")
+                .is_empty()
+        );
+        assert!(flush_until_stalled(&mut p).is_empty());
+        assert!(p.feed(b"c\x1b[4;1Hd\"}\n").is_empty());
+        assert_eq!(feed_into(&mut p, b"x"), vec![plain("x")]);
+    }
+
+    #[test]
     fn an_oversized_paste_of_keys_is_not_a_command_line() {
         let mut p = Parser::new();
         let big = vec![b'x'; MAX_LINE + 2];

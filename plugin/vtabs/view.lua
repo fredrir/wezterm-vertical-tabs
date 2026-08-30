@@ -217,7 +217,8 @@ function M.sync(gui_window, opts)
       local dims = due and dims_of(sb) or nil
       if dims then
         local strip = strip_for(gui_window, cfg, dims)
-        local result = render.render {
+        -- a title or cwd that breaks one render must not stop the other sidebars in this window
+        local ok, result = pcall(render.render, {
           cols = dims.cols,
           rows = dims.viewport_rows,
           strip = strip,
@@ -232,16 +233,22 @@ function M.sync(gui_window, opts)
           ensure_visible = not session.user_scrolled[wid] and active_tab_id or nil,
           focus_index = is_active and focus_index or nil,
           footer = footer,
-        }
-        if is_active then
+        })
+        if not ok then
+          util.warn_once("render-failed", "sidebar render failed: %s", tostring(result):match "^[^\n]*")
+          result = nil
+        end
+        if result and is_active then
           session.scroll[wid] = result.scroll
         end
-        session.hits[pid] = result.hits
-        session.dims[pid] = { cols = dims.cols, rows = dims.viewport_rows }
-        local payload = M.payload_for(pid, result, dims, opts.force)
-        if payload and sidebar.send(sb, { t = "frame", data = payload }) then
-          session.frames[pid] = { cols = dims.cols, rows = dims.viewport_rows, text = result.rows, n = result.rows_n }
-          session.sent_at[pid] = now
+        if result then
+          session.hits[pid] = result.hits
+          session.dims[pid] = { cols = dims.cols, rows = dims.viewport_rows }
+          local payload = M.payload_for(pid, result, dims, opts.force)
+          if payload and sidebar.send(sb, { t = "frame", data = payload }) then
+            session.frames[pid] = { cols = dims.cols, rows = dims.viewport_rows, text = result.rows, n = result.rows_n }
+            session.sent_at[pid] = now
+          end
         end
       end
     end

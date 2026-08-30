@@ -1,5 +1,7 @@
 use std::io::{self, Write};
+use std::time::Instant;
 
+use crate::anim;
 use crate::command::Command;
 use crate::event::Event;
 use crate::log::Logger;
@@ -15,6 +17,7 @@ pub struct App<W: Write> {
     pub log: Logger,
     pub var: String,
     pub size: (u16, u16),
+    pub anim: Option<anim::Run>,
 }
 
 impl<W: Write> App<W> {
@@ -49,13 +52,78 @@ impl<W: Write> App<W> {
 
     fn run(&mut self, cmd: Command) -> io::Result<bool> {
         match cmd {
-            Command::Frame { data } => self.write(data.as_bytes())?,
-            Command::Clear => self.write(CLEAR_SCREEN.as_bytes())?,
+            Command::Frame { data } => {
+                self.cancel_anim()?;
+                self.write(data.as_bytes())?
+            }
+            Command::Clear => {
+                self.cancel_anim()?;
+                self.write(CLEAR_SCREEN.as_bytes())?
+            }
             Command::Ping { n } => self.emit(&Event::Pong { n })?,
             Command::Auth { token } => self.write(set_user_var(TOKEN_VAR, &token).as_bytes())?,
-            Command::Quit => return Ok(false),
+            Command::Anim(cmd) => self.start_anim(cmd)?,
+            Command::Quit => {
+                self.cancel_anim()?;
+                return Ok(false);
+            }
         }
         Ok(true)
+    }
+
+    /// Lua always wins: whatever was playing ends where it stands and is reported done.
+    fn cancel_anim(&mut self) -> io::Result<()> {
+        if let Some(run) = self.anim.take() {
+            self.emit(&Event::AnimDone { id: run.id })?;
+        }
+        Ok(())
+    }
+
+    fn start_anim(&mut self, cmd: crate::command::AnimCmd) -> io::Result<()> {
+        self.cancel_anim()?;
+        let id = cmd.id;
+        match anim::Run::new(cmd, Instant::now()) {
+            Ok(mut run) => {
+                if let Some(frame) = run.tick(Instant::now()) {
+                    self.write(frame.as_bytes())?;
+                }
+                if run.finished() {
+                    self.emit(&Event::AnimDone { id })?;
+                } else {
+                    self.anim = Some(run);
+                }
+            }
+            Err(why) => {
+                self.log.log(format!("anim {id} dropped: {}", why.reason()));
+                self.emit(&Event::Dropped {
+                    what: "anim",
+                    reason: why.reason(),
+                })?;
+            }
+        }
+        Ok(())
+    }
+
+    pub fn next_anim(&self) -> Option<Instant> {
+        self.anim.as_ref().map(|run| run.next_at)
+    }
+
+    /// Writes the frame for `now`, skipping any tick the loop slept through.
+    pub fn tick_anim(&mut self, now: Instant) -> io::Result<()> {
+        let Some(run) = self.anim.as_mut() else {
+            return Ok(());
+        };
+        let frame = run.tick(now);
+        let done = run.finished();
+        let id = run.id;
+        if let Some(frame) = frame {
+            self.write(frame.as_bytes())?;
+        }
+        if done {
+            self.anim = None;
+            self.emit(&Event::AnimDone { id })?;
+        }
+        Ok(())
     }
 
     pub fn poll_size(&mut self) -> io::Result<()> {
@@ -88,6 +156,7 @@ mod tests {
             log: Logger::from_env(),
             var: "vtabs".into(),
             size: (28, 24),
+            anim: None,
         }
     }
 
@@ -130,6 +199,90 @@ mod tests {
         .unwrap();
         // the token never goes in the title: window titles are readable by the whole desktop
         assert_eq!(a.out, set_user_var("vtabs_token", "abc").as_bytes());
+    }
+
+    fn anim_cmd(id: u64, ms: u64) -> Command {
+        Command::Anim(crate::command::AnimCmd {
+            id,
+            ms,
+            fps: Some(30),
+            ease: Some("linear".into()),
+            dir: Some("in".into()),
+            anchor: "#000000".into(),
+            rows: vec![crate::command::AnimRow { y: 3, delay: 0 }],
+            data: "\x1b[3;1H\x1b[38;2;200;200;200mhi\x1b[0m".into(),
+        })
+    }
+
+    fn saw(a: &App<Vec<u8>>, needle: &str) -> bool {
+        String::from_utf8_lossy(&a.out).contains(&crate::uservar::b64(needle.as_bytes()))
+    }
+
+    #[test]
+    fn an_anim_writes_its_first_frame_at_once_and_keeps_running() {
+        let mut a = app();
+        a.handle(Input::Command(anim_cmd(1, 100))).unwrap();
+        assert!(a.anim.is_some(), "still playing");
+        let painted = String::from_utf8_lossy(&a.out).to_string();
+        assert!(painted.contains("\x1b[38;2;0;0;0m"), "t=0 frame written");
+        assert!(!saw(&a, r#"{"t":"anim_done","id":1}"#), "not done yet");
+    }
+
+    #[test]
+    fn a_frame_command_cancels_the_run_and_reports_it_done() {
+        let mut a = app();
+        a.handle(Input::Command(anim_cmd(2, 500))).unwrap();
+        a.handle(Input::Command(Command::Frame { data: "x".into() }))
+            .unwrap();
+        assert!(a.anim.is_none(), "cancelled");
+        assert!(saw(&a, r#"{"t":"anim_done","id":2}"#));
+    }
+
+    #[test]
+    fn a_new_anim_cancels_the_old_one() {
+        let mut a = app();
+        a.handle(Input::Command(anim_cmd(3, 500))).unwrap();
+        a.handle(Input::Command(anim_cmd(4, 500))).unwrap();
+        assert!(saw(&a, r#"{"t":"anim_done","id":3}"#));
+        assert_eq!(a.anim.as_ref().map(|r| r.id), Some(4));
+    }
+
+    #[test]
+    fn clear_and_quit_cancel_too() {
+        let mut a = app();
+        a.handle(Input::Command(anim_cmd(5, 500))).unwrap();
+        a.handle(Input::Command(Command::Clear)).unwrap();
+        assert!(saw(&a, r#"{"t":"anim_done","id":5}"#));
+
+        let mut b = app();
+        b.handle(Input::Command(anim_cmd(6, 500))).unwrap();
+        assert!(!b.handle(Input::Command(Command::Quit)).unwrap());
+        assert!(saw(&b, r#"{"t":"anim_done","id":6}"#));
+    }
+
+    #[test]
+    fn an_oversized_anim_is_dropped_with_a_reason() {
+        let mut a = app();
+        let Command::Anim(mut cmd) = anim_cmd(7, 100) else {
+            unreachable!()
+        };
+        cmd.data = "x".repeat(crate::anim::MAX_DATA + 1);
+        a.handle(Input::Command(Command::Anim(cmd))).unwrap();
+        assert!(a.anim.is_none(), "nothing plays");
+        assert!(saw(&a, r#"{"t":"dropped","what":"anim","reason":"size"}"#));
+    }
+
+    #[test]
+    fn a_finished_run_emits_done_once() {
+        let mut a = app();
+        a.handle(Input::Command(anim_cmd(8, 30))).unwrap();
+        let late = std::time::Instant::now() + std::time::Duration::from_millis(200);
+        a.tick_anim(late).unwrap();
+        assert!(a.anim.is_none());
+        assert!(saw(&a, r#"{"t":"anim_done","id":8}"#));
+        let before = a.out.len();
+        a.tick_anim(late).unwrap();
+        assert_eq!(a.out.len(), before, "nothing more is written");
     }
 
     #[test]
