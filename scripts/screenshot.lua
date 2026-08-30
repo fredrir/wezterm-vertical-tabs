@@ -36,6 +36,7 @@ local VARIANTS = {
   confirm = { confirm_close = true },
   macos = { titlebar = "macos" },
   ["macos-rail"] = { titlebar = "macos", collapsed = "rail" },
+  ["macos-rail-plain"] = { titlebar = "macos", collapsed = "rail", rail_titlebar = "none" },
 }
 local variant = os.getenv "VTABS_SHOT_OPTS" or "default"
 if variant == "padded" then

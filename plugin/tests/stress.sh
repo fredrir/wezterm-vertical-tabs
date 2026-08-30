@@ -17,6 +17,10 @@ first_content=$(content_of "$first_tab")
 no_dupes startup
 echo "ok: startup leaves one sidebar on the first tab"
 
+# `rail_titlebar = "widen"` widens the rail to the traffic-light reserve, so the expected rail width
+# is `rail_width` everywhere the reserve is zero and the reserve itself under the macOS seam.
+rail_want=5
+
 # `VTABS_E2E_MACOS=1` fakes the traffic-light reserve on, which is the only way to run the rail's
 # own strip geometry outside macOS. `rail_titlebar` defaults to "widen".
 macos_rail() {
@@ -46,6 +50,8 @@ macos_rail() {
   reserve_cols=$(printf '%s' "$reserve" | cut -d' ' -f1)
   [ "$rail_cols" -ge "$reserve_cols" ] ||
     fail "rail_titlebar=widen left the rail at $rail_cols cols, under the $reserve_cols-column reserve"
+  # `soft` runs this in a subshell, so the width the later rail checks want travels through a file.
+  printf '%s' "$rail_cols" >"$home/rail_want"
   no_warnings "$mac_mark" "the macOS rail"
   vtest "$first_content" toggle
   sleep 2.5
@@ -54,6 +60,8 @@ macos_rail() {
 }
 if [ -n "${VTABS_E2E_MACOS:-}" ]; then
   soft macos_rail
+  [ -s "$home/rail_want" ] && rail_want=$(cat "$home/rail_want")
+  echo "  the rail is expected at $rail_want cols under the macOS reserve"
 fi
 
 # ---------------------------------------------------------------- item 5 ---
@@ -310,15 +318,15 @@ echo "ok: an expanded sidebar keeps its width across grow and shrink"
 # B. The same while collapsed to the rail.
 vtest "$hot_content" toggle
 sleep 2
-want_width "$hot" 5 "collapse to the rail"
+want_width "$hot" "$rail_want" "collapse to the rail"
 vtest "$hot_content" grow
 sleep 2.5
 trace "rail, +300 px"
-want_width "$hot" 5 "grow while railed"
+want_width "$hot" "$rail_want" "grow while railed"
 vtest "$hot_content" shrink
 sleep 2.5
 trace "rail, back to the start"
-want_width "$hot" 5 "shrink while railed"
+want_width "$hot" "$rail_want" "shrink while railed"
 vtest "$hot_content" toggle
 sleep 2.5
 want_width "$hot" 28 "expand after resizing the rail"
@@ -338,11 +346,11 @@ echo "ok: ten resizes 100 ms apart leave the sidebar at its configured width"
 # D. The reported sequence: expand -> collapse -> change tab -> expand.
 vtest "$hot_content" toggle
 sleep 2
-want_width "$hot" 5 "collapse before the tab switch"
+want_width "$hot" "$rail_want" "collapse before the tab switch"
 cli activate-tab --tab-id "$other" >/dev/null
 sleep 2.5
 trace "collapsed, switched to tab $other"
-want_width "$other" 5 "a background tab joining the rail"
+want_width "$other" "$rail_want" "a background tab joining the rail"
 vtest "$(content_of "$other")" toggle
 sleep 2.5
 trace "expanded on tab $other"
@@ -356,7 +364,7 @@ echo "ok: expand, collapse, switch tab, expand keeps both sidebars at 28"
 # E. collapse -> resize -> expand, so the expand target is computed at a width nobody observed.
 vtest "$(content_of "$hot")" toggle
 sleep 2
-want_width "$hot" 5 "collapse before the resize"
+want_width "$hot" "$rail_want" "collapse before the resize"
 vtest "$(content_of "$hot")" grow
 sleep 2.5
 vtest "$(content_of "$hot")" toggle
@@ -373,7 +381,7 @@ vtest "$(content_of "$hot")" toggle
 sleep 2
 cli activate-tab --tab-id "$other" >/dev/null
 sleep 2.5
-want_width "$other" 5 "the background tab under the rail"
+want_width "$other" "$rail_want" "the background tab under the rail"
 vtest "$(content_of "$other")" toggle
 sleep 2.5
 want_width "$other" 28 "expanding on the lazily corrected tab"
@@ -419,7 +427,7 @@ vtest "$hot_content" rail_mode
 sleep 0.5
 vtest "$hot_content" toggle
 sleep 2.5
-want_width "$hot" 5 "collapsing after a drag"
+want_width "$hot" "$rail_want" "collapsing after a drag"
 vtest "$hot_content" toggle
 sleep 3
 trace "expanded again after the rail"
@@ -611,7 +619,14 @@ if [ "$after_panes" -gt "$before_panes" ]; then
   renders "$(sidebar_of "$first")" "a split sidebar pane"
   no_warnings "$split_mark" "splitting the sidebar pane"
   not_frozen "$(sidebar_of "$first")" "$first" "a split sidebar pane"
+  # The split pane is not content the user asked for; leaving it behind would fail every later
+  # pane-count assertion for a reason that has nothing to do with duplicate sidebars.
+  for p in $(list | python3 -c 'import json,sys; t='"$first"'; print(" ".join(str(q["pane_id"]) for q in json.load(sys.stdin) if q["tab_id"]==t and not '"$is_marked"' and q["left_col"]==0))'); do
+    cli kill-pane --pane-id "$p" >/dev/null 2>&1 || true
+  done
+  sleep 2
   max_panes=2
+  no_dupes_settled "closing the pane split off the sidebar" 8
   echo "ok: splitting the sidebar leaves it at $before_width cols, rendering and repainting"
 else
   echo "ok: the sidebar pane refuses to split"
@@ -647,12 +662,17 @@ close_confirmation() {
   survivor_cols=$(cols_of "$survivor_content")
   echo "  $(probe_line "$survivor_content" probe_confirm confirm)"
 
-  # The close span is 25-27 at width 28; press and release both land on col 26.
-  press "$victim_sb" 26 "$victim_row" 0
+  # The close span moves with the card grid, so it is read from the live hit map, never guessed.
+  victim_hits=$(probe_line "$survivor_content" probe_hits hits)
+  close_col=$(printf '%s\n' "$victim_hits" | tr ' ' '\n' | grep ',close@' | head -1 |
+    sed -n 's/.*,close@[0-9]*-\([0-9]*\).*/\1/p')
+  [ -n "$close_col" ] || { echo "$victim_hits"; fail "the victim card has no close span"; }
+  echo "  close span ends at column $close_col"
+  press "$victim_sb" "$close_col" "$victim_row" 0
   sleep 1
   [ "$(tab_count)" -eq "$before_tabs" ] || { geometry; fail "the press on x closed the tab before the release"; }
   [ "$(pane_set)" = "$before_set" ] || { geometry; fail "the press on x created a pane"; }
-  release "$victim_sb" 26 "$victim_row" 0
+  release "$victim_sb" "$close_col" "$victim_row" 0
   sleep 1.5
   [ "$(tab_count)" -eq "$before_tabs" ] || { geometry; fail "x closed a confirmable tab without asking"; }
   [ "$(pane_set)" = "$before_set" ] || { geometry; fail "the confirmation created a WezTerm overlay pane"; }
@@ -674,9 +694,9 @@ close_confirmation() {
   echo "ok: Cancel leaves the tab and every pane untouched"
 
   # Then the affirmative: the row above Cancel.
-  press "$victim_sb" 26 "$victim_row" 0
+  press "$victim_sb" "$close_col" "$victim_row" 0
   sleep 0.5
-  release "$victim_sb" 26 "$victim_row" 0
+  release "$victim_sb" "$close_col" "$victim_row" 0
   sleep 1.5
   cancel_row=$(row_of "$victim_sb" "Cancel")
   click "$victim_sb" 6 $((cancel_row - 1)) 0
