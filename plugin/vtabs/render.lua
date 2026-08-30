@@ -83,7 +83,6 @@ local util = require "vtabs.util"
 ---@class VtabsHit
 ---@field kind string
 ---@field id integer|nil
----@field tab_id integer|nil
 ---@field slot integer|nil
 ---@field part string|nil
 ---@field x1 integer|nil
@@ -411,7 +410,7 @@ function M.render(view)
   local glyphs = view.glyphs
   local g = grid(cfg, cols)
   local ctx = { theme = theme, cfg = cfg, cols = cols, glyphs = glyphs, grid = g }
-  local strip_rows = view.strip and math.max(view.strip.rows or 0, 0) or 0
+  local strip_rows = view.strip and math.max(view.strip.rows or 0, 0) or math.max(cfg.padding.top or 0, 0)
   local footer = {}
   for _, entry in ipairs(view.footer or {}) do
     footer[#footer + 1] = footer_entry(entry)
@@ -478,6 +477,24 @@ function M.render(view)
   local hovered_entry = view.hover and plan[view.hover.y - strip_rows + scroll] or nil
   local hovered_id = hovered_entry and hovered_entry.kind == "tab" and hovered_entry.item.tab_id or nil
 
+  -- a gap row paints nothing, so fading it would leave the cut edge looking solid
+  local function paints(entry)
+    return entry ~= nil and entry.kind ~= "space" and not (entry.kind == "tab" and entry.part == "gap")
+  end
+  local fade_first, fade_last
+  for i = 1, list_rows do
+    if paints(plan[i + scroll]) then
+      fade_first = i
+      break
+    end
+  end
+  for i = list_rows, 1, -1 do
+    if paints(plan[i + scroll]) then
+      fade_last = i
+      break
+    end
+  end
+
   local out = { ansi.HIDE_CURSOR }
   local hits = {}
   local function line(row, cells, fade)
@@ -513,7 +530,7 @@ function M.render(view)
     elseif entry.kind == "separator" then
       cells = new_line(cols, theme.bg, theme.fg)
       for x = g.card_x1, g.card_x2 do
-        put(cells, x, "─", { fg = theme.separator }, x)
+        put(cells, x, glyphs.frame_h, { fg = theme.separator }, x)
       end
       hit = { kind = "separator" }
     else
@@ -529,7 +546,6 @@ function M.render(view)
       hit = {
         kind = "tab",
         id = item.tab_id,
-        tab_id = item.tab_id,
         slot = entry.slot,
         part = entry.part,
         x1 = g.card_x1,
@@ -539,7 +555,7 @@ function M.render(view)
       }
     end
     local fade = nil
-    if (i == 1 and scroll > 0) or (i == list_rows and scroll < max_scroll) then
+    if (i == fade_first and scroll > 0) or (i == fade_last and scroll < max_scroll) then
       fade = 0.5
     end
     if view.drag and view.drag.outside then
