@@ -1,8 +1,8 @@
 ## Notes and limitations
 
-- The sidebar is a real pane in each tab (WezTerm has no custom-chrome API).
-  Pane-directional navigation should use `vtabs.action.activate_pane_direction`
-  so the sidebar is skipped. `TogglePaneZoom` hides it until unzoomed.
+- The sidebar is a real pane in each tab. Pane-directional navigation should
+  use `vtabs.action.activate_pane_direction` so the sidebar is skipped.
+  `TogglePaneZoom` hides it until unzoomed.
 - Tabs spawned by bindings other than the plugin's get their sidebar on the
   next poll (`poll_ms`). Use `vtabs.action.new_tab` for an instant one.
 - The sidebar process runs in the tab's domain. For remote multiplexer domains
