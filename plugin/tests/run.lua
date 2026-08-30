@@ -6062,26 +6062,37 @@ end)
 test("P3 §3/§4: the badge names the source, and r resets exactly the focused field", function()
   local cfg = config.setup { width = 32, backend = { path = "/bin/wez-vtabs" } }
   local v = page_view { cols = 100, rows = 21, cfg = cfg, st = { group = 1, focus = 1, scroll = 0 } }
-  local rows = page_rows(v)
-  local locked_line
-  for _, line in ipairs(rows) do
-    locked_line = line:find(" width ", 1, true) and line or locked_line
+  local rows, out = page_rows(v)
+  local function row_for(key, painted, plan_out)
+    for row = 1, 21 do
+      if plan_out.hits[row].id == key then
+        return painted[row]
+      end
+    end
   end
-  assert(locked_line, "the width row is drawn")
-  assert(locked_line:find("LOCKED wezterm.lua", 1, true), "§4: named as wezterm.lua's: " .. locked_line)
-  assert(not locked_line:find("(host)", 1, true), "and not as the host's")
+  local focused = row_for("width", rows, out)
+  assert(focused, "the width row is drawn")
+  assert(focused:find("LOCKED wezterm.lua", 1, true), "§4: the focused row names the source: " .. focused)
+  assert(not focused:find("(host)", 1, true), "and not as the host's")
+
+  -- every other locked row says LOCKED and shows its value; only one row is ever being asked about
+  local elsewhere = page_view { cols = 100, rows = 21, cfg = cfg, st = { group = 1, focus = 3, scroll = 0 } }
+  local other_rows, other_out = page_rows(elsewhere)
+  local unfocused = row_for("width", other_rows, other_out)
+  assert(unfocused:find("LOCKED", 1, true), "still badged: " .. unfocused)
+  assert(not unfocused:find("wezterm.lua", 1, true), "but the reason is the focused row's job: " .. unfocused)
+  assert(unfocused:find("32", 1, true), "and the value is shown instead: " .. unfocused)
+  local help = other_rows[19]
+  assert(help:find("—", 1, true), "the descriptor's label and help sit in the hint area: " .. help)
 
   config.host_config = { window_padding = { left = 8 } }
-  local hosted = page_rows(page_view {
-    cols = 100,
-    rows = 21,
-    cfg = config.setup { backend = { path = "/bin/wez-vtabs" } },
-    st = { group = 1, focus = 1, scroll = 0 },
-  })
-  local host_line
-  for _, line in ipairs(hosted) do
-    host_line = line:find("edge_to_edge", 1, true) and line or host_line
+  local host_cfg = config.setup { backend = { path = "/bin/wez-vtabs" } }
+  local host_st = { group = 1, focus = 1, scroll = 0 }
+  for i, row in ipairs(page.plan(page_view { cols = 100, rows = 21, cfg = host_cfg, st = host_st }).fields) do
+    host_st.focus = row.key == "edge_to_edge" and i or host_st.focus
   end
+  local hosted, hosted_out = page_rows(page_view { cols = 100, rows = 21, cfg = host_cfg, st = host_st })
+  local host_line = row_for("edge_to_edge", hosted, hosted_out)
   assert(
     host_line and host_line:find("wezterm.lua (host)", 1, true),
     "§4: named as the host's: " .. tostring(host_line)
