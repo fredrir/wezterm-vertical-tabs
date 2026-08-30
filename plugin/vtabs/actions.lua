@@ -416,7 +416,7 @@ function M.activate_pane_direction(gui_window, direction)
   local target = util.try(function()
     return content:tab():get_pane_direction(direction)
   end)
-  if target and not sidebar.is_sidebar(target) then
+  if target and not sidebar.is_backend(target) then
     target:activate()
   end
 end

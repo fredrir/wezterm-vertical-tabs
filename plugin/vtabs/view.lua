@@ -22,6 +22,8 @@ function M.invalidate_theme(window_id)
   end
 end
 
+table.insert(state.forget_hooks, M.invalidate_theme)
+
 local function theme_for(gui_window, cfg)
   local wid = gui_window:window_id()
   if not themes[wid] then

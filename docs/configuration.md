@@ -110,7 +110,7 @@ the tab's content pane, which then takes focus back.
 | -------------------- | ---------------------------------------------------------------------- |
 | source               | a sidebar pane this process authenticated, in the window's active tab   |
 | target               | that same tab's content pane, same domain, not an overlay              |
-| payload              | one key press, <= 16 bytes, no OSC/DCS/APC introducer, no bracketed paste |
+| payload              | structurally one key press: a single UTF-8 codepoint, or one `ESC`-prefixed sequence (CSI / SS3 / alt-key), <= 16 bytes, never a paste bracket |
 | rate                 | one forward per source pane per 50 ms                                  |
 
 ## Mouse
