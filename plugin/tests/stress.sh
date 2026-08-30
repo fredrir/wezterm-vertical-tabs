@@ -792,8 +792,19 @@ close_confirmation() {
   sleep 0.5
   vtest "$hot_content" confirm_on
   sleep 0.5
-  victim=$(tab_ids | cut -d' ' -f2)
-  wait_attached "$victim" 12
+  # A tab that already carries a sidebar, so the check measures the confirmation rather than how
+  # long a lazy attach took under load. Falls back to the second tab and waits.
+  victim=$(list | python3 -c '
+import json,sys,collections
+marked=collections.defaultdict(int)
+tabs=set()
+for p in json.load(sys.stdin):
+    tabs.add(p["tab_id"])
+    if p["title"].startswith("wez-vtabs:"): marked[p["tab_id"]] += 1
+ready=sorted(t for t in tabs if marked[t] == 1)
+print(ready[1] if len(ready) > 1 else "")')
+  [ -n "$victim" ] || victim=$(tab_ids | cut -d' ' -f2)
+  wait_attached "$victim" 30
   cli set-tab-title --tab-id "$victim" victim
   cli send-text --no-paste --pane-id "$(content_of "$victim")" "sleep 1000
   "
