@@ -99,6 +99,19 @@ local probes = {
     end
     step()
   end,
+  -- The horizontal case: it halves the sidebar's box and the new pane reaches past it, so a
+  -- containment test never saw it. Left/Right rather than Top/Bottom is the whole point.
+  split_sidebar_h = function(window)
+    local sidebar = require "vtabs.sidebar"
+    local sb = sidebar.find(window:mux_window():active_tab())
+    if not sb then
+      wezterm.log_info "e2e: split sidebar h none"
+      return
+    end
+    sb:activate()
+    window:perform_action(wezterm.action.SplitHorizontal { domain = "CurrentPaneDomain" }, sb)
+    wezterm.log_info("e2e: split sidebar h " .. tostring(sb:pane_id()))
+  end,
   -- A user's split keybinding while the sidebar holds focus under `hover = "follow"`.
   split_sidebar = function(window)
     local sidebar = require "vtabs.sidebar"
