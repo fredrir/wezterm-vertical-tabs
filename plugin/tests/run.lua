@@ -1436,6 +1436,75 @@ test("P2 anim: refuses what the backend would refuse", function()
   eq(why, "size")
 end)
 
+test("P3 role: a settings pane is content, never a sidebar", function()
+  local win, gui = setup_window(1)
+  sidebar.ensure(gui)
+  local tab = win.tab_list[1]
+  local sb = mark_ready(tab)
+  local settings = fake.pane(tab, { title = "wez-vtabs-settings:ab12" })
+  table.insert(tab.pane_list, 2, settings)
+
+  eq(sidebar.is_settings(settings), true)
+  eq(sidebar.is_settings(sb), false, "the sidebar's own marker is not a settings marker")
+  eq(sidebar.is_backend(settings), false, "rank 0: it is content")
+  eq(sidebar.is_ready(settings), false, "and never trusted")
+
+  local sent = #settings.sent
+  sidebar.ensure(gui)
+  eq(#settings.sent, sent, "never adopted, so never auth'd")
+  eq(sidebar.find(tab):pane_id(), sb:pane_id(), "the real sidebar still holds the role")
+  eq(state.sidebar_pane_id(tab.id), sb:pane_id(), "the map is untouched")
+end)
+
+test("P3 role: a settings pane never closes its tab as an orphan", function()
+  local win, gui = setup_window(2)
+  sidebar.ensure(gui)
+  local victim = win.tab_list[2]
+  mark_ready(victim)
+  local settings = fake.pane(victim, { title = "wez-vtabs-settings:ff" })
+  victim.pane_list = { sidebar.find(victim), settings }
+  victim.active = settings
+  sidebar.ensure(gui)
+  eq(#win.tab_list, 2, "a settings pane counts as content, so the tab is not orphaned")
+end)
+
+test("P3 role: both markers are stripped from the rendered list", function()
+  eq(sidebar.marker "wez-vtabs:ab12", true)
+  eq(sidebar.marker "wez-vtabs-settings:ab12", true)
+  eq(sidebar.marker "wez-vtabs-settings", false)
+  eq(sidebar.marker "wez-vtabs-settings:zz", false, "hex only")
+  local win, gui = setup_window(1)
+  sidebar.ensure(gui)
+  local tab = win.tab_list[1]
+  mark_ready(tab)
+  tab:set_title "wez-vtabs-settings:ab12"
+  local built = model.build(gui)
+  eq(built[1].title:find "wez%-vtabs", nil, "the settings marker never reaches the tab list")
+end)
+
+test("P3 role: spawn_args carries a non-default role on every path", function()
+  local cfg = config.setup { backend = { path = "/bin/wez-vtabs" } }
+  local direct = backend.spawn_args(cfg, "local", nil, "settings")
+  eq(direct[1], "/bin/wez-vtabs")
+  eq(direct[2], "--role")
+  eq(direct[3], "settings")
+  eq(#backend.spawn_args(cfg, "local", nil, "sidebar"), 1, "the default role adds nothing")
+  eq(#backend.spawn_args(cfg, "local"), 1, "and nil means default")
+
+  local boot = config.setup {}
+  local local_boot = backend.spawn_args(boot, "local", nil, "settings")
+  eq(local_boot[1], "sh")
+  eq(local_boot[#local_boot - 1], "--role")
+  eq(local_boot[#local_boot], "settings")
+
+  local remote = backend.spawn_args(boot, "desktop", nil, "settings")
+  eq(remote[2], "-c")
+  eq(remote[4], "wez-vtabs", "sh -c needs a $0 before the role")
+  eq(remote[5], "--role")
+  eq(remote[6], "settings")
+  config.setup { backend = { path = "/bin/wez-vtabs" } }
+end)
+
 test("P1 frames are written for design review", function()
   -- the shared fixture pins row_gap and separator for positional tests; frames want the shipped values
   local design = { row_gap = config.defaults.row_gap, separator = config.defaults.separator }

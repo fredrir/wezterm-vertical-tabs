@@ -10,7 +10,7 @@ use wez_vertical_tabs_backend::parser::Parser;
 use wez_vertical_tabs_backend::signal;
 use wez_vertical_tabs_backend::terminal::{self, TerminalGuard};
 use wez_vertical_tabs_backend::uservar::{
-    DEFAULT_VAR, ROLE, ROLE_VAR, nonce, set_user_var, title_marker,
+    DEFAULT_VAR, ROLE_VAR, Role, nonce, set_user_var, title_marker,
 };
 
 const SIZE_POLL: Duration = Duration::from_millis(250);
@@ -38,8 +38,28 @@ fn spawn_stdin_reader() -> Receiver<Vec<u8>> {
     rx
 }
 
+/// `--role sidebar|settings`; anything else keeps the default and says so in the log.
+fn role_from_args(log: &mut Logger) -> Role {
+    let mut args = std::env::args().skip(1);
+    while let Some(arg) = args.next() {
+        let value = match arg.strip_prefix("--role=") {
+            Some(v) => Some(v.to_string()),
+            None if arg == "--role" => args.next(),
+            None => None,
+        };
+        if let Some(value) = value {
+            return Role::parse(&value).unwrap_or_else(|| {
+                log.log(format!("unknown role {value}; using sidebar"));
+                Role::default()
+            });
+        }
+    }
+    Role::default()
+}
+
 fn run() -> io::Result<()> {
     let mut log = Logger::from_env();
+    let role = role_from_args(&mut log);
     let var = std::env::var("VTABS_USERVAR").unwrap_or_else(|_| DEFAULT_VAR.to_string());
     let bg = std::env::var("VTABS_BG")
         .ok()
@@ -57,9 +77,9 @@ fn run() -> io::Result<()> {
         size,
         anim: None,
     };
-    app.write(set_user_var(ROLE_VAR, ROLE).as_bytes())?;
+    app.write(set_user_var(ROLE_VAR, role.name()).as_bytes())?;
     // Marker only: it lets the plugin find this pane again, it proves nothing and carries no token.
-    app.write(title_marker(&nonce()).as_bytes())?;
+    app.write(title_marker(role, &nonce()).as_bytes())?;
     app.emit(&Event::ready(size.0, size.1))?;
 
     let rx = spawn_stdin_reader();

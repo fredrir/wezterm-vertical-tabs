@@ -70,22 +70,52 @@ function M.resolve_path(cfg, domain, host)
   return nil
 end
 
-function M.spawn_args(cfg, domain, host)
+---Extra argv for a non-default role; the bootstraps forward whatever follows them to the binary.
+local function role_args(role)
+  if role == nil or role == "sidebar" then
+    return nil
+  end
+  return { "--role", role }
+end
+
+local function with_role(args, role, shell_c)
+  local extra = role_args(role)
+  if not extra then
+    return args
+  end
+  if shell_c then
+    -- `sh -c script` takes the next word as $0, so the role needs one in front of it
+    args[#args + 1] = "wez-vtabs"
+  end
+  for _, arg in ipairs(extra) do
+    args[#args + 1] = arg
+  end
+  return args
+end
+
+function M.spawn_args(cfg, domain, host, role)
   local path = M.resolve_path(cfg, domain, host)
   if path then
-    return { path }
+    return with_role({ path }, role)
   end
   if M.is_local(domain, host) then
     if platform.is_windows then
-      return { "powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", M.root .. "\\bin\\bootstrap.ps1" }
+      return with_role({
+        "powershell",
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        M.root .. "\\bin\\bootstrap.ps1",
+      }, role)
     end
-    return { "sh", M.root .. "/bin/bootstrap.sh" }
+    return with_role({ "sh", M.root .. "/bin/bootstrap.sh" }, role)
   end
   local script = bootstrap_script()
   if not script then
     return nil
   end
-  return { "sh", "-c", script }
+  return with_role({ "sh", "-c", script }, role, true)
 end
 
 function M.env(cfg, domain, host, bg)

@@ -119,6 +119,18 @@ parsed on their own.
 
 ## Environment
 
+## Roles
+
+| Flag | Title marker | `vtabs_role` |
+| --- | --- | --- |
+| `--role sidebar` (default) | `wez-vtabs:<nonce>` | `sidebar` |
+| `--role settings` | `wez-vtabs-settings:<nonce>` | `settings` |
+
+The role changes nothing else: frames, keys with `raw`, paste, `anim`, `ping`/`auth` and every
+event are identical. An unknown role logs and falls back to `sidebar`. The plugin treats a
+settings-role pane as content — it is never adopted as a tab list, never authenticated, and
+never closed as an orphan — and strips both markers from the titles it renders.
+
 | Env             | Value                                                                            |
 | --------------- | -------------------------------------------------------------------------------- |
 | `VTABS_USERVAR` | user var name for events \| `vtabs`                                               |

@@ -1,3 +1,4 @@
+param([Parameter(ValueFromRemainingArguments = $true)] $Passthru)
 # Locates the wez-vtabs backend: explicit path, cached download, verified GitHub release, or cargo build.
 $ErrorActionPreference = "Stop"
 $name = "wez-vtabs"
@@ -12,7 +13,7 @@ if ($target -notmatch '^[A-Za-z0-9._-]+$' -or $version -notmatch '^[A-Za-z0-9._-
 if ($env:VTABS_BIN -and (Test-Path $env:VTABS_BIN)) { & $env:VTABS_BIN; exit $LASTEXITCODE }
 
 $bin = Join-Path $data "bin\$name-$target-$version.exe"
-if (Test-Path $bin) { & $bin; exit $LASTEXITCODE }
+if (Test-Path $bin) { & $bin @Passthru; exit $LASTEXITCODE }
 New-Item -ItemType Directory -Force -Path (Split-Path $bin) | Out-Null
 
 if ($version -ne "dev" -and $env:VTABS_REPO) {
@@ -26,7 +27,7 @@ if ($version -ne "dev" -and $env:VTABS_REPO) {
     $actual = (Get-FileHash -Algorithm SHA256 $tmp).Hash.ToLower()
     if ($expected -and $expected.Trim() -eq $actual) {
       Move-Item -Force $tmp $bin
-      & $bin; exit $LASTEXITCODE
+      & $bin @Passthru; exit $LASTEXITCODE
     }
     Write-Host "checksum mismatch"
   } catch { Write-Host "download failed" }
@@ -38,11 +39,11 @@ if ($env:VTABS_BUILD -ne "0" -and $env:VTABS_SRC -and (Get-Command cargo -ErrorA
   cargo build --release --manifest-path (Join-Path $env:VTABS_SRC "Cargo.toml") --target-dir (Join-Path $data "target")
   if ($LASTEXITCODE -eq 0) {
     Copy-Item (Join-Path $data "target\release\$name.exe") $bin
-    & $bin; exit $LASTEXITCODE
+    & $bin @Passthru; exit $LASTEXITCODE
   }
   Write-Host "build failed"
 }
 
 Write-Host "backend not found`ninstall cargo or set backend.path, then press Enter to retry"
 Read-Host | Out-Null
-& $PSCommandPath; exit $LASTEXITCODE
+& $PSCommandPath @Passthru; exit $LASTEXITCODE

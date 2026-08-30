@@ -6,9 +6,39 @@ use base64::engine::general_purpose::STANDARD;
 
 pub const DEFAULT_VAR: &str = "vtabs";
 pub const ROLE_VAR: &str = "vtabs_role";
-pub const ROLE: &str = "sidebar";
 pub const TOKEN_VAR: &str = "vtabs_token";
-pub const TITLE_PREFIX: &str = "wez-vtabs:";
+
+/// The only thing a role changes: which title marker and `vtabs_role` value this pane advertises.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Role {
+    #[default]
+    Sidebar,
+    Settings,
+}
+
+impl Role {
+    pub fn parse(name: &str) -> Option<Self> {
+        match name {
+            "sidebar" => Some(Role::Sidebar),
+            "settings" => Some(Role::Settings),
+            _ => None,
+        }
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Role::Sidebar => "sidebar",
+            Role::Settings => "settings",
+        }
+    }
+
+    pub fn title_prefix(self) -> &'static str {
+        match self {
+            Role::Sidebar => "wez-vtabs:",
+            Role::Settings => "wez-vtabs-settings:",
+        }
+    }
+}
 
 pub fn b64(bytes: &[u8]) -> String {
     STANDARD.encode(bytes)
@@ -35,10 +65,11 @@ pub fn nonce() -> String {
 }
 
 /// Pane title the plugin looks for when a mux outlives the GUI; hex only, so it cannot break the OSC.
-pub fn title_marker(nonce: &str) -> String {
+pub fn title_marker(role: Role, nonce: &str) -> String {
     let hex: String = nonce.chars().filter(|c| c.is_ascii_hexdigit()).collect();
     let nonce = if hex.is_empty() { "0" } else { &hex };
-    format!("\x1b]0;{TITLE_PREFIX}{nonce}\x07\x1b]2;{TITLE_PREFIX}{nonce}\x07")
+    let prefix = role.title_prefix();
+    format!("\x1b]0;{prefix}{nonce}\x07\x1b]2;{prefix}{nonce}\x07")
 }
 
 #[cfg(test)]
@@ -56,22 +87,39 @@ mod tests {
     #[test]
     fn role_var() {
         assert_eq!(
-            set_user_var(ROLE_VAR, ROLE),
+            set_user_var(ROLE_VAR, Role::Sidebar.name()),
             "\x1b]1337;SetUserVar=vtabs_role=c2lkZWJhcg==\x07"
         );
     }
 
     #[test]
+    fn a_role_only_changes_the_marker_and_the_role_var() {
+        assert_eq!(Role::parse("sidebar"), Some(Role::Sidebar));
+        assert_eq!(Role::parse("settings"), Some(Role::Settings));
+        assert_eq!(Role::parse("nope"), None);
+        assert_eq!(Role::default(), Role::Sidebar);
+        assert_eq!(
+            title_marker(Role::Sidebar, "ab"),
+            "\x1b]0;wez-vtabs:ab\x07\x1b]2;wez-vtabs:ab\x07"
+        );
+        assert_eq!(
+            title_marker(Role::Settings, "ab"),
+            "\x1b]0;wez-vtabs-settings:ab\x07\x1b]2;wez-vtabs-settings:ab\x07"
+        );
+        assert_eq!(Role::Settings.name(), "settings");
+    }
+
+    #[test]
     fn title_marker_keeps_hex_only() {
         assert_eq!(
-            title_marker("a1b2"),
+            title_marker(Role::Sidebar, "a1b2"),
             "\x1b]0;wez-vtabs:a1b2\x07\x1b]2;wez-vtabs:a1b2\x07"
         );
         assert_eq!(
-            title_marker("\x07;evil ~"),
+            title_marker(Role::Sidebar, "\x07;evil ~"),
             "\x1b]0;wez-vtabs:e\x07\x1b]2;wez-vtabs:e\x07"
         );
-        assert!(title_marker("").starts_with("\x1b]0;wez-vtabs:0\x07"));
+        assert!(title_marker(Role::Sidebar, "").starts_with("\x1b]0;wez-vtabs:0\x07"));
     }
 
     #[test]
