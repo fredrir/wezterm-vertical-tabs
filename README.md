@@ -1,10 +1,10 @@
-# wez-vertical-tabs (WiP)
+# wezterm-vertical-tabs (WiP)
 
 
 ## Installation
 
 ```sh
-local vtabs = wezterm.plugin.require "https://github.com/fredrir/wez-vertical-tabs"
+local vtabs = wezterm.plugin.require "https://github.com/fredrir/wezterm-vertical-tabs"
 vtabs.apply_to_config(config, {
   width = 28,
 })

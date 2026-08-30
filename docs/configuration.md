@@ -9,7 +9,7 @@ local config = wezterm.config_builder()
 -- your own bindings first: the plugin never overrides a key you already bound
 config.keys = { ... }
 
-local vtabs = wezterm.plugin.require "https://github.com/fredrir/wez-vertical-tabs"
+local vtabs = wezterm.plugin.require "https://github.com/fredrir/wezterm-vertical-tabs"
 vtabs.apply_to_config(config, {
   width = 28,
 })
@@ -53,7 +53,7 @@ return config
 | `hooks.theme`             | `nil`                                                             | `fun(window, theme): theme` per-window theme override                                                                                           |
 | `hooks.route`             | `nil`                                                             | reserved for Spaces (`fun(meta): space_id`), not called yet                                                                                     |
 | `backend.path`            | `nil`                                                             | explicit path to the `wez-vtabs` binary                                                                                                         |
-| `backend.repo`            | `"fredrir/wez-vertical-tabs"`                                     | GitHub repo used for release downloads                                                                                                          |
+| `backend.repo`            | `"fredrir/wezterm-vertical-tabs"`                                 | GitHub repo used for release downloads                                                                                                          |
 | `backend.version`         | plugin version                                                    | release tag to download (`v<version>`)                                                                                                          |
 | `backend.build`           | `true`                                                            | fall back to `cargo build` when no release matches                                                                                              |
 | `backend.uservar`         | `"vtabs"`                                                         | user var name used by the backend                                                                                                               |

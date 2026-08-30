@@ -44,7 +44,7 @@ M.defaults = {
   },
   backend = {
     path = nil,
-    repo = "fredrir/wez-vertical-tabs",
+    repo = "fredrir/wezterm-vertical-tabs",
     version = nil,
     build = true,
     uservar = "vtabs",

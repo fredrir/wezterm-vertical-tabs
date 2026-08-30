@@ -38,10 +38,10 @@ sh plugin/tests/e2e.sh mux      # through a unix multiplexer domain
 ## Local development config
 
 ```lua
-package.path = "/path/to/wez-vertical-tabs/plugin/?.lua;" .. package.path
-local vtabs = dofile "/path/to/wez-vertical-tabs/plugin/init.lua"
+package.path = "/path/to/wezterm-vertical-tabs/plugin/?.lua;" .. package.path
+local vtabs = dofile "/path/to/wezterm-vertical-tabs/plugin/init.lua"
 vtabs.apply_to_config(config, {
-  backend = { path = "/path/to/wez-vertical-tabs/backend/target/release/wez-vtabs" },
+  backend = { path = "/path/to/wezterm-vertical-tabs/backend/target/release/wez-vtabs" },
   debug = true, -- logs events and hit rows (see `wezterm --config-file ... start` output or the debug overlay)
 })
 ```

@@ -1,16 +1,26 @@
 local wezterm = require "wezterm" ---@type Wezterm
 
+local function usable(root)
+  return package.searchpath("vtabs.config", root .. "/?.lua;" .. root .. "/?/init.lua") ~= nil
+end
+
 local function plugin_root()
+  local stale
   for _, p in ipairs(wezterm.plugin.list()) do
-    if p.url:find("wez-vertical-tabs", 1, true) then
-      return p.plugin_dir .. "/plugin"
+    if p.url:find("wezterm-vertical-tabs", 1, true) then
+      local candidate = p.plugin_dir .. "/plugin"
+      if usable(candidate) then
+        return candidate
+      end
+      stale = stale or candidate
     end
   end
+
   local found = package.searchpath("vtabs.config", package.path)
   if found then
     return found:match "^(.*)[/\\]vtabs[/\\]config%.lua$"
   end
-  return nil
+  return stale
 end
 
 local root = plugin_root()
