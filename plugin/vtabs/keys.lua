@@ -25,6 +25,7 @@ function M.defaults()
     move_tab_up = { key = "PageUp", mods = SUPER2 },
     move_tab_down = { key = "PageDown", mods = SUPER2 },
     tab_last = { key = "9", mods = SUPER },
+    settings = { key = ",", mods = SUPER },
   }
   if platform.is_mac then
     keys.next_tab_arrow = { key = "RightArrow", mods = "CMD|OPT" }
@@ -36,6 +37,7 @@ function M.defaults()
   return keys
 end
 
+-- Second default chords for a behaviour; the behaviour's own renames live in `actions.canonical`.
 local ALIASES = {
   private_window_alt = "private_window",
   next_tab_alt = "next_tab",
@@ -53,7 +55,7 @@ local function action_for(name)
   if n then
     return actions.action.activate_tab(tonumber(n) - 1)
   end
-  local action = actions.action[name]
+  local action = actions.action[actions.canonical(name)]
   return type(action) == "table" and action or nil
 end
 
@@ -75,7 +77,9 @@ function M.build(user)
     local binding = keys[name]
     local action = action_for(name)
     if binding and action then
-      out[#out + 1] = { key = binding.key, mods = binding.mods, action = action }
+      -- `vtabs` names the binding for the popover's key hints; `apply` drops it, since wezterm
+      -- rejects a key entry carrying a field it does not know.
+      out[#out + 1] = { key = binding.key, mods = binding.mods, action = action, vtabs = name }
     end
   end
   return out
@@ -98,7 +102,7 @@ function M.apply(config, cfg)
   end
   for _, b in ipairs(bindings) do
     if not taken[signature(b)] then
-      table.insert(config.keys, b)
+      table.insert(config.keys, { key = b.key, mods = b.mods, action = b.action })
     end
   end
 end

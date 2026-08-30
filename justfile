@@ -20,9 +20,23 @@ test:
 lint:
     cd backend && cargo fmt --check && cargo clippy --all-targets --locked -- -D warnings
     cd plugin && luacheck init.lua vtabs tests && stylua --check init.lua vtabs tests
+    lua scripts/gen-docs.lua --check
 
-e2e mode="local":
+# Regenerate the options table in docs/configuration.md from plugin/vtabs/schema.lua
+docs:
+    lua scripts/gen-docs.lua
+
+e2e mode="local": build
     sh plugin/tests/e2e.sh {{mode}}
 
 build profile="release":
     cd backend && cargo build --locked {{ if profile == "release" { "--release" } else { "" } }}
+
+screenshot state="":
+    xvfb-run -a -s "-screen 0 1600x900x24" sh scripts/screenshot.sh {{state}}
+
+baseline *args:
+    @sh scripts/baseline.sh {{args}}
+
+baseline-check:
+    @sh scripts/baseline.sh --check

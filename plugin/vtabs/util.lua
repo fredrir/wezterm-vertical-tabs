@@ -1,4 +1,5 @@
 local wezterm = require "wezterm" ---@type Wezterm
+local platform = require "vtabs.platform"
 
 local M = {}
 
@@ -78,6 +79,52 @@ function M.truncate(s, max, ellipsis)
   return s:sub(1, offsets[lo] - 1) .. ellipsis
 end
 
+---Elides middle path components to fit `budget`; the basename survives longest.
+function M.shorten_path(path, budget, ellipsis)
+  ellipsis = ellipsis or "…"
+  if type(path) ~= "string" or path == "" or budget <= 0 then
+    return ""
+  end
+  if M.width(path) <= budget then
+    return path
+  end
+  local sep = (path:find("\\", 1, true) and not path:find("/", 1, true)) and "\\" or "/"
+  local parts = {}
+  for part in path:gmatch "[^/\\]+" do
+    parts[#parts + 1] = part
+  end
+  local lead = ""
+  if parts[1] and parts[1]:match "^%a:$" then
+    lead = table.remove(parts, 1) .. sep
+  elseif path:sub(1, 1) == "/" or path:sub(1, 1) == "\\" then
+    lead = sep
+  end
+  if #parts <= 1 then
+    return lead .. M.truncate(parts[1] or "", budget - M.width(lead), ellipsis)
+  end
+  local function joined()
+    return lead .. table.concat(parts, sep)
+  end
+  -- Leftmost first, and never the marker or the basename.
+  local from = (parts[1] == "~" or parts[1] == "..") and 2 or 1
+  for i = from, #parts - 1 do
+    if M.width(joined()) <= budget then
+      break
+    end
+    parts[i] = M.truncate(parts[i], 1, "")
+  end
+  local out = joined()
+  if M.width(out) <= budget then
+    return out
+  end
+  local base = parts[#parts]
+  local room = budget - M.width(ellipsis) - 1
+  if room < 1 then
+    return M.truncate(base, budget, ellipsis)
+  end
+  return ellipsis .. sep .. M.truncate(base, room, ellipsis)
+end
+
 function M.pad_right(s, cols)
   local w = M.width(s)
   if w >= cols then
@@ -87,13 +134,70 @@ function M.pad_right(s, cols)
 end
 
 ---Removes control characters so foreign titles cannot inject escapes into the sidebar.
+local function seq_len(b)
+  if b < 0x80 then
+    return 1
+  elseif b >= 0xc2 and b <= 0xdf then
+    return 2
+  elseif b >= 0xe0 and b <= 0xef then
+    return 3
+  elseif b >= 0xf0 and b <= 0xf4 then
+    return 4
+  end
+  return 0
+end
+
+---Rejects overlongs, surrogate halves, past-U+10FFFF and truncated tails.
+local function well_formed(s, i, len)
+  local b1, b2 = string.byte(s, i), string.byte(s, i + 1)
+  if len >= 2 then
+    if not b2 or b2 < 0x80 or b2 > 0xbf then
+      return false
+    end
+    if (b1 == 0xe0 and b2 < 0xa0) or (b1 == 0xed and b2 > 0x9f) then
+      return false
+    end
+    if (b1 == 0xf0 and b2 < 0x90) or (b1 == 0xf4 and b2 > 0x8f) then
+      return false
+    end
+  end
+  for k = 2, len - 1 do
+    local b = string.byte(s, i + k)
+    if not b or b < 0x80 or b > 0xbf then
+      return false
+    end
+  end
+  return true
+end
+
+---Returns valid UTF-8 with no control characters, whatever bytes went in: a remote OSC 7 cwd
+---reaches us undecoded, and one raw 0x9b would otherwise make every width call in render raise.
 function M.sanitize(s)
   if type(s) ~= "string" then
     return ""
   end
-  s = s:gsub("[%z\1-\31\127]", "")
-  s = s:gsub("\194[\128-\159]", "")
-  return s
+  local out, i, n = {}, 1, #s
+  while i <= n do
+    local b = string.byte(s, i)
+    local len = seq_len(b)
+    if len == 0 or not well_formed(s, i, len) then
+      i = i + 1
+    elseif len == 1 then
+      if b >= 0x20 and b ~= 0x7f then
+        out[#out + 1] = string.char(b)
+      end
+      i = i + 1
+    else
+      local b2, b3 = string.byte(s, i + 1), string.byte(s, i + 2)
+      -- U+202A-202E reorder the glyphs around them; the U+2066-2069 isolates are legitimate
+      local bidi_override = b == 0xe2 and b2 == 0x80 and b3 and b3 >= 0xaa and b3 <= 0xae
+      if not (b == 0xc2 and b2 <= 0x9f) and not bidi_override then
+        out[#out + 1] = s:sub(i, i + len - 1)
+      end
+      i = i + len
+    end
+  end
+  return table.concat(out)
 end
 
 function M.basename(path)
@@ -161,9 +265,91 @@ function M.warn_once(key, fmt, ...)
   M.warn(fmt, ...)
 end
 
+-- Reseeding per call made tokens minted in the same millisecond identical; the pointer adds entropy.
+math.randomseed(os.time() + math.floor(os.clock() * 1000000) + (tonumber(tostring({}):match "%x+$", 16) or 0))
+
+local function urandom(bytes)
+  local f = io.open("/dev/urandom", "rb")
+  if not f then
+    return nil
+  end
+  local raw = f:read(bytes)
+  f:close()
+  if type(raw) ~= "string" or #raw < bytes then
+    return nil
+  end
+  return (raw:gsub(".", function(c)
+    return string.format("%02x", c:byte())
+  end))
+end
+
+local B64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+local B64_VALUE = {}
+for i = 1, #B64 do
+  B64_VALUE[B64:sub(i, i)] = i - 1
+end
+
+---Decodes standard base64 (padding optional); nil for anything malformed. WezTerm has no Lua helper.
+function M.base64_decode(s)
+  if type(s) ~= "string" or not s:match "^[A-Za-z0-9+/]*=?=?$" then
+    return nil
+  end
+  local body = (s:gsub("=+$", ""))
+  if #body % 4 == 1 then
+    return nil
+  end
+  local out, acc, bits = {}, 0, 0
+  for i = 1, #body do
+    acc = ((acc << 6) | B64_VALUE[body:sub(i, i)]) & 0xffffff
+    bits = bits + 6
+    if bits >= 8 then
+      bits = bits - 8
+      out[#out + 1] = string.char((acc >> bits) & 0xff)
+    end
+  end
+  return table.concat(out)
+end
+
+---True when `path` is a symlink: a file we would otherwise write through without knowing where to.
+function M.is_symlink(path)
+  if platform.is_windows then
+    return false
+  end
+  return M.try(wezterm.run_child_process, { "test", "-L", path }) == true
+end
+
+---Writes `body` to `path` atomically and readable only by its owner: a temp file beside it,
+---chmod 600, then rename. `dir` is created 0700 if the first open fails. Returns true on success.
+function M.write_private(path, body, dir, tag)
+  tag = tag or "file"
+  local tmp = path .. "." .. M.random_token():sub(1, 8) .. ".tmp"
+  local f = io.open(tmp, "w")
+  if not f and dir then
+    M.try(wezterm.run_child_process, { "mkdir", "-m", "700", "-p", dir })
+    f = io.open(tmp, "w")
+  end
+  if not f then
+    M.warn_once(tag .. "-file", "cannot write %s", path)
+    return false
+  end
+  if not platform.is_windows and M.try(wezterm.run_child_process, { "chmod", "600", tmp }) ~= true then
+    M.warn_once(tag .. "-chmod", "cannot restrict %s to 0600", path)
+  end
+  f:write(body)
+  f:close()
+  if os.rename(tmp, path) then
+    return true
+  end
+  os.remove(tmp)
+  M.warn_once(tag .. "-rename", "cannot replace %s", path)
+  return false
+end
+
 function M.random_token()
-  local seed = os.time() + math.floor(os.clock() * 1000000) + M.now_ms()
-  math.randomseed(seed)
+  local token = urandom(16)
+  if token then
+    return token
+  end
   local parts = {}
   for _ = 1, 4 do
     parts[#parts + 1] = string.format("%08x", math.random(0, 0x7fffffff))

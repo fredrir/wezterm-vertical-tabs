@@ -1,11 +1,16 @@
 use serde::Serialize;
 
 use crate::parser::{Button, Mods, Mouse, MouseKind};
+use crate::uservar::b64;
+
+/// Protocol version carried by `ready`.
+pub const VERSION: u8 = 1;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "t", rename_all = "snake_case")]
 pub enum Event {
     Ready {
+        v: u8,
         cols: u16,
         rows: u16,
     },
@@ -27,22 +32,59 @@ pub enum Event {
         key: String,
         #[serde(skip_serializing_if = "Vec::is_empty")]
         mods: Vec<&'static str>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        raw: Option<String>,
     },
     Focus {
         #[serde(rename = "in")]
         focused: bool,
     },
+    Paste {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        data: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        dropped: Option<&'static str>,
+    },
     Pong {
         #[serde(skip_serializing_if = "Option::is_none")]
         n: Option<u64>,
     },
+    AnimDone {
+        id: u64,
+    },
+    Dropped {
+        what: &'static str,
+        reason: &'static str,
+    },
 }
 
 impl Event {
-    pub fn key(name: String, mods: Mods) -> Self {
+    pub fn ready(cols: u16, rows: u16) -> Self {
+        Event::Ready {
+            v: VERSION,
+            cols,
+            rows,
+        }
+    }
+
+    pub fn paste(data: Option<Vec<u8>>) -> Self {
+        match data {
+            Some(bytes) => Event::Paste {
+                data: Some(b64(&bytes)),
+                dropped: None,
+            },
+            None => Event::Paste {
+                data: None,
+                dropped: Some("size"),
+            },
+        }
+    }
+
+    pub fn key(name: String, mods: Mods, raw: &[u8]) -> Self {
         Event::Key {
             key: name,
             mods: mods_list(mods),
+            raw: (!raw.is_empty()).then(|| b64(raw)),
         }
     }
 
@@ -112,8 +154,8 @@ mod tests {
     #[test]
     fn ready_and_resize() {
         assert_eq!(
-            Event::Ready { cols: 30, rows: 40 }.to_json(),
-            r#"{"t":"ready","cols":30,"rows":40}"#
+            Event::ready(30, 40).to_json(),
+            r#"{"t":"ready","v":1,"cols":30,"rows":40}"#
         );
         assert_eq!(
             Event::Resize { cols: 31, rows: 40 }.to_json(),
@@ -182,16 +224,20 @@ mod tests {
     #[test]
     fn key_events() {
         assert_eq!(
-            Event::key("enter".into(), Mods::default()).to_json(),
-            r#"{"t":"key","key":"enter"}"#
+            Event::key("enter".into(), Mods::default(), b"\r").to_json(),
+            r#"{"t":"key","key":"enter","raw":"DQ=="}"#
         );
         let ctrl = Mods {
             ctrl: true,
             ..Mods::default()
         };
         assert_eq!(
-            Event::key("c".into(), ctrl).to_json(),
-            r#"{"t":"key","key":"c","mods":["ctrl"]}"#
+            Event::key("c".into(), ctrl, b"\x03").to_json(),
+            r#"{"t":"key","key":"c","mods":["ctrl"],"raw":"Aw=="}"#
+        );
+        assert_eq!(
+            Event::key("escape".into(), Mods::default(), b"").to_json(),
+            r#"{"t":"key","key":"escape"}"#
         );
     }
 
@@ -204,6 +250,26 @@ mod tests {
         assert_eq!(
             Event::Focus { focused: false }.to_json(),
             r#"{"t":"focus","in":false}"#
+        );
+        assert_eq!(
+            Event::paste(Some(b"hi".to_vec())).to_json(),
+            r#"{"t":"paste","data":"aGk="}"#
+        );
+        assert_eq!(
+            Event::paste(None).to_json(),
+            r#"{"t":"paste","dropped":"size"}"#
+        );
+        assert_eq!(
+            Event::AnimDone { id: 7 }.to_json(),
+            r#"{"t":"anim_done","id":7}"#
+        );
+        assert_eq!(
+            Event::Dropped {
+                what: "anim",
+                reason: "size"
+            }
+            .to_json(),
+            r#"{"t":"dropped","what":"anim","reason":"size"}"#
         );
         assert_eq!(Event::Pong { n: None }.to_json(), r#"{"t":"pong"}"#);
         assert_eq!(

@@ -77,7 +77,14 @@ pub struct Mouse {
 pub enum Input {
     Mouse(Mouse),
     Focus(bool),
-    Key { name: String, mods: Mods },
+    /// `raw` holds the exact bytes this key was decoded from, for forwarding to another pane.
+    Key {
+        name: String,
+        mods: Mods,
+        raw: Vec<u8>,
+    },
+    /// Bracketed paste; `None` once it grew past the size cap.
+    Paste(Option<Vec<u8>>),
     Command(Command),
 }
 
@@ -85,14 +92,26 @@ pub enum Input {
 pub struct Parser {
     buf: Vec<u8>,
     stalled_flushes: u32,
+    discarding: bool,
+    pasting: Option<Vec<u8>>,
 }
 
 /// Flushes arrive every ~30ms while input is pending; give up on a stalled prefix after this many.
 const STALL_LIMIT: u32 = 10;
 
+/// Longest byte sequence a single key may carry as `raw`.
+const RAW_MAX: usize = 16;
+
+const PASTE_END: &[u8] = b"\x1b[201~";
+const PASTE_MAX: usize = 64 * 1024;
+
 enum Step {
     Token(Input, usize),
     Skip(usize),
+    /// Drop these bytes and the rest of the command line they belong to.
+    Discard(usize),
+    /// Bracketed paste opened: collect raw bytes until the terminator.
+    Paste(usize),
     Incomplete,
 }
 
@@ -111,6 +130,8 @@ impl Parser {
     pub fn feed(&mut self, bytes: &[u8]) -> Vec<Input> {
         self.buf.extend_from_slice(bytes);
         if self.buf.len() > MAX_LINE {
+            // the rest of an abandoned command line must not come back as key events
+            self.discarding |= self.buf.first() == Some(&b'{');
             self.buf.clear();
         }
         self.stalled_flushes = 0;
@@ -131,23 +152,102 @@ impl Parser {
         !self.buf.is_empty()
     }
 
+    /// Returns false while the paste is still open and more bytes are needed.
+    fn collect_paste(&mut self, out: &mut Vec<Input>) -> bool {
+        let Some(data) = self.pasting.as_mut() else {
+            return true;
+        };
+        let end = find(&self.buf, PASTE_END);
+        let take = end.unwrap_or_else(|| self.buf.len() - partial_tail(&self.buf, PASTE_END));
+        if data.len() <= PASTE_MAX {
+            data.extend_from_slice(&self.buf[..take]);
+        }
+        self.buf
+            .drain(..take + if end.is_some() { PASTE_END.len() } else { 0 });
+        if end.is_none() {
+            return false;
+        }
+        let data = self.pasting.take().unwrap_or_default();
+        out.push(Input::Paste(if data.len() > PASTE_MAX {
+            None
+        } else {
+            Some(data)
+        }));
+        true
+    }
+
     fn drain(&mut self, timed_out: bool, stalled: bool) -> Vec<Input> {
         let mut out = Vec::new();
+        loop {
+            if !self.drain_once(timed_out, stalled, &mut out) {
+                return out;
+            }
+        }
+    }
+
+    /// Returns true when a mode change (discard, paste) means the rest of the buffer needs another pass.
+    fn drain_once(&mut self, timed_out: bool, stalled: bool, out: &mut Vec<Input>) -> bool {
+        if self.discarding {
+            match self.buf.iter().position(|&b| b == b'\n') {
+                Some(end) => {
+                    self.buf.drain(..=end);
+                    self.discarding = false;
+                }
+                None => {
+                    self.buf.clear();
+                    return false;
+                }
+            }
+        }
+        if self.pasting.is_some() && !self.collect_paste(out) {
+            return false;
+        }
+        let mut again = false;
         let mut pos = 0;
         while pos < self.buf.len() {
             let wait = Wait { timed_out, stalled };
             match parse_one(&self.buf[pos..], wait) {
-                Step::Token(input, n) => {
-                    push_coalesced(&mut out, input);
+                Step::Token(mut input, n) => {
+                    if let Input::Key { raw, .. } = &mut input
+                        && n <= RAW_MAX
+                    {
+                        raw.extend_from_slice(&self.buf[pos..pos + n]);
+                    }
+                    push_coalesced(out, input);
                     pos += n;
                 }
                 Step::Skip(n) => pos += n,
+                Step::Discard(n) => {
+                    pos += n;
+                    self.discarding = true;
+                    again = true;
+                    break;
+                }
+                Step::Paste(n) => {
+                    pos += n;
+                    self.pasting = Some(Vec::new());
+                    again = true;
+                    break;
+                }
                 Step::Incomplete => break,
             }
         }
         self.buf.drain(..pos);
-        out
+        again
     }
+}
+
+fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    haystack.windows(needle.len()).position(|w| w == needle)
+}
+
+/// Length of the trailing bytes that could still grow into `needle` in the next chunk.
+fn partial_tail(haystack: &[u8], needle: &[u8]) -> usize {
+    let max = needle.len().min(haystack.len());
+    (1..max)
+        .rev()
+        .find(|&n| haystack[haystack.len() - n..] == needle[..n])
+        .unwrap_or(0)
 }
 
 fn push_coalesced(out: &mut Vec<Input>, input: Input) {
@@ -200,8 +300,9 @@ fn utf8_len(lead: u8) -> usize {
 
 fn parse_command_line(bytes: &[u8], wait: Wait) -> Step {
     let Some(end) = bytes.iter().position(|&b| b == b'\n') else {
+        // Abandoned command bytes must never be re-read as input; that would type a frame at the shell.
         return if bytes.len() > MAX_LINE || wait.stalled {
-            Step::Skip(1)
+            Step::Discard(bytes.len())
         } else {
             Step::Incomplete
         };
@@ -226,11 +327,13 @@ fn parse_escape(bytes: &[u8], wait: Wait) -> Step {
         Some(b'O') => parse_ss3(bytes, wait),
         Some(&ESC | &b'{') => Step::Token(key("escape", Mods::default()), 1),
         Some(_) => match parse_plain(&bytes[1..]) {
-            Step::Token(Input::Key { name, mods }, n) => {
+            Step::Token(Input::Key { name, mods, .. }, n) => {
                 Step::Token(key(name, Mods { alt: true, ..mods }), n + 1)
             }
             Step::Token(other, n) => Step::Token(other, n + 1),
             Step::Skip(n) => Step::Skip(n + 1),
+            Step::Discard(n) => Step::Discard(n + 1),
+            Step::Paste(n) => Step::Paste(n + 1),
             Step::Incomplete => Step::Incomplete,
         },
     }
@@ -247,7 +350,7 @@ fn parse_ss3(bytes: &[u8], wait: Wait) -> Step {
         b'D' => "left",
         b'H' => "home",
         b'F' => "end",
-        _ => return Step::Skip(3),
+        _ => return Step::Token(unknown_key(), 3),
     };
     Step::Token(key(name, Mods::default()), 3)
 }
@@ -274,18 +377,28 @@ fn parse_csi(bytes: &[u8], wait: Wait) -> Step {
     let final_byte = bytes[end];
     let body = &bytes[2..end];
     let consumed = end + 1;
+    if body.first() == Some(&b'<') && matches!(final_byte, b'M' | b'm') {
+        // an unrecognised mouse report is dropped: it is not text and must never be forwarded
+        return match sgr_mouse(&body[1..], final_byte == b'M') {
+            Some(t) => Step::Token(t, consumed),
+            None => Step::Skip(consumed),
+        };
+    }
+    if final_byte == b'~' {
+        match params(body).first() {
+            Some(&200) => return Step::Paste(consumed),
+            Some(&201) => return Step::Skip(consumed),
+            _ => {}
+        }
+    }
     let token = match (body.first(), final_byte) {
-        (Some(b'<'), b'M' | b'm') => sgr_mouse(&body[1..], final_byte == b'M'),
         (None, b'I') => Some(Input::Focus(true)),
         (None, b'O') => Some(Input::Focus(false)),
         (_, b'~') => tilde_key(body),
         (_, b'A' | b'B' | b'C' | b'D' | b'H' | b'F') => letter_key(body, final_byte),
         _ => None,
     };
-    match token {
-        Some(t) => Step::Token(t, consumed),
-        None => Step::Skip(consumed),
-    }
+    Step::Token(token.unwrap_or_else(unknown_key), consumed)
 }
 
 /// An `ESC [`/`ESC O` introducer promises more bytes, so only a long stall turns it into escape.
@@ -397,10 +510,16 @@ fn ascii_key(b: u8) -> Input {
     }
 }
 
+/// A sequence the parser cannot name: still forwardable, because `raw` carries the bytes.
+fn unknown_key() -> Input {
+    key("unknown", Mods::default())
+}
+
 fn key(name: impl Into<String>, mods: Mods) -> Input {
     Input::Key {
         name: name.into(),
         mods,
+        raw: Vec::new(),
     }
 }
 
@@ -408,8 +527,33 @@ fn key(name: impl Into<String>, mods: Mods) -> Input {
 mod tests {
     use super::*;
 
+    /// Existing expectations are written without `raw`; dedicated tests below cover it.
+    fn bare(inputs: Vec<Input>) -> Vec<Input> {
+        inputs
+            .into_iter()
+            .map(|i| match i {
+                Input::Key { name, mods, .. } => key(name, mods),
+                other => other,
+            })
+            .collect()
+    }
+
     fn feed(bytes: &[u8]) -> Vec<Input> {
-        Parser::new().feed(bytes)
+        bare(Parser::new().feed(bytes))
+    }
+
+    fn feed_into(p: &mut Parser, bytes: &[u8]) -> Vec<Input> {
+        bare(p.feed(bytes))
+    }
+
+    fn raw_of(inputs: &[Input]) -> Vec<&[u8]> {
+        inputs
+            .iter()
+            .filter_map(|i| match i {
+                Input::Key { raw, .. } => Some(raw.as_slice()),
+                _ => None,
+            })
+            .collect()
     }
 
     fn mouse(kind: MouseKind, button: Button, x: u16, y: u16, dy: i8, mods: Mods) -> Input {
@@ -617,7 +761,7 @@ mod tests {
         assert_eq!(feed("æ→".as_bytes()), vec![plain("æ"), plain("→")]);
         let mut p = Parser::new();
         assert!(p.feed(&"ø".as_bytes()[..1]).is_empty());
-        assert_eq!(p.feed(&"ø".as_bytes()[1..]), vec![plain("ø")]);
+        assert_eq!(bare(p.feed(&"ø".as_bytes()[1..])), vec![plain("ø")]);
         assert_eq!(feed(b"\xffa"), vec![plain("a")]);
     }
 
@@ -640,7 +784,7 @@ mod tests {
         let mut p = Parser::new();
         assert!(p.feed(b"\x1b").is_empty());
         assert!(p.has_pending());
-        assert_eq!(p.flush(), vec![plain("escape")]);
+        assert_eq!(bare(p.flush()), vec![plain("escape")]);
         assert!(!p.has_pending());
     }
 
@@ -691,8 +835,15 @@ mod tests {
     }
 
     #[test]
-    fn unknown_csi_skipped() {
-        assert_eq!(feed(b"\x1b[?1;2c\x1b[A"), vec![plain("up")]);
+    fn unnamed_csi_becomes_the_unknown_key() {
+        assert_eq!(
+            feed(b"\x1b[?1;2c\x1b[A"),
+            vec![plain("unknown"), plain("up")]
+        );
+        assert_eq!(feed(b"\x1b[15~"), vec![plain("unknown")]);
+        assert_eq!(feed(b"\x1bOZ"), vec![plain("unknown")]);
+        let out = Parser::new().feed(b"\x1b[15~");
+        assert_eq!(raw_of(&out), vec![b"\x1b[15~".as_slice()]);
     }
 
     fn flush_until_stalled(p: &mut Parser) -> Vec<Input> {
@@ -700,7 +851,7 @@ mod tests {
         for _ in 0..STALL_LIMIT {
             out.extend(p.flush());
         }
-        out
+        bare(out)
     }
 
     #[test]
@@ -745,21 +896,41 @@ mod tests {
     }
 
     #[test]
-    fn stray_brace_is_dropped_after_stall() {
+    fn stalled_command_line_is_dropped_whole() {
         let mut p = Parser::new();
-        assert!(p.feed(b"{\x1b[<0;3;2M").is_empty());
-        let out = flush_until_stalled(&mut p);
-        assert_eq!(
-            out,
-            vec![mouse(
-                MouseKind::Press,
-                Button::Left,
-                3,
-                2,
-                0,
-                Mods::default()
-            )]
+        assert!(p.feed(b"{\"t\":\"frame\",\"data\":\"\x1b[1;1Hx").is_empty());
+        assert!(flush_until_stalled(&mut p).is_empty());
+        assert!(!p.has_pending());
+    }
+
+    #[test]
+    fn a_frame_split_by_a_long_gap_yields_no_keys() {
+        let mut p = Parser::new();
+        assert!(
+            p.feed(b"{\"t\":\"frame\",\"data\":\"\x1b[1;1Hab")
+                .is_empty()
         );
+        assert!(flush_until_stalled(&mut p).is_empty());
+        assert!(p.feed(b"c\x1b[2;1Hd\"}\n").is_empty());
+        assert_eq!(feed_into(&mut p, b"x"), vec![plain("x")]);
+    }
+
+    #[test]
+    fn key_events_carry_their_exact_bytes() {
+        let out = Parser::new().feed(b"x\x1b[A\x1b\x1bOH\xc3\xa6");
+        assert_eq!(
+            raw_of(&out),
+            vec![
+                b"x".as_slice(),
+                b"\x1b[A".as_slice(),
+                b"\x1b".as_slice(),
+                b"\x1bOH".as_slice(),
+                "æ".as_bytes(),
+            ]
+        );
+        let mut p = Parser::new();
+        assert!(p.feed(b"\x1b").is_empty());
+        assert_eq!(raw_of(&p.flush()), vec![b"\x1b".as_slice()]);
     }
 
     #[test]
@@ -781,8 +952,34 @@ mod tests {
 
     #[test]
     fn focus_requires_empty_params() {
-        assert!(feed(b"\x1b[5I").is_empty());
+        assert_eq!(feed(b"\x1b[5I"), vec![plain("unknown")]);
         assert_eq!(feed(b"\x1b[I"), vec![Input::Focus(true)]);
+    }
+
+    #[test]
+    fn bracketed_paste_is_one_event_never_keys() {
+        assert_eq!(
+            feed(b"\x1b[200~hi \x1b[A there\x1b[201~x"),
+            vec![Input::Paste(Some(b"hi \x1b[A there".to_vec())), plain("x"),]
+        );
+    }
+
+    #[test]
+    fn a_paste_split_across_chunks_including_its_terminator() {
+        let mut p = Parser::new();
+        assert!(p.feed(b"\x1b[200~one").is_empty());
+        assert!(p.feed(b" two\x1b[20").is_empty());
+        assert_eq!(p.feed(b"1~"), vec![Input::Paste(Some(b"one two".to_vec()))]);
+        assert!(!p.has_pending());
+    }
+
+    #[test]
+    fn an_oversized_paste_is_dropped_not_typed() {
+        let mut p = Parser::new();
+        assert!(p.feed(b"\x1b[200~").is_empty());
+        let big = vec![b'x'; PASTE_MAX + 1];
+        assert!(p.feed(&big).is_empty());
+        assert_eq!(p.feed(b"\x1b[201~"), vec![Input::Paste(None)]);
     }
 
     #[test]
@@ -792,5 +989,27 @@ mod tests {
         big.resize(MAX_LINE + 2, b'x');
         assert!(p.feed(&big).is_empty());
         assert!(!p.has_pending());
+        assert!(p.feed(b"rest of the same line\x1b[A").is_empty());
+        assert_eq!(feed_into(&mut p, b"\n\x1b[A"), vec![plain("up")]);
+    }
+
+    #[test]
+    fn a_stalled_anim_line_discards_like_a_frame() {
+        let mut p = Parser::new();
+        assert!(
+            p.feed(b"{\"t\":\"anim\",\"id\":1,\"data\":\"\x1b[3;1Hab")
+                .is_empty()
+        );
+        assert!(flush_until_stalled(&mut p).is_empty());
+        assert!(p.feed(b"c\x1b[4;1Hd\"}\n").is_empty());
+        assert_eq!(feed_into(&mut p, b"x"), vec![plain("x")]);
+    }
+
+    #[test]
+    fn an_oversized_paste_of_keys_is_not_a_command_line() {
+        let mut p = Parser::new();
+        let big = vec![b'x'; MAX_LINE + 2];
+        assert!(p.feed(&big).is_empty());
+        assert_eq!(feed_into(&mut p, b"y"), vec![plain("y")]);
     }
 }

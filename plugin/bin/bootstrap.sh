@@ -30,7 +30,7 @@ if ! safe "$target" || ! safe "$version"; then
 fi
 
 bin="$data/bin/$name-$target-$version"
-[ -x "$bin" ] && exec "$bin"
+[ -x "$bin" ] && exec "$bin" "$@"
 mkdir -p "$data/bin"
 
 sha256() {
@@ -59,14 +59,14 @@ download() {
 }
 
 if [ "$version" != dev ] && [ -n "${VTABS_REPO:-}" ] && command -v curl >/dev/null 2>&1; then
-  download && exec "$bin"
+  download && exec "$bin" "$@"
   printf 'download failed\n'
 fi
 
 if [ "${VTABS_BUILD:-1}" = 1 ] && [ -f "${VTABS_SRC:-}/Cargo.toml" ] && command -v cargo >/dev/null 2>&1; then
   printf 'building backend\n'
   if cargo build --release --manifest-path "$VTABS_SRC/Cargo.toml" --target-dir "$data/target"; then
-    cp "$data/target/release/$name" "$bin" && exec "$bin"
+    cp "$data/target/release/$name" "$bin" && exec "$bin" "$@"
   fi
   printf 'build failed\n'
 fi

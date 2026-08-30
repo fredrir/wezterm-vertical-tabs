@@ -2,8 +2,8 @@ use std::io::{self, IsTerminal, Write};
 
 use crossterm::{cursor, execute, terminal};
 
-const ENABLE_MODES: &str = "\x1b[?1000h\x1b[?1002h\x1b[?1003h\x1b[?1006h\x1b[?1004h";
-const DISABLE_MODES: &str = "\x1b[?1004l\x1b[?1006l\x1b[?1003l\x1b[?1002l\x1b[?1000l";
+const ENABLE_MODES: &str = "\x1b[?1000h\x1b[?1002h\x1b[?1003h\x1b[?1006h\x1b[?1004h\x1b[?2004h";
+const DISABLE_MODES: &str = "\x1b[?2004l\x1b[?1004l\x1b[?1006l\x1b[?1003l\x1b[?1002l\x1b[?1000l";
 
 /// Restores the terminal on drop, including during panic unwinding.
 pub struct TerminalGuard {
@@ -11,9 +11,12 @@ pub struct TerminalGuard {
 }
 
 impl TerminalGuard {
-    pub fn enter(out: &mut impl Write) -> io::Result<Self> {
+    pub fn enter(out: &mut impl Write, bg: Option<(u8, u8, u8)>) -> io::Result<Self> {
         let raw = io::stdin().is_terminal() && terminal::enable_raw_mode().is_ok();
         execute!(out, terminal::EnterAlternateScreen, cursor::Hide)?;
+        if let Some(bg) = bg {
+            out.write_all(fill(bg).as_bytes())?;
+        }
         out.write_all(ENABLE_MODES.as_bytes())?;
         out.flush()?;
         Ok(Self { raw })
@@ -36,6 +39,44 @@ impl Drop for TerminalGuard {
     }
 }
 
+/// Paints the whole pane before the first frame arrives, so a new sidebar never flashes.
+fn fill(bg: (u8, u8, u8)) -> String {
+    let (r, g, b) = bg;
+    format!("\x1b[48;2;{r};{g};{b}m\x1b[2J\x1b[H\x1b[0m")
+}
+
+pub fn parse_bg(spec: &str) -> Option<(u8, u8, u8)> {
+    let hex = spec.strip_prefix('#')?;
+    if hex.len() != 6 || !hex.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return None;
+    }
+    let byte = |i: usize| u8::from_str_radix(&hex[i..i + 2], 16).ok();
+    Some((byte(0)?, byte(2)?, byte(4)?))
+}
+
 pub fn size() -> Option<(u16, u16)> {
     terminal::size().ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_only_full_hex_colors() {
+        assert_eq!(parse_bg("#1e1e2e"), Some((30, 30, 46)));
+        assert_eq!(parse_bg("#FFFFFF"), Some((255, 255, 255)));
+        assert_eq!(parse_bg("1e1e2e"), None);
+        assert_eq!(parse_bg("#1e1e2"), None);
+        assert_eq!(parse_bg("#1e1e2g"), None);
+        assert_eq!(parse_bg(""), None);
+    }
+
+    #[test]
+    fn fill_erases_with_the_background() {
+        assert_eq!(
+            fill((30, 30, 46)),
+            "\x1b[48;2;30;30;46m\x1b[2J\x1b[H\x1b[0m"
+        );
+    }
 }

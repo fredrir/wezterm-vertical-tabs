@@ -25,7 +25,12 @@ M.executable_dir = "/usr/local/bin"
 function M.hostname()
   return "macie"
 end
-function M.run_child_process()
+-- Paths the fake `test -L` should report as symlinks, so the refusal can be pinned.
+M.symlinks = {}
+function M.run_child_process(args)
+  if type(args) == "table" and args[1] == "test" then
+    return M.symlinks[args[3]] == true, "", ""
+  end
   return true, "", ""
 end
 
@@ -111,9 +116,14 @@ M.time = {
   end,
 }
 
+M.panes = {}
+
 M.mux = {
   all_windows = function()
     return {}
+  end,
+  get_pane = function(pane_id)
+    return M.panes[pane_id]
   end,
 }
 M.plugin = {

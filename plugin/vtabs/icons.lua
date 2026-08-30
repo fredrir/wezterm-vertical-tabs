@@ -1,4 +1,5 @@
 local wezterm = require "wezterm" ---@type Wezterm
+local mux = require "vtabs.mux"
 local util = require "vtabs.util"
 
 local M = {}
@@ -10,12 +11,12 @@ local function glyph(name, fallback)
 end
 
 M.defaults = {
-  default = glyph("cod_terminal", ">"),
-  zsh = glyph("dev_terminal", "$"),
-  bash = glyph("dev_terminal", "$"),
+  default = glyph("md_console_line", ">"),
+  zsh = glyph("md_console_line", "$"),
+  bash = glyph("md_console_line", "$"),
   fish = glyph("md_fish", "$"),
-  nu = glyph("dev_terminal", "$"),
-  sh = glyph("dev_terminal", "$"),
+  nu = glyph("md_console_line", "$"),
+  sh = glyph("md_console_line", "$"),
   ["cmd.exe"] = glyph("cod_terminal_cmd", ">"),
   ["pwsh.exe"] = glyph("cod_terminal_powershell", ">"),
   ["powershell.exe"] = glyph("cod_terminal_powershell", ">"),
@@ -35,7 +36,8 @@ M.defaults = {
   python3 = glyph("dev_python", "p"),
   cargo = glyph("dev_rust", "r"),
   rustc = glyph("dev_rust", "r"),
-  go = glyph("dev_go", "G"),
+  -- dev_go (U+E724) is a blank glyph in both Nerd Fonts; seti_go actually draws something
+  go = glyph("seti_go", "G"),
   make = glyph("cod_tools", "m"),
   htop = glyph("md_chart_line", "%"),
   btop = glyph("md_chart_line", "%"),
@@ -45,8 +47,16 @@ M.defaults = {
   mux = glyph("md_lan_connect", "@"),
   pinned = glyph("md_pin", "*"),
   private = glyph("md_incognito", "~"),
-  close = glyph("cod_close", "x"),
+  -- U+2716 is in no monospace cmap we checked, so it was fallback-rendered all along; the thick
+  -- Material close is in-font and measures about twice the ink of the plain one.
+  close = glyph("md_close_thick", "x"),
   new_tab = glyph("cod_add", "+"),
+  -- The strip trio is uniform and light: ❮ and ⚙ measure the same ink as body text, and a heavy
+  -- cross beside them measured twice their weight. `⚙` is the recorded exception to the in-font
+  -- rule - Unicode has no width-safe gear that is. `icon_map` overrides any of them.
+  strip_new_tab = "+",
+  settings = "⚙",
+  search = glyph("cod_search", "/"),
   unseen = glyph("md_circle_medium", "•"),
   focus = "›",
   active = "▎",
@@ -67,9 +77,7 @@ function M.resolve(icon_map)
 end
 
 local function process_key(pane)
-  local name = util.try(function()
-    return pane:get_foreground_process_name()
-  end)
+  local name = mux.foreground(pane)
   if not name or name == "" then
     return nil
   end

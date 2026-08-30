@@ -40,3 +40,7 @@ jobs:
       - run: luarocks install luacheck
       - run: luacheck init.lua vtabs tests
       - run: lua tests/run.lua
+      - name: docs table matches the schema
+        run: lua scripts/gen-docs.lua --check
+        working-directory: .
+
