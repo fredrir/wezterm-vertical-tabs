@@ -1,0 +1,5 @@
+backend/target
+
+plugin/lua_modules
+plugin/luarocks
+plugin/lua
