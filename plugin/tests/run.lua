@@ -3285,6 +3285,61 @@ test("a width the content bands clamp is still the width the user asked for, not
   config.setup { backend = { path = "/bin/wez-vtabs" } }
 end)
 
+test("a width the bands clamped us to is never adopted, however long it sits there", function()
+  local win, gui = setup_window(1)
+  sidebar.ensure(gui)
+  local tab = win.tab_list[1]
+  local sb = mark_ready(tab)
+  local wid = gui:window_id()
+  local content = sidebar.content_pane(tab)
+  sb.left, sb.width = 0, sb.cols
+  content.left, content.width = sb.cols + 1, content.cols
+  later(400, function()
+    geometry.correct(gui)
+  end)
+  tab:set_split(40)
+  later(800, function()
+    geometry.correct(gui)
+  end)
+  later(1200, function()
+    eq(geometry.correct(gui), false, "the drag is adopted once the hand comes off")
+  end)
+  eq(geometry.desired(wid), 40, "40 is theirs")
+
+  -- Two more bands: 40 no longer leaves each of them MIN_CONTENT, so we drive it down to 20.
+  for i = 1, 2 do
+    local beside = fake.pane(tab, { cols = 8 })
+    tab.pane_list[#tab.pane_list + 1] = beside
+    beside.left, beside.width = content.left + i * 9, 8
+  end
+  -- A width that has sat still with nothing outstanding is re-adopted before the adjust is reached,
+  -- so the new target is only pursued once something perturbs it -- here the resize that opened the
+  -- band. That deferral is a separate wart; what this test pins is what happens to the clamp after.
+  later(1600, function()
+    geometry.on_resize(wid)
+    assert(geometry.correct(gui), "the clamp is driven, not merely computed")
+  end)
+  eq(sb.cols, 20, "the sidebar is where the bands leave room for it")
+  -- The width we clamped it to now sits still, with nothing outstanding: this is the state the
+  -- adoption branch used to mistake for a hand on the divider.
+  for _, at in ipairs { 2000, 3000, 8000 } do
+    later(at, function()
+      eq(geometry.correct(gui), false, "nothing to do at " .. at .. " ms")
+    end)
+    eq(geometry.desired(wid), 40, "still theirs after " .. at .. " ms at the clamp")
+  end
+
+  -- The band closes: the room comes back and so must the width, rather than 20 being kept.
+  table.remove(tab.pane_list, #tab.pane_list)
+  table.remove(tab.pane_list, #tab.pane_list)
+  later(9000, function()
+    assert(geometry.correct(gui), "the room came back, so the width is pursued")
+  end)
+  eq(sb.cols, 40, "driven back to what they dragged to")
+  eq(geometry.desired(wid), 40, "20 was our clamp, never their preference")
+  config.setup { backend = { path = "/bin/wez-vtabs" } }
+end)
+
 test("a font or dpi change is corrected, not adopted as a divider drag", function()
   local win, gui = setup_window(1)
   sidebar.ensure(gui)

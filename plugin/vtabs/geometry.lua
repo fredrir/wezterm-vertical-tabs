@@ -32,6 +32,7 @@ local in_flight = {}
 local driven = {}
 local resized_at = {}
 local rail_reserve = {}
+local last_target = {}
 
 ---Target width: the rail when collapsed, else what the user last dragged it to, else `cfg.width`.
 function M.desired(window_id)
@@ -62,6 +63,7 @@ function M.forget_window(window_id)
   driven[window_id] = nil
   resized_at[window_id] = nil
   rail_reserve[window_id] = nil
+  last_target[window_id] = nil
 end
 
 ---The sidebar reporting its own size means our adjust moved something, so the next one need not
@@ -209,6 +211,9 @@ function M.correct(gui_window)
   local target = fits(want, tab_cols, collapsed and want or MIN_WIDTH, bands)
   local attempt = { tab_id = tab_id, tab_cols = tab_cols, target = target, cols = cols }
   if target == cols then
+    -- Remembered, not just forgotten: a width we asked for stays ours after we stop asking, or the
+    -- adoption branch below reads our own clamp back as a hand on the divider.
+    last_target[wid] = target
     attempted[wid] = nil
     in_flight[wid] = nil
     return false
@@ -221,7 +226,7 @@ function M.correct(gui_window)
   local outstanding = attempted[wid] ~= nil or in_flight[wid] ~= nil
   local quiet = math.max(cfg.poll_ms, ADOPT_FLOOR_MS)
   local settled = now - (driven[wid] or 0) >= ADOPT_FLOOR_MS and now - (resized_at[wid] or 0) >= quiet
-  if comparable and not outstanding and settled then
+  if comparable and not outstanding and settled and cols ~= (last_target[wid] or -1) then
     if seen.cols ~= cols or now - since < ADOPT_FLOOR_MS then
       -- Moving, and not by us: the user is on the divider. Correcting now fights their hand.
       return false
