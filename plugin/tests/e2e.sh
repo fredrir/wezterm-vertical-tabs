@@ -125,7 +125,8 @@ drag() { # press_pane follow_pane x1 y1 x2 y2
   cli send-text --no-paste --pane-id "$2" "$(printf '\033[<0;%s;%sm' "$5" "$6")"
 }
 sb3=$(sidebar_of "$third_tab")
-drag "$sb1" "$sb1" 5 "$(row_of "$sb1" one)" 5 6
+# Both ends come from the live hit map: card heights are configurable, row 6 was not.
+drag "$sb1" "$sb1" 5 "$(row_of "$sb1" one)" 5 "$(row_of "$sb1" three)"
 sleep 1.5
 [ "$(row_of "$sb1" three)" -lt "$(row_of "$sb1" one)" ] || fail "drag did not reorder tabs"
 echo "ok: drag reorders tabs"

@@ -237,14 +237,13 @@ local function rect_for(gui_window, dims, resolved, cfg)
 end
 
 ---A rail has no room beside the lights, so its toggle centres below them; without telling
----`strip_geometry` which mode it is in, the toggle lands at column 11 of a 5-column pane.
-local function strip_for(gui_window, cfg, dims)
+---`strip_geometry` which mode it is in, the toggle lands off the end of the rail.
+local function strip_for(gui_window, cfg, dims, rail)
   local facts = chrome_for(gui_window, cfg)
   local wid = gui_window:window_id()
   local window = util.try(function()
     return gui_window:get_dimensions()
   end) or {}
-  local rail = state.is_collapsed(wid) and cfg.collapsed == "rail" or nil
   local g = platform.strip_geometry(dims, {
     is_mac = platform.is_mac or facts.preview,
     integrated_buttons = facts.integrated_buttons,
@@ -254,7 +253,7 @@ local function strip_for(gui_window, cfg, dims)
     padding_top = cfg.padding.top,
     toggle_button = cfg.toggle_button,
     card_x1 = cfg.padding.left + 1,
-    rail = rail,
+    rail = rail or nil,
     rail_width = rail and cfg.rail_width or nil,
   })
   -- `desired` has no cell size of its own, so the reserve a frame measured is handed to geometry.
@@ -263,7 +262,7 @@ local function strip_for(gui_window, cfg, dims)
   if cfg.toggle_button and g.rows > 0 then
     toggle = { row = g.toggle_row, x = g.toggle_x, x1 = math.max(1, g.toggle_x - 1), x2 = g.toggle_x + 2 }
   end
-  return { rows = g.rows, cols = g.cols, toggle = toggle }
+  return { rows = g.rows, cols = g.cols, toggle = toggle, toggle_row = g.toggle_row }
 end
 
 local function theme_for(gui_window, cfg)
@@ -371,7 +370,8 @@ function M.sync(gui_window, opts)
       local due = is_active or opts.force or now - (session.sent_at[pid] or 0) >= INACTIVE_REFRESH_MS
       local dims = due and dims_of(sb) or nil
       if dims then
-        local strip = strip_for(gui_window, cfg, dims)
+        local rail = state.is_collapsed(wid) and cfg.collapsed == "rail" or nil
+        local strip = strip_for(gui_window, cfg, dims, rail)
         -- a title or cwd that breaks one render must not stop the other sidebars in this window
         local ok, result = pcall(render.render, {
           cols = dims.cols,
@@ -388,7 +388,7 @@ function M.sync(gui_window, opts)
           ensure_visible = not session.user_scrolled[wid] and active_tab_id or nil,
           focus_index = is_active and focus_index or nil,
           private = state.is_private(wid),
-          rail = state.is_collapsed(wid) and cfg.collapsed == "rail" or nil,
+          rail = rail,
           popover = is_active and rect_for(gui_window, dims, resolved, cfg) or nil,
           footer = footer,
         })

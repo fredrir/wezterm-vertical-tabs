@@ -919,23 +919,106 @@ test("item 7: the ghost card's hover is one border step and no inline band", fun
   )
 end)
 
-test("P1 strip: reserve rows, toggle span, never over a list row", function()
-  local v =
-    p1_view { strip = { rows = 3, toggle = { row = 2, x = 11, x1 = 10, x2 = 13 } }, opts = { separator = "gap" } }
+test("P1 strip: reserve rows, action cluster, never over a list row", function()
+  local v = p1_view { strip = { rows = 3, cols = 0, toggle_row = 2 }, opts = { separator = "gap" } }
   local rows, r = frame_rows(v)
-  eq(usub(rows[2], 11, 11), "«", "toggle glyph at toggle.x")
+  eq(usub(rows[2], 3, 3), "«", "with no lights the cluster starts where the toggle already was")
+  eq(usub(rows[2], 6, 6), "+", "and new tab follows one span along")
   eq(r.hits[1].kind, "strip")
   eq(r.hits[1].x1, nil, "strip reserve is not clickable")
-  eq(r.hits[2].kind, "toggle")
-  eq(r.hits[2].x1, 10)
-  eq(r.hits[2].x2, 13)
-  eq(r.hits[3].kind, "toggle", "span is 2 rows and stays inside the strip")
+  eq(r.hits[2].kind, "action")
+  eq(r.hits[2].x1, 2)
+  eq(r.hits[2].x2, 7)
+  eq(hit.span(r.hits[2], 2), "toggle")
+  eq(hit.span(r.hits[2], 4), "toggle")
+  eq(hit.span(r.hits[2], 5), "new_tab", "the spans are contiguous, with no dead cell between")
+  eq(hit.span(r.hits[2], 7), "new_tab")
+  eq(hit.span(r.hits[2], 8), nil)
+  eq(r.hits[3].kind, "action", "the band is 2 rows and stays inside the strip")
   eq(r.hits[4].kind, "tab", "the list starts below the strip")
   local right = frame_rows(p1_view {
-    strip = { rows = 2, toggle = { row = 1, x = 2, x1 = 1, x2 = 4 } },
+    strip = { rows = 2, cols = 0, toggle_row = 1 },
     opts = { position = "right", separator = "gap" },
   })
-  eq(usub(right[1], 2, 2), "»", "position=right flips only the glyph")
+  eq(usub(right[1], 2, 2), "»", "position=right mirrors the padding and flips the toggle glyph")
+  eq(usub(right[1], 5, 5), "+")
+end)
+
+test("addendum 2 A8a: every action column derives from the reserve, whatever it measures", function()
+  -- 70 px of buttons is 9 cells at the default macOS font and 10 at the next cell width up
+  for _, reserve in ipairs { 9, 10 } do
+    local v = p1_view {
+      strip = { rows = 4, cols = reserve, toggle_row = 1 },
+      opts = { separator = "gap", strip_actions = { "toggle", "new_tab", "settings" } },
+    }
+    v.cfg.hooks.settings = function() end
+    local rows, r = frame_rows(v)
+    local base = reserve + 2
+    eq(usub(rows[1], base, base), "«", reserve .. ": first glyph two columns clear of the last light")
+    eq(usub(rows[1], base + 3, base + 3), "+")
+    eq(usub(rows[1], base + 6, base + 6), "⚙")
+    local spans = r.hits[1].spans
+    eq(#spans, 3)
+    eq(spans[1].x1, base - 1, reserve .. ": the first span opens on the reserve's last column")
+    eq(spans[1].x2, base + 1)
+    eq(spans[2].x1, base + 2, reserve .. ": contiguous and non-overlapping")
+    eq(spans[3].x2, base + 7)
+    for _, row in ipairs { 1, 2 } do
+      eq(r.hits[row].kind, "action", reserve .. ": both reserved rows take the click")
+    end
+    eq(r.hits[3].kind, "strip", reserve .. ": the alignment row does not")
+
+    v.cfg.hooks.settings = nil
+    local _, dropped = frame_rows(v)
+    eq(#dropped.hits[1].spans, 2, reserve .. ": settings is not drawn without a hook to answer it")
+  end
+end)
+
+test("addendum 2 A8d: hovering one action lights only its own three columns", function()
+  local base = p1_view { strip = { rows = 3, cols = 0, toggle_row = 2 }, opts = { separator = "gap" } }
+  local idle = render.render(base)
+  local lit = render.render(p1_view {
+    strip = { rows = 3, cols = 0, toggle_row = 2 },
+    hover = { x = 6, y = 2 },
+    opts = { separator = "gap" },
+  })
+  assert(not idle.rows[2]:find(ansi.bg(base.theme.hover_bg), 1, true), "nothing is lit while the pointer is away")
+  local body = strip(lit.rows[2])
+  eq(usub(body, 6, 6), "+", "the hovered glyph is still its own")
+  local plan = require("vtabs.layout").plan(p1_view {
+    strip = { rows = 3, cols = 0, toggle_row = 2 },
+    hover = { x = 6, y = 2 },
+    opts = { separator = "gap" },
+  })
+  eq(plan.rows[2].lit_id, "new_tab", "and only that action is lit")
+  eq(plan.rows[3].lit_id, "new_tab", "on both rows of the band")
+  local off = require("vtabs.layout").plan(p1_view {
+    strip = { rows = 3, cols = 0, toggle_row = 2 },
+    hover = { x = 9, y = 2 },
+    opts = { separator = "gap" },
+  })
+  eq(off.rows[2].lit_id, nil, "a column between the cluster and the list lights nothing")
+end)
+
+test("addendum 2 §8: the rail keeps only what fits, centred", function()
+  local narrow = p1_view { rows = 16, cols = 5, opts = { separator = "gap", width = 8 } }
+  narrow.rail = true
+  narrow.strip = { rows = 2, cols = 0, toggle_row = 1 }
+  local rows, r = frame_rows(narrow)
+  eq(usub(rows[1], 3, 3), "«", "one action, centred at ceil(width / 2)")
+  eq(#r.hits[1].spans, 1)
+  local wide = p1_view { rows = 16, cols = 9, opts = { separator = "gap", width = 9 } }
+  wide.rail = true
+  wide.strip = { rows = 2, cols = 0, toggle_row = 1 }
+  local wide_rows, wr = frame_rows(wide)
+  eq(#wr.hits[1].spans, 2, "nine columns hold the pair")
+  eq(usub(wide_rows[1], 2, 2), "«")
+  eq(usub(wide_rows[1], 5, 5), "+")
+  local reserved = p1_view { rows = 16, cols = 9, opts = { separator = "gap", width = 9 } }
+  reserved.rail = true
+  reserved.strip = { rows = 4, cols = 9, toggle_row = 3 }
+  local _, rr = frame_rows(reserved)
+  eq(#rr.hits[3].spans, 1, "under the lights there is only room for the first")
 end)
 
 test("P1 scroll: thumb by state, edge fade, footer below the ghost card", function()
@@ -1319,8 +1402,8 @@ test("P1 screenshots: icon weight, chamfer, toggle surface, dashed ghost", funct
 
   local lit = render.render(p1_view {
     rows = 20,
-    hover = { x = 2, y = 1 },
-    strip = { rows = 2, toggle = { row = 1, x = 2, x1 = 1, x2 = 4 } },
+    hover = { x = 3, y = 1 },
+    strip = { rows = 2, cols = 0, toggle_row = 1 },
   })
   assert(lit.rows[1]:find(ansi.bg(v.theme.hover_bg), 1, true), "the toggle span reads as a button when hovered")
   assert(not r.rows[1]:find(ansi.bg(v.theme.hover_bg), 1, true), "and is bare otherwise")
@@ -1894,14 +1977,22 @@ test("addendum 2 A3c: show_index rides the title when there is no meta line", fu
   assert(usub(metaed[meta_row], 7, 9):find "3", "and the index goes back to the meta line")
 end)
 
-test("addendum 2 A4c: the close glyph is the Material one and still measures one cell", function()
+test("addendum 2 A4c: the close glyph is the heavy multiplication x and measures one cell", function()
+  local icons_mod = require "vtabs.icons"
+  eq(icons_mod.defaults.close, "✖", "not a Nerd Font glyph: those are drawn cell-sized and read thin")
   local resolved = glyphs.resolve(config.setup({ backend = { path = "/bin/wez-vtabs" } }).glyphs, {})
   eq(util.width(resolved.close), 1, "one column, so the ASCII guard never fires")
-  eq(resolved.close, "✖", "the fallback these tests see, the Nerd Font table being empty")
+  eq(resolved.close, "✖")
   local wide = glyphs.resolve(config.setup({ backend = { path = "/bin/wez-vtabs" } }).glyphs, {
     treat_east_asian_ambiguous_width_as_wide = true,
   })
   eq(wide.close, "✖", "U+2716 is Neutral, so ambiguous-as-wide leaves it alone")
+  local swapped = glyphs.resolve(
+    config.setup({ icon_map = { close = "\u{f0156}" }, backend = { path = "/bin/wez-vtabs" } }).glyphs,
+    {}
+  )
+  eq(swapped.close, "\u{f0156}", "and icon_map still reaches the Nerd Font close for anyone who wants it")
+  config.setup { backend = { path = "/bin/wez-vtabs" } }
 end)
 
 test("addendum 4: fit_meta splits on the configured separator", function()
@@ -2043,6 +2134,8 @@ test("layout: the grid, plan and scroll are pure and inspectable", function()
   local rl = layout.plan(rail)
   eq(rl.grid.icon_x, 3)
   eq(rl.grid.close_x, nil, "a rail card has no close column at all")
+  eq(layout.has_text(rl.grid), false, "nor any text column, which is the one contract the painters read")
+  eq(layout.has_text(l.grid), true)
   eq(rl.rail, true)
 end)
 
@@ -2106,7 +2199,7 @@ test("P1 frames are written for design review", function()
     "strip-macos",
     p1_view {
       rows = 20,
-      strip = { rows = 3, toggle = { row = 2, x = 11, x1 = 10, x2 = 13 } },
+      strip = { rows = 4, cols = 9, toggle_row = 1 },
       opts = design,
     }
   )
@@ -3502,7 +3595,7 @@ test("the P1 defaults and their aliases pass validation without warning", functi
   local before = #wezterm.log
   local cfg = config.setup {}
   eq(cfg.padding.top, 1)
-  eq(cfg.row_gap, 1)
+  eq(cfg.row_gap, 0)
   eq(cfg.tab_height, "card")
   eq(cfg.meta, false)
   eq(cfg.separator, "gap")
@@ -3534,8 +3627,8 @@ test("each new key rejects a bad value and keeps its default", function()
   } do
     eq(config.setup({ [key] = bad })[key], config.defaults[key], key .. " reset")
   end
-  eq(config.setup({ row_gap = -1 }).row_gap, 1)
-  eq(config.setup({ row_gap = "two" }).row_gap, 1)
+  eq(config.setup({ row_gap = -1 }).row_gap, 0)
+  eq(config.setup({ row_gap = "two" }).row_gap, 0)
   eq(config.setup({ toggle_button = "yes" }).toggle_button, true)
   eq(config.setup({ row_gap = 3 }).row_gap, 3, "a valid value survives")
 end)
@@ -3869,13 +3962,15 @@ test('rail_titlebar = "widen" widens the rail to the reserve and keeps its toggl
   assert(geom.toggle.x2 <= sb.cols, "the toggle span ends inside the rail, at " .. geom.toggle.x2)
   local toggle_row = nil
   for row, h in pairs(state.session.hits[sb:pane_id()]) do
-    if h.kind == "toggle" then
+    if h.kind == "action" or h.kind == "toggle" then
       toggle_row = row
-      assert(h.x2 <= sb.cols, "and so does its hit record, at " .. h.x2)
-      assert(h.x1 >= 1, "which is what makes it clickable at all")
+      for _, span in ipairs(h.spans or { h }) do
+        assert(span.x2 <= sb.cols, "and so does its hit record, at " .. tostring(span.x2))
+        assert(span.x1 >= 1, "which is what makes it clickable at all")
+      end
     end
   end
-  assert(toggle_row, "the rail still records a toggle")
+  assert(toggle_row, "the rail still records the strip's own target")
 
   railed { rail_titlebar = "none" }
   eq(geometry.desired(wid), 5, "opting out leaves rail_width alone")
@@ -3954,7 +4049,7 @@ test("the close span closes and the toggle span collapses the sidebar", function
   eq(hit.span(hits[first], 24), nil)
   eq(hit.span(hits[first + 1], 26), "close", "the meta row carries the same span")
   eq(hit.span(hits[first - 1], 26), nil, "the pad row does not")
-  eq(hits[1].kind, "toggle")
+  eq(hits[1].kind, "action")
 
   eq(#win.tab_list, 3)
   mouse(gui, sb1, "down", "left", 26, first)
@@ -4026,6 +4121,38 @@ test("a click in a pinned entry's pin span toggles the pin instead of activating
   eq(win.active_tab_ref, win.tab_list[2], "and the tab was not activated")
 end)
 
+test("a drag onto the neighbouring card reorders, at every card height", function()
+  local layout = require "vtabs.layout"
+  for _, shape in ipairs { { "card", false }, { "card", "auto" }, { "row", false }, { "tall", false } } do
+    local height, meta = shape[1], shape[2]
+    config.setup {
+      backend = { path = "/bin/wez-vtabs" },
+      tab_height = height,
+      meta = meta,
+      row_gap = 0,
+    }
+    local label = height .. "/" .. tostring(meta)
+    local win, gui = drag_setup()
+    local sb = sidebar.find(win.tab_list[1])
+    local first, second = win.tab_list[1].id, win.tab_list[2].id
+    local from, onto = title_row(sb, first), title_row(sb, second)
+    assert(from and onto, label .. ": both cards are on screen")
+    eq(onto - from, layout.slot_rows(config.get()), label .. ": the neighbour is exactly one slot away")
+
+    press_row(gui, sb, from)
+    mouse(gui, sb, "drag", "left", 5, onto)
+    local drag = state.session.drag[gui:window_id()]
+    assert(drag and drag.active, label .. ": one slot of travel starts the drag")
+    mouse(gui, sb, "up", "left", 5, onto)
+    view_mod.sync(gui, { force = true })
+    assert(
+      title_row(sb, second) < title_row(sb, first),
+      label .. ": and the dragged tab lands below the one it was dropped on"
+    )
+  end
+  config.setup { meta = "auto", backend = { path = "/bin/wez-vtabs" } }
+end)
+
 test("a drop on a gap row lands below its card, a drop on the title row lands on it", function()
   local win = drag_setup()
   local sb = sidebar.find(win.tab_list[1])
@@ -4044,7 +4171,7 @@ local P1_DEFAULTS = {
   width = 28,
   padding = { top = 1, left = 2, right = 1 },
   edge_to_edge = true,
-  row_gap = 1,
+  row_gap = 0,
   tab_height = "card",
   meta = false,
   separator = "gap",
@@ -4263,7 +4390,7 @@ test("every enum rejects a value outside it and every range rejects the wrong si
   end
   eq(config.setup({ width = 4 }).width, 28, "below min")
   eq(config.setup({ width = "wide" }).width, 28, "wrong type")
-  eq(config.setup({ row_gap = -1 }).row_gap, 1)
+  eq(config.setup({ row_gap = -1 }).row_gap, 0)
   eq(config.setup({ theme = { elevation = 2 } }).theme.elevation, 0.06, "above max")
   eq(config.setup({ toggle_button = "yes" }).toggle_button, true)
   eq(config.setup({ padding = { top = -1 } }).padding.top, 1, "nested keys validate too")
@@ -4360,7 +4487,7 @@ end)
 
 test("cell counts and durations must be whole numbers", function()
   eq(config.setup({ width = 28.7 }).width, 28, "a fractional width would reach AdjustPaneSize")
-  eq(config.setup({ row_gap = 1.5 }).row_gap, 1)
+  eq(config.setup({ row_gap = 1.5 }).row_gap, 0)
   eq(config.setup({ rail_width = 5.5 }).rail_width, 5)
   eq(config.setup({ poll_ms = 500.5 }).poll_ms, 500)
   eq(config.setup({ padding = { top = 1.2 } }).padding.top, 1)
@@ -4893,6 +5020,50 @@ test("collapsed = rail keeps the pane and narrows it to rail_width", function()
   eq(geometry.desired(gui:window_id()), 28)
   assert(geometry.correct(gui))
   eq(sb.cols, 28)
+end)
+
+test("the rail flag reaches strip_geometry, so the toggle lands inside the rail", function()
+  local win, gui = setup_window(1)
+  config.setup { collapsed = "rail", rail_width = 5, titlebar = "macos", backend = { path = "/bin/wez-vtabs" } }
+  sidebar.ensure(gui)
+  local sb = mark_ready(win.tab_list[1])
+  -- the reserve only exists when the pane reports a cell box, and only then can the toggle escape it
+  sb.get_dimensions = function(self)
+    return { cols = self.cols, viewport_rows = 24, pixel_width = self.cols * 10, pixel_height = 456 }
+  end
+  local was_mac = platform.is_mac
+  platform.is_mac = false
+  sidebar.set_collapsed(gui, true)
+  geometry.correct(gui)
+  local seen
+  local render_mod = require "vtabs.render"
+  local original = render_mod.render
+  render_mod.render = function(frame)
+    seen = frame
+    return original(frame)
+  end
+  view_mod.invalidate_theme()
+  view_mod.sync(gui, { force = true })
+  render_mod.render = original
+  platform.is_mac = was_mac
+  assert(seen, "the rail rendered")
+  eq(seen.rail, true, "collapsed to the rail")
+  assert(seen.strip.cols > 0, "and the preview reserved columns for the lights")
+  assert(
+    seen.strip.toggle.x <= seen.cols,
+    "the toggle is inside the rail, not at reserve + 2 past its end: " .. tostring(seen.strip.toggle.x)
+  )
+  eq(seen.strip.toggle_row, seen.strip.rows - config.get().padding.top, "the toggle row sits below the reserve")
+  local rows = {}
+  local painted = render.render(seen)
+  for row = 1, seen.rows do
+    rows[row] = row_text(painted.data, row)
+  end
+  local x = math.ceil(seen.cols / 2)
+  eq(usub(rows[seen.strip.toggle_row], x, x), "«", "and §8 centres the one glyph that fits in the rail")
+  sidebar.set_collapsed(gui, false)
+  view_mod.invalidate_theme()
+  config.setup(legacy { backend = { path = "/bin/wez-vtabs" } })
 end)
 
 test("the rail toggle centres below the macOS reserve instead of beside it", function()

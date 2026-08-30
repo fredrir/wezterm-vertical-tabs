@@ -267,11 +267,13 @@ local function card_row(item, ctx, st, part, rows_in_card, spans, row_in_card)
   local icon_fg = st.dragging and fg or theme.meta_fg or theme.dim
   fill(cells, g.card_x1, g.card_x2, bg)
 
-  local rail = ctx.rail == true
   -- the content block is centred, so the title row is the middle one in both modes
   if part == "title" then
     local mark, mark_fg = marker(item, theme, st, glyphs)
     put(cells, g.gutter, mark, { fg = mark_fg }, g.gutter)
+  elseif (item.is_active or st.dragging) and needs_bar(theme) then
+    -- the bar runs the card's full height: one cell is too little to carry the active state alone
+    put(cells, g.gutter, glyphs.active, { fg = item.is_private and theme.private_accent or theme.accent }, g.gutter)
   end
 
   local function paint_icon()
@@ -284,7 +286,7 @@ local function card_row(item, ctx, st, part, rows_in_card, spans, row_in_card)
     )
   end
 
-  if rail then
+  if not layout.has_text(g) then
     if part == "title" and item.icon ~= "" then
       paint_icon()
     end
@@ -335,14 +337,24 @@ local function card_row(item, ctx, st, part, rows_in_card, spans, row_in_card)
   return cells
 end
 
+---A strip action's glyph: the user's icon, the mirrored toggle, or the icon map's entry for the id.
+local function action_glyph(action, cfg, glyphs)
+  if action.icon then
+    return util.sanitize(action.icon)
+  end
+  if action.id == "toggle" then
+    return cfg.position == "right" and glyphs.toggle_right or glyphs.toggle_left
+  end
+  return glyphs[action.id] or glyphs.new_tab
+end
+
 local function chrome_row(ctx, glyph, glyph_x, text, text_fg, glyph_fg, bg)
   local theme, g, cols = ctx.theme, ctx.grid, ctx.cols
   local cells = new_line(cols, bg or theme.bg, theme.fg)
   if glyph and glyph ~= "" then
     put(cells, glyph_x, glyph, { fg = glyph_fg or text_fg }, glyph_x)
   end
-  -- the rail has no title column at all, so its chrome rows are the glyph and nothing else
-  if text and text ~= "" and g.title_x1 ~= nil then
+  if text and text ~= "" and layout.has_text(g) then
     put(cells, g.title_x1, util.truncate(text, math.max(g.card_x2 - g.title_x1 + 1, 0), ctx.glyphs.ellipsis), {
       fg = text_fg,
     }, g.card_x2)
@@ -361,7 +373,7 @@ local function ghost_rows(ctx, hovered)
     if i == 2 then
       put(cells, g.card_x1, glyphs.frame_dash_v, { fg = border_fg }, g.card_x1)
       put(cells, g.icon_x, glyphs.new_tab, { fg = theme.accent }, g.icon_x)
-      if g.title_x1 ~= nil then
+      if layout.has_text(g) then
         local label = util.truncate(ctx.cfg.new_tab_label, math.max(g.card_x2 - 1 - g.title_x1, 0), glyphs.ellipsis)
         put(cells, g.title_x1, label, { fg = hovered and theme.fg or theme.new_tab_fg }, g.card_x2 - 1)
       end
@@ -475,7 +487,7 @@ function M.render(view)
   local glyphs = view.glyphs
   local plan = layout.plan(view)
   local g = plan.grid
-  local ctx = { theme = theme, cfg = cfg, cols = cols, glyphs = glyphs, grid = g, rail = plan.rail }
+  local ctx = { theme = theme, cfg = cfg, cols = cols, glyphs = glyphs, grid = g }
   local painted, fades = {}, {}
 
   for row = 1, view.rows do
@@ -485,13 +497,14 @@ function M.render(view)
       cells = nil
     elseif spec.kind == "strip" then
       cells = new_line(cols, theme.bg, theme.fg)
-      if spec.lit then
-        fill(cells, spec.toggle.x1, spec.toggle.x2, theme.hover_bg)
-      end
-      if spec.glyph then
-        local glyph = cfg.position == "right" and glyphs.toggle_right or glyphs.toggle_left
-        local on = plan.rows[spec.toggle.row] and plan.rows[spec.toggle.row].lit
-        put(cells, spec.toggle.x or spec.toggle.x1 + 1, glyph, { fg = on and theme.accent or theme.dim }, cols)
+      for _, action in ipairs(spec.actions or {}) do
+        local on = spec.lit_id == action.id
+        if on then
+          fill(cells, action.x1, action.x2, theme.hover_bg)
+        end
+        if spec.glyph then
+          put(cells, action.x, action_glyph(action, cfg, glyphs), { fg = on and theme.accent or theme.dim }, cols)
+        end
       end
     elseif spec.kind == "space" then
       cells = new_line(cols, theme.bg, theme.fg)
