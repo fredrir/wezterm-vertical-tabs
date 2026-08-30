@@ -37,7 +37,8 @@ padded|Catppuccin Mocha|padded|scene|always
 strip-macos|Catppuccin Mocha|macos|scene|always
 rail-macos|Catppuccin Mocha|macos-rail|probe:toggle|rail_widened
 rail-macos-plain|Catppuccin Mocha|macos-rail-plain|probe:toggle|rail_width
-settings|Catppuccin Mocha|default|settings|settings_tab"
+settings|Catppuccin Mocha|default|settings|settings_tab
+settings-behaviour|Catppuccin Mocha|default|settings_behaviour|settings_locked"
 
 cli() { wezterm cli --no-auto-start "$@"; }
 # A gui busy with a spawn or a resize can answer an empty body; every helper here parses this, and
@@ -189,6 +190,20 @@ step() {
       xdotool click 1
       sleep 1.5
       ;;
+    # `Tab` cycles the nav; Behaviour is the fourth group, and the harness config sets poll_ms,
+    # confirm_close and debug, so those rows are the ones precedence has to lock.
+    settings_behaviour)
+      probe "$(content_of "$(tab_ids | cut -d' ' -f2)")" settings
+      sleep 3.5
+      shot_tab=$(pick 'ps=[p["tab_id"] for p in json.load(sys.stdin) if p["title"].startswith("wez-vtabs-settings")];print(ps[0] if ps else "")' 2>/dev/null || echo "")
+      focus_window || return 1
+      xdotool key Tab
+      sleep 0.4
+      xdotool key Tab
+      sleep 0.4
+      xdotool key Tab
+      sleep 2
+      ;;
     probe:*)
       probe "$(content_of "$(tab_ids | cut -d' ' -f2)")" "${1#probe:}"
       sleep 2.5
@@ -259,6 +274,16 @@ EOF
       [ "$corner" != "$middle" ] ||
         fail_state "the frame tint and the terminal background are the same colour ($corner)"
       echo "  zen frame $corner, terminal $middle"
+      ;;
+    # An option the host set in wezterm.lua cannot be edited here; the badge is the whole point of
+    # the Behaviour frame, so a page that merely reached the group does not pass.
+    settings_locked)
+      settings_pane=$(pick 'ps=[p for p in json.load(sys.stdin) if p["title"].startswith("wez-vtabs-settings")];print(ps[0]["pane_id"] if ps else "")')
+      [ -n "$settings_pane" ] || fail_state "no pane carries the wez-vtabs-settings: marker"
+      pane_text "$settings_pane" | grep -q "Behaviour" ||
+        fail_state "the nav is not on the Behaviour group"
+      pane_text "$settings_pane" | grep -q "poll_ms.*LOCKED" ||
+        fail_state "the poll_ms row carries no LOCKED badge"
       ;;
     tooltip_only)
       sidebar_text >"$home/after.txt"
