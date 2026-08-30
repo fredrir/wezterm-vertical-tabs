@@ -308,9 +308,10 @@ function M.apply_to_config(config, opts)
     colors_split = config.colors and config.colors.split or nil,
     window_padding = config.window_padding,
   }
-  -- defaults <- settings.json <- opts, so wezterm.lua always outranks the file
+  -- defaults <- settings.json <- opts, so wezterm.lua always outranks the file. The path comes
+  -- straight off `opts` rather than a first `setup`, which would warn about a typo twice.
   local stored = util.try(function()
-    return settings.load(config_mod.setup(opts))
+    return settings.load { settings = (opts or {}).settings }
   end)
   local cfg = config_mod.setup(opts, stored)
   if cfg.hide_native_tab_bar then
