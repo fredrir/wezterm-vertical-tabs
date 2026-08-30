@@ -38,7 +38,16 @@ wezterm.on("window-resized", function(window)
   wezterm.log_info("e2e: sidebar cols on resize " .. sidebar_cols(window))
 end)
 
+-- The traffic-light reserve and the rail's own strip geometry are keyed off the target triple,
+-- so they can only be exercised anywhere else by lying to `platform` about the platform.
+if os.getenv "VTABS_E2E_MACOS" then
+  require("vtabs.platform").is_mac = true
+  config.window_decorations = "INTEGRATED_BUTTONS|RESIZE"
+  config.integrated_title_button_style = "MacOsNative"
+end
+
 vtabs.apply_to_config(config, {
+  titlebar = os.getenv "VTABS_E2E_MACOS" and "integrate" or nil,
   poll_ms = 200,
   debug = true,
   confirm_close = false,
@@ -115,11 +124,62 @@ local probes = {
   tear_off = function(window)
     require("vtabs.actions").tear_off(window, window:mux_window():active_tab():tab_id())
   end,
+  -- `actions.new_tab` attaches after an awaiting `spawn_tab`; a poll landing in that await has
+  -- already attached and cleared `session.attaching`, so the second call sees exactly this state.
+  double_attach = function(window)
+    local sidebar = require "vtabs.sidebar"
+    local tab = window:mux_window():active_tab()
+    local before = sidebar.find(tab)
+    local again = sidebar.attach(tab)
+    wezterm.log_info(
+      "e2e: double attach had "
+        .. tostring(before and before:pane_id())
+        .. " got "
+        .. tostring(again and again:pane_id())
+    )
+  end,
   reload = function()
     wezterm.reload_configuration()
   end,
   rail_mode = function()
     require("vtabs.config").get().collapsed = "rail"
+  end,
+  popover_level = function(window)
+    local pop = require("vtabs.popover").get(window:window_id())
+    wezterm.log_info("e2e: popover level " .. (pop and (tostring(pop.level) .. ":" .. tostring(pop.confirm)) or "none"))
+  end,
+  confirm_on = function()
+    require("vtabs.config").get().confirm_close = true
+  end,
+  confirm_off = function()
+    require("vtabs.config").get().confirm_close = false
+  end,
+  footer_hook = function()
+    require("vtabs.config").get().hooks.footer = function()
+      return { { id = "e2e_footer", text = "e2e footer" } }
+    end
+  end,
+  no_footer_hook = function()
+    require("vtabs.config").get().hooks.footer = nil
+  end,
+  private_window = function(window)
+    require("vtabs.actions").new_window(window, true)
+  end,
+  -- The hit map is the only source for the columns a click has to land on; labels move, spans do not.
+  probe_hits = function(window)
+    local state = require "vtabs.state"
+    local sidebar = require "vtabs.sidebar"
+    local sb = sidebar.find(window:mux_window():active_tab())
+    local out = {}
+    for row, h in pairs(sb and state.session.hits[sb:pane_id()] or {}) do
+      local parts = { string.format("%s/%s/%d/%s-%s", h.kind, tostring(h.id), row, tostring(h.x1), tostring(h.x2)) }
+      for _, span in ipairs(h.spans or {}) do
+        parts[#parts + 1] = string.format("%s@%d-%d", tostring(span.id), span.x1, span.x2)
+      end
+      out[#out + 1] = table.concat(parts, ",")
+    end
+    table.sort(out)
+    wezterm.log_info("e2e: hits " .. table.concat(out, " "))
   end,
   hidden_mode = function()
     require("vtabs.config").get().collapsed = "hidden"

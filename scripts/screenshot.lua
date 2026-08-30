@@ -31,6 +31,8 @@ local VARIANTS = {
   rail = { collapsed = "rail" },
   tooltip = { hover = "follow", tooltip = true, tooltip_delay_ms = 3000 },
   anim = { animations = true, animation = { expand_ms = 600, collapse_ms = 600 } },
+  macos = { titlebar = "integrate" },
+  ["macos-rail"] = { titlebar = "integrate", collapsed = "rail" },
 }
 local variant = os.getenv "VTABS_SHOT_OPTS" or "default"
 for _, layer in ipairs { variant ~= "zeroconfig" and base or {}, VARIANTS[variant] or {} } do
@@ -38,6 +40,15 @@ for _, layer in ipairs { variant ~= "zeroconfig" and base or {}, VARIANTS[varian
     opts[k] = v
   end
 end
+
+-- The traffic-light reserve is keyed off the target triple, so shooting it anywhere else means
+-- lying to `platform` about the platform. Only the reserve is faked; nothing else is patched.
+if variant:find "^macos" then
+  require("vtabs.platform").is_mac = true
+  config.window_decorations = "INTEGRATED_BUTTONS|RESIZE"
+  config.integrated_title_button_style = "MacOsNative"
+end
+
 vtabs.apply_to_config(config, opts)
 
 local probes = {

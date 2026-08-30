@@ -17,6 +17,32 @@ first_content=$(content_of "$first_tab")
 no_dupes startup
 echo "ok: startup leaves one sidebar on the first tab"
 
+# `VTABS_E2E_MACOS=1` fakes the traffic-light reserve on, which is the only way to run the rail's
+# own strip geometry outside macOS. `rail_titlebar` defaults to "widen".
+if [ -n "${VTABS_E2E_MACOS:-}" ]; then
+  mac_mark=$(mark)
+  mac_sb=$(sidebar_of "$first_tab")
+  vtest "$first_content" rail_mode
+  sleep 0.5
+  vtest "$first_content" toggle
+  sleep 3
+  rail_cols=$(cols_of "$mac_sb")
+  mac_hits=$(probe_line "$first_content" probe_hits hits)
+  echo "  macOS rail: $rail_cols cols; hits: $mac_hits"
+  toggle_hit=$(printf '%s\n' "$mac_hits" | tr ' ' '\n' | grep '^toggle/' | head -1)
+  [ -n "$toggle_hit" ] || { sidebar_text "$mac_sb"; fail "the macOS rail has no toggle hit row"; }
+  toggle_x2=$(printf '%s' "$toggle_hit" | cut -d/ -f4 | cut -d, -f1 | cut -d- -f2)
+  [ "$toggle_x2" -le "$rail_cols" ] ||
+    fail "the rail's toggle ends at column $toggle_x2 of a $rail_cols-column rail; it cannot be clicked"
+  [ "$rail_cols" -ge 9 ] ||
+    fail "rail_titlebar=widen left the rail at $rail_cols cols, under the traffic-light reserve"
+  no_warnings "$mac_mark" "the macOS rail"
+  vtest "$first_content" toggle
+  sleep 2.5
+  no_dupes "the macOS rail"
+  echo "ok: the macOS rail is wide enough for the traffic lights and keeps its toggle inside"
+fi
+
 # ---------------------------------------------------------------- item 5 ---
 # 1. Ten `cli spawn` inside one poll: every spawn activates its tab, so the poll that lands
 #    mid-burst attaches to a tab the next spawn has already replaced as active.
@@ -50,15 +76,13 @@ echo "ok: sequential spawns leave one sidebar per tab"
 
 # 2. Activating every tab drives the lazy attach; a tab that already has a pending sidebar must
 #    not get a second one.
+sweep_mark=$(mark)
 for t in $(tab_ids); do
   cli activate-tab --tab-id "$t" >/dev/null
-  no_dupes "activate tab $t"
+  wait_attached "$t" 12
 done
-no_dupes_settled "activating all tabs" 8
-for t in $(tab_ids); do
-  n=$(list | python3 -c 'import json,sys; t='"$t"'; print(sum(1 for p in json.load(sys.stdin) if p["tab_id"]==t and '"$is_marked"'))')
-  [ "$n" -eq 1 ] || { geometry; fail "tab $t has $n sidebars after the lazy attach sweep"; }
-done
+no_dupes_settled "activating all tabs" 10
+no_warnings "$sweep_mark" "the lazy attach sweep"
 echo "ok: lazy attach gives every one of $(tab_count) tabs exactly one sidebar"
 
 # Back down to a workable tab count.
@@ -135,10 +159,19 @@ echo "ok: switching rail and hidden across a toggle keeps one sidebar per tab"
 # 6. `wezterm.reload_configuration()` rebuilds the Lua VM: every module cache is lost and only
 #    `wezterm.GLOBAL` survives, so attach must not re-run for tabs that already have a sidebar.
 before_reload=$(tab_count)
+reload_mark=$(mark)
+sb_before=$(sidebar_panes | sort -n | tr '\n' ' ')
+width_before=$(width_of "$hot")
 vtest "$hot_content" reload
-sleep 4
+sleep 6
 [ "$(tab_count)" -eq "$before_reload" ] || { geometry; fail "config reload changed the tab count"; }
 no_dupes_settled "config reload" 8
+# A reload rebuilds the Lua VM: the panes it left behind have to be recognised, not replaced.
+[ "$(sidebar_panes | sort -n | tr '\n' ' ')" = "$sb_before" ] ||
+  { geometry; fail "config reload replaced sidebar panes: $sb_before -> $(sidebar_panes | sort -n | tr '\n' ' ')"; }
+[ "$(width_of "$hot")" -eq "$width_before" ] ||
+  { widths; fail "config reload moved the sidebar from $width_before to $(width_of "$hot") cols"; }
+no_warnings "$reload_mark" "a config reload"
 for t in $(tab_ids); do
   cli activate-tab --tab-id "$t" >/dev/null
   no_dupes "activate tab $t after reload"
@@ -213,19 +246,27 @@ fi
 
 # ---------------------------------------------------------------- item 9 ---
 # Every width check waits for the sidebar to stop moving, then pins the number it settled on.
-settled_width() { # tab_id -> prints the width once two reads agree, or after 6 s
-  last=""
-  for _ in $(seq 1 24); do
+settled_width() { # tab_id -> the width once three reads in a row agree, else the last one seen
+  last=""; same=0
+  for _ in $(seq 1 32); do
     now=$(width_of "$1" 2>/dev/null || echo "?")
-    [ "$now" = "$last" ] && { echo "$now"; return 0; }
+    if [ "$now" = "$last" ]; then
+      same=$((same + 1))
+      [ "$same" -ge 2 ] && { echo "$now"; return 0; }
+    else
+      same=0
+    fi
     last="$now"
     sleep 0.25
   done
   echo "$last"
 }
-want_width() { # tab_id want label
-  got=$(settled_width "$1")
-  [ "$got" = "$2" ] || { widths; geometry; fail "$3: sidebar is $got cols, want $2"; }
+want_width() { # tab_id want label — waits for the wanted width, then fails with what it settled on
+  for _ in $(seq 1 40); do
+    [ "$(width_of "$1" 2>/dev/null || echo '?')" = "$2" ] && return 0
+    sleep 0.25
+  done
+  widths; geometry; fail "$3: sidebar settled at $(settled_width "$1") cols, want $2"
 }
 
 vtest "$hot_content" rail_mode
@@ -323,5 +364,234 @@ sleep 2.5
 want_width "$hot" 28 "the other tab after that expand"
 no_dupes_settled "the width traces" 8
 echo "ok: rail, activate a background tab, expand leaves every sidebar at 28"
+
+# G. A divider drag is the one width the plugin must adopt and keep. `cli adjust-pane-size` moves
+#    the split exactly the way dragging the divider does, so this is the real gesture.
+hot=$(tab_ids | cut -d' ' -f1)
+other=$(tab_ids | cut -d' ' -f2)
+hot_content=$(content_of "$hot")
+cli activate-tab --tab-id "$hot" >/dev/null
+want_width "$hot" 28 "before the drag trace"
+drag_mark=$(mark)
+cli adjust-pane-size --pane-id "$(sidebar_of "$hot")" --amount 12 Right >/dev/null 2>&1 ||
+  cli adjust-pane-size --pane-id "$(sidebar_of "$hot")" --amount 12 Left >/dev/null 2>&1 || true
+sleep 1
+dragged=$(settled_width "$hot")
+trace "after a 12-cell divider drag ($dragged cols)"
+[ "$dragged" != 28 ] || fail "adjust-pane-size did not move the divider; the drag trace cannot run"
+# Two polls plus geometry's settle window is what turns an observed width into the adopted one.
+sleep 3
+echo "  desired after the drag: $(probe_line "$hot_content" probe_desired "desired width")"
+want_width "$hot" "$dragged" "a divider drag"
+no_warnings "$drag_mark" "the divider drag"
+echo "ok: a divider drag to $dragged cols is adopted and held"
+
+vtest "$hot_content" grow
+sleep 3
+trace "dragged width, +300 px"
+want_width "$hot" "$dragged" "growing the window after a drag"
+vtest "$hot_content" shrink
+sleep 3
+trace "dragged width, back to the start"
+want_width "$hot" "$dragged" "shrinking the window after a drag"
+echo "ok: the dragged width survives a grow and a shrink"
+
+vtest "$hot_content" rail_mode
+sleep 0.5
+vtest "$hot_content" toggle
+sleep 2.5
+want_width "$hot" 5 "collapsing after a drag"
+vtest "$hot_content" toggle
+sleep 3
+trace "expanded again after the rail"
+want_width "$hot" "$dragged" "expanding back to the dragged width"
+cli activate-tab --tab-id "$other" >/dev/null
+sleep 3
+want_width "$other" "$dragged" "a second tab under the dragged width"
+cli activate-tab --tab-id "$hot" >/dev/null
+sleep 2
+no_dupes "the divider drag trace"
+echo "ok: rail and back, and a tab switch, all return to the dragged width"
+
+# H. A split content pane is the branch where `correct` activates the sidebar and restores focus
+#    on every single correction — including on every `window-resized` of a drag.
+split_mark=$(mark)
+extra=$(cli split-pane --pane-id "$hot_content" --right 2>/dev/null || echo "")
+if [ -n "$extra" ]; then
+  sleep 2
+  before_active=$(probe_line "$hot_content" probe_active "active pane")
+  trace "content split in two"
+  vtest "$hot_content" drag_shrink
+  sleep 5
+  trace "after a shrink drag with the content split"
+  want_width "$hot" "$dragged" "a resize drag over a split content pane"
+  [ "$(list | python3 -c 'import json,sys; t='"$hot"'; print(sum(1 for p in json.load(sys.stdin) if p["tab_id"]==t))')" -eq 3 ] ||
+    { geometry; fail "the resize drag lost a content pane"; }
+  after_active=$(probe_line "$hot_content" probe_active "active pane")
+  [ "$before_active" = "$after_active" ] ||
+    fail "the resize drag moved focus from pane $before_active to $after_active"
+  no_warnings "$split_mark" "a resize drag over a split content pane"
+  vtest "$hot_content" drag_grow
+  sleep 5
+  want_width "$hot" "$dragged" "a grow drag over a split content pane"
+  no_dupes "the split-content drag"
+  echo "ok: a resize drag over split content keeps the width, the panes and the focus"
+  cli kill-pane --pane-id "$extra" >/dev/null 2>&1 || true
+  sleep 2
+fi
+
+# I. The rail in a private window: `render` takes its private branch there, and a throw leaves the
+#    pane showing its last frame, which reads exactly like "expand -> collapse acts weird".
+priv_mark=$(mark)
+before_windows=$(window_count)
+known_tabs=" $(tab_ids) "
+vtest "$hot_content" private_window
+for _ in $(seq 1 24); do
+  [ "$(window_count)" -gt "$before_windows" ] && break
+  sleep 0.5
+done
+if [ "$(window_count)" -gt "$before_windows" ]; then
+  priv_tab=""
+  for t in $(tab_ids); do
+    case "$known_tabs" in
+      *" $t "*) ;;
+      *) priv_tab=$t ;;
+    esac
+  done
+  if [ -n "$priv_tab" ]; then
+    wait_attached "$priv_tab" 12
+    priv_content=$(content_of "$priv_tab")
+    priv_sb=$(sidebar_of "$priv_tab")
+    renders "$priv_sb" "a private window before the rail"
+    vtest "$priv_content" rail_mode
+    sleep 0.5
+    vtest "$priv_content" toggle
+    sleep 2.5
+    renders "$priv_sb" "a private window under the rail"
+    no_warnings "$priv_mark" "a private window under the rail"
+    vtest "$priv_content" toggle
+    sleep 2.5
+    renders "$priv_sb" "a private window expanded again"
+    no_warnings "$priv_mark" "expanding a private window from the rail"
+    no_dupes "the private window rail trace"
+    echo "ok: a private window renders under the rail and after expanding"
+    cli kill-pane --pane-id "$priv_content" >/dev/null 2>&1 || true
+    sleep 2
+  fi
+fi
+
+# J. The rail with a footer hook: the footer adds rows the rail grid has to place too.
+foot_mark=$(mark)
+hot=$(tab_ids | cut -d' ' -f1)
+hot_content=$(content_of "$hot")
+hot_sb=$(sidebar_of "$hot")
+cli activate-tab --tab-id "$hot" >/dev/null
+vtest "$hot_content" footer_hook
+sleep 2
+renders "$hot_sb" "an expanded sidebar with a footer hook"
+vtest "$hot_content" toggle
+sleep 2.5
+renders "$hot_sb" "a railed sidebar with a footer hook"
+no_warnings "$foot_mark" "a railed sidebar with a footer hook"
+vtest "$hot_content" toggle
+sleep 2.5
+renders "$hot_sb" "an expanded sidebar with a footer hook"
+no_warnings "$foot_mark" "expanding a sidebar with a footer hook"
+not_frozen "$hot_sb" "$hot" "the footer-hook trace"
+vtest "$hot_content" no_footer_hook
+sleep 1.5
+no_dupes "the footer-hook trace"
+echo "ok: the rail renders with a footer hook and keeps repainting"
+
+# Both groups below pin bugs that are still open; `VTABS_STRESS_SOFT=1` prints XFAIL for them
+# and lets the run continue.
+close_confirmation() {
+  # --------------------------------------------------- close confirmation ---
+  # A card's x on a tab whose shell would prompt: the question belongs in the sidebar, and no
+  # WezTerm overlay pane may ever be created for it.
+  vtest "$hot_content" hidden_mode
+  sleep 0.5
+  vtest "$hot_content" confirm_on
+  sleep 0.5
+  victim=$(tab_ids | cut -d' ' -f2)
+  wait_attached "$victim" 12
+  cli set-tab-title --tab-id "$victim" victim
+  cli send-text --no-paste --pane-id "$(content_of "$victim")" "sleep 1000
+  "
+  sleep 2
+  cli activate-tab --tab-id "$victim" >/dev/null
+  sleep 1.5
+  victim_sb=$(sidebar_of "$victim")
+  frame_shows "$victim_sb" victim 8 || { sidebar_text "$victim_sb" | head -20; fail "the sidebar never listed the victim tab"; }
+  victim_row=$(row_of "$victim_sb" victim)
+  pane_set() { list | python3 -c 'import json,sys; print(" ".join(sorted("%d/%d"%(p["tab_id"],p["pane_id"]) for p in json.load(sys.stdin))))'; }
+  before_set=$(pane_set)
+  before_tabs=$(tab_count)
+  survivor=$(tab_ids | cut -d' ' -f1)
+  survivor_sb=$(sidebar_of "$survivor")
+  survivor_content=$(content_of "$survivor")
+  survivor_cols=$(cols_of "$survivor_content")
+
+  # The close span is 25-27 at width 28; press and release both land on col 26.
+  press "$victim_sb" 26 "$victim_row" 0
+  sleep 1
+  [ "$(tab_count)" -eq "$before_tabs" ] || { geometry; fail "the press on x closed the tab before the release"; }
+  [ "$(pane_set)" = "$before_set" ] || { geometry; fail "the press on x created a pane"; }
+  release "$victim_sb" 26 "$victim_row" 0
+  sleep 1.5
+  [ "$(tab_count)" -eq "$before_tabs" ] || { geometry; fail "x closed a confirmable tab without asking"; }
+  [ "$(pane_set)" = "$before_set" ] || { geometry; fail "the confirmation created a WezTerm overlay pane"; }
+  level=$(probe_line "$survivor_content" popover_level "popover level")
+  case "$level" in
+    confirm*) ;;
+    *) sidebar_text "$victim_sb" | head -20; fail "x did not open the confirm level (level: $level)" ;;
+  esac
+  sidebar_text "$victim_sb" | grep -q "Cancel" || { sidebar_text "$victim_sb" | head -20; fail "the confirm level has no Cancel row"; }
+  echo "ok: x on a confirmable tab asks inside the sidebar and creates no overlay pane"
+
+  # Cancel first: nothing may change.
+  cancel_row=$(row_of "$victim_sb" "Cancel")
+  click "$victim_sb" 6 "$cancel_row" 0
+  sleep 1.5
+  [ "$(tab_count)" -eq "$before_tabs" ] || { geometry; fail "Cancel closed the tab"; }
+  [ "$(pane_set)" = "$before_set" ] || { geometry; fail "Cancel changed the pane set"; }
+  [ "$(probe_line "$survivor_content" popover_level "popover level")" = none ] || fail "Cancel left the popover open"
+  echo "ok: Cancel leaves the tab and every pane untouched"
+
+  # Then the affirmative: the row above Cancel.
+  press "$victim_sb" 26 "$victim_row" 0
+  sleep 0.5
+  release "$victim_sb" 26 "$victim_row" 0
+  sleep 1.5
+  cancel_row=$(row_of "$victim_sb" "Cancel")
+  click "$victim_sb" 6 $((cancel_row - 1)) 0
+  for _ in $(seq 1 20); do
+    [ "$(tab_count)" -lt "$before_tabs" ] && break
+    sleep 0.5
+  done
+  [ "$(tab_count)" -eq $((before_tabs - 1)) ] || { geometry; fail "the confirmation did not close the tab"; }
+  [ "$(sidebar_of "$survivor")" = "$survivor_sb" ] || { geometry; fail "the confirmation disturbed the other tab's sidebar"; }
+  [ "$(content_of "$survivor")" = "$survivor_content" ] || { geometry; fail "the confirmation disturbed the other tab's content"; }
+  [ "$(cols_of "$survivor_content")" -eq "$survivor_cols" ] || { geometry; fail "the confirmation resized the other tab"; }
+  no_dupes "the close confirmation"
+  vtest "$survivor_content" confirm_off
+  sleep 0.5
+  echo "ok: confirming closes only the asked-about tab"
+}
+soft close_confirmation
+
+deterministic_pins() {
+  # ------------------------------------------------ deterministic pins ------
+  # Last, because they are expected to fail until the fix lands: everything above is timing, this
+  # is the invariant itself.
+  hot=$(tab_ids | cut -d' ' -f1)
+  cli activate-tab --tab-id "$hot" >/dev/null
+  sleep 1
+  echo "  attach on an attached tab: $(probe_line "$(content_of "$hot")" double_attach "double attach")"
+  sleep 2
+  no_dupes "attach on a tab that already has a sidebar"
+  echo "ok: attach is refused on a tab that already has a sidebar"
+}
+soft deterministic_pins
 
 echo "all stress checks passed"

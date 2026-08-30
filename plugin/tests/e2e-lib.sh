@@ -58,6 +58,15 @@ e2e_cleanup() {
 }
 
 fail() { echo "FAIL: $*"; exit 1; }
+# A group of checks that pins a bug still open upstream. Fatal, so nobody forgets it; set
+# `VTABS_STRESS_SOFT=1` to print XFAIL instead and let the rest of the run continue.
+soft() {
+  if [ -n "${VTABS_STRESS_SOFT:-}" ]; then
+    ("$@") || echo "XFAIL: $1"
+  else
+    "$@"
+  fi
+}
 cli() { wezterm cli --no-auto-start "$@"; }
 mark() { wc -l <"$log" | tr -d ' '; }
 since() { tail -n "+$(($1 + 1))" "$log"; }
@@ -81,6 +90,8 @@ total_cols() { list | python3 -c 'import json,sys; print(max(p["left_col"]+p["si
 window_count() { list | python3 -c 'import json,sys; print(len({p["window_id"] for p in json.load(sys.stdin)}))'; }
 geometry() { list | python3 -c 'import json,sys; [print("  win", p["window_id"], "tab", p["tab_id"], "pane", p["pane_id"], p["title"], "left", p["left_col"], "cols", p["size"]["cols"]) for p in json.load(sys.stdin)]'; }
 click() { cli send-text --no-paste --pane-id "$1" "$(printf '\033[<%s;%s;%sM\033[<%s;%s;%sm' "$4" "$2" "$3" "$4" "$2" "$3")"; }
+press() { cli send-text --no-paste --pane-id "$1" "$(printf '\033[<%s;%s;%sM' "$4" "$2" "$3")"; }
+release() { cli send-text --no-paste --pane-id "$1" "$(printf '\033[<%s;%s;%sm' "$4" "$2" "$3")"; }
 row_of() { sidebar_text "$1" | python3 -c 'import sys; rows=sys.stdin.read().split("\n"); print(next(i+1 for i,l in enumerate(rows) if "'"$2"'" in l))'; }
 probe_line() {
   m=$(mark)
@@ -126,6 +137,49 @@ no_dupes_settled() {
     n=$((n - 1)); sleep 0.25
   done
   no_dupes "$1"
+}
+
+# Sidebar panes on a tab whose title the backend has claimed.
+marked_of() { list | python3 -c 'import json,sys; t='"$1"'; print(sum(1 for p in json.load(sys.stdin) if p["tab_id"]==t and '"$is_marked"'))'; }
+# Waits for a tab's lazy attach, asserting the invariant on every look.
+wait_attached() { # tab_id [seconds]
+  n=$((${2:-8} * 4))
+  while [ "$n" -gt 0 ]; do
+    [ "$(marked_of "$1")" -ge 1 ] && break
+    no_dupes "waiting for tab $1 to attach"
+    n=$((n - 1)); sleep 0.25
+  done
+  [ "$(marked_of "$1")" -eq 1 ] || { geometry; fail "tab $1 has $(marked_of "$1") sidebars after its lazy attach"; }
+}
+
+# --- log assertions --------------------------------------------------------
+# Plugin-side warnings and errors since a `mark`; an empty answer means the step was clean.
+vtabs_warnings() { since "$1" | grep -E "(WARN|ERROR).*(lua: )?vtabs: " | grep -v "some glyphs are not one cell wide" || true; }
+no_warnings() { # mark label
+  w=$(vtabs_warnings "$1")
+  [ -z "$w" ] || { echo "$w"; fail "the plugin warned during $2"; }
+}
+
+# --- frozen-frame detection ------------------------------------------------
+# A pane that stops repainting keeps its last frame; the text alone cannot say which, so callers
+# name the string the sidebar must show once it repaints.
+frame_shows() { # sidebar_pane needle [seconds]
+  n=$((${3:-8} * 4))
+  while [ "$n" -gt 0 ]; do
+    sidebar_text "$1" 2>/dev/null | grep -qF "$2" && return 0
+    n=$((n - 1)); sleep 0.25
+  done
+  return 1
+}
+# A pane whose render threw keeps whatever it last painted, or nothing at all if it never painted.
+renders() { # sidebar_pane label
+  text=$(sidebar_text "$1" 2>/dev/null | tr -d ' \n')
+  [ -n "$text" ] || { geometry; fail "sidebar $1 painted nothing during $2"; }
+}
+not_frozen() { # sidebar_pane tab_id label — retitles the tab and waits for the frame to follow
+  needle="live$(date +%N | tail -c 5)"
+  cli set-tab-title --tab-id "$2" "$needle"
+  frame_shows "$1" "$needle" 8 || { sidebar_text "$1" | head -12; fail "sidebar $1 froze during $3"; }
 }
 
 # --- width traces (item 9) -------------------------------------------------
