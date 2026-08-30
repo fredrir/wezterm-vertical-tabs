@@ -25,7 +25,7 @@ elevation|Catppuccin Mocha|elevation|scene|always
 elevation-1|Catppuccin Mocha|elevation-1|scene|always
 press|Catppuccin Mocha|press|hover|always
 popover|Catppuccin Mocha|default|rclick|in_sidebar:Duplicate tab
-popover-space|Catppuccin Mocha|default|rclick_space|in_sidebar:Spaces arrive in P4
+popover-space|Catppuccin Mocha|default|rclick_space|in_sidebar:Move to space
 rename|Catppuccin Mocha|default|key:r|in_sidebar:esc cancel
 rail|Catppuccin Mocha|rail|probe:toggle|rail_width
 tooltip|Catppuccin Mocha|tooltip|dwell|tooltip_only
