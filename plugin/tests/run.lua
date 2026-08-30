@@ -577,6 +577,26 @@ test("a sidebar that never becomes ready is left in place and its domain not ret
   state.session.failed_domains["desktop@"] = nil
 end)
 
+-- ===================== implementer-2: interaction / geometry / focus =====================
+
+local function rgb(c)
+  return table.concat(c, ",")
+end
+
+test("theme bg is the terminal background; elevation restores the raised tint", function()
+  local t = theme.resolve({}, fake.palette)
+  eq(rgb(t.bg), "30,30,46")
+  local raised = theme.resolve({ elevation = 0.06 }, fake.palette)
+  assert(raised.bg[1] > t.bg[1] and raised.bg[3] > t.bg[3], "elevation lifts bg toward fg")
+end)
+
+test("accent is cursor_bg when it clears 3.0 contrast, else ansi[5]", function()
+  eq(rgb(theme.resolve({}, fake.palette).accent), "245,224,220")
+  local low = util.merge(fake.palette, { cursor_bg = "#242438" })
+  assert(theme.contrast({ 36, 36, 56 }, { 30, 30, 46 }) < 3.0, "fixture cursor is low contrast")
+  eq(rgb(theme.resolve({}, low).accent), "137,180,250")
+end)
+
 os.remove(state.file)
 print(string.format("%d passed, %d failed", passed, failed))
 os.exit(failed == 0 and 0 or 1)

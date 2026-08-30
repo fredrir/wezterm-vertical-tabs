@@ -35,6 +35,7 @@ M.defaults = {
   keys = {},
   theme = {
     use_scheme_tab_bar = "auto", -- "auto" | true | false
+    elevation = 0, -- mix the sidebar bg toward fg; 0.06 is the pre-1.0 raised look
   },
   hooks = {
     filter = nil, -- fun(tab: MuxTab, window: MuxWindow): boolean

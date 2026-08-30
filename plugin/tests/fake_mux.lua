@@ -166,8 +166,22 @@ end
 function Gui:window_id()
   return self._mux.id
 end
+-- Catppuccin Mocha, the shape wezterm hands back in effective_config().resolved_palette.
+M.palette = {
+  background = "#1e1e2e",
+  foreground = "#cdd6f4",
+  cursor_bg = "#f5e0dc",
+  cursor_fg = "#1e1e2e",
+  selection_bg = "#585b70",
+  ansi = { "#45475a", "#f38ba8", "#a6e3a1", "#f9e2af", "#89b4fa", "#f5c2e7", "#94e2d5", "#bac2de" },
+  brights = { "#585b70", "#f38ba8", "#a6e3a1", "#f9e2af", "#89b4fa", "#f5c2e7", "#94e2d5", "#a6adc8" },
+}
+
 function Gui:effective_config()
-  return { resolved_palette = {}, skip_close_confirmation_for_processes_named = { "zsh", "wez-vtabs" } }
+  return {
+    resolved_palette = M.palette,
+    skip_close_confirmation_for_processes_named = { "zsh", "wez-vtabs" },
+  }
 end
 function Gui:get_dimensions()
   return { pixel_width = 800, pixel_height = 600 }

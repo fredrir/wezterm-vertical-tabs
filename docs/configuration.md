@@ -47,7 +47,7 @@ return config
 | `skip_close_confirmation` | `true`                                                            | add `wez-vtabs` to `skip_close_confirmation_for_processes_named`                                                                                |
 | `private.env`             | `{ HISTFILE = "", fish_private_mode = "1", VTABS_PRIVATE = "1" }` | env for shells in private windows                                                                                                               |
 | `keys`                    | `{}`                                                              | key overrides, see below; `false` disables all defaults                                                                                         |
-| `theme`                   | `{ use_scheme_tab_bar = "auto" }`                                 | color overrides, see below                                                                                                                      |
+| `theme`                   | `{ use_scheme_tab_bar = "auto", elevation = 0 }`                  | color overrides, see below                                                                                                                      |
 | `hooks.filter`            | `nil`                                                             | `fun(tab, mux_window): boolean` hide tabs from the sidebar (navigation and reordering only touch visible tabs)                                  |
 | `hooks.footer`            | `nil`                                                             | `fun(mux_window): (string \| FooterEntry)[]` sticky rows at the bottom; `FooterEntry = { text, fg?, bg?, id?, on_click? = fun(window, entry) }` |
 | `hooks.theme`             | `nil`                                                             | `fun(window, theme): theme` per-window theme override                                                                                           |
@@ -126,10 +126,19 @@ is not in keyboard mode returns focus to the content pane.
 
 ## Theme
 
-`bg fg dim accent active_bg active_fg hover_bg hover_fg focus_bg pinned_fg
-separator new_tab_fg close_fg close_hover_fg unseen_fg private_accent drag_bg
-drag_fg scroll_fg`
+| key                  | default                                                            |
+| -------------------- | ------------------------------------------------------------------ |
+| `bg`                 | `resolved_palette.background`                                      |
+| `elevation`          | `0` — mix `bg` toward `fg`; `0.06` is the pre-1.0 raised sidebar   |
+| `use_scheme_tab_bar` | `"auto"` — adopt `colors.tab_bar` when its ladder is monotone      |
+| `accent`             | `resolved_palette.cursor_bg` if contrast vs `bg` >= 3.0, else `ansi[5]` |
+| `fg`                 | `resolved_palette.foreground`                                      |
+| `hover_bg`           | `bg` mixed 8% toward `fg`                                          |
+| `active_bg`          | `bg` mixed 16% toward `fg`                                         |
+
+Also settable: `dim active_fg hover_fg focus_bg pinned_fg separator new_tab_fg
+close_fg close_hover_fg unseen_fg private_accent drag_bg drag_fg scroll_fg`.
 
 ```lua
-theme = { accent = "#f5c2e7", active_bg = "#313244" }
+theme = { accent = "#f5c2e7", active_bg = "#313244", elevation = 0.06 }
 ```
