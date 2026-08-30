@@ -1,4 +1,7 @@
 local config = require "vtabs.config"
+local icons = require "vtabs.icons"
+local keys_mod = require "vtabs.keys"
+local platform = require "vtabs.platform"
 local render = require "vtabs.render"
 local schema = require "vtabs.schema"
 local util = require "vtabs.util"
@@ -178,13 +181,42 @@ local WIDGETS = {
   },
   recorder = {
     text = function(row)
-      if type(row.value) == "table" then
-        return (row.value.mods and row.value.mods .. "+" or "") .. tostring(row.value.key)
+      if row.armed then
+        return "press a key…   [ ARMED  ]"
       end
-      return row.value == false and "off" or tostring(row.value)
+      local binding = "off"
+      if type(row.value) == "table" then
+        binding = (row.value.mods and row.value.mods .. "+" or "") .. tostring(row.value.key)
+      elseif row.value ~= false then
+        binding = tostring(row.value)
+      end
+      return binding .. "   [ record ]"
     end,
     activate = function()
       return "record"
+    end,
+  },
+  variant = {
+    text = function(row)
+      return "‹ " .. M.variant_name(row) .. " ›"
+    end,
+    step = function(row, delta)
+      local presets = M.variants(row)
+      -- a table no preset describes is `custom`: shown, never stepped away from by an arrow key
+      if M.variant_name(row) == "custom" then
+        return row.value
+      end
+      local at = 1
+      for i, preset in ipairs(presets) do
+        at = preset == row.value and i or at
+      end
+      return presets[((at - 1 + delta) % #presets) + 1]
+    end,
+    activate = function(row)
+      if M.variant_name(row) == "custom" then
+        return nil
+      end
+      return "commit", M.WIDGETS.variant.step(row, 1)
     end,
   },
   entries = {
@@ -202,12 +234,33 @@ local WIDGETS = {
 
 M.WIDGETS = WIDGETS
 
+---The presets a `type = "any"` key offers. A descriptor names them; otherwise a boolean default
+---means the key is simply on or off.
+function M.variants(row)
+  local option = row.option or {}
+  if type(option.variants) == "table" then
+    return option.variants
+  end
+  return { false, true }
+end
+
+---What the picker reads for the current value: a named preset, or `custom` for a table that
+---matches none of them - which a toggle could never have expressed.
+function M.variant_name(row)
+  for _, preset in ipairs(M.variants(row)) do
+    if preset == row.value then
+      return preset == false and "off" or (preset == true and "on" or tostring(preset))
+    end
+  end
+  return "custom"
+end
+
 ---The widget a descriptor's own facts ask for. The page never names an option.
 local function widget_for(option, key, value)
   if type(value) == "function" then
     return "locked"
   end
-  local by_type = { boolean = "toggle", enum = "picker", number = "stepper" }
+  local by_type = { boolean = "toggle", enum = "picker", number = "stepper", any = "variant" }
   if option and by_type[option.type] then
     return by_type[option.type]
   end
@@ -231,8 +284,14 @@ end
 
 local function field(key, option, cfg, group, opts)
   opts = opts or {}
-  local value = schema.get(cfg, key)
-  local default = schema.get(config.defaults, key)
+  local value = opts.value
+  if value == nil then
+    value = schema.get(cfg, key)
+  end
+  local default = opts.default
+  if default == nil then
+    default = schema.get(config.defaults, key)
+  end
   return {
     key = key,
     label = opts.label or key,
@@ -254,11 +313,26 @@ end
 function M.fields(cfg)
   cfg = cfg or config.get()
   local out = {}
-  local function expand(option, value)
+  local function expand(option, value, defaults)
     for _, name in ipairs(util.sorted_keys(value)) do
       local child = option.key .. "." .. name
-      out[#out + 1] = field(child, schema.by_key[child], cfg, option.group, { label = "  " .. name, depth = 1 })
+      out[#out + 1] = field(child, schema.by_key[child], cfg, option.group, {
+        label = "  " .. name,
+        depth = 1,
+        value = value[name],
+        default = defaults and defaults[name] or nil,
+      })
     end
+  end
+
+  ---`cfg.keys` holds only the user's overrides, but what the user wants to see and rebind is every
+  ---binding that is actually live, so the rows come from the resolved set.
+  local function effective(option, value)
+    if option.key ~= "keys" or value == false then
+      return value, nil
+    end
+    local shipped = keys_mod.defaults()
+    return util.merge(shipped, value or {}), shipped
   end
   for _, option in ipairs(schema.options) do
     local value = schema.get(cfg, option.key)
@@ -266,9 +340,11 @@ function M.fields(cfg)
       local row = field(option.key, option, cfg, option.group)
       out[#out + 1] = row
       if option.open and type(row.value) == "table" then
-        row.widget = "entries"
-        row.entries = count_entries(row.value)
-        expand(option, row.value)
+        local live, shipped = effective(option, row.value)
+        -- a variant keeps its picker and reads `custom`; a plain container just counts its entries
+        row.widget = row.widget == "variant" and "variant" or "entries"
+        row.entries = count_entries(live)
+        expand(option, live, shipped)
       end
     elseif option.open and type(value) == "table" then
       -- `theme` is both: the container row would say nothing the entries do not
@@ -399,6 +475,21 @@ function M.grid(cols)
   return g
 end
 
+-- Shown only while the recorder is armed, where it is actionable, and never as ambient chrome.
+-- `enable_kitty_keyboard` would widen what the pty delivers, but its effects reach far past this
+-- plugin, so it is named and left to wezterm.lua.
+-- Wrapped to 42 cells: the form is 46 wide at 100 columns and 42 at 60, so one wording serves both.
+M.CAVEAT = {
+  "⚠ macOS does not deliver CMD to the pty.",
+  "  Type it into wezterm.lua, or avoid CMD.",
+  "  enable_kitty_keyboard widens what arrives",
+}
+
+---True when the armed recorder cannot see what the user is about to press.
+function M.caveat_applies()
+  return platform.is_mac == true
+end
+
 ---Rows the body has for nav entries and form rows: header, rule, blank … blank, rule, hints.
 function M.body_rows(rows)
   return math.max(rows - 6, 0)
@@ -434,7 +525,13 @@ function M.plan(view)
   local shown = {}
   for _, row in ipairs(fields) do
     if row.group == group and matches(row, st.filter) then
+      row.armed = st.armed == row.key
       shown[#shown + 1] = row
+      if row.armed and M.caveat_applies() then
+        for _, line in ipairs(M.CAVEAT) do
+          shown[#shown + 1] = { caveat = line, key = row.key .. ".caveat" }
+        end
+      end
     end
   end
   out.groups = groups
@@ -460,11 +557,15 @@ function M.plan(view)
   for i = 1, body do
     local row = 3 + i
     local nav = groups[i]
-    local entry = shown[i + scroll]
+    local shown_row = shown[i + scroll]
+    local caveat = shown_row and shown_row.caveat or nil
+    -- a caveat line is not a form row: it has no label, no widget and no target
+    local entry = caveat == nil and shown_row or nil
     out.rows[row] = {
       kind = "body",
       nav = nav,
       nav_selected = nav == group,
+      caveat = caveat,
       field = entry,
       focused = entry ~= nil and (i + scroll) == focus,
       preview_index = g.preview and i or nil,
@@ -513,22 +614,56 @@ end
 
 ---Three fixed fake tabs, so the preview says the same thing whatever the user happens to have open.
 local SAMPLE = {
-  { tab_id = 1, index = 1, is_active = false, is_pinned = false, title = "zsh", meta = "~/", icon = "*" },
-  { tab_id = 2, index = 2, is_active = true, is_pinned = false, title = "init.lua", meta = "~/.config", icon = "*" },
-  { tab_id = 3, index = 3, is_active = false, is_pinned = false, title = "cargo run", meta = "~/src", icon = "*" },
+  { tab_id = 1, index = 1, is_active = false, is_pinned = false, title = "zsh", meta = "~/", process = "zsh" },
+  {
+    tab_id = 2,
+    index = 2,
+    is_active = true,
+    is_pinned = false,
+    title = "init.lua",
+    meta = "~/.config",
+    process = "nvim",
+  },
+  {
+    tab_id = 3,
+    index = 3,
+    is_active = false,
+    is_pinned = false,
+    title = "cargo run",
+    meta = "~/src",
+    process = "cargo",
+  },
 }
 
-local HINTS_WIDE = "↑↓ field   ←→ change   ⏎ edit   r reset   c copy as Lua   esc close"
-local HINTS_NARROW = "↑↓ ←→ ⏎ r c esc"
+---Composed from guarded glyphs rather than written out: the arrows are East Asian Ambiguous and
+---U+23CE is in barely any monospace font, so both go through the same fallback every glyph does.
+local function hints(glyphs, wide)
+  local ud = glyphs.hint_up .. glyphs.hint_down
+  local lr = glyphs.hint_left .. glyphs.hint_right
+  if wide then
+    return ud .. " field   " .. lr .. " change   Enter edit   r reset   c copy as Lua   esc close"
+  end
+  return ud .. " " .. lr .. " Enter r c esc"
+end
 
 ---A 28-column sidebar built from an explicitly merged table. `config.get()` is never reassigned for
 ---a preview, which is what keeps a half-typed hex colour out of every real sidebar in the window.
 function M.preview_cells(cfg, pending, theme, glyphs, rows)
   local merged = util.merge(cfg, pending or {})
+  -- the icons come from the merged map, so editing `icon_map` changes the preview (A6a)
+  local map = icons.resolve(merged.icon_map)
+  local items = {}
+  for i, sample in ipairs(SAMPLE) do
+    items[i] = {}
+    for k, v in pairs(sample) do
+      items[i][k] = v
+    end
+    items[i].icon = map[sample.process] or map.default
+  end
   return render.cells {
     cols = 28,
     rows = rows,
-    items = SAMPLE,
+    items = items,
     theme = theme,
     cfg = merged,
     glyphs = glyphs,
@@ -568,7 +703,7 @@ function M.paint(view)
         render.put(cells, x, view.glyphs.rule, { fg = theme.separator }, x)
       end
     elseif spec and spec.kind == "hints" then
-      local text = cols >= M.PREVIEW_COLS and HINTS_WIDE or HINTS_NARROW
+      local text = hints(view.glyphs, cols >= M.PREVIEW_COLS)
       render.put(cells, 2, util.truncate(text, cols - 2, view.glyphs.ellipsis), { fg = dim }, cols)
     elseif spec and spec.kind == "body" then
       if spec.nav then
@@ -580,6 +715,11 @@ function M.paint(view)
         render.put(cells, g.nav_x1 + 2, M.group_label(spec.nav), { fg = fg }, g.nav_x2)
       end
       render.put(cells, g.divider, "│", { fg = theme.separator }, g.divider)
+      if spec.caveat then
+        render.put(cells, g.caret_x, util.truncate(spec.caveat, g.form_x2 - g.caret_x + 1, view.glyphs.ellipsis), {
+          fg = theme.unseen_fg,
+        }, g.form_x2)
+      end
       if spec.field then
         M.paint_field(cells, spec, g, view, theme)
       end
@@ -600,6 +740,13 @@ function M.paint(view)
   }
 end
 
+---Shorter wording for a value column too narrow to name the source in full.
+local SHORT_SOURCE = {
+  ["wezterm.lua"] = "wezterm.lua",
+  ["wezterm.lua (host)"] = "host",
+  ["not editable"] = "read-only",
+}
+
 ---One form row: caret, label, right-aligned value, and the badge that says why it is not editable.
 function M.paint_field(cells, spec, g, view, theme)
   local row = spec.field
@@ -614,11 +761,18 @@ function M.paint_field(cells, spec, g, view, theme)
 
   local text = M.value_text(row)
   if row.locked then
-    local badge = "LOCKED"
-    local shown = util.truncate(text, 14, view.glyphs.ellipsis)
-    local x = g.value_x2 - util.width(shown) + 1
-    render.put(cells, x, shown, { fg = dim }, g.value_x2)
-    render.put(cells, x - util.width(badge) - 2, badge, { fg = theme.unseen_fg }, x - 2)
+    -- §4: the badge names which of the two reasons it is, so the user knows where to go to change
+    -- it. The value column is 18 cells at 100 and 14 at 60, so the wording steps down to fit
+    -- rather than overrunning the label beside it.
+    local room = math.max(g.value_x2 - g.label_x2 - 1, 1)
+    local badge
+    for _, candidate in ipairs { "LOCKED " .. row.locked, row.locked, "LOCKED " .. SHORT_SOURCE[row.locked] } do
+      if badge == nil and util.width(candidate) <= room then
+        badge = candidate
+      end
+    end
+    badge = badge or util.truncate(SHORT_SOURCE[row.locked], room, view.glyphs.ellipsis)
+    render.put(cells, g.value_x2 - util.width(badge) + 1, badge, { fg = theme.unseen_fg }, g.value_x2)
     return
   end
   local shown = util.truncate(text, g.value_x2 - g.label_x2 - 1, view.glyphs.ellipsis)
@@ -779,8 +933,11 @@ end
 KEYS[" "] = KEYS.enter
 KEYS.space = KEYS.enter
 
+---`r` resets exactly the focused field to its schema default, which is what makes the `•` badge
+---reversible: the file keeps only what differs, so a reset drops the key from it entirely.
 KEYS.r = function(ctx)
   if ctx.row and not ctx.row.locked then
+    ctx.st.armed = nil
     M.commit(ctx.window, ctx.row, ctx.row.default)
   end
   return true
@@ -842,6 +999,18 @@ function M.key(gui_window, view, ev)
       st.filtering, st.filter = nil, ""
       return true
     end)
+  end
+  if st.armed then
+    -- whatever the pty delivered is the binding; that is the only thing this side can observe
+    st.armed = nil
+    if ev.key == "escape" then
+      return true
+    end
+    if row and not row.locked then
+      local mods = type(ev.mods) == "table" and table.concat(ev.mods, "|") or ev.mods
+      M.commit(gui_window, row, { key = ev.key, mods = (mods ~= "" and mods) or nil })
+    end
+    return true
   end
   local handler = KEYS[ev.key]
   return handler ~= nil and handler(ctx) or false

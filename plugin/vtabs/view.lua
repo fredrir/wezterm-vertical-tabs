@@ -266,7 +266,7 @@ local function strip_for(gui_window, cfg, dims, rail)
   if cfg.toggle_button and g.rows > 0 then
     toggle = { row = g.toggle_row, x = g.toggle_x, x1 = math.max(1, g.toggle_x - 1), x2 = g.toggle_x + 2 }
   end
-  return { rows = g.rows, cols = g.cols, toggle = toggle, toggle_row = g.toggle_row }
+  return { rows = g.rows, cols = g.cols, cell_w = g.cell_w, toggle = toggle, toggle_row = g.toggle_row }
 end
 
 local function theme_for(gui_window, cfg)
