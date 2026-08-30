@@ -5,15 +5,28 @@ on:
       - "v*"
 permissions:
   contents: read
-defaults:
-  run:
-    working-directory: backend
 jobs:
+  version:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Sources match tag
+        run: |
+          set -euo pipefail
+          v="${GITHUB_REF_NAME#v}"
+          grep -qE "^version[[:space:]]*=[[:space:]]*\"$v\"" backend/Cargo.toml \
+            || { echo "::error::backend/Cargo.toml is not $v"; exit 1; }
+          grep -q "return \"$v\"" plugin/vtabs/version.lua \
+            || { echo "::error::plugin/vtabs/version.lua is not $v"; exit 1; }
   build:
+    needs: version
     name: ${{ matrix.target }}
     runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: backend
     strategy:
-      fail-fast: false
+      fail-fast: true
       matrix:
         include:
           - target: aarch64-apple-darwin
@@ -44,16 +57,20 @@ jobs:
       - name: Build
         shell: bash
         run: |
+          set -euo pipefail
           if [ "${{ matrix.cross }}" = "true" ]; then
-            cross build --release --target ${{ matrix.target }}
+            cross build --release --locked --target ${{ matrix.target }}
           else
-            cargo build --release --target ${{ matrix.target }}
+            cargo build --release --locked --target ${{ matrix.target }}
           fi
       - name: Stage asset
         shell: bash
         run: |
+          set -euo pipefail
           mkdir -p dist
-          cp target/${{ matrix.target }}/release/wez-vtabs${{ matrix.ext }} dist/wez-vtabs-${{ matrix.target }}${{ matrix.ext }}
+          cp target/${{ matrix.target }}/release/wez-vtabs${{ matrix.ext }} \
+             dist/wez-vtabs-${{ matrix.target }}${{ matrix.ext }}
+          test -s dist/wez-vtabs-${{ matrix.target }}${{ matrix.ext }}
       - uses: actions/upload-artifact@v4
         with:
           name: wez-vtabs-${{ matrix.target }}
@@ -69,8 +86,29 @@ jobs:
         with:
           path: dist
           merge-multiple: true
+      - name: Assert complete bundle
+        run: |
+          set -euo pipefail
+          for t in aarch64-apple-darwin x86_64-apple-darwin \
+                   x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu; do
+            test -s "dist/wez-vtabs-$t" || { echo "::error::missing wez-vtabs-$t"; exit 1; }
+          done
+          test -s dist/wez-vtabs-x86_64-pc-windows-msvc.exe
+          test "$(find dist -maxdepth 1 -type f | wc -l)" -eq 5
+      - name: Assert release profile applied
+        run: |
+          set -euo pipefail
+          f=dist/wez-vtabs-x86_64-unknown-linux-gnu
+          if file -b "$f" | grep -q "not stripped"; then
+            echo "::error::$f is not stripped; [profile.release] missing"
+            exit 1
+          fi
+          sz=$(stat -c%s "$f")
+          test "$sz" -lt 614400 || { echo "::error::$f is ${sz}B, over 600KiB"; exit 1; }
+          test "$sz" -gt 102400 || { echo "::error::$f is ${sz}B, suspiciously small"; exit 1; }
       - name: Checksums
         run: cd dist && sha256sum wez-vtabs-* > SHA256SUMS
       - uses: softprops/action-gh-release@v2
         with:
           files: dist/*
+          fail_on_unmatched_files: true
