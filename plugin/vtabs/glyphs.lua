@@ -18,9 +18,8 @@ local CHROME = {
   frame_tr = { "╮", "+", group = "ghost_frame" },
   frame_bl = { "╰", "+", group = "ghost_frame" },
   frame_br = { "╯", "+", group = "ghost_frame" },
-  frame_h = { "─", "-", group = "ghost_frame" },
   frame_dash = { "╌", "-", group = "ghost_frame" },
-  frame_v = { "│", "|", group = "ghost_frame" },
+  frame_dash_v = { "╎", "|", group = "ghost_frame" },
   rule = { "─", "-", group = "marks" },
 }
 
@@ -30,12 +29,13 @@ local AMBIGUOUS = {
   [0x2022] = true,
   [0x2026] = true,
   [0x00b7] = true,
+  [0x00ab] = true,
+  [0x00bb] = true,
   [0x256d] = true,
   [0x256e] = true,
   [0x256f] = true,
   [0x2570] = true,
   [0x2500] = true,
-  [0x2502] = true,
 }
 
 local function ambiguous(s)

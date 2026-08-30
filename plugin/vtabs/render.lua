@@ -56,6 +56,7 @@ local util = require "vtabs.util"
 ---@field private_accent integer[]
 ---@field border integer[]
 ---@field border_idle integer[]
+---@field ghost_border_hover integer[]
 ---@field scroll_fg integer[]
 ---@field scroll_idle_fg integer[]
 
@@ -349,51 +350,27 @@ local function chrome_row(ctx, glyph, glyph_x, text, text_fg, glyph_fg, bg)
   return cells
 end
 
-local BORDER_STEP_MIN = 10
-
----Hover is one step of border colour and nothing else. Where the two steps are indistinguishable
----the accent stands in, so the affordance never sinks into the idle border.
-local function ghost_border(theme, hovered)
-  local idle = theme.border_idle or theme.separator
-  if not hovered then
-    return idle
-  end
-  local step = theme.border
-  if not step or not idle then
-    return theme.accent
-  end
-  local delta = 0
-  for i = 1, 3 do
-    delta = math.max(delta, math.abs((step[i] or 0) - (idle[i] or 0)))
-  end
-  return delta >= BORDER_STEP_MIN and step or theme.accent
-end
-
 ---The only outlined element in the sidebar: that is what makes it read as "not a tab".
 local function ghost_rows(ctx, hovered)
   local theme, glyphs, g, cols = ctx.theme, ctx.glyphs, ctx.grid, ctx.cols
-  local border_fg = ghost_border(theme, hovered)
+  -- hover moves the border's colour and the label's, and nothing else: same glyphs, same background
+  local border_fg = hovered and (theme.ghost_border_hover or theme.accent) or (theme.border_idle or theme.separator)
   local rows = {}
   for i = 1, 3 do
     local cells = new_line(cols, theme.bg, theme.fg)
     if i == 2 then
-      put(cells, g.card_x1, glyphs.frame_v, { fg = border_fg }, g.card_x1)
+      put(cells, g.card_x1, glyphs.frame_dash_v, { fg = border_fg }, g.card_x1)
       put(cells, g.icon_x, glyphs.new_tab, { fg = theme.accent }, g.icon_x)
-      -- the label keeps the page behind it in both states: an inline band only shows up on hover
       if g.title_x1 ~= nil then
         local label = util.truncate(ctx.cfg.new_tab_label, math.max(g.card_x2 - 1 - g.title_x1, 0), glyphs.ellipsis)
         put(cells, g.title_x1, label, { fg = hovered and theme.fg or theme.new_tab_fg }, g.card_x2 - 1)
       end
-      put(cells, g.card_x2, glyphs.frame_v, { fg = border_fg }, g.card_x2)
+      put(cells, g.card_x2, glyphs.frame_dash_v, { fg = border_fg }, g.card_x2)
     else
       put(cells, g.card_x1, i == 1 and glyphs.frame_tl or glyphs.frame_bl, { fg = border_fg }, g.card_x1)
-      local first, last = g.card_x1 + 1, g.card_x2 - 1
-      for x = first, last do
-        -- the cells either side of a corner never gap: on Latte closure carries the card, not contrast
-        local corner = x <= first + 1 or x >= last - 1
-        if corner or (x - first) % 2 == 1 then
-          put(cells, x, glyphs.frame_dash, { fg = border_fg }, x)
-        end
+      -- the glyph is dashed inside its own cell, so a solid run of them still reads as a dash
+      for x = g.card_x1 + 1, g.card_x2 - 1 do
+        put(cells, x, glyphs.frame_dash, { fg = border_fg }, x)
       end
       put(cells, g.card_x2, i == 1 and glyphs.frame_tr or glyphs.frame_br, { fg = border_fg }, g.card_x2)
     end

@@ -886,15 +886,16 @@ test("item 7: the ghost card's hover is one border step and no inline band", fun
   eq(usub(idle_rows[top + 2], 2, 2), "╰")
   eq(usub(idle_rows[top + 2], 27, 27), "╯")
   assert(idle.rows[top]:find(ansi.fg(v.theme.border_idle), 1, true), "the idle border is border_idle")
-  assert(hovered.rows[top]:find(ansi.fg(v.theme.border), 1, true), "hover is the one step up to border")
-  assert(not hovered.rows[top]:find(ansi.fg(v.theme.accent), 1, true), "never the accent while the step shows")
+  assert(hovered.rows[top]:find(ansi.fg(v.theme.ghost_border_hover), 1, true), "hover takes the half step to hue")
+  assert(not hovered.rows[top]:find(ansi.fg(v.theme.accent), 1, true), "but never all the way to the accent")
   assert(not hovered.rows[top + 1]:find(ansi.bg(v.theme.hover_bg), 1, true), "the label keeps the page behind it")
   assert(not idle.rows[top + 1]:find(ansi.bg(v.theme.hover_bg), 1, true), "in both states")
 
-  local flat = p1_view { rows = 20, hover = { x = 5, y = 19 }, opts = { separator = "gap" } }
-  flat.theme.border = flat.theme.border_idle
-  local flat_r = render.render(flat)
-  assert(flat_r.rows[top]:find(ansi.fg(flat.theme.accent), 1, true), "a step too small to see falls back to the accent")
+  assert(
+    theme.contrast(v.theme.ghost_border_hover, v.theme.border_idle)
+      > theme.contrast(v.theme.border, v.theme.border_idle),
+    "and it is a bigger step than border alone, which is what read as no step at all"
+  )
 end)
 
 test("P1 strip: reserve rows, toggle span, never over a list row", function()
@@ -964,7 +965,7 @@ test("P1 glyph guard: groups substitute together, N glyphs survive", function()
   eq(wide.ellipsis, "...")
   eq(wide.chamfer_top, "▙", "neutral block glyphs survive")
   eq(wide.scroll, "▐")
-  eq(wide.toggle_left, "«")
+  eq(wide.toggle_left, "<", "the ambiguous guillemets substitute quietly instead of tripping the width backstop")
   eq(wide.frame_tl, "+", "ghost frame substitutes as a unit")
   eq(wide.frame_dash, "-", "including its neutral member")
   local v14 = glyphs.resolve(base, { unicode_version = 14 })
@@ -1309,9 +1310,11 @@ test("P1 screenshots: icon weight, chamfer, toggle surface, dashed ghost", funct
       ghost_top = ghost_top or row
     end
   end
-  eq(usub(rows[ghost_top], 3, 4), "╌╌", "the cells beside a corner never gap")
+  eq(usub(rows[ghost_top], 3, 4), "╌╌", "every cell between the corners is dashed")
   eq(usub(rows[ghost_top], 25, 26), "╌╌", "at both ends")
-  eq(usub(rows[ghost_top], 5, 6), " ╌", "and the run between them alternates")
+  eq(usub(rows[ghost_top], 5, 6), "╌╌", "and in between: the dash lives inside the glyph")
+  eq(usub(rows[ghost_top + 1], 2, 2), "╎", "the sides are dashed too")
+  eq(usub(rows[ghost_top + 1], 27, 27), "╎")
   eq(usub(rows[ghost_top + 2], 3, 4), "╌╌", "the bottom rail closes the same way")
   eq(usub(rows[ghost_top + 2], 25, 26), "╌╌")
   local over = render.render(p1_view { rows = 20, hover = { x = 5, y = 19 } })
@@ -3234,6 +3237,8 @@ test("every §6.1 gate holds on all ten palettes, or is declared ceiling-limited
     assert(c(t.close_hover_fg, t.active_bg) >= 3.0 - 0.001, "close_hover_fg vs active_bg" .. where)
     assert(c(t.border, t.bg) >= 2.5 - 0.001, "border vs bg" .. where)
     assert(c(t.border_idle, t.bg) >= 2.0 - 0.001, "border_idle vs bg" .. where)
+    assert(c(t.ghost_border_hover, t.bg) >= 2.8 - 0.001, "ghost_border_hover vs bg" .. where)
+    assert(c(t.ghost_border_hover, t.border_idle) >= 1.3 - 0.001, "the ghost hover is a visible step" .. where)
     assert(c(t.scroll_fg, t.bg) >= 2.0 - 0.001, "scroll_fg vs bg" .. where)
     assert(c(t.accent, t.bg) >= 3.0 - 0.001, "accent vs bg" .. where)
     if ceiling < 3.5 then
