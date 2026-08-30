@@ -6,3 +6,4 @@ plugin/lua
 plugin/*.src.rock
 
 .dev-build.log
+.claude/worktrees/
