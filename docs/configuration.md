@@ -30,13 +30,14 @@ return config
 | `hide_native_tab_bar`     | `true`                                                            | `true` \| `false` |
 | `poll_ms`                 | `500`                                                             | number >= `50` |
 | `padding`                 | `{ top = 1, left = 1, right = 1 }`                                | `{ top, left, right }` |
-| `tab_height`              | `"card"`                                                          | `"card"` (`2`) \| `"row"` (`1`) |
+| `tab_height`              | `"card"`                                                          | `"card"` (`2`) \| `"row"` (`1`) \| `"tall"` (`3`) |
 | `meta`                    | `"auto"`                                                          | `"auto"` \| `"cwd"` \| `"process"` \| `false` |
 | `meta_sep`                | `"  "`                                                            | string |
 | `row_gap`                 | `1`                                                               | number >= `0` |
 | `new_tab_button`          | `"ghost"`                                                         | `"ghost"` \| `"row"` \| `false` |
 | `new_tab_label`           | `"New tab"`                                                       | string |
 | `corners`                 | `"chamfer"`                                                       | `"chamfer"` \| `"square"` |
+| `frame`                   | `false`                                                           | any |
 | `titlebar`                | `"auto"`                                                          | `"auto"` \| `"integrate"` \| `"plain"` |
 | `context`                 | `"popover"`                                                       | `"popover"` \| `false` |
 | `toggle_button`           | `true`                                                            | `true` \| `false` |

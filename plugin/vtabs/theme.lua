@@ -142,6 +142,7 @@ function M.resolve(user, palette, opts)
   local hover_bg = first(user.hover_bg) or lift(0.06)
   local active_bg = first(user.active_bg) or mix(lift(0.12), accent, 0.12)
   local meta_fg = first(user.meta_fg) or ensure_contrast(mix(fg, bg, 0.48), active_bg, fg, 3.5)
+  local title_active = first(user.title_active, user.active_title_fg) or ensure_contrast(accent, active_bg, fg, 4.5)
   local raised = first(user.surface_raised) or raise(bg, fg, lift)
   local scrim = tonumber(user.scrim) or scrim_for(bg, fg)
   local scroll_fg = first(user.scroll_fg) or ensure_contrast(lift(0.22), bg, fg, 2.0)
@@ -172,6 +173,11 @@ function M.resolve(user, palette, opts)
     drag_fg = first(user.drag_fg) or fg,
     scroll_fg = scroll_fg,
     scroll_idle_fg = first(user.scroll_idle_fg) or mix(scroll_fg, bg, 0.55),
+    title_active = title_active,
+    active_title_fg = title_active,
+    -- Render draws the accent bar only when the tinted title is not distinct enough on its own.
+    title_active_contrast = M.contrast(title_active, active_bg),
+    content_bg = base_bg,
     surface_raised = raised,
     scrim = scrim,
     disabled_fg = first(user.disabled_fg) or mix(meta_fg, raised, 0.45),

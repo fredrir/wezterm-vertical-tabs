@@ -2977,7 +2977,7 @@ end)
 
 test("each new key rejects a bad value and keeps its default", function()
   for key, bad in pairs {
-    tab_height = "tall",
+    tab_height = "gigantic",
     meta = "path",
     new_tab_button = "button",
     corners = "round",
@@ -3871,6 +3871,42 @@ test("the rail toggle centres below the macOS reserve instead of beside it", fun
   eq(wide.cols, 0)
   eq(wide.toggle_row, 1)
   eq(wide.toggle_x, 3, "centre of a 5-column rail")
+end)
+
+test("the active title is accent-tinted where the scheme can carry it, else it keeps fg", function()
+  local barred = {}
+  for _, p in ipairs(palettes) do
+    local t = theme.resolve({}, p)
+    local where = " on " .. p.name
+    eq(rgb(t.active_title_fg), rgb(t.title_active), "both names, one colour" .. where)
+    eq(t.title_active_contrast, theme.contrast(t.title_active, t.active_bg), "exposed, not recomputed" .. where)
+    assert(t.title_active_contrast >= math.min(4.5, theme.contrast(t.fg, t.active_bg)) - 0.001, "gate" .. where)
+    if t.title_active_contrast < 4.0 then
+      barred[p.name] = true
+    end
+  end
+  -- The two schemes whose own fg cannot reach 4.0 on the card keep the accent bar instead.
+  eq(rgb(util.sorted_keys(barred)), rgb { "Solarized Dark", "Solarized Light" })
+end)
+
+test("content_bg is the untinted terminal background, whatever elevation does to the page", function()
+  for _, p in ipairs(palettes) do
+    local t = theme.resolve({ elevation = 0.06 }, p)
+    eq(rgb(t.content_bg), hex(p.background), "on " .. p.name)
+    assert(rgb(t.bg) ~= rgb(t.content_bg), "the page is tinted, the gutter is not")
+  end
+  eq(rgb(theme.resolve({}, palettes[1]).content_bg), rgb(theme.resolve({}, palettes[1]).bg))
+end)
+
+test("tall cards and the frame are configurable, and false is the frame default", function()
+  eq(config.setup({ tab_height = "tall" }).tab_height, "tall")
+  eq(config.setup({ tab_height = 3 }).tab_height, "tall")
+  eq(config.setup({ tab_height = "gigantic" }).tab_height, "card", "an unknown height resets")
+  eq(config.setup({}).frame, false)
+  local framed = config.setup { frame = { margin = 1, corners = "chamfer" } }
+  eq(framed.frame.margin, 1)
+  eq(framed.frame.corners, "chamfer")
+  config.setup { backend = { path = "/bin/wez-vtabs" } }
 end)
 
 os.remove(state.file)
