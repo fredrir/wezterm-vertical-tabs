@@ -34,7 +34,7 @@ return config
 | `tab_height`              | `"card"`                                                                     | `"card"` (`2`) \| `"row"` (`1`) \| `"tall"` (`3`) |
 | `meta`                    | `false`                                                                      | `"auto"` \| `"cwd"` \| `"process"` \| `false` |
 | `meta_sep`                | `"  "`                                                                       | string |
-| `row_gap`                 | `1`                                                                          | number >= `0` |
+| `row_gap`                 | `0`                                                                          | number >= `0` |
 | `new_tab_button`          | `"ghost"`                                                                    | `"ghost"` \| `"row"` \| `false` |
 | `new_tab_label`           | `"New tab"`                                                                  | string |
 | `corners`                 | `"chamfer"`                                                                  | `"chamfer"` \| `"square"` |

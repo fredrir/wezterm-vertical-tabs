@@ -3542,7 +3542,7 @@ test("the P1 defaults and their aliases pass validation without warning", functi
   local before = #wezterm.log
   local cfg = config.setup {}
   eq(cfg.padding.top, 1)
-  eq(cfg.row_gap, 1)
+  eq(cfg.row_gap, 0)
   eq(cfg.tab_height, "card")
   eq(cfg.meta, false)
   eq(cfg.separator, "gap")
@@ -3574,8 +3574,8 @@ test("each new key rejects a bad value and keeps its default", function()
   } do
     eq(config.setup({ [key] = bad })[key], config.defaults[key], key .. " reset")
   end
-  eq(config.setup({ row_gap = -1 }).row_gap, 1)
-  eq(config.setup({ row_gap = "two" }).row_gap, 1)
+  eq(config.setup({ row_gap = -1 }).row_gap, 0)
+  eq(config.setup({ row_gap = "two" }).row_gap, 0)
   eq(config.setup({ toggle_button = "yes" }).toggle_button, true)
   eq(config.setup({ row_gap = 3 }).row_gap, 3, "a valid value survives")
 end)
@@ -4027,7 +4027,7 @@ local P1_DEFAULTS = {
   width = 28,
   padding = { top = 1, left = 2, right = 1 },
   edge_to_edge = true,
-  row_gap = 1,
+  row_gap = 0,
   tab_height = "card",
   meta = false,
   separator = "gap",
@@ -4245,7 +4245,7 @@ test("every enum rejects a value outside it and every range rejects the wrong si
   end
   eq(config.setup({ width = 4 }).width, 28, "below min")
   eq(config.setup({ width = "wide" }).width, 28, "wrong type")
-  eq(config.setup({ row_gap = -1 }).row_gap, 1)
+  eq(config.setup({ row_gap = -1 }).row_gap, 0)
   eq(config.setup({ theme = { elevation = 2 } }).theme.elevation, 0.06, "above max")
   eq(config.setup({ toggle_button = "yes" }).toggle_button, true)
   eq(config.setup({ padding = { top = -1 } }).padding.top, 1, "nested keys validate too")
@@ -4342,7 +4342,7 @@ end)
 
 test("cell counts and durations must be whole numbers", function()
   eq(config.setup({ width = 28.7 }).width, 28, "a fractional width would reach AdjustPaneSize")
-  eq(config.setup({ row_gap = 1.5 }).row_gap, 1)
+  eq(config.setup({ row_gap = 1.5 }).row_gap, 0)
   eq(config.setup({ rail_width = 5.5 }).rail_width, 5)
   eq(config.setup({ poll_ms = 500.5 }).poll_ms, 500)
   eq(config.setup({ padding = { top = 1.2 } }).padding.top, 1)

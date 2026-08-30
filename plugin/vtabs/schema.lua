@@ -156,7 +156,7 @@ M.options = {
   {
     key = "row_gap",
     type = "number",
-    default = 1,
+    default = 0,
     integer = true,
     min = 0,
     label = "Row gap",
