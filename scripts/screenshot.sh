@@ -39,9 +39,9 @@ rail-macos|Catppuccin Mocha|macos-rail|probe:toggle|rail_widened
 rail-macos-plain|Catppuccin Mocha|macos-rail-plain|probe:toggle|rail_width
 settings|Catppuccin Mocha|default|settings|settings_tab
 settings-behaviour|Catppuccin Mocha|default|settings_behaviour|settings_locked
-zen|Catppuccin Mocha|zen|scene|always
-zen-square|Catppuccin Mocha|zen-square|scene|always
-zen-rail|Catppuccin Mocha|zen-rail|probe:toggle|always"
+zen|Catppuccin Mocha|zen|scene|zen_frame
+zen-square|Catppuccin Mocha|zen-square|scene|zen_frame
+zen-rail|Catppuccin Mocha|zen-rail|probe:toggle|zen_frame"
 
 cli() { wezterm cli --no-auto-start "$@"; }
 # A gui busy with a spawn or a resize can answer an empty body; every helper here parses this, and
@@ -58,6 +58,11 @@ list() {
 }
 pick() { list | python3 -c "import json,sys;$1"; }
 sidebars() { pick 'print("\n".join(str(p["pane_id"]) for p in json.load(sys.stdin) if p["title"].startswith("wez-vtabs")))'; }
+# The most frequent pixel in a crop, as `#rrggbb`. An average would blend antialiased text back in.
+dominant() {
+  magick "$1" -crop "$2" +repage -depth 8 -format %c histogram:info:- |
+    sed 's/^ *//' | sort -rn | head -1 | sed -n 's/.*\(#[0-9A-F]\{6\}\).*/\1/p'
+}
 tab_ids() { pick 'print(" ".join(str(t) for t in sorted({p["tab_id"] for p in json.load(sys.stdin)})))'; }
 content_of() { pick "t=$1;print([p['pane_id'] for p in json.load(sys.stdin) if p['tab_id']==t and not p['title'].startswith('wez-vtabs')][0])"; }
 sidebar_of() { pick "t=$1;print([p['pane_id'] for p in json.load(sys.stdin) if p['tab_id']==t and p['title'].startswith('wez-vtabs')][0])"; }
@@ -268,17 +273,27 @@ check() {
         fail_state "the settings page has no hint bar on its last row"
       ;;
     # `frame = "zen"` insets the terminal as a rounded card inside a tinted frame, so the corner
-    # pixels of the content rect are the frame and the middle is the terminal background.
+    # pixels of the content rect are the frame and the middle is the terminal background. The
+    # sidebar has to read as one surface with the frame: it paints the same tint in explicit-bg
+    # cells, and anything between the two (a dim, a compositing alpha) shows up as a seam.
     zen_frame)
       png=$out/$state.png
       [ -s "$png" ] || fail_state "no window shot to read the frame from"
+      # `%` opens a format escape, so the centre is an fx expression rather than a percentage.
       read -r corner middle <<EOF
-$(magick "$png" -format "%[pixel:p{4,4}] %[pixel:p{50%,50%}]" info:)
+$(magick "$png" -format "%[pixel:p{4,4}] %[pixel:p{w/2,h/2}]" info:)
 EOF
       [ -n "$corner" ] && [ -n "$middle" ] || fail_state "could not sample the window shot"
       [ "$corner" != "$middle" ] ||
         fail_state "the frame tint and the terminal background are the same colour ($corner)"
-      echo "  zen frame $corner, terminal $middle"
+      # The most common pixel of a strip, so one antialiased glyph cannot decide the answer. The
+      # gutter is window_padding wide and the sidebar's own first column is its background.
+      gutter=$(dominant "$png" "6x400+3+150")
+      bar=$(dominant "$png" "6x400+16+150")
+      [ -n "$gutter" ] && [ -n "$bar" ] || fail_state "could not sample the frame and the sidebar"
+      [ "$gutter" = "$bar" ] ||
+        fail_state "the sidebar is $bar where the frame is $gutter; they must be one surface"
+      echo "  zen frame $corner, terminal $middle, one surface at $bar"
       ;;
     # An option the host set in wezterm.lua cannot be edited here; the badge is the whole point of
     # the Behaviour frame, so a page that merely reached the group does not pass.

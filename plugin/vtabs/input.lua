@@ -11,6 +11,7 @@ local hit = require "vtabs.hit"
 local layout = require "vtabs.layout"
 local settings = require "vtabs.settings"
 local page = require "vtabs.page"
+local mux = require "vtabs.mux"
 local util = require "vtabs.util"
 
 local M = {}
@@ -406,9 +407,7 @@ end
 ---The content pane a hovered sidebar may hand input to, or nil when any part of that claim fails.
 local function handover_target(gui_window, pane, cfg)
   local wid = gui_window:window_id()
-  local tab = util.try(function()
-    return pane:tab()
-  end)
+  local tab = mux.tab_of(pane)
   local active = util.active_tab(gui_window)
   if not sidebar.is_ready(pane) or not tab or not active or tab:tab_id() ~= active:tab_id() then
     return nil
@@ -423,12 +422,8 @@ local function handover_target(gui_window, pane, cfg)
   if sidebar.is_backend(content) or sidebar.is_overlay(content) then
     return nil
   end
-  local domain = util.try(function()
-    return pane:get_domain_name()
-  end)
-  if domain == nil or domain ~= util.try(function()
-    return content:get_domain_name()
-  end) then
+  local domain = mux.domain(pane)
+  if domain == nil or domain ~= mux.domain(content) then
     return nil
   end
   return content

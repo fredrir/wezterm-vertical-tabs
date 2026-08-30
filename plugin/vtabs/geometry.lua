@@ -3,6 +3,7 @@ local act = wezterm.action
 local config = require "vtabs.config"
 local state = require "vtabs.state"
 local sidebar = require "vtabs.sidebar"
+local mux = require "vtabs.mux"
 local util = require "vtabs.util"
 
 local M = {}
@@ -32,6 +33,7 @@ local in_flight = {}
 local driven = {}
 local resized_at = {}
 local rail_reserve = {}
+local last_target = {}
 
 ---Target width: the rail when collapsed, else what the user last dragged it to, else `cfg.width`.
 function M.desired(window_id)
@@ -62,6 +64,7 @@ function M.forget_window(window_id)
   driven[window_id] = nil
   resized_at[window_id] = nil
   rail_reserve[window_id] = nil
+  last_target[window_id] = nil
 end
 
 ---The sidebar reporting its own size means our adjust moved something, so the next one need not
@@ -92,9 +95,7 @@ table.insert(state.forget_hooks, M.forget_window)
 
 ---Columns, dpi and cell width of a pane; the last two tell a divider drag from a font or DPI change.
 local function pane_metrics(pane)
-  local d = util.try(function()
-    return pane:get_dimensions()
-  end)
+  local d = mux.dims(pane)
   if type(d) ~= "table" or not d.cols or d.cols < 1 then
     return nil
   end
@@ -102,17 +103,13 @@ local function pane_metrics(pane)
 end
 
 local function window_px(gui_window)
-  local d = util.try(function()
-    return gui_window:get_dimensions()
-  end)
+  local d = mux.dims(gui_window)
   return d and d.pixel_width or nil
 end
 
 ---Tab width in cells and whether any pane is zoomed; `panes_with_info` reports the unzoomed layout.
 local function tab_metrics(tab, sb_id)
-  local infos = util.try(function()
-    return tab:panes_with_info()
-  end)
+  local infos = mux.panes_with_info(tab)
   if type(infos) ~= "table" or #infos == 0 then
     return nil, false, 1
   end
@@ -209,6 +206,9 @@ function M.correct(gui_window)
   local target = fits(want, tab_cols, collapsed and want or MIN_WIDTH, bands)
   local attempt = { tab_id = tab_id, tab_cols = tab_cols, target = target, cols = cols }
   if target == cols then
+    -- Remembered, not just forgotten: a width we asked for stays ours after we stop asking, or the
+    -- adoption branch below reads our own clamp back as a hand on the divider.
+    last_target[wid] = target
     attempted[wid] = nil
     in_flight[wid] = nil
     return false
@@ -221,7 +221,7 @@ function M.correct(gui_window)
   local outstanding = attempted[wid] ~= nil or in_flight[wid] ~= nil
   local quiet = math.max(cfg.poll_ms, ADOPT_FLOOR_MS)
   local settled = now - (driven[wid] or 0) >= ADOPT_FLOOR_MS and now - (resized_at[wid] or 0) >= quiet
-  if comparable and not outstanding and settled then
+  if comparable and not outstanding and settled and cols ~= (last_target[wid] or -1) then
     if seen.cols ~= cols or now - since < ADOPT_FLOOR_MS then
       -- Moving, and not by us: the user is on the divider. Correcting now fights their hand.
       return false
@@ -255,19 +255,13 @@ function M.correct(gui_window)
   end
   -- `AdjustPaneSize` ignores its pane argument and moves whichever pane is active, so the sidebar
   -- has to be the active one when it runs -- in a single-content tab as much as any other.
-  local active = util.try(function()
-    return tab:active_pane()
-  end)
+  local active = mux.active_pane(tab)
   local restore = active and active:pane_id() ~= sb:pane_id() and active or nil
   if restore then
     sb:activate()
   end
-  util.try(function()
-    gui_window:perform_action(
-      act.AdjustPaneSize { direction_for(cfg.position, target - cols), math.abs(target - cols) },
-      sb
-    )
-  end)
+  local adjust = act.AdjustPaneSize { direction_for(cfg.position, target - cols), math.abs(target - cols) }
+  mux.call(gui_window, "perform_action", adjust, sb)
   if restore then
     restore:activate()
   end

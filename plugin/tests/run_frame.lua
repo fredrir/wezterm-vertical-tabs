@@ -80,6 +80,9 @@ test("the frame declines to a background of the user's own, and to transparency"
   eq(frame_mod.refuses(gui), "window_background_image")
   gui.overrides = { background = { { source = { File = "/tmp/mine.png" } } } }
   eq(frame_mod.refuses(gui), "background", "a real one is theirs, not ours to replace")
+  -- Z6: `install` writes exactly one layer, so a second is theirs however ours got to the front.
+  gui.overrides = { background = { { source = { File = "/tmp/mine.png" } }, { source = { File = "/tmp/b.png" } } } }
+  eq(frame_mod.refuses(gui), "background", "a layer appended after ours is still a background")
   gui.overrides = nil
   eq(frame_mod.sync(gui), false, "and sync does nothing at all while it declines")
   config.setup { backend = { path = "/bin/wez-vtabs" } }
@@ -99,11 +102,101 @@ test("installing the frame keeps the padding the titlebar band owns in the same 
   eq(out.background[1].source.File, "/tmp/frame_mod.png")
   eq(out.background[1].repeat_x, "NoRepeat")
   eq(out.background[1].width, "100%")
-  eq(out.window_padding.left, 8, "the margin is the padding on every side")
-  eq(out.window_padding.bottom, 8)
-  assert(out.colors.split, "the divider is hidden in the frame tint")
+  -- Z5: `apply_padding` composes margin + inset and `apply_titlebar_band` holds the override, so a
+  -- write from the frame would reset the band's top on the next resize.
+  eq(out.window_padding, nil, "the frame never writes the key the band owns")
+  eq(out.colors.split, frame_mod.colours(gui, cfg).card, "splits vanish into the card, not the tint")
   gui.overrides = nil
   config.setup { backend = { path = "/bin/wez-vtabs" } }
+end)
+
+test("zen + collapsed = hidden keeps the traffic-light band across a resize", function()
+  local win, gui = window(1)
+  sidebar.ensure(gui)
+  mark_ready(win.tab_list[1])
+  gui.decorations = "INTEGRATED_BUTTONS|RESIZE"
+  gui.window_padding = { left = 14, right = 14, top = 14, bottom = 14 }
+  local was_mac = platform.is_mac
+  platform.is_mac = true
+  view_mod.invalidate_theme()
+  local cfg = config.setup {
+    backend = { path = "/bin/wez-vtabs" },
+    frame = "zen",
+    collapsed = "hidden",
+    meta = "auto",
+  }
+
+  state.set_collapsed(gui:window_id(), true)
+  assert(view_mod.apply_titlebar_band(gui), "collapsing bands the window")
+  eq(gui:get_config_overrides().window_padding.top, platform.TITLEBAR_PAD)
+
+  -- The resize the band exists to survive: a new rect reinstalls the frame.
+  frame_mod.install(gui, "/tmp/frame_resize.png", cfg)
+  eq(
+    gui:get_config_overrides().window_padding.top,
+    platform.TITLEBAR_PAD,
+    "the lights still clear the shell after the frame reinstalls"
+  )
+  eq(gui:get_config_overrides().window_padding.left, 14, "and the frame's own sides are untouched")
+
+  state.set_collapsed(gui:window_id(), false)
+  assert(view_mod.apply_titlebar_band(gui), "expanding clears the band")
+  eq(gui:get_config_overrides().window_padding, nil, "back to the base config's margin + inset")
+
+  platform.is_mac = was_mac
+  gui.decorations, gui.window_padding, gui.overrides = nil, nil, nil
+  state.set_collapsed(gui:window_id(), false)
+  view_mod.invalidate_theme()
+  config.setup { backend = { path = "/bin/wez-vtabs" } }
+end)
+
+test("the frame inset lifts the text off the stroke without moving the card's outer edge", function()
+  local win, gui = window(1)
+  sidebar.ensure(gui)
+  mark_ready(win.tab_list[1])
+  local base = config.setup {
+    frame = { zen = true, inset = 0 },
+    meta = "auto",
+    backend = { path = "/bin/wez-vtabs" },
+  }
+  local flat = frame_mod.rect(gui, base)
+  local cfg = config.setup { frame = "zen", meta = "auto", backend = { path = "/bin/wez-vtabs" } }
+  eq(frame_mod.inset(cfg), 6, "six device pixels by default")
+  local inset = frame_mod.rect(gui, cfg)
+
+  -- The grid shrank by 2*inset and the card grew by it, so the two cancel at the outer edge: the
+  -- gutter is `margin` on all four sides whatever the inset is.
+  local m = frame_mod.margin(cfg)
+  eq(inset.y, m, "the card's top gutter is the margin")
+  eq(inset.y + inset.ch, inset.h - m, "and so is its bottom")
+  eq(inset.x + inset.cw, inset.w - m, "the right edge stays a margin from the window")
+  eq(flat.x + flat.cw, flat.w - m, "which is where a flat card ended too")
+  eq(inset.y, flat.y, "the top does not move")
+  eq(inset.ch, flat.ch)
+  -- The text rect it is drawn around is 2*inset narrower, so the card itself is wider.
+  assert(inset.cw > flat.cw, "the card covers the air the padding opened, at " .. inset.cw)
+
+  -- An inner gap larger than the outer frame reads inside-out.
+  eq(frame_mod.inset(config.setup { frame = { zen = true, inset = 99 }, backend = { path = "/x" } }), 8)
+  eq(frame_mod.inset(config.setup { frame = { zen = true, inset = -4 }, backend = { path = "/x" } }), 0)
+  eq(
+    frame_mod.inset(config.setup { frame = { zen = true, margin = 2, inset = 6 }, backend = { path = "/x" } }),
+    2,
+    "the margin is the ceiling"
+  )
+  config.setup { backend = { path = "/bin/wez-vtabs" } }
+end)
+
+test("the frame's file name carries the colours and the process, not just the geometry", function()
+  local rect = { w = 100, h = 80, x = 8, y = 8, cw = 60, ch = 64, radius = 8 }
+  local dark = { fill = "#29293a", card = "#1e1e2e", border = "#45475a" }
+  local light = { fill = "#e6e9ef", card = "#eff1f5", border = "#9ca0b0" }
+  -- Z7: a theme change must not match a file written for the old colours.
+  assert(frame_mod.path_for(1, rect, dark) ~= frame_mod.path_for(1, rect, light), "colour is in the key")
+  eq(frame_mod.path_for(1, rect, dark), frame_mod.path_for(1, rect, dark), "and it is stable")
+  assert(frame_mod.path_for(1, rect, dark) ~= frame_mod.path_for(2, rect, dark), "window is still in it")
+  -- Window ids restart per GUI process, so the process has to be in the name too.
+  assert(frame_mod.path_for(1, rect, dark):match "/frame%-[^-]+%-1%-", "the process key precedes the window")
 end)
 
 test("every vtabs module is on the config-reload watch list", function()

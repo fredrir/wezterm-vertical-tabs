@@ -91,6 +91,12 @@ test("wezterm is told not to dim the idle pane, unless the user asked for dimmin
   eq(off.brightness, 1.0, "the sidebar is chrome; wezterm would dim it whenever the shell has focus")
   eq(off.saturation, 1.0)
   eq(hsb { dim_inactive_panes = true }, nil, "opting in leaves wezterm's default alone")
+  -- The frame is no excuse: wezterm skips only the pane's default fill under a background layer and
+  -- goes on dimming explicit-bg cells, which is every cell the sidebar paints. Without this the
+  -- sidebar rendered (38,38,52) against a frame tint of (41,41,58).
+  local zen = hsb { frame = "zen", backend = { path = "/bin/wez-vtabs" } }
+  eq(zen.brightness, 1.0, "a background layer does not spare the sidebar's own cells")
+  eq(zen.saturation, 1.0)
   local mine = { brightness = 0.5, saturation = 0.5 }
   eq(hsb({}, mine), mine, "a user value is never overwritten")
   config.setup { backend = { path = "/bin/wez-vtabs" } }

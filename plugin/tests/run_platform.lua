@@ -173,6 +173,13 @@ test("the window padding is zeroed on the sides the sidebar touches, and never w
   eq(sides.right, "1cell")
   eq(sides.top, "0.5cell", "but hands the content pane back wezterm's top and bottom half-cell")
   eq(sides.bottom, "0.5cell")
+  -- Zen supersedes the asymmetric padding: the card grew by the inset, so the padding absorbs it.
+  local zen = padding { frame = "zen", backend = { path = "/bin/wez-vtabs" } }
+  eq(zen.left, 14, "margin + inset on every side")
+  eq(zen.top, 14)
+  eq(zen.right, 14)
+  eq(zen.bottom, 14)
+  eq(padding({ frame = { zen = true, margin = 10, inset = 0 }, backend = { path = "/bin/wez-vtabs" } }).top, 10)
   local mine = { left = 8, right = 8, top = 8, bottom = 8 }
   eq(padding({}, mine), mine, "a user value is never overwritten")
   eq(padding { edge_to_edge = false }, nil, "and the opt-out never touches it")
