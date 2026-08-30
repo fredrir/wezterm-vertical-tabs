@@ -50,14 +50,23 @@ echo "  shots"
 shots=$(mktemp -d /tmp/vtshots.XXXXXX)
 VTABS_SHOTS="$shots" xvfb-run -a -s "-screen 0 1600x900x24" sh "$root/scripts/screenshot.sh" \
   >"$out/shots.log" 2>&1 || true
+# The sha256 of no bytes is a perfectly good-looking hash, so an unrendered state would compare
+# "identical" against another unrendered one. Hash only real pixels and record the roster instead.
+empty=$(printf "" | sha256sum | cut -d' ' -f1)
+hashed=0
 for png in "$shots"/*-sidebar.png; do
-  [ -e "$png" ] || continue
+  [ -s "$png" ] || continue
   state=$(basename "$png" -sidebar.png)
-  # The sidebar crop is what a refactor must not move; the full window carries the shell's noise.
-  magick "$png" -depth 8 ppm:- | sha256sum | cut -d' ' -f1 >"$out/shots/$state"
+  hash=$(magick "$png" -depth 8 ppm:- 2>/dev/null | sha256sum | cut -d' ' -f1)
+  [ -n "$hash" ] && [ "$hash" != "$empty" ] || { echo "  warn: $state produced no pixels"; continue; }
+  echo "$hash" >"$out/shots/$state"
+  hashed=$((hashed + 1))
 done
-grep -c "^ok:" "$out/shots.log" >"$out/shots/count" || echo 0 >"$out/shots/count"
-echo "    $(cat "$out/shots/count") states hashed"
+# Every state the run was asked for, so a state that stops rendering is a diff, not a silent gap.
+sed -n 's/^\([a-z0-9-]*\)|.*/\1/p' "$root/scripts/screenshot.sh" | sort >"$out/shots/roster"
+echo "$hashed" >"$out/shots/count"
+echo "    $hashed of $(wc -l <"$out/shots/roster" | tr -d ' ') states hashed"
+[ "$hashed" -gt 0 ] || { echo "  no screenshot state rendered; refusing to record an empty baseline"; exit 1; }
 rm -rf "$shots"
 
 # --- geometry and stress: both e2e modes ----------------------------------
