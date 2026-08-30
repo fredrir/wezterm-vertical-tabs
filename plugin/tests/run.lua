@@ -912,6 +912,77 @@ test("an adopted pane is abandoned once its window closes", function()
   eq(state.sidebar_pane_id(win.tab_list[1].id) ~= liar:pane_id(), true, "unmapped after 30 s")
 end)
 
+test("a re-entrant ensure returns without running", function()
+  local win, gui = setup_window(1)
+  sidebar.ensure(gui)
+  local tab = win.tab_list[1]
+  mark_ready(tab)
+  local content = sidebar.content_pane(tab)
+  local depth, deepest, triggered = 0, 0, false
+  content.get_user_vars = function(self)
+    depth = depth + 1
+    deepest = math.max(deepest, depth)
+    if not triggered then
+      triggered = true
+      sidebar.ensure(gui)
+    end
+    depth = depth - 1
+    return self.vars
+  end
+  sidebar.ensure(gui)
+  content.get_user_vars = nil
+  assert(triggered, "the inner ensure was attempted")
+  eq(deepest, 1, "the inner ensure did not re-enter the body")
+end)
+
+test("ensure clears its guard when a pass throws", function()
+  local win, gui = setup_window(1)
+  local tab = win.tab_list[1]
+  local panes = tab.panes
+  tab.panes = function()
+    error "mux went away"
+  end
+  eq(pcall(sidebar.ensure, gui), false, "the error is raised, not swallowed")
+  tab.panes = panes
+  sidebar.ensure(gui)
+  eq(sidebars_in(tab), 1, "the next pass runs")
+end)
+
+test("detach never closes a pane that is no longer the active one", function()
+  local win, gui = setup_window(2)
+  sidebar.ensure(gui)
+  local tab, other = win.tab_list[1], win.tab_list[2]
+  local sb = mark_ready(tab)
+  win.active_tab_ref = tab
+  -- another handler activates a different tab while the sidebar activation is in flight
+  sb.activate = function()
+    other:activate()
+  end
+  local panes, tabs, acted = #tab:panes(), #win.tab_list, #win.actions
+  sidebar.detach(gui, tab)
+  eq(#tab:panes(), panes, "the sidebar is left open")
+  eq(#win.tab_list, tabs, "no tab closed")
+  eq(#win.actions, acted, "CloseCurrentPane never ran")
+  sb.activate = nil
+end)
+
+test("close_orphan never closes a tab that lost focus", function()
+  local win, gui = setup_window(2)
+  sidebar.ensure(gui)
+  local victim, other = win.tab_list[2], win.tab_list[1]
+  local sb = mark_ready(victim)
+  table.remove(victim.pane_list, 2)
+  win.active_tab_ref = other
+  victim.activate = function()
+    other:activate()
+  end
+  local acted = #win.actions
+  sidebar.close_orphan(gui, victim, sb)
+  eq(#win.tab_list, 2, "the tab survives")
+  eq(#win.actions, acted, "CloseCurrentTab never ran")
+  victim.activate = nil
+end)
+
 -- ===================== implementer-2: interaction / geometry / focus =====================
 
 local function rgb(c)

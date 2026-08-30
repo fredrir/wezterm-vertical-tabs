@@ -3,6 +3,7 @@ local act = wezterm.action
 local config = require "vtabs.config"
 local state = require "vtabs.state"
 local backend = require "vtabs.backend"
+local platform = require "vtabs.platform"
 local theme = require "vtabs.theme"
 local util = require "vtabs.util"
 
@@ -122,7 +123,12 @@ local function sidebar_rank(pane, pure)
   if state.sidebar_pane_id(tab_id) == pid then
     return RANK.mapped
   end
-  local marker = pure and M.has_marker(pane) and not M.is_overlay(pane) or (not pure and has_marker_cached(pane, pid))
+  local marker
+  if pure then
+    marker = M.has_marker(pane) and not M.is_overlay(pane)
+  else
+    marker = has_marker_cached(pane, pid)
+  end
   if session.given_up[pid] or not marker then
     return RANK.none
   end
@@ -440,7 +446,63 @@ local function await_auth(gui_window, tab, sb, now)
   end
 end
 
----CloseCurrentPane/CloseCurrentTab act on the active pane/tab, so targets are activated first.
+---The GUI overwrites WEZTERM_UNIX_SOCKET with its own gui-sock-<pid> (wezterm-gui/src/main.rs:413-415).
+local function own_socket()
+  local socket = os.getenv "WEZTERM_UNIX_SOCKET"
+  local pid = util.try(function()
+    return wezterm.procinfo.pid()
+  end)
+  if type(socket) ~= "string" or not pid then
+    return false
+  end
+  return socket:match("gui%-sock%-" .. tostring(pid) .. "$") ~= nil
+end
+
+---Kills one pane by id, so no tab or pane has to be activated first. False when the CLI is not usable.
+local function cli_kill(pane_id)
+  local dir = wezterm.executable_dir
+  if type(dir) == "string" and own_socket() then
+    local exe = dir .. (platform.is_windows and "\\wezterm.exe" or "/wezterm")
+    local args = { exe, "cli", "--no-auto-start", "kill-pane", "--pane-id", tostring(pane_id) }
+    if util.try(wezterm.run_child_process, args) == true then
+      return true
+    end
+  end
+  util.warn_once("cli-kill", "wezterm cli kill-pane unavailable; closing sidebars by activation")
+  return false
+end
+
+---`perform_action` ignores its pane argument, so the intended target must still be active when it runs.
+local function still_active(gui_window, tab, pane)
+  local active_tab = util.try(function()
+    return gui_window:mux_window():active_tab()
+  end)
+  if not active_tab or active_tab:tab_id() ~= tab:tab_id() then
+    return false
+  end
+  local active_pane = util.try(function()
+    return active_tab:active_pane()
+  end)
+  return active_pane ~= nil and active_pane:pane_id() == pane:pane_id()
+end
+
+local function close_pane_by_activation(gui_window, tab, sb)
+  local content = M.content_pane(tab)
+  local previous = gui_window:mux_window():active_tab()
+  sb:activate()
+  if not still_active(gui_window, tab, sb) then
+    util.warn("sidebar %d lost focus before close; left open", sb:pane_id())
+    return
+  end
+  gui_window:perform_action(act.CloseCurrentPane { confirm = false }, sb)
+  if content then
+    content:activate()
+  end
+  if previous and previous:tab_id() ~= tab:tab_id() then
+    previous:activate()
+  end
+end
+
 function M.detach(gui_window, tab)
   local sb = M.find(tab)
   if sb and not M.is_ready(sb) then
@@ -449,15 +511,8 @@ function M.detach(gui_window, tab)
   end
   if sb then
     state.forget_pane(sb:pane_id())
-    local content = M.content_pane(tab)
-    local previous = gui_window:mux_window():active_tab()
-    sb:activate()
-    gui_window:perform_action(act.CloseCurrentPane { confirm = false }, sb)
-    if content then
-      content:activate()
-    end
-    if previous and previous:tab_id() ~= tab:tab_id() then
-      previous:activate()
+    if not cli_kill(sb:pane_id()) then
+      close_pane_by_activation(gui_window, tab, sb)
     end
   end
   state.set_sidebar(tab:tab_id(), nil)
@@ -466,10 +521,17 @@ end
 ---Closes a tab that only holds a sidebar without disturbing the active tab.
 function M.close_orphan(gui_window, tab, sb)
   state.forget_pane(sb:pane_id())
+  if cli_kill(sb:pane_id()) then
+    return
+  end
   local previous = gui_window:mux_window():active_tab()
   local switching = previous and previous:tab_id() ~= tab:tab_id()
   if switching then
     tab:activate()
+  end
+  if not still_active(gui_window, tab, sb) then
+    util.warn("orphan tab %d lost focus before close; left open", tab:tab_id())
+    return
   end
   gui_window:perform_action(act.CloseCurrentTab { confirm = false }, sb)
   if switching then
@@ -581,7 +643,7 @@ local function prune_windows(now)
 end
 
 ---Makes every tab match the collapsed/expanded state and closes tabs left with only a sidebar.
-function M.ensure(gui_window)
+local function ensure_window(gui_window)
   local mux_win = gui_window:mux_window()
   local wid = gui_window:window_id()
   local collapsed = state.is_collapsed(wid)
@@ -632,6 +694,22 @@ function M.ensure(gui_window)
     end
   end
   record_closed_tabs(wid, seen, private)
+end
+
+local ensuring = {}
+
+---Splits and closes await, so several event handlers can be inside `ensure` for one window at once.
+function M.ensure(gui_window)
+  local wid = gui_window:window_id()
+  if ensuring[wid] then
+    return
+  end
+  ensuring[wid] = true
+  local ok, err = pcall(ensure_window, gui_window)
+  ensuring[wid] = nil
+  if not ok then
+    error(err, 0)
+  end
 end
 
 function M.set_collapsed(gui_window, collapsed)

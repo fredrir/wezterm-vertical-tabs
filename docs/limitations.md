@@ -56,3 +56,12 @@ its own domain, within 30 s and 5 attempts per pane.
 
 Two GUI processes attached to one mux both manage the same tabs and fight over
 the sidebars. Unsupported.
+
+## Key and paste forwarding
+
+| Sent to the content pane | Behaviour |
+| --- | --- |
+| keys, and pastes into an app with `?2004h` | bracketed, so escapes stay data |
+| pastes into an app without `?2004h` | arrives raw, exactly as a clipboard paste would: `send_paste` strips `ESC[201~` and turns `\r` into `\n`, other escapes pass through |
+
+Forwarding only ever reaches the source tab's own content pane, in its own domain.

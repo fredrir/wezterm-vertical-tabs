@@ -47,8 +47,9 @@ All events carry `"t"`. Columns/rows are 1-based cell coordinates.
   plugin can forward them to another pane verbatim. Omitted when empty.
 - A CSI/SS3 sequence the parser does not name is `"key":"unknown"` with its
   bytes in `raw`; unrecognised mouse reports are dropped instead.
-- Bracketed paste is one `paste` event, never key events. Its bytes are not
-  parsed, so escapes inside a paste stay data.
+- Bracketed paste is one `paste` event, never key events. This parser does not
+  interpret those bytes; what the pane they are forwarded to makes of them is
+  that app's business.
 - Key names: a single printable character (as typed), or one of
   `enter escape tab backspace delete up down left right home end pageup pagedown space`.
   Control characters map to their letter with `"ctrl"` in `mods` (`0x03` → `c` + ctrl;

@@ -101,8 +101,14 @@ end
 function Tab:panes()
   return self.pane_list
 end
+---A pane that left the tab cannot stay active; the mux moves focus to a surviving one.
 function Tab:active_pane()
-  return self.active
+  for _, p in ipairs(self.pane_list) do
+    if p == self.active then
+      return p
+    end
+  end
+  return self.pane_list[1]
 end
 function Tab:get_title()
   return self.title
