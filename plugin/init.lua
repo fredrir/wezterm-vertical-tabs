@@ -90,7 +90,10 @@ M.invalidate_theme = view.invalidate_theme
 M.is_sidebar_pane = sidebar.is_backend
 
 function M.is_private_window(window)
-  return state.is_private(window:window_id())
+  local wid = util.try(function()
+    return window:window_id()
+  end)
+  return wid ~= nil and state.is_private(wid)
 end
 
 local registered = false
@@ -143,7 +146,6 @@ local function register_events(cfg)
       local wid = window:window_id()
       view.invalidate_theme(wid)
       geometry.reset(wid)
-      geometry.correct(window)
       view.sync(window, { force = true })
     end)
   )

@@ -162,8 +162,7 @@ local function needs_prompt(gui_window, panes)
   return false
 end
 
----Closes any tab, restoring the previous one unless `defer` batches that or a prompt is showing.
----Returns true when WezTerm is now showing a close prompt.
+---Closes any tab and restores the previous one unless `defer` batches that; true = prompt showing.
 function M.close_tab(gui_window, tab_id, defer)
   local tab = M.tab_by_id(gui_window, tab_id)
   local content = tab and sidebar.classify(tab) or {}

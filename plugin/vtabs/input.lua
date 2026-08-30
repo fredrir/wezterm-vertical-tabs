@@ -217,8 +217,7 @@ local forwarded_at = {}
 local KEY_SHAPES = { "^\27%[[\48-\63]*[\32-\47]*[\64-\126]$", "^\27O.$", "^\27.$" }
 local PASTE_BRACKETS = { "\27[200~", "\27[201~" }
 
----`text` when it is structurally one key press, else nil. The backend emits exactly these shapes
----per key, so nothing legitimate is rejected and nothing chainable into a command line survives.
+---`text` when it is structurally one key press, else nil.
 function M.safe_key_bytes(text)
   if type(text) ~= "string" or text == "" or #text > FORWARD_MAX_BYTES then
     return nil
@@ -337,7 +336,7 @@ end
 ---Entry point for the `user-var-changed` event; only registered sidebar panes are trusted.
 function M.handle(gui_window, pane, name, value)
   local cfg = config.get()
-  if name ~= cfg.backend.uservar or not sidebar.is_sidebar(pane) then
+  if name ~= cfg.backend.uservar or not sidebar.is_ready(pane) then
     return
   end
   local ok, ev = pcall(wezterm.json_parse, value)

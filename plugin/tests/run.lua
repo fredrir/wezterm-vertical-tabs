@@ -874,7 +874,7 @@ end)
 test("window growth drifts the sidebar 50/50; correct claws it back in one AdjustPaneSize", function()
   local win, gui = setup_window(1)
   sidebar.ensure(gui)
-  local sb = sidebar.find(win.tab_list[1])
+  local sb = mark_ready(win.tab_list[1])
   eq(sb.cols, 28)
   win:resize(40)
   eq(sb.cols, 48, "adjust_x_size gave the sidebar half of the delta")
@@ -895,7 +895,7 @@ test("split Left puts the sidebar in first, split Right in second, so a right si
   local gui = win.gui
   sidebar.ensure(gui)
   local tab = win.tab_list[1]
-  local sb = sidebar.find(tab)
+  local sb = mark_ready(tab)
   eq(sb.split_args.direction, "Right")
   eq(sb.cols, 28)
   win:resize(-20)
@@ -911,7 +911,7 @@ test("a divider drag with an unchanged window becomes the desired width until co
   local win, gui = setup_window(1)
   sidebar.ensure(gui)
   local tab = win.tab_list[1]
-  local sb = sidebar.find(tab)
+  local sb = mark_ready(tab)
   eq(geometry.correct(gui), false, "baseline recorded")
   tab:set_split(34)
   eq(geometry.correct(gui), false, "drag adopted, not fought")
@@ -927,6 +927,7 @@ test("correction with several content panes activates the sidebar and restores f
   local win, gui = setup_window(1)
   sidebar.ensure(gui)
   local tab = win.tab_list[1]
+  mark_ready(tab)
   local extra = fake.pane(tab, { cols = sidebar.content_pane(tab).cols })
   tab.pane_list[#tab.pane_list + 1] = extra
   extra:activate()
@@ -936,9 +937,77 @@ test("correction with several content panes activates the sidebar and restores f
   eq(sidebar.find(tab).cols, 28)
 end)
 
+test("a sidebar that only carries the title marker is never resized", function()
+  local win, gui = setup_window(1)
+  sidebar.ensure(gui)
+  local tab = win.tab_list[1]
+  local sb = sidebar.find(tab)
+  win:resize(20)
+  local before = #win.actions
+  eq(geometry.correct(gui), false, "an unauthenticated pane is not corrected")
+  eq(#win.actions, before, "no AdjustPaneSize")
+  eq(sb.cols, 38)
+  mark_ready(tab)
+  assert(geometry.correct(gui), "the same pane is corrected once it echoes its token")
+  eq(sb.cols, 28)
+end)
+
+test("a zoomed pane suspends adoption and correction until it is unzoomed", function()
+  local win, gui = setup_window(1)
+  sidebar.ensure(gui)
+  local tab = win.tab_list[1]
+  local sb = mark_ready(tab)
+  eq(geometry.correct(gui), false, "baseline recorded")
+  sb.zoomed = true
+  sb.cols = tab:width()
+  local before = #win.actions
+  eq(geometry.correct(gui), false, "zoom is not a divider drag")
+  eq(#win.actions, before, "no AdjustPaneSize while zoomed")
+  eq(geometry.desired(gui:window_id()), 28, "full-window zoom width not latched")
+  sb.zoomed = false
+  sb.cols = 28
+  eq(geometry.correct(gui), false, "unzoom restores the width it had")
+  eq(geometry.desired(gui:window_id()), 28)
+end)
+
+test("an adopted width is clamped to a plausible sidebar", function()
+  local win, gui = setup_window(1)
+  sidebar.ensure(gui)
+  local tab = win.tab_list[1]
+  mark_ready(tab)
+  eq(geometry.correct(gui), false, "baseline recorded")
+  tab:set_split(78)
+  eq(geometry.correct(gui), false, "drag adopted")
+  eq(geometry.desired(gui:window_id()), 60, "clamped to tab width minus the content margin")
+  geometry.reset(gui:window_id())
+  assert(geometry.correct(gui), "a reset re-asserts cfg.width")
+  eq(geometry.correct(gui), false, "baseline recorded")
+  tab:set_split(1)
+  eq(geometry.correct(gui), false, "drag adopted")
+  eq(geometry.desired(gui:window_id()), 8, "clamped to the minimum width")
+end)
+
+test("geometry.sync corrects on a tab change and rate-gates otherwise", function()
+  local win, gui = setup_window(2)
+  sidebar.ensure(gui)
+  for _, tab in ipairs(win.tab_list) do
+    mark_ready(tab)
+  end
+  local first, second = win.tab_list[1], win.tab_list[2]
+  win.active_tab_ref = first
+  assert(geometry.sync(gui, first.id) == false, "nothing to correct")
+  win:resize(20)
+  eq(geometry.sync(gui, first.id), false, "same tab inside the observe window is skipped")
+  eq(sidebar.find(first).cols, 38)
+  win.active_tab_ref = second
+  assert(geometry.sync(gui, second.id), "a tab change corrects at once")
+  eq(sidebar.find(second).cols, 28)
+end)
+
 test("correction is skipped while a tab drag is in flight", function()
   local win, gui = setup_window(1)
   sidebar.ensure(gui)
+  mark_ready(win.tab_list[1])
   win:resize(20)
   state.session.drag[gui:window_id()] = { tab_id = win.tab_list[1].id }
   eq(geometry.correct(gui), false)

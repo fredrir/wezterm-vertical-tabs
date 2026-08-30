@@ -75,7 +75,6 @@ function M.sync(gui_window, opts)
   if cfg.debug then
     util.log("sync: window %d", gui_window:window_id())
   end
-  geometry.correct(gui_window)
   local mux_win = gui_window:mux_window()
   local wid = gui_window:window_id()
   local items = model.build(gui_window)
@@ -85,6 +84,7 @@ function M.sync(gui_window, opts)
   local active_tab_id = active_tab and active_tab:tab_id() or nil
   local focus_index = state.has_focus(wid) and session.focus_index[wid] or nil
   local now = util.now_ms()
+  geometry.sync(gui_window, active_tab_id)
 
   for _, info in ipairs(mux_win:tabs_with_info()) do
     local sb = sidebar.find(info.tab)
