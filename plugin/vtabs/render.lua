@@ -56,6 +56,7 @@ local util = require "vtabs.util"
 ---@field private_accent integer[]
 ---@field border integer[]
 ---@field border_idle integer[]
+---@field ghost_border_hover integer[]
 ---@field scroll_fg integer[]
 ---@field scroll_idle_fg integer[]
 
@@ -256,7 +257,7 @@ local function fit_meta(text, budget, glyphs, sep)
 end
 
 ---Paints one row of a card; which sub-targets exist was decided in layout.
-local function card_row(item, ctx, st, part, rows_in_card, spans)
+local function card_row(item, ctx, st, part, rows_in_card, spans, row_in_card)
   local theme, cfg, glyphs, g, cols = ctx.theme, ctx.cfg, ctx.glyphs, ctx.grid, ctx.cols
   local cells = new_line(cols, theme.bg, theme.fg)
   if part == "gap" then
@@ -267,13 +268,10 @@ local function card_row(item, ctx, st, part, rows_in_card, spans)
   fill(cells, g.card_x1, g.card_x2, bg)
 
   local rail = ctx.rail == true
-  local carries_icon = part == (rows_in_card >= 3 and "icon" or "title")
-  local mark, mark_fg = marker(item, theme, st, glyphs)
-  -- in the rail the marker rides the icon so the pair reads as one row of the same card
-  if rail and carries_icon or not rail and part == "title" then
+  -- the content block is centred, so the title row is the middle one in both modes
+  if part == "title" then
+    local mark, mark_fg = marker(item, theme, st, glyphs)
     put(cells, g.gutter, mark, { fg = mark_fg }, g.gutter)
-  elseif (item.is_active or st.dragging) and needs_bar(theme) then
-    put(cells, g.gutter, glyphs.active, { fg = item.is_private and theme.private_accent or theme.accent }, g.gutter)
   end
 
   local function paint_icon()
@@ -287,21 +285,22 @@ local function card_row(item, ctx, st, part, rows_in_card, spans)
   end
 
   if rail then
-    if carries_icon and item.icon ~= "" then
+    if part == "title" and item.icon ~= "" then
       paint_icon()
     end
     return cells
   end
 
-  if part == "icon" then
+  if part == "title" then
     if cfg.icons and item.icon ~= "" then
       paint_icon()
     end
-  elseif part == "title" then
-    if cfg.icons and item.icon ~= "" and carries_icon then
-      paint_icon()
+    local text = util.sanitize(item.title)
+    -- with no meta line the index has nowhere else to go, so it rides the title
+    if cfg.show_index and cfg.meta == false then
+      text = string.format("%d%s%s", item.index, cfg.meta_sep ~= nil and cfg.meta_sep or glyphs.meta_sep, text)
     end
-    local title = util.truncate(util.sanitize(item.title), g.title_budget, glyphs.ellipsis)
+    local title = util.truncate(text, g.title_budget, glyphs.ellipsis)
     local title_fg = item.is_active and not st.dragging and (theme.title_active or fg) or fg
     put(cells, g.title_x1, title, { fg = title_fg, bold = item.is_active }, g.title_x2)
     local span = spans and spans[1]
@@ -315,7 +314,7 @@ local function card_row(item, ctx, st, part, rows_in_card, spans)
       end
       put(cells, g.close_x, glyph, { fg = glyph_fg }, g.close_x)
     end
-  else
+  elseif part == "meta" then
     local meta = util.sanitize(item.meta or "")
     local sep = cfg.meta_sep ~= nil and cfg.meta_sep or glyphs.meta_sep
     if cfg.show_index then
@@ -327,9 +326,11 @@ local function card_row(item, ctx, st, part, rows_in_card, spans)
 
   -- inverted from P1: the active card is square, so the chamfer is what marks a hover
   local chamfered = (st.hovered or st.focused) and not item.is_active and not st.dragging
-  if chamfered and rows_in_card >= 2 and glyphs.corners == "chamfer" and part ~= "icon" then
-    local ch = part == "title" and glyphs.chamfer_top or glyphs.chamfer_bottom
-    cells[g.card_x2] = { ch = ch, fg = bg, bg = theme.bg }
+  if chamfered and rows_in_card >= 2 and glyphs.corners == "chamfer" then
+    local ch = row_in_card == 1 and glyphs.chamfer_top or (row_in_card == rows_in_card and glyphs.chamfer_bottom)
+    if ch then
+      cells[g.card_x2] = { ch = ch, fg = bg, bg = theme.bg }
+    end
   end
   return cells
 end
@@ -349,49 +350,27 @@ local function chrome_row(ctx, glyph, glyph_x, text, text_fg, glyph_fg, bg)
   return cells
 end
 
-local BORDER_STEP_MIN = 10
-
----Hover is one step of border colour and nothing else. Where the two steps are indistinguishable
----the accent stands in, so the affordance never sinks into the idle border.
-local function ghost_border(theme, hovered)
-  local idle = theme.border_idle or theme.separator
-  if not hovered then
-    return idle
-  end
-  local step = theme.border
-  if not step or not idle then
-    return theme.accent
-  end
-  local delta = 0
-  for i = 1, 3 do
-    delta = math.max(delta, math.abs((step[i] or 0) - (idle[i] or 0)))
-  end
-  return delta >= BORDER_STEP_MIN and step or theme.accent
-end
-
 ---The only outlined element in the sidebar: that is what makes it read as "not a tab".
 local function ghost_rows(ctx, hovered)
   local theme, glyphs, g, cols = ctx.theme, ctx.glyphs, ctx.grid, ctx.cols
-  local border_fg = ghost_border(theme, hovered)
+  -- hover moves the border's colour and the label's, and nothing else: same glyphs, same background
+  local border_fg = hovered and (theme.ghost_border_hover or theme.accent) or (theme.border_idle or theme.separator)
   local rows = {}
   for i = 1, 3 do
     local cells = new_line(cols, theme.bg, theme.fg)
     if i == 2 then
-      put(cells, g.card_x1, glyphs.frame_v, { fg = border_fg }, g.card_x1)
+      put(cells, g.card_x1, glyphs.frame_dash_v, { fg = border_fg }, g.card_x1)
       put(cells, g.icon_x, glyphs.new_tab, { fg = theme.accent }, g.icon_x)
-      local label = util.truncate(ctx.cfg.new_tab_label, math.max(g.card_x2 - 1 - g.title_x1, 0), glyphs.ellipsis)
-      -- the label keeps the page behind it in both states: an inline band only shows up on hover
-      put(cells, g.title_x1, label, { fg = hovered and theme.fg or theme.new_tab_fg }, g.card_x2 - 1)
-      put(cells, g.card_x2, glyphs.frame_v, { fg = border_fg }, g.card_x2)
+      if g.title_x1 ~= nil then
+        local label = util.truncate(ctx.cfg.new_tab_label, math.max(g.card_x2 - 1 - g.title_x1, 0), glyphs.ellipsis)
+        put(cells, g.title_x1, label, { fg = hovered and theme.fg or theme.new_tab_fg }, g.card_x2 - 1)
+      end
+      put(cells, g.card_x2, glyphs.frame_dash_v, { fg = border_fg }, g.card_x2)
     else
       put(cells, g.card_x1, i == 1 and glyphs.frame_tl or glyphs.frame_bl, { fg = border_fg }, g.card_x1)
-      local first, last = g.card_x1 + 1, g.card_x2 - 1
-      for x = first, last do
-        -- the cells either side of a corner never gap: on Latte closure carries the card, not contrast
-        local corner = x <= first + 1 or x >= last - 1
-        if corner or (x - first) % 2 == 1 then
-          put(cells, x, glyphs.frame_dash, { fg = border_fg }, x)
-        end
+      -- the glyph is dashed inside its own cell, so a solid run of them still reads as a dash
+      for x = g.card_x1 + 1, g.card_x2 - 1 do
+        put(cells, x, glyphs.frame_dash, { fg = border_fg }, x)
       end
       put(cells, g.card_x2, i == 1 and glyphs.frame_tr or glyphs.frame_br, { fg = border_fg }, g.card_x2)
     end
@@ -524,7 +503,7 @@ function M.render(view)
         put(cells, x, glyphs.rule, { fg = theme.separator }, x)
       end
     elseif spec.kind == "card" then
-      cells = card_row(spec.item, ctx, spec.st, spec.part, spec.rows_in_card, spec.spans)
+      cells = card_row(spec.item, ctx, spec.st, spec.part, spec.rows_in_card, spec.spans, spec.row_in_card)
     elseif spec.kind == "ghost" then
       if spec.shape == "rail" then
         cells = new_line(cols, spec.hovered and theme.hover_bg or theme.bg, theme.fg)

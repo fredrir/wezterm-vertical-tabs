@@ -236,8 +236,9 @@ WezTerm runs only the first `format-window-title` handler; register yours before
 | `active_bg`      | `lift(0.12)` mixed 12% toward `accent`                                         |
 | `focus_bg`       | `bg` mixed 25% toward `accent`                                                 |
 | `separator`      | `lift(0.10)`                                                                   |
-| `border`         | `lift(0.18)`, lifted to 2.5 against `bg` — hovered ghost card                  |
-| `border_idle`    | `lift(0.14)`, lifted to 2.0 against `bg` — dashed ghost card                   |
+| `border`         | `lift(0.18)`, lifted to 2.5 against `bg` — popover frame                       |
+| `border_idle`    | `lift(0.14)`, lifted to 2.0 against `bg` — idle ghost card                     |
+| `ghost_border_hover` | `border` mixed halfway to `accent`, lifted to 2.8 against `bg` — hovered ghost card |
 | `new_tab_fg`     | `fg` mixed 30% toward `bg`                                                     |
 | `close_fg`       | `fg` mixed 55% toward `bg`, then lifted to 3.0 against `active_bg`             |
 | `close_hover_fg` | `ansi[2]`, lifted to 3.0 against `active_bg`                                   |

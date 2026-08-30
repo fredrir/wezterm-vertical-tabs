@@ -150,6 +150,8 @@ function M.resolve(user, palette, opts)
   local raised = first(user.surface_raised) or raise(bg, fg, lift)
   local scrim = tonumber(user.scrim) or scrim_for(bg, fg)
   local scroll_fg = first(user.scroll_fg) or ensure_contrast(lift(0.22), bg, fg, 2.0)
+  local border = first(user.border) or ensure_contrast(lift(0.18), bg, fg, 2.5)
+  local border_idle = first(user.border_idle) or ensure_contrast(lift(0.14), bg, fg, 2.0)
   local unseen = first(ansi[4])
 
   -- A saturated fill is the one selection construction that clears 4.5 on every scheme; the ink is
@@ -172,8 +174,10 @@ function M.resolve(user, palette, opts)
     focus_bg = first(user.focus_bg) or mix(bg, accent, 0.25),
     pinned_fg = first(user.pinned_fg) or meta_fg,
     separator = first(user.separator) or lift(0.10),
-    border = first(user.border) or ensure_contrast(lift(0.18), bg, fg, 2.5),
-    border_idle = first(user.border_idle) or ensure_contrast(lift(0.14), bg, fg, 2.0),
+    border = border,
+    border_idle = border_idle,
+    -- a luminance-only step off border_idle is invisible on a 1-cell stroke, so the hover takes hue
+    ghost_border_hover = first(user.ghost_border_hover) or ensure_contrast(mix(border, accent, 0.5), bg, accent, 2.8),
     new_tab_fg = first(user.new_tab_fg) or mix(fg, bg, 0.30),
     close_fg = first(user.close_fg) or ensure_contrast(mix(fg, bg, 0.55), active_bg, fg, 3.0),
     close_hover_fg = ensure_contrast(first(user.close_hover_fg, ansi[2], "#f38ba8"), active_bg, fg, 3.0),
