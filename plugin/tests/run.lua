@@ -6506,5 +6506,49 @@ test("the rail's narrow width is never adopted as the user's desired width", fun
   eq(geometry.desired(wid), 28, "the rail width was not adopted as a divider drag")
 end)
 
+test("P3 §4: options the host set in wezterm.lua are LOCKED on the Behaviour group", function()
+  -- Exactly what the screenshot harness passes, so this is the precedence a shot would show.
+  local cfg = config.setup {
+    backend = { path = "/bin/wez-vtabs" },
+    poll_ms = 200,
+    confirm_close = false,
+    debug = true,
+  }
+  local fields = page.fields(cfg)
+  local by_key = {}
+  for _, row in ipairs(fields) do
+    by_key[row.key] = row
+  end
+  for _, key in ipairs { "poll_ms", "confirm_close", "debug" } do
+    local row = by_key[key]
+    assert(row, key .. " has a form row")
+    eq(row.locked, "wezterm.lua", key .. " is locked by the host config")
+  end
+  eq(by_key.poll_ms.group, "behaviour", "poll_ms lives on the Behaviour group")
+
+  -- An option the host left alone stays editable, so LOCKED names the host, not every row.
+  eq(by_key.width.locked, nil, "width was not set in wezterm.lua")
+
+  local groups = page.groups(fields)
+  local behaviour = nil
+  for i, g in ipairs(groups) do
+    if g == "behaviour" then
+      behaviour = i
+    end
+  end
+  assert(behaviour, "the nav carries a Behaviour group")
+
+  local v = page_view { cfg = cfg, st = { group = behaviour, focus = 1 } }
+  local lines = page_rows(v)
+  local locked_row = nil
+  for _, line in ipairs(lines) do
+    if line:find("poll_ms", 1, true) then
+      locked_row = line
+    end
+  end
+  assert(locked_row, "the Behaviour group renders the poll_ms row")
+  assert(locked_row:find("LOCKED", 1, true), "the poll_ms row carries the LOCKED badge: " .. locked_row)
+end)
+
 print(string.format("%d passed, %d failed", passed, failed))
 os.exit(failed == 0 and 0 or 1)
