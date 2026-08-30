@@ -40,7 +40,8 @@ function Pane:get_domain_name()
   return self.domain
 end
 function Pane:get_foreground_process_name()
-  return self.process
+  -- mux panes never report one; mux/src/pane.rs:331-333 returns None.
+  return self.domain == "local" and self.process or nil
 end
 function Pane:get_title()
   return self.title
@@ -56,6 +57,10 @@ function Pane:get_dimensions()
 end
 function Pane:send_text(text)
   self.sent[#self.sent + 1] = text
+  local title = text:match "\27%]0;(.-)\7" or text:match "\27%]2;(.-)\7"
+  if title then
+    self.title = title
+  end
 end
 function Pane:activate()
   self._tab.active = self
@@ -128,6 +133,15 @@ function Window:remove_tab(tab)
   end
   if self.active_tab_ref == tab then
     self.active_tab_ref = self.tab_list[1]
+  end
+end
+
+---A GUI reconnect to a surviving mux: panes and titles live on, user vars start empty.
+function Window:reattach()
+  for _, tab in ipairs(self.tab_list) do
+    for _, pane in ipairs(tab.pane_list) do
+      pane.vars = {}
+    end
   end
 end
 

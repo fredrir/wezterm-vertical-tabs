@@ -16,13 +16,13 @@ local function title_for(tab, pane, cfg)
     end
   end
   local title = tab:get_title()
-  if title ~= "" then
+  if title ~= "" and not sidebar.marker(title) then
     return title
   end
   local pane_title = util.try(function()
     return pane:get_title()
   end)
-  if pane_title and pane_title ~= "" then
+  if pane_title and pane_title ~= "" and not sidebar.marker(pane_title) then
     return pane_title
   end
   return "tab " .. tostring(tab:tab_id())

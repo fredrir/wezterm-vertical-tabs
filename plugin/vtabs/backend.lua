@@ -88,11 +88,12 @@ function M.spawn_args(cfg, domain, host)
   return { "sh", "-c", script }
 end
 
-function M.env(cfg, domain, host)
+function M.env(cfg, domain, host, bg)
   local env = {
     VTABS_USERVAR = cfg.backend.uservar,
     VTABS_REPO = cfg.backend.repo,
     VTABS_VERSION = cfg.backend.version or version,
+    VTABS_BG = type(bg) == "string" and bg:match "^#%x%x%x%x%x%x$" or nil,
   }
   if M.is_local(domain, host) then
     env.VTABS_TARGET = platform.triple

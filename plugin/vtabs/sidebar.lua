@@ -3,6 +3,7 @@ local act = wezterm.action
 local config = require "vtabs.config"
 local state = require "vtabs.state"
 local backend = require "vtabs.backend"
+local theme = require "vtabs.theme"
 local util = require "vtabs.util"
 
 local M = {}
@@ -11,6 +12,13 @@ local ATTACH_RETRY_MS = 5000
 local PING_AFTER_MS = 8000
 local DEAD_AFTER_MS = 20000
 local READY_TIMEOUT_MS = 12000
+local ADOPT_RETRY_MS = 2000
+local FAILED_DOMAIN_MS = 60000
+local PRUNE_MS = 30000
+local PIN_GRACE_MS = 3000
+
+---Title the backend sets on itself; adoption evidence only, any process can set a title.
+local MARKER = "^wez%-vtabs:%x+$"
 
 local session = state.session
 
@@ -35,44 +43,45 @@ function M.is_overlay(pane)
   return type(domain) ~= "string" or domain:find "TermWiz" ~= nil
 end
 
----Only panes the plugin registered count. After a GUI restart mux panes get new ids, so a pane
----that echoes a token this plugin minted is re-adopted; arbitrary user vars are never trusted.
-function M.is_sidebar(pane)
-  if not pane then
-    return false
-  end
-  local tab_id = tab_id_of(pane)
-  if tab_id == nil then
-    return false
-  end
-  local pid = pane:pane_id()
-  if state.sidebar_pane_id(tab_id) == pid then
-    return true
-  end
+function M.marker(title)
+  return type(title) == "string" and title:match(MARKER) ~= nil
+end
+
+function M.has_marker(pane)
+  return M.marker(util.try(function()
+    return pane:get_title()
+  end))
+end
+
+---Re-points the map when the mux renumbers panes; only this process knows the token it minted.
+local function claim_echoed_token(pane, pid)
   local token = user_vars(pane).vtabs_token
   local owner = state.pane_for_token(token)
   if owner == nil or owner == pid then
     return false
   end
-  for _, p in ipairs(pane:tab():panes()) do
+  local tab = pane:tab()
+  for _, p in ipairs(tab:panes()) do
     if p:pane_id() == owner then
       return false
     end
   end
-  state.set_sidebar(tab_id, pid, token)
-  session.ready[pid] = true
-  session.seen[pid] = util.now_ms()
+  state.set_sidebar(tab:tab_id(), pid, token)
   return true
 end
 
----True once the backend in `pane` has echoed the token it was given over stdin.
+---True once the backend in `pane` echoed a token this process minted for it. The only trusted state:
+---nothing may close a tab or pane, take its events or send it frames until this holds.
 function M.is_ready(pane)
+  if not pane or tab_id_of(pane) == nil then
+    return false
+  end
   local pid = pane:pane_id()
   if session.ready[pid] then
     return true
   end
   local token = state.token_for(pid)
-  if token and user_vars(pane).vtabs_token == token then
+  if (token and user_vars(pane).vtabs_token == token) or claim_echoed_token(pane, pid) then
     session.ready[pid] = true
     session.seen[pid] = util.now_ms()
     return true
@@ -80,11 +89,25 @@ function M.is_ready(pane)
   return false
 end
 
+M.is_sidebar = M.is_ready
+
+---Panes that play the sidebar role for layout purposes; a marker alone authorises nothing.
+function M.is_backend(pane)
+  if not pane then
+    return false
+  end
+  local tab_id = tab_id_of(pane)
+  if tab_id == nil then
+    return false
+  end
+  return M.is_ready(pane) or state.sidebar_pane_id(tab_id) == pane:pane_id() or M.has_marker(pane)
+end
+
 ---Splits a tab's panes into { content = Pane[], sidebar = Pane|nil }.
 function M.classify(tab)
   local content, sb = {}, nil
   for _, p in ipairs(tab:panes()) do
-    if M.is_sidebar(p) then
+    if M.is_backend(p) then
       sb = sb or p
     else
       content[#content + 1] = p
@@ -100,7 +123,7 @@ end
 
 function M.content_pane(tab)
   local active = tab:active_pane()
-  if active and not M.is_sidebar(active) then
+  if active and not M.is_backend(active) then
     return active
   end
   local content = M.classify(tab)
@@ -141,6 +164,9 @@ end
 
 function M.tab_meta(tab, pane)
   local title = tab:get_title()
+  if M.marker(title) then
+    title = ""
+  end
   return {
     cwd = cwd_path(pane),
     domain = util.try(function()
@@ -160,19 +186,57 @@ end
 function M.auth(pane)
   local token = state.token_for(pane:pane_id())
   if token then
+    session.authed_at[pane:pane_id()] = util.now_ms()
     M.send(pane, { t = "auth", token = token })
   end
 end
 
+local fitted = {}
+
 ---Mux-domain splits can grow the tab past the window; re-sending the window size makes the mux refit it.
 local function fit_to_window(tab)
-  pcall(function()
-    local gui = tab:window():gui_window()
-    if gui then
-      local dims = gui:get_dimensions()
-      gui:set_inner_size(dims.pixel_width, dims.pixel_height)
-    end
+  local gui = util.try(function()
+    return tab:window():gui_window()
   end)
+  if not gui then
+    return
+  end
+  local wid = gui:window_id()
+  if fitted[wid] then
+    return
+  end
+  fitted[wid] = true
+  local ok, err = pcall(function()
+    local dims = gui:get_dimensions()
+    gui:set_inner_size(dims.pixel_width, dims.pixel_height)
+  end)
+  if not ok then
+    util.log("fit to window failed: %s", tostring(err))
+  end
+end
+
+local function theme_bg(tab)
+  local palette = util.try(function()
+    return tab:window():gui_window():effective_config().resolved_palette
+  end)
+  local resolved = util.try(theme.resolve, config.get().theme, palette or {})
+  local rgb = resolved and resolved.bg
+  if type(rgb) ~= "table" then
+    return nil
+  end
+  return string.format("#%02x%02x%02x", rgb[1], rgb[2], rgb[3])
+end
+
+local function domain_failed(place, now)
+  local at = session.failed_domains[place]
+  if not at then
+    return false
+  end
+  if now - at > FAILED_DOMAIN_MS then
+    session.failed_domains[place] = nil
+    return false
+  end
+  return true
 end
 
 ---Splits off the sidebar pane; guarded because splits are async on mux domains.
@@ -200,7 +264,7 @@ function M.attach(tab)
   end
   local host = cwd_host(base)
   local place = pane_domain .. "@" .. (host or "")
-  if session.failed_domains[place] then
+  if domain_failed(place, now) then
     return nil
   end
   local args = backend.spawn_args(cfg, pane_domain, host)
@@ -229,7 +293,7 @@ function M.attach(tab)
       top_level = true,
       size = cfg.width,
       args = args,
-      set_environment_variables = backend.env(cfg, pane_domain, host),
+      set_environment_variables = backend.env(cfg, pane_domain, host, theme_bg(tab)),
       domain = domain,
     }
   end)
@@ -238,10 +302,11 @@ function M.attach(tab)
     return nil
   end
   session.attaching[tab_id] = nil
-  local token = util.random_token()
-  state.set_sidebar(tab_id, sb:pane_id(), token)
-  session.seen[sb:pane_id()] = now
-  session.pane_domain[sb:pane_id()] = place
+  local pid = sb:pane_id()
+  state.set_sidebar(tab_id, pid, util.random_token())
+  session.seen[pid] = now
+  session.spawned[pid] = now
+  session.pane_domain[pid] = place
   M.auth(sb)
   base:activate()
   if not backend.is_local(pane_domain, host) then
@@ -250,9 +315,42 @@ function M.attach(tab)
   return sb
 end
 
+---Takes over a backend pane the mux kept across a GUI restart: fresh token, then wait for its echo.
+local function adopt(tab, sb, now)
+  local pid = sb:pane_id()
+  state.set_sidebar(tab:tab_id(), pid, util.random_token())
+  session.adopted[pid] = true
+  session.seen[pid] = now
+  M.auth(sb)
+end
+
+---A pane that never echoes its token is never trusted; adopted panes are retried, never given up on.
+local function await_auth(gui_window, tab, sb, now)
+  local pid = sb:pane_id()
+  if state.sidebar_pane_id(tab:tab_id()) ~= pid then
+    if M.has_marker(sb) then
+      adopt(tab, sb, now)
+    end
+    return
+  end
+  if session.adopted[pid] then
+    if now - (session.authed_at[pid] or 0) > ADOPT_RETRY_MS then
+      M.auth(sb)
+    end
+    return
+  end
+  if not session.given_up[pid] and now - (session.seen[pid] or now) > READY_TIMEOUT_MS then
+    M.give_up(gui_window, tab, sb)
+  end
+end
+
 ---CloseCurrentPane/CloseCurrentTab act on the active pane/tab, so targets are activated first.
 function M.detach(gui_window, tab)
   local sb = M.find(tab)
+  if sb and not M.is_ready(sb) then
+    util.warn_once("detach-" .. sb:pane_id(), "sidebar %d never authenticated; left open", sb:pane_id())
+    return
+  end
   if sb then
     state.forget_pane(sb:pane_id())
     local content = M.content_pane(tab)
@@ -287,11 +385,12 @@ end
 ---WezTerm's focus reconciliation, so the pane is left for the user and its place is not retried.
 function M.give_up(_, _, sb)
   local pid = sb:pane_id()
+  local now = util.now_ms()
   local place = session.pane_domain[pid] or "local@"
-  if session.failed_domains[place] then
+  if domain_failed(place, now) then
     return
   end
-  session.failed_domains[place] = true
+  session.failed_domains[place] = now
   session.given_up[pid] = true
   util.warn("sidebar backend did not start in %s; fix backend.path and close that pane", place)
 end
@@ -332,6 +431,59 @@ local function record_closed_tabs(wid, seen, private)
   session.known_tabs[wid] = seen
 end
 
+local pins_deadline = nil
+
+---Tab ids only mean something while the mux that minted them lives; a surviving backend pane proves it.
+local function resolve_pins(tabs, now)
+  if not state.pins_pending() then
+    return
+  end
+  for _, info in ipairs(tabs) do
+    for _, p in ipairs(info.tab:panes()) do
+      if M.has_marker(p) then
+        state.restore_pins()
+        pins_deadline = nil
+        return
+      end
+    end
+  end
+  pins_deadline = pins_deadline or now + PIN_GRACE_MS
+  if now > pins_deadline then
+    state.discard_pins()
+    pins_deadline = nil
+  end
+end
+
+local pruned_at = 0
+
+local function prune_windows(now)
+  if now - pruned_at < PRUNE_MS then
+    return
+  end
+  pruned_at = now
+  local windows = util.try(function()
+    return wezterm.mux.all_windows()
+  end)
+  if type(windows) ~= "table" or #windows == 0 then
+    return
+  end
+  local live = {}
+  for _, w in ipairs(windows) do
+    local id = util.try(function()
+      return w:window_id()
+    end)
+    if id then
+      live[id] = true
+    end
+  end
+  for id in pairs(fitted) do
+    if not live[id] then
+      fitted[id] = nil
+    end
+  end
+  state.forget_windows_except(live)
+end
+
 ---Makes every tab match the collapsed/expanded state and closes tabs left with only a sidebar.
 function M.ensure(gui_window)
   local mux_win = gui_window:mux_window()
@@ -340,31 +492,39 @@ function M.ensure(gui_window)
   local private = state.is_private(wid)
   local now = util.now_ms()
   local seen = {}
+  local tabs = mux_win:tabs_with_info()
 
-  for _, info in ipairs(mux_win:tabs_with_info()) do
+  resolve_pins(tabs, now)
+  prune_windows(now)
+
+  for _, info in ipairs(tabs) do
     local tab = info.tab
     local tab_id = tab:tab_id()
     local content, sb = M.classify(tab)
     if #content == 0 then
       if sb then
-        M.close_orphan(gui_window, tab, sb)
+        -- the tab still exists; forgetting it would strand a sidebar that authenticates later
+        seen[tab_id] = true
+        if M.is_ready(sb) then
+          M.close_orphan(gui_window, tab, sb)
+        end
       end
     else
       seen[tab_id] = true
       local active = tab:active_pane()
-      if active and not M.is_sidebar(active) then
+      if active and not M.is_backend(active) then
         session.content_pane[tab_id] = active:pane_id()
       end
       session.tab_meta[tab_id] = M.tab_meta(tab, M.content_pane(tab))
       if collapsed then
-        if sb then
+        if sb and M.is_ready(sb) then
           M.detach(gui_window, tab)
         end
       elseif sb then
         if M.is_ready(sb) then
           check_liveness(gui_window, tab, sb, now)
-        elseif not session.given_up[sb:pane_id()] and now - (session.seen[sb:pane_id()] or now) > READY_TIMEOUT_MS then
-          M.give_up(gui_window, tab, sb)
+        else
+          await_auth(gui_window, tab, sb, now)
         end
       else
         M.attach(tab)
