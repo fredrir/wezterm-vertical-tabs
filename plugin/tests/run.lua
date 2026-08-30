@@ -182,9 +182,9 @@ local function view(over)
   local cfg = config.setup(opts)
   local v = {
     cols = 28,
-    -- one more row than the old fixture: padding.bottom reserves the last one, so the list keeps
-    -- the seven rows every positional test in this file counts on
-    rows = 11,
+    -- two more rows than the old fixture: padding.bottom takes the last and the ghost's page row the
+    -- one above it, so the list keeps the seven rows every positional test in this file counts on
+    rows = 12,
     items = items(),
     theme = theme.resolve({}, palette("#1e1e2e", "#cdd6f4")),
     cfg = cfg,
@@ -241,9 +241,11 @@ test("layout: pinned block, separator, padded cards, ghost card", function()
   eq(r.hits[5].slot, r.hits[3].slot)
   eq(r.hits[6].id, 3)
   eq(r.total_rows, 8)
-  for row = 8, 10 do
+  eq(r.hits[8].kind, "space", "a page row above the ghost, so it is as far from the last card as cards are")
+  for row = 9, 11 do
     eq(r.hits[row].kind, "new_tab", "ghost row " .. row)
   end
+  eq(r.hits[12].kind, "space", "and padding.bottom below it")
   assert(strip(r.data):find "New tab")
   assert(strip(r.data):find "…", "long title truncated")
   local sep = render.render(view { opts = { separator = "none" } })
@@ -307,7 +309,7 @@ test("scroll clamps, ensure_visible follows active, footer is sticky", function(
   end
   local r = render.render(view { items = many, rows = 10, scroll = 999, footer = { "space: work" } })
   eq(r.total_rows, 90, "3 rows per card")
-  eq(r.scroll, 85, "clamped to max_scroll")
+  eq(r.scroll, 86, "clamped to max_scroll")
   eq(r.hits[9].kind, "footer", "footer is the last row of content, below the ghost card")
   eq(r.hits[10].kind, "space", "with padding.bottom under it")
   eq(r.hits[6].kind, "new_tab")
@@ -818,9 +820,9 @@ test("P1 grid: landmarks derive from cols and padding", function()
 end)
 
 test("P1 chamfer: the card's own first and last row, right side only", function()
-  local rows = frame_rows(p1_view { rows = 12, opts = { separator = "gap" } })
+  local rows = frame_rows(p1_view { rows = 13, opts = { separator = "gap" } })
   eq(usub(rows[4], 26, 26), " ", "the active card is square")
-  local hovered_rows = frame_rows(p1_view { rows = 12, hover = { x = 5, y = 7 }, opts = { separator = "gap" } })
+  local hovered_rows = frame_rows(p1_view { rows = 13, hover = { x = 5, y = 7 }, opts = { separator = "gap" } })
   eq(usub(hovered_rows[6], 26, 26), "▙", "a hovered card chamfers on its first row")
   eq(usub(hovered_rows[7], 26, 26), " ", "never on the title row, which is no longer an edge")
   eq(usub(hovered_rows[8], 26, 26), "▛", "and closes on its last")
@@ -830,7 +832,7 @@ test("P1 chamfer: the card's own first and last row, right side only", function(
   for _, line in ipairs(one_row) do
     assert(not line:find("▙", 1, true) and not line:find("▛", 1, true), "1-row cards are square")
   end
-  local dense = frame_rows(p1_view { rows = 12, hover = { x = 5, y = 1 }, opts = { separator = "gap" } })
+  local dense = frame_rows(p1_view { rows = 13, hover = { x = 5, y = 1 }, opts = { separator = "gap" } })
   assert(not dense[1]:find("▙", 1, true), "a hovered dense pinned row stays square")
 end)
 
@@ -865,20 +867,21 @@ end)
 
 test("P1 ghost card: outlined, sticky, exactly cols wide idle and hovered", function()
   local idle, r = frame_rows(p1_view { opts = { separator = "gap" } })
-  eq(usub(idle[8], 3, 3), "╭")
-  eq(usub(idle[8], 26, 26), "╮")
-  eq(usub(idle[9], 5, 5), "+")
-  eq(usub(idle[9], 7, 14), "New tab ", "label at title_x1")
-  eq(usub(idle[10], 3, 3), "╰")
-  eq(usub(idle[10], 26, 26), "╯")
-  for row = 8, 10 do
+  eq(usub(idle[9], 3, 3), "╭")
+  eq(usub(idle[9], 26, 26), "╮")
+  eq(usub(idle[10], 5, 5), "+")
+  eq(usub(idle[10], 7, 14), "New tab ", "label at title_x1")
+  eq(usub(idle[11], 3, 3), "╰")
+  eq(usub(idle[11], 26, 26), "╯")
+  for row = 9, 11 do
     eq(r.hits[row].kind, "new_tab")
     eq(r.hits[row].x1, 3)
     eq(r.hits[row].x2, 26)
   end
-  eq(r.hits[11].kind, "space", "padding.bottom gives the ghost the same air the cards get")
-  local hover = frame_rows(p1_view { hover = { x = 5, y = 9 }, opts = { separator = "gap" } })
-  for row = 8, 10 do
+  eq(r.hits[8].kind, "space", "a page row above it")
+  eq(r.hits[12].kind, "space", "and padding.bottom below")
+  local hover = frame_rows(p1_view { hover = { x = 5, y = 10 }, opts = { separator = "gap" } })
+  for row = 9, 11 do
     eq(hover[row], idle[row], "hover redraws no glyph, only recolours row " .. row)
   end
   eq(util.width(hover[8]), 28)

@@ -249,10 +249,13 @@ function M.plan(view)
   for _, entry in ipairs(view.footer or {}) do
     footer[#footer + 1] = footer_entry(entry)
   end
-  -- new_tab_rows has to see the shortened pane too, or the ghost claims the row padding just reserved
+  -- new_tab_rows has to see the shortened pane too, or the ghost claims the rows reserved below and
+  -- above it: one page row, so the outlined card is as far from the last title as the cards are
+  -- from each other. The one-row form has no border and needs none.
   local pad_b = math.min(math.max(cfg.padding.bottom or 0, 0), math.max(view.rows - strip_rows, 0))
-  local ghost_h = M.new_tab_rows(cfg, view.rows - pad_b, strip_rows, #footer)
-  local list_rows = math.max(view.rows - strip_rows - ghost_h - #footer - pad_b, 0)
+  local ghost_h = M.new_tab_rows(cfg, view.rows - pad_b - 1, strip_rows, #footer)
+  local ghost_gap = ghost_h == 3 and 1 or 0
+  local list_rows = math.max(view.rows - strip_rows - ghost_gap - ghost_h - #footer - pad_b, 0)
 
   local ordered = M.apply_drag(view.items, view.drag)
   local pinned, rest = util.partition(ordered, function(i)
@@ -445,8 +448,14 @@ function M.plan(view)
     end
   end
 
+  if ghost_gap > 0 then
+    local row = strip_rows + list_rows + 1
+    rows[row] = { kind = "space" }
+    hits[row] = { kind = "space" }
+  end
+
   if ghost_h > 0 then
-    local base = strip_rows + list_rows
+    local base = strip_rows + list_rows + ghost_gap
     local hovered = view.hover ~= nil and view.hover.y > base and view.hover.y <= base + ghost_h
     -- the rail draws the same outlined card; only a window too short for it falls back to a bare glyph
     local shape = ghost_h == 3 and "card" or (rail and "rail" or "row")
