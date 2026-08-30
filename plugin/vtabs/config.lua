@@ -80,7 +80,7 @@ local ALIAS = {
   new_tab_button = { [true] = "ghost" },
   scroll_indicator = { [true] = "auto", [false] = "never" },
   meta = { [true] = "auto" },
-  tab_height = { [true] = "card", [false] = "row" },
+  tab_height = { [2] = "card", [1] = "row", [true] = "card", [false] = "row" },
 }
 
 local current = nil

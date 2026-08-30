@@ -2489,6 +2489,54 @@ test("a drop on a gap row lands below its card, a drop on the title row lands on
   eq(hit.drop_slot(hits, 1, dims.rows, dims.strip_rows), 1, "inside the strip")
 end)
 
+-- P1-spec §7, verbatim. Injected values in other tests cannot keep a wrong default green.
+local P1_DEFAULTS = {
+  width = 28,
+  padding = { top = 0, left = 1, right = 1 },
+  row_gap = 1,
+  tab_height = "card",
+  meta = "auto",
+  separator = "gap",
+  pinned_style = "dense",
+  new_tab_button = "ghost",
+  new_tab_label = "New tab",
+  corners = "chamfer",
+  scroll_indicator = "auto",
+  titlebar = "auto",
+  toggle_button = true,
+  close_button = "hover",
+  show_index = false,
+}
+
+test("the shipped defaults are the §7 table", function()
+  local shipped = config.defaults
+  for key, want in pairs(P1_DEFAULTS) do
+    if type(want) == "table" then
+      for field, value in pairs(want) do
+        eq(shipped[key][field], value, key .. "." .. field)
+      end
+    else
+      eq(shipped[key], want, key)
+    end
+  end
+  eq(shipped.theme.use_scheme_tab_bar, nil, "the deprecated key is gone from the defaults")
+  local resolved = config.setup {}
+  for key, want in pairs(P1_DEFAULTS) do
+    if type(want) ~= "table" then
+      eq(resolved[key], want, "setup keeps " .. key)
+    end
+  end
+  config.setup(legacy { backend = { path = "/bin/wez-vtabs" } })
+end)
+
+test("tab_height accepts the row counts as well as the names", function()
+  eq(config.setup({ tab_height = 2 }).tab_height, "card")
+  eq(config.setup({ tab_height = 1 }).tab_height, "row")
+  eq(config.setup({ tab_height = 1 }).meta, false, "a one-row card has no meta line")
+  eq(config.setup({ tab_height = 2 }).meta, "auto")
+  config.setup(legacy { backend = { path = "/bin/wez-vtabs" } })
+end)
+
 os.remove(state.file)
 print(string.format("%d passed, %d failed", passed, failed))
 os.exit(failed == 0 and 0 or 1)
