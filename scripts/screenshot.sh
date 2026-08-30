@@ -35,7 +35,9 @@ confirm|Catppuccin Mocha|confirm|confirm_close|in_sidebar:Cancel
 new-tab-hover|Catppuccin Mocha|default|hover_new_tab|always
 padded|Catppuccin Mocha|padded|scene|always
 strip-macos|Catppuccin Mocha|macos|scene|always
-rail-macos|Catppuccin Mocha|macos-rail|probe:toggle|rail_width"
+rail-macos|Catppuccin Mocha|macos-rail|probe:toggle|rail_widened
+rail-macos-plain|Catppuccin Mocha|macos-rail-plain|probe:toggle|rail_width
+settings|Catppuccin Mocha|default|settings|settings_tab"
 
 cli() { wezterm cli --no-auto-start "$@"; }
 list() { cli list --format json; }
@@ -179,6 +181,13 @@ step() {
       probe "$(content_of "$(tab_ids | cut -d' ' -f2)")" "${1#probe:}"
       sleep 2.5
       ;;
+    # The settings page opens in a tab of its own; the shot is of that tab and its sidebar.
+    settings)
+      probe "$(content_of "$(tab_ids | cut -d' ' -f2)")" settings
+      sleep 3.5
+      shot_tab=$(pick 'print([p["tab_id"] for p in json.load(sys.stdin) if p["title"].startswith("wez-vtabs-settings")][0])' 2>/dev/null || echo "")
+      sleep 1
+      ;;
     toggle_fast)
       focus_window
       probe "$(content_of "$(tab_ids | cut -d' ' -f2)")" toggle
@@ -200,6 +209,24 @@ check() {
       w=$(pick "p=$(active_sidebar);print([q['size']['cols'] for q in json.load(sys.stdin) if q['pane_id']==p][0])")
       [ "$w" -le 9 ] || fail_state "sidebar is $w cols, not a rail"
       [ "$w" -eq 5 ] || echo "  warn: rail is $w cols, not rail_width=5 (geometry.lua MIN_WIDTH clamps it)"
+      ;;
+    # `rail_titlebar = "widen"` grows the rail to the traffic-light reserve, so it is wider than
+    # `rail_width` by design and only has to stay a rail.
+    rail_widened)
+      have_sidebar || fail_state "rail detached the pane instead of narrowing it"
+      w=$(pick "p=$(active_sidebar);print([q['size']['cols'] for q in json.load(sys.stdin) if q['pane_id']==p][0])")
+      [ "$w" -lt "$sidebar_cols" ] || fail_state "sidebar is $w cols, not a rail"
+      [ "$w" -ge 5 ] || fail_state "sidebar is $w cols, under rail_width=5"
+      ;;
+    # implementer-1 is still building the page, so the check is the tab and its marker, never
+    # what the page draws.
+    settings_tab)
+      settings_pane=$(pick 'ps=[p for p in json.load(sys.stdin) if p["title"].startswith("wez-vtabs-settings")];print(ps[0]["pane_id"] if ps else "")')
+      [ -n "$settings_pane" ] || fail_state "no pane carries the wez-vtabs-settings: marker"
+      settings_tab_id=$(pick "s=$settings_pane;print([p['tab_id'] for p in json.load(sys.stdin) if p['pane_id']==s][0])")
+      beside=$(pick "t=$settings_tab_id;print(sum(1 for p in json.load(sys.stdin) if p['tab_id']==t and p['title'].startswith('wez-vtabs:')))")
+      [ "$beside" -eq 1 ] || fail_state "the settings tab has $beside sidebars beside it, want 1"
+      sidebar_text | grep -qF Settings || fail_state "the sidebar does not list a Settings card"
       ;;
     tooltip_only)
       sidebar_text >"$home/after.txt"

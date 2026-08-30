@@ -12,8 +12,8 @@ local CHROME = {
   focus = { "›", ">", group = "marks" },
   ellipsis = { "…", "...", group = "marks" },
   meta_sep = { "  ", "  ", group = "marks" },
-  toggle_left = { "«", "<", group = "toggle" },
-  toggle_right = { "»", ">", group = "toggle" },
+  toggle_left = { "❮", "<", group = "toggle" },
+  toggle_right = { "❯", ">", group = "toggle" },
   frame_tl = { "╭", "+", group = "ghost_frame" },
   frame_tr = { "╮", "+", group = "ghost_frame" },
   frame_bl = { "╰", "+", group = "ghost_frame" },
@@ -29,8 +29,6 @@ local AMBIGUOUS = {
   [0x2022] = true,
   [0x2026] = true,
   [0x00b7] = true,
-  [0x00ab] = true,
-  [0x00bb] = true,
   [0x256d] = true,
   [0x256e] = true,
   [0x256f] = true,
@@ -113,9 +111,17 @@ function M.resolve(base, effective)
       break
     end
   end
-  for _, key in ipairs { "close", "pinned", "private", "new_tab", "settings", "search" } do
+  for _, key in ipairs { "close", "pinned", "private", "new_tab", "strip_new_tab", "settings", "search" } do
     if out[key] and util.width(out[key]) ~= 1 then
-      out[key] = ({ close = "x", pinned = "*", private = "~", new_tab = "+", settings = "*", search = "/" })[key]
+      out[key] = ({
+        close = "x",
+        pinned = "*",
+        private = "~",
+        new_tab = "+",
+        strip_new_tab = "+",
+        settings = "*",
+        search = "/",
+      })[key]
       by_width = true
     end
   end
