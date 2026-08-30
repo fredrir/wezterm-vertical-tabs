@@ -55,14 +55,10 @@ local probes = {
     local dims = window:get_dimensions()
     window:set_inner_size(dims.pixel_width + 300, dims.pixel_height)
   end,
-  -- An InputSelector replaces the tab's panes, so the active pane becomes a TermWiz overlay pane.
-  probe_overlay = function(window)
+  -- A tab overlay (the tab menu) replaces the tab's panes, so this reports the overlay's pane id.
+  probe_active = function(window)
     local pane = window:active_pane()
-    local domain = pane and pane:get_domain_name() or "none"
-    wezterm.log_info("e2e: active pane domain " .. tostring(domain))
-  end,
-  probe_cols = function(window)
-    wezterm.log_info("e2e: sidebar cols now " .. sidebar_cols(window))
+    wezterm.log_info("e2e: active pane " .. tostring(pane and pane:pane_id()))
   end,
 }
 
@@ -72,7 +68,7 @@ wezterm.on("user-var-changed", function(window, _, name, value)
   if not probe then
     return
   end
-  local ok, err = xpcall(probe, debug.traceback, window)
+  local ok, err = pcall(probe, window)
   if not ok then
     wezterm.log_error("e2e: probe " .. value .. " failed: " .. tostring(err))
   end

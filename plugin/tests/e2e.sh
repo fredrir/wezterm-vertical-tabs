@@ -23,7 +23,7 @@ HOME="$home" XDG_RUNTIME_DIR="$home/run" VTABS_ROOT="$root" VTABS_BIN="$bin" WEZ
 pid=$!
 cleanup() {
   set +e
-  kill $pid 2>/dev/null; wait $pid 2>/dev/null
+  kill $pid 2>/dev/null || true; wait $pid 2>/dev/null || true
   if [ "$mode" = mux ]; then
     sleep 1
     for p in $(pgrep -x wezterm-mux-server); do
@@ -90,8 +90,7 @@ sidebar_text "$sb1" | grep -c "one" >/dev/null || fail "first sidebar does not l
 sidebar_text "$sb1" | grep -c "two" >/dev/null || fail "first sidebar does not list tab two"
 echo "ok: both sidebars render both tabs"
 
-toggle() { cli send-text --no-paste --pane-id "$1" "printf '\\033]1337;SetUserVar=vtabs_test=dG9nZ2xl\\a'
-"; }
+toggle() { vtest "$1" toggle; }
 toggle "$(content_of "$first_tab")"
 sleep 1.5
 [ -z "$(sidebar_panes)" ] || fail "toggle did not remove sidebars"
@@ -177,6 +176,122 @@ done
 [ "$(window_count)" -eq 1 ] || fail "empty window did not close"
 [ "$(active_title "$sb1")" = "one" ] || fail "orphan cleanup closed the wrong tab"
 echo "ok: orphaned sidebar tab closed"
+
+cli spawn --pane-id "$(content_of "$first_tab")" >/dev/null
+for _ in $(seq 1 20); do
+  [ "$(sidebar_panes | wc -l | tr -d ' ')" -eq 2 ] && break
+  sleep 0.5
+done
+[ "$(sidebar_panes | wc -l | tr -d ' ')" -eq 2 ] || fail "second tab has no sidebar before the restart check"
+
+if [ "$mode" = mux ]; then
+  # A reattached client renumbers panes and tabs, so identity can only be counted, not compared.
+  panes_of() { list | python3 -c 'import json,sys; t='"$1"'; print(sum(1 for p in json.load(sys.stdin) if p["tab_id"]==t))'; }
+  sidebars_of() { list | python3 -c 'import json,sys; t='"$1"'; print(sum(1 for p in json.load(sys.stdin) if p["tab_id"]==t and '"$is_sb"'))'; }
+  before_count=$(tab_count)
+  kill $pid 2>/dev/null || true; wait $pid 2>/dev/null || true
+  sleep 1
+  HOME="$home" XDG_RUNTIME_DIR="$home/run" VTABS_ROOT="$root" VTABS_BIN="$bin" WEZTERM_LOG=info \
+    wezterm --config-file "$root/plugin/tests/wezterm-e2e.lua" connect e2emux --class vtabs-e2e >>"$log" 2>&1 &
+  pid=$!
+  export WEZTERM_UNIX_SOCKET="$home/run/wezterm/gui-sock-$pid"
+  for _ in $(seq 1 200); do
+    [ -S "$WEZTERM_UNIX_SOCKET" ] && cli list >/dev/null 2>&1 && break
+    sleep 0.1
+  done
+  cli list >/dev/null 2>&1 || fail "the reattached gui never answered"
+  attached=$(date +%s%N)
+  [ "$(tab_count)" -eq "$before_count" ] || { geometry; fail "the mux lost tabs across the restart: $before_count -> $(tab_count)"; }
+  # A title set after the restart can only appear in a frame the reattached gui painted.
+  after_tabs=$(tab_ids)
+  for t in $after_tabs; do cli set-tab-title --tab-id "$t" "re$t"; done
+  painted=""
+  for _ in $(seq 1 200); do
+    fresh=1
+    for t in $after_tabs; do
+      sidebar_text "$(sidebar_of "$t")" 2>/dev/null | grep -q "re$t" || fresh=0
+    done
+    [ "$fresh" -eq 1 ] && { painted=$(date +%s%N); break; }
+    sleep 0.1
+  done
+  [ -n "$painted" ] || { geometry; fail "no sidebar painted a fresh frame after the restart"; }
+  for t in $after_tabs; do
+    [ "$(sidebars_of "$t")" -eq 1 ] || { geometry; fail "tab $t has $(sidebars_of "$t") sidebar panes after the restart, want 1"; }
+    [ "$(panes_of "$t")" -eq 2 ] || { geometry; fail "tab $t has $(panes_of "$t") panes after the restart, want 2"; }
+  done
+  ms=$(((painted - attached) / 1000000))
+  [ "$ms" -lt 3000 ] || { geometry; fail "sidebars took ${ms}ms to repaint after the restart, want < 3000"; }
+  echo "ok: gui restart keeps one sidebar per tab and repaints in ${ms}ms"
+fi
+
+# Resize last: WezTerm hands the sidebar half of every new column, so a failure here moves the
+# inner edge and would break every gesture that follows.
+width_of() { list | python3 -c 'import json,sys; t='"$1"'; print([p["size"]["cols"] for p in json.load(sys.stdin) if p["tab_id"]==t and '"$is_sb"'][0])'; }
+total_cols() { list | python3 -c 'import json,sys; print(max(p["left_col"]+p["size"]["cols"] for p in json.load(sys.stdin)))'; }
+settle_width() { # tab_id
+  for _ in $(seq 1 24); do
+    [ "$(width_of "$1")" -eq 28 ] && return 0
+    sleep 0.25
+  done
+  return 1
+}
+grow_tab=$(tab_ids | cut -d' ' -f2)
+other_tab=$(tab_ids | cut -d' ' -f1)
+before_cols=$(total_cols)
+resize_mark=$(mark)
+cli activate-tab --tab-id "$grow_tab"
+vtest "$(content_of "$grow_tab")" grow
+for _ in $(seq 1 20); do
+  [ "$(total_cols)" -ne "$before_cols" ] && break
+  sleep 0.25
+done
+[ "$(total_cols)" -ne "$before_cols" ] || fail "set_inner_size did not resize the window (still $before_cols cols)"
+# The observer is registered before the plugin, so it reports the width WezTerm dealt out uncorrected.
+drifted=$(since "$resize_mark" | grep -o "e2e: sidebar cols on resize [0-9,]*" | tail -1)
+case "$drifted" in
+  "") fail "no window-resized event observed" ;;
+  *" 28"*) fail "resize did not widen any sidebar; the observer saw '$drifted'" ;;
+esac
+settle_width "$grow_tab" || { geometry; fail "the active tab's sidebar stayed $(width_of "$grow_tab") cols after the window grew"; }
+echo "ok: window grew $before_cols -> $(total_cols) cols; wezterm dealt the sidebar [$drifted] and correct() put it back to 28"
+
+cli activate-tab --tab-id "$other_tab"
+settle_width "$other_tab" || { geometry; fail "the background tab's sidebar stayed $(width_of "$other_tab") cols once it was activated"; }
+echo "ok: a background tab's sidebar is corrected to 28 when it is activated"
+
+rc_tab=$(tab_ids | cut -d' ' -f1)
+rc_sb=$(sidebar_of "$rc_tab")
+rc_content=$(content_of "$rc_tab")
+rc_row=$(sidebar_text "$rc_sb" | python3 -c 'import sys; rows=sys.stdin.read().split("\n"); print(next(i+1 for i,l in enumerate(rows) if "▎" in l))')
+rc_cols=$(list | python3 -c 'import json,sys; p='"$rc_content"'; print([q["size"]["cols"] for q in json.load(sys.stdin) if q["pane_id"]==p][0])')
+cols_of() { list | python3 -c 'import json,sys; p='"$1"'; print([q["size"]["cols"] for q in json.load(sys.stdin) if q["pane_id"]==p][0])'; }
+# The menu is a GUI tab overlay: the CLI never sees it, so this only asserts nothing is destroyed.
+active_pane() {
+  m=$(mark)
+  vtest "$1" probe_active
+  for _ in $(seq 1 25); do
+    p=$(since "$m" | sed -n 's/.*e2e: active pane //p' | tail -1)
+    [ -n "$p" ] && { echo "$p"; return 0; }
+    sleep 0.2
+  done
+  echo "no-answer"
+}
+press() { cli send-text --no-paste --pane-id "$1" "$(printf '\033[<%s;%s;%sM' "$4" "$2" "$3")"; }
+release() { cli send-text --no-paste --pane-id "$1" "$(printf '\033[<%s;%s;%sm' "$4" "$2" "$3")"; }
+[ "$(active_pane "$rc_content")" != no-answer ] || fail "the active-pane probe never answered"
+press "$rc_sb" 5 "$rc_row" 2
+sleep 1
+[ "$(tab_count)" -eq 2 ] || { geometry; fail "the right-button press changed the tab count"; }
+[ "$(width_of "$rc_tab")" -eq 28 ] || { geometry; fail "the right-button press resized the sidebar"; }
+release "$rc_sb" 5 "$rc_row" 2
+sleep 1.5
+[ "$(tab_count)" -eq 2 ] || { geometry; fail "the right-button release changed the tab count"; }
+[ "$(sidebar_of "$rc_tab")" = "$rc_sb" ] || { geometry; fail "the sidebar pane went away on right click"; }
+[ "$(content_of "$rc_tab")" = "$rc_content" ] || { geometry; fail "the content pane went away on right click"; }
+[ "$(width_of "$rc_tab")" -eq 28 ] || { geometry; fail "the sidebar changed size while the menu was open"; }
+[ "$(cols_of "$rc_content")" -eq "$rc_cols" ] || { geometry; fail "the content pane changed size while the menu was open"; }
+[ "$(active_pane "$rc_content")" != no-answer ] || fail "the window stopped answering after the menu opened"
+echo "ok: right click keeps the sidebar and content panes alive at their sizes"
 
 list | python3 -c 'import json,sys; [print("  pane", p["pane_id"], p["title"], "left", p["left_col"], "cols", p["size"]["cols"]) for p in json.load(sys.stdin)]'
 echo "all e2e checks passed"
