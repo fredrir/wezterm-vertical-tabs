@@ -40,7 +40,18 @@ rail-macos-plain|Catppuccin Mocha|macos-rail-plain|probe:toggle|rail_width
 settings|Catppuccin Mocha|default|settings|settings_tab"
 
 cli() { wezterm cli --no-auto-start "$@"; }
-list() { cli list --format json; }
+# A gui busy with a spawn or a resize can answer an empty body; every helper here parses this, and
+# `set -e` would kill the whole run over one transient. Retry instead.
+list() {
+  for _ in 1 2 3 4 5; do
+    body=$(cli list --format json 2>/dev/null || true)
+    case "$body" in
+      \[*) printf '%s' "$body"; return 0 ;;
+    esac
+    sleep 0.3
+  done
+  echo "[]"
+}
 pick() { list | python3 -c "import json,sys;$1"; }
 sidebars() { pick 'print("\n".join(str(p["pane_id"]) for p in json.load(sys.stdin) if p["title"].startswith("wez-vtabs")))'; }
 tab_ids() { pick 'print(" ".join(str(t) for t in sorted({p["tab_id"] for p in json.load(sys.stdin)})))'; }
@@ -52,6 +63,7 @@ active_sidebar() { sidebar_of "${shot_tab:-$(tab_ids | cut -d' ' -f2)}"; }
 # Pixel centre of a sidebar column, so a click lands inside a three-column span.
 col_x() { echo $((X + WIDTH * (2 * $1 - 1) / (2 * cols))); }
 sidebar_text() { cli get-text --pane-id "$(active_sidebar)"; }
+pane_text() { cli get-text --pane-id "$1"; }
 probe() { cli send-text --no-paste --pane-id "$1" "printf '\\033]1337;SetUserVar=vtabs_shot=$(printf %s "$2" | base64)\\a'
 "; }
 
@@ -227,6 +239,26 @@ check() {
       beside=$(pick "t=$settings_tab_id;print(sum(1 for p in json.load(sys.stdin) if p['tab_id']==t and p['title'].startswith('wez-vtabs:')))")
       [ "$beside" -eq 1 ] || fail_state "the settings tab has $beside sidebars beside it, want 1"
       sidebar_text | grep -qF Settings || fail_state "the sidebar does not list a Settings card"
+      # A page that painted only its chrome passes "not blank"; a nav row beside its divider does not.
+      pane_text "$settings_pane" | grep -q "Layout.*│" ||
+        fail_state "the settings page has no nav row beside its divider"
+      pane_text "$settings_pane" | sed -n 1p | grep -qF "Settings" ||
+        fail_state "the settings page has no header on row 1"
+      pane_text "$settings_pane" | grep -vE "^[[:space:]]*$" | tail -1 | grep -qF "esc" ||
+        fail_state "the settings page has no hint bar on its last row"
+      ;;
+    # `frame = "zen"` insets the terminal as a rounded card inside a tinted frame, so the corner
+    # pixels of the content rect are the frame and the middle is the terminal background.
+    zen_frame)
+      png=$out/$state.png
+      [ -s "$png" ] || fail_state "no window shot to read the frame from"
+      read -r corner middle <<EOF
+$(magick "$png" -format "%[pixel:p{4,4}] %[pixel:p{50%,50%}]" info:)
+EOF
+      [ -n "$corner" ] && [ -n "$middle" ] || fail_state "could not sample the window shot"
+      [ "$corner" != "$middle" ] ||
+        fail_state "the frame tint and the terminal background are the same colour ($corner)"
+      echo "  zen frame $corner, terminal $middle"
       ;;
     tooltip_only)
       sidebar_text >"$home/after.txt"
@@ -309,6 +341,6 @@ echo "$STATES" | while IFS='|' read -r state scheme variant setup want; do
       *) continue ;;
     esac
   fi
-  shoot "$state" "$scheme" "$variant" "$setup" "$want"
+  shoot "$state" "$scheme" "$variant" "$setup" "$want" || echo "FAIL: $state — the state aborted"
 done
 echo "shots in $out"
