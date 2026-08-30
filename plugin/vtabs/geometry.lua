@@ -184,7 +184,11 @@ function M.correct(gui_window)
   end
   -- A divider drag moves the sidebar within a tab whose own width, pixels and cells all stay put.
   -- A rail width is ours, not a drag, and the width either side of a toggle is not comparable.
-  -- A width seen while our own adjust is still in flight is that adjust landing, never a drag.
+  -- A width seen while our own adjust is still in flight is that adjust landing, never a drag; so
+  -- is one that matches what we last asked for. Anything else, in a tab whose own width, pixels and
+  -- cells all stayed put, is the user on the divider — and it is adopted at once, because waiting
+  -- out a settle window means the correction below pulls the divider back while they still hold it.
+  local asked = attempted[wid] and attempted[wid].target or nil
   local steady = seen
     and not collapsed
     and seen.collapsed == false
@@ -194,7 +198,7 @@ function M.correct(gui_window)
     and seen.cell == cell
     and seen.tab_cols == tab_cols
     and in_flight[wid] == nil
-    and now - (settling[wid] or 0) >= SETTLE_MS
+    and cols ~= asked
   if steady and seen.cols ~= cols then
     adopted[wid] = fits(cols, tab_cols)
     adopted_for[wid] = cfg.width
