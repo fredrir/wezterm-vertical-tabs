@@ -70,6 +70,28 @@ local function ensure_contrast(fg, ref, target, min)
   return out
 end
 
+---The popover surface, lowered in 0.01 steps until its text is no harder to read than the body.
+local function raise(bg, fg, lift)
+  local ceiling = math.min(4.5, 0.95 * M.contrast(fg, bg))
+  local out = lift(0.09)
+  for step = 9, 1, -1 do
+    out = lift(step / 100)
+    if M.contrast(fg, out) >= ceiling then
+      return out
+    end
+  end
+  return out
+end
+
+---Smallest fade that pushes the scrimmed layer under 2.6 against the page; a target, not a constant.
+local function scrim_for(bg, fg)
+  local pct = 30
+  while pct < 70 and M.contrast(mix(fg, bg, pct / 100), bg) > 2.6 do
+    pct = pct + 5
+  end
+  return pct / 100
+end
+
 local function accent_candidate(color, bg, fg)
   local rgb = first(color)
   if rgb and M.contrast(rgb, bg) >= ACCENT_MIN and M.contrast(rgb, fg) >= ACCENT_VS_FG_MIN then
@@ -111,6 +133,8 @@ function M.resolve(user, palette, opts)
   local hover_bg = first(user.hover_bg) or lift(0.06)
   local active_bg = first(user.active_bg) or mix(lift(0.12), accent, 0.12)
   local meta_fg = first(user.meta_fg) or ensure_contrast(mix(fg, bg, 0.48), active_bg, fg, 3.5)
+  local raised = first(user.surface_raised) or raise(bg, fg, lift)
+  local scrim = tonumber(user.scrim) or scrim_for(bg, fg)
   local scroll_fg = first(user.scroll_fg) or ensure_contrast(lift(0.22), bg, fg, 2.0)
   local unseen = first(ansi[4])
 
@@ -139,6 +163,9 @@ function M.resolve(user, palette, opts)
     drag_fg = first(user.drag_fg) or fg,
     scroll_fg = scroll_fg,
     scroll_idle_fg = first(user.scroll_idle_fg) or mix(scroll_fg, bg, 0.55),
+    surface_raised = raised,
+    scrim = scrim,
+    disabled_fg = first(user.disabled_fg) or mix(meta_fg, raised, 0.45),
   }
 end
 

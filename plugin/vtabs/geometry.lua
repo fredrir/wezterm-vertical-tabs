@@ -21,8 +21,13 @@ local unreachable = {}
 local settling = {}
 local attempted = {}
 
+---Target width: the rail when collapsed, else what the user last dragged it to, else `cfg.width`.
 function M.desired(window_id)
-  return adopted[window_id] or config.get().width
+  local cfg = config.get()
+  if cfg.collapsed == "rail" and state.is_collapsed(window_id) then
+    return cfg.rail_width
+  end
+  return adopted[window_id] or cfg.width
 end
 
 function M.forget_window(window_id)

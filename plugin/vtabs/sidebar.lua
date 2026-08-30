@@ -648,7 +648,8 @@ end
 local function ensure_window(gui_window)
   local mux_win = gui_window:mux_window()
   local wid = gui_window:window_id()
-  local collapsed = state.is_collapsed(wid)
+  -- A rail keeps the pane and only narrows it (geometry.desired); "hidden" detaches as before.
+  local collapsed = state.is_collapsed(wid) and config.get().collapsed == "hidden"
   local private = state.is_private(wid)
   local now = util.now_ms()
   local seen = {}

@@ -19,54 +19,82 @@ return config
 ## Options
 
 <!-- options:start -->
-| option                    | default                                                           | description |
-| ------------------------- | ----------------------------------------------------------------- | ----------- |
-| `width`                   | `28`                                                              | sidebar width in cells (min 8); re-asserted on the active tab after every window resize, a divider drag is adopted until the config reloads. Two-row cards give a 19-column title and a 20-column meta line at 28; raise to `32` if titles truncate too often |
-| `position`                | `"left"`                                                          | `"left"` or `"right"` |
-| `hide_native_tab_bar`     | `true`                                                            | sets `enable_tab_bar = false` |
-| `poll_ms`                 | `500`                                                             | upper bound for `status_update_interval`; drives sidebar refresh |
-| `padding`                 | `{ top = 1, left = 1, right = 1 }`                                | cells of padding; `top` is added to the top strip, which owns the rows above the first card |
-| `tab_height`              | `"card"`                                                          | `"card"` (or `2`): 2 painted rows per tab; `"row"` (or `1`): 1 row, same as `meta = false` |
-| `meta`                    | `"auto"`                                                          | second card row: `"auto"` (cwd for shells, `user@host` for ssh, `proc · dir` otherwise, `domain · cwd` on a mux), `"cwd"`, `"process"`, or `false` for 1-row cards |
-| `row_gap`                 | `1`                                                               | blank rows after each card; the gap row is part of the card's click target |
-| `new_tab_button`          | `"ghost"`                                                         | `"ghost"`: dashed card, sticky at the bottom; `"row"`: single row; `false`: hidden. `true` = `"ghost"` |
-| `new_tab_label`           | `"New tab"`                                                       | label inside the card |
-| `corners`                 | `"chamfer"`                                                       | `"chamfer"`: quadrant-cut card corners; `"square"`. Forced to `"square"` when `custom_block_glyphs = false` |
-| `titlebar`                | `"auto"`                                                          | `"auto"`: reserve cells for the macOS traffic lights when the window has `INTEGRATED_BUTTONS`; `"integrate"`: always reserve; `"plain"`: never |
-| `toggle_button`           | `true`                                                            | draw `«`/`»` in the top strip; clicking it hides the sidebar, `toggle_sidebar` brings it back |
-| `close_button`            | `"hover"`                                                         | `"hover"` (hovered + active rows), `"always"` or `"never"`; the column is reserved so rows never reflow. The hit target is 3 columns × both card rows. Treated as `"always"` when `hover = "press"`, where no non-active row is ever hovered |
-| `confirm_close`           | `true`                                                            | let WezTerm prompt before closing tabs with stateful processes |
-| `debug`                   | `false`                                                           | log backend events and hit rows via `wezterm.log_info` |
-| `show_index`              | `false`                                                           | prefix titles with the tab index; with two-row cards the index renders on the meta line (`1 · ~/projects/api`) so the title grid never shifts, and goes back inline with `meta = false` |
-| `pinned_style`            | `"dense"`                                                         | `"dense"`: 1-row entries, pin glyph on hover; `"compact"`: as before; `"full"`: normal 2-row cards |
-| `separator`               | `"gap"`                                                           | between pinned and other tabs: `"gap"`, `"rule"` or `"none"` |
-| `scroll_indicator`        | `"auto"`                                                          | right-edge thumb when tabs overflow: `"auto"` dims it while the sidebar is idle, `"always"`, `"never"`. `true`/`false` accepted |
-| `wheel`                   | `"scroll"`                                                        | `"scroll"` the list or `"switch"` tabs |
-| `tear_off`                | `true`                                                            | drag a tab onto the sidebar's inner edge (3+ columns of travel) to move it to a new window |
-| `adopt`                   | `"auto"`                                                          | take over an unmapped pane that carries the `wez-vtabs:` title marker instead of splitting a second sidebar. `"auto"`: only in a domain this plugin spawns backends in (local, already-spawned, or one `backend.path` resolves); `true`: any domain; `false`: never. See the identity table in `docs/limitations.md` |
-| `window_title`            | `true`                                                            | while the sidebar is the active pane, title the window after the content pane instead. `false` leaves `format-window-title` unregistered |
-| `hover`                   | `"follow"`                                                        | `"follow"`: the sidebar is the tab's active pane while the pointer is over it (sets `pane_focus_follows_mouse = true` when you left it unset — this is a global wezterm option); `"press"`: only from press to release |
-| `hover_timeout_ms`        | `6000`                                                            | clear hover highlight after inactivity (`0` = never); terminals report no mouse-leave |
-| `double_click_ms`         | `400`                                                             | double-click on empty space opens a new tab |
-| `ellipsis`                | `"…"`                                                             | used when truncating titles |
-| `icons`                   | `true`                                                            | show process icons (Nerd Font glyphs) |
-| `icon_map`                | `{}`                                                              | process name → glyph overrides; Lua patterns allowed. Also overrides UI glyphs: `close new_tab unseen pinned focus active scroll` |
-| `title`                   | `nil`                                                             | `fun(tab, pane): string` custom title |
-| `domain`                  | `"CurrentPaneDomain"`                                             | domain the sidebar pane is spawned in |
-| `skip_close_confirmation` | `true`                                                            | add `wez-vtabs` to `skip_close_confirmation_for_processes_named` |
-| `private.env`             | `{ HISTFILE = "", fish_private_mode = "1", VTABS_PRIVATE = "1" }` | env for shells in private windows |
-| `keys`                    | `{}`                                                              | key overrides, see below; `false` disables all defaults |
-| `theme`                   | `{ elevation = 0 }`                                               | color overrides, see below |
-| `hooks.filter`            | `nil`                                                             | `fun(tab, mux_window): boolean` hide tabs from the sidebar (navigation and reordering only touch visible tabs) |
-| `hooks.footer`            | `nil`                                                             | `fun(mux_window): (string \| FooterEntry)[]` sticky rows at the bottom; `FooterEntry = { text, fg?, bg?, id?, on_click? = fun(window, entry) }` |
-| `hooks.theme`             | `nil`                                                             | `fun(window, theme): theme` per-window theme override |
-| `hooks.route`             | `nil`                                                             | reserved for Spaces (`fun(meta): space_id`), not called yet |
-| `backend.path`            | `nil`                                                             | path to the `wez-vtabs` binary: string (this machine), table keyed by host or domain (`{ ["local"] = "…", archie = "…" }`) or `fun(domain, host): string?`; `host` comes from the pane\'s OSC 7 cwd, which is what identifies panes proxied through a mux server |
-| `backend.repo`            | `"fredrir/wezterm-vertical-tabs"`                                 | GitHub repo used for release downloads |
-| `backend.version`         | plugin version                                                    | release tag to download (`v<version>`) |
-| `backend.build`           | `true`                                                            | fall back to `cargo build` when no release matches |
-| `backend.uservar`         | `"vtabs"`                                                         | user var name used by the backend |
+| option                    | default                                                           | values |
+| ------------------------- | ----------------------------------------------------------------- | ------ |
+| `width`                   | `28`                                                              | number >= `8` |
+| `dim_inactive_panes`      | `false`                                                           | `true` \| `false` |
+| `position`                | `"left"`                                                          | `"left"` \| `"right"` |
+| `collapsed`               | `"rail"`                                                          | `"rail"` \| `"hidden"` |
+| `rail_width`              | `5`                                                               | number >= `3` |
+| `rail_titlebar`           | `"widen"`                                                         | `"widen"` \| `"band"` |
+| `hide_native_tab_bar`     | `true`                                                            | `true` \| `false` |
+| `poll_ms`                 | `500`                                                             | number >= `50` |
+| `padding`                 | `{ top = 1, left = 1, right = 1 }`                                | `{ top, left, right }` |
+| `tab_height`              | `"card"`                                                          | `"card"` (`2`) \| `"row"` (`1`) |
+| `meta`                    | `"auto"`                                                          | `"auto"` \| `"cwd"` \| `"process"` \| `false` |
+| `row_gap`                 | `1`                                                               | number >= `0` |
+| `new_tab_button`          | `"ghost"`                                                         | `"ghost"` \| `"row"` \| `false` |
+| `new_tab_label`           | `"New tab"`                                                       | string |
+| `corners`                 | `"chamfer"`                                                       | `"chamfer"` \| `"square"` |
+| `titlebar`                | `"auto"`                                                          | `"auto"` \| `"integrate"` \| `"plain"` |
+| `context`                 | `"popover"`                                                       | `"popover"` \| `false` |
+| `toggle_button`           | `true`                                                            | `true` \| `false` |
+| `close_button`            | `"hover"`                                                         | `"hover"` \| `"always"` \| `"never"` |
+| `confirm_close`           | `true`                                                            | `true` \| `false` |
+| `debug`                   | `false`                                                           | `true` \| `false` |
+| `show_index`              | `false`                                                           | `true` \| `false` |
+| `pinned_style`            | `"dense"`                                                         | `"dense"` \| `"compact"` \| `"full"` |
+| `separator`               | `"gap"`                                                           | `"rule"` \| `"gap"` \| `"none"` |
+| `scroll_indicator`        | `"auto"`                                                          | `"auto"` \| `"always"` \| `"never"` \| `true` \| `false` |
+| `wheel`                   | `"scroll"`                                                        | `"scroll"` \| `"switch"` |
+| `tear_off`                | `true`                                                            | `true` \| `false` |
+| `adopt`                   | `"auto"`                                                          | `"auto"` \| `true` \| `false` |
+| `window_title`            | `true`                                                            | `true` \| `false` |
+| `hover`                   | `"follow"`                                                        | `"follow"` \| `"press"` |
+| `hover_timeout_ms`        | `6000`                                                            | number >= `0` |
+| `tooltip`                 | `"auto"`                                                          | `"auto"` \| `true` \| `false` |
+| `tooltip_delay_ms`        | `600`                                                             | number >= `0` |
+| `double_click_ms`         | `400`                                                             | number >= `0` |
+| `animations`              | `"auto"`                                                          | `"auto"` \| `true` \| `false` |
+| `animation.fps`           | `30`                                                              | `15`-`60` |
+| `animation.expand_ms`     | `220`                                                             | number >= `0` |
+| `animation.collapse_ms`   | `160`                                                             | number >= `0` |
+| `animation.hover`         | `false`                                                           | `true` \| `false` |
+| `ellipsis`                | `"…"`                                                             | string |
+| `icons`                   | `true`                                                            | `true` \| `false` |
+| `icon_map`                | `{}`                                                              | table |
+| `title`                   | `nil`                                                             | `fun(tab, pane): string` |
+| `domain`                  | `"CurrentPaneDomain"`                                             | string |
+| `skip_close_confirmation` | `true`                                                            | `true` \| `false` |
+| `private.env`             | `{ HISTFILE = "", fish_private_mode = "1", VTABS_PRIVATE = "1" }` | table |
+| `keys`                    | `{}`                                                              | table \| `false` |
+| `theme`                   | `{ elevation = 0 }`                                               | see Theme |
+| `hooks.filter`            | `nil`                                                             | `fun(tab, mux_window): boolean` |
+| `hooks.footer`            | `nil`                                                             | `fun(mux_window): rows` |
+| `hooks.theme`             | `nil`                                                             | `fun(window, theme): theme` |
+| `hooks.route`             | `nil`                                                             | `fun(meta): space_id` |
+| `backend.path`            | `nil`                                                             | string \| table \| `fun(domain, host)` |
+| `backend.repo`            | `"fredrir/wezterm-vertical-tabs"`                                 | string |
+| `backend.version`         | plugin version                                                    | string |
+| `backend.build`           | `true`                                                            | `true` \| `false` |
+| `backend.uservar`         | `"vtabs"`                                                         | string |
 <!-- options:end -->
+
+| option | note |
+| ------ | ---- |
+| `width` | re-asserted on the active tab after every resize; a divider drag is adopted until the config reloads |
+| `collapsed` | `"rail"` keeps the pane and narrows it, so the toggle stays reachable |
+| `rail_width` | raised to the traffic-light reserve (typically 9) on macOS with `INTEGRATED_BUTTONS` |
+| `close_button` | treated as `"always"` when `hover = "press"`, where no background row is ever hovered |
+| `context` | `false` removes the mouse trigger only; `m` in keyboard mode still opens the popover |
+| `show_index` | renders on the meta line with 2-row cards, inline with `meta = false` |
+| `tooltip` | `"auto"` is off in `"press"` mode, where hover never reaches the sidebar |
+| `tooltip_delay_ms` | effective delay is `max(tooltip_delay_ms, poll_ms)`; halved in rail mode |
+| `animations` | colour only: expand and collapse fade around one hard width snap, never a slide |
+| `dim_inactive_panes` | wezterm dims the idle pane by default, which makes the sidebar change shade as focus moves |
+| `theme.elevation` | `0` = the terminal background exactly, `0.06` = the pre-P1 tint; capped at `0.3` |
+| `adopt` | `"auto"` adopts only where this plugin spawns backends; see `docs/limitations.md` |
+| `backend.path` | keyed by host or domain; `host` comes from the pane's OSC 7 cwd |
 
 ## Keys
 
@@ -144,6 +172,7 @@ the tab's content pane, which then takes focus back.
 | `enable_tab_bar`           | `false`                       | `hide_native_tab_bar = true`                                    |
 | `pane_focus_follows_mouse` | `true`                        | `hover = "follow"` and you left it unset                        |
 | `window_decorations`       | `"INTEGRATED_BUTTONS\|RESIZE"` | macOS, you left it unset, `position = "left"`, `titlebar ~= "plain"` |
+| `inactive_pane_hsb`        | identity                      | you left it unset and `dim_inactive_panes = false` (the default)  |
 | `status_update_interval`   | `min(yours, poll_ms)`         | always                                                          |
 
 `window_decorations = "RESIZE"` alone hides the macOS window buttons and pins the window in

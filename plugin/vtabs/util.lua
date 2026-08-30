@@ -78,8 +78,7 @@ function M.truncate(s, max, ellipsis)
   return s:sub(1, offsets[lo] - 1) .. ellipsis
 end
 
----Elides middle path components to fit `budget`; the basename is the informative part, so it
----survives until nothing else can go. `util.truncate` cuts from the right and is kept for titles.
+---Elides middle path components to fit `budget`; the basename survives longest.
 function M.shorten_path(path, budget, ellipsis)
   ellipsis = ellipsis or "…"
   if type(path) ~= "string" or path == "" or budget <= 0 then

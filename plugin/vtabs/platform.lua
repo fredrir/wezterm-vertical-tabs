@@ -16,8 +16,7 @@ M.BUTTON_PX = 70
 -- macOS titlebar height; NEEDS-ENG-CONFIRM #1, over-reserving is the safe direction.
 M.TITLEBAR_PX = 28
 
----Cells the top strip must keep clear, and where the toggle glyph goes. Pure, so it is testable
----without a macOS window: `dims` is a pane's `get_dimensions()`, `opts` the resolved config.
+---Cells the top strip keeps clear and where the toggle goes; pure, so it needs no macOS window.
 function M.strip_geometry(dims, opts)
   dims, opts = dims or {}, opts or {}
   local rows, cols = 0, 0
@@ -34,12 +33,27 @@ function M.strip_geometry(dims, opts)
       rows = math.max(1, math.ceil(M.TITLEBAR_PX / cell_h))
     end
   end
-  local toggle_row = rows > 0 and rows or 1
-  local toggle_x = cols > 0 and cols + 2 or (opts.card_x1 or 2)
+  -- Rail mode centres the toggle *below* the lights: at 9 columns there is no column 11.
+  local rail = opts.rail == true
+  local toggle_row
+  if rail then
+    toggle_row = cols > 0 and rows + 1 or 1
+  else
+    toggle_row = rows > 0 and rows or 1
+  end
+  local width = math.max(opts.rail_width or 0, cols)
+  local toggle_x
+  if rail then
+    toggle_x = math.ceil(width / 2)
+  else
+    toggle_x = cols > 0 and cols + 2 or (opts.card_x1 or 2)
+  end
   local strip_rows = math.max(rows, opts.toggle_button and toggle_row or 0) + (opts.padding_top or 0)
   return {
     rows = strip_rows,
+    rows_reserved = rows,
     cols = cols,
+    width = rail and width or nil,
     toggle_row = toggle_row,
     toggle_x = toggle_x,
   }

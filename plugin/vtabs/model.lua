@@ -56,8 +56,7 @@ local function some(s)
   return type(s) == "string" and s ~= "" and s or nil
 end
 
----Path, host and remote user of a pane's OSC 7 cwd. The user comes from the URL authority, never
----from the environment: `$USER` is who *we* are, not who the remote shell logged in as.
+---Path, host and user of a pane's OSC 7 cwd; the user is the URL's, never the local `$USER`.
 local function cwd_of(pane)
   local cwd = util.try(function()
     return pane:get_current_working_dir()

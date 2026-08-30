@@ -36,11 +36,14 @@ function M.window_title(tab, pane, tabs, panes)
   local title = nil
   for _, info in ipairs(panes or {}) do
     if info.pane_id ~= pane.pane_id and not backend(info) then
-      title = info.title
+      title = util.sanitize(info.title)
       break
     end
   end
-  title = title or (tab.tab_title ~= "" and tab.tab_title) or nil
+  title = (title ~= "" and title) or util.sanitize(tab.tab_title)
+  if title == "" then
+    title = nil
+  end
   if not title then
     return nil
   end
@@ -62,8 +65,7 @@ end
 
 table.insert(state.forget_hooks, M.invalidate_theme)
 
----macOS only shows its window buttons for `TITLE`/`INTEGRATED_BUTTONS`, and only keeps
----`INTEGRATED_BUTTONS` when the button style is native; both decide whether cells are reserved.
+---macOS shows its buttons only for `INTEGRATED_BUTTONS` with a native style; both gate the reserve.
 local function chrome_for(gui_window, cfg)
   local wid = gui_window:window_id()
   if not chrome[wid] then
