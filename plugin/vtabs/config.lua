@@ -9,18 +9,42 @@ M.defaults = schema.defaults()
 
 local current = nil
 
+local function in_enum(option, value)
+  for _, allowed in ipairs(option.enum) do
+    if value == allowed then
+      return true
+    end
+  end
+  return false
+end
+
+---A list entry is either one of the option's named ids or a caller-supplied `{ id, ... }` entry.
+local function list_ok(option, value)
+  if type(value) ~= "table" then
+    return false
+  end
+  for _, entry in ipairs(value) do
+    if type(entry) == "table" then
+      if type(entry.id) ~= "string" then
+        return false
+      end
+    elseif option.of ~= "enum" or not in_enum(option, entry) then
+      return false
+    end
+  end
+  return true
+end
+
 local function type_ok(option, value)
   local kind = option.type
   if kind == "any" then
     return true
   end
   if kind == "enum" then
-    for _, allowed in ipairs(option.enum) do
-      if value == allowed then
-        return true
-      end
-    end
-    return false
+    return in_enum(option, value)
+  end
+  if kind == "list" then
+    return list_ok(option, value)
   end
   return type(value) == kind
 end
@@ -38,6 +62,9 @@ end
 local function reason(option, value)
   if option.type == "enum" then
     return string.format("invalid %s=%s, using default", option.key, tostring(value))
+  end
+  if option.type == "list" then
+    return string.format("%s must be a list of %s, using default", option.key, table.concat(option.enum, ", "))
   end
   if option.type == "number" then
     local kind = option.integer and "whole number" or "number"
@@ -115,7 +142,7 @@ function M.setup(opts, stored)
   -- `tab_height` decides the pad rows and `meta` whether there is a second content line; they are
   -- independent, so neither key rewrites the other any more.
 
-  M.normalise(cfg, opts)
+  M.normalise(cfg)
   cfg.glyphs = icons.resolve(cfg.icon_map)
   current = cfg
   return cfg
@@ -124,20 +151,11 @@ end
 ---Cross-key rules every resolved config obeys, whoever built it: `setup` on boot and `replace`
 ---when the settings page swaps one in. Keeping them here is what stops a page edit of `hover`
 ---leaving `close_button` on a value the sidebar can never show.
-function M.normalise(cfg, opts)
-  opts = opts or {}
-  -- The sidebar's own gutter replaces the window padding `edge_to_edge` removes, so the wider one
-  -- belongs on whichever side touches the window edge.
-  if cfg.position == "right" then
-    -- Only the defaults mirror: a user who names a side means that side. A fresh table, because
-    -- `merge` shares the one in `defaults` whenever the user passed no padding at all.
-    local given = opts.padding or {}
-    cfg.padding = {
-      top = cfg.padding.top,
-      bottom = cfg.padding.bottom,
-      left = given.left or M.defaults.padding.right,
-      right = given.right or M.defaults.padding.left,
-    }
+function M.normalise(cfg)
+  -- The wider gutter belongs on the side touching the window edge, so an untouched pair mirrors.
+  local pad, shipped = cfg.padding, M.defaults.padding
+  if cfg.position == "right" and pad.left == shipped.left and pad.right == shipped.right then
+    cfg.padding = { top = pad.top, bottom = pad.bottom, left = shipped.right, right = shipped.left }
   end
   if cfg.popover.width ~= "auto" and type(cfg.popover.width) ~= "number" then
     util.warn 'popover.width must be "auto" or a number, using auto'

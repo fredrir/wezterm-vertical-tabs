@@ -15,6 +15,7 @@ local MAX_HINT_COLS = 8
 local FRAME_ROWS = 2
 local MIN_ITEM_ROWS = 4
 local MIN_W = 16
+local MIN_RENDER_W = 4
 -- Interior columns a row spends on anything but its label: borders, marker, both margins, and the
 -- gap a hint needs on top of that.
 local LABEL_PAD = 5
@@ -157,9 +158,11 @@ local function header(gui_window, pop, budget)
   local item = model.find(model.build(gui_window), tab_id)
   local lines = {}
   if level == "confirm" then
-    for _, ask in ipairs(question(gui_window, pop)) do
+    -- The qualifier goes before the question does: "and 3 others" alone asks nothing.
+    for n, ask in ipairs(question(gui_window, pop)) do
       for i, line in ipairs(M.wrap(ask, budget, MAX_TITLE_ROWS)) do
-        lines[#lines + 1] = { text = line, tone = "fg", drop = i == 1 and DROP.title or DROP.title_extra }
+        local first = n == 1 and i == 1
+        lines[#lines + 1] = { text = line, tone = "fg", drop = first and DROP.title or DROP.title_extra }
       end
     end
     lines[#lines + 1] = { text = "", tone = "meta", drop = DROP.separator }
@@ -290,11 +293,25 @@ function M.open(gui_window, tab_id, anchor_row, anchor_col)
   return session.popover[wid]
 end
 
+---A popover opened from a key binding has to hold the pane too, or Esc and Enter reach the shell.
+function M.grab_focus(gui_window)
+  local pop = session.popover[gui_window:window_id()]
+  local sb = M.sidebar_of(gui_window)
+  if not pop or not sb then
+    return false
+  end
+  pop.took_pane = true
+  sb:activate()
+  return true
+end
+
 function M.close(gui_window)
   local wid = gui_window:window_id()
   local pop = session.popover[wid]
   session.popover[wid] = nil
-  if pop and not pop.restore_focus then
+  if pop and pop.took_pane then
+    actions.blur_sidebar(gui_window)
+  elseif pop and not pop.restore_focus then
     state.set_focus(wid, false)
   end
   return pop ~= nil
@@ -330,6 +347,11 @@ end
 function M.point_at(gui_window, record, x)
   local pop = session.popover[gui_window:window_id()]
   if not pop or not config.get().popover.follow_pointer then
+    return false
+  end
+  -- Cancel stays selected at the confirm level: a pointer that happens to rest over Close must not
+  -- arm a destructive answer the user never chose.
+  if pop.level == "confirm" then
     return false
   end
   if not record or record.kind ~= "popover" or record.id == nil then
@@ -626,7 +648,9 @@ function M.rect(gui_window, rows, cols, theme, cfg)
   end
   local first_col = cfg.padding.left + 1
   local w = M.width_for(cfg, cols, items_for(gui_window, pop), question(gui_window, pop))
-  if w < 8 or rows < 3 then
+  -- A width that cannot hold two borders and a cell has nothing to draw. Anything above that does
+  -- render, however cramped: a level that is open but unpainted swallows every click in the pane.
+  if w < MIN_RENDER_W or rows < FRAME_ROWS + 1 then
     return nil
   end
   -- §6.4: the menu opens at the column that asked for it and slides back inside the sidebar's own.
@@ -659,6 +683,12 @@ function M.rect(gui_window, rows, cols, theme, cfg)
     out[#out + 1] = row
   end
   out[#out + 1] = frame_row(w, "╰", "─", "╯", theme)
+  -- `composite` gives a whole pane row to the rect's hit, so every row carries the rect's own
+  -- columns: without them a click level with an item but beside the menu would run it.
+  for _, row in ipairs(out) do
+    row.hit = row.hit or { kind = "popover" }
+    row.hit.x1, row.hit.x2 = x, x + w - 1
+  end
   local y = math.max(1, math.min(placed.a, math.max(rows - #out + 1, 1)))
   return {
     x = x,

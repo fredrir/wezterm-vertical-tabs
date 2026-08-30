@@ -34,3 +34,9 @@ build profile="release":
 
 screenshot state="":
     xvfb-run -a -s "-screen 0 1600x900x24" sh scripts/screenshot.sh {{state}}
+
+baseline *args:
+    @sh scripts/baseline.sh {{args}}
+
+baseline-check:
+    @sh scripts/baseline.sh --check

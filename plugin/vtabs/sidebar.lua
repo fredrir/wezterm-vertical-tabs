@@ -508,18 +508,109 @@ local function own_socket()
   return socket:match("gui%-sock%-" .. tostring(pid) .. "$") ~= nil
 end
 
----Kills one pane by id, so no tab or pane has to be activated first. False when the CLI is not usable.
-local function cli_kill(pane_id)
+---Runs `wezterm cli` against the GUI's own socket, so no tab or pane has to be activated first.
+---False when the CLI is not usable here, which is the caller's cue to fall back.
+local function cli(args, key, unavailable)
   local dir = wezterm.executable_dir
   if type(dir) == "string" and own_socket() then
-    local exe = dir .. (platform.is_windows and "\\wezterm.exe" or "/wezterm")
-    local args = { exe, "cli", "--no-auto-start", "kill-pane", "--pane-id", tostring(pane_id) }
-    if util.try(wezterm.run_child_process, args) == true then
+    local argv = { dir .. (platform.is_windows and "\\wezterm.exe" or "/wezterm"), "cli", "--no-auto-start" }
+    for _, arg in ipairs(args) do
+      argv[#argv + 1] = arg
+    end
+    if util.try(wezterm.run_child_process, argv) == true then
       return true
     end
   end
-  util.warn_once("cli-kill", "wezterm cli kill-pane unavailable; closing sidebars by activation")
+  util.warn_once(key, "%s", unavailable)
   return false
+end
+
+local function cli_kill(pane_id)
+  local args = { "kill-pane", "--pane-id", tostring(pane_id) }
+  return cli(args, "cli-kill", "wezterm cli kill-pane unavailable; closing sidebars by activation")
+end
+
+---Moves a pane under `target`, splitting it downwards. `--move-pane-id` relocates an existing pane.
+local function cli_move(pane_id, target_id)
+  local args = { "split-pane", "--move-pane-id", tostring(pane_id), "--pane-id", tostring(target_id), "--bottom" }
+  return cli(args, "cli-move", "wezterm cli split-pane --move-pane-id unavailable; a split sidebar is left as is")
+end
+
+---Panes on the sidebar's side of the top-level split. Only a split of the sidebar node can put one
+---there, so the test is which side of the sidebar's own edge a pane starts (or ends) on -- not
+---whether it fits inside the sidebar's box, which a Left/Right split of the sidebar never does.
+---`panes_with_info` reports the unzoomed layout (`mux/src/tab.rs:88`), so zoom does not enter it.
+local function intruders(tab, sb, position)
+  local infos = util.try(function()
+    return tab:panes_with_info()
+  end)
+  if type(infos) ~= "table" then
+    return {}
+  end
+  local box = nil
+  for _, info in ipairs(infos) do
+    if info.pane:pane_id() == sb:pane_id() then
+      box = info
+    end
+  end
+  if not box then
+    return {}
+  end
+  local edge = (box.left or 0) + (box.width or 0)
+  local out = {}
+  for _, info in ipairs(infos) do
+    local left = info.left or 0
+    local inside
+    if position == "right" then
+      inside = left + (info.width or 0) >= (box.left or 0)
+    else
+      inside = left <= edge
+    end
+    if info.pane:pane_id() ~= sb:pane_id() and inside then
+      out[#out + 1] = info.pane
+    end
+  end
+  return out
+end
+
+---WezTerm splits whichever pane is active, and under `hover = "follow"` that is often the sidebar,
+---which leaves a shell in a column too narrow to use. Move it to the content side instead.
+function M.rescue_splits(gui_window, tab)
+  local content, sb = M.classify(tab)
+  -- A pane that only claims the role by its title must never decide that another one moves.
+  if not sb or not M.is_ready(sb) or #content < 2 then
+    return false
+  end
+  local stuck = intruders(tab, sb, config.get().position)
+  if #stuck == 0 then
+    return false
+  end
+  local inside = {}
+  for _, pane in ipairs(stuck) do
+    inside[pane:pane_id()] = true
+  end
+  local host = nil
+  for _, pane in ipairs(content) do
+    -- The destination is a real shell of this tab: never an overlay, never another backend.
+    if not inside[pane:pane_id()] and not M.is_backend(pane) and not M.is_overlay(pane) then
+      host = pane
+      break
+    end
+  end
+  if not host then
+    return false
+  end
+  local moved = false
+  for _, pane in ipairs(stuck) do
+    moved = cli_move(pane:pane_id(), host:pane_id()) or moved
+  end
+  if moved then
+    classified[tab:tab_id()] = nil
+    util.try(function()
+      require("vtabs.geometry").correct(gui_window)
+    end)
+  end
+  return moved
 end
 
 ---`perform_action` ignores its pane argument, so the intended target must still be active when it runs.
@@ -739,6 +830,7 @@ local function ensure_window(gui_window)
         end
       elseif sb then
         if M.is_ready(sb) then
+          M.rescue_splits(gui_window, tab)
           check_liveness(gui_window, tab, sb, now)
         else
           await_auth(gui_window, tab, sb, now)

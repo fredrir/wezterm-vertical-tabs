@@ -36,6 +36,7 @@ local VARIANTS = {
   confirm = { confirm_close = true },
   macos = { titlebar = "macos" },
   ["macos-rail"] = { titlebar = "macos", collapsed = "rail" },
+  ["macos-rail-plain"] = { titlebar = "macos", collapsed = "rail", rail_titlebar = "none" },
 }
 local variant = os.getenv "VTABS_SHOT_OPTS" or "default"
 if variant == "padded" then
@@ -70,6 +71,9 @@ local probes = {
   end,
   focus = function(window, pane)
     window:perform_action(vtabs.action.focus_sidebar, pane)
+  end,
+  settings = function(window, pane)
+    window:perform_action(vtabs.action.open_settings, pane)
   end,
   -- `popover_in` is 90 ms, shorter than one `import`; stretching it keeps the blend and the
   -- zero stagger while giving the capture a window it can hit.

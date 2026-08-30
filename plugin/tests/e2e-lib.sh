@@ -58,6 +58,20 @@ e2e_cleanup() {
 }
 
 fail() { echo "FAIL: $*"; exit 1; }
+# Announces a passed step and, when `VTABS_E2E_GEOMETRY` names a file, appends the pane geometry
+# after it. Pane and tab ids are dropped: a mux reassigns them, the shapes are what must not move.
+ok() {
+  echo "ok: $*"
+  [ -n "${VTABS_E2E_GEOMETRY:-}" ] || return 0
+  {
+    echo "# $*"
+    list | python3 -c '
+import json,sys,re
+for p in sorted(json.load(sys.stdin), key=lambda q: (q["window_id"], q["tab_id"], q["left_col"], q["top_row"])):
+    title=re.sub(r"wez-vtabs(-settings)?:[0-9a-f]+", r"wez-vtabs\1", p["title"])
+    print("  %s left %d top %d cols %d rows %d" % (title, p["left_col"], p["top_row"], p["size"]["cols"], p["size"]["rows"]))'
+  } >>"$VTABS_E2E_GEOMETRY"
+}
 # A group of checks that pins a bug still open upstream. Fatal, so nobody forgets it; set
 # `VTABS_STRESS_SOFT=1` to print XFAIL instead and let the rest of the run continue.
 soft() {

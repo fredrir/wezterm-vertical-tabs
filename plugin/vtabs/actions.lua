@@ -37,13 +37,24 @@ local function spawn_env(gui_window)
 end
 
 ---`focus` picks which pane of the activated tab keeps input: "sidebar" or, by default, the content.
+---Sidebars attach lazily on activation and widths are corrected on the active tab only, so leaving
+---both to the next poll costs a frame of a tab with no sidebar, or one at the wrong width -- and on
+---a mux, a round trip on top of it. The switch does its own, in the same action.
 function M.activate_tab(gui_window, tab_id, focus)
   local tab = M.tab_by_id(gui_window, tab_id)
   if not tab then
     return nil
   end
   tab:activate()
-  local target = (focus == "sidebar" and sidebar.find(tab)) or sidebar.content_pane(tab)
+  local hidden = state.is_collapsed(gui_window:window_id()) and config.get().collapsed == "hidden"
+  local sb = sidebar.find(tab)
+  if not sb and not hidden then
+    sb = sidebar.attach(tab)
+  end
+  -- Correction activates the sidebar to land its adjust and hands focus back; doing it before the
+  -- switch's own activation keeps that dance from being the last word on which pane holds input.
+  require("vtabs.geometry").correct(gui_window)
+  local target = (focus == "sidebar" and sb) or sidebar.content_pane(tab)
   if target then
     target:activate()
   end
@@ -230,15 +241,27 @@ end
 
 ---A popover needs an expanded, authenticated sidebar to be drawn in; without one there is nothing
 ---to ask in, and wezterm's overlay survives a keyboard close.
+-- Two six-cell items, their left margin and a border either side: below this the question cannot be
+-- read, and an unreadable confirmation is worse than wezterm's own.
+local CONFIRM_COLS = 15
+local CONFIRM_ROWS = 5
+
 local function can_confirm(gui_window)
   local tab = util.active_tab(gui_window)
   local sb = tab and sidebar.find(tab)
-  return sb ~= nil and sidebar.is_ready(sb) and not state.is_collapsed(gui_window:window_id())
+  if not sb or not sidebar.is_ready(sb) or state.is_collapsed(gui_window:window_id()) then
+    return false
+  end
+  local d = util.try(function()
+    return sb:get_dimensions()
+  end)
+  return type(d) == "table" and (d.cols or 0) >= CONFIRM_COLS and (d.viewport_rows or 0) >= CONFIRM_ROWS
 end
 
 ---WezTerm's `CloseCurrentTab { confirm = true }` opens a per-tab overlay that the mouse-up after
 ---the click dismisses again, so the sidebar asks in a popover level of its own instead.
-function M.request_close(gui_window, tab_id, anchor_row, anchor_col)
+---@param from_key boolean|nil the pointer is not in the sidebar, so the question must take the pane
+function M.request_close(gui_window, tab_id, anchor_row, anchor_col, from_key)
   if not M.needs_confirm(gui_window, tab_id, "close") then
     return M.close_tab(gui_window, tab_id)
   end
@@ -248,6 +271,9 @@ function M.request_close(gui_window, tab_id, anchor_row, anchor_col)
   local popover = require "vtabs.popover"
   popover.open(gui_window, tab_id, anchor_row or 0, anchor_col)
   popover.to_confirm(gui_window, "close")
+  if from_key then
+    popover.grab_focus(gui_window)
+  end
   return false
 end
 
@@ -472,6 +498,32 @@ function M.move_relative(gui_window, delta)
   end
 end
 
+-- WezTerm's own `SplitPane` names them Top/Bottom; Up/Down is what everyone types.
+local SPLIT = { Right = "Right", Left = "Left", Top = "Top", Bottom = "Bottom", Up = "Top", Down = "Bottom" }
+
+---Splits the tab's content pane, never the sidebar. WezTerm's own `SplitPane` acts on whichever
+---pane is active, which under `hover = "follow"` is the sidebar whenever the pointer is over it.
+function M.split(gui_window, direction)
+  local where = SPLIT[direction]
+  if not where then
+    util.warn("split direction must be Right, Left, Top/Up or Bottom/Down, got %s", tostring(direction))
+    return nil
+  end
+  local content = active_content_pane(gui_window)
+  if not content then
+    return nil
+  end
+  local ok, pane = pcall(function()
+    return content:split { direction = where }
+  end)
+  if not ok or not pane then
+    util.warn("split failed: %s", tostring(pane):match "^[^\n]*")
+    return nil
+  end
+  pane:activate()
+  return pane
+end
+
 function M.activate_pane_direction(gui_window, direction)
   local content = active_content_pane(gui_window)
   if not content then
@@ -514,7 +566,9 @@ M.action = {
   new_tab = callback(function(window)
     M.new_tab(window)
   end),
-  close_tab = on_current_tab(M.request_close),
+  close_tab = on_current_tab(function(window, id)
+    M.request_close(window, id, nil, nil, true)
+  end),
   reopen_closed = callback(M.reopen_closed),
   open_settings = callback(M.open_settings),
   pin_tab = on_current_tab(M.toggle_pin),
@@ -546,6 +600,11 @@ M.action = {
   activate_pane_direction = function(direction)
     return callback(function(window)
       M.activate_pane_direction(window, direction)
+    end)
+  end,
+  split = function(direction)
+    return callback(function(window)
+      M.split(window, direction)
     end)
   end,
 }

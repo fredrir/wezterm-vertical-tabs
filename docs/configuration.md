@@ -43,6 +43,7 @@ return config
 | `titlebar`                | `"auto"`                                                                     | `"auto"` \| `"integrate"` \| `"plain"` \| `"macos"` |
 | `context`                 | `"popover"`                                                                  | `"popover"` \| `false` |
 | `popover`                 | `{ width = "auto", follow_pointer = true, fade_ms = 90, overflow = "clip" }` | see below |
+| `strip_actions`           | `{ "toggle", "new_tab", "settings" }`                                        | `"toggle"` \| `"new_tab"` \| `"settings"` \| `"search"` \| `{ id, icon, on_click }` |
 | `toggle_button`           | `true`                                                                       | `true` \| `false` |
 | `close_button`            | `"hover"`                                                                    | `"hover"` \| `"always"` \| `"never"` |
 | `confirm_close`           | `true`                                                                       | `true` \| `false` |
@@ -87,20 +88,21 @@ return config
 
 | option | note |
 | ------ | ---- |
-| `width` | re-asserted on the active tab after every resize; a divider drag is adopted until the config reloads |
+| `width` | re-asserted on the active tab after every resize, one `AdjustPaneSize` at a time so a lagging mux is not overshot; a divider drag is adopted and survives config reloads until `width` itself changes. A window drag corrects on its first frame and again once it stops, never per frame |
 | `collapsed` | `"rail"` keeps the pane and narrows it, so the toggle stays reachable |
 | `padding` | cells inside the sidebar pane, painted in its own colour; `left = 2` replaces the window padding `edge_to_edge` removes, and mirrors to `right = 2` with `position = "right"`. It is unconditional, so setting `window_padding` yourself leaves one extra cell of air |
-| `edge_to_edge` | zeroes wezterm's window padding on the sides the sidebar touches, so its background reaches the window edge; the far side keeps wezterm's `1cell`, and top/bottom are window-global, so the content pane loses its half cell too. The split line stays: pair with `theme = { split = "hidden" }` for a seamless edge |
+| `edge_to_edge` | zeroes wezterm's window padding on the sides the sidebar touches, so its background reaches the window edge; the far side keeps wezterm's `1cell`, and top/bottom are window-global, so the content pane loses its half cell too. It only ever fills in a `window_padding` you left unset, so one set **after** `apply_to_config` wins. The split line stays: pair with `theme = { split = "hidden" }` for a seamless edge |
 | `tab_height` | pad rows around the card's content; independent of `meta` |
 | `meta` | off by default; opt in with `"auto"`, `"cwd"` or `"process"`. The popover header always shows cwd and domain, whatever this says |
 | `rail_width` | raised to the traffic-light reserve on macOS with `INTEGRATED_BUTTONS`: `ceil(70pt / cell width)`, so 9 columns at an 8 pt cell and 6 at 12 pt, the same on a 2x display |
+| `rail_titlebar` | `"widen"` grows the collapsed rail to that reserve so the lights land on the sidebar and its toggle stays inside the pane; `"band"` pads the whole window instead, which is the only option once `collapsed = "hidden"` has detached the pane; `"none"` leaves both alone |
 | `close_button` | treated as `"always"` when `hover = "press"`, where no background row is ever hovered |
 | `context` | `false` removes the mouse trigger only; `m` in keyboard mode still opens the popover |
 | `popover.width` | `"auto"` sizes the menu to its widest row, floor 16; a number is taken verbatim. Both are capped at `width - padding.left - padding.right` |
 | `popover.follow_pointer` | the pointer selects the row it is over inside the menu; over the scrim the keyboard selection stands |
 | `popover.fade_ms` | the menu's own colour fade in, over its rows only; `0` disables it, and nothing fades on close |
 | `popover.overflow` | `"clip"` keeps the menu inside the sidebar. `"grow"` is not implemented yet |
-| `confirm_close` | the question is a popover level in the sidebar, never wezterm's own overlay, which the release after the click that opened it would dismiss; the overlay is the fallback only when no sidebar can draw the question |
+| `confirm_close` | the question is a popover level in the sidebar, never wezterm's own overlay, which the release after the click that opened it would dismiss. Asked from a key binding it takes the sidebar pane so `Enter` and `Esc` reach it, and hands focus back on close. The overlay is the fallback only when no sidebar can draw the question |
 | `show_index` | renders on the meta line with 2-row cards, inline with `meta = false` |
 | `settings` | the page is a normal tab running the plugin's own backend with `--role settings`; it is never adopted as a sidebar and never appears in the tab list as anything but "Settings" |
 | `settings.persist` | writes only the keys that differ from the defaults, atomically at `0600`, to `$XDG_CONFIG_HOME/wez-vtabs/settings.json`; anything you set in `wezterm.lua` outranks the file |
@@ -146,12 +148,13 @@ manual binding:
 ```lua
 { key = "b", mods = "CMD", action = vtabs.action.toggle_sidebar }
 { key = "h", mods = "CMD", action = vtabs.action.activate_pane_direction "Left" } -- skips the sidebar
+{ key = "d", mods = "CMD", action = vtabs.action.split "Right" }                 -- splits the shell, not the sidebar
 { key = "1", mods = "CMD", action = vtabs.action.activate_tab(0) }              -- 0-based, -1 = last
 ```
 
 Available: `toggle_sidebar focus_sidebar new_tab close_tab reopen_closed pin_tab
 private_window new_window tear_off rename_tab next_tab prev_tab move_tab_up
-move_tab_down activate_tab(index) activate_pane_direction(dir)`.
+move_tab_down activate_tab(index) activate_pane_direction(dir) split(dir)`.
 
 ### Sidebar keyboard mode
 
@@ -186,7 +189,8 @@ the tab's content pane, which then takes focus back.
 | drop on a gap row                          | insert below that tab                                                            |
 | click the toggle `«`                       | hide the sidebar; `toggle_sidebar` brings it back                                |
 | right click a tab                          | action popover, drawn inside the sidebar                                         |
-| click away from an open popover            | dismiss without switching tabs                                                   |
+| click away from an open popover            | dismiss without switching tabs; a click level with an item but outside the menu counts as away |
+| click a destructive menu item              | runs on release, and only if the release is still on the same item               |
 | wheel over an open popover                 | move its selection                                                               |
 | move the pointer inside an open popover    | select the row under it (`popover.follow_pointer`)                               |
 | footer row                                 | calls the entry's `on_click`                                                     |
@@ -214,6 +218,7 @@ place; the plugin never sets it and warns once if you do.
 ## Public API
 
 `vtabs.apply_to_config(config, opts)`, `vtabs.action.*`,
+`vtabs.action.split "Right"` (also `"Left"`, `"Top"`, `"Bottom"`),
 `vtabs.toggle_sidebar(window)`, `vtabs.show_sidebar(window, bool)`,
 `vtabs.sync(window, { force = true })`, `vtabs.invalidate_theme(window_id?)`,
 `vtabs.is_sidebar_pane(pane)` (true for any pane presenting as a sidebar backend; for skipping, never for trust), `vtabs.window_title(tab, pane, tabs, panes)`, `vtabs.is_private_window(window)`, `vtabs.version`.

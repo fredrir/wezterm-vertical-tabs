@@ -77,7 +77,9 @@ function M.build(user)
     local binding = keys[name]
     local action = action_for(name)
     if binding and action then
-      out[#out + 1] = { key = binding.key, mods = binding.mods, action = action }
+      -- `vtabs` names the binding for the popover's key hints; `apply` drops it, since wezterm
+      -- rejects a key entry carrying a field it does not know.
+      out[#out + 1] = { key = binding.key, mods = binding.mods, action = action, vtabs = name }
     end
   end
   return out
@@ -100,7 +102,7 @@ function M.apply(config, cfg)
   end
   for _, b in ipairs(bindings) do
     if not taken[signature(b)] then
-      table.insert(config.keys, b)
+      table.insert(config.keys, { key = b.key, mods = b.mods, action = b.action })
     end
   end
 end

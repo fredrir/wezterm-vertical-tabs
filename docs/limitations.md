@@ -19,6 +19,13 @@
   reach disk. Pins are keyed by tab id, so they are dropped at startup unless a
   sidebar pane survived in the mux; collapsed, focus and private are per GUI
   process.
+- WezTerm's own `SplitPane` acts on whichever pane is active, and under
+  `hover = "follow"` that is the sidebar whenever the pointer is over it, which
+  leaves a shell in a column too narrow to use. `vtabs.action.split(dir)` splits
+  the tab's content pane instead. A split that lands in the sidebar's own
+  columns anyway is moved to the content side on the next poll, using
+  `wezterm cli split-pane --move-pane-id`; where that CLI is unusable (the GUI
+  is not on its own socket) the plugin warns once and leaves the pane alone.
 - "Move to new window" (drag to the inner edge, menu, or `tear_off`) only works
   for tabs with a single content pane; multi-pane tabs show a notification.
 - The action menu is composited into the sidebar pane's own cells. A plugin has

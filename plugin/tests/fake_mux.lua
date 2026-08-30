@@ -171,9 +171,10 @@ function Tab:panes_with_info()
       index = i - 1,
       is_active = p == self.active,
       is_zoomed = p.zoomed == true,
-      left = i == 1 and 0 or first.cols + 1,
-      top = 0,
-      width = p.cols,
+      -- `left`/`width` are overridable per pane, so a test can place one inside another's columns.
+      left = p.left or (i == 1 and 0 or first.cols + 1),
+      top = p.top or 0,
+      width = p.width or p.cols,
       height = 24,
       pane = p,
     }

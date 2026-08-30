@@ -48,6 +48,8 @@ if os.getenv "VTABS_E2E_MACOS" then
 end
 
 vtabs.apply_to_config(config, {
+  -- `"macos"` is the plugin's own preview seam: it claims the reserve without asking wezterm for a
+  -- button style this platform does not have, which `"integrate"` warns about on every reload.
   titlebar = os.getenv "VTABS_E2E_MACOS" and "macos" or nil,
   poll_ms = 200,
   debug = true,
@@ -110,6 +112,92 @@ local probes = {
     wezterm.log_info("e2e: split sidebar " .. tostring(sb:pane_id()))
   end,
   -- The pane tree as the plugin classifies it, next to what the mux reports.
+  -- How the plugin classifies every pane of the active tab: the rescue must leave the moved pane
+  -- ranked as nothing at all, and the sidebar ready as before.
+  probe_ranks = function(window)
+    local sidebar = require "vtabs.sidebar"
+    local tab = window:mux_window():active_tab()
+    local sb = sidebar.find(tab)
+    local out = {}
+    for _, pane in ipairs(tab:panes()) do
+      out[#out + 1] = string.format(
+        "%d:backend=%s,ready=%s,marker=%s,settings=%s%s",
+        pane:pane_id(),
+        tostring(sidebar.is_backend(pane)),
+        tostring(sidebar.is_ready(pane)),
+        tostring(sidebar.has_marker(pane)),
+        tostring(sidebar.is_settings(pane)),
+        sb and pane:pane_id() == sb:pane_id() and ",role=sidebar" or ""
+      )
+    end
+    wezterm.log_info("e2e: ranks " .. table.concat(out, " "))
+  end,
+  -- `vtabs.action.split` must target the content pane even when the sidebar holds focus.
+  action_split_bottom = function(window)
+    local sidebar = require "vtabs.sidebar"
+    local sb = sidebar.find(window:mux_window():active_tab())
+    if sb then
+      sb:activate()
+    end
+    window:perform_action(vtabs.action.split "Bottom", window:active_pane())
+    wezterm.log_info("e2e: action split from " .. tostring(sb and sb:pane_id()))
+  end,
+  -- "Down" is an alias of "Bottom", so it must really split.
+  action_split_down = function(window)
+    local sidebar = require "vtabs.sidebar"
+    local sb = sidebar.find(window:mux_window():active_tab())
+    if sb then
+      sb:activate()
+    end
+    local before = #window:mux_window():active_tab():panes()
+    window:perform_action(vtabs.action.split "Down", window:active_pane())
+    local after = #window:mux_window():active_tab():panes()
+    wezterm.log_info(string.format("e2e: split down panes %d -> %d", before, after))
+  end,
+  -- A direction the vocabulary does not name must warn instead of splitting anything.
+  action_split_bogus = function(window)
+    local before = #window:mux_window():active_tab():panes()
+    window:perform_action(vtabs.action.split "Sideways", window:active_pane())
+    local after = #window:mux_window():active_tab():panes()
+    wezterm.log_info(string.format("e2e: split bogus panes %d -> %d", before, after))
+  end,
+  settings = function(window)
+    require("vtabs.actions").open_settings(window)
+  end,
+  -- What `correct` would aim for right now: `fits` clamps the adopted width so every content band
+  -- keeps MIN_CONTENT, so a split tab legitimately holds less than `desired`.
+  probe_target = function(window)
+    local geometry = require "vtabs.geometry"
+    local sidebar = require "vtabs.sidebar"
+    local fits, tab_metrics
+    for i = 1, 60 do
+      local name, value = debug.getupvalue(geometry.correct, i)
+      if not name then
+        break
+      end
+      if name == "fits" then
+        fits = value
+      elseif name == "tab_metrics" then
+        tab_metrics = value
+      end
+    end
+    local tab = window:mux_window():active_tab()
+    local sb = sidebar.find(tab)
+    local cols, _, bands = nil, nil, nil
+    if tab_metrics then
+      cols, _, bands = tab_metrics(tab, sb and sb:pane_id())
+    end
+    local want = geometry.desired(window:window_id())
+    wezterm.log_info(
+      string.format(
+        "e2e: target %s want %s tab_cols %s bands %s",
+        tostring(fits and cols and fits(want, cols, nil, bands)),
+        tostring(want),
+        tostring(cols),
+        tostring(bands)
+      )
+    )
+  end,
   probe_tree = function(window)
     local sidebar = require "vtabs.sidebar"
     local out = {}
@@ -279,6 +367,7 @@ local probes = {
         is_mac = true,
         integrated_buttons = true,
         native_button_style = true,
+        preview = os.getenv "VTABS_E2E_MACOS" ~= nil,
         position = cfg.position,
         padding_top = cfg.padding.top,
         toggle_button = cfg.toggle_button,
