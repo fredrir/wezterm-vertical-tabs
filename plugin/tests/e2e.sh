@@ -124,9 +124,9 @@ sidebar_text "$sb1" | grep -c "two" >/dev/null && fail "closed tab still rendere
 [ "$(active_title "$sb1")" = "one" ] || fail "wrong tab closed (active: $(active_title "$sb1"))"
 echo "ok: middle click closes the clicked tab, not the active one"
 
-click "$sb1" 5 "$(row_of "$sb1" "New Tab")" 0
+click "$sb1" 5 "$(row_of "$sb1" "New tab")" 0
 sleep 1.5
-[ "$(tab_count)" -eq 2 ] || fail "click on New Tab row did not spawn a tab"
+[ "$(tab_count)" -eq 2 ] || fail "click on the New tab card did not spawn a tab"
 third_tab=$(tab_ids | cut -d' ' -f2)
 sidebar_of "$third_tab" >/dev/null || fail "new tab has no sidebar"
 echo "ok: new tab button spawns tab with sidebar"
