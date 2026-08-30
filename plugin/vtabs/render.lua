@@ -1,6 +1,95 @@
 local ansi = require "vtabs.ansi"
 local util = require "vtabs.util"
 
+---@class VtabsItem
+---@field tab_id integer
+---@field index integer
+---@field is_active boolean
+---@field is_pinned boolean
+---@field is_private boolean
+---@field title string
+---@field meta string|nil
+---@field icon string
+---@field has_unseen boolean
+
+---@class VtabsStripToggle
+---@field row integer
+---@field x1 integer
+---@field x2 integer
+
+---@class VtabsStrip
+---@field rows integer
+---@field toggle VtabsStripToggle|nil
+
+---@class VtabsHover
+---@field x integer
+---@field y integer
+
+---@class VtabsDrag
+---@field tab_id integer
+---@field over_index integer|nil
+---@field active boolean
+---@field outside boolean|nil
+
+---@class VtabsTheme
+---@field bg integer[]
+---@field fg integer[]
+---@field dim integer[]
+---@field accent integer[]
+---@field title_idle integer[]
+---@field meta_fg integer[]
+---@field active_bg integer[]
+---@field active_fg integer[]
+---@field hover_bg integer[]
+---@field hover_fg integer[]
+---@field focus_bg integer[]
+---@field drag_bg integer[]
+---@field drag_fg integer[]
+---@field pinned_fg integer[]
+---@field separator integer[]
+---@field new_tab_fg integer[]
+---@field close_fg integer[]
+---@field close_hover_fg integer[]
+---@field unseen_fg integer[]
+---@field private_accent integer[]
+---@field border integer[]
+---@field border_idle integer[]
+---@field scroll_fg integer[]
+---@field scroll_idle_fg integer[]
+
+---@class VtabsRenderInput
+---@field cols integer
+---@field rows integer
+---@field items VtabsItem[]
+---@field theme VtabsTheme
+---@field cfg table
+---@field glyphs table
+---@field strip VtabsStrip|nil
+---@field hover VtabsHover|nil
+---@field drag VtabsDrag|nil
+---@field scroll integer|nil
+---@field focus_index integer|nil
+---@field ensure_visible integer|nil
+---@field footer (string|table)[]|nil
+---@field private boolean|nil
+---@field user_scrolled boolean|nil
+
+---@class VtabsSpan
+---@field id string
+---@field x1 integer
+---@field x2 integer
+
+---@class VtabsHit
+---@field kind string
+---@field id integer|nil
+---@field slot integer|nil
+---@field part string|nil
+---@field x1 integer|nil
+---@field x2 integer|nil
+---@field pinned boolean|nil
+---@field entry table|nil
+---@field spans VtabsSpan[]|nil
+
 local M = {}
 
 local function style(fg, bg)
