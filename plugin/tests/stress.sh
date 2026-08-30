@@ -266,33 +266,35 @@ if [ "$mode" = mux ]; then
   sleep 1
 fi
 
+# Width helpers every group below uses, so they must sit outside the fast-mode guard.
+settled_width() { # tab_id -> the width once three reads in a row agree, else the last one seen
+  last=""; same=0
+  for _ in $(seq 1 32); do
+    now=$(width_of "$1" 2>/dev/null || echo "?")
+    if [ "$now" = "$last" ]; then
+      same=$((same + 1))
+      [ "$same" -ge 2 ] && { echo "$now"; return 0; }
+    else
+      same=0
+    fi
+    last="$now"
+    sleep 0.25
+  done
+  echo "$last"
+}
+want_width() { # tab_id want label — waits for the wanted width, then fails with what it settled on
+  for _ in $(seq 1 40); do
+    [ "$(width_of "$1" 2>/dev/null || echo '?')" = "$2" ] && return 0
+    sleep 0.25
+  done
+  widths; geometry; fail "$3: sidebar settled at $(settled_width "$1") cols, want $2"
+}
+
 # `VTABS_STRESS_FAST=1` skips the width traces, which take most of a run, so the groups after
 # them can be exercised on their own.
 if [ -z "${VTABS_STRESS_FAST:-}" ]; then
   # ---------------------------------------------------------------- item 9 ---
   # Every width check waits for the sidebar to stop moving, then pins the number it settled on.
-  settled_width() { # tab_id -> the width once three reads in a row agree, else the last one seen
-    last=""; same=0
-    for _ in $(seq 1 32); do
-      now=$(width_of "$1" 2>/dev/null || echo "?")
-      if [ "$now" = "$last" ]; then
-        same=$((same + 1))
-        [ "$same" -ge 2 ] && { echo "$now"; return 0; }
-      else
-        same=0
-      fi
-      last="$now"
-      sleep 0.25
-    done
-    echo "$last"
-  }
-  want_width() { # tab_id want label — waits for the wanted width, then fails with what it settled on
-    for _ in $(seq 1 40); do
-      [ "$(width_of "$1" 2>/dev/null || echo '?')" = "$2" ] && return 0
-      sleep 0.25
-    done
-    widths; geometry; fail "$3: sidebar settled at $(settled_width "$1") cols, want $2"
-  }
 
   vtest "$hot_content" rail_mode
   sleep 0.5
@@ -723,7 +725,11 @@ split_net() {
     *) fail "an unknown split direction neither split nor warned: $bogus_warn" ;;
   esac
 
-  # Leave the tab as it was; every later pane-count assertion expects a sidebar and one content pane.
+}
+
+# Outside the group on purpose: `soft` runs it in a subshell, so a failed assertion skips the rest
+# of the group and would otherwise strand its extra panes in every later pane-count assertion.
+restore_split_panes() {
   for p in $(list | python3 -c 'import json,sys; t='"$first"'; print(" ".join(str(q["pane_id"]) for q in sorted((r for r in json.load(sys.stdin) if r["tab_id"]==t and not '"$is_marked"'), key=lambda r: r["top_row"])[1:]))'); do
     cli kill-pane --pane-id "$p" >/dev/null 2>&1 || true
   done
@@ -731,7 +737,9 @@ split_net() {
   max_panes=2
   no_dupes_settled "closing the rescued splits" 8
 }
+
 soft split_net
+restore_split_panes
 
 # Both groups below pin bugs that are still open; `VTABS_STRESS_SOFT=1` prints XFAIL for them
 # and lets the run continue.
