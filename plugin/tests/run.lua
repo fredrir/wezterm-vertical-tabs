@@ -108,14 +108,19 @@ test("theme ladder is monotone on dark and light schemes with readable dim", fun
   end
 end)
 
-test("theme uses scheme tab_bar only when its ladder is monotone", function()
+test("use_scheme_tab_bar is a deprecated no-op: the sidebar keeps the terminal background", function()
   local p = palette("#1e1e2e", "#cdd6f4")
   p.tab_bar =
     { background = "#000000", inactive_tab_hover = { bg_color = "#333333" }, active_tab = { bg_color = "#555555" } }
-  eq(theme.resolve({}, p).bg[1], 0)
-  p.tab_bar.active_tab.bg_color = "#111111"
-  assert(theme.resolve({}, p).bg[1] ~= 0, "non-monotone tab_bar rejected")
-  eq(theme.resolve({ use_scheme_tab_bar = true }, p).bg[1], 0)
+  eq(theme.resolve({}, p).bg[1], 30, "no background is borrowed")
+  eq(theme.resolve({ use_scheme_tab_bar = true }, p).bg[1], 30)
+  local warned = 0
+  for _, line in ipairs(wezterm.log) do
+    if line:find("use_scheme_tab_bar is deprecated", 1, true) then
+      warned = warned + 1
+    end
+  end
+  eq(warned, 1, "warned once")
 end)
 
 local function items()
@@ -996,11 +1001,20 @@ test("theme bg is the terminal background; elevation restores the raised tint", 
   assert(raised.bg[1] > t.bg[1] and raised.bg[3] > t.bg[3], "elevation lifts bg toward fg")
 end)
 
-test("accent is cursor_bg when it clears 3.0 contrast, else ansi[5]", function()
-  eq(rgb(theme.resolve({}, fake.palette).accent), "245,224,220")
-  local low = util.merge(fake.palette, { cursor_bg = "#242438" })
-  assert(theme.contrast({ 36, 36, 56 }, { 30, 30, 46 }) < 3.0, "fixture cursor is low contrast")
-  eq(rgb(theme.resolve({}, low).accent), "137,180,250")
+test("the accent chain is cursor_bg, then tab_bar active, then ansi[5], each behind both gates", function()
+  local base = fake.palette
+  -- Mocha's rosewater cursor clears 3.0 against the page but is 1.06 from the foreground.
+  assert(theme.contrast({ 245, 224, 220 }, { 205, 214, 244 }) < 1.2, "fixture cursor is fg-coloured")
+  eq(rgb(theme.resolve({}, base).accent), "137,180,250", "falls through to ansi[5]")
+  local usable = util.merge(base, { cursor_bg = "#f38ba8" })
+  eq(rgb(theme.resolve({}, usable).accent), "243,139,168", "a cursor that clears both gates wins")
+  local no_cursor = util.merge(base, { cursor_bg = "#242438" })
+  no_cursor.tab_bar = { active_tab = { bg_color = "#74c7ec" } }
+  eq(rgb(theme.resolve({}, no_cursor).accent), "116,199,236", "then the scheme's active tab colour")
+  local flat = util.merge(base, { cursor_bg = "#242438" })
+  flat.tab_bar = { active_tab = { bg_color = "#94e2d5" } }
+  eq(rgb(theme.resolve({}, flat).accent), "137,180,250", "a tab colour too close to fg is skipped too")
+  eq(rgb(theme.resolve({ accent = "#ff0000" }, base).accent), "255,0,0", "a user accent still wins")
 end)
 
 local function last_action(win)
@@ -1574,12 +1588,15 @@ end)
 test("an unreachable contrast gate stops at the target colour instead of mixing past it", function()
   for _, p in ipairs { palette("#2b2b2b", "#4a4a4a"), palette("#ffffff", "#cccccc") } do
     local t = theme.resolve({}, p)
-    assert(theme.contrast(t.fg, t.bg) < 3.0, "the fixture ceiling is below the dim gate")
-    eq(rgb(t.dim), rgb(t.fg), "dim lands on fg, never past it")
+    assert(theme.contrast(t.fg, t.active_bg) < 3.5, "the fixture ceiling is below the meta gate")
+    eq(rgb(t.meta_fg), rgb(t.fg), "meta_fg lands on fg, never past it")
+    for i = 1, 3 do
+      assert(t.meta_fg[i] >= 0 and t.meta_fg[i] <= 255, "channel in range")
+    end
   end
-  local reachable = theme.resolve({}, palette("#002b36", "#839496"))
-  assert(theme.contrast(reachable.dim, reachable.bg) >= 3.0, "a reachable gate is still met")
-  assert(rgb(reachable.dim) ~= rgb(reachable.fg), "and dim is still dimmer than fg")
+  local reachable = theme.resolve({}, palette("#1e1e2e", "#cdd6f4"))
+  assert(theme.contrast(reachable.meta_fg, reachable.active_bg) >= 3.5, "a reachable gate is met")
+  assert(rgb(reachable.meta_fg) ~= rgb(reachable.fg), "and meta_fg is still quieter than fg")
 end)
 
 -- bug-hunter regression pins ------------------------------------------------
@@ -1646,6 +1663,127 @@ test("the sidebar's own resize event corrects at once, inside the observe gate",
   eq(sb.cols, 43)
   input.handle(gui, sb, "vtabs", '{"t":"resize","cols":43,"rows":30}')
   eq(sb.cols, 28, "the backend reporting its own size is never gated")
+end)
+
+local palettes = require "palettes"
+
+-- P1-spec §6.1: the gates every scheme must clear, and the ceiling clamp where it cannot.
+local CEILING_LIMITED = { ["Solarized Dark"] = true, ["Solarized Light"] = true }
+
+test("every §6.1 gate holds on all ten palettes, or is declared ceiling-limited", function()
+  local limited = {}
+  for _, p in ipairs(palettes) do
+    local t = theme.resolve({}, p)
+    local c, where = theme.contrast, " on " .. p.name
+    local ceiling = c(t.fg, t.active_bg)
+    assert(c(t.meta_fg, t.active_bg) >= math.min(3.5, ceiling) - 0.001, "meta_fg vs active_bg" .. where)
+    assert(c(t.close_fg, t.active_bg) >= 3.0 - 0.001, "close_fg vs active_bg" .. where)
+    assert(c(t.close_hover_fg, t.active_bg) >= 3.0 - 0.001, "close_hover_fg vs active_bg" .. where)
+    assert(c(t.border, t.bg) >= 2.5 - 0.001, "border vs bg" .. where)
+    assert(c(t.border_idle, t.bg) >= 2.0 - 0.001, "border_idle vs bg" .. where)
+    assert(c(t.scroll_fg, t.bg) >= 2.0 - 0.001, "scroll_fg vs bg" .. where)
+    assert(c(t.accent, t.bg) >= 3.0 - 0.001, "accent vs bg" .. where)
+    if ceiling < 3.5 then
+      limited[p.name] = true
+      eq(rgb(t.meta_fg), rgb(t.fg), "ceiling-limited meta_fg is fg exactly" .. where)
+    end
+  end
+  eq(rgb(util.sorted_keys(limited)), rgb(util.sorted_keys(CEILING_LIMITED)), "exactly the declared two")
+end)
+
+test("title_idle is quieted only when the scheme has 5.0 of contrast to spend", function()
+  for _, p in ipairs(palettes) do
+    local t = theme.resolve({}, p)
+    local quiet = theme.contrast(t.fg, t.bg) >= 5.0
+    if quiet then
+      assert(rgb(t.title_idle) ~= rgb(t.fg), "quieted on " .. p.name)
+    else
+      eq(rgb(t.title_idle), rgb(t.fg), "left alone on " .. p.name)
+    end
+  end
+  local dark = theme.resolve({}, palettes[1])
+  local flat = theme.resolve({}, palette("#002b36", "#839496"))
+  assert(theme.contrast(flat.fg, flat.bg) < 5.0)
+  eq(rgb(flat.title_idle), rgb(flat.fg))
+  assert(rgb(dark.title_idle) ~= rgb(dark.fg))
+end)
+
+local function hex(h)
+  local r, g, b = h:match "^#(%x%x)(%x%x)(%x%x)$"
+  return table.concat({ tonumber(r, 16), tonumber(g, 16), tonumber(b, 16) }, ",")
+end
+
+test("close_hover_fg keeps the scheme's red where the red already clears its gate", function()
+  local untouched = 0
+  for _, p in ipairs(palettes) do
+    local t = theme.resolve({}, p)
+    local red = theme.resolve({ close_fg = p.ansi[2] }, p).close_fg
+    assert(theme.contrast(t.close_hover_fg, t.active_bg) >= 3.0 - 0.001, "gate met on " .. p.name)
+    if theme.contrast(red, t.active_bg) >= 3.0 then
+      eq(rgb(t.close_hover_fg), hex(p.ansi[2]), "a red that already clears the gate is not desaturated")
+      untouched = untouched + 1
+    end
+  end
+  assert(untouched >= 3, "the 3.0 gate leaves most schemes' red alone, got " .. untouched)
+end)
+
+test("unseen_fg keeps a distinct hue when ansi[4] clears the page, else follows the accent", function()
+  local base = palettes[1]
+  local t = theme.resolve({}, base)
+  eq(rgb(t.unseen_fg), rgb(theme.resolve({ unseen_fg = base.ansi[4] }, base).unseen_fg))
+  local dull = util.merge(base, {})
+  dull.ansi = { base.ansi[1], base.ansi[2], base.ansi[3], "#20202c", base.ansi[5] }
+  local low = theme.resolve({}, dull)
+  eq(rgb(low.unseen_fg), rgb(low.accent), "a dim ansi[4] falls back to the accent")
+end)
+
+test("a private window derives every accent-tinted surface from private_accent", function()
+  local base = palettes[1]
+  local normal = theme.resolve({}, base)
+  local private = theme.resolve({}, base, { private = true })
+  eq(rgb(private.accent), rgb(private.private_accent))
+  assert(rgb(private.accent) ~= rgb(normal.accent), "hue actually moves")
+  for _, key in ipairs { "active_bg", "focus_bg", "drag_bg" } do
+    assert(rgb(private[key]) ~= rgb(normal[key]), key .. " follows the private accent")
+  end
+end)
+
+test("ensure_contrast returns fg untouched, and never past target when the gate is unreachable", function()
+  local p = palettes[1]
+  local t = theme.resolve({}, p)
+  assert(theme.contrast(t.border, t.bg) >= 2.5, "a reachable gate stops as soon as it is met")
+  local flat = theme.resolve({}, palette("#2b2b2b", "#4a4a4a"))
+  eq(rgb(flat.meta_fg), rgb(flat.fg), "unreachable gate stops at the target")
+  eq(rgb(theme.resolve({ meta_fg = "#123456" }, p).meta_fg), "18,52,86", "a user value is taken verbatim")
+end)
+
+test("theme exports mix and luminance for the renderer", function()
+  eq(type(theme.mix), "function")
+  eq(type(theme.luminance), "function")
+  eq(rgb(theme.mix({ 0, 0, 0 }, { 100, 200, 250 }, 0.5)), "50,100,125")
+  assert(theme.luminance { 255, 255, 255 } > theme.luminance { 0, 0, 0 })
+end)
+
+test("every §6.3 key is present and overridable", function()
+  local groups = {
+    "bg fg dim accent title_idle meta_fg active_bg active_fg hover_bg hover_fg focus_bg",
+    "pinned_fg separator border border_idle new_tab_fg close_fg close_hover_fg unseen_fg",
+    "private_accent drag_bg drag_fg scroll_fg scroll_idle_fg",
+  }
+  -- accent and close_hover_fg are the two keys §6.1 gates after resolving the user's value.
+  local GATED = { accent = true, close_hover_fg = true }
+  local t = theme.resolve({}, palettes[1])
+  for _, group in ipairs(groups) do
+    for key in group:gmatch "%S+" do
+      assert(t[key], "missing key " .. key)
+      if not GATED[key] then
+        eq(rgb(theme.resolve({ [key] = "#010203" }, palettes[1])[key]), "1,2,3", "override ignored for " .. key)
+      end
+    end
+  end
+  eq(rgb(theme.resolve({ accent = "#89b4fa" }, palettes[1]).accent), "137,180,250", "a passing accent is kept")
+  local lifted = theme.resolve({ accent = "#010203" }, palettes[1]).accent
+  assert(rgb(lifted) ~= "1,2,3" and theme.contrast(lifted, t.bg) >= 3.0, "an unreadable accent is lifted")
 end)
 
 os.remove(state.file)
