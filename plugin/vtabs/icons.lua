@@ -35,7 +35,8 @@ M.defaults = {
   python3 = glyph("dev_python", "p"),
   cargo = glyph("dev_rust", "r"),
   rustc = glyph("dev_rust", "r"),
-  go = glyph("dev_go", "G"),
+  -- dev_go (U+E724) is a blank glyph in both Nerd Fonts; seti_go actually draws something
+  go = glyph("seti_go", "G"),
   make = glyph("cod_tools", "m"),
   htop = glyph("md_chart_line", "%"),
   btop = glyph("md_chart_line", "%"),
@@ -45,12 +46,14 @@ M.defaults = {
   mux = glyph("md_lan_connect", "@"),
   pinned = glyph("md_pin", "*"),
   private = glyph("md_incognito", "~"),
-  -- U+2716, not a Nerd Font close: both PUA glyphs are drawn cell-sized and read as thin as the
-  -- title next to them. `icon_map = { close = wezterm.nerdfonts.md_close }` gets the codicon back.
-  close = "✖",
+  -- U+2716 is in no monospace cmap we checked, so it was fallback-rendered all along; the thick
+  -- Material close is in-font and measures about twice the ink of the plain one.
+  close = glyph("md_close_thick", "x"),
   new_tab = glyph("cod_add", "+"),
-  -- the strip sits beside macOS's solid traffic lights: heavy Unicode, not thin cell-sized PUA ink
-  strip_new_tab = "✚",
+  -- The strip trio is uniform and light: ❮ and ⚙ measure the same ink as body text, and a heavy
+  -- cross beside them measured twice their weight. `⚙` is the recorded exception to the in-font
+  -- rule - Unicode has no width-safe gear that is. `icon_map` overrides any of them.
+  strip_new_tab = "+",
   settings = "⚙",
   search = glyph("cod_search", "/"),
   unseen = glyph("md_circle_medium", "•"),

@@ -21,6 +21,8 @@ M.POINT_DPI = 72
 M.LOGICAL_DPI = 96
 -- wezterm-gui/src/termwindow/render/fancy_tab_bar.rs:382 reserves this much for the traffic lights.
 M.BUTTON_PT = 70
+-- Centre-to-centre spacing of the three lights; the strip's own glyphs sit on the same pitch.
+M.BUTTON_PITCH_PT = 20
 -- macOS titlebar height; NEEDS-ENG-CONFIRM #1, over-reserving is the safe direction.
 M.TITLEBAR_PT = 28
 -- The lights are centred in the title bar, so this is where the toggle must line up.
@@ -38,13 +40,13 @@ function M.strip_geometry(dims, opts)
     and opts.native_button_style
     and opts.position == "left"
     and not opts.is_full_screen
-  local cell_h = 0
-  if reserve and dims.cols and dims.cols > 0 and dims.viewport_rows and dims.viewport_rows > 0 then
+  local cell_h, cell_w = 0, 0
+  if dims.cols and dims.cols > 0 and dims.viewport_rows and dims.viewport_rows > 0 then
     local base = opts.preview and M.LOGICAL_DPI or M.POINT_DPI
     local scale = (dims.dpi or base) / base
-    local cell_w = (dims.pixel_width or 0) / dims.cols / scale
+    cell_w = (dims.pixel_width or 0) / dims.cols / scale
     cell_h = (dims.pixel_height or 0) / dims.viewport_rows / scale
-    if cell_w > 0 and cell_h > 0 then
+    if reserve and cell_w > 0 and cell_h > 0 then
       cols = math.ceil(M.BUTTON_PT / cell_w)
       rows = math.max(1, math.ceil(M.TITLEBAR_PT / cell_h))
     end
@@ -81,6 +83,8 @@ function M.strip_geometry(dims, opts)
     rows = strip_rows,
     rows_reserved = rows,
     cols = cols,
+    -- in points, so the action cluster can match the lights' pitch the same way the reserve does
+    cell_w = cell_w > 0 and cell_w or nil,
     width = rail and width or nil,
     toggle_row = toggle_row,
     toggle_x = toggle_x,

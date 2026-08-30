@@ -46,6 +46,16 @@ function M.has_text(g)
 end
 
 local ACTION_STRIDE = 3
+
+---Columns between one action glyph and the next. The lights are 20 pt apart whatever the font is,
+---so a fixed cell count drifts out of step with them; two is the floor a hit span can live in.
+local function action_stride(strip)
+  local cell_w = strip and strip.cell_w
+  if not cell_w or cell_w <= 0 then
+    return ACTION_STRIDE
+  end
+  return math.max(2, math.floor(require("vtabs.platform").BUTTON_PITCH_PT / cell_w + 0.5))
+end
 local ACTION_DEFAULT = { "toggle", "new_tab", "settings" }
 local ACTION_BUILTIN = { toggle = true, new_tab = true, settings = true, search = true }
 -- `search` has no built-in behaviour, so it is drawn only when a hook answers it; `settings` opens
@@ -87,10 +97,11 @@ function M.strip_actions(cfg, strip, g, rail, cols)
     return {}, nil
   end
   local reserve = strip.cols or 0
+  local stride = action_stride(strip)
   local base
   if rail then
     local width = g.card_x2
-    if reserve == 0 and width >= 9 and 2 + ACTION_STRIDE * (#list - 1) + 1 <= width - 1 then
+    if reserve == 0 and width >= 9 and 2 + stride * (#list - 1) + 1 <= width - 1 then
       base = 2
     else
       list = { list[1] }
@@ -104,13 +115,16 @@ function M.strip_actions(cfg, strip, g, rail, cols)
   else
     -- no lights to sit beside: the trailing edge is the toolbar convention, and it leaves the
     -- list's left margin clean. The cluster keeps its order, so the toggle is still its first glyph.
-    base = g.card_x2 - 1 - ACTION_STRIDE * (#list - 1)
+    base = g.card_x2 - 1 - stride * (#list - 1)
   end
   local out = {}
   for i, action in ipairs(list) do
-    local x = base + ACTION_STRIDE * (i - 1)
-    if x - 1 >= 1 and x + 1 <= cols then
-      out[#out + 1] = { id = action.id, icon = action.icon, x = x, x1 = x - 1, x2 = x + 1 }
+    local x = base + stride * (i - 1)
+    -- the span is exactly one stride wide, so neighbours stay contiguous with no dead cell between
+    local x1 = x - math.floor((stride - 1) / 2)
+    local x2 = x1 + stride - 1
+    if x1 >= 1 and x2 <= cols then
+      out[#out + 1] = { id = action.id, icon = action.icon, x = x, x1 = x1, x2 = x2 }
     end
   end
   return out, row

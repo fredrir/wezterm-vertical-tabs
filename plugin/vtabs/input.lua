@@ -10,6 +10,7 @@ local popover = require "vtabs.popover"
 local hit = require "vtabs.hit"
 local layout = require "vtabs.layout"
 local settings = require "vtabs.settings"
+local page = require "vtabs.page"
 local util = require "vtabs.util"
 
 local M = {}
@@ -577,8 +578,20 @@ function M.handle(gui_window, pane, name, value)
   if sidebar.is_settings(pane) then
     if ev.t == "ready" then
       sidebar.auth(pane)
-    elseif ev.t == "key" then
-      settings.key(gui_window, ev)
+      view.sync(gui_window, { force = true })
+    elseif ev.t == "key" or ev.t == "mouse" then
+      local dims = session.dims[pane:pane_id()] or { cols = 100, rows = 24 }
+      local page_view =
+        { cols = dims.cols, rows = dims.rows, cfg = cfg, st = settings.page_state(gui_window:window_id()) }
+      local handled
+      if ev.t == "key" then
+        handled = settings.key(gui_window, ev) or page.key(gui_window, page_view, ev)
+      elseif ev.k == "down" and ev.b == "left" then
+        handled = page.click(gui_window, page_view, hit.at(session.hits[pane:pane_id()], ev.y), ev.x)
+      end
+      if handled then
+        view.sync(gui_window, { force = true })
+      end
     end
     return
   end

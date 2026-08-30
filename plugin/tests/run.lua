@@ -275,7 +275,7 @@ test("close column is reserved so hover does not reflow the title", function()
   eq(hit.span(hovered.hits[7], 24), nil)
   eq(hit.span(hovered.hits[7], 28), nil)
   eq(hit.span(hovered.hits[6], 26), nil, "a pad row offers no sub-target")
-  eq(usub(b, 26, 26), "✖", "glyph sits one col inside the card edge")
+  eq(usub(b, 26, 26), "x", "glyph sits one col inside the card edge")
   eq(hit.span(plain.hits[4], 26), "close", "active card shows close")
   eq(hit.span(plain.hits[7], 26), nil, "idle card does not")
   local meta = render.render(view { opts = { meta = "auto" }, hover = { x = 5, y = 4 } })
@@ -1126,7 +1126,7 @@ test("P1 strip: reserve rows, action cluster, never over a list row", function()
   local v = p1_view { strip = { rows = 3, cols = 0, toggle_row = 2 }, opts = { separator = "gap" } }
   local rows, r = frame_rows(v)
   eq(usub(rows[2], 20, 20), "❮", "with no lights the cluster right-aligns on card_x2")
-  eq(usub(rows[2], 23, 23), "✚")
+  eq(usub(rows[2], 23, 23), "+")
   eq(usub(rows[2], 26, 26), "⚙", "with the last glyph over the close column")
   eq(r.hits[1].kind, "strip")
   eq(r.hits[1].x1, nil, "strip reserve is not clickable")
@@ -1144,7 +1144,7 @@ test("P1 strip: reserve rows, action cluster, never over a list row", function()
     opts = { separator = "gap", strip_actions = { "toggle", "new_tab" } },
   })
   eq(usub(two[2], 23, 23), "❮", "a shorter cluster still ends over the close column")
-  eq(usub(two[2], 26, 26), "✚")
+  eq(usub(two[2], 26, 26), "+")
   eq(r.hits[3].kind, "action", "the band is 2 rows and stays inside the strip")
   eq(r.hits[4].kind, "tab", "the list starts below the strip")
   local right = frame_rows(p1_view {
@@ -1152,7 +1152,7 @@ test("P1 strip: reserve rows, action cluster, never over a list row", function()
     opts = { position = "right", separator = "gap" },
   })
   eq(usub(right[1], 2, 2), "❯", "position=right mirrors the cluster to card_x1 and flips the glyph")
-  eq(usub(right[1], 5, 5), "✚")
+  eq(usub(right[1], 5, 5), "+")
 end)
 
 test("addendum 2 A8a: every action column derives from the reserve, whatever it measures", function()
@@ -1169,7 +1169,7 @@ test("addendum 2 A8a: every action column derives from the reserve, whatever it 
     local rows, r = frame_rows(v)
     local base = reserve + 2
     eq(usub(rows[1], base, base), "❮", reserve .. ": first glyph two columns clear of the last light")
-    eq(usub(rows[1], base + 3, base + 3), "✚")
+    eq(usub(rows[1], base + 3, base + 3), "+")
     eq(usub(rows[1], base + 6, base + 6), "⚙")
     local spans = r.hits[1].spans
     eq(#spans, 4)
@@ -1235,7 +1235,7 @@ test("addendum 2 §8: the rail keeps only what fits, centred", function()
   local wide_rows, wr = frame_rows(wide)
   eq(#wr.hits[1].spans, 2, "nine columns hold the pair")
   eq(usub(wide_rows[1], 2, 2), "❮")
-  eq(usub(wide_rows[1], 5, 5), "✚")
+  eq(usub(wide_rows[1], 5, 5), "+")
   local reserved = p1_view { rows = 16, cols = 9, opts = { separator = "gap", width = 9 } }
   reserved.rail = true
   reserved.strip = { rows = 4, cols = 9, toggle_row = 3 }
@@ -1291,7 +1291,7 @@ test("P1 glyph guard: groups substitute together, N glyphs survive", function()
   eq(wide.ellipsis, "...")
   eq(wide.chamfer_top, "▙", "neutral block glyphs survive")
   eq(wide.scroll, "▐")
-  eq(wide.toggle_left, "❮", "the heavy ornament is EAW Neutral, so ambiguous-as-wide leaves it alone")
+  eq(wide.toggle_left, "❮", "the ornament is EAW Neutral, so ambiguous-as-wide leaves it alone")
   eq(wide.frame_tl, "+", "ghost frame substitutes as a unit")
   eq(wide.frame_dash, "-", "including its neutral member")
   local v14 = glyphs.resolve(base, { unicode_version = 14 })
@@ -2200,21 +2200,16 @@ test("addendum 2 A3c: show_index rides the title when there is no meta line", fu
   assert(usub(metaed[meta_row], 6, 8):find "3", "and the index goes back to the meta line")
 end)
 
-test("addendum 2 A4c: the close glyph is the heavy multiplication x and measures one cell", function()
+test("addendum 2 A4c/§1.6d: the close glyph is in-font and measures one cell", function()
   local icons_mod = require "vtabs.icons"
-  eq(icons_mod.defaults.close, "✖", "not a Nerd Font glyph: those are drawn cell-sized and read thin")
+  -- the stub has no nerdfonts table, so the default resolves to its ASCII fallback; on a real
+  -- install it is nf-md-close_thick, which is in the cmap where U+2716 never was
+  eq(icons_mod.defaults.close, "x", "the fallback is ASCII, never another font's glyph")
   local resolved = glyphs.resolve(config.setup({ backend = { path = "/bin/wez-vtabs" } }).glyphs, {})
   eq(util.width(resolved.close), 1, "one column, so the ASCII guard never fires")
-  eq(resolved.close, "✖")
-  local wide = glyphs.resolve(config.setup({ backend = { path = "/bin/wez-vtabs" } }).glyphs, {
-    treat_east_asian_ambiguous_width_as_wide = true,
-  })
-  eq(wide.close, "✖", "U+2716 is Neutral, so ambiguous-as-wide leaves it alone")
-  local swapped = glyphs.resolve(
-    config.setup({ icon_map = { close = "\u{f0156}" }, backend = { path = "/bin/wez-vtabs" } }).glyphs,
-    {}
-  )
-  eq(swapped.close, "\u{f0156}", "and icon_map still reaches the Nerd Font close for anyone who wants it")
+  local swapped =
+    glyphs.resolve(config.setup({ icon_map = { close = "Z" }, backend = { path = "/bin/wez-vtabs" } }).glyphs, {})
+  eq(swapped.close, "Z", "and icon_map still reaches it")
   config.setup { backend = { path = "/bin/wez-vtabs" } }
 end)
 
@@ -4718,25 +4713,56 @@ test("addendum 2 §1.6: the toggle row rounds to the lights' centre instead of c
   end
 end)
 
-test("addendum 2 §1.6: the strip glyphs are heavy and one cell wide", function()
+test("addendum 2 §1.6c: every chrome glyph is in the primary font's cmap, never decorative Unicode", function()
+  local icons_mod = require "vtabs.icons"
+  -- the stub has no nerdfonts table, so these resolve to ASCII: that is the point of the rule, a
+  -- glyph the primary font does not carry is a fallback font's problem and looks like one
+  eq(icons_mod.defaults.strip_new_tab, "+", "the strip trio is uniform and light")
+  eq(icons_mod.defaults.settings, "⚙", "the gear is the recorded exception to the in-font rule")
+  eq(icons_mod.defaults.go, wezterm.nerdfonts.seti_go or "G", "dev_go draws nothing in either Nerd Font")
   local resolved = glyphs.resolve(config.setup({ backend = { path = "/bin/wez-vtabs" } }).glyphs, {})
-  for _, pair in ipairs {
-    { "toggle_left", "❮" },
-    { "toggle_right", "❯" },
-    { "strip_new_tab", "✚" },
-    { "settings", "⚙" },
-  } do
-    eq(resolved[pair[1]], pair[2], pair[1])
-    eq(util.width(resolved[pair[1]]), 1, pair[1] .. " is one column, so the ASCII guard never fires")
+  for _, key in ipairs { "toggle_left", "toggle_right", "strip_new_tab", "settings", "close" } do
+    eq(util.width(resolved[key]), 1, key .. " is one column, so the ASCII guard never fires")
   end
-  local wide = glyphs.resolve(config.setup({ backend = { path = "/bin/wez-vtabs" } }).glyphs, {
-    treat_east_asian_ambiguous_width_as_wide = true,
-  })
-  eq(wide.toggle_left, "❮", "all four are EAW Neutral, so ambiguous-as-wide leaves them alone")
-  eq(wide.strip_new_tab, "✚")
-  eq(wide.settings, "⚙")
-  eq(resolved.new_tab, "+", "the ghost card keeps the light plus; only the strip goes heavy")
+  eq(resolved.toggle_left, "❮")
+  eq(resolved.toggle_right, "❯")
+  local swapped = glyphs.resolve(
+    config.setup({ icon_map = { toggle_left = "Z", settings = "S" }, backend = { path = "/bin/wez-vtabs" } }).glyphs,
+    {}
+  )
+  eq(swapped.toggle_left, "Z", "and icon_map reaches every one of them")
+  eq(swapped.settings, "S")
+  eq(resolved.new_tab, "+", "the ghost card keeps its own plus, separate from the strip's")
   config.setup { backend = { path = "/bin/wez-vtabs" } }
+end)
+
+test("addendum 2 §1.6c: the action stride follows the lights' 20 pt pitch, not a cell count", function()
+  local layout_mod = require "vtabs.layout"
+  local platform_mod = require "vtabs.platform"
+  local g = layout_mod.grid(config.setup { backend = { path = "/bin/wez-vtabs" } }, 28)
+  for _, case in ipairs { { 6, 3 }, { 7, 3 }, { 8, 3 }, { 10, 2 }, { 12, 2 } } do
+    local cell_w, want = case[1], case[2]
+    local cluster = layout_mod.strip_actions(
+      config.setup { backend = { path = "/bin/wez-vtabs" } },
+      { cols = 0, toggle_row = 1, cell_w = cell_w },
+      g,
+      false,
+      28
+    )
+    assert(#cluster >= 2, cell_w .. " pt: the cluster fits")
+    eq(cluster[2].x - cluster[1].x, want, cell_w .. " pt cells: " .. want .. " columns per 20 pt")
+    eq(cluster[1].x2 - cluster[1].x1 + 1, want, "and the span is exactly one stride wide")
+    eq(cluster[2].x1, cluster[1].x2 + 1, "so neighbours stay contiguous with no dead cell between")
+    eq(want, math.max(2, math.floor(platform_mod.BUTTON_PITCH_PT / cell_w + 0.5)), "and it is the rule")
+  end
+  local no_cells = layout_mod.strip_actions(
+    config.setup { backend = { path = "/bin/wez-vtabs" } },
+    { cols = 0, toggle_row = 1 },
+    g,
+    false,
+    28
+  )
+  eq(no_cells[2].x - no_cells[1].x, 3, "with no cell size to go on, three columns")
 end)
 
 test("the shipped defaults are the §7 table", function()
@@ -6046,6 +6072,86 @@ test("P3 A5: settings.json holds only what differs, versioned, and never a symli
 
   os.remove(path)
   os.execute("rmdir " .. dir)
+  config.setup(legacy { backend = { path = "/bin/wez-vtabs" } })
+end)
+
+test("P3 S9: config.replace runs the same cross-key rules setup does", function()
+  local cfg = config.setup { backend = { path = "/bin/wez-vtabs" } }
+  eq(cfg.close_button, "hover", "the shipped pair")
+  local edited = util.merge(cfg, { hover = "press" })
+  eq(config.replace(edited).close_button, "always", "press mode never hovers a background row")
+  eq(config.get().close_button, "always", "and the live config carries the rule, not just setup's copy")
+
+  local wide = util.merge(config.setup { backend = { path = "/bin/wez-vtabs" } }, { popover = { width = "wide" } })
+  eq(config.replace(wide).popover.width, "auto", "and the popover width is coerced the same way")
+  config.setup { backend = { path = "/bin/wez-vtabs" } }
+end)
+
+test("P3 S10: the persistence guards refuse, each for its own reason", function()
+  local settings = require "vtabs.settings"
+  local dir = "/tmp/vtabs-guards-" .. tostring(os.time()) .. tostring(math.random(1e6))
+  os.execute("mkdir -p " .. dir)
+  local path = dir .. "/settings.json"
+  local function with(over)
+    local opts = { backend = { path = "/bin/wez-vtabs" }, settings = over }
+    return config.setup(opts)
+  end
+
+  local cfg = with { path = path }
+  assert(settings.save(cfg), "a plain file is written")
+  assert(settings.load(cfg), "and read back")
+
+  -- the symlink refusal
+  wezterm.symlinks[path] = true
+  local before = #wezterm.log
+  eq(settings.load(cfg), nil, "S10: a symlinked settings file is refused")
+  assert(#wezterm.log > before, "with one warning")
+  wezterm.symlinks[path] = nil
+  assert(settings.load(cfg), "and read again once it is not one")
+
+  -- the absolute-path refusal
+  local relative = with { path = "settings.json" }
+  eq(settings.path(relative), settings.dir .. "/settings.json", "S10: a relative path falls back to the default")
+  local traversing = with { path = "/tmp/../etc/settings.json" }
+  eq(settings.path(traversing), settings.dir .. "/settings.json", "and so does a traversing one")
+  eq(settings.path(with { path = path }), path, "an absolute one is taken as given")
+
+  -- persist
+  eq(settings.persists(with { path = path, persist = false }), false, "S10: persist = false never writes")
+  eq(settings.save(with { path = path, persist = false }), false)
+  eq(settings.persists(config.setup { settings = false, backend = { path = "/bin/wez-vtabs" } }), false)
+  eq(settings.persists(with { path = path }), true)
+
+  os.remove(path)
+  os.execute("rmdir " .. dir)
+  config.setup(legacy { backend = { path = "/bin/wez-vtabs" } })
+end)
+
+test("P3 S11: escape and a bare q close the page, a chord does not", function()
+  local settings = require "vtabs.settings"
+  local function closes(ev)
+    local win, gui = setup_window(2)
+    attach_all(win, gui)
+    for _, tab in ipairs(win.tab_list) do
+      mark_ready(tab)
+    end
+    settings.open(gui)
+    local before = #win.tab_list
+    local answered = settings.key(gui, ev)
+    return answered, #win.tab_list < before
+  end
+  local answered, closed = closes { key = "escape" }
+  assert(answered and closed, "escape closes it")
+  answered, closed = closes { key = "q" }
+  assert(answered and closed, "so does a bare q")
+  answered, closed = closes { key = "q", mods = {} }
+  assert(answered and closed, "S11: an empty mods array is bare, and the wire sends an array")
+  answered = closes { key = "q", mods = { "CTRL" } }
+  eq(answered, false, "S11: but CTRL+q is the shell's, not ours")
+  answered = closes { key = "q", mods = "CTRL" }
+  eq(answered, false, "and a string still works, for anything that sends one")
+  answered = closes { key = "j" }
+  eq(answered, false, "and every other key is the page's own")
   config.setup(legacy { backend = { path = "/bin/wez-vtabs" } })
 end)
 
