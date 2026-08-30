@@ -28,7 +28,7 @@ function M.on_inner_edge(x, cols, position)
 end
 
 ---Slot the dragged tab would take when dropped at row `y`; a gap row drops below its card.
-function M.drop_slot(hits, y, rows, strip_rows)
+function M.drop_slot(hits, y, rows)
   local hit = M.at(hits, y)
   if hit.kind == "tab" and hit.slot then
     return hit.part == "gap" and hit.slot + 1 or hit.slot
@@ -42,9 +42,6 @@ function M.drop_slot(hits, y, rows, strip_rows)
         return h.slot
       end
     end
-  end
-  if y <= (strip_rows or 0) then
-    return 1
   end
   return last_slot + 1
 end

@@ -150,10 +150,12 @@ local function emit(cells, page_bg, fade)
   local out, run, text = {}, nil, {}
   local function flush()
     if run and #text > 0 then
+      local body = table.concat(text)
+      local blank = body:match "^ *$" ~= nil
       out[#out + 1] = ansi.bg(run.bg)
-        .. ansi.fg(faded(run.fg, page_bg, fade))
+        .. (blank and "" or ansi.fg(faded(run.fg, page_bg, fade)))
         .. (run.bold and ansi.bold(true) or "")
-        .. table.concat(text)
+        .. body
         .. (run.bold and ansi.bold(false) or "")
     end
     text = {}
@@ -253,9 +255,12 @@ local function fit_meta(text, budget, glyphs)
   if at then
     head, tail = text:sub(1, at + #sep - 1), text:sub(at + #sep)
   end
-  local lead = tail:sub(1, 1)
   local room = budget - util.width(head)
-  if (lead ~= "~" and lead ~= "/") or room < 3 then
+  local path_like = tail:sub(1, 1) == "~"
+    or tail:sub(1, 1) == "/"
+    or tail:match "^%a:[\\/]" ~= nil
+    or tail:sub(1, 2) == "\\\\"
+  if not path_like or room < 3 then
     return util.truncate(text, budget, glyphs.ellipsis)
   end
   return head .. util.shorten_path(tail, room, glyphs.ellipsis)
@@ -307,7 +312,7 @@ local function card_row(item, ctx, st, part, rows_in_card)
     if cfg.show_index then
       meta = string.format("%d %s %s", item.index, glyphs.meta_sep, meta)
     end
-    -- The drag chip is one object in drag colours; meta_fg is only gated against page and card.
+    -- meta_fg is gated against page and card only, never against drag_bg
     local meta_fg = st.dragging and theme.drag_fg or theme.meta_fg or theme.dim
     put(cells, g.meta_x1, fit_meta(meta, g.meta_budget, glyphs), { fg = meta_fg }, g.meta_x2)
     if shows_close(item, cfg, st) and not item.is_pinned then
@@ -432,12 +437,13 @@ function M.render(view)
   local g = grid(cfg, cols)
   local ctx = { theme = theme, cfg = cfg, cols = cols, glyphs = glyphs, grid = g }
   local strip_rows = view.strip and math.max(view.strip.rows or 0, 0) or math.max(cfg.padding.top or 0, 0)
+  strip_rows = math.min(strip_rows, view.rows)
   local footer = {}
   for _, entry in ipairs(view.footer or {}) do
     footer[#footer + 1] = footer_entry(entry)
   end
   local ghost_h = new_tab_rows(cfg, view.rows, strip_rows, #footer)
-  local list_rows = math.max(view.rows - strip_rows - ghost_h - #footer, 1)
+  local list_rows = math.max(view.rows - strip_rows - ghost_h - #footer, 0)
 
   local ordered = apply_drag(view.items, view.drag)
   local pinned, rest = util.partition(ordered, function(i)
@@ -518,8 +524,13 @@ function M.render(view)
 
   local out = { ansi.HIDE_CURSOR }
   local hits = {}
+  local rows_text, rows_n = {}, 0
+  ---Each row is self-contained -- SGR, cells, reset -- so it can be re-sent on its own.
   local function line(row, cells, fade)
-    out[#out + 1] = ansi.cup(row, 1) .. emit(cells, theme.bg, fade)
+    local body = emit(cells, theme.bg, fade)
+    rows_text[row] = body
+    rows_n = math.max(rows_n, row)
+    out[#out + 1] = ansi.cup(row, 1) .. body
   end
 
   for row = 1, strip_rows do
@@ -551,7 +562,7 @@ function M.render(view)
     elseif entry.kind == "separator" then
       cells = new_line(cols, theme.bg, theme.fg)
       for x = g.card_x1, g.card_x2 do
-        put(cells, x, glyphs.frame_h, { fg = theme.separator }, x)
+        put(cells, x, glyphs.rule, { fg = theme.separator }, x)
       end
       hit = { kind = "separator" }
     else
@@ -609,8 +620,10 @@ function M.render(view)
     if ghost_h == 3 then
       local rows = ghost_rows(ctx, hovered)
       for i = 1, 3 do
-        line(base + i, rows[i])
-        hits[base + i] = { kind = "new_tab", x1 = g.card_x1, x2 = g.card_x2 }
+        if base + i <= view.rows then
+          line(base + i, rows[i])
+          hits[base + i] = { kind = "new_tab", x1 = g.card_x1, x2 = g.card_x2 }
+        end
       end
     else
       local cells = chrome_row(
@@ -622,8 +635,10 @@ function M.render(view)
         theme.accent,
         hovered and theme.hover_bg or theme.bg
       )
-      line(base + 1, cells)
-      hits[base + 1] = { kind = "new_tab", x1 = g.card_x1, x2 = g.card_x2 }
+      if base + 1 <= view.rows then
+        line(base + 1, cells)
+        hits[base + 1] = { kind = "new_tab", x1 = g.card_x1, x2 = g.card_x2 }
+      end
     end
   end
 
@@ -642,7 +657,14 @@ function M.render(view)
   end
   out[#out + 1] = ansi.RESET
 
-  return { data = table.concat(out), hits = hits, total_rows = total, scroll = scroll }
+  return {
+    data = table.concat(out),
+    rows = rows_text,
+    rows_n = rows_n,
+    hits = hits,
+    total_rows = total,
+    scroll = scroll,
+  }
 end
 
 return M

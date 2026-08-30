@@ -237,6 +237,8 @@ end
 function M.auth(pane)
   local token = state.token_for(pane:pane_id())
   if token then
+    -- whatever the pane painted before is not ours; the next sync must repaint it whole
+    session.frames[pane:pane_id()] = nil
     session.authed_at[pane:pane_id()] = util.now_ms()
     M.send(pane, { t = "auth", token = token })
   end
