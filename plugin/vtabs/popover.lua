@@ -292,11 +292,25 @@ function M.open(gui_window, tab_id, anchor_row, anchor_col)
   return session.popover[wid]
 end
 
+---A popover opened from a key binding has to hold the pane too, or Esc and Enter reach the shell.
+function M.grab_focus(gui_window)
+  local pop = session.popover[gui_window:window_id()]
+  local sb = M.sidebar_of(gui_window)
+  if not pop or not sb then
+    return false
+  end
+  pop.took_pane = true
+  sb:activate()
+  return true
+end
+
 function M.close(gui_window)
   local wid = gui_window:window_id()
   local pop = session.popover[wid]
   session.popover[wid] = nil
-  if pop and not pop.restore_focus then
+  if pop and pop.took_pane then
+    actions.blur_sidebar(gui_window)
+  elseif pop and not pop.restore_focus then
     state.set_focus(wid, false)
   end
   return pop ~= nil
