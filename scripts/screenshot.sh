@@ -35,7 +35,8 @@ confirm|Catppuccin Mocha|confirm|confirm_close|in_sidebar:Cancel
 new-tab-hover|Catppuccin Mocha|default|hover_new_tab|always
 padded|Catppuccin Mocha|padded|scene|always
 strip-macos|Catppuccin Mocha|macos|scene|always
-rail-macos|Catppuccin Mocha|macos-rail|probe:toggle|rail_width"
+rail-macos|Catppuccin Mocha|macos-rail|probe:toggle|rail_widened
+rail-macos-plain|Catppuccin Mocha|macos-rail-plain|probe:toggle|rail_width"
 
 cli() { wezterm cli --no-auto-start "$@"; }
 list() { cli list --format json; }
@@ -200,6 +201,14 @@ check() {
       w=$(pick "p=$(active_sidebar);print([q['size']['cols'] for q in json.load(sys.stdin) if q['pane_id']==p][0])")
       [ "$w" -le 9 ] || fail_state "sidebar is $w cols, not a rail"
       [ "$w" -eq 5 ] || echo "  warn: rail is $w cols, not rail_width=5 (geometry.lua MIN_WIDTH clamps it)"
+      ;;
+    # `rail_titlebar = "widen"` grows the rail to the traffic-light reserve, so it is wider than
+    # `rail_width` by design and only has to stay a rail.
+    rail_widened)
+      have_sidebar || fail_state "rail detached the pane instead of narrowing it"
+      w=$(pick "p=$(active_sidebar);print([q['size']['cols'] for q in json.load(sys.stdin) if q['pane_id']==p][0])")
+      [ "$w" -lt "$sidebar_cols" ] || fail_state "sidebar is $w cols, not a rail"
+      [ "$w" -ge 5 ] || fail_state "sidebar is $w cols, under rail_width=5"
       ;;
     tooltip_only)
       sidebar_text >"$home/after.txt"

@@ -619,7 +619,14 @@ if [ "$after_panes" -gt "$before_panes" ]; then
   renders "$(sidebar_of "$first")" "a split sidebar pane"
   no_warnings "$split_mark" "splitting the sidebar pane"
   not_frozen "$(sidebar_of "$first")" "$first" "a split sidebar pane"
+  # The split pane is not content the user asked for; leaving it behind would fail every later
+  # pane-count assertion for a reason that has nothing to do with duplicate sidebars.
+  for p in $(list | python3 -c 'import json,sys; t='"$first"'; print(" ".join(str(q["pane_id"]) for q in json.load(sys.stdin) if q["tab_id"]==t and not '"$is_marked"' and q["left_col"]==0))'); do
+    cli kill-pane --pane-id "$p" >/dev/null 2>&1 || true
+  done
+  sleep 2
   max_panes=2
+  no_dupes_settled "closing the pane split off the sidebar" 8
   echo "ok: splitting the sidebar leaves it at $before_width cols, rendering and repainting"
 else
   echo "ok: the sidebar pane refuses to split"
@@ -655,12 +662,17 @@ close_confirmation() {
   survivor_cols=$(cols_of "$survivor_content")
   echo "  $(probe_line "$survivor_content" probe_confirm confirm)"
 
-  # The close span is 25-27 at width 28; press and release both land on col 26.
-  press "$victim_sb" 26 "$victim_row" 0
+  # The close span moves with the card grid, so it is read from the live hit map, never guessed.
+  victim_hits=$(probe_line "$survivor_content" probe_hits hits)
+  close_col=$(printf '%s\n' "$victim_hits" | tr ' ' '\n' | grep ',close@' | head -1 |
+    sed -n 's/.*,close@[0-9]*-\([0-9]*\).*/\1/p')
+  [ -n "$close_col" ] || { echo "$victim_hits"; fail "the victim card has no close span"; }
+  echo "  close span ends at column $close_col"
+  press "$victim_sb" "$close_col" "$victim_row" 0
   sleep 1
   [ "$(tab_count)" -eq "$before_tabs" ] || { geometry; fail "the press on x closed the tab before the release"; }
   [ "$(pane_set)" = "$before_set" ] || { geometry; fail "the press on x created a pane"; }
-  release "$victim_sb" 26 "$victim_row" 0
+  release "$victim_sb" "$close_col" "$victim_row" 0
   sleep 1.5
   [ "$(tab_count)" -eq "$before_tabs" ] || { geometry; fail "x closed a confirmable tab without asking"; }
   [ "$(pane_set)" = "$before_set" ] || { geometry; fail "the confirmation created a WezTerm overlay pane"; }
@@ -682,9 +694,9 @@ close_confirmation() {
   echo "ok: Cancel leaves the tab and every pane untouched"
 
   # Then the affirmative: the row above Cancel.
-  press "$victim_sb" 26 "$victim_row" 0
+  press "$victim_sb" "$close_col" "$victim_row" 0
   sleep 0.5
-  release "$victim_sb" 26 "$victim_row" 0
+  release "$victim_sb" "$close_col" "$victim_row" 0
   sleep 1.5
   cancel_row=$(row_of "$victim_sb" "Cancel")
   click "$victim_sb" 6 $((cancel_row - 1)) 0
