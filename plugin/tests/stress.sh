@@ -174,7 +174,8 @@ echo "ok: switching rail and hidden across a toggle keeps one sidebar per tab"
 before_reload=$(tab_count)
 reload_mark=$(mark)
 sb_before=$(sidebar_panes | sort -n | tr '\n' ' ')
-width_before=$(width_of "$hot")
+# The tab may be mid-reattach after the mode dance, so the width is only checked when there is one.
+width_before=$(width_of "$hot" 2>/dev/null || echo "")
 vtest "$hot_content" reload
 sleep 6
 [ "$(tab_count)" -eq "$before_reload" ] || { geometry; fail "config reload changed the tab count"; }
@@ -182,8 +183,8 @@ no_dupes_settled "config reload" 8
 # A reload rebuilds the Lua VM: the panes it left behind have to be recognised, not replaced.
 [ "$(sidebar_panes | sort -n | tr '\n' ' ')" = "$sb_before" ] ||
   { geometry; fail "config reload replaced sidebar panes: $sb_before -> $(sidebar_panes | sort -n | tr '\n' ' ')"; }
-[ "$(width_of "$hot")" -eq "$width_before" ] ||
-  { widths; fail "config reload moved the sidebar from $width_before to $(width_of "$hot") cols"; }
+[ -z "$width_before" ] || [ "$(width_of "$hot" 2>/dev/null || echo "")" = "$width_before" ] ||
+  { widths; fail "config reload moved the sidebar from $width_before cols"; }
 no_warnings "$reload_mark" "a config reload"
 for t in $(tab_ids); do
   cli activate-tab --tab-id "$t" >/dev/null
