@@ -605,37 +605,111 @@ divider_drag() {
 }
 soft divider_drag
 
-# C. A user's split keybinding while the sidebar holds focus. Nothing should end up inside the
-#    sidebar's column, and whatever does must not be mistaken for content.
-split_mark=$(mark)
-cli activate-tab --tab-id "$first" >/dev/null
-sleep 1
-before_panes=$(list | python3 -c 'import json,sys; t='"$first"'; print(sum(1 for p in json.load(sys.stdin) if p["tab_id"]==t))')
-before_width=$(settled_width "$first")
-vtest "$first_content" split_sidebar
-sleep 2.5
-echo "  after splitting the sidebar: $(probe_line "$first_content" probe_tree tree)"
-geometry
-after_panes=$(list | python3 -c 'import json,sys; t='"$first"'; print(sum(1 for p in json.load(sys.stdin) if p["tab_id"]==t))')
-if [ "$after_panes" -gt "$before_panes" ]; then
-  max_panes=$after_panes
-  # The sidebar must keep its width and its role, and the strip must keep repainting.
-  want_width "$first" "$before_width" "after splitting the sidebar pane"
-  renders "$(sidebar_of "$first")" "a split sidebar pane"
-  no_warnings "$split_mark" "splitting the sidebar pane"
-  not_frozen "$(sidebar_of "$first")" "$first" "a split sidebar pane"
-  # The split pane is not content the user asked for; leaving it behind would fail every later
-  # pane-count assertion for a reason that has nothing to do with duplicate sidebars.
-  for p in $(list | python3 -c 'import json,sys; t='"$first"'; print(" ".join(str(q["pane_id"]) for q in json.load(sys.stdin) if q["tab_id"]==t and not '"$is_marked"' and q["left_col"]==0))'); do
+# C. A user's own split keybinding while the sidebar holds focus. WezTerm splits whichever pane is
+#    active, so the shell lands in the sidebar's column; `sidebar.rescue_splits` has to move it to
+#    the content side, leave the sidebar's width and identity alone, and rank the moved pane as
+#    nothing. Panes are addressed by the columns they occupy, which is the only way to say
+#    "inside the sidebar's strip".
+in_sidebar_columns() { # tab_id
+  list | python3 -c '
+import json,sys
+t='"$1"'
+panes=[p for p in json.load(sys.stdin) if p["tab_id"]==t]
+sb=[p for p in panes if p["title"].startswith("wez-vtabs")]
+if not sb: print(""); raise SystemExit
+l=sb[0]["left_col"]; r=l+sb[0]["size"]["cols"]
+print(" ".join(str(p["pane_id"]) for p in panes
+                if p["pane_id"]!=sb[0]["pane_id"] and p["left_col"]>=l and p["left_col"]+p["size"]["cols"]<=r))'
+}
+lowest_content() { # tab_id -> the content pane furthest down the tab
+  list | python3 -c '
+import json,sys
+t='"$1"'
+panes=[p for p in json.load(sys.stdin) if p["tab_id"]==t]
+sb=[p for p in panes if p["title"].startswith("wez-vtabs")]
+rest=sorted((p for p in panes if not sb or p["pane_id"]!=sb[0]["pane_id"]), key=lambda p: p["top_row"])
+print(rest[-1]["pane_id"] if len(rest)>1 else "")'
+}
+panes_in() { list | python3 -c 'import json,sys; t='"$1"'; print(sum(1 for p in json.load(sys.stdin) if p["tab_id"]==t))'; }
+
+split_net() {
+  split_mark=$(mark)
+  cli activate-tab --tab-id "$first" >/dev/null
+  sleep 1
+  before_sb=$(sidebar_of "$first")
+  before_width=$(settled_width "$first")
+  before_panes=$(panes_in "$first")
+  echo "  before the split: $(probe_line "$first_content" probe_ranks ranks)"
+  vtest "$first_content" split_sidebar
+  sleep 4
+  max_panes=$((before_panes + 1))
+  echo "  after the split: $(probe_line "$first_content" probe_tree tree)"
+  [ "$(panes_in "$first")" -eq "$max_panes" ] ||
+    { geometry; fail "the split did not add exactly one pane ($before_panes -> $(panes_in "$first"))"; }
+  # The rescue runs on a poll, so give it a few before deciding it did not happen.
+  for _ in $(seq 1 24); do
+    [ -z "$(in_sidebar_columns "$first")" ] && break
+    sleep 0.5
+  done
+  stuck=$(in_sidebar_columns "$first")
+  [ -z "$stuck" ] || { geometry; fail "pane(s) $stuck are still inside the sidebar's columns"; }
+  echo "  rescued: $(probe_line "$first_content" probe_tree tree)"
+  moved=$(lowest_content "$first")
+  [ -n "$moved" ] || { geometry; fail "the split pane did not end up beside the content pane"; }
+  [ "$(sidebar_of "$first")" = "$before_sb" ] ||
+    { geometry; fail "the rescue changed the sidebar pane from $before_sb to $(sidebar_of "$first")"; }
+  ranks=$(probe_line "$first_content" probe_ranks ranks)
+  echo "  ranks after the rescue: $ranks"
+  case "$ranks" in
+    *"$before_sb:backend=true,ready=true"*) ;;
+    *) fail "the sidebar $before_sb is no longer a ready backend: $ranks" ;;
+  esac
+  case "$ranks" in
+    *"$moved:backend=true"*) fail "the moved pane $moved is ranked as a backend: $ranks" ;;
+  esac
+  want_width "$first" "$before_width" "after the split was rescued"
+  renders "$before_sb" "a rescued split"
+  not_frozen "$before_sb" "$first" "a rescued split"
+  no_warnings "$split_mark" "rescuing a split off the sidebar"
+  no_dupes "the split rescue"
+  echo "ok: a split off the sidebar is moved to the content side, sidebar intact at $before_width cols"
+
+  # `vtabs.action.split` targets the content pane even with the sidebar focused, so nothing has to
+  # be rescued at all.
+  act_mark=$(mark)
+  act_before=$(panes_in "$first")
+  max_panes=$((act_before + 1))
+  echo "  $(probe_line "$first_content" action_split_bottom "action split from")"
+  sleep 3
+  [ "$(panes_in "$first")" -eq "$max_panes" ] ||
+    { geometry; fail "vtabs.action.split did not add a pane ($act_before -> $(panes_in "$first"))"; }
+  [ -z "$(in_sidebar_columns "$first")" ] ||
+    { geometry; fail "vtabs.action.split put a pane in the sidebar's columns: $(in_sidebar_columns "$first")"; }
+  [ "$(sidebar_of "$first")" = "$before_sb" ] || { geometry; fail "vtabs.action.split moved the sidebar"; }
+  want_width "$first" "$before_width" "after vtabs.action.split"
+  no_warnings "$act_mark" "vtabs.action.split from the sidebar"
+  no_dupes "vtabs.action.split"
+  echo "ok: vtabs.action.split targets the content pane with the sidebar focused"
+
+  # The direction vocabulary: "Down" is not one of Right/Left/Top/Bottom.
+  down_mark=$(mark)
+  echo "  $(probe_line "$first_content" action_split_down "split down panes")"
+  sleep 1
+  down_warn=$(vtabs_warnings "$down_mark")
+  case "$down_warn" in
+    *"split direction"*) echo "ok: an unknown split direction warns instead of splitting" ;;
+    *) fail "an unknown split direction neither split nor warned: $down_warn" ;;
+  esac
+
+  # Leave the tab as it was; every later pane-count assertion expects a sidebar and one content pane.
+  for p in $(list | python3 -c 'import json,sys; t='"$first"'; print(" ".join(str(q["pane_id"]) for q in sorted((r for r in json.load(sys.stdin) if r["tab_id"]==t and not '"$is_marked"'), key=lambda r: r["top_row"])[1:]))'); do
     cli kill-pane --pane-id "$p" >/dev/null 2>&1 || true
   done
-  sleep 2
+  sleep 3
   max_panes=2
-  no_dupes_settled "closing the pane split off the sidebar" 8
-  echo "ok: splitting the sidebar leaves it at $before_width cols, rendering and repainting"
-else
-  echo "ok: the sidebar pane refuses to split"
-fi
+  no_dupes_settled "closing the rescued splits" 8
+}
+soft split_net
 
 # Both groups below pin bugs that are still open; `VTABS_STRESS_SOFT=1` prints XFAIL for them
 # and lets the run continue.

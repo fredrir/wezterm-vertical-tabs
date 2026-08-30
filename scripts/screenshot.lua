@@ -72,6 +72,9 @@ local probes = {
   focus = function(window, pane)
     window:perform_action(vtabs.action.focus_sidebar, pane)
   end,
+  settings = function(window, pane)
+    window:perform_action(vtabs.action.open_settings, pane)
+  end,
   -- `popover_in` is 90 ms, shorter than one `import`; stretching it keeps the blend and the
   -- zero stagger while giving the capture a window it can hit.
   slow_popover = function()
