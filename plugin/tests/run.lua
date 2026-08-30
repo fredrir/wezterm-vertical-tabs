@@ -1977,14 +1977,22 @@ test("addendum 2 A3c: show_index rides the title when there is no meta line", fu
   assert(usub(metaed[meta_row], 7, 9):find "3", "and the index goes back to the meta line")
 end)
 
-test("addendum 2 A4c: the close glyph is the Material one and still measures one cell", function()
+test("addendum 2 A4c: the close glyph is the heavy multiplication x and measures one cell", function()
+  local icons_mod = require "vtabs.icons"
+  eq(icons_mod.defaults.close, "✖", "not a Nerd Font glyph: those are drawn cell-sized and read thin")
   local resolved = glyphs.resolve(config.setup({ backend = { path = "/bin/wez-vtabs" } }).glyphs, {})
   eq(util.width(resolved.close), 1, "one column, so the ASCII guard never fires")
-  eq(resolved.close, "✖", "the fallback these tests see, the Nerd Font table being empty")
+  eq(resolved.close, "✖")
   local wide = glyphs.resolve(config.setup({ backend = { path = "/bin/wez-vtabs" } }).glyphs, {
     treat_east_asian_ambiguous_width_as_wide = true,
   })
   eq(wide.close, "✖", "U+2716 is Neutral, so ambiguous-as-wide leaves it alone")
+  local swapped = glyphs.resolve(
+    config.setup({ icon_map = { close = "\u{f0156}" }, backend = { path = "/bin/wez-vtabs" } }).glyphs,
+    {}
+  )
+  eq(swapped.close, "\u{f0156}", "and icon_map still reaches the Nerd Font close for anyone who wants it")
+  config.setup { backend = { path = "/bin/wez-vtabs" } }
 end)
 
 test("addendum 4: fit_meta splits on the configured separator", function()

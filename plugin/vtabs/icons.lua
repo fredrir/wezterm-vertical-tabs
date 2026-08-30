@@ -45,8 +45,9 @@ M.defaults = {
   mux = glyph("md_lan_connect", "@"),
   pinned = glyph("md_pin", "*"),
   private = glyph("md_incognito", "~"),
-  -- the Material close is drawn at icon size; the codicon read too thin next to the title
-  close = glyph("md_close", "✖"),
+  -- U+2716, not a Nerd Font close: both PUA glyphs are drawn cell-sized and read as thin as the
+  -- title next to them. `icon_map = { close = wezterm.nerdfonts.md_close }` gets the codicon back.
+  close = "✖",
   new_tab = glyph("cod_add", "+"),
   settings = glyph("md_cog", "⚙"),
   search = glyph("cod_search", "/"),
