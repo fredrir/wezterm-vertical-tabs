@@ -404,6 +404,17 @@ local function sidebars_in(tab)
   return n
 end
 
+---Sidebars attach on activation, so a test that wants them all has to visit every tab.
+local function attach_all(win, gui)
+  local was = win.active_tab_ref
+  for _, tab in ipairs(win.tab_list) do
+    win.active_tab_ref = tab
+    sidebar.ensure(gui)
+  end
+  win.active_tab_ref = was
+  sidebar.ensure(gui)
+end
+
 local function mark_ready(tab)
   local sb = sidebar.find(tab)
   sb.vars.vtabs_token = state.token_for(sb:pane_id())
@@ -412,7 +423,7 @@ end
 
 test("ensure attaches one authenticated sidebar per tab and sends auth", function()
   local win, gui = setup_window(2)
-  sidebar.ensure(gui)
+  attach_all(win, gui)
   for _, tab in ipairs(win.tab_list) do
     eq(sidebars_in(tab), 1, "tab " .. tab.id)
     local sb = sidebar.find(tab)
@@ -459,7 +470,7 @@ end)
 
 test("orphaned sidebar closes its tab without touching the active tab", function()
   local win, gui = setup_window(2)
-  sidebar.ensure(gui)
+  attach_all(win, gui)
   local victim = win.tab_list[2]
   mark_ready(victim)
   table.remove(victim.pane_list, 2)
@@ -471,7 +482,7 @@ end)
 test("collapsed = hidden detaches, expand re-attaches", function()
   local win, gui = setup_window(2)
   config.setup { backend = { path = "/bin/wez-vtabs" }, collapsed = "hidden" }
-  sidebar.ensure(gui)
+  attach_all(win, gui)
   for _, tab in ipairs(win.tab_list) do
     mark_ready(tab)
   end
@@ -481,8 +492,15 @@ test("collapsed = hidden detaches, expand re-attaches", function()
     eq(#tab:panes(), 1)
   end
   sidebar.set_collapsed(gui, false)
+  eq(sidebars_in(win.active_tab_ref), 1, "expand splits the active tab at once")
   for _, tab in ipairs(win.tab_list) do
-    eq(sidebars_in(tab), 1)
+    if tab ~= win.active_tab_ref then
+      eq(sidebars_in(tab), 0, "a background tab waits for its first activation")
+    end
+  end
+  attach_all(win, gui)
+  for _, tab in ipairs(win.tab_list) do
+    eq(sidebars_in(tab), 1, "and gets one when visited")
   end
   config.setup { backend = { path = "/bin/wez-vtabs" } }
 end)
@@ -617,7 +635,7 @@ test("a sidebar that never becomes ready is left in place and its domain not ret
     tab.pane_list[1].domain = "desktop"
   end
   config.setup { backend = { path = { ["local"] = "/bin/wez-vtabs", desktop = "/usr/bin/wez-vtabs" } } }
-  sidebar.ensure(gui)
+  attach_all(win, gui)
   eq(sidebars_in(win.tab_list[1]), 1)
   for _, tab in ipairs(win.tab_list) do
     state.session.seen[sidebar.find(tab):pane_id()] = 0
@@ -1157,7 +1175,7 @@ end)
 
 test("one unrenderable tab does not stop the other sidebars", function()
   local win, gui = setup_window(2)
-  sidebar.ensure(gui)
+  attach_all(win, gui)
   for _, tab in ipairs(win.tab_list) do
     mark_ready(tab)
   end
@@ -1458,7 +1476,7 @@ end)
 
 test("P3 role: a settings pane never closes its tab as an orphan", function()
   local win, gui = setup_window(2)
-  sidebar.ensure(gui)
+  attach_all(win, gui)
   local victim = win.tab_list[2]
   mark_ready(victim)
   local settings = fake.pane(victim, { title = "wez-vtabs-settings:ff" })
@@ -1503,6 +1521,47 @@ test("P3 role: spawn_args carries a non-default role on every path", function()
   eq(remote[5], "--role")
   eq(remote[6], "settings")
   config.setup { backend = { path = "/bin/wez-vtabs" } }
+end)
+
+test("P3 lazy attach: expand splits the active tab only, the rest on activation", function()
+  local win, gui = setup_window(5)
+  win.active_tab_ref = win.tab_list[1]
+  local splits = 0
+  for _, tab in ipairs(win.tab_list) do
+    local pane = tab.pane_list[1]
+    local real = pane.split
+    pane.split = function(self, args)
+      splits = splits + 1
+      return real(self, args)
+    end
+  end
+
+  sidebar.ensure(gui)
+  eq(splits, 1, "one split for the active tab, not five")
+  eq(sidebars_in(win.tab_list[1]), 1)
+  for i = 2, 5 do
+    eq(sidebars_in(win.tab_list[i]), 0, "tab " .. i .. " has no sidebar yet")
+  end
+
+  sidebar.ensure(gui)
+  eq(splits, 1, "idling on the same tab splits nothing more")
+
+  win.active_tab_ref = win.tab_list[3]
+  sidebar.ensure(gui)
+  eq(splits, 2, "activating tab 3 splits exactly once")
+  eq(sidebars_in(win.tab_list[3]), 1)
+  eq(sidebars_in(win.tab_list[2]), 0, "its neighbours still wait")
+  eq(sidebars_in(win.tab_list[4]), 0)
+end)
+
+test("P3 lazy attach: a sidebar-less background tab is not an orphan", function()
+  local win, gui = setup_window(3)
+  win.active_tab_ref = win.tab_list[1]
+  sidebar.ensure(gui)
+  sidebar.ensure(gui)
+  eq(#win.tab_list, 3, "no tab is closed for lacking a sidebar")
+  local listed = model.build(gui)
+  eq(#listed, 3, "and every tab is still listed")
 end)
 
 test("P1 frames are written for design review", function()
@@ -1719,7 +1778,7 @@ end)
 
 test("an orphan tab is closed only once its sidebar echoed a token", function()
   local win, gui = setup_window(2)
-  sidebar.ensure(gui)
+  attach_all(win, gui)
   local victim = win.tab_list[2]
   local sb = sidebar.find(victim)
   table.remove(victim.pane_list, 2)
@@ -1972,7 +2031,7 @@ end)
 
 test("close_orphan never closes a tab that lost focus", function()
   local win, gui = setup_window(2)
-  sidebar.ensure(gui)
+  attach_all(win, gui)
   local victim, other = win.tab_list[2], win.tab_list[1]
   local sb = mark_ready(victim)
   table.remove(victim.pane_list, 2)
@@ -2191,7 +2250,7 @@ end)
 
 test("geometry.sync corrects on a tab change and rate-gates otherwise", function()
   local win, gui = setup_window(2)
-  sidebar.ensure(gui)
+  attach_all(win, gui)
   for _, tab in ipairs(win.tab_list) do
     mark_ready(tab)
   end
@@ -2223,7 +2282,7 @@ local view_mod = require "vtabs.view"
 
 local function drag_setup()
   local win, gui = setup_window(3)
-  sidebar.ensure(gui)
+  attach_all(win, gui)
   for _, tab in ipairs(win.tab_list) do
     mark_ready(tab)
   end

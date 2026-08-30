@@ -3,8 +3,10 @@
 - The sidebar is a real pane in each tab. Pane-directional navigation should
   use `vtabs.action.activate_pane_direction` so the sidebar is skipped.
   `TogglePaneZoom` hides it until unzoomed.
-- Tabs spawned by bindings other than the plugin's get their sidebar on the
-  next poll (`poll_ms`). Use `vtabs.action.new_tab` for an instant one.
+- A tab gets its sidebar when it is first activated, so opening a window with
+  many tabs costs one pane split, not one per tab. Tabs spawned by bindings
+  other than the plugin's are activated by WezTerm, so they still get theirs at
+  once; `vtabs.action.new_tab` splits explicitly.
 - The sidebar process runs in the tab's domain; WezTerm cannot host a local
   pane inside a remote-mux tab. On remote multiplexer domains (ssh/tls mux) the
   plugin runs an inline bootstrap that downloads a release build for the remote

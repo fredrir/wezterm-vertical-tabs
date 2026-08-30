@@ -674,6 +674,10 @@ local function ensure_window(gui_window)
   tick = tick + 1
   classified = {}
   local tabs = mux_win:tabs_with_info()
+  local active_tab = util.try(function()
+    return mux_win:active_tab()
+  end)
+  local active_id = active_tab and active_tab:tab_id() or nil
 
   resolve_pins(tabs, now)
   prune_windows(now)
@@ -709,7 +713,8 @@ local function ensure_window(gui_window)
         else
           await_auth(gui_window, tab, sb, now)
         end
-      else
+      elseif tab_id == active_id then
+        -- background tabs attach when they are first activated: 20 splits at once cost ~460 ms
         M.attach(tab)
       end
     end

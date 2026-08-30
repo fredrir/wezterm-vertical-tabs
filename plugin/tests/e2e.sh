@@ -23,7 +23,7 @@ echo "mode: $mode"
 # Isolated HOME keeps sockets and the mux pid file away from the real wezterm.
 # shellcheck disable=SC2086
 mkdir -p "$home/run"
-HOME="$home" XDG_RUNTIME_DIR="$home/run" VTABS_ROOT="$root" VTABS_BIN="$bin" WEZTERM_LOG=info wezterm --config-file "$root/plugin/tests/wezterm-e2e.lua" \
+HOME="$home" XDG_RUNTIME_DIR="$home/run" VTABS_ROOT="$root" VTABS_BIN="$bin" VTABS_E2E_COLLAPSED=hidden WEZTERM_LOG=info wezterm --config-file "$root/plugin/tests/wezterm-e2e.lua" \
   $launch --class vtabs-e2e >"$log" 2>&1 &
 pid=$!
 cleanup() {
@@ -102,6 +102,12 @@ sleep 1.5
 [ "$(tab_count)" -eq 2 ] || fail "toggle closed a tab"
 toggle "$(content_of "$first_tab")"
 sleep 2.5
+# expand splits the active tab only; the other one attaches when it is next activated
+[ "$(sidebar_panes | wc -l | tr -d ' ')" -eq 1 ] || fail "expand split more than the active tab"
+cli activate-tab --tab-id "$second_tab"
+sleep 1.5
+cli activate-tab --tab-id "$first_tab"
+sleep 1.5
 [ "$(sidebar_panes | wc -l | tr -d ' ')" -eq 2 ] || fail "toggle did not restore sidebars"
 sb1=$(sidebar_of "$first_tab")
 sb2=$(sidebar_of "$second_tab")
