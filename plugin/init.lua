@@ -202,6 +202,7 @@ local MODULES = {
   "keys",
   "layout",
   "model",
+  "page",
   "platform",
   "popover",
   "render",
