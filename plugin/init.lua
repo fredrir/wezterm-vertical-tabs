@@ -136,6 +136,7 @@ local function register_events(cfg)
   wezterm.on(
     "window-resized",
     guarded("window-resized", function(window)
+      geometry.settle(window:window_id())
       geometry.correct(window)
       view.sync(window)
     end)

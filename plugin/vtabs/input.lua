@@ -4,6 +4,7 @@ local state = require "vtabs.state"
 local sidebar = require "vtabs.sidebar"
 local model = require "vtabs.model"
 local view = require "vtabs.view"
+local geometry = require "vtabs.geometry"
 local actions = require "vtabs.actions"
 local menu = require "vtabs.menu"
 local hit = require "vtabs.hit"
@@ -216,7 +217,7 @@ local PASTE_MAX_BYTES = 64 * 1024
 local BUDGET_TTL_MS = 60000
 local budget = {}
 
----Token bucket per source pane: fast typing and auto-repeat pass, a synthetic flood does not.
+---Token bucket per source pane, charged by size, so one big paste borrows against the next second.
 local function affordable(pid, now, cost)
   local b = budget[pid]
   if not b then
@@ -225,7 +226,7 @@ local function affordable(pid, now, cost)
   end
   b.tokens = math.min(FORWARD_BURST, b.tokens + (now - b.at) * FORWARD_PER_SEC / 1000)
   b.at = now
-  if b.tokens < cost then
+  if b.tokens < 1 then
     return false
   end
   b.tokens = b.tokens - cost
@@ -341,7 +342,10 @@ local function forward_paste(gui_window, pane, ev, cfg)
   if type(ev.data) == "string" and #ev.data <= PASTE_MAX_RAW then
     text = util.base64_decode(ev.data)
   end
-  if text and (text == "" or #text > PASTE_MAX_BYTES or not affordable(pane:pane_id(), util.now_ms(), 1)) then
+  if text == "" or (text and #text > PASTE_MAX_BYTES) then
+    text = nil
+  end
+  if text and not affordable(pane:pane_id(), util.now_ms(), 1 + #text // 1024) then
     text = nil
   end
   hand_over(gui_window, content, text and function()
@@ -407,6 +411,8 @@ function M.handle(gui_window, pane, name, value)
     sidebar.ensure(gui_window)
     view.sync(gui_window, { force = true })
   elseif ev.t == "resize" then
+    -- The sidebar reporting its own new size is the one signal that is never a poll behind the mux.
+    geometry.correct(gui_window)
     view.sync(gui_window, { force = true })
   elseif ev.t == "mouse" then
     M.mouse(gui_window, pane, ev)

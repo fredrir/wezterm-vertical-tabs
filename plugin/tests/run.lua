@@ -1059,6 +1059,7 @@ test("an adopted width is clamped to a plausible sidebar", function()
   eq(geometry.desired(gui:window_id()), 60, "clamped to tab width minus the content margin")
   geometry.reset(gui:window_id())
   assert(geometry.correct(gui), "a reset re-asserts cfg.width")
+  geometry.settle(gui:window_id(), 0)
   eq(geometry.correct(gui), false, "baseline recorded")
   tab:set_split(1)
   eq(geometry.correct(gui), false, "drag adopted")
@@ -1074,9 +1075,13 @@ test("an unreachable width is attempted until it stops moving, then left alone",
   eq(tab:width(), 9, "a window too narrow to hold the sidebar")
   assert(geometry.correct(gui), "first attempt moves it as far as the split allows")
   eq(sb.cols, 7, "clamped to width - 2")
-  local attempts = #win.actions
-  eq(geometry.correct(gui), false, "the attempt that changes nothing is the last one")
-  eq(#win.actions, attempts + 1)
+  local issued = 0
+  for _ = 1, 10 do
+    if geometry.correct(gui) then
+      issued = issued + 1
+    end
+  end
+  assert(issued <= 4, "the retry is bounded; a mux gets a few polls to catch up, got " .. issued)
   local settled = #win.actions
   eq(geometry.correct(gui), false)
   eq(geometry.correct(gui), false)
@@ -1523,6 +1528,53 @@ test("a mux window resize is not a divider drag, even though the pane size arriv
   eq(geometry.desired(gui:window_id()), 28, "the drift was adopted as the user's width")
   geometry.correct(gui)
   eq(sb.cols, 28)
+end)
+
+test("the two-step mux resize is corrected, and a real divider drag is still adopted", function()
+  local win, gui = setup_window(1)
+  sidebar.ensure(gui)
+  local tab = win.tab_list[1]
+  local sb = mark_ready(tab)
+  eq(geometry.correct(gui), false, "baseline")
+  win:resize_mux(30)
+  eq(geometry.correct(gui), false, "the window grew but the panes have not heard yet")
+  win:settle_mux()
+  eq(sb.cols, 43, "wezterm dealt the sidebar half the delta")
+  assert(geometry.correct(gui), "the late pane size is a resize, not a drag")
+  eq(sb.cols, 28)
+  eq(geometry.desired(gui:window_id()), 28, "nothing was adopted")
+
+  geometry.reset(gui:window_id())
+  geometry.settle(gui:window_id(), 0)
+  eq(geometry.correct(gui), false, "baseline on the settled window")
+  tab:set_split(34)
+  eq(geometry.correct(gui), false, "same tab width, same pixels: this one is a drag")
+  eq(geometry.desired(gui:window_id()), 34)
+end)
+
+test("a paste is charged by its size, so a second large one waits for the budget", function()
+  local _, gui, tab, sb, content = key_setup()
+  local big = string.rep("eHh4", 21845) .. "eA=="
+  input.handle(gui, sb, "vtabs", string.format('{"t":"paste","data":"%s"}', big))
+  eq(#content.pasted, 1, "the first 64 KiB paste goes through")
+  eq(#content.pasted[1], 64 * 1024)
+  input.handle(gui, sb, "vtabs", string.format('{"t":"paste","data":"%s"}', big))
+  eq(#content.pasted, 1, "the second is over budget")
+  eq(tab.active, content, "focus is still handed over")
+end)
+
+test("the sidebar's own resize event corrects at once, inside the observe gate", function()
+  local win, gui = drag_setup()
+  local tab = win.tab_list[1]
+  local sb = sidebar.find(tab)
+  geometry.sync(gui, tab.id)
+  win:resize_mux(30)
+  win:settle_mux()
+  eq(sb.cols, 43, "wezterm dealt the sidebar half the delta")
+  eq(geometry.sync(gui, tab.id), false, "the poll gate is still closed")
+  eq(sb.cols, 43)
+  input.handle(gui, sb, "vtabs", '{"t":"resize","cols":43,"rows":30}')
+  eq(sb.cols, 28, "the backend reporting its own size is never gated")
 end)
 
 os.remove(state.file)

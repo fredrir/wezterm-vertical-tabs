@@ -10,12 +10,16 @@ local M = {}
 local MIN_WIDTH = 8
 local MIN_CONTENT = 20
 local OBSERVE_MS = 400
+local SETTLE_MS = 1000
+local STUCK_TRIES = 3
 
 local session = state.session
 local adopted = {}
 local observed = {}
 local checked = {}
 local unreachable = {}
+local settling = {}
+local attempted = {}
 
 function M.desired(window_id)
   return adopted[window_id] or config.get().width
@@ -26,6 +30,13 @@ function M.forget_window(window_id)
   observed[window_id] = nil
   checked[window_id] = nil
   unreachable[window_id] = nil
+  settling[window_id] = nil
+  attempted[window_id] = nil
+end
+
+---A mux client sees the new window size a poll before the new pane sizes; no adoption until both land.
+function M.settle(window_id, at)
+  settling[window_id] = at or util.now_ms()
 end
 
 M.reset = M.forget_window
@@ -109,9 +120,20 @@ function M.correct(gui_window)
   end
   local tab_id = tab:tab_id()
   local px = window_px(gui_window)
+  local now = util.now_ms()
   local seen = observed[wid]
-  observed[wid] = { tab_id = tab_id, cols = cols, px = px, dpi = dpi, cell = cell }
-  local steady = seen and seen.tab_id == tab_id and seen.px == px and seen.dpi == dpi and seen.cell == cell
+  observed[wid] = { tab_id = tab_id, cols = cols, px = px, dpi = dpi, cell = cell, tab_cols = tab_cols }
+  if seen and seen.tab_cols ~= tab_cols then
+    settling[wid] = now
+  end
+  -- A divider drag moves the sidebar within a tab whose own width, pixels and cells all stay put.
+  local steady = seen
+    and seen.tab_id == tab_id
+    and seen.px == px
+    and seen.dpi == dpi
+    and seen.cell == cell
+    and seen.tab_cols == tab_cols
+    and now - (settling[wid] or 0) >= SETTLE_MS
   if steady and seen.cols ~= cols then
     adopted[wid] = fits(cols, tab_cols)
     unreachable[wid] = nil
@@ -119,8 +141,15 @@ function M.correct(gui_window)
   end
 
   local target = fits(M.desired(wid), tab_cols)
-  local attempt = { tab_id = tab_id, tab_cols = tab_cols, target = target }
+  local attempt = { tab_id = tab_id, tab_cols = tab_cols, target = target, cols = cols }
+  local last = attempted[wid]
+  -- A mux applies the adjust a poll late, so a width counts as unreachable only after it sits still.
+  attempt.stuck = (last and same_attempt(last, attempt) and last.cols == cols) and last.stuck + 1 or 0
+  if attempt.stuck >= STUCK_TRIES then
+    unreachable[wid] = attempt
+  end
   if target == cols or same_attempt(unreachable[wid], attempt) then
+    attempted[wid] = nil
     return false
   end
   local content = sidebar.classify(tab)
@@ -138,10 +167,9 @@ function M.correct(gui_window)
   if restore then
     restore:activate()
   end
-  local now = pane_metrics(sb) or cols
-  observed[wid].cols = now
-  unreachable[wid] = now == cols and attempt or nil
-  return now ~= cols
+  attempted[wid] = attempt
+  settling[wid] = now
+  return true
 end
 
 ---Per-poll entry point: corrects at once when the active tab changed, otherwise at most every 400 ms.
