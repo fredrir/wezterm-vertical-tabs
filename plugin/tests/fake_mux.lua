@@ -48,7 +48,10 @@ function Pane:get_title()
   return self.title
 end
 function Pane:get_current_working_dir()
-  return { file_path = "/tmp" }
+  if self.cwd == false then
+    return nil
+  end
+  return self.cwd or { file_path = "/tmp" }
 end
 function Pane:has_unseen_output()
   return false
