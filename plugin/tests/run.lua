@@ -173,6 +173,11 @@ local function view(over)
   local opts = over and over.opts or {}
   opts.row_gap = opts.row_gap or 1
   opts.separator = opts.separator or "rule"
+  -- The meta line is opt-in since round 2; these frames are about the 2-row card, so they ask for it.
+  if opts.meta == nil then
+    opts.meta = "auto"
+  end
+  opts.padding = opts.padding or { top = 1, left = 1, right = 1 }
   local cfg = config.setup(opts)
   local v = {
     cols = 28,
@@ -390,7 +395,7 @@ test("model.ordered is pinned-first and stable", function()
 end)
 
 local function setup_window(n)
-  config.setup { backend = { path = "/bin/wez-vtabs" } }
+  config.setup { meta = "auto", backend = { path = "/bin/wez-vtabs" } }
   local win = fake.window()
   for i = 1, n or 2 do
     win:add_tab { title = "t" .. i }
@@ -3196,8 +3201,8 @@ test("the P1 defaults and their aliases pass validation without warning", functi
   local cfg = config.setup {}
   eq(cfg.padding.top, 1)
   eq(cfg.row_gap, 1)
-  eq(cfg.tab_height, "card")
-  eq(cfg.meta, "auto")
+  eq(cfg.tab_height, "row")
+  eq(cfg.meta, false)
   eq(cfg.separator, "gap")
   eq(cfg.pinned_style, "dense")
   eq(cfg.new_tab_button, "ghost")
@@ -3236,7 +3241,13 @@ end)
 test("tab_height and meta stay consistent, and press mode forces an always-on close button", function()
   eq(config.setup({ tab_height = "row" }).meta, false)
   eq(config.setup({ meta = false }).tab_height, "row")
-  eq(config.setup({ tab_height = "card" }).meta, "auto")
+  eq(config.setup({ tab_height = "card" }).meta, "auto", "asking for a second row asks for the line on it")
+  eq(config.setup({ tab_height = "tall" }).meta, "auto")
+  eq(config.setup({ meta = "cwd" }).tab_height, "card", "and asking for the line asks for the row")
+  eq(config.setup({ meta = "auto", tab_height = "row" }).meta, false, "naming both, the row count wins")
+  eq(config.setup({ meta = false, tab_height = "tall" }).tab_height, "row")
+  eq(config.setup({ meta = "cwd", tab_height = "tall" }).tab_height, "tall", "a consistent pair is kept")
+  eq(config.setup({ meta = "cwd", tab_height = "tall" }).meta, "cwd")
   eq(config.setup({ hover = "press" }).close_button, "always")
   eq(config.setup({ hover = "press", close_button = "never" }).close_button, "never")
   eq(config.setup({ hover = "follow" }).close_button, "hover")
@@ -3343,6 +3354,31 @@ test("macOS window decorations are set only for a left sidebar the user has not 
   local before = #wezterm.log
   decorations({}, "RESIZE")
   assert(#wezterm.log > before, "RESIZE alone hides the buttons, so it warns")
+  config.setup(legacy { backend = { path = "/bin/wez-vtabs" } })
+end)
+
+test("the window padding is zeroed on the sides the sidebar touches, and never when you set it", function()
+  local vtabs = dofile(here .. "/../init.lua")
+  local function padding(opts, preset)
+    local cfg = { keys = {}, window_padding = preset }
+    vtabs.apply_to_config(cfg, opts)
+    return cfg.window_padding
+  end
+  local left = padding {}
+  eq(left.left, 0, "the sidebar's own edge, so its background reaches it")
+  eq(left.top, 0)
+  eq(left.bottom, 0)
+  eq(left.right, "1cell", "the far side keeps wezterm's own default")
+  local right = padding { position = "right" }
+  eq(right.right, 0, "mirrored for a right sidebar")
+  eq(right.left, "1cell")
+  eq(right.top, 0)
+  eq(right.bottom, 0)
+  local mine = { left = 8, right = 8, top = 8, bottom = 8 }
+  eq(padding({}, mine), mine, "a user value is never overwritten")
+  eq(padding { window_padding = false }, nil, "and false never touches it")
+  eq(config.setup({ window_padding = "sometimes" }).window_padding, "auto", "an unknown value resets")
+  eq(config.defaults.padding.left, 2, "the air the window padding no longer gives is painted by the sidebar")
   config.setup(legacy { backend = { path = "/bin/wez-vtabs" } })
 end)
 
@@ -3542,10 +3578,11 @@ end)
 -- P1-spec §7, verbatim. Injected values in other tests cannot keep a wrong default green.
 local P1_DEFAULTS = {
   width = 28,
-  padding = { top = 1, left = 1, right = 1 },
+  padding = { top = 1, left = 2, right = 1 },
+  window_padding = "auto",
   row_gap = 1,
-  tab_height = "card",
-  meta = "auto",
+  tab_height = "row",
+  meta = false,
   separator = "gap",
   pinned_style = "dense",
   new_tab_button = "ghost",
@@ -4138,7 +4175,7 @@ end)
 test("tall cards and the frame are configurable, and false is the frame default", function()
   eq(config.setup({ tab_height = "tall" }).tab_height, "tall")
   eq(config.setup({ tab_height = 3 }).tab_height, "tall")
-  eq(config.setup({ tab_height = "gigantic" }).tab_height, "card", "an unknown height resets")
+  eq(config.setup({ tab_height = "gigantic" }).tab_height, "row", "an unknown height resets")
   eq(config.setup({}).frame, false)
   local framed = config.setup { frame = { margin = 1, corners = "chamfer" } }
   eq(framed.frame.margin, 1)

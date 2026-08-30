@@ -260,6 +260,21 @@ local function apply_split(config, cfg)
   end
 end
 
+-- WezTerm's own default; the far side keeps it so only the sidebar's edges change.
+local WEZTERM_SIDE_PADDING = "1cell"
+
+---`window_padding` is window-global, so wezterm's left band frames the sidebar in the terminal
+---colour. Zeroing the sides the sidebar touches is the only way its page reaches the window edge;
+---the air comes back as `padding.left`, painted in the sidebar's own colour.
+local function apply_padding(config, cfg)
+  if cfg.window_padding == false or config.window_padding ~= nil then
+    return
+  end
+  local outer = cfg.position == "left" and "right" or "left"
+  config.window_padding = { left = 0, right = 0, top = 0, bottom = 0 }
+  config.window_padding[outer] = WEZTERM_SIDE_PADDING
+end
+
 ---macOS hides close/minimise/zoom unless the decorations ask for them; `RESIZE` alone also pins
 ---the window in place. Only a left-hand sidebar reserves cells for them, so only it opts in.
 local function apply_decorations(config, cfg)
@@ -292,6 +307,7 @@ function M.apply_to_config(config, opts)
     config.inactive_pane_hsb = { brightness = 1.0, saturation = 1.0, hue = 1.0 }
   end
   apply_split(config, cfg)
+  apply_padding(config, cfg)
   apply_decorations(config, cfg)
   if cfg.skip_close_confirmation then
     config.skip_close_confirmation_for_processes_named = config.skip_close_confirmation_for_processes_named
