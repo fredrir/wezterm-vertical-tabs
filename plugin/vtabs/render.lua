@@ -393,8 +393,11 @@ local function ghost_rows(ctx, hovered)
       put(cells, g.card_x2, glyphs.frame_v, { fg = border_fg }, g.card_x2)
     else
       put(cells, g.card_x1, i == 1 and glyphs.frame_tl or glyphs.frame_bl, { fg = border_fg }, g.card_x1)
-      for x = g.card_x1 + 1, g.card_x2 - 1 do
-        if hovered or (x - g.card_x1) % 2 == 1 then
+      local first, last = g.card_x1 + 1, g.card_x2 - 1
+      for x = first, last do
+        -- the cells either side of a corner never gap: on Latte closure carries the card, not contrast
+        local corner = x <= first + 1 or x >= last - 1
+        if hovered or corner or (x - first) % 2 == 1 then
           put(cells, x, line, { fg = border_fg }, x)
         end
       end

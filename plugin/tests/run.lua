@@ -1211,7 +1211,11 @@ test("P1 screenshots: icon weight, chamfer, toggle surface, dashed ghost", funct
       ghost_top = ghost_top or row
     end
   end
-  eq(usub(rows[ghost_top], 3, 4), "╌ ", "idle ghost border is dashed with a gap cell")
+  eq(usub(rows[ghost_top], 3, 4), "╌╌", "the cells beside a corner never gap")
+  eq(usub(rows[ghost_top], 25, 26), "╌╌", "at both ends")
+  eq(usub(rows[ghost_top], 5, 6), " ╌", "and the run between them alternates")
+  eq(usub(rows[ghost_top + 2], 3, 4), "╌╌", "the bottom rail closes the same way")
+  eq(usub(rows[ghost_top + 2], 25, 26), "╌╌")
   local over = render.render(p1_view { rows = 20, hover = { x = 5, y = 19 } })
   local over_rows = {}
   for row = 1, 20 do
