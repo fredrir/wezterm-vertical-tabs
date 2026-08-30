@@ -177,6 +177,8 @@ local function view(over)
   if opts.meta == nil then
     opts.meta = "auto"
   end
+  -- §1 slides the grid one column right; these frames still state the old landmarks explicitly.
+  opts.padding = opts.padding or { top = 1, left = 1, right = 1 }
   local cfg = config.setup(opts)
   local v = {
     cols = 28,
@@ -3485,7 +3487,10 @@ test("the window padding is zeroed on the sides the sidebar touches, and never w
   local mine = { left = 8, right = 8, top = 8, bottom = 8 }
   eq(padding({}, mine), mine, "a user value is never overwritten")
   eq(padding { edge_to_edge = false }, nil, "and the opt-out never touches it")
-  eq(config.defaults.padding.left, 1, "the sidebar keeps its own gutter, painted in the page colour")
+  eq(config.defaults.padding.left, 2, "the air the window padding no longer gives, in the page colour")
+  eq(config.setup({ position = "right" }).padding.right, 2, "and it mirrors to the side that touches")
+  eq(config.setup({ position = "right" }).padding.left, 1)
+  eq(config.setup({ position = "right", padding = { right = 4 } }).padding.right, 4, "yours wins")
   config.setup(legacy { backend = { path = "/bin/wez-vtabs" } })
 end)
 
@@ -3724,7 +3729,7 @@ end)
 -- P1-spec §7, verbatim. Injected values in other tests cannot keep a wrong default green.
 local P1_DEFAULTS = {
   width = 28,
-  padding = { top = 1, left = 1, right = 1 },
+  padding = { top = 1, left = 2, right = 1 },
   edge_to_edge = true,
   row_gap = 1,
   tab_height = "card",

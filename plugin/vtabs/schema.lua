@@ -79,7 +79,7 @@ M.options = {
     key = "padding",
     type = "table",
     container = true,
-    shown = "`{ top = 1, left = 1, right = 1 }`",
+    shown = "`{ top = 1, left = 2, right = 1 }`",
     label = "Padding",
     group = "layout",
     values = "`{ top, left, right }`",
@@ -98,7 +98,7 @@ M.options = {
   {
     key = "padding.left",
     type = "number",
-    default = 1,
+    default = 2,
     integer = true,
     min = 0,
     docs = false,

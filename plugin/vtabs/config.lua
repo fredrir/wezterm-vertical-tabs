@@ -92,6 +92,14 @@ function M.setup(opts)
 
   -- `tab_height` decides the pad rows and `meta` whether there is a second content line; they are
   -- independent, so neither key rewrites the other any more.
+
+  -- The sidebar's own gutter replaces the window padding `edge_to_edge` removes, so the wider one
+  -- belongs on whichever side touches the window edge.
+  if cfg.position == "right" then
+    local given = opts.padding or {}
+    -- A fresh table: `merge` shares the one in `defaults` whenever the user passed no padding.
+    cfg.padding = { top = cfg.padding.top, left = given.left or 1, right = given.right or 2 }
+  end
   -- press mode never hovers a background row, so a hover-only close button would never appear.
   if cfg.hover == "press" and cfg.close_button == "hover" then
     cfg.close_button = "always"
