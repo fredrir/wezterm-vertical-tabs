@@ -281,6 +281,7 @@ local probes = {
         is_mac = true,
         integrated_buttons = true,
         native_button_style = true,
+        preview = os.getenv "VTABS_E2E_MACOS" ~= nil,
         position = cfg.position,
         padding_top = cfg.padding.top,
         toggle_button = cfg.toggle_button,

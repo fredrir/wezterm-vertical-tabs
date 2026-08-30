@@ -17,6 +17,10 @@ first_content=$(content_of "$first_tab")
 no_dupes startup
 echo "ok: startup leaves one sidebar on the first tab"
 
+# `rail_titlebar = "widen"` widens the rail to the traffic-light reserve, so the expected rail width
+# is `rail_width` everywhere the reserve is zero and the reserve itself under the macOS seam.
+rail_want=5
+
 # `VTABS_E2E_MACOS=1` fakes the traffic-light reserve on, which is the only way to run the rail's
 # own strip geometry outside macOS. `rail_titlebar` defaults to "widen".
 macos_rail() {
@@ -54,6 +58,13 @@ macos_rail() {
 }
 if [ -n "${VTABS_E2E_MACOS:-}" ]; then
   soft macos_rail
+  # `soft` runs its group in a subshell, so the width every later rail check wants is read here.
+  mac_reserve=$(probe_line "$first_content" probe_reserve reserve | cut -d' ' -f1)
+  case "$mac_reserve" in
+    '' | *[!0-9]*) ;;
+    *) [ "$mac_reserve" -gt "$rail_want" ] && rail_want=$mac_reserve ;;
+  esac
+  echo "  the rail is expected at $rail_want cols under the macOS reserve"
 fi
 
 # ---------------------------------------------------------------- item 5 ---
@@ -310,15 +321,15 @@ echo "ok: an expanded sidebar keeps its width across grow and shrink"
 # B. The same while collapsed to the rail.
 vtest "$hot_content" toggle
 sleep 2
-want_width "$hot" 5 "collapse to the rail"
+want_width "$hot" "$rail_want" "collapse to the rail"
 vtest "$hot_content" grow
 sleep 2.5
 trace "rail, +300 px"
-want_width "$hot" 5 "grow while railed"
+want_width "$hot" "$rail_want" "grow while railed"
 vtest "$hot_content" shrink
 sleep 2.5
 trace "rail, back to the start"
-want_width "$hot" 5 "shrink while railed"
+want_width "$hot" "$rail_want" "shrink while railed"
 vtest "$hot_content" toggle
 sleep 2.5
 want_width "$hot" 28 "expand after resizing the rail"
@@ -338,11 +349,11 @@ echo "ok: ten resizes 100 ms apart leave the sidebar at its configured width"
 # D. The reported sequence: expand -> collapse -> change tab -> expand.
 vtest "$hot_content" toggle
 sleep 2
-want_width "$hot" 5 "collapse before the tab switch"
+want_width "$hot" "$rail_want" "collapse before the tab switch"
 cli activate-tab --tab-id "$other" >/dev/null
 sleep 2.5
 trace "collapsed, switched to tab $other"
-want_width "$other" 5 "a background tab joining the rail"
+want_width "$other" "$rail_want" "a background tab joining the rail"
 vtest "$(content_of "$other")" toggle
 sleep 2.5
 trace "expanded on tab $other"
@@ -356,7 +367,7 @@ echo "ok: expand, collapse, switch tab, expand keeps both sidebars at 28"
 # E. collapse -> resize -> expand, so the expand target is computed at a width nobody observed.
 vtest "$(content_of "$hot")" toggle
 sleep 2
-want_width "$hot" 5 "collapse before the resize"
+want_width "$hot" "$rail_want" "collapse before the resize"
 vtest "$(content_of "$hot")" grow
 sleep 2.5
 vtest "$(content_of "$hot")" toggle
@@ -373,7 +384,7 @@ vtest "$(content_of "$hot")" toggle
 sleep 2
 cli activate-tab --tab-id "$other" >/dev/null
 sleep 2.5
-want_width "$other" 5 "the background tab under the rail"
+want_width "$other" "$rail_want" "the background tab under the rail"
 vtest "$(content_of "$other")" toggle
 sleep 2.5
 want_width "$other" 28 "expanding on the lazily corrected tab"
@@ -419,7 +430,7 @@ vtest "$hot_content" rail_mode
 sleep 0.5
 vtest "$hot_content" toggle
 sleep 2.5
-want_width "$hot" 5 "collapsing after a drag"
+want_width "$hot" "$rail_want" "collapsing after a drag"
 vtest "$hot_content" toggle
 sleep 3
 trace "expanded again after the rail"
