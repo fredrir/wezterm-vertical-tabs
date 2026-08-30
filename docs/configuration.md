@@ -26,7 +26,7 @@ return config
 | `position`                | `"left"`                                                          | `"left"` \| `"right"` |
 | `collapsed`               | `"rail"`                                                          | `"rail"` \| `"hidden"` |
 | `rail_width`              | `5`                                                               | number >= `3` |
-| `rail_titlebar`           | `"widen"`                                                         | `"widen"` \| `"band"` |
+| `rail_titlebar`           | `"widen"`                                                         | `"widen"` \| `"band"` \| `"none"` |
 | `hide_native_tab_bar`     | `true`                                                            | `true` \| `false` |
 | `poll_ms`                 | `500`                                                             | number >= `50` |
 | `padding`                 | `{ top = 1, left = 1, right = 1 }`                                | `{ top, left, right }` |

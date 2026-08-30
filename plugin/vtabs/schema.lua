@@ -52,10 +52,10 @@ M.options = {
     key = "rail_titlebar",
     type = "enum",
     default = "widen",
-    enum = { "widen", "band" },
+    enum = { "widen", "band", "none" },
     label = "Rail title bar",
     group = "layout",
-    help = "macOS: widen the rail, or band the window padding",
+    help = "macOS window buttons: widen the rail, band the window, or neither",
   },
   {
     key = "hide_native_tab_bar",

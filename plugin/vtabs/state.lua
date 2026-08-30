@@ -179,6 +179,7 @@ M.session = {
   known_tabs = {},
   moving = {},
   focus_index = {},
+  applying = {},
   popover = {},
   tooltip = {},
   last_active = {},
@@ -204,6 +205,7 @@ local WINDOW_SESSION = {
   "known_tabs",
   "focus_index",
   "last_active",
+  "applying",
   "popover",
   "tooltip",
 }
@@ -268,6 +270,12 @@ end
 function M.discard_pins()
   deferred_pins = nil
   save(true)
+end
+
+---True just after we applied a config override, so its reload event can be told apart from a real one.
+function M.applying_recently(window_id, within_ms)
+  local at = M.session.applying[window_id]
+  return at ~= nil and (util.now_ms() - at) < (within_ms or 1000)
 end
 
 function M.is_collapsed(window_id)

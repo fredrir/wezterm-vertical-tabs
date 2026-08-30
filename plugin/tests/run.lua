@@ -4128,6 +4128,56 @@ test("a toggle sends the fade around its single resize, and only on a local doma
   sidebar.set_collapsed(gui, false)
 end)
 
+test("collapsed = hidden bands the window so the macOS lights clear the shell", function()
+  local win, gui = setup_window(1)
+  sidebar.ensure(gui)
+  mark_ready(win.tab_list[1])
+  gui.decorations = "INTEGRATED_BUTTONS|RESIZE"
+  gui.window_padding = { left = 4, right = 4, top = 0, bottom = 2 }
+  local was_mac = platform.is_mac
+  platform.is_mac = true
+  view_mod.invalidate_theme()
+  config.setup { backend = { path = "/bin/wez-vtabs" }, collapsed = "hidden" }
+
+  eq(gui:get_config_overrides().window_padding, nil, "nothing is overridden while expanded")
+  state.set_collapsed(gui:window_id(), true)
+  assert(view_mod.apply_titlebar_band(gui), "collapsing applies the band")
+  local padded = gui:get_config_overrides().window_padding
+  eq(padded.top, platform.TITLEBAR_PX, "the band is the light reserve")
+  eq(padded.left, 4, "the user's other sides are kept")
+  eq(padded.bottom, 2)
+  eq(view_mod.apply_titlebar_band(gui), false, "and it is idempotent")
+  assert(state.applying_recently(gui:window_id()), "the reload it triggers is marked as ours")
+
+  state.set_collapsed(gui:window_id(), false)
+  assert(view_mod.apply_titlebar_band(gui), "expanding clears it")
+  eq(gui:get_config_overrides().window_padding, nil, "back to the user's own padding")
+
+  -- The rail never needs the band: its own pane still owns the window's top-left.
+  config.setup { backend = { path = "/bin/wez-vtabs" }, collapsed = "rail" }
+  state.set_collapsed(gui:window_id(), true)
+  eq(view_mod.apply_titlebar_band(gui), false, "a rail is not banded")
+  eq(gui:get_config_overrides().window_padding, nil)
+
+  config.setup { backend = { path = "/bin/wez-vtabs" }, collapsed = "hidden", rail_titlebar = "none" }
+  eq(view_mod.apply_titlebar_band(gui), false, "rail_titlebar = none declines")
+  eq(gui:get_config_overrides().window_padding, nil, "and leaves window_padding alone")
+
+  config.setup { backend = { path = "/bin/wez-vtabs" }, collapsed = "hidden" }
+  gui.full_screen = true
+  eq(view_mod.apply_titlebar_band(gui), false, "fullscreen has no titlebar to clear")
+  gui.full_screen = false
+  gui.decorations = "RESIZE"
+  view_mod.invalidate_theme()
+  eq(view_mod.apply_titlebar_band(gui), false, "and neither does a window without the buttons")
+
+  platform.is_mac = was_mac
+  gui.decorations, gui.window_padding = nil, nil
+  state.set_collapsed(gui:window_id(), false)
+  view_mod.invalidate_theme()
+  config.setup { backend = { path = "/bin/wez-vtabs" } }
+end)
+
 os.remove(state.file)
 print(string.format("%d passed, %d failed", passed, failed))
 os.exit(failed == 0 and 0 or 1)

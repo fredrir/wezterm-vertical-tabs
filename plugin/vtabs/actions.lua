@@ -345,6 +345,7 @@ local function resize_now(gui_window, collapsing)
   local geometry = require "vtabs.geometry"
   local view = require "vtabs.view"
   view.animate(gui_window, collapsing and "collapse_out" or "expand_out")
+  view.apply_titlebar_band(gui_window)
   geometry.correct(gui_window)
   view.sync(gui_window, { force = true })
   view.animate(gui_window, collapsing and "collapse_in" or "expand_in")

@@ -149,7 +149,10 @@ local function register_events(cfg)
     guarded("window-config-reloaded", function(window)
       local wid = window:window_id()
       view.invalidate_theme(wid)
-      geometry.reset(wid)
+      -- Our own `set_config_overrides` fires this; re-entering correction mid-toggle would fight it.
+      if not state.applying_recently(wid) then
+        geometry.reset(wid)
+      end
       view.sync(window, { force = true })
     end)
   )
