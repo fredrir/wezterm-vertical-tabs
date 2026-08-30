@@ -20,21 +20,26 @@ return config
 
 | option                    | default                                                           | description                                                                                                                                     |
 | ------------------------- | ----------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-| `width`                   | `28`                                                              | sidebar width in cells (min 8); re-asserted on the active tab after every window resize, a divider drag is adopted until the config reloads      |
+| `width`                   | `28`                                                              | sidebar width in cells (min 8); re-asserted on the active tab after every window resize, a divider drag is adopted until the config reloads. Two-row cards give a 19-column title and a 20-column meta line at 28; raise to `32` if titles truncate too often |
 | `position`                | `"left"`                                                          | `"left"` or `"right"`                                                                                                                           |
 | `hide_native_tab_bar`     | `true`                                                            | sets `enable_tab_bar = false`                                                                                                                   |
 | `poll_ms`                 | `500`                                                             | upper bound for `status_update_interval`; drives sidebar refresh                                                                                |
-| `padding`                 | `{ top = 1, left = 1, right = 1 }`                                | cells of padding                                                                                                                                |
-| `row_gap`                 | `0`                                                               | blank rows between tabs                                                                                                                         |
-| `new_tab_button`          | `true`                                                            | show the "New Tab" row                                                                                                                          |
-| `new_tab_label`           | `"New Tab"`                                                       | label for that row                                                                                                                              |
-| `close_button`            | `"hover"`                                                         | `"hover"` (hovered + active rows), `"always"` or `"never"`; the column is reserved so rows never reflow                                         |
+| `padding`                 | `{ top = 0, left = 1, right = 1 }`                                | cells of padding; `top` is added to the top strip, which owns the rows above the first card                                                      |
+| `tab_height`              | `"card"`                                                          | `"card"`: 2 painted rows per tab; `"row"`: 1 row (same as `meta = false`)                                                                        |
+| `meta`                    | `"auto"`                                                          | second card row: `"auto"` (cwd for shells, `user@host` for ssh, `proc · dir` otherwise, `domain · cwd` on a mux), `"cwd"`, `"process"`, or `false` for 1-row cards |
+| `row_gap`                 | `1`                                                               | blank rows after each card; the gap row is part of the card's click target                                                                      |
+| `new_tab_button`          | `"ghost"`                                                         | `"ghost"`: dashed card, sticky at the bottom; `"row"`: single row; `false`: hidden. `true` = `"ghost"`                                          |
+| `new_tab_label`           | `"New tab"`                                                       | label inside the card                                                                                                                           |
+| `corners`                 | `"chamfer"`                                                       | `"chamfer"`: quadrant-cut card corners; `"square"`. Forced to `"square"` when `custom_block_glyphs = false`                                      |
+| `titlebar`                | `"auto"`                                                          | `"auto"`: reserve cells for the macOS traffic lights when the window has `INTEGRATED_BUTTONS`; `"integrate"`: always reserve; `"plain"`: never   |
+| `toggle_button`           | `true`                                                            | draw `«`/`»` in the top strip; clicking it hides the sidebar, `toggle_sidebar` brings it back                                                    |
+| `close_button`            | `"hover"`                                                         | `"hover"` (hovered + active rows), `"always"` or `"never"`; the column is reserved so rows never reflow. The hit target is 3 columns × both card rows. Treated as `"always"` when `hover = "press"`, where no non-active row is ever hovered |
 | `confirm_close`           | `true`                                                            | let WezTerm prompt before closing tabs with stateful processes                                                                                  |
 | `debug`                   | `false`                                                           | log backend events and hit rows via `wezterm.log_info`                                                                                          |
-| `show_index`              | `false`                                                           | prefix titles with the tab index                                                                                                                |
-| `pinned_style`            | `"compact"`                                                       | `"compact"`: pin glyph instead of a close button; `"full"`: like normal rows                                                                    |
-| `separator`               | `"rule"`                                                          | between pinned and other tabs: `"rule"`, `"gap"` or `"none"`                                                                                    |
-| `scroll_indicator`        | `true`                                                            | right-edge thumb when tabs overflow                                                                                                             |
+| `show_index`              | `false`                                                           | prefix titles with the tab index; with two-row cards the index renders on the meta line (`1 · ~/projects/api`) so the title grid never shifts, and goes back inline with `meta = false` |
+| `pinned_style`            | `"dense"`                                                         | `"dense"`: 1-row entries, pin glyph on hover; `"compact"`: as before; `"full"`: normal 2-row cards                                              |
+| `separator`               | `"gap"`                                                           | between pinned and other tabs: `"gap"`, `"rule"` or `"none"`                                                                                    |
+| `scroll_indicator`        | `"auto"`                                                          | right-edge thumb when tabs overflow: `"auto"` dims it while the sidebar is idle, `"always"`, `"never"`. `true`/`false` accepted                  |
 | `wheel`                   | `"scroll"`                                                        | `"scroll"` the list or `"switch"` tabs                                                                                                          |
 | `tear_off`                | `true`                                                            | drag a tab onto the sidebar's inner edge (3+ columns of travel) to move it to a new window                                                      |
 | `adopt`                   | `"auto"`                                                          | take over an unmapped pane that carries the `wez-vtabs:` title marker instead of splitting a second sidebar. `"auto"`: only in a domain this plugin spawns backends in (local, already-spawned, or one `backend.path` resolves); `true`: any domain; `false`: never. See the identity table in `docs/limitations.md` |
@@ -50,7 +55,7 @@ return config
 | `skip_close_confirmation` | `true`                                                            | add `wez-vtabs` to `skip_close_confirmation_for_processes_named`                                                                                |
 | `private.env`             | `{ HISTFILE = "", fish_private_mode = "1", VTABS_PRIVATE = "1" }` | env for shells in private windows                                                                                                               |
 | `keys`                    | `{}`                                                              | key overrides, see below; `false` disables all defaults                                                                                         |
-| `theme`                   | `{ use_scheme_tab_bar = "auto", elevation = 0 }`                  | color overrides, see below                                                                                                                      |
+| `theme`                   | `{ elevation = 0 }`                                               | color overrides, see below                                                                                                                      |
 | `hooks.filter`            | `nil`                                                             | `fun(tab, mux_window): boolean` hide tabs from the sidebar (navigation and reordering only touch visible tabs)                                  |
 | `hooks.footer`            | `nil`                                                             | `fun(mux_window): (string \| FooterEntry)[]` sticky rows at the bottom; `FooterEntry = { text, fg?, bg?, id?, on_click? = fun(window, entry) }` |
 | `hooks.theme`             | `nil`                                                             | `fun(window, theme): theme` per-window theme override                                                                                           |
@@ -127,7 +132,20 @@ the tab's content pane, which then takes focus back.
 | drag to the inner edge                     | move tab to a new window (edge highlights while armed)                           |
 | double-click empty space / click "New Tab" | new tab                                                                          |
 | wheel                                      | scroll list (or switch tabs with `wheel = "switch"`)                             |
+| click a card's gap row                     | switch to the tab above                                                          |
+| drop on a gap row                          | insert below that tab                                                            |
+| click the toggle `«`                       | hide the sidebar; `toggle_sidebar` brings it back                                |
 | footer row                                 | calls the entry's `on_click`                                                     |
+
+| wezterm key                | set to                        | when                                                            |
+| -------------------------- | ----------------------------- | --------------------------------------------------------------- |
+| `enable_tab_bar`           | `false`                       | `hide_native_tab_bar = true`                                    |
+| `pane_focus_follows_mouse` | `true`                        | `hover = "follow"` and you left it unset                        |
+| `window_decorations`       | `"INTEGRATED_BUTTONS\|RESIZE"` | macOS, you left it unset, `position = "left"`, `titlebar ~= "plain"` |
+| `status_update_interval`   | `min(yours, poll_ms)`         | always                                                          |
+
+`window_decorations = "RESIZE"` alone hides the macOS window buttons and pins the window in
+place; the plugin never sets it and warns once if you do.
 
 | focus                | behaviour                                                                                  |
 | -------------------- | ------------------------------------------------------------------------------------------ |
@@ -149,18 +167,34 @@ WezTerm runs only the first `format-window-title` handler; register yours before
 
 ## Theme
 
-| key                  | default                                                            |
-| -------------------- | ------------------------------------------------------------------ |
-| `bg`                 | `resolved_palette.background`                                      |
-| `elevation`          | `0` — mix `bg` toward `fg`; `0.06` is the pre-1.0 raised sidebar   |
-| `use_scheme_tab_bar` | `"auto"` — adopt `colors.tab_bar` when its ladder is monotone      |
-| `accent`             | `resolved_palette.cursor_bg` if contrast vs `bg` >= 3.0, else `ansi[5]` |
-| `fg`                 | `resolved_palette.foreground`                                      |
-| `hover_bg`           | `bg` mixed 8% toward `fg`                                          |
-| `active_bg`          | `bg` mixed 16% toward `fg`                                         |
+`lift(t)` = `bg` mixed `t` toward `fg`, halved on light schemes.
 
-Also settable: `dim active_fg hover_fg focus_bg pinned_fg separator new_tab_fg
-close_fg close_hover_fg unseen_fg private_accent drag_bg drag_fg scroll_fg`.
+| key              | default                                                                        |
+| ---------------- | ------------------------------------------------------------------------------ |
+| `bg`             | `resolved_palette.background`                                                  |
+| `elevation`      | `0` — tint `bg` toward `fg`; `0.06` is the pre-P1 raised sidebar                |
+| `fg`             | `resolved_palette.foreground`                                                  |
+| `accent`         | `cursor_bg`, else `tab_bar.active_tab.bg_color`, else `ansi[5]`; each must clear 3.0 against `bg` and 1.2 against `fg` |
+| `title_idle`     | `fg` quieted 12% toward `bg`, only when `contrast(fg, bg) >= 5.0`              |
+| `meta_fg`        | `fg` mixed 48% toward `bg`, then lifted to 3.5 against `active_bg`             |
+| `dim`            | `meta_fg`                                                                      |
+| `hover_bg`       | `lift(0.06)`                                                                   |
+| `active_bg`      | `lift(0.12)` mixed 12% toward `accent`                                         |
+| `focus_bg`       | `bg` mixed 25% toward `accent`                                                 |
+| `drag_bg`        | `bg` mixed 35% toward `accent`                                                 |
+| `separator`      | `lift(0.10)`                                                                   |
+| `border`         | `lift(0.18)`, lifted to 2.5 against `bg` — hovered ghost card                  |
+| `border_idle`    | `lift(0.14)`, lifted to 2.0 against `bg` — dashed ghost card                   |
+| `new_tab_fg`     | `fg` mixed 30% toward `bg`                                                     |
+| `close_fg`       | `fg` mixed 55% toward `bg`, then lifted to 3.0 against `active_bg`             |
+| `close_hover_fg` | `ansi[2]`, lifted to 3.0 against `active_bg`                                   |
+| `unseen_fg`      | `ansi[4]` when it clears 3.0 against `bg`, else `accent`                       |
+| `scroll_fg`      | `lift(0.22)`, lifted to 2.0 against `bg`                                       |
+| `scroll_idle_fg` | `scroll_fg` mixed 55% toward `bg`                                              |
+| `private_accent` | `ansi[6]`; becomes `accent` for the whole window in a private window           |
+
+Also settable: `active_fg hover_fg pinned_fg drag_fg`. `use_scheme_tab_bar` is deprecated and
+ignored — the sidebar paints the terminal background, so there is no background to borrow.
 
 ```lua
 theme = { accent = "#f5c2e7", active_bg = "#313244", elevation = 0.06 }
