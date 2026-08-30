@@ -449,6 +449,27 @@ test("ensure attaches one authenticated sidebar per tab and sends auth", functio
   eq(sidebars_in(win.tab_list[1]), 1, "no duplicate on second ensure")
 end)
 
+test("attach refuses a tab that already has a sidebar, so a direct caller cannot double it", function()
+  local win, gui = setup_window(1)
+  sidebar.ensure(gui)
+  local tab = win.tab_list[1]
+  mark_ready(tab)
+  eq(sidebars_in(tab), 1)
+  local panes = #tab.pane_list
+  -- new_tab, new_window and tear_off call attach outside ensure, and a poll can attach first.
+  eq(sidebar.attach(tab), nil, "an attached tab refuses a second split")
+  eq(sidebars_in(tab), 1)
+  eq(#tab.pane_list, panes, "and no pane was added")
+  -- The loser of that race would keep its marker and be demoted to content for good.
+  state.session.attaching[tab:tab_id()] = nil
+  eq(sidebar.attach(tab), nil, "the refusal is not the pending guard")
+  eq(#tab.pane_list, panes)
+  local before = #win.tab_list
+  actions.new_tab(gui)
+  eq(#win.tab_list, before + 1)
+  eq(sidebars_in(win.tab_list[#win.tab_list]), 1, "and the path that spawns a tab still gets one")
+end)
+
 test("a sidebar with a new pane id but a known token is re-adopted, not duplicated", function()
   local win, gui = setup_window(1)
   sidebar.ensure(gui)
