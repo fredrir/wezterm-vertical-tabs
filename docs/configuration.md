@@ -16,13 +16,6 @@ vtabs.apply_to_config(config, {
 return config
 ```
 
-The sidebar needs the `wez-vtabs` helper binary. On first start the sidebar
-pane downloads a verified release build, or builds it with `cargo` when no
-release matches. Set `backend.path` to skip both. Requires a recent WezTerm
-(tested on nightly 20260826; needs `pane:move_to_new_window`, `tabs_with_info`).
-
-Widths below ~16 columns leave little room for titles.
-
 ## Options
 
 | option                    | default                                                           | description                                                                                                                                     |
@@ -67,9 +60,6 @@ Widths below ~16 columns leave little room for titles.
 
 ## Keys
 
-Tier 1 is `CMD` on macOS and `CTRL|SHIFT` elsewhere; tier 2 is `CMD|SHIFT` / `CTRL|SHIFT|ALT`.
-Plain `CTRL+letter` is never bound so shell editing keys stay intact.
-
 | name                                   | macOS                         | Linux / Windows              | action                          |
 | -------------------------------------- | ----------------------------- | ---------------------------- | ------------------------------- |
 | `toggle_sidebar`                       | `CMD+b`                       | `CTRL+SHIFT+b`               | show/hide sidebar               |
@@ -93,7 +83,7 @@ keys = {
 }
 ```
 
-Every action is also exposed for manual binding:
+manual binding:
 
 ```lua
 { key = "b", mods = "CMD", action = vtabs.action.toggle_sidebar }
@@ -126,7 +116,6 @@ is not in keyboard mode returns focus to the content pane.
 | wheel                                      | scroll list (or switch tabs with `wheel = "switch"`)                             |
 | footer row                                 | calls the entry's `on_click`                                                     |
 
-Modifier-clicks are reported but unused; terminals cannot report the Super/Cmd key.
 
 ## Public API
 
@@ -136,12 +125,6 @@ Modifier-clicks are reported but unused; terminals cannot report the Super/Cmd k
 `vtabs.is_sidebar_pane(pane)`, `vtabs.is_private_window(window)`, `vtabs.version`.
 
 ## Theme
-
-Colors derive from the window's color scheme: the sidebar background mixes the
-scheme background 6% toward the foreground, hover/active rows step further, and
-`dim` is kept at ≥ 3:1 contrast. This works for light and dark schemes. The
-scheme's `tab_bar` colors are used when `use_scheme_tab_bar = true`, or with
-`"auto"` when they form a consistent ladder. Override any of:
 
 `bg fg dim accent active_bg active_fg hover_bg hover_fg focus_bg pinned_fg
 separator new_tab_fg close_fg close_hover_fg unseen_fg private_accent drag_bg
