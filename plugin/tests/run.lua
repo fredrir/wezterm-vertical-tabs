@@ -1873,6 +1873,96 @@ test("tab_height and meta stay consistent, and press mode forces an always-on cl
   config.setup(legacy { backend = { path = "/bin/wez-vtabs" } })
 end)
 
+local platform = require "vtabs.platform"
+
+-- Retina-ish: 8.4 px cells across, 19 px down, so 70/8.4 -> 9 cols and 28/19 -> 2 rows.
+local RETINA = { cols = 28, viewport_rows = 30, pixel_width = 235, pixel_height = 570 }
+
+local function strip_geom(dims, over)
+  local opts = {
+    is_mac = true,
+    integrated_buttons = true,
+    native_button_style = true,
+    is_full_screen = false,
+    position = "left",
+    padding_top = 1,
+    toggle_button = true,
+    card_x1 = 2,
+  }
+  for k, v in pairs(over or {}) do
+    opts[k] = v
+  end
+  return platform.strip_geometry(dims, opts)
+end
+
+test("the macOS strip reserves the traffic lights from the pane's own cell size", function()
+  local g = strip_geom(RETINA)
+  eq(g.cols, math.ceil(70 / (235 / 28)), "70 px of buttons, never a hardcoded column count")
+  eq(g.cols, 9)
+  eq(g.rows, 3, "max(reserve 2, toggle 2) + padding_top 1")
+  eq(g.toggle_row, 2)
+  eq(g.toggle_x, 11, "clear of the reserve")
+  local wide = strip_geom { cols = 28, viewport_rows = 30, pixel_width = 560, pixel_height = 570 }
+  eq(wide.cols, 4, "bigger cells need fewer of them")
+end)
+
+test("every branch that is not a windowed left-hand macOS sidebar reserves no columns", function()
+  eq(strip_geom(RETINA, { is_full_screen = true }).cols, 0)
+  eq(strip_geom(RETINA, { position = "right" }).cols, 0)
+  eq(strip_geom(RETINA, { native_button_style = false }).cols, 0)
+  eq(strip_geom(RETINA, { integrated_buttons = false }).cols, 0)
+  eq(strip_geom(RETINA, { is_mac = false }).cols, 0, "linux and windows")
+  eq(strip_geom({}, {}).cols, 0, "no dimensions, no guess")
+  eq(strip_geom({ cols = 0, viewport_rows = 0, pixel_width = 0, pixel_height = 0 }).cols, 0)
+end)
+
+test("the strip is toggle plus padding when nothing is reserved", function()
+  local linux = { is_mac = false }
+  eq(strip_geom(RETINA, linux).rows, 2, "toggle row plus padding_top")
+  eq(strip_geom(RETINA, { is_mac = false, toggle_button = false }).rows, 1)
+  eq(strip_geom(RETINA, { is_mac = false, padding_top = 0 }).rows, 1, "the P1 default padding")
+  eq(strip_geom(RETINA, { is_mac = false, toggle_button = false, padding_top = 0 }).rows, 0)
+  eq(strip_geom(RETINA, linux).toggle_row, 1)
+  eq(strip_geom(RETINA, linux).toggle_x, 2, "card_x1")
+  eq(strip_geom(RETINA, { is_mac = false, card_x1 = 4 }).toggle_x, 4)
+end)
+
+test("the toggle span never reaches past the strip into the first card row", function()
+  for _, over in ipairs {
+    {},
+    { is_mac = false },
+    { is_full_screen = true },
+    { position = "right" },
+    { padding_top = 0 },
+    { is_mac = false, padding_top = 0 },
+    { padding_top = 3 },
+  } do
+    local g = strip_geom(RETINA, over)
+    local span_last = math.min(g.toggle_row + 1, g.rows)
+    assert(span_last <= g.rows, "toggle span inside the strip")
+    assert(g.toggle_row <= g.rows, "toggle row inside the strip")
+  end
+end)
+
+test("macOS window decorations are set only for a left sidebar the user has not configured", function()
+  local vtabs = dofile(here .. "/../init.lua")
+  assert(platform.is_mac, "the stub target triple is darwin")
+  local function decorations(opts, preset)
+    local cfg = { keys = {} }
+    cfg.window_decorations = preset
+    vtabs.apply_to_config(cfg, opts)
+    return cfg.window_decorations
+  end
+  eq(decorations {}, "INTEGRATED_BUTTONS|RESIZE")
+  eq(decorations { position = "right" }, nil, "a right sidebar reserves nothing, so it opts out")
+  eq(decorations { titlebar = "plain" }, nil)
+  eq(decorations({}, "TITLE|RESIZE"), "TITLE|RESIZE", "a user value is never overwritten")
+  local before = #wezterm.log
+  decorations({}, "RESIZE")
+  assert(#wezterm.log > before, "RESIZE alone hides the buttons, so it warns")
+  config.setup(legacy { backend = { path = "/bin/wez-vtabs" } })
+end)
+
 os.remove(state.file)
 print(string.format("%d passed, %d failed", passed, failed))
 os.exit(failed == 0 and 0 or 1)

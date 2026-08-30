@@ -34,6 +34,7 @@ local backend = require "vtabs.backend"
 local sidebar = require "vtabs.sidebar"
 local view = require "vtabs.view"
 local geometry = require "vtabs.geometry"
+local platform = require "vtabs.platform"
 local input = require "vtabs.input"
 local actions = require "vtabs.actions"
 local keys = require "vtabs.keys"
@@ -215,6 +216,22 @@ local function watch_plugin_files()
   end
 end
 
+---macOS hides close/minimise/zoom unless the decorations ask for them; `RESIZE` alone also pins
+---the window in place. Only a left-hand sidebar reserves cells for them, so only it opts in.
+local function apply_decorations(config, cfg)
+  if not platform.is_mac then
+    return
+  end
+  local decorations = config.window_decorations
+  if decorations == nil then
+    if cfg.position == "left" and cfg.titlebar ~= "plain" then
+      config.window_decorations = "INTEGRATED_BUTTONS|RESIZE"
+    end
+  elseif decorations == "RESIZE" then
+    util.warn_once("decorations", 'window_decorations = "RESIZE" hides the macOS window buttons')
+  end
+end
+
 ---@param config Config
 ---@param opts table|nil
 function M.apply_to_config(config, opts)
@@ -226,6 +243,7 @@ function M.apply_to_config(config, opts)
   if cfg.hover == "follow" and config.pane_focus_follows_mouse == nil then
     config.pane_focus_follows_mouse = true
   end
+  apply_decorations(config, cfg)
   if cfg.skip_close_confirmation then
     config.skip_close_confirmation_for_processes_named = config.skip_close_confirmation_for_processes_named
       or { "bash", "sh", "zsh", "fish", "tmux", "nu", "cmd.exe", "pwsh.exe", "powershell.exe" }
