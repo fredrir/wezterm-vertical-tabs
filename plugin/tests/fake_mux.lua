@@ -214,6 +214,20 @@ function M.window(cols)
   return w
 end
 
+---A mux client's view: the window reports its new size now, the panes catch up on `settle_mux`.
+function Window:resize_mux(dcols)
+  self.cols = self.cols + dcols
+  self.pending_cols = (self.pending_cols or 0) + dcols
+end
+
+function Window:settle_mux()
+  local pending = self.pending_cols or 0
+  self.pending_cols = nil
+  for _, tab in ipairs(self.tab_list) do
+    tab:adjust_x_size(pending)
+  end
+end
+
 ---Window resize: every tab's split absorbs the delta the way `adjust_x_size` deals it out.
 function Window:resize(dcols)
   self.cols = self.cols + dcols
