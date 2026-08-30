@@ -602,7 +602,7 @@ local function last_action(win)
   return win.actions[#win.actions].action
 end
 
-test("AdjustPaneSize Right adds to the split's first child, Left subtracts (mux/src/tab.rs:1294)", function()
+test("AdjustPaneSize Right adds delta to split first.cols, Left subtracts (tab.rs:1294; headless 28-33-28)", function()
   local win = fake.window(80)
   local tab = win:add_tab { title = "g" }
   tab.pane_list[1]:split { direction = "Left", top_level = true, size = 28 }
@@ -632,7 +632,7 @@ test("window growth drifts the sidebar 50/50; correct claws it back in one Adjus
   eq(geometry.correct(gui), false, "second pass is a no-op")
 end)
 
-test("a left sidebar shrinks with Left; a right sidebar is the second child and grows with Left", function()
+test("split Left puts the sidebar in first, split Right in second, so a right sidebar grows with Left", function()
   config.setup { position = "right", backend = { path = "/bin/wez-vtabs" } }
   local win = fake.window(80)
   win:add_tab { title = "r" }
