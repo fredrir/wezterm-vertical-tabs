@@ -62,10 +62,18 @@ function Pane:activate()
   self._tab._window.active_tab_ref = self._tab
 end
 function Pane:split(args)
-  local sb = M.pane(self._tab, { process = args.args and args.args[1] or "sh", cols = args.size })
+  local tab = self._tab
+  local size = args.size or math.floor(tab:width() / 2)
+  local sb = M.pane(tab, { process = args.args and args.args[1] or "sh", cols = size })
   sb.split_args = args
-  table.insert(self._tab.pane_list, 1, sb)
-  self._tab.active = sb
+  if args.direction == "Right" or args.direction == "Bottom" then
+    tab.pane_list[#tab.pane_list + 1] = sb
+    tab:set_split(tab:width() - size - 1)
+  else
+    table.insert(tab.pane_list, 1, sb)
+    tab:set_split(size)
+  end
+  tab.active = sb
   return sb
 end
 function Pane:move_to_new_window()
@@ -98,14 +106,79 @@ end
 function Tab:window()
   return self._window
 end
+function Tab:width()
+  return self._window.cols
+end
+
+---The fake models one top-level horizontal split: leaf 1 is `first`, every other leaf shares `second`.
+local function second_leaves(tab)
+  local rest = {}
+  for i = 2, #tab.pane_list do
+    rest[#rest + 1] = tab.pane_list[i]
+  end
+  return rest
+end
+
+function Tab:set_split(first_cols)
+  local rest = second_leaves(self)
+  if #rest == 0 then
+    self.pane_list[1].cols = self:width()
+    return
+  end
+  self.pane_list[1].cols = first_cols
+  for _, p in ipairs(rest) do
+    p.cols = self:width() - first_cols - 1
+  end
+end
+
+---Mirrors `mux/src/tab.rs adjust_x_size`: one column at a time, alternating first and second.
+function Tab:adjust_x_size(delta)
+  local rest = second_leaves(self)
+  if #rest == 0 then
+    self.pane_list[1].cols = math.max(1, self.pane_list[1].cols + delta)
+    return
+  end
+  local first_cols, second_cols = self.pane_list[1].cols, rest[1].cols
+  while delta ~= 0 do
+    local moved = false
+    if delta > 0 then
+      first_cols, delta, moved = first_cols + 1, delta - 1, true
+      if delta > 0 then
+        second_cols, delta = second_cols + 1, delta - 1
+      end
+    else
+      if first_cols > 1 then
+        first_cols, delta, moved = first_cols - 1, delta + 1, true
+      end
+      if delta < 0 and second_cols > 1 then
+        second_cols, delta, moved = second_cols - 1, delta + 1, true
+      end
+    end
+    if not moved then
+      break
+    end
+  end
+  self.pane_list[1].cols = first_cols
+  for _, p in ipairs(rest) do
+    p.cols = second_cols
+  end
+end
 
 local Window = {}
 Window.__index = Window
 
-function M.window()
-  local w = setmetatable({ id = alloc "window", tab_list = {}, actions = {} }, Window)
+function M.window(cols)
+  local w = setmetatable({ id = alloc "window", tab_list = {}, actions = {}, cols = cols or 80 }, Window)
   w.gui = M.gui(w)
   return w
+end
+
+---Window resize: every tab's split absorbs the delta the way `adjust_x_size` deals it out.
+function Window:resize(dcols)
+  self.cols = self.cols + dcols
+  for _, tab in ipairs(self.tab_list) do
+    tab:adjust_x_size(dcols)
+  end
 end
 
 function Window:add_tab(opts)
@@ -113,6 +186,7 @@ function Window:add_tab(opts)
   local tab = setmetatable({ id = alloc "tab", pane_list = {}, title = opts.title or "", _window = self }, Tab)
   local pane = opts.existing or M.pane(tab, opts)
   pane._tab = tab
+  pane.cols = opts.cols or self.cols
   tab.pane_list[1] = pane
   tab.active = pane
   self.tab_list[#self.tab_list + 1] = tab
@@ -184,7 +258,7 @@ function Gui:effective_config()
   }
 end
 function Gui:get_dimensions()
-  return { pixel_width = 800, pixel_height = 600 }
+  return { pixel_width = self._mux.cols * 10, pixel_height = 600 }
 end
 function Gui:set_inner_size() end
 function Gui:toast_notification() end
@@ -205,6 +279,15 @@ function Gui:perform_action(action, pane)
     tab.active = tab.pane_list[1]
     if #tab.pane_list == 0 then
       self._mux:remove_tab(tab)
+    end
+  elseif name == "AdjustPaneSize" then
+    -- Delta lands on the split node above the ACTIVE leaf: first.cols += delta, second = width - first - 1.
+    local tab = self._mux.active_tab_ref
+    local dir, amount = action.arg[1], action.arg[2]
+    if dir == "Left" or dir == "Right" then
+      local delta = dir == "Right" and amount or -amount
+      local width = tab:width()
+      tab:set_split(math.max(1, math.min(tab.pane_list[1].cols + delta, width - 2)))
     end
   elseif name == "MoveTab" then
     local tab = self._mux.active_tab_ref

@@ -33,6 +33,7 @@ local config_mod = require "vtabs.config"
 local backend = require "vtabs.backend"
 local sidebar = require "vtabs.sidebar"
 local view = require "vtabs.view"
+local geometry = require "vtabs.geometry"
 local input = require "vtabs.input"
 local actions = require "vtabs.actions"
 local keys = require "vtabs.keys"
@@ -87,7 +88,28 @@ local function register_events(cfg)
   registered = true
 
   local last_poll = {}
+  local tracked = 0
   local min_gap = math.max(50, math.floor(cfg.poll_ms / 4))
+
+  ---Windows leave without an event; per-window tables are dropped once one goes missing from the mux.
+  local function prune_windows()
+    local live = {}
+    for _, mux_win in ipairs(wezterm.mux.all_windows()) do
+      live[mux_win:window_id()] = true
+    end
+    tracked = 0
+    for wid in pairs(last_poll) do
+      if live[wid] then
+        tracked = tracked + 1
+      else
+        last_poll[wid] = nil
+        geometry.forget_window(wid)
+        view.invalidate_theme(wid)
+        state.forget_window(wid)
+      end
+    end
+  end
+
   wezterm.on(
     "update-status",
     guarded("update-status", function(window)
@@ -96,7 +118,13 @@ local function register_events(cfg)
       if last_poll[wid] and now - last_poll[wid] < min_gap then
         return
       end
+      if last_poll[wid] == nil then
+        tracked = tracked + 1
+      end
       last_poll[wid] = now
+      if tracked > #wezterm.mux.all_windows() then
+        prune_windows()
+      end
       sidebar.ensure(window)
       input.tick(window)
       view.sync(window)
@@ -113,6 +141,7 @@ local function register_events(cfg)
   wezterm.on(
     "window-resized",
     guarded("window-resized", function(window)
+      geometry.correct(window)
       view.sync(window)
     end)
   )
@@ -120,7 +149,10 @@ local function register_events(cfg)
   wezterm.on(
     "window-config-reloaded",
     guarded("window-config-reloaded", function(window)
-      view.invalidate_theme(window:window_id())
+      local wid = window:window_id()
+      view.invalidate_theme(wid)
+      geometry.reset(wid)
+      geometry.correct(window)
       view.sync(window, { force = true })
     end)
   )
@@ -153,6 +185,7 @@ local MODULES = {
   "ansi",
   "backend",
   "config",
+  "geometry",
   "hit",
   "icons",
   "input",

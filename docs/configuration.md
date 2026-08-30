@@ -20,7 +20,7 @@ return config
 
 | option                    | default                                                           | description                                                                                                                                     |
 | ------------------------- | ----------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-| `width`                   | `28`                                                              | sidebar width in cells (min 8)                                                                                                                  |
+| `width`                   | `28`                                                              | sidebar width in cells (min 8); re-asserted on the active tab after every window resize, a divider drag is adopted until the config reloads      |
 | `position`                | `"left"`                                                          | `"left"` or `"right"`                                                                                                                           |
 | `hide_native_tab_bar`     | `true`                                                            | sets `enable_tab_bar = false`                                                                                                                   |
 | `poll_ms`                 | `500`                                                             | upper bound for `status_update_interval`; drives sidebar refresh                                                                                |

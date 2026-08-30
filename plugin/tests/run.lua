@@ -50,6 +50,7 @@ local model = require "vtabs.model"
 local sidebar = require "vtabs.sidebar"
 local actions = require "vtabs.actions"
 local input = require "vtabs.input"
+local geometry = require "vtabs.geometry"
 local fake = require "fake_mux"
 local backend = require "vtabs.backend"
 
@@ -595,6 +596,100 @@ test("accent is cursor_bg when it clears 3.0 contrast, else ansi[5]", function()
   local low = util.merge(fake.palette, { cursor_bg = "#242438" })
   assert(theme.contrast({ 36, 36, 56 }, { 30, 30, 46 }) < 3.0, "fixture cursor is low contrast")
   eq(rgb(theme.resolve({}, low).accent), "137,180,250")
+end)
+
+local function last_action(win)
+  return win.actions[#win.actions].action
+end
+
+test("AdjustPaneSize Right adds to the split's first child, Left subtracts (mux/src/tab.rs:1294)", function()
+  local win = fake.window(80)
+  local tab = win:add_tab { title = "g" }
+  tab.pane_list[1]:split { direction = "Left", top_level = true, size = 28 }
+  eq(tab.pane_list[1].cols, 28)
+  eq(tab.pane_list[2].cols, 51)
+  win.gui:perform_action(wezterm.action.AdjustPaneSize { "Right", 5 }, tab.pane_list[1])
+  eq(tab.pane_list[1].cols, 33)
+  eq(tab.pane_list[2].cols, 46)
+  win.gui:perform_action(wezterm.action.AdjustPaneSize { "Left", 5 }, tab.pane_list[1])
+  eq(tab.pane_list[1].cols, 28)
+end)
+
+test("window growth drifts the sidebar 50/50; correct claws it back in one AdjustPaneSize", function()
+  local win, gui = setup_window(1)
+  sidebar.ensure(gui)
+  local sb = sidebar.find(win.tab_list[1])
+  eq(sb.cols, 28)
+  win:resize(40)
+  eq(sb.cols, 48, "adjust_x_size gave the sidebar half of the delta")
+  local before = #win.actions
+  assert(geometry.correct(gui), "correction ran")
+  eq(#win.actions - before, 1, "exactly one action")
+  eq(last_action(win).action, "AdjustPaneSize")
+  eq(last_action(win).arg[1], "Left")
+  eq(last_action(win).arg[2], 20)
+  eq(sb.cols, 28)
+  eq(geometry.correct(gui), false, "second pass is a no-op")
+end)
+
+test("a left sidebar shrinks with Left; a right sidebar is the second child and grows with Left", function()
+  config.setup { position = "right", backend = { path = "/bin/wez-vtabs" } }
+  local win = fake.window(80)
+  win:add_tab { title = "r" }
+  local gui = win.gui
+  sidebar.ensure(gui)
+  local tab = win.tab_list[1]
+  local sb = sidebar.find(tab)
+  eq(sb.split_args.direction, "Right")
+  eq(sb.cols, 28)
+  win:resize(-20)
+  eq(sb.cols, 18)
+  assert(geometry.correct(gui), "correction ran")
+  eq(last_action(win).arg[1], "Left")
+  eq(last_action(win).arg[2], 10)
+  eq(sb.cols, 28)
+  config.setup { backend = { path = "/bin/wez-vtabs" } }
+end)
+
+test("a divider drag with an unchanged window becomes the desired width until config reload", function()
+  local win, gui = setup_window(1)
+  sidebar.ensure(gui)
+  local tab = win.tab_list[1]
+  local sb = sidebar.find(tab)
+  eq(geometry.correct(gui), false, "baseline recorded")
+  tab:set_split(34)
+  eq(geometry.correct(gui), false, "drag adopted, not fought")
+  eq(geometry.desired(gui:window_id()), 34)
+  eq(geometry.correct(gui), false)
+  eq(sb.cols, 34)
+  geometry.reset(gui:window_id())
+  assert(geometry.correct(gui), "config reload drops the adopted width")
+  eq(sb.cols, 28)
+end)
+
+test("correction with several content panes activates the sidebar and restores focus", function()
+  local win, gui = setup_window(1)
+  sidebar.ensure(gui)
+  local tab = win.tab_list[1]
+  local extra = fake.pane(tab, { cols = sidebar.content_pane(tab).cols })
+  tab.pane_list[#tab.pane_list + 1] = extra
+  extra:activate()
+  win:resize(10)
+  assert(geometry.correct(gui), "correction ran")
+  eq(tab.active, extra, "focus restored")
+  eq(sidebar.find(tab).cols, 28)
+end)
+
+test("correction is skipped while a tab drag is in flight", function()
+  local win, gui = setup_window(1)
+  sidebar.ensure(gui)
+  win:resize(20)
+  state.session.drag[gui:window_id()] = { tab_id = win.tab_list[1].id }
+  eq(geometry.correct(gui), false)
+  eq(sidebar.find(win.tab_list[1]).cols, 38)
+  state.session.drag[gui:window_id()] = nil
+  assert(geometry.correct(gui))
+  eq(sidebar.find(win.tab_list[1]).cols, 28)
 end)
 
 os.remove(state.file)
