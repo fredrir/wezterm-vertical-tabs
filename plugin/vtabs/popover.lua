@@ -366,7 +366,7 @@ function M.edit(pop, key, mods)
     pop.cursor = 1
   elseif key == "end" then
     pop.cursor = #text + 1
-  elseif not ctrl and type(key) == "string" and utf8.len(key) == 1 and utf8.codepoint(key) >= 32 then
+  elseif not ctrl and type(key) == "string" and utf8.len(key) == 1 and utf8.codepoint(key) >= 32 and #text < 256 then
     table.insert(text, at, key)
     rebuild(text, at + 1)
   end

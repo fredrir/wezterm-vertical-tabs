@@ -209,7 +209,9 @@ WezTerm runs only the first `format-window-title` handler; register yours before
 | key              | default                                                                        |
 | ---------------- | ------------------------------------------------------------------------------ |
 | `bg`             | `resolved_palette.background`                                                  |
-| `elevation`      | `0` — tint `bg` toward `fg`; `0.06` is the pre-P1 raised sidebar                |
+| `elevation`      | `0.06` — tint `bg` toward `fg`; `0` is seamless with the terminal               |
+| `content_bg`     | `resolved_palette.background`, untinted; painted by `frame`                    |
+| `title_active`   | `fg` mixed toward `accent`, lifted to 4.5 against `active_bg`; the accent bar returns when it lands within 24 channel units of `fg` |
 | `fg`             | `resolved_palette.foreground`                                                  |
 | `accent`         | `cursor_bg`, else `tab_bar.active_tab.bg_color`, else `ansi[5]`; each must clear 3.0 against `bg` and 1.2 against `fg` |
 | `title_idle`     | `fg` quieted 12% toward `bg`, only when `contrast(fg, bg) >= 5.0`              |
