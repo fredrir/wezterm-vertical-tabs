@@ -20,7 +20,7 @@ local handlers = {
 }
 
 ---Opens the tab menu as an overlay in the current content pane, without switching tabs.
-function M.open(gui_window, tab_id)
+function M.open(gui_window, tab_id, opts)
   local tab = actions.tab_by_id(gui_window, tab_id)
   local current = util.active_tab(gui_window)
   local content = current and sidebar.content_pane(current)
@@ -37,7 +37,9 @@ function M.open(gui_window, tab_id)
     { id = "close_others", label = "Close other tabs" },
     { id = "close", label = "Close tab" },
   }
-  content:activate()
+  if not (opts and opts.keep_focus) then
+    content:activate()
+  end
   gui_window:perform_action(
     act.InputSelector {
       title = title ~= "" and title or "Tab",

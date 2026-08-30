@@ -36,33 +36,44 @@ local function spawn_env(gui_window)
   return nil
 end
 
-function M.activate_tab(gui_window, tab_id)
+---`focus` picks which pane of the activated tab keeps input: "sidebar" or, by default, the content.
+function M.activate_tab(gui_window, tab_id, focus)
   local tab = M.tab_by_id(gui_window, tab_id)
   if not tab then
-    return
+    return nil
   end
   tab:activate()
-  local content = sidebar.content_pane(tab)
-  if content then
-    content:activate()
+  local target = (focus == "sidebar" and sidebar.find(tab)) or sidebar.content_pane(tab)
+  if target then
+    target:activate()
+  end
+  return target
+end
+
+---`MoveTab` moves the window's active tab, so the target has to be activated first.
+local function move_to_index(gui_window, tab_id, index)
+  local tab, current = M.tab_by_id(gui_window, tab_id)
+  local content = tab and sidebar.content_pane(tab)
+  if not content or current == index then
+    return false
+  end
+  tab:activate()
+  gui_window:perform_action(act.MoveTab(index), content)
+  return true
+end
+
+local function restore_tab(gui_window, tab_id)
+  local tab = tab_id and M.tab_by_id(gui_window, tab_id)
+  if tab then
+    tab:activate()
   end
 end
 
 ---Moves a tab to a physical index (0-based), leaving the active tab as it was.
 function M.move_tab_to_index(gui_window, tab_id, index)
-  local tab, current = M.tab_by_id(gui_window, tab_id)
-  if not tab or current == index then
-    return
-  end
   local previous = util.active_tab(gui_window)
-  local content = sidebar.content_pane(tab)
-  if not content then
-    return
-  end
-  tab:activate()
-  gui_window:perform_action(act.MoveTab(index), content)
-  if previous and previous:tab_id() ~= tab_id then
-    previous:activate()
+  if move_to_index(gui_window, tab_id, index) then
+    restore_tab(gui_window, previous and previous:tab_id())
   end
 end
 
@@ -83,8 +94,13 @@ function M.reorder(gui_window, visible_ids)
       order[#order + 1] = id
     end
   end
+  local previous = util.active_tab(gui_window)
+  local moved = false
   for i, id in ipairs(order) do
-    M.move_tab_to_index(gui_window, id, i - 1)
+    moved = move_to_index(gui_window, id, i - 1) or moved
+  end
+  if moved then
+    restore_tab(gui_window, previous and previous:tab_id())
   end
 end
 
@@ -146,15 +162,13 @@ local function needs_prompt(gui_window, panes)
   return false
 end
 
----Closes any tab: activates it, closes, and restores the previous tab unless a prompt is showing.
-function M.close_tab(gui_window, tab_id)
+---Closes any tab, restoring the previous one unless `defer` batches that or a prompt is showing.
+---Returns true when WezTerm is now showing a close prompt.
+function M.close_tab(gui_window, tab_id, defer)
   local tab = M.tab_by_id(gui_window, tab_id)
-  if not tab then
-    return
-  end
-  local content, _ = sidebar.classify(tab)
+  local content = tab and sidebar.classify(tab) or {}
   if #content == 0 then
-    return
+    return false
   end
   session.tab_meta[tab_id] = sidebar.tab_meta(tab, content[1])
   local confirm = config.get().confirm_close ~= false and needs_prompt(gui_window, content)
@@ -164,16 +178,23 @@ function M.close_tab(gui_window, tab_id)
     tab:activate()
   end
   gui_window:perform_action(act.CloseCurrentTab { confirm = confirm }, content[1])
-  if switching and not confirm then
+  if switching and not confirm and not defer then
     previous:activate()
   end
+  return confirm
 end
 
 function M.close_others(gui_window, tab_id)
+  local previous = util.active_tab(gui_window)
+  local previous_id = previous and previous:tab_id() or nil
+  local prompted = false
   for _, item in ipairs(visible(gui_window)) do
     if item.tab_id ~= tab_id and not item.is_pinned then
-      M.close_tab(gui_window, item.tab_id)
+      prompted = M.close_tab(gui_window, item.tab_id, true) or prompted
     end
+  end
+  if not prompted then
+    restore_tab(gui_window, previous_id)
   end
 end
 

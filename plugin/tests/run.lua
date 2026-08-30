@@ -50,6 +50,7 @@ local model = require "vtabs.model"
 local sidebar = require "vtabs.sidebar"
 local actions = require "vtabs.actions"
 local input = require "vtabs.input"
+local geometry = require "vtabs.geometry"
 local fake = require "fake_mux"
 local backend = require "vtabs.backend"
 
@@ -780,6 +781,365 @@ test("a marker title never reaches the rendered tab list", function()
   tab:set_title "wez-vtabs:abcd"
   local built = model.build(gui)
   eq(built[1].title:find "wez%-vtabs", nil)
+end)
+
+-- ===================== implementer-2: interaction / geometry / focus =====================
+
+local function rgb(c)
+  return table.concat(c, ",")
+end
+
+test("theme bg is the terminal background; elevation restores the raised tint", function()
+  local t = theme.resolve({}, fake.palette)
+  eq(rgb(t.bg), "30,30,46")
+  local raised = theme.resolve({ elevation = 0.06 }, fake.palette)
+  assert(raised.bg[1] > t.bg[1] and raised.bg[3] > t.bg[3], "elevation lifts bg toward fg")
+end)
+
+test("accent is cursor_bg when it clears 3.0 contrast, else ansi[5]", function()
+  eq(rgb(theme.resolve({}, fake.palette).accent), "245,224,220")
+  local low = util.merge(fake.palette, { cursor_bg = "#242438" })
+  assert(theme.contrast({ 36, 36, 56 }, { 30, 30, 46 }) < 3.0, "fixture cursor is low contrast")
+  eq(rgb(theme.resolve({}, low).accent), "137,180,250")
+end)
+
+local function last_action(win)
+  return win.actions[#win.actions].action
+end
+
+test("AdjustPaneSize Right adds delta to split first.cols, Left subtracts (tab.rs:1294; headless 28-33-28)", function()
+  local win = fake.window(80)
+  local tab = win:add_tab { title = "g" }
+  tab.pane_list[1]:split { direction = "Left", top_level = true, size = 28 }
+  eq(tab.pane_list[1].cols, 28)
+  eq(tab.pane_list[2].cols, 51)
+  win.gui:perform_action(wezterm.action.AdjustPaneSize { "Right", 5 }, tab.pane_list[1])
+  eq(tab.pane_list[1].cols, 33)
+  eq(tab.pane_list[2].cols, 46)
+  win.gui:perform_action(wezterm.action.AdjustPaneSize { "Left", 5 }, tab.pane_list[1])
+  eq(tab.pane_list[1].cols, 28)
+end)
+
+test("window growth drifts the sidebar 50/50; correct claws it back in one AdjustPaneSize", function()
+  local win, gui = setup_window(1)
+  sidebar.ensure(gui)
+  local sb = sidebar.find(win.tab_list[1])
+  eq(sb.cols, 28)
+  win:resize(40)
+  eq(sb.cols, 48, "adjust_x_size gave the sidebar half of the delta")
+  local before = #win.actions
+  assert(geometry.correct(gui), "correction ran")
+  eq(#win.actions - before, 1, "exactly one action")
+  eq(last_action(win).action, "AdjustPaneSize")
+  eq(last_action(win).arg[1], "Left")
+  eq(last_action(win).arg[2], 20)
+  eq(sb.cols, 28)
+  eq(geometry.correct(gui), false, "second pass is a no-op")
+end)
+
+test("split Left puts the sidebar in first, split Right in second, so a right sidebar grows with Left", function()
+  config.setup { position = "right", backend = { path = "/bin/wez-vtabs" } }
+  local win = fake.window(80)
+  win:add_tab { title = "r" }
+  local gui = win.gui
+  sidebar.ensure(gui)
+  local tab = win.tab_list[1]
+  local sb = sidebar.find(tab)
+  eq(sb.split_args.direction, "Right")
+  eq(sb.cols, 28)
+  win:resize(-20)
+  eq(sb.cols, 18)
+  assert(geometry.correct(gui), "correction ran")
+  eq(last_action(win).arg[1], "Left")
+  eq(last_action(win).arg[2], 10)
+  eq(sb.cols, 28)
+  config.setup { backend = { path = "/bin/wez-vtabs" } }
+end)
+
+test("a divider drag with an unchanged window becomes the desired width until config reload", function()
+  local win, gui = setup_window(1)
+  sidebar.ensure(gui)
+  local tab = win.tab_list[1]
+  local sb = sidebar.find(tab)
+  eq(geometry.correct(gui), false, "baseline recorded")
+  tab:set_split(34)
+  eq(geometry.correct(gui), false, "drag adopted, not fought")
+  eq(geometry.desired(gui:window_id()), 34)
+  eq(geometry.correct(gui), false)
+  eq(sb.cols, 34)
+  geometry.reset(gui:window_id())
+  assert(geometry.correct(gui), "config reload drops the adopted width")
+  eq(sb.cols, 28)
+end)
+
+test("correction with several content panes activates the sidebar and restores focus", function()
+  local win, gui = setup_window(1)
+  sidebar.ensure(gui)
+  local tab = win.tab_list[1]
+  local extra = fake.pane(tab, { cols = sidebar.content_pane(tab).cols })
+  tab.pane_list[#tab.pane_list + 1] = extra
+  extra:activate()
+  win:resize(10)
+  assert(geometry.correct(gui), "correction ran")
+  eq(tab.active, extra, "focus restored")
+  eq(sidebar.find(tab).cols, 28)
+end)
+
+test("correction is skipped while a tab drag is in flight", function()
+  local win, gui = setup_window(1)
+  sidebar.ensure(gui)
+  win:resize(20)
+  state.session.drag[gui:window_id()] = { tab_id = win.tab_list[1].id }
+  eq(geometry.correct(gui), false)
+  eq(sidebar.find(win.tab_list[1]).cols, 38)
+  state.session.drag[gui:window_id()] = nil
+  assert(geometry.correct(gui))
+  eq(sidebar.find(win.tab_list[1]).cols, 28)
+end)
+
+local view_mod = require "vtabs.view"
+
+local function drag_setup()
+  local win, gui = setup_window(3)
+  sidebar.ensure(gui)
+  for _, tab in ipairs(win.tab_list) do
+    mark_ready(tab)
+  end
+  win.active_tab_ref = win.tab_list[1]
+  view_mod.sync(gui, { force = true })
+  return win, gui
+end
+
+local function mouse(gui, sb, kind, button, x, y)
+  input.handle(gui, sb, "vtabs", string.format('{"t":"mouse","k":"%s","b":"%s","x":%d,"y":%d}', kind, button, x, y))
+end
+
+---Presses row `y` and reports the drag, with the dwell already elapsed unless `hold` says otherwise.
+local function press_row(gui, sb, y, hold)
+  mouse(gui, sb, "down", "left", 5, y)
+  local drag = state.session.drag[gui:window_id()]
+  if drag and not hold then
+    drag.began = drag.began - 200
+  end
+  return drag
+end
+
+test("press keeps the sidebar of the clicked tab focused and points the drag at it", function()
+  local win, gui = drag_setup()
+  local sb1 = sidebar.find(win.tab_list[1])
+  local drag = press_row(gui, sb1, 4)
+  eq(win.active_tab_ref, win.tab_list[3])
+  eq(win.tab_list[3].active, sidebar.find(win.tab_list[3]), "sidebar holds focus, not the shell")
+  eq(drag.pane_id, sidebar.find(win.tab_list[3]):pane_id())
+end)
+
+test("one row of drift never arms a drag; three rows plus the dwell reorders on release", function()
+  local win, gui = drag_setup()
+  local sb1 = sidebar.find(win.tab_list[1])
+  local ids = {}
+  for i, t in ipairs(win.tab_list) do
+    ids[i] = t.id
+  end
+  press_row(gui, sb1, 4)
+  local sb3 = sidebar.find(win.tab_list[3])
+  mouse(gui, sb3, "drag", "left", 5, 3)
+  eq(state.session.drag[gui:window_id()].active, false, "one row is jitter")
+  mouse(gui, sb3, "up", "left", 5, 3)
+  eq(win.tab_list[3].id, ids[3], "order untouched")
+
+  press_row(gui, sb1, 4)
+  mouse(gui, sb3, "drag", "left", 5, 1)
+  assert(state.session.drag[gui:window_id()].active, "three rows arms the drag")
+  mouse(gui, sb3, "up", "left", 5, 1)
+  eq(win.tab_list[1].id, ids[3], "dragged tab took the first slot")
+end)
+
+test("a drag that starts before the dwell elapses is jitter", function()
+  local win, gui = drag_setup()
+  local sb1 = sidebar.find(win.tab_list[1])
+  press_row(gui, sb1, 4, "hold")
+  local sb3 = sidebar.find(win.tab_list[3])
+  mouse(gui, sb3, "drag", "left", 5, 1)
+  eq(state.session.drag[gui:window_id()].active, false)
+end)
+
+test("drag events from a pane other than the drag origin are dropped", function()
+  local win, gui = drag_setup()
+  local sb1 = sidebar.find(win.tab_list[1])
+  press_row(gui, sb1, 4)
+  local sb2 = sidebar.find(win.tab_list[2])
+  mouse(gui, sb2, "drag", "left", 5, 1)
+  eq(state.session.drag[gui:window_id()].active, false)
+end)
+
+test("a drag whose pane has no hit map is dropped instead of dropping at slot 1", function()
+  local win, gui = drag_setup()
+  local sb1 = sidebar.find(win.tab_list[1])
+  local drag = press_row(gui, sb1, 2)
+  state.session.hits[sb1:pane_id()] = nil
+  mouse(gui, sb1, "drag", "left", 5, 5)
+  eq(drag.active, false)
+  eq(drag.over_index, nil)
+end)
+
+test("right click opens the menu on release, never while the button is held", function()
+  local win, gui = drag_setup()
+  local sb1 = sidebar.find(win.tab_list[1])
+  local before = #win.actions
+  mouse(gui, sb1, "down", "right", 5, 3)
+  eq(#win.actions, before, "nothing opens under a held button")
+  mouse(gui, sb1, "up", "right", 5, 3)
+  eq(last_action(win).action, "InputSelector")
+end)
+
+test("hover=press restores content focus on release, hover=follow keeps the sidebar", function()
+  local win, gui = drag_setup()
+  local tab = win.tab_list[1]
+  local sb1 = sidebar.find(tab)
+  press_row(gui, sb1, 2)
+  eq(tab.active, sb1)
+  mouse(gui, sb1, "up", "left", 5, 2)
+  eq(tab.active, sb1, "follow leaves the sidebar active")
+  config.setup { hover = "press", backend = { path = "/bin/wez-vtabs" } }
+  press_row(gui, sb1, 2)
+  mouse(gui, sb1, "up", "left", 5, 2)
+  assert(tab.active ~= sb1, "press mode hands focus back")
+  config.setup { backend = { path = "/bin/wez-vtabs" } }
+end)
+
+test("mouse move repaints on a row change and stays quiet inside the row", function()
+  local win, gui = drag_setup()
+  local sb1 = sidebar.find(win.tab_list[1])
+  local sent = #sb1.sent
+  mouse(gui, sb1, "move", "none", 5, 3)
+  local repainted = #sb1.sent
+  assert(repainted > sent, "crossing into a row repaints")
+  mouse(gui, sb1, "move", "none", 6, 3)
+  eq(#sb1.sent, repainted, "same row, same spans, no frame")
+end)
+
+test("base64_decode round-trips and refuses malformed input", function()
+  eq(util.base64_decode "bA==", "l")
+  eq(util.base64_decode "G1tB", "\27[A")
+  eq(util.base64_decode "", "")
+  eq(util.base64_decode "bA", "l")
+  eq(util.base64_decode "b*==", nil)
+  eq(util.base64_decode "b", nil)
+  eq(util.base64_decode(nil), nil)
+end)
+
+local function key_setup(index)
+  local win, gui = drag_setup()
+  win.active_tab_ref = win.tab_list[index or 1]
+  local tab = win.active_tab_ref
+  return win, gui, tab, sidebar.find(tab), sidebar.content_pane(tab)
+end
+
+test("a key at a sidebar outside keyboard mode is typed into the content pane, which takes focus", function()
+  local _, gui, tab, sb, content = key_setup()
+  sb:activate()
+  local before = #content.sent
+  input.handle(gui, sb, "vtabs", '{"t":"key","key":"l","raw":"bA=="}')
+  eq(#content.sent, before + 1)
+  eq(content.sent[#content.sent], "l")
+  eq(tab.active, content, "focus handed back to the shell")
+end)
+
+test("raw carrying an OSC or bracketed-paste introducer is dropped, focus still returns", function()
+  local _, gui, tab, sb, content = key_setup(2)
+  local before = #content.sent
+  input.handle(gui, sb, "vtabs", '{"t":"key","key":"x","raw":"G10wOyE="}')
+  eq(#content.sent, before, "OSC introducer never reaches the shell")
+  eq(tab.active, content)
+  local _, gui2, _, sb2, content2 = key_setup(3)
+  input.handle(gui2, sb2, "vtabs", '{"t":"key","key":"x","raw":"G1syMDB+eA=="}')
+  eq(#content2.sent, 0, "bracketed paste never reaches the shell")
+end)
+
+test("a burst from one sidebar pane is rate-limited to one forward", function()
+  local _, gui, _, sb, content = key_setup()
+  input.handle(gui, sb, "vtabs", '{"t":"key","key":"a","raw":"YQ=="}')
+  eq(content.sent[#content.sent], "a")
+  local n = #content.sent
+  input.handle(gui, sb, "vtabs", '{"t":"key","key":"b","raw":"Yg=="}')
+  eq(#content.sent, n, "second key in the same window dropped")
+end)
+
+test("without raw only a lone printable key is forwarded", function()
+  local _, gui, tab, sb, content = key_setup()
+  input.handle(gui, sb, "vtabs", '{"t":"key","key":"enter"}')
+  eq(#content.sent, 0, "named keys send nothing")
+  eq(tab.active, content)
+  local _, gui2, _, sb2, content2 = key_setup(2)
+  input.handle(gui2, sb2, "vtabs", '{"t":"key","key":"c","mods":["ctrl"]}')
+  eq(#content2.sent, 0, "ctrl chords send nothing")
+  local _, gui3, _, sb3, content3 = key_setup(3)
+  input.handle(gui3, sb3, "vtabs", '{"t":"key","key":"z"}')
+  eq(content3.sent[1], "z")
+end)
+
+test("a key from a background tab's sidebar is never forwarded", function()
+  local win, gui = drag_setup()
+  win.active_tab_ref = win.tab_list[1]
+  local other = win.tab_list[2]
+  local content = sidebar.content_pane(other)
+  input.handle(gui, sidebar.find(other), "vtabs", '{"t":"key","key":"l","raw":"bA=="}')
+  eq(#content.sent, 0)
+end)
+
+test("a key from a sidebar in another domain than its content pane is dropped", function()
+  local _, gui, _, sb, content = key_setup()
+  sb.domain = "desktop"
+  input.handle(gui, sb, "vtabs", '{"t":"key","key":"l","raw":"bA=="}')
+  eq(#content.sent, 0)
+end)
+
+---Counts tab switches by wrapping the shared Tab metatable for the duration of `fn`.
+local function count_switches(win, fn)
+  local Tab = getmetatable(win.tab_list[1])
+  local original = Tab.activate
+  local switches = 0
+  Tab.activate = function(self)
+    switches = switches + 1
+    return original(self)
+  end
+  local ok, err = pcall(fn)
+  Tab.activate = original
+  if not ok then
+    error(err, 0)
+  end
+  return switches
+end
+
+test("reorder restores the active tab once for the whole batch", function()
+  local win, gui = setup_window(4)
+  sidebar.ensure(gui)
+  local ids = {}
+  for i, t in ipairs(win.tab_list) do
+    ids[i] = t.id
+  end
+  win.active_tab_ref = win.tab_list[1]
+  local before = #win.actions
+  local switches = count_switches(win, function()
+    actions.reorder(gui, { ids[4], ids[3], ids[2], ids[1] })
+  end)
+  local moves = #win.actions - before
+  assert(moves >= 2, "several tabs moved, got " .. moves)
+  eq(switches, moves + 1, "one restore, not one per move")
+  eq(win.active_tab_ref.id, ids[1])
+end)
+
+test("close_others restores the kept tab once, not after every close", function()
+  local win, gui = setup_window(4)
+  sidebar.ensure(gui)
+  win.active_tab_ref = win.tab_list[1]
+  local kept = win.tab_list[1].id
+  local switches = count_switches(win, function()
+    actions.close_others(gui, kept)
+  end)
+  eq(#win.tab_list, 1)
+  eq(win.active_tab_ref.id, kept)
+  eq(switches, 4, "three closes plus one restore")
 end)
 
 os.remove(state.file)

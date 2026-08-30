@@ -20,7 +20,7 @@ return config
 
 | option                    | default                                                           | description                                                                                                                                     |
 | ------------------------- | ----------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-| `width`                   | `28`                                                              | sidebar width in cells (min 8)                                                                                                                  |
+| `width`                   | `28`                                                              | sidebar width in cells (min 8); re-asserted on the active tab after every window resize, a divider drag is adopted until the config reloads      |
 | `position`                | `"left"`                                                          | `"left"` or `"right"`                                                                                                                           |
 | `hide_native_tab_bar`     | `true`                                                            | sets `enable_tab_bar = false`                                                                                                                   |
 | `poll_ms`                 | `500`                                                             | upper bound for `status_update_interval`; drives sidebar refresh                                                                                |
@@ -37,6 +37,7 @@ return config
 | `scroll_indicator`        | `true`                                                            | right-edge thumb when tabs overflow                                                                                                             |
 | `wheel`                   | `"scroll"`                                                        | `"scroll"` the list or `"switch"` tabs                                                                                                          |
 | `tear_off`                | `true`                                                            | drag a tab onto the sidebar's inner edge (3+ columns of travel) to move it to a new window                                                      |
+| `hover`                   | `"follow"`                                                       | `"follow"`: the sidebar is the tab's active pane while the pointer is over it (sets `pane_focus_follows_mouse = true` when you left it unset — this is a global wezterm option); `"press"`: only from press to release |
 | `hover_timeout_ms`        | `6000`                                                            | clear hover highlight after inactivity (`0` = never); terminals report no mouse-leave                                                           |
 | `double_click_ms`         | `400`                                                             | double-click on empty space opens a new tab                                                                                                     |
 | `ellipsis`                | `"…"`                                                             | used when truncating titles                                                                                                                     |
@@ -47,7 +48,7 @@ return config
 | `skip_close_confirmation` | `true`                                                            | add `wez-vtabs` to `skip_close_confirmation_for_processes_named`                                                                                |
 | `private.env`             | `{ HISTFILE = "", fish_private_mode = "1", VTABS_PRIVATE = "1" }` | env for shells in private windows                                                                                                               |
 | `keys`                    | `{}`                                                              | key overrides, see below; `false` disables all defaults                                                                                         |
-| `theme`                   | `{ use_scheme_tab_bar = "auto" }`                                 | color overrides, see below                                                                                                                      |
+| `theme`                   | `{ use_scheme_tab_bar = "auto", elevation = 0 }`                  | color overrides, see below                                                                                                                      |
 | `hooks.filter`            | `nil`                                                             | `fun(tab, mux_window): boolean` hide tabs from the sidebar (navigation and reordering only touch visible tabs)                                  |
 | `hooks.footer`            | `nil`                                                             | `fun(mux_window): (string \| FooterEntry)[]` sticky rows at the bottom; `FooterEntry = { text, fg?, bg?, id?, on_click? = fun(window, entry) }` |
 | `hooks.theme`             | `nil`                                                             | `fun(window, theme): theme` per-window theme override                                                                                           |
@@ -100,8 +101,17 @@ move_tab_down activate_tab(index) activate_pane_direction(dir)`.
 `focus_sidebar` moves focus into the sidebar: `j`/`k`/arrows/`Tab`/`Shift+Tab`
 move, `g`/`G`/`Home`/`End` jump, `1`–`9` switch directly, `Enter`/`Space`
 switch, `x`/`d`/`Delete` close, `p` pin, `n` new tab, `r` rename, `m` menu,
-`J`/`K` reorder, `Esc`/`q`/`Ctrl+C` leave. Any other key while the sidebar
-is not in keyboard mode returns focus to the content pane.
+`J`/`K` reorder, `Esc`/`q`/`Ctrl+C` leave.
+
+Keys that reach the sidebar while it is *not* in keyboard mode are forwarded to
+the tab's content pane, which then takes focus back.
+
+| guard                | value                                                                 |
+| -------------------- | ---------------------------------------------------------------------- |
+| source               | a sidebar pane this process authenticated, in the window's active tab   |
+| target               | that same tab's content pane, same domain, not an overlay              |
+| payload              | one key press, <= 16 bytes, no OSC/DCS/APC introducer, no bracketed paste |
+| rate                 | one forward per source pane per 50 ms                                  |
 
 ## Mouse
 
@@ -109,12 +119,18 @@ is not in keyboard mode returns focus to the content pane.
 | ------------------------------------------ | -------------------------------------------------------------------------------- |
 | left click                                 | switch tab                                                                       |
 | click `✕` / middle click                   | close tab                                                                        |
-| right click                                | context menu (overlay in the current pane)                                       |
-| drag                                       | reorder; dropping across the separator pins/unpins, the list previews the result |
+| right click                                | context menu on release (overlay in the current pane)                            |
+| drag                                       | reorder after 3 rows of travel and 120 ms; dropping across the separator pins/unpins, the list previews the result |
 | drag to the inner edge                     | move tab to a new window (edge highlights while armed)                           |
 | double-click empty space / click "New Tab" | new tab                                                                          |
 | wheel                                      | scroll list (or switch tabs with `wheel = "switch"`)                             |
 | footer row                                 | calls the entry's `on_click`                                                     |
+
+| focus                | behaviour                                                                                  |
+| -------------------- | ------------------------------------------------------------------------------------------ |
+| `hover = "follow"`   | pointer over the sidebar = sidebar focused; keys that are not sidebar bindings are forwarded to the tab's content pane, which then takes focus back |
+| `hover = "press"`    | the sidebar holds focus from press to release only                                          |
+| press                | never hands focus to the content pane, so the drag and the release reach the sidebar        |
 
 
 ## Public API
@@ -126,10 +142,19 @@ is not in keyboard mode returns focus to the content pane.
 
 ## Theme
 
-`bg fg dim accent active_bg active_fg hover_bg hover_fg focus_bg pinned_fg
-separator new_tab_fg close_fg close_hover_fg unseen_fg private_accent drag_bg
-drag_fg scroll_fg`
+| key                  | default                                                            |
+| -------------------- | ------------------------------------------------------------------ |
+| `bg`                 | `resolved_palette.background`                                      |
+| `elevation`          | `0` — mix `bg` toward `fg`; `0.06` is the pre-1.0 raised sidebar   |
+| `use_scheme_tab_bar` | `"auto"` — adopt `colors.tab_bar` when its ladder is monotone      |
+| `accent`             | `resolved_palette.cursor_bg` if contrast vs `bg` >= 3.0, else `ansi[5]` |
+| `fg`                 | `resolved_palette.foreground`                                      |
+| `hover_bg`           | `bg` mixed 8% toward `fg`                                          |
+| `active_bg`          | `bg` mixed 16% toward `fg`                                         |
+
+Also settable: `dim active_fg hover_fg focus_bg pinned_fg separator new_tab_fg
+close_fg close_hover_fg unseen_fg private_accent drag_bg drag_fg scroll_fg`.
 
 ```lua
-theme = { accent = "#f5c2e7", active_bg = "#313244" }
+theme = { accent = "#f5c2e7", active_bg = "#313244", elevation = 0.06 }
 ```

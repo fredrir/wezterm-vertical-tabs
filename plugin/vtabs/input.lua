@@ -12,22 +12,27 @@ local util = require "vtabs.util"
 local M = {}
 
 local DRAG_TIMEOUT_MS = 3000
-local DRAG_START_ROWS = 1
+local DRAG_START_ROWS = 3
 local DRAG_START_COLS = 2
+local DRAG_DWELL_MS = 120
 local TEAR_OFF_TRAVEL = 3
 
 local session = state.session
+local pending_menu = {}
 
 local function blur(gui_window)
   actions.blur_sidebar(gui_window)
 end
 
+---Press keeps the sidebar as the tab's active pane so the drag and the release reach it too.
 local function on_down(gui_window, pane, ev, cfg)
   local wid = gui_window:window_id()
-  local h = hit.at(session.hits[pane:pane_id()], ev.y)
+  local pid = pane:pane_id()
+  local h = hit.at(session.hits[pid], ev.y)
   local now = util.now_ms()
   session.hover[wid] = { x = ev.x, y = ev.y, at = now }
   session.drag[wid] = nil
+  pending_menu[wid] = nil
   state.set_focus(wid, false)
   if cfg.debug then
     util.log("down hit=%s tab=%s slot=%s", h.kind, tostring(h.tab_id), tostring(h.slot))
@@ -41,8 +46,16 @@ local function on_down(gui_window, pane, ev, cfg)
       if hit.in_close(h, ev.x) then
         actions.close_tab(gui_window, h.tab_id)
       else
-        actions.activate_tab(gui_window, h.tab_id)
-        session.drag[wid] = { tab_id = h.tab_id, origin_x = ev.x, origin_y = ev.y, active = false, at = now }
+        local focused = actions.activate_tab(gui_window, h.tab_id, "sidebar")
+        session.drag[wid] = {
+          tab_id = h.tab_id,
+          origin_x = ev.x,
+          origin_y = ev.y,
+          pane_id = focused and focused:pane_id() or pid,
+          active = false,
+          began = now,
+          at = now,
+        }
       end
     elseif h.kind == "new_tab" then
       actions.new_tab(gui_window)
@@ -54,49 +67,61 @@ local function on_down(gui_window, pane, ev, cfg)
   elseif ev.b == "middle" and h.kind == "tab" then
     actions.close_tab(gui_window, h.tab_id)
   elseif ev.b == "right" and h.kind == "tab" then
-    menu.open(gui_window, h.tab_id)
-    return
+    pending_menu[wid] = { tab_id = h.tab_id, at = now }
   end
-  blur(gui_window)
 end
 
 local function on_drag(gui_window, pane, ev, cfg)
   local wid = gui_window:window_id()
+  local pid = pane:pane_id()
   local drag = session.drag[wid]
-  if not drag or ev.b ~= "left" then
+  local hits = session.hits[pid]
+  if not drag or ev.b ~= "left" or drag.pane_id ~= pid or not hits then
     return
   end
   drag.at = util.now_ms()
   local dx = math.abs(ev.x - drag.origin_x)
-  if not drag.active and (math.abs(ev.y - drag.origin_y) >= DRAG_START_ROWS or dx >= DRAG_START_COLS) then
+  local dy = math.abs(ev.y - drag.origin_y)
+  local past_threshold = dy >= DRAG_START_ROWS or dx >= DRAG_START_COLS
+  if not drag.active and past_threshold and drag.at - drag.began >= DRAG_DWELL_MS then
     drag.active = true
   end
   if drag.active then
-    local pid = pane:pane_id()
     local dims = session.dims[pid] or { cols = cfg.width, rows = ev.y }
-    drag.over_index = hit.drop_slot(session.hits[pid], ev.y, dims.rows, cfg.padding.top)
+    drag.over_index = hit.drop_slot(hits, ev.y, dims.rows, cfg.padding.top)
     drag.outside = cfg.tear_off and dx >= TEAR_OFF_TRAVEL and hit.on_inner_edge(ev.x, dims.cols, cfg.position)
   end
   session.hover[wid] = { x = ev.x, y = ev.y, at = drag.at }
 end
 
+---The menu is opened from the release: a selector overlay cancels itself if a button is still held.
 local function on_up(gui_window, pane, ev, cfg)
   local wid = gui_window:window_id()
+  local pid = pane:pane_id()
   local drag = session.drag[wid]
+  local menu_for = pending_menu[wid]
   session.drag[wid] = nil
-  if not drag or not drag.active then
+  pending_menu[wid] = nil
+  if ev.b == "right" then
+    if menu_for then
+      menu.open(gui_window, menu_for.tab_id)
+    end
     return
   end
-  local dims = session.dims[pane:pane_id()] or { cols = cfg.width }
-  local travelled = math.abs(ev.x - drag.origin_x) >= TEAR_OFF_TRAVEL
-  if drag.outside or (cfg.tear_off and travelled and hit.on_inner_edge(ev.x, dims.cols, cfg.position)) then
-    if actions.tear_off(gui_window, drag.tab_id) then
-      return
+  if drag and drag.active and drag.pane_id == pid and session.hits[pid] then
+    local dims = session.dims[pid] or { cols = cfg.width }
+    local travelled = math.abs(ev.x - drag.origin_x) >= TEAR_OFF_TRAVEL
+    if drag.outside or (cfg.tear_off and travelled and hit.on_inner_edge(ev.x, dims.cols, cfg.position)) then
+      if actions.tear_off(gui_window, drag.tab_id) then
+        return
+      end
+    elseif drag.over_index then
+      actions.move_tab_to_slot(gui_window, drag.tab_id, drag.over_index)
     end
-  elseif drag.over_index then
-    actions.move_tab_to_slot(gui_window, drag.tab_id, drag.over_index)
   end
-  blur(gui_window)
+  if cfg.hover == "press" then
+    blur(gui_window)
+  end
 end
 
 local function on_wheel(gui_window, ev, cfg)
@@ -109,11 +134,24 @@ local function on_wheel(gui_window, ev, cfg)
   session.user_scrolled[wid] = true
 end
 
+---Motion only needs a repaint when it crosses a row or the close-button span of the row it is on.
+local function hover_moved(previous, ev, pid)
+  if not previous or previous.y ~= ev.y then
+    return true
+  end
+  local h = hit.at(session.hits[pid], ev.y)
+  return hit.in_close(h, previous.x) ~= hit.in_close(h, ev.x)
+end
+
 function M.mouse(gui_window, pane, ev)
   local cfg = config.get()
   local wid = gui_window:window_id()
   if ev.k == "move" then
+    local moved = hover_moved(session.hover[wid], ev, pane:pane_id())
     session.hover[wid] = { x = ev.x, y = ev.y, at = util.now_ms() }
+    if not moved then
+      return
+    end
   elseif ev.k == "down" then
     on_down(gui_window, pane, ev, cfg)
   elseif ev.k == "drag" then
@@ -152,7 +190,7 @@ local KEYS = {
     actions.rename_tab(gui_window, id)
   end),
   m = with_focused(function(gui_window, id)
-    menu.open(gui_window, id)
+    menu.open(gui_window, id, { keep_focus = true })
   end),
   J = with_focused(function(gui_window, id, index)
     actions.move_tab_to_slot(gui_window, id, index + 1)
@@ -169,10 +207,87 @@ local KEYS = {
 }
 KEYS.space, KEYS.d, KEYS.delete = KEYS.enter, KEYS.x, KEYS.x
 
-function M.key(gui_window, ev)
+local FORWARD_MAX_RAW = 64
+local FORWARD_MAX_BYTES = 16
+local FORWARD_MIN_GAP_MS = 50
+local FORWARD_TTL_MS = 60000
+local forwarded_at = {}
+
+---Bytes worth typing at a shell: one key press, no OSC/DCS/APC introducer, no bracketed paste.
+local function safe_bytes(text)
+  if not text or text == "" or #text > FORWARD_MAX_BYTES then
+    return nil
+  end
+  if text:find "\27[%]PX%^_]" or text:find("\27[200~", 1, true) or text:find("\27[201~", 1, true) then
+    return nil
+  end
+  return text
+end
+
+local function decoded_key(ev)
+  if type(ev.raw) == "string" then
+    return #ev.raw <= FORWARD_MAX_RAW and util.base64_decode(ev.raw) or nil
+  end
+  local key = ev.key
+  if type(key) ~= "string" or utf8.len(key) ~= 1 then
+    return nil
+  end
+  if util.contains(ev.mods, "ctrl") or util.contains(ev.mods, "alt") then
+    return nil
+  end
+  local code = utf8.codepoint(key)
+  return code >= 32 and code ~= 127 and key or nil
+end
+
+---A key at a sidebar that is not in keyboard mode is the user typing at their shell: hand it over.
+local function forward_key(gui_window, pane, ev, cfg)
+  local wid = gui_window:window_id()
+  local pid = pane:pane_id()
+  local tab = util.try(function()
+    return pane:tab()
+  end)
+  local active = util.active_tab(gui_window)
+  if not sidebar.is_ready(pane) or not tab or not active or tab:tab_id() ~= active:tab_id() then
+    return
+  end
+  if cfg.hover == "press" and not session.drag[wid] then
+    return
+  end
+  local now = util.now_ms()
+  if now - (forwarded_at[pid] or 0) < FORWARD_MIN_GAP_MS then
+    if cfg.debug then
+      util.log("key forward rate-limited on pane %d", pid)
+    end
+    return
+  end
+  local content = sidebar.content_pane(tab)
+  if not content or content:pane_id() == pid or sidebar.is_sidebar(content) or sidebar.is_overlay(content) then
+    return
+  end
+  local domain = util.try(function()
+    return pane:get_domain_name()
+  end)
+  if domain == nil or domain ~= util.try(function()
+    return content:get_domain_name()
+  end) then
+    return
+  end
+  forwarded_at[pid] = now
+  local text = safe_bytes(decoded_key(ev))
+  if text and not pcall(function()
+    content:send_text(text)
+  end) then
+    return
+  end
+  content:activate()
+  state.set_focus(wid, false)
+end
+
+function M.key(gui_window, pane, ev)
   local wid = gui_window:window_id()
   if not state.has_focus(wid) then
-    blur(gui_window)
+    forward_key(gui_window, pane, ev, config.get())
+    view.sync(gui_window)
     return
   end
   local items = model.ordered(model.build(gui_window))
@@ -230,7 +345,7 @@ function M.handle(gui_window, pane, name, value)
   elseif ev.t == "mouse" then
     M.mouse(gui_window, pane, ev)
   elseif ev.t == "key" then
-    M.key(gui_window, ev)
+    M.key(gui_window, pane, ev)
   end
 end
 
@@ -246,6 +361,17 @@ function M.tick(gui_window)
   local drag = session.drag[wid]
   if drag and now - drag.at > DRAG_TIMEOUT_MS then
     session.drag[wid] = nil
+    if cfg.hover == "press" then
+      blur(gui_window)
+    end
+  end
+  if pending_menu[wid] and now - pending_menu[wid].at > DRAG_TIMEOUT_MS then
+    pending_menu[wid] = nil
+  end
+  for pid, at in pairs(forwarded_at) do
+    if now - at > FORWARD_TTL_MS then
+      forwarded_at[pid] = nil
+    end
   end
   local active = util.active_tab(gui_window)
   local active_id = active and active:tab_id() or nil

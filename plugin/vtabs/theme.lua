@@ -62,6 +62,16 @@ local function ensure_contrast(fg, bg, target, min)
   return out
 end
 
+local MIN_ACCENT_CONTRAST = 3.0
+
+local function scheme_accent(palette, bg)
+  local cursor = first(palette.cursor_bg)
+  if cursor and M.contrast(cursor, bg) >= MIN_ACCENT_CONTRAST then
+    return cursor
+  end
+  return nil
+end
+
 local function monotone(bg, hover, active, fg)
   local lb, lh, la = luminance(bg), luminance(hover), luminance(active)
   local toward_fg = luminance(fg) > lb
@@ -78,7 +88,8 @@ function M.resolve(user, palette)
   local base_bg = first(palette.background, "#1e1e2e")
   local fg = first(user.fg, palette.foreground, "#cdd6f4")
 
-  local bg = mix(base_bg, fg, 0.06)
+  local elevation = tonumber(user.elevation) or 0
+  local bg = elevation > 0 and mix(base_bg, fg, elevation) or base_bg
   local hover_bg = mix(bg, fg, 0.08)
   local active_bg = mix(bg, fg, 0.16)
 
@@ -100,7 +111,7 @@ function M.resolve(user, palette)
   active_bg = first(user.active_bg) or active_bg
 
   local dim = first(user.dim) or ensure_contrast(mix(fg, bg, 0.45), bg, fg, 3.0)
-  local accent = first(user.accent, ansi[5], "#89b4fa")
+  local accent = first(user.accent) or scheme_accent(palette, bg) or first(ansi[5], "#89b4fa")
 
   return {
     bg = bg,

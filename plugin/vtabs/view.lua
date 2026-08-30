@@ -3,6 +3,7 @@ local state = require "vtabs.state"
 local sidebar = require "vtabs.sidebar"
 local model = require "vtabs.model"
 local render = require "vtabs.render"
+local geometry = require "vtabs.geometry"
 local theme = require "vtabs.theme"
 local util = require "vtabs.util"
 
@@ -42,14 +43,15 @@ local function theme_for(gui_window, cfg)
   return themes[wid]
 end
 
-local function dims_of(pane, cfg)
+---Nil when the pane cannot report a size; the frame is then skipped rather than painted at a guess.
+local function dims_of(pane)
   local d = util.try(function()
     return pane:get_dimensions()
   end)
   if d and d.cols and d.viewport_rows then
     return d.cols, d.viewport_rows
   end
-  return cfg.width, 24
+  return nil
 end
 
 local function footer_for(cfg, mux_win)
@@ -71,6 +73,7 @@ function M.sync(gui_window, opts)
   if cfg.debug then
     util.log("sync: window %d", gui_window:window_id())
   end
+  geometry.correct(gui_window)
   local mux_win = gui_window:mux_window()
   local wid = gui_window:window_id()
   local items = model.build(gui_window)
@@ -87,8 +90,11 @@ function M.sync(gui_window, opts)
       local pid = sb:pane_id()
       local is_active = info.tab:tab_id() == active_tab_id
       local due = is_active or opts.force or now - (session.sent_at[pid] or 0) >= INACTIVE_REFRESH_MS
+      local cols, rows
       if due then
-        local cols, rows = dims_of(sb, cfg)
+        cols, rows = dims_of(sb)
+      end
+      if cols then
         local result = render.render {
           cols = cols,
           rows = rows,
