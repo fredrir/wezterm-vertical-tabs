@@ -35,13 +35,34 @@ function M.is_overlay(pane)
   return type(domain) ~= "string" or domain:find "TermWiz" ~= nil
 end
 
----Only panes the plugin registered count; user vars alone are never trusted.
+---Only panes the plugin registered count. After a GUI restart mux panes get new ids, so a pane
+---that echoes a token this plugin minted is re-adopted; arbitrary user vars are never trusted.
 function M.is_sidebar(pane)
   if not pane then
     return false
   end
   local tab_id = tab_id_of(pane)
-  return tab_id ~= nil and state.sidebar_pane_id(tab_id) == pane:pane_id()
+  if tab_id == nil then
+    return false
+  end
+  local pid = pane:pane_id()
+  if state.sidebar_pane_id(tab_id) == pid then
+    return true
+  end
+  local token = user_vars(pane).vtabs_token
+  local owner = state.pane_for_token(token)
+  if owner == nil or owner == pid then
+    return false
+  end
+  for _, p in ipairs(pane:tab():panes()) do
+    if p:pane_id() == owner then
+      return false
+    end
+  end
+  state.set_sidebar(tab_id, pid, token)
+  session.ready[pid] = true
+  session.seen[pid] = util.now_ms()
+  return true
 end
 
 ---True once the backend in `pane` has echoed the token it was given over stdin.
@@ -105,6 +126,19 @@ local function cwd_path(pane)
   return cwd.file_path
 end
 
+---Host named in the pane's OSC 7 cwd; panes proxied through a mux server only reveal their host this way.
+local function cwd_host(pane)
+  local cwd = util.try(function()
+    return pane:get_current_working_dir()
+  end)
+  if not cwd then
+    return nil
+  end
+  local url = type(cwd) == "string" and cwd or tostring(cwd)
+  local host = url:match "^file://([^/]*)/"
+  return host ~= "" and host or nil
+end
+
 function M.tab_meta(tab, pane)
   local title = tab:get_title()
   return {
@@ -128,13 +162,6 @@ function M.auth(pane)
   if token then
     M.send(pane, { t = "auth", token = token })
   end
-end
-
-local function is_local(pane)
-  local domain = util.try(function()
-    return pane:get_domain_name()
-  end)
-  return domain == "local"
 end
 
 ---Mux-domain splits can grow the tab past the window; re-sending the window size makes the mux refit it.
@@ -161,19 +188,29 @@ function M.attach(tab)
   if not base or M.is_overlay(base) then
     return nil
   end
-  local pane_domain = cfg.domain == "CurrentPaneDomain" and util.try(function()
-    return base:get_domain_name()
-  end) or cfg.domain
-  if session.failed_domains[pane_domain] then
+  local pane_domain = cfg.domain
+  if cfg.domain == "CurrentPaneDomain" then
+    pane_domain = util.try(function()
+      return base:get_domain_name()
+    end)
+  end
+  if not pane_domain then
+    util.warn_once("domain-" .. tab_id, "cannot determine domain for tab %d; sidebar skipped", tab_id)
     return nil
   end
-  local args = backend.spawn_args(cfg, pane_domain)
-  if cfg.debug then
+  local host = cwd_host(base)
+  local place = pane_domain .. "@" .. (host or "")
+  if session.failed_domains[place] then
+    return nil
+  end
+  local args = backend.spawn_args(cfg, pane_domain, host)
+  if not session.logged_domains[place] then
+    session.logged_domains[place] = true
     util.log(
-      "attach: tab %d domain %s args %s",
-      tab_id,
-      tostring(pane_domain),
-      table.concat(args or {}, " "):sub(1, 80)
+      "domain %s host %s: sidebar command %s",
+      pane_domain,
+      host or "?",
+      args and args[#args]:sub(1, 120) or "none"
     )
   end
   if not args then
@@ -192,7 +229,7 @@ function M.attach(tab)
       top_level = true,
       size = cfg.width,
       args = args,
-      set_environment_variables = backend.env(cfg, pane_domain),
+      set_environment_variables = backend.env(cfg, pane_domain, host),
       domain = domain,
     }
   end)
@@ -204,10 +241,10 @@ function M.attach(tab)
   local token = util.random_token()
   state.set_sidebar(tab_id, sb:pane_id(), token)
   session.seen[sb:pane_id()] = now
-  session.pane_domain[sb:pane_id()] = pane_domain
+  session.pane_domain[sb:pane_id()] = place
   M.auth(sb)
   base:activate()
-  if not is_local(base) then
+  if not backend.is_local(pane_domain, host) then
     fit_to_window(tab)
   end
   return sb
@@ -246,20 +283,17 @@ function M.close_orphan(gui_window, tab, sb)
   end
 end
 
-local MAX_READY_FAILURES = 2
-
----A backend that repeatedly never answers means the binary is missing there; stop retrying in that domain.
-function M.give_up(gui_window, tab, sb)
-  local domain = session.pane_domain[sb:pane_id()] or "local"
-  local failures = (session.ready_failures[domain] or 0) + 1
-  session.ready_failures[domain] = failures
-  M.detach(gui_window, tab)
-  if failures >= MAX_READY_FAILURES then
-    session.failed_domains[domain] = true
-    util.warn("sidebar backend not responding in domain %s; set backend.path for it", tostring(domain))
-  else
-    util.warn("sidebar in domain %s did not start, retrying", tostring(domain))
+---A backend that never answers usually died at spawn; closing such panes over a mux link can wedge
+---WezTerm's focus reconciliation, so the pane is left for the user and its place is not retried.
+function M.give_up(_, _, sb)
+  local pid = sb:pane_id()
+  local place = session.pane_domain[pid] or "local@"
+  if session.failed_domains[place] then
+    return
   end
+  session.failed_domains[place] = true
+  session.given_up[pid] = true
+  util.warn("sidebar backend did not start in %s; fix backend.path and close that pane", place)
 end
 
 ---Pings idle sidebars; replaces one whose backend stopped answering.
@@ -273,7 +307,6 @@ local function check_liveness(gui_window, tab, sb, now)
     M.detach(gui_window, tab)
     return false
   end
-  session.ready_failures[session.pane_domain[pid] or "local"] = nil
   if idle > PING_AFTER_MS and (session.pinged[pid] or 0) < seen then
     session.pinged[pid] = now
     M.send(sb, { t = "ping", n = now })
@@ -330,7 +363,7 @@ function M.ensure(gui_window)
       elseif sb then
         if M.is_ready(sb) then
           check_liveness(gui_window, tab, sb, now)
-        elseif now - (session.seen[sb:pane_id()] or now) > READY_TIMEOUT_MS then
+        elseif not session.given_up[sb:pane_id()] and now - (session.seen[sb:pane_id()] or now) > READY_TIMEOUT_MS then
           M.give_up(gui_window, tab, sb)
         end
       else

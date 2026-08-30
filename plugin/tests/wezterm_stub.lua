@@ -22,6 +22,9 @@ function M.column_width(s)
 end
 
 M.executable_dir = "/usr/local/bin"
+function M.hostname()
+  return "macie"
+end
 function M.run_child_process()
   return true, "", ""
 end

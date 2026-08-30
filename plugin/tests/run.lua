@@ -380,6 +380,21 @@ test("ensure attaches one authenticated sidebar per tab and sends auth", functio
   eq(sidebars_in(win.tab_list[1]), 1, "no duplicate on second ensure")
 end)
 
+test("a sidebar with a new pane id but a known token is re-adopted, not duplicated", function()
+  local win, gui = setup_window(1)
+  sidebar.ensure(gui)
+  local tab = win.tab_list[1]
+  local sb = mark_ready(tab)
+  local token = state.token_for(sb:pane_id())
+  sb.id = sb.id + 1000
+  tab.id = tab.id + 1000
+  sb.vars = { vtabs_token = token }
+  eq(sidebar.is_sidebar(sb), true)
+  sidebar.ensure(gui)
+  eq(sidebars_in(tab), 1)
+  eq(#tab:panes(), 2)
+end)
+
 test("a pane spoofing vtabs_role or vtabs_token is never a sidebar", function()
   local win, gui = setup_window(1)
   sidebar.ensure(gui)
@@ -506,7 +521,20 @@ test("backend path resolves per domain and remote bootstrap is inline", function
   eq(backend.resolve_path(cfg, "desktop"), nil)
   backend.register_local_domains { unix_domains = { { name = "localmux" } } }
   eq(backend.resolve_path(cfg, "localmux"), "/bin/wez-vtabs")
+  eq(backend.resolve_path(cfg, "localmux", "macie"), "/bin/wez-vtabs")
+  eq(backend.resolve_path(cfg, "localmux", "archie"), nil, "proxied remote host is not local")
   eq(backend.env(cfg, "localmux").VTABS_TARGET, wezterm.target_triple)
+  eq(backend.env(cfg, "localmux", "archie").VTABS_TARGET, nil)
+  cfg = config.setup { backend = { path = { ["local"] = "/l", archie = "/a" } } }
+  eq(backend.resolve_path(cfg, "localmux", "archie"), "/a")
+  cfg = config.setup {
+    backend = {
+      path = function(_, host)
+        return host == "archie" and "/h" or "/m"
+      end,
+    },
+  }
+  eq(backend.spawn_args(cfg, "localmux", "archie")[1], "/h")
   cfg = config.setup { backend = { path = { ["local"] = "/l", desktop = "/d" } } }
   eq(backend.resolve_path(cfg, "desktop"), "/d")
   cfg = config.setup { backend = {
@@ -523,7 +551,7 @@ test("backend path resolves per domain and remote bootstrap is inline", function
   eq(backend.env(cfg, "desktop").VTABS_BUILD, "0")
 end)
 
-test("a domain whose sidebar never becomes ready is abandoned after one warning", function()
+test("a sidebar that never becomes ready is left in place and its domain not retried", function()
   local win, gui = setup_window(2)
   for _, tab in ipairs(win.tab_list) do
     tab.pane_list[1].domain = "desktop"
@@ -536,11 +564,17 @@ test("a domain whose sidebar never becomes ready is abandoned after one warning"
   end
   sidebar.ensure(gui)
   sidebar.ensure(gui)
-  eq(sidebars_in(win.tab_list[1]), 0)
-  eq(sidebars_in(win.tab_list[2]), 0)
+  eq(sidebars_in(win.tab_list[1]), 1, "dead pane left alone")
   eq(#win.tab_list, 2)
-  assert(state.session.failed_domains.desktop)
-  state.session.failed_domains.desktop = nil
+  assert(state.session.failed_domains["desktop@"])
+  local warned = 0
+  for _, line in ipairs(wezterm.log) do
+    if line:find("did not start", 1, true) then
+      warned = warned + 1
+    end
+  end
+  eq(warned, 1, "warned once")
+  state.session.failed_domains["desktop@"] = nil
 end)
 
 os.remove(state.file)

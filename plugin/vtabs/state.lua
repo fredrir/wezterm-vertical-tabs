@@ -100,7 +100,8 @@ M.session = {
   attaching = {},
   pane_domain = {},
   failed_domains = {},
-  ready_failures = {},
+  given_up = {},
+  logged_domains = {},
 }
 
 local function save(persist)
@@ -153,6 +154,19 @@ end
 
 function M.token_for(pane_id)
   return data.tokens[key(pane_id)]
+end
+
+---Pane id this plugin minted `token` for, or nil when the token is unknown.
+function M.pane_for_token(token)
+  if type(token) ~= "string" or token == "" then
+    return nil
+  end
+  for pid, t in pairs(data.tokens) do
+    if t == token then
+      return tonumber(pid)
+    end
+  end
+  return nil
 end
 
 function M.set_sidebar(tab_id, pane_id, token)

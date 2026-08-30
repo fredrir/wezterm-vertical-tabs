@@ -1,3 +1,4 @@
+local wezterm = require "wezterm" ---@type Wezterm
 local platform = require "vtabs.platform"
 local version = require "vtabs.version"
 local util = require "vtabs.util"
@@ -33,31 +34,48 @@ function M.register_local_domains(config)
   end
 end
 
-function M.is_local(domain)
-  return domain == nil or machine_domains[domain] == true
+local local_host = nil
+
+local function this_host()
+  if local_host == nil then
+    local_host = util.try(wezterm.hostname) or ""
+    local_host = local_host:lower():gsub("%..*$", "")
+  end
+  return local_host
 end
 
----`backend.path` may be a string (this machine's domains), a table keyed by domain, or a function.
-function M.resolve_path(cfg, domain)
+---A pane is on this machine when its domain is local/unix and its cwd does not name another host.
+function M.is_local(domain, host)
+  if domain ~= nil and not machine_domains[domain] then
+    return false
+  end
+  if host == nil or host == "" or host == "localhost" then
+    return true
+  end
+  return host:lower():gsub("%..*$", "") == this_host()
+end
+
+---`backend.path` may be a string (this machine), a table keyed by host or domain, or `fun(domain, host)`.
+function M.resolve_path(cfg, domain, host)
   local path = cfg.backend.path
   if type(path) == "function" then
-    return util.try(path, domain)
+    return util.try(path, domain, host)
   end
   if type(path) == "table" then
-    return path[domain]
+    return (host and path[host]) or path[domain]
   end
-  if type(path) == "string" and M.is_local(domain) then
+  if type(path) == "string" and M.is_local(domain, host) then
     return path
   end
   return nil
 end
 
-function M.spawn_args(cfg, domain)
-  local path = M.resolve_path(cfg, domain)
+function M.spawn_args(cfg, domain, host)
+  local path = M.resolve_path(cfg, domain, host)
   if path then
     return { path }
   end
-  if M.is_local(domain) then
+  if M.is_local(domain, host) then
     if platform.is_windows then
       return { "powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", M.root .. "\\bin\\bootstrap.ps1" }
     end
@@ -70,17 +88,17 @@ function M.spawn_args(cfg, domain)
   return { "sh", "-c", script }
 end
 
-function M.env(cfg, domain)
+function M.env(cfg, domain, host)
   local env = {
     VTABS_USERVAR = cfg.backend.uservar,
     VTABS_REPO = cfg.backend.repo,
     VTABS_VERSION = cfg.backend.version or version,
   }
-  if M.is_local(domain) then
+  if M.is_local(domain, host) then
     env.VTABS_TARGET = platform.triple
     env.VTABS_SRC = M.root .. "/../backend"
     env.VTABS_BUILD = cfg.backend.build and "1" or "0"
-    env.VTABS_BIN = M.resolve_path(cfg, domain)
+    env.VTABS_BIN = M.resolve_path(cfg, domain, host)
   else
     env.VTABS_BUILD = "0"
   end
