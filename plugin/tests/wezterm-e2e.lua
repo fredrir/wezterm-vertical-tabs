@@ -51,6 +51,12 @@ local probes = {
   toggle = function(window)
     vtabs.toggle_sidebar(window)
   end,
+  toggle_ms = function(window)
+    local util = require "vtabs.util"
+    local before = util.now_ms()
+    vtabs.toggle_sidebar(window)
+    wezterm.log_info("e2e: toggle ms " .. tostring(util.now_ms() - before))
+  end,
   grow = function(window)
     local dims = window:get_dimensions()
     window:set_inner_size(dims.pixel_width + 300, dims.pixel_height)

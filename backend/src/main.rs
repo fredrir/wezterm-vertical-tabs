@@ -55,6 +55,7 @@ fn run() -> io::Result<()> {
         log,
         var,
         size,
+        anim: None,
     };
     app.write(set_user_var(ROLE_VAR, ROLE).as_bytes())?;
     // Marker only: it lets the plugin find this pane again, it proves nothing and carries no token.
@@ -68,9 +69,11 @@ fn run() -> io::Result<()> {
     let mut next_tick = Instant::now() + tick;
     let mut next_full = Instant::now() + SIZE_FALLBACK;
     loop {
-        let until_tick = next_tick
-            .min(next_full)
-            .saturating_duration_since(Instant::now());
+        let mut deadline = next_tick.min(next_full);
+        if let Some(at) = app.next_anim() {
+            deadline = deadline.min(at);
+        }
+        let until_tick = deadline.saturating_duration_since(Instant::now());
         let timeout = if parser.has_pending() {
             until_tick.min(ESC_TIMEOUT)
         } else {
@@ -87,6 +90,7 @@ fn run() -> io::Result<()> {
             }
         }
         let now = Instant::now();
+        app.tick_anim(now)?;
         if now >= next_tick {
             next_tick = now + tick;
             if !winch || signal::resized() {
