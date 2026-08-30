@@ -515,33 +515,33 @@ local function cli_move(pane_id, target_id)
   return cli(args, "cli-move", "wezterm cli split-pane --move-pane-id unavailable; a split sidebar is left as is")
 end
 
----Panes on the sidebar's side of the top-level split. Only a split of the sidebar node can put one
----there, so the test is which side of the sidebar's own edge a pane starts (or ends) on -- not
----whether it fits inside the sidebar's box, which a Left/Right split of the sidebar never does.
+---Panes in the sidebar's column band. The band is the width the sidebar is *meant* to have, never
+---the one it currently reports: a `SplitHorizontal` halves the sidebar's own box, which drags its
+---observed edge left of the pane that just landed beside it, so the one split shape that most needs
+---rescuing is the one an observed edge cannot see.
 ---`panes_with_info` reports the unzoomed layout (`mux/src/tab.rs:88`), so zoom does not enter it.
-local function intruders(tab, sb, position)
+local function intruders(tab, sb, position, band)
   local infos = mux.panes_with_info(tab)
-  if type(infos) ~= "table" then
+  if type(infos) ~= "table" or not band or band < 1 then
     return {}
   end
-  local box = nil
+  local tab_cols = 0
+  local ours = false
   for _, info in ipairs(infos) do
-    if info.pane:pane_id() == sb:pane_id() then
-      box = info
-    end
+    tab_cols = math.max(tab_cols, (info.left or 0) + (info.width or 0))
+    ours = ours or info.pane:pane_id() == sb:pane_id()
   end
-  if not box then
+  if not ours then
     return {}
   end
-  local edge = (box.left or 0) + (box.width or 0)
   local out = {}
   for _, info in ipairs(infos) do
     local left = info.left or 0
     local inside
     if position == "right" then
-      inside = left + (info.width or 0) >= (box.left or 0)
+      inside = left + (info.width or 0) >= tab_cols - band
     else
-      inside = left <= edge
+      inside = left <= band
     end
     if info.pane:pane_id() ~= sb:pane_id() and inside then
       out[#out + 1] = info.pane
@@ -558,7 +558,8 @@ function M.rescue_splits(gui_window, tab)
   if not sb or not M.is_ready(sb) or #content < 2 then
     return false
   end
-  local stuck = intruders(tab, sb, config.get().position)
+  local geometry = require "vtabs.geometry"
+  local stuck = intruders(tab, sb, config.get().position, geometry.desired(gui_window:window_id()))
   if #stuck == 0 then
     return false
   end
@@ -583,9 +584,7 @@ function M.rescue_splits(gui_window, tab)
   end
   if moved then
     classified[tab:tab_id()] = nil
-    util.try(function()
-      require("vtabs.geometry").correct(gui_window)
-    end)
+    util.try(geometry.correct, gui_window)
   end
   return moved
 end
