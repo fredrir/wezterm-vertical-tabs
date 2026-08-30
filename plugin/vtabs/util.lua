@@ -161,9 +161,29 @@ function M.warn_once(key, fmt, ...)
   M.warn(fmt, ...)
 end
 
+-- Reseeding per call made tokens minted in the same millisecond identical; the pointer adds entropy.
+math.randomseed(os.time() + math.floor(os.clock() * 1000000) + (tonumber(tostring({}):match "%x+$", 16) or 0))
+
+local function urandom(bytes)
+  local f = io.open("/dev/urandom", "rb")
+  if not f then
+    return nil
+  end
+  local raw = f:read(bytes)
+  f:close()
+  if type(raw) ~= "string" or #raw < bytes then
+    return nil
+  end
+  return (raw:gsub(".", function(c)
+    return string.format("%02x", c:byte())
+  end))
+end
+
 function M.random_token()
-  local seed = os.time() + math.floor(os.clock() * 1000000) + M.now_ms()
-  math.randomseed(seed)
+  local token = urandom(16)
+  if token then
+    return token
+  end
   local parts = {}
   for _ = 1, 4 do
     parts[#parts + 1] = string.format("%08x", math.random(0, 0x7fffffff))

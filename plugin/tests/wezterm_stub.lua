@@ -25,7 +25,10 @@ M.executable_dir = "/usr/local/bin"
 function M.hostname()
   return "macie"
 end
-function M.run_child_process()
+function M.run_child_process(args)
+  if type(args) == "table" and args[1] == "test" then
+    return false, "", ""
+  end
   return true, "", ""
 end
 
