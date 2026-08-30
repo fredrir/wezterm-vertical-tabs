@@ -1082,6 +1082,87 @@ test("P2 row diff: a colour-only change is still re-sent", function()
   state.session.frames[902] = nil
 end)
 
+test("sanitize always returns valid UTF-8, whatever bytes arrive", function()
+  local cases = {
+    { "\155", "raw C1 0x9b" },
+    { "a\155b", "raw C1 inside text" },
+    { "~/p/\194", "truncated 2-byte lead" },
+    { "~/p/\226\130", "truncated 3-byte" },
+    { "\240\159\146", "truncated 4-byte" },
+    { "\192\175", "overlong slash" },
+    { "\224\128\175", "3-byte overlong" },
+    { "\237\160\128", "surrogate half D800" },
+    { "\237\191\191", "surrogate half DFFF" },
+    { "\244\144\128\128", "past U+10FFFF" },
+    { "\128\129\130", "lone continuations" },
+    { "\27]0;title\7", "OSC in a title" },
+    { "ok\0bad", "embedded NUL" },
+  }
+  for _, case in ipairs(cases) do
+    local out = util.sanitize(case[1])
+    assert(utf8.len(out) ~= nil, case[2] .. " left invalid UTF-8: " .. string.format("%q", out))
+    assert(not out:find "[%z\1-\31\127]", case[2] .. " left a control char")
+    util.width(out)
+    util.truncate(out, 8, "…")
+    util.shorten_path(out, 8)
+  end
+  eq(util.sanitize "~/projects/api", "~/projects/api", "clean text is untouched")
+  eq(util.sanitize "日本語", "日本語", "multibyte survives")
+  eq(util.sanitize "a\194\133b", "ab", "C1 in UTF-8 form still goes")
+end)
+
+test("sanitize fuzz: 500 random byte strings never break width or render", function()
+  math.randomseed(20260830)
+  local fuzz_items = {}
+  for n = 1, 500 do
+    local bytes = {}
+    for _ = 1, math.random(1, 24) do
+      bytes[#bytes + 1] = string.char(math.random(0, 255))
+    end
+    local raw = table.concat(bytes)
+    local clean = util.sanitize(raw)
+    assert(utf8.len(clean) ~= nil, string.format("case %d not valid UTF-8: %q", n, clean))
+    fuzz_items[1] = {
+      tab_id = 1,
+      index = 1,
+      is_active = true,
+      is_pinned = false,
+      title = raw,
+      meta = raw,
+      icon = raw,
+      has_unseen = false,
+    }
+    local v = p1_view { items = fuzz_items, rows = 8 }
+    local r = render.render(v)
+    for row = 1, 8 do
+      if r.rows[row] then
+        eq(util.width(row_text(r.data, row)), 28, string.format("case %d row %d", n, row))
+      end
+    end
+  end
+end)
+
+test("one unrenderable tab does not stop the other sidebars", function()
+  local win, gui = setup_window(2)
+  sidebar.ensure(gui)
+  for _, tab in ipairs(win.tab_list) do
+    mark_ready(tab)
+  end
+  local view_mod = require "vtabs.view"
+  view_mod.sync(gui, { force = true })
+  local second = sidebar.find(win.tab_list[2])
+  local before = #second.sent
+  local victim = sidebar.content_pane(win.tab_list[1])
+  victim.get_title = function()
+    error "pane went away mid-render"
+  end
+  win.tab_list[1].get_title = function()
+    error "tab went away mid-render"
+  end
+  view_mod.sync(gui, { force = true })
+  assert(#second.sent > before, "the healthy sidebar still got its frame")
+end)
+
 test("P1 frames are written for design review", function()
   -- the shared fixture pins row_gap and separator for positional tests; frames want the shipped values
   local design = { row_gap = config.defaults.row_gap, separator = config.defaults.separator }

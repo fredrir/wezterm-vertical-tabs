@@ -137,7 +137,8 @@ local function put(cells, x, text, st, limit)
 end
 
 local function same(a, b)
-  return a.fg[1] == b.fg[1]
+  return (a.scrim or 0) == (b.scrim or 0)
+    and a.fg[1] == b.fg[1]
     and a.fg[2] == b.fg[2]
     and a.fg[3] == b.fg[3]
     and a.bg[1] == b.bg[1]
@@ -152,8 +153,8 @@ local function emit(cells, page_bg, fade)
     if run and #text > 0 then
       local body = table.concat(text)
       local blank = body:match "^ *$" ~= nil
-      out[#out + 1] = ansi.bg(run.bg)
-        .. (blank and "" or ansi.fg(faded(run.fg, page_bg, fade)))
+      out[#out + 1] = ansi.bg(faded(run.bg, page_bg, run.scrim))
+        .. (blank and "" or ansi.fg(faded(run.fg, page_bg, fade or run.scrim)))
         .. (run.bold and ansi.bold(true) or "")
         .. body
         .. (run.bold and ansi.bold(false) or "")
@@ -192,6 +193,25 @@ local function grid(cfg, cols)
   g.title_budget = math.max(g.title_x2 - g.title_x1 + 1, 0)
   g.meta_budget = math.max(g.meta_x2 - g.meta_x1 + 1, 0)
   return g
+end
+
+---Collapsed: one icon column, no title, no close, no meta. The nils are the point.
+local function rail_grid(cols)
+  return {
+    card_x1 = 1,
+    card_x2 = cols,
+    gutter = 1,
+    icon_x = math.ceil(cols / 2),
+    close_x = nil,
+    close_x1 = nil,
+    close_x2 = nil,
+    title_x1 = nil,
+    title_x2 = nil,
+    meta_x1 = nil,
+    meta_x2 = nil,
+    title_budget = 0,
+    meta_budget = 0,
+  }
 end
 
 local function row_colors(item, theme, st)
@@ -285,11 +305,15 @@ local function card_row(item, ctx, st, part, rows_in_card)
   end
 
   local spans = nil
-  if part == "title" then
-    if cfg.icons and item.icon ~= "" then
-      put(cells, g.icon_x, item.icon, { fg = item.is_private and theme.private_accent or fg }, g.icon_x)
+  if part == "title" and g.title_x1 == nil then
+    if item.icon ~= "" then
+      put(cells, g.icon_x, util.sanitize(item.icon), { fg = item.is_private and theme.private_accent or fg }, g.icon_x)
     end
-    local title = util.truncate(item.title, g.title_budget, glyphs.ellipsis)
+  elseif part == "title" then
+    if cfg.icons and item.icon ~= "" then
+      put(cells, g.icon_x, util.sanitize(item.icon), { fg = item.is_private and theme.private_accent or fg }, g.icon_x)
+    end
+    local title = util.truncate(util.sanitize(item.title), g.title_budget, glyphs.ellipsis)
     put(cells, g.title_x1, title, { fg = fg, bold = item.is_active }, g.title_x2)
     local pin_only = item.is_pinned and cfg.pinned_style ~= "full"
     local glyph, glyph_fg, span_id
@@ -307,8 +331,10 @@ local function card_row(item, ctx, st, part, rows_in_card)
       put(cells, g.close_x, glyph, { fg = glyph_fg }, g.close_x)
       spans = { { id = span_id, x1 = g.close_x1, x2 = g.close_x2 } }
     end
+  elseif g.meta_x1 == nil then
+    return cells, nil
   else
-    local meta = item.meta or ""
+    local meta = util.sanitize(item.meta or "")
     if cfg.show_index then
       meta = string.format("%d %s %s", item.index, glyphs.meta_sep, meta)
     end
@@ -428,13 +454,77 @@ local function new_tab_rows(cfg, rows, strip_rows, footer_n)
   return 0
 end
 
+---Overlays a popover rect on a laid-out frame and scrims every row it does not own.
+---@param frame table `render.render`'s internal frame: cells, hits, cols, rows, theme
+---@param rect table `{ x, y, w, h, scrim, bg, rows = { { bg, fg, spans, hit } }, outside_hit }`
+function M.composite(frame, rect)
+  local theme, cols = frame.theme, frame.cols
+  local scrim = rect.scrim or 0
+  local x1 = math.max(rect.x or 1, 1)
+  local x2 = math.min(x1 + (rect.w or cols) - 1, cols)
+  local y1 = math.max(rect.y or 1, 1)
+  local y2 = math.min(y1 + (rect.h or 0) - 1, frame.rows)
+  for row, cells in pairs(frame.cells) do
+    if row < y1 or row > y2 then
+      if scrim > 0 then
+        for _, cell in ipairs(cells) do
+          cell.scrim = scrim
+        end
+      end
+      frame.hits[row] = rect.outside_hit or { kind = "scrim" }
+    end
+  end
+  for i = 1, y2 - y1 + 1 do
+    local row = y1 + i - 1
+    local cells = frame.cells[row]
+    local spec = (rect.rows or {})[i] or {}
+    if cells then
+      local bg = spec.bg or rect.bg or theme.active_bg
+      local fg = spec.fg or theme.fg
+      for x = x1, x2 do
+        cells[x] = { ch = " ", fg = fg, bg = bg }
+      end
+      for _, span in ipairs(spec.spans or {}) do
+        put(cells, x1 + (span.x or 1) - 1, span.text, { fg = span.fg or fg, bg = bg, bold = span.bold }, x2)
+      end
+      frame.hits[row] = spec.hit or { kind = "popover" }
+    end
+  end
+  return frame
+end
+
+---Encodes a laid-out frame: one self-contained string per row, plus the joined frame.
+function M.paint(frame)
+  local out = { ansi.HIDE_CURSOR }
+  local rows_text, rows_n = {}, 0
+  for row = 1, frame.rows do
+    local cells = frame.cells[row]
+    if cells then
+      local body = emit(cells, frame.theme.bg, frame.fades[row])
+      rows_text[row] = body
+      rows_n = math.max(rows_n, row)
+      out[#out + 1] = ansi.cup(row, 1) .. body
+    end
+  end
+  out[#out + 1] = ansi.RESET
+  return {
+    data = table.concat(out),
+    rows = rows_text,
+    rows_n = rows_n,
+    hits = frame.hits,
+    total_rows = frame.total_rows,
+    scroll = frame.scroll,
+  }
+end
+
 ---Renders the sidebar.
 ---@param view VtabsRenderInput
 ---@return table `{ data, hits = { [row] = VtabsHit }, total_rows, scroll }`
 function M.render(view)
   local cfg, theme, cols = view.cfg, view.theme, view.cols
   local glyphs = view.glyphs
-  local g = grid(cfg, cols)
+  local rail = view.rail == true
+  local g = rail and rail_grid(cols) or grid(cfg, cols)
   local ctx = { theme = theme, cfg = cfg, cols = cols, glyphs = glyphs, grid = g }
   local strip_rows = view.strip and math.max(view.strip.rows or 0, 0) or math.max(cfg.padding.top or 0, 0)
   strip_rows = math.min(strip_rows, view.rows)
@@ -443,6 +533,9 @@ function M.render(view)
     footer[#footer + 1] = footer_entry(entry)
   end
   local ghost_h = new_tab_rows(cfg, view.rows, strip_rows, #footer)
+  if rail and ghost_h > 0 then
+    ghost_h = 1
+  end
   local list_rows = math.max(view.rows - strip_rows - ghost_h - #footer, 0)
 
   local ordered = apply_drag(view.items, view.drag)
@@ -459,9 +552,10 @@ function M.render(view)
     slot = slot + 1
     local dense = item.is_pinned and cfg.pinned_style ~= "full"
     local armed_dense = item.armed_pinned ~= nil and item.armed_pinned and cfg.pinned_style ~= "full"
-    local rows_in_card = (dense or (cfg.meta == false)) and 1 or 2
+    local one_row = dense or rail or cfg.meta == false
+    local rows_in_card = one_row and 1 or 2
     if item.armed_pinned ~= nil then
-      rows_in_card = (armed_dense or (cfg.meta == false)) and 1 or 2
+      rows_in_card = (armed_dense or rail or cfg.meta == false) and 1 or 2
     end
     plan[#plan + 1] = { kind = "tab", item = item, slot = slot, part = "title", rows_in_card = rows_in_card }
     if rows_in_card == 2 then
@@ -522,15 +616,11 @@ function M.render(view)
     end
   end
 
-  local out = { ansi.HIDE_CURSOR }
   local hits = {}
-  local rows_text, rows_n = {}, 0
-  ---Each row is self-contained -- SGR, cells, reset -- so it can be re-sent on its own.
+  local painted, fades = {}, {}
   local function line(row, cells, fade)
-    local body = emit(cells, theme.bg, fade)
-    rows_text[row] = body
-    rows_n = math.max(rows_n, row)
-    out[#out + 1] = ansi.cup(row, 1) .. body
+    painted[row] = cells
+    fades[row] = fade
   end
 
   for row = 1, strip_rows do
@@ -594,7 +684,10 @@ function M.render(view)
       local edge = cfg.position == "right" and 1 or cols
       cells[edge] = { ch = " ", fg = theme.fg, bg = theme.accent }
     end
-    local thumb = cfg.scroll_indicator ~= "never" and cfg.scroll_indicator ~= false and total > list_rows
+    local thumb = cfg.scroll_indicator ~= "never"
+      and cfg.scroll_indicator ~= false
+      and total > list_rows
+      and (not rail or cols >= 7)
     if thumb then
       local len = math.max(1, math.floor(list_rows * list_rows / total))
       local start = 1 + math.floor(scroll * (list_rows - len) / math.max(max_scroll, 1) + 0.5)
@@ -617,7 +710,14 @@ function M.render(view)
   if ghost_h > 0 then
     local base = strip_rows + list_rows
     local hovered = view.hover and view.hover.y > base and view.hover.y <= base + ghost_h or false
-    if ghost_h == 3 then
+    if rail then
+      if base + 1 <= view.rows then
+        local cells = new_line(cols, hovered and theme.hover_bg or theme.bg, theme.fg)
+        put(cells, g.icon_x, glyphs.new_tab, { fg = theme.accent }, cols)
+        line(base + 1, cells)
+        hits[base + 1] = { kind = "new_tab", x1 = g.card_x1, x2 = g.card_x2 }
+      end
+    elseif ghost_h == 3 then
       local rows = ghost_rows(ctx, hovered)
       for i = 1, 3 do
         if base + i <= view.rows then
@@ -655,16 +755,21 @@ function M.render(view)
       hits[row] = { kind = "footer", id = entry.id, entry = entry, x1 = g.card_x1, x2 = g.card_x2 }
     end
   end
-  out[#out + 1] = ansi.RESET
-
-  return {
-    data = table.concat(out),
-    rows = rows_text,
-    rows_n = rows_n,
+  local frame = {
+    cells = painted,
+    fades = fades,
     hits = hits,
+    cols = cols,
+    rows = view.rows,
+    theme = theme,
+    grid = g,
     total_rows = total,
     scroll = scroll,
   }
+  if view.popover then
+    M.composite(frame, view.popover)
+  end
+  return M.paint(frame)
 end
 
 return M

@@ -64,4 +64,16 @@ the sidebars. Unsupported.
 | keys, and pastes into an app with `?2004h` | bracketed, so escapes stay data |
 | pastes into an app without `?2004h` | arrives raw, exactly as a clipboard paste would: `send_paste` strips `ESC[201~` and turns `\r` into `\n`, other escapes pass through |
 
+## Remote text in frames
+
+| Source | Reaches |
+| --- | --- |
+| OSC 7 cwd, including its `user@host` | every sidebar in the window, on the meta line of that tab's card |
+| pane and tab titles | every sidebar in the window |
+
+A remote shell controls those strings. They are stripped to valid UTF-8 with no control
+characters before rendering, so they cannot inject escapes or crash a frame, but their
+*content* — a username, a host, a path — is shown on every sidebar of the window, including
+sidebars running on other hosts.
+
 Forwarding only ever reaches the source tab's own content pane, in its own domain.

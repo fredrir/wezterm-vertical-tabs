@@ -134,13 +134,67 @@ function M.pad_right(s, cols)
 end
 
 ---Removes control characters so foreign titles cannot inject escapes into the sidebar.
+local function seq_len(b)
+  if b < 0x80 then
+    return 1
+  elseif b >= 0xc2 and b <= 0xdf then
+    return 2
+  elseif b >= 0xe0 and b <= 0xef then
+    return 3
+  elseif b >= 0xf0 and b <= 0xf4 then
+    return 4
+  end
+  return 0
+end
+
+---Rejects overlongs, surrogate halves, past-U+10FFFF and truncated tails.
+local function well_formed(s, i, len)
+  local b1, b2 = string.byte(s, i), string.byte(s, i + 1)
+  if len >= 2 then
+    if not b2 or b2 < 0x80 or b2 > 0xbf then
+      return false
+    end
+    if (b1 == 0xe0 and b2 < 0xa0) or (b1 == 0xed and b2 > 0x9f) then
+      return false
+    end
+    if (b1 == 0xf0 and b2 < 0x90) or (b1 == 0xf4 and b2 > 0x8f) then
+      return false
+    end
+  end
+  for k = 2, len - 1 do
+    local b = string.byte(s, i + k)
+    if not b or b < 0x80 or b > 0xbf then
+      return false
+    end
+  end
+  return true
+end
+
+---Returns valid UTF-8 with no control characters, whatever bytes went in: a remote OSC 7 cwd
+---reaches us undecoded, and one raw 0x9b would otherwise make every width call in render raise.
 function M.sanitize(s)
   if type(s) ~= "string" then
     return ""
   end
-  s = s:gsub("[%z\1-\31\127]", "")
-  s = s:gsub("\194[\128-\159]", "")
-  return s
+  local out, i, n = {}, 1, #s
+  while i <= n do
+    local b = string.byte(s, i)
+    local len = seq_len(b)
+    if len == 0 or not well_formed(s, i, len) then
+      i = i + 1
+    elseif len == 1 then
+      if b >= 0x20 and b ~= 0x7f then
+        out[#out + 1] = string.char(b)
+      end
+      i = i + 1
+    else
+      if not (b == 0xc2 and string.byte(s, i + 1) <= 0x9f) then
+        out[#out + 1] = s:sub(i, i + len - 1)
+      end
+      i = i + len
+    end
+  end
+  return table.concat(out)
 end
 
 function M.basename(path)
