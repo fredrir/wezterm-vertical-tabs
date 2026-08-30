@@ -19,6 +19,7 @@ local INACTIVE_REFRESH_MS = 1000
 
 local themes = {}
 local chrome = {}
+local banding, banding_saved = {}, {}
 local session = state.session
 
 ---WezTerm titles the window after its active pane; under `hover = "follow"` that is the sidebar.
@@ -122,6 +123,66 @@ local function chrome_for(gui_window, cfg)
     }
   end
   return chrome[wid]
+end
+
+---Whether AppKit is drawing its buttons over this window's grid right now.
+local function lights_overhang(gui_window, cfg)
+  if not platform.is_mac then
+    return false
+  end
+  local c = chrome_for(gui_window, cfg)
+  if not (c.integrated_buttons and c.native_button_style) then
+    return false
+  end
+  local fullscreen = util.try(function()
+    return gui_window:get_dimensions().is_full_screen
+  end)
+  return fullscreen ~= true
+end
+
+---`collapsed = "hidden"` detaches the pane that reserved cells for the traffic lights, so nothing
+---owns the window's top-left and the lights land on the user's shell. A window-wide padding band
+---is the only mechanism that moves the grid out from under them; it costs one relayout per toggle.
+function M.apply_titlebar_band(gui_window)
+  local cfg = config.get()
+  if cfg.rail_titlebar == "none" then
+    return false
+  end
+  local wid = gui_window:window_id()
+  local wanted = cfg.collapsed == "hidden" and state.is_collapsed(wid) and lights_overhang(gui_window, cfg)
+  local overrides = util.try(function()
+    return gui_window:get_config_overrides()
+  end) or {}
+  local banded = banding[wid] == true
+  if wanted == banded then
+    return false
+  end
+  local merged = {}
+  for key, value in pairs(overrides) do
+    merged[key] = value
+  end
+  if wanted then
+    local user = util.try(function()
+      return gui_window:effective_config().window_padding
+    end) or {}
+    banding_saved[wid] = overrides.window_padding
+    merged.window_padding = {
+      left = user.left,
+      right = user.right,
+      bottom = user.bottom,
+      top = platform.TITLEBAR_PX,
+    }
+  else
+    merged.window_padding = banding_saved[wid]
+    banding_saved[wid] = nil
+  end
+  banding[wid] = wanted or nil
+  -- The override fires `window-config-reloaded`; the guard keeps it from re-entering correction.
+  session.applying[wid] = util.now_ms()
+  util.try(function()
+    gui_window:set_config_overrides(merged)
+  end)
+  return true
 end
 
 local function strip_for(gui_window, cfg, dims)

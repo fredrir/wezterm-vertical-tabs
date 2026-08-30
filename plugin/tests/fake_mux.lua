@@ -325,13 +325,27 @@ M.palette = {
 }
 
 function Gui:effective_config()
-  return {
+  local out = {
     resolved_palette = M.palette,
     skip_close_confirmation_for_processes_named = { "zsh", "wez-vtabs" },
+    window_decorations = self.decorations,
+    integrated_title_button_style = self.button_style,
+    window_padding = self.window_padding,
   }
+  for key, value in pairs(self.overrides or {}) do
+    out[key] = value
+  end
+  return out
+end
+function Gui:get_config_overrides()
+  return self.overrides or {}
+end
+function Gui:set_config_overrides(value)
+  self.overrides = value
+  self._mux.overrides_set = (self._mux.overrides_set or 0) + 1
 end
 function Gui:get_dimensions()
-  return { pixel_width = self._mux.cols * 10, pixel_height = 600 }
+  return { pixel_width = self._mux.cols * 10, pixel_height = 600, is_full_screen = self.full_screen == true }
 end
 function Gui:set_inner_size() end
 function Gui:toast_notification() end
