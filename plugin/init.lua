@@ -35,6 +35,7 @@ local sidebar = require "vtabs.sidebar"
 local view = require "vtabs.view"
 local geometry = require "vtabs.geometry"
 local platform = require "vtabs.platform"
+local theme = require "vtabs.theme"
 local input = require "vtabs.input"
 local actions = require "vtabs.actions"
 local keys = require "vtabs.keys"
@@ -185,17 +186,19 @@ end
 
 local MODULES = {
   "actions",
+  "anim",
   "ansi",
   "backend",
   "config",
   "geometry",
+  "glyphs",
   "hit",
   "icons",
   "input",
   "keys",
-  "menu",
   "model",
   "platform",
+  "popover",
   "render",
   "schema",
   "sidebar",
@@ -206,14 +209,50 @@ local MODULES = {
   "view",
 }
 
+---Every `vtabs/*.lua`, read from disk when wezterm can list it so the static list cannot drift.
+function M.module_names()
+  local found = util.try(function()
+    return wezterm.read_dir(root .. "/vtabs")
+  end)
+  if type(found) ~= "table" or #found == 0 then
+    return MODULES
+  end
+  local names = {}
+  for _, path in ipairs(found) do
+    local name = tostring(path):match "([^/\\]+)%.lua$"
+    if name then
+      names[#names + 1] = name
+    end
+  end
+  table.sort(names)
+  return #names > 0 and names or MODULES
+end
+
 ---Edits to the plugin reload the config like edits to the user's own files do.
 local function watch_plugin_files()
   if not root or not wezterm.add_to_config_reload_watch_list then
     return
   end
   wezterm.add_to_config_reload_watch_list(root .. "/init.lua")
-  for _, name in ipairs(MODULES) do
+  for _, name in ipairs(M.module_names()) do
     wezterm.add_to_config_reload_watch_list(root .. "/vtabs/" .. name .. ".lua")
+  end
+end
+
+---`theme.split` recolours the pane divider for every split in the window, not just ours.
+local function apply_split(config, cfg)
+  local want = cfg.theme.split
+  if want == nil or want == "auto" then
+    return
+  end
+  config.colors = config.colors or {}
+  if config.colors.split ~= nil then
+    return
+  end
+  if want == "hidden" then
+    config.colors.split = config.colors.background or theme.page(config)
+  else
+    config.colors.split = want
   end
 end
 
@@ -248,6 +287,7 @@ function M.apply_to_config(config, opts)
   if cfg.dim_inactive_panes == false and config.inactive_pane_hsb == nil then
     config.inactive_pane_hsb = { brightness = 1.0, saturation = 1.0, hue = 1.0 }
   end
+  apply_split(config, cfg)
   apply_decorations(config, cfg)
   if cfg.skip_close_confirmation then
     config.skip_close_confirmation_for_processes_named = config.skip_close_confirmation_for_processes_named

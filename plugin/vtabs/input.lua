@@ -6,7 +6,7 @@ local model = require "vtabs.model"
 local view = require "vtabs.view"
 local geometry = require "vtabs.geometry"
 local actions = require "vtabs.actions"
-local menu = require "vtabs.menu"
+local popover = require "vtabs.popover"
 local hit = require "vtabs.hit"
 local util = require "vtabs.util"
 
@@ -26,11 +26,36 @@ local function blur(gui_window)
 end
 
 ---Press keeps the sidebar as the tab's active pane so the drag and the release reach it too.
+---While a popover is open it takes the whole sidebar: left acts, right retargets, middle is inert.
+local function on_popover_down(gui_window, pane, h, ev)
+  if ev.b == "left" then
+    if h.kind == "scrim" then
+      popover.close(gui_window)
+      view.invalidate_frames(pane:pane_id())
+    elseif h.kind == "popover" and h.id and not h.disabled then
+      popover.run(gui_window, h.id)
+      view.invalidate_frames(pane:pane_id())
+    end
+  elseif ev.b == "right" and h.kind == "scrim" then
+    -- Close, repaint, then let the release open one for whatever row is now under the pointer.
+    popover.close(gui_window)
+    view.invalidate_frames(pane:pane_id())
+    view.sync(gui_window)
+    return true
+  end
+end
+
 local function on_down(gui_window, pane, ev, cfg)
   local wid = gui_window:window_id()
   local pid = pane:pane_id()
   local h = hit.at(session.hits[pid], ev.y)
   local now = util.now_ms()
+  if popover.get(wid) then
+    if not on_popover_down(gui_window, pane, h, ev) then
+      return
+    end
+    h = hit.at(session.hits[pid], ev.y)
+  end
   session.hover[wid] = { x = ev.x, y = ev.y, at = now }
   session.drag[wid] = nil
   pending_menu[wid] = nil
@@ -74,14 +99,17 @@ local function on_down(gui_window, pane, ev, cfg)
     end
   elseif ev.b == "middle" and on_card then
     actions.close_tab(gui_window, h.id)
-  elseif ev.b == "right" and on_card then
-    pending_menu[wid] = { tab_id = h.id, at = now }
+  elseif ev.b == "right" and on_card and cfg.context == "popover" then
+    pending_menu[wid] = { tab_id = h.id, at = now, row = ev.y }
   end
 end
 
 local function on_drag(gui_window, pane, ev, cfg)
   local wid = gui_window:window_id()
   local pid = pane:pane_id()
+  if popover.get(wid) then
+    return
+  end
   local drag = session.drag[wid]
   local hits = session.hits[pid]
   if not drag or ev.b ~= "left" or drag.pane_id ~= pid or not hits then
@@ -102,7 +130,7 @@ local function on_drag(gui_window, pane, ev, cfg)
   session.hover[wid] = { x = ev.x, y = ev.y, at = drag.at }
 end
 
----The menu is opened from the release: a selector overlay cancels itself if a button is still held.
+---The popover opens on the release; a held button is what cancelled the old selector overlay.
 local function on_up(gui_window, pane, ev, cfg)
   local wid = gui_window:window_id()
   local pid = pane:pane_id()
@@ -110,9 +138,13 @@ local function on_up(gui_window, pane, ev, cfg)
   local menu_for = pending_menu[wid]
   session.drag[wid] = nil
   pending_menu[wid] = nil
+  if popover.get(wid) and ev.b ~= "right" then
+    return
+  end
   if ev.b == "right" then
     if menu_for then
-      menu.open(gui_window, menu_for.tab_id)
+      popover.open(gui_window, menu_for.tab_id, menu_for.row)
+      view.invalidate_frames(pid)
     end
     return
   end
@@ -134,6 +166,10 @@ end
 
 local function on_wheel(gui_window, ev, cfg)
   local wid = gui_window:window_id()
+  if popover.get(wid) then
+    popover.move(gui_window, ev.dy > 0 and 1 or -1)
+    return
+  end
   if cfg.wheel == "switch" then
     actions.activate_relative(gui_window, ev.dy)
     return
@@ -197,8 +233,8 @@ local KEYS = {
   r = with_focused(function(gui_window, id)
     actions.rename_tab(gui_window, id)
   end),
-  m = with_focused(function(gui_window, id)
-    menu.open(gui_window, id, { keep_focus = true })
+  m = with_focused(function(gui_window, id, index)
+    popover.open(gui_window, id, index)
   end),
   J = with_focused(function(gui_window, id, index)
     actions.move_tab_to_slot(gui_window, id, index + 1)
@@ -360,8 +396,43 @@ local function forward_paste(gui_window, pane, ev, cfg)
   end)
 end
 
+local POP_MOVE = { down = 1, j = 1, tab = 1, up = -1, k = -1 }
+
+---Keys belong to the popover while it is open; nothing is forwarded to the shell.
+local function popover_key(gui_window, pane, ev)
+  local pop = popover.get(gui_window:window_id())
+  local key, mods = ev.key, ev.mods
+  view.invalidate_frames(pane:pane_id())
+  if pop.level == "rename" then
+    local done = popover.edit(pop, key, mods)
+    if done == "commit" then
+      popover.commit_rename(gui_window)
+    elseif done == "cancel" then
+      popover.back(gui_window)
+    end
+    return
+  end
+  if key == "escape" or (util.contains(mods, "ctrl") and key == "c") then
+    popover.back(gui_window)
+  elseif key == "enter" or key == "space" then
+    local item = popover.selected(gui_window)
+    if item then
+      popover.run(gui_window, item.id)
+    end
+  elseif POP_MOVE[key] then
+    popover.move(gui_window, util.contains(mods, "shift") and -POP_MOVE[key] or POP_MOVE[key])
+  elseif type(key) == "string" and utf8.len(key) == 1 then
+    popover.jump(gui_window, key)
+  end
+end
+
 function M.key(gui_window, pane, ev)
   local wid = gui_window:window_id()
+  if popover.get(wid) then
+    popover_key(gui_window, pane, ev)
+    view.sync(gui_window)
+    return
+  end
   if not state.has_focus(wid) then
     forward_key(gui_window, pane, ev, config.get())
     view.sync(gui_window)

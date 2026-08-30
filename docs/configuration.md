@@ -30,12 +30,14 @@ return config
 | `hide_native_tab_bar`     | `true`                                                            | `true` \| `false` |
 | `poll_ms`                 | `500`                                                             | number >= `50` |
 | `padding`                 | `{ top = 1, left = 1, right = 1 }`                                | `{ top, left, right }` |
-| `tab_height`              | `"card"`                                                          | `"card"` (`2`) \| `"row"` (`1`) |
+| `tab_height`              | `"card"`                                                          | `"card"` (`2`) \| `"row"` (`1`) \| `"tall"` (`3`) |
 | `meta`                    | `"auto"`                                                          | `"auto"` \| `"cwd"` \| `"process"` \| `false` |
+| `meta_sep`                | `"  "`                                                            | string |
 | `row_gap`                 | `1`                                                               | number >= `0` |
 | `new_tab_button`          | `"ghost"`                                                         | `"ghost"` \| `"row"` \| `false` |
 | `new_tab_label`           | `"New tab"`                                                       | string |
 | `corners`                 | `"chamfer"`                                                       | `"chamfer"` \| `"square"` |
+| `frame`                   | `false`                                                           | any |
 | `titlebar`                | `"auto"`                                                          | `"auto"` \| `"integrate"` \| `"plain"` |
 | `context`                 | `"popover"`                                                       | `"popover"` \| `false` |
 | `toggle_button`           | `true`                                                            | `true` \| `false` |
@@ -68,7 +70,7 @@ return config
 | `skip_close_confirmation` | `true`                                                            | `true` \| `false` |
 | `private.env`             | `{ HISTFILE = "", fish_private_mode = "1", VTABS_PRIVATE = "1" }` | table |
 | `keys`                    | `{}`                                                              | table \| `false` |
-| `theme`                   | `{ elevation = 0 }`                                               | see Theme |
+| `theme`                   | `{ elevation = 0.06, split = "auto" }`                            | see Theme |
 | `hooks.filter`            | `nil`                                                             | `fun(tab, mux_window): boolean` |
 | `hooks.footer`            | `nil`                                                             | `fun(mux_window): rows` |
 | `hooks.theme`             | `nil`                                                             | `fun(window, theme): theme` |
@@ -92,7 +94,8 @@ return config
 | `tooltip_delay_ms` | effective delay is `max(tooltip_delay_ms, poll_ms)`; halved in rail mode |
 | `animations` | colour only: expand and collapse fade around one hard width snap, never a slide |
 | `dim_inactive_panes` | wezterm dims the idle pane by default, which makes the sidebar change shade as focus moves |
-| `theme.elevation` | `0` = the terminal background exactly, `0.06` = the pre-P1 tint; capped at `0.3` |
+| `theme.split` | `"auto"` leaves wezterm's divider; `"hidden"` or a colour repaints **every** split in the window, not just the sidebar's |
+| `theme.elevation` | `0.06` = the default tint, `0` = seamless with the terminal background; capped at `0.3`. `theme.content_bg` stays untinted, which is what `frame` paints its gutter with |
 | `adopt` | `"auto"` adopts only where this plugin spawns backends; see `docs/limitations.md` |
 | `backend.path` | keyed by host or domain; `host` comes from the pane's OSC 7 cwd |
 
@@ -165,6 +168,9 @@ the tab's content pane, which then takes focus back.
 | click a card's gap row                     | switch to the tab above                                                          |
 | drop on a gap row                          | insert below that tab                                                            |
 | click the toggle `«`                       | hide the sidebar; `toggle_sidebar` brings it back                                |
+| right click a tab                          | action popover, drawn inside the sidebar                                         |
+| click away from an open popover            | dismiss without switching tabs                                                   |
+| wheel over an open popover                 | move its selection                                                               |
 | footer row                                 | calls the entry's `on_click`                                                     |
 
 | wezterm key                | set to                        | when                                                            |
@@ -223,6 +229,10 @@ WezTerm runs only the first `format-window-title` handler; register yours before
 | `scroll_idle_fg` | `scroll_fg` mixed 55% toward `bg`                                              |
 | `drag_bg`        | `bg` mixed 35% toward `accent`; a dragged card paints its whole text in `drag_fg` |
 | `private_accent` | `ansi[6]`; becomes `accent` for the whole window in a private window           |
+| `surface_raised` | `lift(0.09)`, lowered until its text is no harder to read than the body        |
+| `scrim`          | fade applied behind an open popover; a contrast target, not a constant         |
+| `disabled_fg`    | `meta_fg` mixed 45% toward `surface_raised` — popover items that cannot be chosen |
+| `split`          | `"auto"` | `"hidden"` | a colour; window-global, see the note above           |
 
 Also settable: `active_fg hover_fg pinned_fg drag_fg`. `use_scheme_tab_bar` is deprecated and
 ignored — the sidebar paints the terminal background, so there is no background to borrow.

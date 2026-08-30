@@ -54,6 +54,7 @@ local sidebar = require "vtabs.sidebar"
 local actions = require "vtabs.actions"
 local input = require "vtabs.input"
 local geometry = require "vtabs.geometry"
+local popover = require "vtabs.popover"
 local fake = require "fake_mux"
 local backend = require "vtabs.backend"
 
@@ -115,8 +116,11 @@ test("use_scheme_tab_bar is a deprecated no-op: the sidebar keeps the terminal b
   local p = palette("#1e1e2e", "#cdd6f4")
   p.tab_bar =
     { background = "#000000", inactive_tab_hover = { bg_color = "#333333" }, active_tab = { bg_color = "#555555" } }
-  eq(theme.resolve({}, p).bg[1], 30, "no background is borrowed")
-  eq(theme.resolve({ use_scheme_tab_bar = true }, p).bg[1], 30)
+  local seamless = theme.resolve({ elevation = 0 }, p).bg[1]
+  eq(theme.resolve({}, p).bg[1] > seamless, true, "the page is the terminal background plus the tint")
+  local borrowed = theme.resolve({ use_scheme_tab_bar = true }, p).bg
+  local plain = theme.resolve({}, p).bg
+  eq(table.concat(borrowed, ","), table.concat(plain, ","), "nothing is borrowed")
   local warned = 0
   for _, line in ipairs(wezterm.log) do
     if line:find("use_scheme_tab_bar is deprecated", 1, true) then
@@ -1007,8 +1011,12 @@ test("P1 sibling paths stay distinguishable on the meta line", function()
   local win_rows = frame_rows(windows)
   eq(util.width(win_rows[2]), 28)
   eq(util.width(win_rows[5]), 28)
+  local sep = config.get().meta_sep
   local composite = p1_view {
-    items = sibling_items("nvim · ~/work/acme/services/api", "SSH:archie · ~/work/acme/services/web"),
+    items = sibling_items(
+      "nvim" .. sep .. "~/work/acme/services/api",
+      "SSH:archie" .. sep .. "~/work/acme/services/web"
+    ),
     opts = { separator = "gap" },
   }
   local comp = frame_rows(composite)
@@ -2187,11 +2195,12 @@ local function rgb(c)
   return table.concat(c, ",")
 end
 
-test("theme bg is the terminal background; elevation restores the raised tint", function()
+test("the page is tinted by default and elevation = 0 makes it seamless", function()
   local t = theme.resolve({}, fake.palette)
-  eq(rgb(t.bg), "30,30,46")
-  local raised = theme.resolve({ elevation = 0.06 }, fake.palette)
-  assert(raised.bg[1] > t.bg[1] and raised.bg[3] > t.bg[3], "elevation lifts bg toward fg")
+  local seamless = theme.resolve({ elevation = 0 }, fake.palette)
+  eq(rgb(seamless.bg), "30,30,46", "0 is exactly the terminal background")
+  assert(t.bg[1] > seamless.bg[1] and t.bg[3] > seamless.bg[3], "the default tint lifts it toward fg")
+  eq(rgb(t.bg), rgb(theme.resolve({ elevation = 0.06 }, fake.palette).bg), "and it is 0.06")
 end)
 
 test("the accent chain is cursor_bg, then tab_bar active, then ansi[5], each behind both gates", function()
@@ -2509,14 +2518,20 @@ test("a drag whose pane has no hit map is dropped instead of dropping at slot 1"
   eq(drag.over_index, nil)
 end)
 
-test("right click opens the menu on release, never while the button is held", function()
+test("right click opens the popover on release, never while the button is held", function()
   local win, gui = drag_setup()
   local sb1 = sidebar.find(win.tab_list[1])
   local before = #win.actions
   mouse(gui, sb1, "down", "right", 5, 4)
-  eq(#win.actions, before, "nothing opens under a held button")
+  eq(popover.get(gui:window_id()), nil, "nothing opens under a held button")
+  eq(#win.actions, before, "and no overlay action is performed, ever")
   mouse(gui, sb1, "up", "right", 5, 4)
-  eq(last_action(win).action, "InputSelector")
+  local pop = popover.get(gui:window_id())
+  assert(pop, "the release opens it")
+  eq(pop.tab_id, win.tab_list[1].id)
+  eq(pop.anchor_row, 4, "anchored on the row the press landed on")
+  eq(#win.actions, before, "still no overlay: it is drawn inside the sidebar")
+  popover.close(gui)
 end)
 
 test("hover=press restores content focus on release, hover=follow keeps the sidebar", function()
@@ -2966,6 +2981,34 @@ test("unseen_fg keeps a distinct hue when ansi[4] clears the page, else follows 
   eq(rgb(low.unseen_fg), rgb(low.accent), "a dim ansi[4] falls back to the accent")
 end)
 
+test("a private window renders its header, through the same path the plugin uses", function()
+  local win, gui = drag_setup()
+  local wid = gui:window_id()
+  local seen = nil
+  local render_mod = require "vtabs.render"
+  local original = render_mod.render
+  render_mod.render = function(frame)
+    seen = frame
+    return original(frame)
+  end
+  state.set_private(wid, true)
+  view_mod.invalidate_theme()
+  view_mod.sync(gui, { force = true })
+  render_mod.render = original
+  state.set_private(wid, false)
+  view_mod.invalidate_theme()
+  eq(seen.private, true, "view.sync tells the renderer the window is private")
+  local sb = sidebar.find(win.tab_list[1])
+  local hits = state.session.hits[sb:pane_id()]
+  local header = nil
+  for row = 1, 12 do
+    if hits[row] and hits[row].kind == "space" and row > 1 then
+      header = header or row
+    end
+  end
+  assert(header, "the header row is inert")
+end)
+
 test("a private window derives every accent-tinted surface from private_accent", function()
   local base = palettes[1]
   local normal = theme.resolve({}, base)
@@ -3073,7 +3116,7 @@ end)
 
 test("each new key rejects a bad value and keeps its default", function()
   for key, bad in pairs {
-    tab_height = "tall",
+    tab_height = "gigantic",
     meta = "path",
     new_tab_button = "button",
     corners = "round",
@@ -3125,9 +3168,14 @@ test("the macOS strip reserves the traffic lights from the pane's own cell size"
   local g = strip_geom(RETINA)
   eq(g.cols, math.ceil(70 / (235 / 28)), "70 px of buttons, never a hardcoded column count")
   eq(g.cols, 9)
-  eq(g.rows, 3, "max(reserve 2, toggle 2) + padding_top 1")
-  eq(g.toggle_row, 2)
+  eq(g.rows, 3, "max(reserve 2, toggle 1) + padding_top 1")
+  -- The reserve is a row COUNT; the toggle must line up with the lights' centre, not sit below it.
+  eq(g.toggle_row, 1, "beside the lights at a retina cell height")
   eq(g.toggle_x, 11, "clear of the reserve")
+  local small = strip_geom { cols = 28, viewport_rows = 30, pixel_width = 235, pixel_height = 270 }
+  eq(small.rows_reserved, 4, "a small font reserves more rows")
+  eq(small.toggle_row, 2, "and the centre moves down with them, never past the reserve")
+  assert(small.toggle_row <= small.rows_reserved, "always inside the reserve")
   local wide = strip_geom { cols = 28, viewport_rows = 30, pixel_width = 560, pixel_height = 570 }
   eq(wide.cols, 4, "bigger cells need fewer of them")
 end)
@@ -3216,8 +3264,8 @@ test("the meta line names the cwd for shells and the process for anything else",
   local home = wezterm.home_dir
   eq(meta_of { process = "/bin/zsh", cwd = { file_path = "/tmp/work" } }, "~/work", "home_dir collapses to ~")
   eq(meta_of { process = "/usr/bin/fish", cwd = { file_path = "/etc" } }, "/etc")
-  eq(meta_of { process = "/usr/bin/nvim", cwd = { file_path = "/tmp/work" } }, "nvim · work")
-  eq(meta_of { process = "/usr/bin/cargo", cwd = { file_path = "/srv/api" } }, "cargo · api")
+  eq(meta_of { process = "/usr/bin/nvim", cwd = { file_path = "/tmp/work" } }, "nvim  work", "no separator glyph")
+  eq(meta_of { process = "/usr/bin/cargo", cwd = { file_path = "/srv/api" } }, "cargo  api")
   if home and home ~= "" then
     eq(meta_of { process = "/bin/bash", cwd = { file_path = home .. "/projects/api" } }, "~/projects/api")
     eq(meta_of { process = "/bin/bash", cwd = { file_path = home } }, "~")
@@ -3236,7 +3284,7 @@ test("ssh names the remote user only when the pane reports one, never the local 
   eq(url, "admin@buildbox", "and it is parsed out of the string form too")
   eq(meta_of { process = "/usr/bin/ssh", cwd = false }, "ssh", "nothing resolvable falls back to the process")
   -- get_foreground_process_name is nil off the local domain, so the domain carries the line.
-  eq(meta_of { domain = "SSH:archie", cwd = { file_path = "/home/x/api" } }, "SSH:archie · /home/x/api")
+  eq(meta_of { domain = "SSH:archie", cwd = { file_path = "/home/x/api" } }, "SSH:archie  /home/x/api")
   eq(meta_of { domain = "local", process = nil, cwd = { file_path = "/srv" } }, "/srv")
 end)
 
@@ -3244,6 +3292,7 @@ test("meta = cwd, process and false force one column or none", function()
   local pane = { process = "/usr/bin/nvim", cwd = { file_path = "/tmp/work" } }
   eq(meta_of(pane, { meta = "cwd" }), "~/work")
   eq(meta_of(pane, { meta = "process" }), "nvim")
+  eq(meta_of(pane, { meta_sep = " · " }), "nvim · work", "the separator is configurable")
   eq(meta_of(pane, { meta = false }), nil)
   eq(meta_of(pane, { tab_height = "row" }), nil, "a one-row card has no meta to resolve")
 end)
@@ -3302,7 +3351,8 @@ test("view hands the renderer a strip and a private-aware theme", function()
   eq(seen.strip.toggle.x1, 1, "the span reaches one column left of the glyph")
   eq(seen.strip.toggle.x2, 4, "four columns wide")
   eq(type(seen.user_scrolled), "boolean")
-  eq(rgb(seen.theme.bg), "30,30,46", "the fixture palette reaches the renderer")
+  eq(rgb(seen.theme.content_bg), "30,30,46", "the fixture palette reaches the renderer")
+  assert(rgb(seen.theme.bg) ~= "30,30,46", "and the page carries the default tint")
 
   state.set_private(gui:window_id(), true)
   view_mod.invalidate_theme()
@@ -3611,7 +3661,7 @@ test("every enum rejects a value outside it and every range rejects the wrong si
   eq(config.setup({ width = 4 }).width, 28, "below min")
   eq(config.setup({ width = "wide" }).width, 28, "wrong type")
   eq(config.setup({ row_gap = -1 }).row_gap, 1)
-  eq(config.setup({ theme = { elevation = 2 } }).theme.elevation, 0, "above max")
+  eq(config.setup({ theme = { elevation = 2 } }).theme.elevation, 0.06, "above max")
   eq(config.setup({ toggle_button = "yes" }).toggle_button, true)
   eq(config.setup({ padding = { top = -1 } }).padding.top, 1, "nested keys validate too")
   eq(config.setup({ width = 40 }).width, 40, "a valid value survives")
@@ -3671,25 +3721,20 @@ test("the new surfaces are overridable like every other theme key", function()
   eq(over.scrim, 0.5)
 end)
 
-test("the sidebar page colour is the terminal background byte for byte, light and dark", function()
-  for _, name in ipairs { "Catppuccin Mocha", "Catppuccin Latte", "Solarized Light" } do
-    for _, p in ipairs(palettes) do
-      if p.name == name then
-        local t = theme.resolve({}, p)
-        eq(rgb(t.bg), hex(p.background), "no tint on " .. name)
-      end
-    end
-  end
-  -- Only an explicit elevation moves it, and only a little: 1.0 would paint the sidebar in fg.
-  local latte
+test("the sidebar page is tinted by default; the frame gutter keeps the terminal background", function()
   for _, p in ipairs(palettes) do
-    if p.name == "Catppuccin Latte" then
-      latte = p
-    end
+    local t = theme.resolve({}, p)
+    local where = " on " .. p.name
+    assert(rgb(t.bg) ~= hex(p.background), "the default tint is visible" .. where)
+    eq(rgb(t.content_bg), hex(p.background), "content_bg is never tinted" .. where)
+    eq(rgb(t.bg), rgb(theme.mix(t.content_bg, t.fg, 0.06 * (theme.luminance(t.bg) < 0.5 and 1 or 1))), where)
   end
-  assert(rgb(theme.resolve({ elevation = 0.06 }, latte).bg) ~= hex(latte.background))
-  eq(config.setup({ theme = { elevation = 1 } }).theme.elevation, 0, "out of range, reset")
-  eq(config.setup({ theme = { elevation = 0.06 } }).theme.elevation, 0.06)
+  eq(config.setup({}).theme.elevation, 0.06, "the shipped default")
+  local seamless = theme.resolve({ elevation = 0 }, palettes[1])
+  eq(rgb(seamless.bg), hex(palettes[1].background), "0 is still the seamless option")
+  -- Out of range resets to the default rather than painting the sidebar in the foreground.
+  eq(config.setup({ theme = { elevation = 1 } }).theme.elevation, 0.06)
+  eq(config.setup({ theme = { elevation = 0 } }).theme.elevation, 0)
   config.setup { backend = { path = "/bin/wez-vtabs" } }
 end)
 
@@ -3721,6 +3766,366 @@ test("cell counts and durations must be whole numbers", function()
   eq(config.setup({ width = 32 }).width, 32, "a whole number survives")
   eq(config.setup({ theme = { elevation = 0.06 } }).theme.elevation, 0.06, "ratios still take fractions")
   config.setup { backend = { path = "/bin/wez-vtabs" } }
+end)
+
+local function open_popover(row)
+  local win, gui = drag_setup()
+  local sb = sidebar.find(win.tab_list[1])
+  mouse(gui, sb, "down", "right", 5, row or 3)
+  mouse(gui, sb, "up", "right", 5, row or 3)
+  view_mod.sync(gui, { force = true })
+  return win, gui, sb, popover.get(gui:window_id())
+end
+
+test("the popover title wraps on a space, then a slash, then hard", function()
+  eq(rgb(popover.wrap("nvim plugin/vtabs/render.lua", 22, 3)), rgb { "nvim", "plugin/vtabs/", "render.lua" })
+  eq(rgb(popover.wrap("short", 22, 3)), rgb { "short" })
+  local hard = popover.wrap(string.rep("x", 50), 10, 3)
+  eq(#hard, 3)
+  for _, line in ipairs(hard) do
+    assert(util.width(line) <= 10, "each wrapped line fits")
+  end
+end)
+
+test("every popover row is exactly the rect width, header shrunk or not", function()
+  local _, gui = open_popover(3)
+  local cfg = config.get()
+  local resolved = theme.resolve({}, fake.palette)
+  for _, rows in ipairs { 30, 14, 10, 8, 6, 5 } do
+    local rect = popover.rect(gui, rows, 28, resolved, cfg)
+    assert(rect, "a rect at " .. rows .. " rows")
+    eq(rect.h, #rect.rows)
+    assert(rect.y >= 1 and rect.y + rect.h - 1 <= math.max(rows, rect.h), "on screen at " .. rows)
+    for _, row in ipairs(rect.rows) do
+      for _, span in ipairs(row.spans or {}) do
+        assert(span.x >= 1 and span.x + util.width(span.text) - 1 <= rect.w, "span inside the rect")
+      end
+    end
+  end
+  popover.close(gui)
+end)
+
+test("items are never dropped: the header shrinks and the list scrolls instead", function()
+  local _, gui = open_popover(3)
+  local pop = popover.get(gui:window_id())
+  local count = #popover.items(gui, pop.tab_id)
+  for _, rows in ipairs { 30, 16, 12, 10 } do
+    local placed = popover.layout(gui, pop, rows, 28)
+    eq(#placed.items, count, "all items still there at " .. rows .. " rows")
+  end
+  local tall = popover.layout(gui, pop, 30, 28)
+  local short = popover.layout(gui, pop, 12, 28)
+  assert(#short.lines < #tall.lines, "the header is what gives way")
+  popover.close(gui)
+end)
+
+test("selection skips disabled items and first-letter jump lands on an enabled one", function()
+  local _, gui = open_popover(3)
+  local pop = popover.get(gui:window_id())
+  local entries = popover.items(gui, pop.tab_id)
+  local space_at
+  for i, item in ipairs(entries) do
+    if item.id == "space" then
+      space_at = i
+    end
+  end
+  assert(space_at and entries[space_at].disabled, "Move to space is disabled until P4")
+  pop.index = space_at - 1
+  popover.move(gui, 1)
+  assert(pop.index ~= space_at, "the disabled item is stepped over")
+  pop.index = 1
+  assert(popover.jump(gui, "c"), "jumps to Close")
+  assert(not popover.items(gui, pop.tab_id)[pop.index].disabled)
+  pop.index = 1
+  assert(popover.jump(gui, "m"), "jumps past the disabled Move to space to Move to new window")
+  eq(popover.items(gui, pop.tab_id)[pop.index].id, "tear_off")
+  pop.index = 1
+  eq(popover.jump(gui, "q"), false, "no item starts with q, so nothing moves")
+  eq(pop.index, 1)
+  popover.close(gui)
+end)
+
+test("click-away closes without switching tabs; the frame and disabled items are inert", function()
+  local win, gui, sb = open_popover(3)
+  local active = win.active_tab_ref
+  local hits = state.session.hits[sb:pane_id()]
+  local scrim_row, frame_row, item_row
+  for row = 1, 20 do
+    local h = hits[row]
+    if h and h.kind == "scrim" then
+      scrim_row = scrim_row or row
+    elseif h and h.kind == "popover" then
+      if h.id then
+        item_row = item_row or row
+      else
+        frame_row = frame_row or row
+      end
+    end
+  end
+  assert(scrim_row and frame_row and item_row, "scrim, frame and item rows all present")
+  mouse(gui, sb, "down", "left", 5, frame_row)
+  assert(popover.get(gui:window_id()), "the frame does not close it")
+  mouse(gui, sb, "down", "left", 5, scrim_row)
+  eq(popover.get(gui:window_id()), nil, "a click away closes it")
+  eq(win.active_tab_ref, active, "and does not switch tabs")
+end)
+
+test("no tab hit records survive while the popover is open", function()
+  local _, gui, sb = open_popover(3)
+  for _, h in pairs(state.session.hits[sb:pane_id()]) do
+    assert(h.kind == "scrim" or h.kind == "popover", "unexpected " .. tostring(h.kind))
+  end
+  popover.close(gui)
+end)
+
+test("a middle click is ignored while the popover is open, a right click retargets it", function()
+  local win, gui, sb = open_popover(3)
+  local before = #win.tab_list
+  -- Row 3 is the anchor card itself: scrimmed now, a tab row again once the popover closes.
+  local scrim_row = 3
+  eq(state.session.hits[sb:pane_id()][scrim_row].kind, "scrim")
+  mouse(gui, sb, "down", "middle", 5, scrim_row)
+  eq(#win.tab_list, before, "middle does not close a tab through the scrim")
+  assert(popover.get(gui:window_id()), "and does not dismiss")
+  mouse(gui, sb, "down", "right", 5, scrim_row)
+  eq(popover.get(gui:window_id()), nil, "right on the scrim closes")
+  mouse(gui, sb, "up", "right", 5, scrim_row)
+  assert(popover.get(gui:window_id()), "and the release retargets rather than dismissing")
+  popover.close(gui)
+end)
+
+test("raw key forwarding is suppressed while the popover is open", function()
+  local _, gui, sb = open_popover(3)
+  local tab = util.active_tab(gui)
+  local content = sidebar.content_pane(tab)
+  local before = #content.sent
+  input.handle(gui, sb, "vtabs", '{"t":"key","key":"l","raw":"bA=="}')
+  eq(#content.sent, before, "nothing reaches the shell")
+  assert(popover.get(gui:window_id()), "and the popover is still open")
+  input.handle(gui, sb, "vtabs", '{"t":"key","key":"escape"}')
+  eq(popover.get(gui:window_id()), nil, "escape closes it")
+end)
+
+test("rename commits on enter, cancels on escape, and handles the terminal chords", function()
+  local win, gui, sb = open_popover(3)
+  local tab = win.tab_list[1]
+  tab:set_title "render.lua"
+  popover.run(gui, "rename")
+  local pop = popover.get(gui:window_id())
+  eq(pop.level, "rename")
+  eq(pop.buffer, "render.lua")
+  popover.edit(pop, "backspace", {})
+  eq(pop.buffer, "render.lu")
+  popover.edit(pop, "x", {})
+  eq(pop.buffer, "render.lux")
+  popover.edit(pop, "a", { "ctrl" })
+  eq(pop.cursor, 1)
+  popover.edit(pop, "e", { "ctrl" })
+  eq(pop.cursor, 11)
+  popover.edit(pop, "u", { "ctrl" })
+  eq(pop.buffer, "")
+  for ch in ("hello world"):gmatch "." do
+    popover.edit(pop, ch, {})
+  end
+  popover.edit(pop, "w", { "ctrl" })
+  eq(pop.buffer, "hello ")
+  eq(popover.edit(pop, "enter", {}), "commit")
+  popover.commit_rename(gui)
+  eq(tab:get_title(), "hello ")
+  eq(popover.get(gui:window_id()), nil)
+
+  view_mod.sync(gui, { force = true })
+  mouse(gui, sb, "down", "right", 5, 3)
+  mouse(gui, sb, "up", "right", 5, 3)
+  popover.run(gui, "rename")
+  local second = popover.get(gui:window_id())
+  popover.edit(second, "z", {})
+  eq(popover.edit(second, "escape", {}), "cancel")
+  popover.back(gui)
+  eq(tab:get_title(), "hello ", "cancel leaves the title untouched")
+  eq(popover.get(gui:window_id()).level, "root", "escape steps back a level before closing")
+  popover.close(gui)
+end)
+
+test("context = false removes the mouse trigger but not the keyboard one", function()
+  local win, gui = drag_setup()
+  config.setup { backend = { path = "/bin/wez-vtabs" }, context = false }
+  local sb = sidebar.find(win.tab_list[1])
+  mouse(gui, sb, "down", "right", 5, 3)
+  mouse(gui, sb, "up", "right", 5, 3)
+  eq(popover.get(gui:window_id()), nil, "right click does nothing")
+  state.set_focus(gui:window_id(), true)
+  input.handle(gui, sb, "vtabs", '{"t":"key","key":"m"}')
+  assert(popover.get(gui:window_id()), "m in keyboard mode still opens it")
+  popover.close(gui)
+  config.setup { backend = { path = "/bin/wez-vtabs" } }
+end)
+
+test("collapsed = rail keeps the pane and narrows it to rail_width", function()
+  local win, gui = setup_window(1)
+  sidebar.ensure(gui)
+  local tab = win.tab_list[1]
+  local sb = mark_ready(tab)
+  eq(sb.cols, 28)
+  sidebar.set_collapsed(gui, true)
+  eq(#tab:panes(), 2, "the rail keeps the pane")
+  eq(geometry.desired(gui:window_id()), 5)
+  local before = #win.actions
+  assert(geometry.correct(gui), "one correction")
+  eq(#win.actions - before, 1, "exactly one AdjustPaneSize")
+  eq(sb.cols, 5)
+  sidebar.set_collapsed(gui, false)
+  eq(geometry.desired(gui:window_id()), 28)
+  assert(geometry.correct(gui))
+  eq(sb.cols, 28)
+end)
+
+test("the rail toggle centres below the macOS reserve instead of beside it", function()
+  local mac = {
+    is_mac = true,
+    integrated_buttons = true,
+    native_button_style = true,
+    position = "left",
+    padding_top = 1,
+    toggle_button = true,
+    card_x1 = 2,
+    rail = true,
+    rail_width = 5,
+  }
+  local g = platform.strip_geometry(RETINA, mac)
+  eq(g.cols, 9)
+  eq(g.rows_reserved, 2, "the raw reserve, before padding")
+  eq(g.toggle_row, 3, "below the lights, not beside them")
+  eq(g.width, 9, "the rail widens to the reserve")
+  eq(g.toggle_x, 5, "centred in the widened rail")
+  eq(g.rows, 4)
+  local wide = platform.strip_geometry(
+    RETINA,
+    { is_mac = false, rail = true, rail_width = 5, toggle_button = true, padding_top = 1 }
+  )
+  eq(wide.cols, 0)
+  eq(wide.toggle_row, 1)
+  eq(wide.toggle_x, 3, "centre of a 5-column rail")
+end)
+
+test("the active title is accent-tinted where the scheme can carry it, else it keeps fg", function()
+  local barred = {}
+  for _, p in ipairs(palettes) do
+    local t = theme.resolve({}, p)
+    local where = " on " .. p.name
+    eq(rgb(t.active_title_fg), rgb(t.title_active), "both names, one colour" .. where)
+    eq(t.title_active_contrast, theme.contrast(t.title_active, t.active_bg), "exposed, not recomputed" .. where)
+    assert(t.title_active_contrast >= math.min(4.5, theme.contrast(t.fg, t.active_bg)) - 0.001, "gate" .. where)
+    if t.title_active_contrast < 4.0 then
+      barred[p.name] = true
+    end
+  end
+  -- The schemes whose own fg cannot reach 4.0 on the tinted card keep the accent bar instead.
+  eq(rgb(util.sorted_keys(barred)), rgb { "One Dark", "Solarized Dark", "Solarized Light" })
+end)
+
+test("content_bg is the untinted terminal background, whatever elevation does to the page", function()
+  for _, p in ipairs(palettes) do
+    local t = theme.resolve({}, p)
+    eq(rgb(t.content_bg), hex(p.background), "on " .. p.name)
+    assert(rgb(t.bg) ~= rgb(t.content_bg), "the page is tinted, the gutter is not")
+  end
+  local seamless = theme.resolve({ elevation = 0 }, palettes[1])
+  eq(rgb(seamless.content_bg), rgb(seamless.bg), "they coincide only at elevation 0")
+end)
+
+test("tall cards and the frame are configurable, and false is the frame default", function()
+  eq(config.setup({ tab_height = "tall" }).tab_height, "tall")
+  eq(config.setup({ tab_height = 3 }).tab_height, "tall")
+  eq(config.setup({ tab_height = "gigantic" }).tab_height, "card", "an unknown height resets")
+  eq(config.setup({}).frame, false)
+  local framed = config.setup { frame = { margin = 1, corners = "chamfer" } }
+  eq(framed.frame.margin, 1)
+  eq(framed.frame.corners, "chamfer")
+  config.setup { backend = { path = "/bin/wez-vtabs" } }
+end)
+
+test("a rail is corrected to exactly rail_width, below the 8-column sidebar floor", function()
+  for _, width in ipairs { 3, 5, 7 } do
+    local win, gui = setup_window(1)
+    config.setup { backend = { path = "/bin/wez-vtabs" }, rail_width = width }
+    sidebar.ensure(gui)
+    local sb = mark_ready(win.tab_list[1])
+    sidebar.set_collapsed(gui, true)
+    eq(geometry.desired(gui:window_id()), width)
+    assert(geometry.correct(gui), "one correction at rail_width " .. width)
+    eq(sb.cols, width, "the sidebar floor must not raise a deliberate rail")
+    sidebar.set_collapsed(gui, false)
+    assert(geometry.correct(gui))
+    eq(sb.cols, 28, "and expanding still lands on cfg.width")
+  end
+  config.setup { backend = { path = "/bin/wez-vtabs" } }
+end)
+
+test("every vtabs module is on the config-reload watch list", function()
+  local vtabs = dofile(here .. "/../init.lua")
+  local watched = {}
+  for _, name in ipairs(vtabs.module_names()) do
+    watched[name] = true
+  end
+  local listing = io.popen('ls "' .. here .. '/../vtabs"')
+  local missing = {}
+  local seen = 0
+  for line in listing:lines() do
+    local name = line:match "^(.+)%.lua$"
+    if name then
+      seen = seen + 1
+      if not watched[name] then
+        missing[#missing + 1] = name
+      end
+    end
+  end
+  listing:close()
+  assert(seen > 10, "the listing found the modules")
+  eq(table.concat(missing, ","), "", "modules not watched, so edits to them would not reload")
+end)
+
+test("a toggle sends the fade around its single resize, and only on a local domain", function()
+  local win, gui = setup_window(1)
+  sidebar.ensure(gui)
+  local tab = win.tab_list[1]
+  local sb = mark_ready(tab)
+  view_mod.sync(gui, { force = true })
+  local function anims_since(n)
+    local out = {}
+    for i = n + 1, #sb.sent do
+      local phase = sb.sent[i]:match '"t":"anim".-"phase":"([%a_]+)"' or sb.sent[i]:match '"phase":"([%a_]+)"'
+      if sb.sent[i]:find('"anim"', 1, true) then
+        out[#out + 1] = phase or "?"
+      end
+    end
+    return out
+  end
+  local before = #sb.sent
+  local actions_before = #win.actions
+  actions.toggle_sidebar(gui)
+  local sent = anims_since(before)
+  assert(#sent >= 1, "the collapse is animated")
+  local resizes = 0
+  for i = actions_before + 1, #win.actions do
+    if win.actions[i].action.action == "AdjustPaneSize" then
+      resizes = resizes + 1
+    end
+  end
+  eq(resizes, 1, "one pane resize per toggle, whatever the fade does")
+
+  before = #sb.sent
+  sb.domain = "SSH:archie"
+  actions.toggle_sidebar(gui)
+  eq(#anims_since(before), 0, "animations = auto is off for a remote domain")
+  sb.domain = "local"
+
+  config.setup { backend = { path = "/bin/wez-vtabs" }, animations = false }
+  before = #sb.sent
+  actions.toggle_sidebar(gui)
+  eq(#anims_since(before), 0, "and off entirely when asked")
+  config.setup { backend = { path = "/bin/wez-vtabs" } }
+  sidebar.set_collapsed(gui, false)
 end)
 
 os.remove(state.file)

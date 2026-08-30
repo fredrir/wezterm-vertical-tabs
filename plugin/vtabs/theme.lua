@@ -6,6 +6,8 @@ local M = {}
 local ACCENT_MIN = 3.0
 local ACCENT_VS_FG_MIN = 1.2
 local QUIET_TITLE_MIN = 5.0
+-- Matches the shipped `theme.elevation`; a caller passing `{}` gets the page the plugin paints.
+local DEFAULT_ELEVATION = 0.06
 
 local function parse(color)
   if type(color) == "table" then
@@ -100,6 +102,15 @@ local function accent_candidate(color, bg, fg)
   return nil
 end
 
+---The page colour as a hex string, from a config table: what `colors.split` must match to vanish.
+function M.page(config)
+  local colors = config and config.colors or {}
+  if type(colors.background) == "string" then
+    return colors.background
+  end
+  return "#1e1e2e"
+end
+
 ---Resolves the user theme against the window's palette into rgb triples; `opts.private` recolours.
 function M.resolve(user, palette, opts)
   user = user or {}
@@ -112,7 +123,7 @@ function M.resolve(user, palette, opts)
 
   local base_bg = first(palette.background, "#1e1e2e")
   local fg = first(user.fg, palette.foreground, "#cdd6f4")
-  local bg = first(user.bg) or mix(base_bg, fg, tonumber(user.elevation) or 0)
+  local bg = first(user.bg) or mix(base_bg, fg, tonumber(user.elevation) or DEFAULT_ELEVATION)
 
   -- A 6% darken on a light scheme reads far louder than a 6% lighten on near-black.
   local k = luminance(bg) < 0.5 and 1.0 or 0.6
@@ -133,6 +144,7 @@ function M.resolve(user, palette, opts)
   local hover_bg = first(user.hover_bg) or lift(0.06)
   local active_bg = first(user.active_bg) or mix(lift(0.12), accent, 0.12)
   local meta_fg = first(user.meta_fg) or ensure_contrast(mix(fg, bg, 0.48), active_bg, fg, 3.5)
+  local title_active = first(user.title_active, user.active_title_fg) or ensure_contrast(accent, active_bg, fg, 4.5)
   local raised = first(user.surface_raised) or raise(bg, fg, lift)
   local scrim = tonumber(user.scrim) or scrim_for(bg, fg)
   local scroll_fg = first(user.scroll_fg) or ensure_contrast(lift(0.22), bg, fg, 2.0)
@@ -163,6 +175,11 @@ function M.resolve(user, palette, opts)
     drag_fg = first(user.drag_fg) or fg,
     scroll_fg = scroll_fg,
     scroll_idle_fg = first(user.scroll_idle_fg) or mix(scroll_fg, bg, 0.55),
+    title_active = title_active,
+    active_title_fg = title_active,
+    -- Render draws the accent bar only when the tinted title is not distinct enough on its own.
+    title_active_contrast = M.contrast(title_active, active_bg),
+    content_bg = base_bg,
     surface_raised = raised,
     scrim = scrim,
     disabled_fg = first(user.disabled_fg) or mix(meta_fg, raised, 0.45),

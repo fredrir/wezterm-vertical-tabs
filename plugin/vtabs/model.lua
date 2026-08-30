@@ -93,12 +93,12 @@ end
 
 local function join(prefix, tail)
   if prefix and tail then
-    return prefix .. " · " .. tail
+    return prefix .. config.get().meta_sep .. tail
   end
   return prefix or tail
 end
 
----Second card line: cwd for shells, `user@host` for ssh, `proc · dir` otherwise, domain when remote.
+---Second card line: cwd for shells, `user@host` for ssh, `proc dir` otherwise, domain when remote.
 local function meta_for(pane, cfg)
   if cfg.meta == false then
     return nil

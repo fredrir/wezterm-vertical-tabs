@@ -11,7 +11,7 @@ local CHROME = {
   unseen = { "•", "*", group = "marks" },
   focus = { "›", ">", group = "marks" },
   ellipsis = { "…", "...", group = "marks" },
-  meta_sep = { "·", "-", group = "marks" },
+  meta_sep = { "  ", "  ", group = "marks" },
   toggle_left = { "«", "<", group = "toggle" },
   toggle_right = { "»", ">", group = "toggle" },
   frame_tl = { "╭", "+", group = "ghost_frame" },

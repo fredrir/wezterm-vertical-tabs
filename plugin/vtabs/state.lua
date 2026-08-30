@@ -179,6 +179,8 @@ M.session = {
   known_tabs = {},
   moving = {},
   focus_index = {},
+  popover = {},
+  tooltip = {},
   last_active = {},
   attaching = {},
   adopted = {},
@@ -202,6 +204,8 @@ local WINDOW_SESSION = {
   "known_tabs",
   "focus_index",
   "last_active",
+  "popover",
+  "tooltip",
 }
 
 local PANE_SESSION = {

@@ -15,6 +15,8 @@ M.SUPER2 = M.is_mac and "CMD|SHIFT" or "CTRL|SHIFT|ALT"
 M.BUTTON_PX = 70
 -- macOS titlebar height; NEEDS-ENG-CONFIRM #1, over-reserving is the safe direction.
 M.TITLEBAR_PX = 28
+-- The lights are centred in the title bar, so this is where the toggle must line up.
+M.BUTTON_CENTER_PX = M.TITLEBAR_PX / 2
 
 ---Cells the top strip keeps clear and where the toggle goes; pure, so it needs no macOS window.
 function M.strip_geometry(dims, opts)
@@ -25,9 +27,10 @@ function M.strip_geometry(dims, opts)
     and opts.native_button_style
     and opts.position == "left"
     and not opts.is_full_screen
+  local cell_h = 0
   if reserve and dims.cols and dims.cols > 0 and dims.viewport_rows and dims.viewport_rows > 0 then
     local cell_w = (dims.pixel_width or 0) / dims.cols
-    local cell_h = (dims.pixel_height or 0) / dims.viewport_rows
+    cell_h = (dims.pixel_height or 0) / dims.viewport_rows
     if cell_w > 0 and cell_h > 0 then
       cols = math.ceil(M.BUTTON_PX / cell_w)
       rows = math.max(1, math.ceil(M.TITLEBAR_PX / cell_h))
@@ -38,8 +41,11 @@ function M.strip_geometry(dims, opts)
   local toggle_row
   if rail then
     toggle_row = cols > 0 and rows + 1 or 1
+  elseif rows > 0 then
+    -- `rows` is a count, not an index: derive the row from the lights' centre and clamp into it.
+    toggle_row = math.max(1, math.min(math.ceil(M.BUTTON_CENTER_PX / cell_h), rows))
   else
-    toggle_row = rows > 0 and rows or 1
+    toggle_row = 1
   end
   local width = math.max(opts.rail_width or 0, cols)
   local toggle_x
