@@ -14,6 +14,33 @@ local INACTIVE_REFRESH_MS = 1000
 local themes = {}
 local session = state.session
 
+---WezTerm titles the window after its active pane; under `hover = "follow"` that is the sidebar.
+function M.window_title(tab, pane, tabs, panes)
+  if type(tab) ~= "table" or type(pane) ~= "table" then
+    return nil
+  end
+  local is_sidebar = sidebar.marker(pane.title) or state.sidebar_pane_id(tab.tab_id) == pane.pane_id
+  if not is_sidebar then
+    return nil
+  end
+  local title = nil
+  for _, info in ipairs(panes or {}) do
+    if info.pane_id ~= pane.pane_id and not sidebar.marker(info.title) then
+      title = info.title
+      break
+    end
+  end
+  title = title or (tab.tab_title ~= "" and tab.tab_title) or nil
+  if not title then
+    return nil
+  end
+  local count = tabs and #tabs or 1
+  if count > 1 then
+    return string.format("[%d/%d] %s", (tab.tab_index or 0) + 1, count, title)
+  end
+  return title
+end
+
 function M.invalidate_theme(window_id)
   if window_id then
     themes[window_id] = nil

@@ -987,6 +987,41 @@ test("an adopted width is clamped to a plausible sidebar", function()
   eq(geometry.desired(gui:window_id()), 8, "clamped to the minimum width")
 end)
 
+test("an unreachable width is attempted until it stops moving, then left alone", function()
+  local win, gui = setup_window(1)
+  sidebar.ensure(gui)
+  local tab = win.tab_list[1]
+  local sb = mark_ready(tab)
+  win:resize(-71)
+  eq(tab:width(), 9, "a window too narrow to hold the sidebar")
+  assert(geometry.correct(gui), "first attempt moves it as far as the split allows")
+  eq(sb.cols, 7, "clamped to width - 2")
+  local attempts = #win.actions
+  eq(geometry.correct(gui), false, "the attempt that changes nothing is the last one")
+  eq(#win.actions, attempts + 1)
+  local settled = #win.actions
+  eq(geometry.correct(gui), false)
+  eq(geometry.correct(gui), false)
+  eq(#win.actions, settled, "no AdjustPaneSize and no activate once it is known unreachable")
+  win:resize(40)
+  assert(geometry.correct(gui), "a window resize unblocks the retry")
+end)
+
+test("a font or dpi change is corrected, not adopted as a divider drag", function()
+  local win, gui = setup_window(1)
+  sidebar.ensure(gui)
+  local tab = win.tab_list[1]
+  local sb = mark_ready(tab)
+  eq(geometry.correct(gui), false, "baseline recorded")
+  for _, p in ipairs(tab:panes()) do
+    p.cell_width = 14
+  end
+  tab:set_split(20)
+  assert(geometry.correct(gui), "a wider cell is not the user dragging the divider")
+  eq(geometry.desired(gui:window_id()), 28, "cfg.width still wins")
+  eq(sb.cols, 28)
+end)
+
 test("geometry.sync corrects on a tab change and rate-gates otherwise", function()
   local win, gui = setup_window(2)
   sidebar.ensure(gui)
@@ -1176,13 +1211,32 @@ test("raw carrying an OSC or bracketed-paste introducer is dropped, focus still 
   eq(#content2.sent, 0, "bracketed paste never reaches the shell")
 end)
 
-test("a burst from one sidebar pane is rate-limited to one forward", function()
+test("fast typing is forwarded whole; a flood is cut off at the burst budget", function()
+  local _, gui, tab, sb, content = key_setup()
+  for _ = 1, 25 do
+    input.handle(gui, sb, "vtabs", '{"t":"key","key":"a","raw":"YQ=="}')
+  end
+  eq(#content.sent, 20, "20 keys of burst, no refill inside one stub tick")
+  eq(tab.active, content, "focus stays handed over across the dropped tail")
+end)
+
+test("a paste event is delivered whole to the content pane", function()
+  local _, gui, tab, sb, content = key_setup()
+  input.handle(gui, sb, "vtabs", '{"t":"paste","data":"aGVsbG8gd29ybGQ="}')
+  eq(content.pasted[#content.pasted], "hello world")
+  eq(#content.sent, 0, "a paste is not typed key by key")
+  eq(tab.active, content)
+end)
+
+test("a paste is refused when it is oversized, malformed or from a background tab", function()
   local _, gui, _, sb, content = key_setup()
-  input.handle(gui, sb, "vtabs", '{"t":"key","key":"a","raw":"YQ=="}')
-  eq(content.sent[#content.sent], "a")
-  local n = #content.sent
-  input.handle(gui, sb, "vtabs", '{"t":"key","key":"b","raw":"Yg=="}')
-  eq(#content.sent, n, "second key in the same window dropped")
+  input.handle(gui, sb, "vtabs", '{"t":"paste","data":"!!!!"}')
+  eq(#content.pasted, 0, "malformed base64 dropped")
+  local win2, gui2 = drag_setup()
+  win2.active_tab_ref = win2.tab_list[1]
+  local other = win2.tab_list[2]
+  input.handle(gui2, sidebar.find(other), "vtabs", '{"t":"paste","data":"aGk="}')
+  eq(#sidebar.content_pane(other).pasted, 0, "background tab dropped")
 end)
 
 test("without raw only a lone printable key is forwarded", function()
@@ -1309,6 +1363,29 @@ test("close_others restores the kept tab once, not after every close", function(
   eq(#win.tab_list, 1)
   eq(win.active_tab_ref.id, kept)
   eq(switches, 4, "three closes plus one restore")
+end)
+
+test("the window title names the content pane while the sidebar holds focus", function()
+  local view_only = require "vtabs.view"
+  local sb = { pane_id = 7, title = "wez-vtabs:deadbeef" }
+  local shell = { pane_id = 8, title = "nvim" }
+  local tab = { tab_id = 3, tab_index = 1, tab_title = "" }
+  eq(view_only.window_title(tab, sb, { tab }, { sb, shell }), "nvim")
+  eq(view_only.window_title(tab, sb, { tab, tab }, { sb, shell }), "[2/2] nvim")
+  eq(view_only.window_title(tab, shell, { tab }, { sb, shell }), nil, "wezterm's default is left alone")
+  eq(view_only.window_title(tab, sb, { tab }, { sb }), nil, "no content pane, no opinion")
+  eq(view_only.window_title(nil, nil, nil, nil), nil)
+end)
+
+test("an unreachable contrast gate stops at the target colour instead of mixing past it", function()
+  for _, p in ipairs { palette("#2b2b2b", "#4a4a4a"), palette("#ffffff", "#cccccc") } do
+    local t = theme.resolve({}, p)
+    assert(theme.contrast(t.fg, t.bg) < 3.0, "the fixture ceiling is below the dim gate")
+    eq(rgb(t.dim), rgb(t.fg), "dim lands on fg, never past it")
+  end
+  local reachable = theme.resolve({}, palette("#002b36", "#839496"))
+  assert(theme.contrast(reachable.dim, reachable.bg) >= 3.0, "a reachable gate is still met")
+  assert(rgb(reachable.dim) ~= rgb(reachable.fg), "and dim is still dimmer than fg")
 end)
 
 os.remove(state.file)

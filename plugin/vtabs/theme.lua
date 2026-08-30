@@ -51,13 +51,15 @@ function M.contrast(a, b)
   return (hi + 0.05) / (lo + 0.05)
 end
 
----Pushes `fg` toward `target` until it reaches `min` contrast against `bg`.
+---Pushes `fg` toward `target` until it reaches `min` contrast against `bg`, never past `target`.
 local function ensure_contrast(fg, bg, target, min)
+  min = math.min(min, M.contrast(target, bg))
   local out = fg
-  local t = 0
-  while M.contrast(out, bg) < min and t < 1 do
-    t = t + 0.1
-    out = mix(fg, target, t)
+  for i = 1, 10 do
+    if M.contrast(out, bg) >= min then
+      return out
+    end
+    out = mix(fg, target, i / 10)
   end
   return out
 end
