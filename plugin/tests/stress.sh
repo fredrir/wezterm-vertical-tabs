@@ -658,6 +658,16 @@ rescue_case() {
   cli activate-tab --tab-id "$first" >/dev/null
   sleep 1
   before_sb=$(sidebar_of "$first")
+  # The rescue refuses a sidebar that has not echoed its token, and correctly does nothing. Splitting
+  # before then would read as a miss, so wait for ready rather than for the marker title.
+  n=0
+  while [ "$n" -lt 40 ]; do
+    case "$(probe_line "$first_content" probe_ranks ranks)" in
+      *"$before_sb:backend=true,ready=true"*) break ;;
+    esac
+    n=$((n + 1)); sleep 0.5
+  done
+  [ "$n" -lt 40 ] || { geometry; fail "sidebar $before_sb never authenticated before $1"; }
   before_width=$(settled_width "$first")
   before_panes=$(panes_in "$first")
   echo "  before $1: $(probe_line "$first_content" probe_ranks ranks)"
