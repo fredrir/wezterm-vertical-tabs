@@ -889,6 +889,54 @@ test("a key from a sidebar in another domain than its content pane is dropped", 
   eq(#content.sent, 0)
 end)
 
+---Counts tab switches by wrapping the shared Tab metatable for the duration of `fn`.
+local function count_switches(win, fn)
+  local Tab = getmetatable(win.tab_list[1])
+  local original = Tab.activate
+  local switches = 0
+  Tab.activate = function(self)
+    switches = switches + 1
+    return original(self)
+  end
+  local ok, err = pcall(fn)
+  Tab.activate = original
+  if not ok then
+    error(err, 0)
+  end
+  return switches
+end
+
+test("reorder restores the active tab once for the whole batch", function()
+  local win, gui = setup_window(4)
+  sidebar.ensure(gui)
+  local ids = {}
+  for i, t in ipairs(win.tab_list) do
+    ids[i] = t.id
+  end
+  win.active_tab_ref = win.tab_list[1]
+  local before = #win.actions
+  local switches = count_switches(win, function()
+    actions.reorder(gui, { ids[4], ids[3], ids[2], ids[1] })
+  end)
+  local moves = #win.actions - before
+  assert(moves >= 2, "several tabs moved, got " .. moves)
+  eq(switches, moves + 1, "one restore, not one per move")
+  eq(win.active_tab_ref.id, ids[1])
+end)
+
+test("close_others restores the kept tab once, not after every close", function()
+  local win, gui = setup_window(4)
+  sidebar.ensure(gui)
+  win.active_tab_ref = win.tab_list[1]
+  local kept = win.tab_list[1].id
+  local switches = count_switches(win, function()
+    actions.close_others(gui, kept)
+  end)
+  eq(#win.tab_list, 1)
+  eq(win.active_tab_ref.id, kept)
+  eq(switches, 4, "three closes plus one restore")
+end)
+
 os.remove(state.file)
 print(string.format("%d passed, %d failed", passed, failed))
 os.exit(failed == 0 and 0 or 1)
