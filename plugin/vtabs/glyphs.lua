@@ -21,6 +21,10 @@ local CHROME = {
   frame_dash = { "╌", "-", group = "ghost_frame" },
   frame_dash_v = { "╎", "|", group = "ghost_frame" },
   rule = { "─", "-", group = "marks" },
+  hint_up = { "↑", "^", group = "hints" },
+  hint_down = { "↓", "v", group = "hints" },
+  hint_left = { "←", "<", group = "hints" },
+  hint_right = { "→", ">", group = "hints" },
 }
 
 ---East Asian Ambiguous: width flips with unicode_version / treat_east_asian_ambiguous_width_as_wide.
@@ -34,6 +38,10 @@ local AMBIGUOUS = {
   [0x256f] = true,
   [0x2570] = true,
   [0x2500] = true,
+  [0x2190] = true,
+  [0x2191] = true,
+  [0x2192] = true,
+  [0x2193] = true,
 }
 
 local function ambiguous(s)

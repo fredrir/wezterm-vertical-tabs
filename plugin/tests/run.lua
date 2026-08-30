@@ -5998,6 +5998,224 @@ test("P3 §6: the preview renders the merged table and never touches the live co
   assert(not same, "so the preview really did change")
 end)
 
+test("P3 A3d: the recorder arms, shows the caveat only on macOS, and takes the next key", function()
+  local platform_mod = require "vtabs.platform"
+  local cfg = config.setup { backend = { path = "/bin/wez-vtabs" } }
+  local keys_group
+  for i, group in ipairs(page.groups(page.fields(cfg))) do
+    keys_group = group == "behaviour" and i or keys_group
+  end
+  local st = { group = keys_group, focus = 1, scroll = 0, filter = "keys." }
+  local v = page_view { cols = 100, rows = 21, cfg = cfg, st = st }
+
+  local idle = page.plan(v)
+  local first = idle.fields[1]
+  assert(first and first.widget == "recorder", "the filter found a keys.* row: " .. tostring(first and first.key))
+  assert(page.value_text(first):find("[ record ]", 1, true), "idle: " .. page.value_text(first))
+  local rows = page_rows(v)
+  for _, line in ipairs(rows) do
+    assert(not line:find("does not deliver CMD", 1, true), "A3d: no caveat while nothing is armed")
+  end
+
+  -- arming is what Enter does to a recorder
+  page.key(nil, v, { key = "enter" })
+  eq(st.armed, first.key, "Enter arms the recorder")
+  page_rows(v)
+  local armed_text = page.value_text(page.plan(v).fields[1])
+  assert(armed_text:find("ARMED", 1, true), "armed: " .. armed_text)
+
+  local was_mac = platform_mod.is_mac
+  platform_mod.is_mac = true
+  st.armed = first.key
+  local mac_rows = page_rows(v)
+  local said = false
+  for _, line in ipairs(mac_rows) do
+    said = said or line:find("does not deliver CMD", 1, true) ~= nil
+  end
+  assert(said, "A3d: on macOS the caveat is shown while armed")
+  local named = false
+  for _, line in ipairs(mac_rows) do
+    named = named or line:find("enable_kitty_keyboard", 1, true) ~= nil
+  end
+  assert(named, "and enable_kitty_keyboard is named, not offered")
+
+  platform_mod.is_mac = false
+  st.armed = first.key
+  local linux_rows = page_rows(v)
+  for _, line in ipairs(linux_rows) do
+    assert(not line:find("does not deliver CMD", 1, true), "A3d: and never where it is not true")
+  end
+  platform_mod.is_mac = was_mac
+
+  -- the recorder records what the pty delivered, not what the user meant
+  st.armed = first.key
+  page.key(nil, v, { key = "z", mods = { "CTRL", "SHIFT" } })
+  eq(st.armed, nil, "the next key disarms it")
+  eq(config.get().keys[first.key:match "^keys%.(.+)$"].key, "z", "and is taken as the binding")
+  eq(config.get().keys[first.key:match "^keys%.(.+)$"].mods, "CTRL|SHIFT", "mods come off the array the wire sends")
+  st.armed = first.key
+  page.key(nil, v, { key = "escape" })
+  eq(st.armed, nil, "escape disarms without recording")
+  config.setup(legacy { backend = { path = "/bin/wez-vtabs" } })
+end)
+
+test("P3 §3/§4: the badge names the source, and r resets exactly the focused field", function()
+  local cfg = config.setup { width = 32, backend = { path = "/bin/wez-vtabs" } }
+  local v = page_view { cols = 100, rows = 21, cfg = cfg, st = { group = 1, focus = 1, scroll = 0 } }
+  local rows = page_rows(v)
+  local locked_line
+  for _, line in ipairs(rows) do
+    locked_line = line:find(" width ", 1, true) and line or locked_line
+  end
+  assert(locked_line, "the width row is drawn")
+  assert(locked_line:find("LOCKED wezterm.lua", 1, true), "§4: named as wezterm.lua's: " .. locked_line)
+  assert(not locked_line:find("(host)", 1, true), "and not as the host's")
+
+  config.host_config = { window_padding = { left = 8 } }
+  local hosted = page_rows(page_view {
+    cols = 100,
+    rows = 21,
+    cfg = config.setup { backend = { path = "/bin/wez-vtabs" } },
+    st = { group = 1, focus = 1, scroll = 0 },
+  })
+  local host_line
+  for _, line in ipairs(hosted) do
+    host_line = line:find("edge_to_edge", 1, true) and line or host_line
+  end
+  assert(
+    host_line and host_line:find("wezterm.lua (host)", 1, true),
+    "§4: named as the host's: " .. tostring(host_line)
+  )
+  config.host_config = {}
+
+  -- r resets the focused field and nothing else, and the changed marker goes with it
+  local edited = config.setup { backend = { path = "/bin/wez-vtabs" } }
+  local st = { group = 2, focus = 1, scroll = 0 }
+  local ev = page_view { cols = 100, rows = 21, cfg = edited, st = st }
+  local plan = page.plan(ev)
+  local target, other
+  for i, row in ipairs(plan.fields) do
+    if row.widget == "picker" and not row.locked and not target then
+      target, st.focus = row, i
+    elseif row.widget == "picker" and not row.locked and not other then
+      other = row
+    end
+  end
+  assert(target and other, "two pickers to tell apart")
+  page.key(nil, ev, { key = "rightarrow" })
+  page.key(nil, ev, { key = "rightarrow" })
+  local moved = page.plan(page_view { cols = 100, rows = 21, cfg = config.get(), st = st })
+  eq(moved.fields[st.focus].changed, true, "the focused field moved off its default")
+  local marker_col = page.grid(100).marker_x
+  local after = page_rows(page_view { cols = 100, rows = 21, cfg = config.get(), st = st })
+  local marked = 0
+  for _, line in ipairs(after) do
+    marked = usub(line, marker_col, marker_col) == ev.glyphs.unseen and marked + 1 or marked
+  end
+  eq(marked, 1, "exactly one row carries the changed marker")
+
+  page.key(nil, ev, { key = "r" })
+  local reset = page.plan(page_view { cols = 100, rows = 21, cfg = config.get(), st = st })
+  eq(reset.fields[st.focus].changed, false, "r puts it back on the schema default")
+  eq(reset.fields[st.focus].value, target.default)
+  config.setup(legacy { backend = { path = "/bin/wez-vtabs" } })
+end)
+
+test("P3 §3: a type = any key fronts an enum, and custom is shown but not stepped", function()
+  local cfg = config.setup { backend = { path = "/bin/wez-vtabs" } }
+  local by_key = {}
+  for _, row in ipairs(page.fields(cfg)) do
+    by_key[row.key] = row
+  end
+  local frame = by_key.frame
+  assert(frame, "frame has a row")
+  eq(frame.widget, "variant", "a boolean toggle could never express its table form")
+  eq(page.variant_name(frame), "off")
+  eq(page.value_text(frame), "‹ off ›")
+  eq(page.step(frame, 1), true, "and it steps through its presets")
+
+  local tabled = config.setup { frame = { margin = 1, corners = true }, backend = { path = "/bin/wez-vtabs" } }
+  local rows = {}
+  for _, row in ipairs(page.fields(tabled)) do
+    rows[row.key] = row
+  end
+  eq(page.variant_name(rows.frame), "custom", "a table no preset describes reads as custom")
+  eq(page.value_text(rows.frame), "‹ custom ›")
+  eq(page.step(rows.frame, 1), rows.frame.value, "and an arrow key cannot flip it away")
+  eq(page.WIDGETS.variant.activate(rows.frame), nil, "nor can Enter")
+  assert(rows["frame.margin"], "its keys are listed below it instead")
+  config.setup { backend = { path = "/bin/wez-vtabs" } }
+end)
+
+test("P3 §2: the hint bar and the preview icons go through the glyph guard", function()
+  local cfg = config.setup { backend = { path = "/bin/wez-vtabs" } }
+  local safe = glyphs.resolve(cfg.glyphs, {})
+  local wide = glyphs.resolve(cfg.glyphs, { treat_east_asian_ambiguous_width_as_wide = true })
+  for _, key in ipairs { "hint_up", "hint_down", "hint_left", "hint_right" } do
+    eq(util.width(safe[key]), 1, key .. " is one column")
+    eq(util.width(wide[key]), 1, key .. " stays one column under ambiguous-as-wide")
+  end
+  eq(wide.hint_up, "^", "the arrows are East Asian Ambiguous, so the flag substitutes them")
+  eq(wide.hint_left, "<")
+
+  local v = page_view { cols = 100, rows = 21 }
+  local bar = page_rows(v)[21]
+  assert(bar:find("Enter edit", 1, true), "Enter is spelled out, not U+23CE: " .. bar)
+  assert(not bar:find("⏎", 1, true), "which is in barely any monospace font")
+  local narrow = page_rows(page_view { cols = 60, rows = 18 })[18]
+  assert(narrow:find("Enter", 1, true), "narrow too: " .. narrow)
+
+  local ascii = page_view { cols = 100, rows = 21 }
+  ascii.glyphs = wide
+  local ascii_bar = page_rows(ascii)[21]
+  assert(ascii_bar:find("^v field", 1, true), "and the bar is composed from the guarded glyphs: " .. ascii_bar)
+
+  -- A6a: the preview's icons come from the merged map, so an icon_map edit shows there
+  local edited = page_rows(page_view { cols = 100, rows = 21, pending = { icon_map = { zsh = "Z" } } })
+  local found = false
+  for _, line in ipairs(edited) do
+    found = found or line:find("Z zsh", 1, true) ~= nil
+  end
+  assert(found, "A6a: the sample icons are resolved, never literals")
+  config.setup { backend = { path = "/bin/wez-vtabs" } }
+end)
+
+test("P3 §2: the 60-column layout is nav plus form, and says so under 48", function()
+  local narrow = page_rows(page_view { cols = 60, rows = 18, st = { group = 1, focus = 1, scroll = 0 } })
+  local g = page.grid(60)
+  eq(g.preview, false, "no preview box below 90 columns")
+  eq(g.nav_x1, 2)
+  eq(g.nav_x2, 15)
+  eq(g.divider, 16)
+  eq(g.caret_x, 17)
+  eq(g.label_x, 19)
+  eq(g.form_x2, 58)
+  assert(narrow[1]:find("Settings", 1, true), "the header")
+  assert(narrow[1]:find("0.1.0", 1, true) and not narrow[1]:find("wez-vtabs", 1, true), "version abbreviated at 60")
+  eq(usub(narrow[4], g.divider, g.divider), "│", "the divider runs down the body")
+  eq(usub(narrow[4], g.nav_x1 + 2, g.nav_x1 + 7), "Layout", "nav on the left")
+  assert(narrow[18]:find("esc", 1, true), "and the narrow hint bar is last")
+  assert(not narrow[18]:find("copy as Lua", 1, true), "which is the short copy, not the wide one")
+  for row = 1, 18 do
+    eq(util.width(narrow[row]), 60, "60-col row " .. row)
+    assert(not narrow[row]:find("╭", 1, true), "row " .. row .. " draws no preview box")
+  end
+
+  local under = page_rows(page_view { cols = 47, rows = 12 })
+  local said, other = false, 0
+  for _, line in ipairs(under) do
+    if line:find("Settings needs 48 columns", 1, true) then
+      said = true
+    elseif line:match "%S" then
+      other = other + 1
+    end
+  end
+  assert(said, "under 48 it says so")
+  eq(other, 0, "and draws nothing else")
+  eq(page.grid(47), nil, "there is no grid to draw with")
+  assert(page.grid(48), "48 is the floor, not the first refusal")
+end)
+
 test("P3 A5: settings.json holds only what differs, versioned, and never a symlink", function()
   local settings = require "vtabs.settings"
   local schema_mod = require "vtabs.schema"
