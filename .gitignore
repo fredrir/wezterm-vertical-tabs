@@ -4,3 +4,5 @@ plugin/lua_modules
 plugin/luarocks
 plugin/lua
 plugin/*.src.rock
+
+.dev-build.log

@@ -1,0 +1,28 @@
+_default:
+    @just --list --unsorted
+
+dev *args:
+    @sh scripts/dev.sh {{args}}
+
+deploy *args: # --from-dev (default) / --from-prd / --from-release
+    @sh scripts/deploy.sh {{args}}
+
+doctor:
+    @sh scripts/doctor.sh
+
+# Everything CI runs
+check: test lint
+
+test:
+    cd backend && cargo test --locked
+    cd plugin && lua tests/run.lua
+
+lint:
+    cd backend && cargo fmt --check && cargo clippy --all-targets --locked -- -D warnings
+    cd plugin && luacheck init.lua vtabs tests && stylua --check init.lua vtabs tests
+
+e2e mode="local":
+    sh plugin/tests/e2e.sh {{mode}}
+
+build profile="release":
+    cd backend && cargo build --locked {{ if profile == "release" { "--release" } else { "" } }}

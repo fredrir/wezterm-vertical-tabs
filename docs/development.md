@@ -1,11 +1,5 @@
 # Development
 
-```
-backend/   Rust input/render bridge (`wez-vtabs`)
-plugin/    Lua plugin (`init.lua` + `vtabs/*`), bootstrap scripts, tests
-docs/      protocol + configuration
-```
-
 ## Backend
 
 ```sh
@@ -20,19 +14,35 @@ cargo build --release      # target/release/wez-vtabs
 
 ```sh
 cd plugin
-lua tests/run.lua          # unit tests: wezterm stub + fake mux (any Lua 5.4+)
+lua tests/run.lua
 luacheck init.lua vtabs tests
 stylua --check init.lua vtabs tests
 ```
 
 ## End-to-end
 
-Launches a throwaway WezTerm window, drives it with `wezterm cli` and
-synthetic SGR mouse sequences, and checks the rendered sidebar:
-
 ```sh
 sh plugin/tests/e2e.sh          # local domain
 sh plugin/tests/e2e.sh mux      # through a unix multiplexer domain
+```
+
+## Dev loop
+
+Needs [`just`](https://github.com/casey/just) and [`watchexec`](https://github.com/watchexec/watchexec).
+
+```sh
+just              # list recipes
+just dev          # sandbox WezTerm, rebuild + hot-swap on change
+just dev --live   # hot-swap the sidebars in your running WezTerm instead
+just doctor       # which backend is running, and whether the installs agree
+```
+
+## Applying a build
+
+```sh
+just deploy                  # build release, hot-swap your running sidebars
+just deploy --from-prd       # install into WezTerm's plugin dir as a real plugin
+just deploy --from-release   # download the published assets and install those
 ```
 
 ## Local development config
@@ -42,21 +52,18 @@ package.path = "/path/to/wezterm-vertical-tabs/plugin/?.lua;" .. package.path
 local vtabs = dofile "/path/to/wezterm-vertical-tabs/plugin/init.lua"
 vtabs.apply_to_config(config, {
   backend = { path = "/path/to/wezterm-vertical-tabs/backend/target/release/wez-vtabs" },
-  debug = true, -- logs events and hit rows (see `wezterm --config-file ... start` output or the debug overlay)
+  debug = true, 
 })
 ```
 
 ## Bootstrap environment
 
-`plugin/vtabs/backend.lua` passes these to `plugin/bin/bootstrap.sh|.ps1`:
-`VTABS_TARGET` (Rust triple), `VTABS_REPO`, `VTABS_VERSION` (release tag
-without `v`), `VTABS_SRC` (backend crate for the cargo fallback), `VTABS_BUILD`
-(`0` disables it), `VTABS_BIN` (explicit binary), `VTABS_USERVAR`. The script
-extends `PATH` with `~/.cargo/bin`, `/opt/homebrew/bin` and `/usr/local/bin`
-because the GUI process has a minimal PATH, and verifies downloads against the
-release's `SHA256SUMS`.
-
-## Releasing
-
-Tag `vX.Y.Z` (matching `plugin/vtabs/version.lua`); `.github/workflows/release.yml`
-builds `wez-vtabs-<target>` assets that `plugin/bin/bootstrap.sh` downloads.
+| Variable        | Description                          |
+| --------------- | ------------------------------------ |
+| `VTABS_TARGET`  | Rust triple                          |
+| `VTABS_REPO`    | Repository URL                       |
+| `VTABS_VERSION` | Release tag without `v`              |
+| `VTABS_SRC`     | Backend crate for the cargo fallback |
+| `VTABS_BUILD`   | `0` disables it                      |
+| `VTABS_BIN`     | Explicit binary                      |
+| `VTABS_USERVAR` | User variable                        |
