@@ -78,6 +78,47 @@ function M.truncate(s, max, ellipsis)
   return s:sub(1, offsets[lo] - 1) .. ellipsis
 end
 
+---Elides middle path components to fit `budget`; the basename is the informative part, so it
+---survives until nothing else can go. `util.truncate` cuts from the right and is kept for titles.
+function M.shorten_path(path, budget, ellipsis)
+  ellipsis = ellipsis or "…"
+  if type(path) ~= "string" or path == "" or budget <= 0 then
+    return ""
+  end
+  if M.width(path) <= budget then
+    return path
+  end
+  local parts = {}
+  for part in path:gmatch "[^/]+" do
+    parts[#parts + 1] = part
+  end
+  local lead = path:sub(1, 1) == "/" and "/" or ""
+  if #parts <= 1 then
+    return lead .. M.truncate(parts[1] or "", budget - M.width(lead), ellipsis)
+  end
+  local function joined()
+    return lead .. table.concat(parts, "/")
+  end
+  -- Leftmost first, and never the marker or the basename.
+  local from = (parts[1] == "~" or parts[1] == "..") and 2 or 1
+  for i = from, #parts - 1 do
+    if M.width(joined()) <= budget then
+      break
+    end
+    parts[i] = M.truncate(parts[i], 1, "")
+  end
+  local out = joined()
+  if M.width(out) <= budget then
+    return out
+  end
+  local base = parts[#parts]
+  local room = budget - M.width(ellipsis) - 1
+  if room < 1 then
+    return M.truncate(base, budget, ellipsis)
+  end
+  return ellipsis .. "/" .. M.truncate(base, room, ellipsis)
+end
+
 function M.pad_right(s, cols)
   local w = M.width(s)
   if w >= cols then

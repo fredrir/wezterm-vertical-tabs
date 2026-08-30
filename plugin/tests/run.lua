@@ -147,8 +147,23 @@ local function items()
   }
 end
 
+-- These assert renderer mechanics at a fixed layout, so they state it rather than tracking defaults.
+local LEGACY_LAYOUT = {
+  row_gap = 0,
+  padding = { top = 1, left = 1, right = 1 },
+  separator = "rule",
+  pinned_style = "compact",
+  new_tab_button = "row",
+  meta = false,
+  toggle_button = false,
+}
+
+local function legacy(opts)
+  return util.merge(LEGACY_LAYOUT, opts or {})
+end
+
 local function view(over)
-  local cfg = config.setup(over and over.opts or {})
+  local cfg = config.setup(legacy(over and over.opts))
   local v = {
     cols = 28,
     rows = 10,
@@ -202,7 +217,7 @@ test("layout: padding, pinned, separator, tabs, new tab", function()
   eq(r.hits[5].tab_id, 3)
   eq(r.hits[6].kind, "new_tab")
   eq(r.total_rows, 6)
-  assert(strip(r.data):find "New Tab")
+  assert(strip(r.data):find "New tab")
   assert(strip(r.data):find "…", "long title truncated")
   local sep = render.render(view { opts = { separator = "none" } })
   eq(sep.hits[3].tab_id, 2)
@@ -344,7 +359,7 @@ test("model.ordered is pinned-first and stable", function()
 end)
 
 local function setup_window(n)
-  config.setup { backend = { path = "/bin/wez-vtabs" } }
+  config.setup(legacy { backend = { path = "/bin/wez-vtabs" } })
   local win = fake.window()
   for i = 1, n or 2 do
     win:add_tab { title = "t" .. i }
@@ -1784,6 +1799,78 @@ test("every §6.3 key is present and overridable", function()
   eq(rgb(theme.resolve({ accent = "#89b4fa" }, palettes[1]).accent), "137,180,250", "a passing accent is kept")
   local lifted = theme.resolve({ accent = "#010203" }, palettes[1]).accent
   assert(rgb(lifted) ~= "1,2,3" and theme.contrast(lifted, t.bg) >= 3.0, "an unreadable accent is lifted")
+end)
+
+test("shorten_path elides middle components and keeps the basename", function()
+  local sp = util.shorten_path
+  eq(sp("~/projects/wez-plugins/vertical-tabs", 20), "~/p/w/vertical-tabs")
+  eq(sp("~/projects/wezterm-vertical-tabs/plugin/vtabs", 20), "~/p/w/plugin/vtabs")
+  eq(sp("/usr/local/share/doc/wezterm/examples", 20), "/u/l/s/d/w/examples")
+  eq(sp("~/Documents/notes", 20), "~/Documents/notes", "a path that fits is untouched")
+  assert(sp("~/projects/api", 12) ~= sp("~/projects/web", 12), "siblings stay distinguishable")
+  eq(sp("~/projects/api", 12), "~/p/api")
+  eq(sp("~/a/very-long-basename-that-alone-overflows", 20), "…/very-long-basenam…")
+  eq(util.width(sp("~/a/very-long-basename-that-alone-overflows", 20)), 20)
+  eq(sp("~", 20), "~")
+  eq(sp("", 20), "")
+  eq(sp(nil, 20), "")
+  eq(sp("~/x", 0), "")
+  for _, budget in ipairs { 4, 8, 12, 20, 40 } do
+    local out = sp("~/projects/wezterm-vertical-tabs/plugin/vtabs", budget)
+    assert(util.width(out) <= budget, "budget " .. budget .. " overflowed with " .. out)
+  end
+end)
+
+test("the P1 defaults and their aliases pass validation without warning", function()
+  local before = #wezterm.log
+  local cfg = config.setup {}
+  eq(cfg.padding.top, 0)
+  eq(cfg.row_gap, 1)
+  eq(cfg.tab_height, "card")
+  eq(cfg.meta, "auto")
+  eq(cfg.separator, "gap")
+  eq(cfg.pinned_style, "dense")
+  eq(cfg.new_tab_button, "ghost")
+  eq(cfg.corners, "chamfer")
+  eq(cfg.scroll_indicator, "auto")
+  eq(cfg.titlebar, "auto")
+  eq(cfg.toggle_button, true)
+  eq(#wezterm.log, before, "no warnings on the defaults")
+  eq(config.setup({ new_tab_button = true }).new_tab_button, "ghost")
+  eq(config.setup({ scroll_indicator = true }).scroll_indicator, "auto")
+  eq(config.setup({ scroll_indicator = false }).scroll_indicator, "never")
+  eq(config.setup({ meta = true }).meta, "auto")
+  eq(config.setup({ new_tab_button = false }).new_tab_button, false)
+  eq(config.setup({ meta = false }).meta, false)
+  eq(#wezterm.log, before, "aliases do not warn either")
+end)
+
+test("each new key rejects a bad value and keeps its default", function()
+  for key, bad in pairs {
+    tab_height = "tall",
+    meta = "path",
+    new_tab_button = "button",
+    corners = "round",
+    scroll_indicator = "sometimes",
+    titlebar = "native",
+    pinned_style = "tiny",
+  } do
+    eq(config.setup({ [key] = bad })[key], config.defaults[key], key .. " reset")
+  end
+  eq(config.setup({ row_gap = -1 }).row_gap, 1)
+  eq(config.setup({ row_gap = "two" }).row_gap, 1)
+  eq(config.setup({ toggle_button = "yes" }).toggle_button, true)
+  eq(config.setup({ row_gap = 3 }).row_gap, 3, "a valid value survives")
+end)
+
+test("tab_height and meta stay consistent, and press mode forces an always-on close button", function()
+  eq(config.setup({ tab_height = "row" }).meta, false)
+  eq(config.setup({ meta = false }).tab_height, "row")
+  eq(config.setup({ tab_height = "card" }).meta, "auto")
+  eq(config.setup({ hover = "press" }).close_button, "always")
+  eq(config.setup({ hover = "press", close_button = "never" }).close_button, "never")
+  eq(config.setup({ hover = "follow" }).close_button, "hover")
+  config.setup(legacy { backend = { path = "/bin/wez-vtabs" } })
 end)
 
 os.remove(state.file)
