@@ -244,6 +244,10 @@ function M.apply_to_config(config, opts)
   if cfg.hover == "follow" and config.pane_focus_follows_mouse == nil then
     config.pane_focus_follows_mouse = true
   end
+  -- The sidebar is chrome, not a pane to focus; wezterm would otherwise dim whichever one is idle.
+  if cfg.dim_inactive_panes == false and config.inactive_pane_hsb == nil then
+    config.inactive_pane_hsb = { brightness = 1.0, saturation = 1.0, hue = 1.0 }
+  end
   apply_decorations(config, cfg)
   if cfg.skip_close_confirmation then
     config.skip_close_confirmation_for_processes_named = config.skip_close_confirmation_for_processes_named

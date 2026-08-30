@@ -467,8 +467,9 @@ test("orphaned sidebar closes its tab without touching the active tab", function
   eq(win.active_tab_ref, win.tab_list[1])
 end)
 
-test("collapse detaches, expand re-attaches", function()
+test("collapsed = hidden detaches, expand re-attaches", function()
   local win, gui = setup_window(2)
+  config.setup { backend = { path = "/bin/wez-vtabs" }, collapsed = "hidden" }
   sidebar.ensure(gui)
   for _, tab in ipairs(win.tab_list) do
     mark_ready(tab)
@@ -482,6 +483,7 @@ test("collapse detaches, expand re-attaches", function()
   for _, tab in ipairs(win.tab_list) do
     eq(sidebars_in(tab), 1)
   end
+  config.setup { backend = { path = "/bin/wez-vtabs" } }
 end)
 
 test("close_tab on a background tab restores the previous active tab", function()
@@ -1379,8 +1381,9 @@ test("an orphan tab is closed only once its sidebar echoed a token", function()
   eq(#win.tab_list, 1)
 end)
 
-test("collapsing leaves an unauthenticated sidebar alone", function()
+test("collapsing to hidden leaves an unauthenticated sidebar alone", function()
   local win, gui = setup_window(1)
+  config.setup { backend = { path = "/bin/wez-vtabs" }, collapsed = "hidden" }
   sidebar.ensure(gui)
   local tab = win.tab_list[1]
   sidebar.set_collapsed(gui, true)
@@ -1389,6 +1392,7 @@ test("collapsing leaves an unauthenticated sidebar alone", function()
   sidebar.ensure(gui)
   eq(#tab:panes(), 1)
   sidebar.set_collapsed(gui, false)
+  config.setup { backend = { path = "/bin/wez-vtabs" } }
 end)
 
 test("a failed domain is retried after a minute", function()
@@ -3076,6 +3080,104 @@ test("the committed options table is what the schema generates", function()
   local status = code or (ok and 0 or 1)
   eq(status, 0, "docs/configuration.md is stale; run `just docs`")
   assert(how == nil or how == "exit", "generator exited normally")
+end)
+
+test("the popover surface is never harder to read than the sidebar body", function()
+  for _, p in ipairs(palettes) do
+    local t = theme.resolve({}, p)
+    local ceiling = math.min(4.5, 0.95 * theme.contrast(t.fg, t.bg))
+    local where = " on " .. p.name
+    assert(theme.contrast(t.fg, t.surface_raised) >= ceiling - 0.001, "fg vs surface_raised" .. where)
+    assert(theme.contrast(t.meta_fg, t.surface_raised) >= 3.5 - 0.001, "meta_fg vs surface_raised" .. where)
+    assert(theme.contrast(t.fg, t.surface_raised) < theme.contrast(t.fg, t.bg), "raised is a surface" .. where)
+    -- disabled is quiet by design; it only has to stay a colour, not a gate
+    assert(theme.contrast(t.disabled_fg, t.surface_raised) > 1.5, "disabled_fg still visible" .. where)
+  end
+  -- Only the two low-contrast schemes need the lift lowered below 0.09.
+  local lowered = {}
+  for _, p in ipairs(palettes) do
+    local t = theme.resolve({}, p)
+    local dark = theme.luminance(t.bg) < 0.5
+    local full = theme.mix(t.bg, t.fg, 0.09 * (dark and 1.0 or 0.6))
+    if rgb(t.surface_raised) ~= rgb(full) then
+      lowered[p.name] = true
+    end
+  end
+  eq(rgb(util.sorted_keys(lowered)), rgb { "Solarized Dark", "Solarized Light" })
+end)
+
+test("the scrim is a contrast target: every palette lands in the same narrow band", function()
+  local lo, hi = 99, 0
+  for _, p in ipairs(palettes) do
+    local t = theme.resolve({}, p)
+    local where = " on " .. p.name
+    assert(t.scrim >= 0.30 and t.scrim <= 0.70, "scrim inside its range" .. where)
+    local fg = theme.contrast(theme.mix(t.fg, t.bg, t.scrim), t.bg)
+    local card = theme.contrast(theme.mix(t.active_bg, t.bg, t.scrim), t.bg)
+    assert(fg >= 2.0 and fg <= 3.0, "scrimmed text stays legible but recedes" .. where .. ": " .. fg)
+    assert(card < 1.3, "the scrimmed active card stops reading as a block" .. where .. ": " .. card)
+    lo, hi = math.min(lo, fg), math.max(hi, fg)
+  end
+  assert(hi / lo < 1.2, "a fixed fade would spread 2.5x; the target keeps it under 1.2x")
+end)
+
+test("the new surfaces are overridable like every other theme key", function()
+  local over = theme.resolve({ surface_raised = "#010203", disabled_fg = "#040506", scrim = 0.5 }, palettes[1])
+  eq(rgb(over.surface_raised), "1,2,3")
+  eq(rgb(over.disabled_fg), "4,5,6")
+  eq(over.scrim, 0.5)
+end)
+
+test("the sidebar page colour is the terminal background byte for byte, light and dark", function()
+  for _, name in ipairs { "Catppuccin Mocha", "Catppuccin Latte", "Solarized Light" } do
+    for _, p in ipairs(palettes) do
+      if p.name == name then
+        local t = theme.resolve({}, p)
+        eq(rgb(t.bg), hex(p.background), "no tint on " .. name)
+      end
+    end
+  end
+  -- Only an explicit elevation moves it, and only a little: 1.0 would paint the sidebar in fg.
+  local latte
+  for _, p in ipairs(palettes) do
+    if p.name == "Catppuccin Latte" then
+      latte = p
+    end
+  end
+  assert(rgb(theme.resolve({ elevation = 0.06 }, latte).bg) ~= hex(latte.background))
+  eq(config.setup({ theme = { elevation = 1 } }).theme.elevation, 0, "out of range, reset")
+  eq(config.setup({ theme = { elevation = 0.06 } }).theme.elevation, 0.06)
+  config.setup { backend = { path = "/bin/wez-vtabs" } }
+end)
+
+test("wezterm is told not to dim the idle pane, unless the user asked for dimming", function()
+  local vtabs = dofile(here .. "/../init.lua")
+  local function hsb(opts, preset)
+    local cfg = { keys = {} }
+    cfg.inactive_pane_hsb = preset
+    vtabs.apply_to_config(cfg, opts)
+    return cfg.inactive_pane_hsb
+  end
+  local off = hsb {}
+  eq(off.brightness, 1.0, "the sidebar is chrome; wezterm would dim it whenever the shell has focus")
+  eq(off.saturation, 1.0)
+  eq(hsb { dim_inactive_panes = true }, nil, "opting in leaves wezterm's default alone")
+  local mine = { brightness = 0.5, saturation = 0.5 }
+  eq(hsb({}, mine), mine, "a user value is never overwritten")
+  config.setup { backend = { path = "/bin/wez-vtabs" } }
+end)
+
+test("cell counts and durations must be whole numbers", function()
+  eq(config.setup({ width = 28.7 }).width, 28, "a fractional width would reach AdjustPaneSize")
+  eq(config.setup({ row_gap = 1.5 }).row_gap, 1)
+  eq(config.setup({ rail_width = 5.5 }).rail_width, 5)
+  eq(config.setup({ poll_ms = 500.5 }).poll_ms, 500)
+  eq(config.setup({ padding = { top = 1.2 } }).padding.top, 1)
+  eq(config.setup({ tooltip_delay_ms = 600.5 }).tooltip_delay_ms, 600)
+  eq(config.setup({ animation = { fps = 30.5 } }).animation.fps, 30)
+  eq(config.setup({ width = 32 }).width, 32, "a whole number survives")
+  eq(config.setup({ theme = { elevation = 0.06 } }).theme.elevation, 0.06, "ratios still take fractions")
+  config.setup { backend = { path = "/bin/wez-vtabs" } }
 end)
 
 os.remove(state.file)

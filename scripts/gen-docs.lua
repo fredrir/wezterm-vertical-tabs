@@ -40,11 +40,36 @@ local function pad(s, cols)
   return s .. string.rep(" ", math.max(cols - width(s), 0))
 end
 
+---What the option accepts, from the schema rather than prose.
+local function values_of(option)
+  if option.values then
+    return option.values
+  end
+  -- a bare `|` would end the markdown cell
+  if option.type == "enum" then
+    local out = {}
+    for _, allowed in ipairs(option.enum) do
+      out[#out + 1] = "`" .. render(allowed) .. "`"
+    end
+    return table.concat(out, " \\| ")
+  end
+  if option.type == "number" then
+    if option.min and option.max then
+      return string.format("`%s`-`%s`", option.min, option.max)
+    end
+    return option.min and string.format("number >= `%s`", option.min) or "number"
+  end
+  if option.type == "boolean" then
+    return "`true` \\| `false`"
+  end
+  return option.type
+end
+
 local function table_lines()
   local rows = {}
   for _, option in ipairs(schema.options) do
-    if option.docs ~= false and option.help then
-      rows[#rows + 1] = { "`" .. option.key .. "`", default_of(option), option.help }
+    if option.docs ~= false then
+      rows[#rows + 1] = { "`" .. option.key .. "`", default_of(option), values_of(option) }
     end
   end
   local w1, w2 = width "option", width "default"
@@ -52,8 +77,8 @@ local function table_lines()
     w1, w2 = math.max(w1, width(row[1])), math.max(w2, width(row[2]))
   end
   local out = {
-    string.format("| %s | %s | description |", pad("option", w1), pad("default", w2)),
-    string.format("| %s | %s | ----------- |", string.rep("-", w1), string.rep("-", w2)),
+    string.format("| %s | %s | values |", pad("option", w1), pad("default", w2)),
+    string.format("| %s | %s | ------ |", string.rep("-", w1), string.rep("-", w2)),
   }
   for _, row in ipairs(rows) do
     out[#out + 1] = string.format("| %s | %s | %s |", pad(row[1], w1), pad(row[2], w2), row[3])

@@ -26,6 +26,9 @@ local function type_ok(option, value)
 end
 
 local function range_ok(option, value)
+  if option.integer and value ~= math.floor(value) then
+    return false
+  end
   if option.min and value < option.min then
     return false
   end
@@ -36,8 +39,14 @@ local function reason(option, value)
   if option.type == "enum" then
     return string.format("invalid %s=%s, using default", option.key, tostring(value))
   end
-  if option.type == "number" and option.min then
-    return string.format("%s must be a number >= %s, using default", option.key, option.min)
+  if option.type == "number" then
+    local kind = option.integer and "whole number" or "number"
+    if option.min and option.max then
+      return string.format("%s must be a %s %s-%s, using default", option.key, kind, option.min, option.max)
+    end
+    if option.min then
+      return string.format("%s must be a %s >= %s, using default", option.key, kind, option.min)
+    end
   end
   return string.format("%s must be a %s, using default", option.key, option.type)
 end
