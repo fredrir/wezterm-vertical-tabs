@@ -39,7 +39,7 @@ return config
 | `new_tab_label`           | `"New tab"`                                                       | string |
 | `corners`                 | `"chamfer"`                                                       | `"chamfer"` \| `"square"` |
 | `frame`                   | `false`                                                           | any |
-| `titlebar`                | `"auto"`                                                          | `"auto"` \| `"integrate"` \| `"plain"` |
+| `titlebar`                | `"auto"`                                                          | `"auto"` \| `"integrate"` \| `"plain"` \| `"macos"` |
 | `context`                 | `"popover"`                                                       | `"popover"` \| `false` |
 | `toggle_button`           | `true`                                                            | `true` \| `false` |
 | `close_button`            | `"hover"`                                                         | `"hover"` \| `"always"` \| `"never"` |
@@ -94,7 +94,9 @@ return config
 | `rail_width` | raised to the traffic-light reserve (typically 9) on macOS with `INTEGRATED_BUTTONS` |
 | `close_button` | treated as `"always"` when `hover = "press"`, where no background row is ever hovered |
 | `context` | `false` removes the mouse trigger only; `m` in keyboard mode still opens the popover |
+| `confirm_close` | the question is a popover level in the sidebar, never wezterm's own overlay, which the release after the click that opened it would dismiss; the overlay is the fallback only when no sidebar can draw the question |
 | `show_index` | renders on the meta line with 2-row cards, inline with `meta = false` |
+| `titlebar` | `"macos"` forces the traffic-light reserve on any platform, for previews and screenshots; it changes nothing about the real window buttons |
 | `tooltip` | `"auto"` is off in `"press"` mode, where hover never reaches the sidebar |
 | `tooltip_delay_ms` | effective delay is `max(tooltip_delay_ms, poll_ms)`; halved in rail mode |
 | `animations` | colour only: expand and collapse fade around one hard width snap, never a slide |
@@ -164,7 +166,7 @@ the tab's content pane, which then takes focus back.
 | gesture                                    | effect                                                                           |
 | ------------------------------------------ | -------------------------------------------------------------------------------- |
 | left click                                 | switch tab                                                                       |
-| click `✕` / middle click                   | close tab                                                                        |
+| click `✕` / middle click                   | close the tab on release; one that would prompt raises a `Close` / `Cancel` popover first |
 | right click                                | context menu on release (overlay in the current pane)                            |
 | drag                                       | reorder after 3 rows of travel and 120 ms; dropping across the separator pins/unpins, the list previews the result |
 | drag to the inner edge                     | move tab to a new window (edge highlights while armed)                           |

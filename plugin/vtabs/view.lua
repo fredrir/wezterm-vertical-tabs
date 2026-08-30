@@ -109,9 +109,13 @@ local function chrome_for(gui_window, cfg)
       return gui_window:effective_config()
     end) or {}
     local decorations = tostring(effective.window_decorations or "")
-    local asked = cfg.titlebar == "integrate"
+    -- `titlebar = "macos"` is the preview knob: it claims the reserve on a machine that has none.
+    local preview = cfg.titlebar == "macos"
+    local asked = preview
+      or cfg.titlebar == "integrate"
       or (cfg.titlebar == "auto" and decorations:find("INTEGRATED_BUTTONS", 1, true) ~= nil)
-    local native = effective.integrated_title_button_style == nil
+    local native = preview
+      or effective.integrated_title_button_style == nil
       or effective.integrated_title_button_style == "MacOsNative"
     if platform.is_mac and asked and not native then
       util.warn_once("button-style", "integrated_title_button_style must be MacOsNative to reserve cells")
@@ -119,6 +123,7 @@ local function chrome_for(gui_window, cfg)
     chrome[wid] = {
       integrated_buttons = asked,
       native_button_style = native,
+      preview = preview,
       glyphs = glyphs.resolve(cfg.glyphs, effective),
     }
   end
@@ -191,7 +196,7 @@ local function strip_for(gui_window, cfg, dims)
     return gui_window:get_dimensions()
   end) or {}
   local g = platform.strip_geometry(dims, {
-    is_mac = platform.is_mac,
+    is_mac = platform.is_mac or facts.preview,
     integrated_buttons = facts.integrated_buttons,
     native_button_style = facts.native_button_style,
     is_full_screen = window.is_full_screen == true,

@@ -586,7 +586,12 @@ test("middle click through input closes the clicked tab", function()
     end
   end
   assert(row, "second tab has a card")
-  input.handle(gui, sb, "vtabs", string.format('{"t":"mouse","k":"down","b":"middle","x":3,"y":%d}', row))
+  local function middle(kind)
+    input.handle(gui, sb, "vtabs", string.format('{"t":"mouse","k":"%s","b":"middle","x":3,"y":%d}', kind, row))
+  end
+  middle "down"
+  eq(#win.tab_list, 2, "the press alone closes nothing; the overlay would die on the release")
+  middle "up"
   eq(#win.tab_list, 1)
   eq(win.active_tab_ref, first)
 end)
@@ -3501,6 +3506,40 @@ test("view hands the renderer a strip and a private-aware theme", function()
   config.setup(legacy { backend = { path = "/bin/wez-vtabs" } })
 end)
 
+test('titlebar = "macos" previews the light reserve on a machine that has none', function()
+  local win, gui = setup_window(1)
+  sidebar.ensure(gui)
+  local sb = mark_ready(win.tab_list[1])
+  -- The fake reports no pixel height, and the reserve is derived from the cell box.
+  sb.get_dimensions = function(self)
+    return { cols = self.cols, viewport_rows = 30, pixel_width = self.cols * 10, pixel_height = 570 }
+  end
+  local was_mac = platform.is_mac
+  platform.is_mac = false
+  local seen = nil
+  local render_mod = require "vtabs.render"
+  local original = render_mod.render
+  render_mod.render = function(frame)
+    seen = frame
+    return original(frame)
+  end
+  local function strip_of(opts)
+    config.setup(util.merge({ meta = "auto", backend = { path = "/bin/wez-vtabs" } }, opts))
+    view_mod.invalidate_theme()
+    view_mod.sync(gui, { force = true })
+    return seen.strip
+  end
+  eq(strip_of({}).cols, 0, "off macOS there is nothing to reserve")
+  local preview = strip_of { titlebar = "macos" }
+  eq(preview.cols, 7, "70 px of buttons over 10 px cells")
+  eq(preview.rows, 3, "two reserved rows plus padding.top")
+  eq(strip_of({ titlebar = "macos", position = "right" }).cols, 0, "the lights are on the left only")
+  render_mod.render = original
+  platform.is_mac = was_mac
+  view_mod.invalidate_theme()
+  config.setup(legacy { backend = { path = "/bin/wez-vtabs" } })
+end)
+
 test("all three rows of a card activate its tab, but only inside the card surface", function()
   local win, gui = drag_setup()
   local sb1 = sidebar.find(win.tab_list[1])
@@ -3532,7 +3571,13 @@ test("the close span closes and the toggle span collapses the sidebar", function
 
   eq(#win.tab_list, 3)
   mouse(gui, sb1, "down", "left", 26, 3)
-  eq(#win.tab_list, 2, "clicking the ✕ closed the card's tab")
+  eq(#win.tab_list, 3, "the ✕ arms on the press")
+  mouse(gui, sb1, "up", "left", 26, 3)
+  eq(#win.tab_list, 2, "and closes the card's tab on the release")
+
+  mouse(gui, sb1, "down", "left", 26, 3)
+  mouse(gui, sb1, "up", "left", 5, 3)
+  eq(#win.tab_list, 2, "a release that slid off the ✕ closes nothing")
 
   assert(not state.is_collapsed(gui:window_id()))
   mouse(gui, sb1, "down", "left", 2, 1)
@@ -3914,6 +3959,100 @@ local function open_popover(row)
   view_mod.sync(gui, { force = true })
   return win, gui, sb, popover.get(gui:window_id())
 end
+
+---A foreground process the skip list does not name is what makes a close want confirming.
+local function make_busy(tab)
+  for _, p in ipairs(tab.pane_list) do
+    if not sidebar.is_backend(p) then
+      p.process = "/usr/bin/sleep"
+    end
+  end
+end
+
+local function popover_row(sb, id)
+  for row, h in pairs(state.session.hits[sb:pane_id()] or {}) do
+    if h.kind == "popover" and h.id == id then
+      return row
+    end
+  end
+end
+
+test("the ✕ on a busy tab asks in the sidebar, and closes only when Close is chosen", function()
+  local win, gui = drag_setup()
+  local sb = sidebar.find(win.tab_list[1])
+  make_busy(win.tab_list[1])
+  local acted = #win.actions
+  mouse(gui, sb, "down", "left", 26, 3)
+  mouse(gui, sb, "up", "left", 26, 3)
+  eq(#win.tab_list, 3, "nothing closes while the question is open")
+  eq(#win.actions, acted, "and CloseCurrentTab never ran, so no overlay to dismiss")
+  local pop = popover.get(gui:window_id())
+  eq(pop.level, "confirm")
+  eq(pop.index, 2, "Cancel is selected, so a stray Enter is harmless")
+
+  input.handle(gui, sb, "vtabs", '{"t":"key","key":"escape"}')
+  eq(popover.get(gui:window_id()), nil, "escape cancels the question outright")
+  eq(#win.tab_list, 3)
+
+  mouse(gui, sb, "down", "left", 26, 3)
+  mouse(gui, sb, "up", "left", 26, 3)
+  view_mod.sync(gui, { force = true })
+  local row = popover_row(sb, "confirm_close")
+  assert(row, "the confirm level offers Close")
+  mouse(gui, sb, "down", "left", 5, row)
+  eq(#win.tab_list, 2, "and choosing it closes the tab")
+  eq(popover.get(gui:window_id()), nil)
+end)
+
+test("the menu's close items raise the same confirm level, and Cancel leaves the tabs alone", function()
+  local win, gui = open_popover(3)
+  make_busy(win.tab_list[1])
+  popover.run(gui, "close")
+  eq(popover.get(gui:window_id()).level, "confirm", "the menu asks instead of closing")
+  eq(#win.tab_list, 3)
+  popover.run(gui, "confirm_cancel")
+  eq(popover.get(gui:window_id()), nil)
+  eq(#win.tab_list, 3, "Cancel closed nothing")
+
+  local others, others_gui = open_popover(3)
+  for _, tab in ipairs(others.tab_list) do
+    make_busy(tab)
+  end
+  popover.run(others_gui, "close_others")
+  local pop = popover.get(others_gui:window_id())
+  eq(pop.confirm, "close_others")
+  eq(pop.count, 2, "the tabs that are not the anchor")
+  local rect = popover.rect(others_gui, 30, 28, theme.resolve({}, fake.palette), config.get())
+  local asked = false
+  for _, r in ipairs(rect.rows) do
+    for _, span in ipairs(r.spans or {}) do
+      asked = asked or span.text:find("Close 2 other tabs?", 1, true) ~= nil
+    end
+  end
+  assert(asked, "one question, naming the count")
+  popover.run(others_gui, "confirm_close")
+  eq(#others.tab_list, 1, "and Close takes them all")
+end)
+
+test("a tab the skip list names closes without a question, and so does confirm_close = false", function()
+  local win, gui = drag_setup()
+  local sb = sidebar.find(win.tab_list[1])
+  mouse(gui, sb, "down", "left", 26, 3)
+  mouse(gui, sb, "up", "left", 26, 3)
+  eq(popover.get(gui:window_id()), nil, "zsh is on the skip list")
+  eq(#win.tab_list, 2)
+
+  local opted, opted_gui = drag_setup()
+  local sb2 = sidebar.find(opted.tab_list[1])
+  make_busy(opted.tab_list[1])
+  config.setup { meta = "auto", confirm_close = false, backend = { path = "/bin/wez-vtabs" } }
+  view_mod.sync(opted_gui, { force = true })
+  mouse(opted_gui, sb2, "down", "left", 26, 3)
+  mouse(opted_gui, sb2, "up", "left", 26, 3)
+  eq(popover.get(opted_gui:window_id()), nil, "opting out never asks")
+  eq(#opted.tab_list, 2)
+  config.setup { backend = { path = "/bin/wez-vtabs" } }
+end)
 
 test("the popover title wraps on a space, then a slash, then hard", function()
   eq(rgb(popover.wrap("nvim plugin/vtabs/render.lua", 22, 3)), rgb { "nvim", "plugin/vtabs/", "render.lua" })

@@ -27,8 +27,14 @@ local ITEMS = {
   { id = "space", label = "Move to space", hint = "▸", disabled = true },
   { id = "tear_off", label = "Move to new window", action = "tear_off" },
   { id = "duplicate", label = "Duplicate tab" },
-  { id = "close_others", label = "Close other tabs", action = "close_others" },
-  { id = "close", label = "Close tab", action = "close_tab", key = "close_tab" },
+  { id = "close_others", label = "Close other tabs", action = "close_others", confirm = "close_others" },
+  { id = "close", label = "Close tab", action = "close_tab", key = "close_tab", confirm = "close" },
+}
+
+-- Cancel is second so the confirm level can select it and a stray Enter does nothing.
+local CONFIRM_ITEMS = {
+  { id = "confirm_close", label = "Close" },
+  { id = "confirm_cancel", label = "Cancel" },
 }
 
 local function compact_mods(mods)
@@ -93,6 +99,7 @@ function M.items(gui_window, tab_id)
       level = spec.level,
       action = spec.action,
       hint = spec.hint or (spec.key and hint[spec.key]) or nil,
+      confirm = spec.confirm,
       disabled = spec.disabled == true,
     }
     if spec.id == "pin" then
@@ -105,12 +112,36 @@ function M.items(gui_window, tab_id)
   return out
 end
 
-local function header(gui_window, tab_id, budget, level)
+---What the confirm level asks, named after the tab or the number of tabs it would take.
+local function question(gui_window, pop)
+  if pop.confirm == "close_others" then
+    local n = pop.count or 0
+    return string.format("Close %d other tab%s?", n, n == 1 and "" or "s")
+  end
+  local item = model.find(model.build(gui_window), pop.tab_id)
+  local title = item and item.title or ""
+  return string.format("Close %s?", title ~= "" and title or "tab")
+end
+
+local function items_for(gui_window, pop)
+  if pop.level == "confirm" then
+    return CONFIRM_ITEMS
+  end
+  return M.items(gui_window, pop.tab_id)
+end
+
+local function header(gui_window, pop, budget)
+  local tab_id, level = pop.tab_id, pop.level
   local meta = session.tab_meta[tab_id] or {}
   local item = model.find(model.build(gui_window), tab_id)
   local lines = {}
-  for i, line in ipairs(M.wrap(item and item.title or "tab", budget, MAX_TITLE_ROWS)) do
+  local head = level == "confirm" and question(gui_window, pop) or (item and item.title or "tab")
+  for i, line in ipairs(M.wrap(head, budget, MAX_TITLE_ROWS)) do
     lines[#lines + 1] = { text = line, tone = "fg", drop = i == 1 and DROP.title or DROP.title_extra }
+  end
+  if level == "confirm" then
+    lines[#lines + 1] = { text = "", tone = "meta", drop = DROP.separator }
+    return lines
   end
   if meta.cwd then
     lines[#lines + 1] = { text = util.shorten_path(meta.cwd, budget), tone = "meta", drop = DROP.cwd }
@@ -165,8 +196,8 @@ end
 ---Where the popover sits and how much header it can afford (§1.9's five rules, in order).
 function M.layout(gui_window, pop, rows, cols)
   local budget = cols - 6
-  local items = M.items(gui_window, pop.tab_id)
-  local full = header(gui_window, pop.tab_id, budget, pop.level)
+  local items = items_for(gui_window, pop)
+  local full = header(gui_window, pop, budget)
   local anchor = math.max(0, math.min(pop.anchor_row or 0, rows))
 
   for keep = #full, 0, -1 do
@@ -228,7 +259,7 @@ function M.move(gui_window, delta)
   if not pop then
     return
   end
-  local items = M.items(gui_window, pop.tab_id)
+  local items = items_for(gui_window, pop)
   local i = pop.index
   for _ = 1, #items do
     i = i + delta
@@ -248,7 +279,7 @@ function M.jump(gui_window, ch)
   if not pop or type(ch) ~= "string" or ch == "" then
     return false
   end
-  local items = M.items(gui_window, pop.tab_id)
+  local items = items_for(gui_window, pop)
   local want = ch:lower()
   for step = 1, #items do
     local i = (pop.index + step - 1) % #items + 1
@@ -266,7 +297,19 @@ function M.selected(gui_window)
   if not pop then
     return nil
   end
-  return M.items(gui_window, pop.tab_id)[pop.index]
+  return items_for(gui_window, pop)[pop.index]
+end
+
+---Raises the open popover to its confirm level; Cancel is selected, so a stray Enter is harmless.
+function M.to_confirm(gui_window, kind)
+  local pop = session.popover[gui_window:window_id()]
+  if not pop then
+    return false
+  end
+  pop.level, pop.confirm = "confirm", kind
+  pop.count = kind == "close_others" and #actions.others(gui_window, pop.tab_id) or nil
+  pop.index = 2
+  return true
 end
 
 ---Runs an item; `rename` changes level instead of acting, disabled items do nothing.
@@ -277,10 +320,25 @@ function M.run(gui_window, id)
     return false
   end
   local tab_id = pop.tab_id
+  if pop.level == "confirm" then
+    if id == "confirm_cancel" then
+      return M.close(gui_window)
+    end
+    if id ~= "confirm_close" then
+      return false
+    end
+    local kind = pop.confirm
+    M.close(gui_window)
+    actions[kind == "close_others" and "close_others" or "close_tab"](gui_window, tab_id)
+    return true
+  end
   for _, entry in ipairs(M.items(gui_window, tab_id)) do
     if entry.id == id then
       if entry.disabled then
         return false
+      end
+      if entry.confirm and actions.needs_confirm(gui_window, tab_id, entry.confirm) then
+        return M.to_confirm(gui_window, entry.confirm)
       end
       if entry.level == "rename" then
         local tab = actions.tab_by_id(gui_window, tab_id)
@@ -386,10 +444,13 @@ function M.commit_rename(gui_window)
   M.close(gui_window)
 end
 
+-- Escaping a confirm is cancelling it, so only rename steps back to the menu it came from.
+local STEPS_BACK = { rename = true }
+
 ---`Esc` steps back a level before it closes.
 function M.back(gui_window)
   local pop = session.popover[gui_window:window_id()]
-  if pop and pop.level ~= "root" then
+  if pop and STEPS_BACK[pop.level] then
     pop.level, pop.buffer, pop.cursor = "root", nil, nil
     return true
   end
@@ -406,7 +467,7 @@ local function item_row(entry, w, selected, theme)
   local fg = theme.fg
   if entry.disabled then
     fg = theme.disabled_fg
-  elseif selected and entry.id == "close" then
+  elseif selected and (entry.id == "close" or entry.id == "confirm_close") then
     fg = theme.close_hover_fg
   end
   local spans = {

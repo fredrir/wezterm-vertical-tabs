@@ -206,10 +206,10 @@ M.options = {
     key = "titlebar",
     type = "enum",
     default = "auto",
-    enum = { "auto", "integrate", "plain" },
+    enum = { "auto", "integrate", "plain", "macos" },
     label = "Title bar",
     group = "chrome",
-    help = "reserve cells for the macOS traffic lights",
+    help = 'reserve cells for the macOS traffic lights; `"macos"` forces the reserve anywhere',
   },
   {
     key = "context",

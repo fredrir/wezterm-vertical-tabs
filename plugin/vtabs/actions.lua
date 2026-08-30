@@ -162,39 +162,93 @@ local function needs_prompt(gui_window, panes)
   return false
 end
 
----Closes any tab and restores the previous one unless `defer` batches that; true = prompt showing.
-function M.close_tab(gui_window, tab_id, defer)
+---The unpinned tabs `close_others` would take, in rendered order.
+function M.others(gui_window, tab_id)
+  local out = {}
+  for _, item in ipairs(visible(gui_window)) do
+    if item.tab_id ~= tab_id and not item.is_pinned then
+      out[#out + 1] = item.tab_id
+    end
+  end
+  return out
+end
+
+local function content_of(gui_window, tab_id)
   local tab = M.tab_by_id(gui_window, tab_id)
-  local content = tab and sidebar.classify(tab) or {}
+  return tab, tab and sidebar.classify(tab) or {}
+end
+
+---Whether closing would prompt. `kind` is "close" or "close_others"; a mux pane reports no
+---foreground process at all, which the skip list can never name, so it always counts.
+function M.needs_confirm(gui_window, tab_id, kind)
+  if config.get().confirm_close == false then
+    return false
+  end
+  local ids = kind == "close_others" and M.others(gui_window, tab_id) or { tab_id }
+  for _, id in ipairs(ids) do
+    local _, content = content_of(gui_window, id)
+    if #content > 0 and needs_prompt(gui_window, content) then
+      return true
+    end
+  end
+  return false
+end
+
+local function close_now(gui_window, tab_id, defer, overlay)
+  local tab, content = content_of(gui_window, tab_id)
   if #content == 0 then
     return false
   end
   session.tab_meta[tab_id] = sidebar.tab_meta(tab, content[1])
-  local confirm = config.get().confirm_close ~= false and needs_prompt(gui_window, content)
   local previous = util.active_tab(gui_window)
   local switching = previous and previous:tab_id() ~= tab_id
   if switching then
     tab:activate()
   end
-  gui_window:perform_action(act.CloseCurrentTab { confirm = confirm }, content[1])
-  if switching and not confirm and not defer then
+  gui_window:perform_action(act.CloseCurrentTab { confirm = overlay == true }, content[1])
+  if switching and not overlay and not defer then
     previous:activate()
   end
-  return confirm
+  return true
 end
 
+---Closes any tab and restores the previous one unless `defer` batches that. Never prompts: the
+---confirmation belongs to the popover, so callers ask through `request_close`.
+function M.close_tab(gui_window, tab_id, defer)
+  return close_now(gui_window, tab_id, defer, false)
+end
+
+---Closes every unpinned tab but `tab_id`, restoring the kept tab once rather than after each close.
 function M.close_others(gui_window, tab_id)
   local previous = util.active_tab(gui_window)
   local previous_id = previous and previous:tab_id() or nil
-  local prompted = false
-  for _, item in ipairs(visible(gui_window)) do
-    if item.tab_id ~= tab_id and not item.is_pinned then
-      prompted = M.close_tab(gui_window, item.tab_id, true) or prompted
-    end
+  for _, id in ipairs(M.others(gui_window, tab_id)) do
+    M.close_tab(gui_window, id, true)
   end
-  if not prompted then
-    restore_tab(gui_window, previous_id)
+  restore_tab(gui_window, previous_id)
+end
+
+---A popover needs an expanded, authenticated sidebar to be drawn in; without one there is nothing
+---to ask in, and wezterm's overlay survives a keyboard close.
+local function can_confirm(gui_window)
+  local tab = util.active_tab(gui_window)
+  local sb = tab and sidebar.find(tab)
+  return sb ~= nil and sidebar.is_ready(sb) and not state.is_collapsed(gui_window:window_id())
+end
+
+---WezTerm's `CloseCurrentTab { confirm = true }` opens a per-tab overlay that the mouse-up after
+---the click dismisses again, so the sidebar asks in a popover level of its own instead.
+function M.request_close(gui_window, tab_id, anchor_row)
+  if not M.needs_confirm(gui_window, tab_id, "close") then
+    return M.close_tab(gui_window, tab_id)
   end
+  if not can_confirm(gui_window) then
+    return close_now(gui_window, tab_id, false, true)
+  end
+  local popover = require "vtabs.popover"
+  popover.open(gui_window, tab_id, anchor_row or 0)
+  popover.to_confirm(gui_window, "close")
+  return false
 end
 
 function M.new_tab(gui_window, spawn)
@@ -454,7 +508,7 @@ M.action = {
   new_tab = callback(function(window)
     M.new_tab(window)
   end),
-  close_tab = on_current_tab(M.close_tab),
+  close_tab = on_current_tab(M.request_close),
   reopen_closed = callback(M.reopen_closed),
   pin_tab = on_current_tab(M.toggle_pin),
   private_window = callback(function(window)

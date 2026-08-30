@@ -20,6 +20,7 @@ local TEAR_OFF_TRAVEL = 3
 
 local session = state.session
 local pending_menu = {}
+local pending_close = {}
 
 local function blur(gui_window)
   actions.blur_sidebar(gui_window)
@@ -59,6 +60,7 @@ local function on_down(gui_window, pane, ev, cfg)
   session.hover[wid] = { x = ev.x, y = ev.y, at = now }
   session.drag[wid] = nil
   pending_menu[wid] = nil
+  pending_close[wid] = nil
   state.set_focus(wid, false)
   if cfg.debug then
     util.log("down hit=%s tab=%s slot=%s", h.kind, tostring(h.id), tostring(h.slot))
@@ -73,7 +75,7 @@ local function on_down(gui_window, pane, ev, cfg)
     if on_card then
       local span = hit.span(h, ev.x)
       if span == "close" then
-        actions.close_tab(gui_window, h.id)
+        pending_close[wid] = { tab_id = h.id, at = now, row = ev.y }
       elseif span == "pin" then
         actions.toggle_pin(gui_window, h.id)
       else
@@ -98,7 +100,7 @@ local function on_down(gui_window, pane, ev, cfg)
       actions.new_tab(gui_window)
     end
   elseif ev.b == "middle" and on_card then
-    actions.close_tab(gui_window, h.id)
+    pending_close[wid] = { tab_id = h.id, at = now, row = ev.y }
   elseif ev.b == "right" and on_card and cfg.context == "popover" then
     pending_menu[wid] = { tab_id = h.id, at = now, row = ev.y }
   end
@@ -130,14 +132,25 @@ local function on_drag(gui_window, pane, ev, cfg)
   session.hover[wid] = { x = ev.x, y = ev.y, at = drag.at }
 end
 
----The popover opens on the release; a held button is what cancelled the old selector overlay.
+---A press on the ✕ or a middle click closes only when the release lands on the same target again.
+local function released_on(hits, ev, pending)
+  local h = hit.at(hits, ev.y)
+  if h.kind ~= "tab" or h.id ~= pending.tab_id or not hit.in_card(h, ev.x) then
+    return false
+  end
+  return ev.b == "middle" or hit.span(h, ev.x) == "close"
+end
+
+---Everything that closes or opens a level acts on the release; a held button cancels an overlay.
 local function on_up(gui_window, pane, ev, cfg)
   local wid = gui_window:window_id()
   local pid = pane:pane_id()
   local drag = session.drag[wid]
   local menu_for = pending_menu[wid]
+  local close_for = pending_close[wid]
   session.drag[wid] = nil
   pending_menu[wid] = nil
+  pending_close[wid] = nil
   if popover.get(wid) and ev.b ~= "right" then
     return
   end
@@ -146,6 +159,11 @@ local function on_up(gui_window, pane, ev, cfg)
       popover.open(gui_window, menu_for.tab_id, menu_for.row)
       view.invalidate_frames(pid)
     end
+    return
+  end
+  if close_for and released_on(session.hits[pid], ev, close_for) then
+    actions.request_close(gui_window, close_for.tab_id, close_for.row)
+    view.invalidate_frames(pid)
     return
   end
   if drag and drag.active and drag.pane_id == pid and session.hits[pid] then
@@ -224,8 +242,8 @@ local KEYS = {
     actions.activate_tab(gui_window, id)
     blur(gui_window)
   end),
-  x = with_focused(function(gui_window, id)
-    actions.close_tab(gui_window, id)
+  x = with_focused(function(gui_window, id, index)
+    actions.request_close(gui_window, id, index)
   end),
   p = with_focused(function(gui_window, id)
     actions.toggle_pin(gui_window, id)
@@ -520,6 +538,9 @@ function M.tick(gui_window)
   end
   if pending_menu[wid] and now - pending_menu[wid].at > DRAG_TIMEOUT_MS then
     pending_menu[wid] = nil
+  end
+  if pending_close[wid] and now - pending_close[wid].at > DRAG_TIMEOUT_MS then
+    pending_close[wid] = nil
   end
   for pid, b in pairs(budget) do
     if now - b.at > BUDGET_TTL_MS then
