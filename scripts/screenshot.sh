@@ -25,7 +25,7 @@ elevation|Catppuccin Mocha|elevation|scene|always
 elevation-1|Catppuccin Mocha|elevation-1|scene|always
 press|Catppuccin Mocha|press|hover|always
 popover|Catppuccin Mocha|default|rclick|in_sidebar:Duplicate tab
-popover-space|Catppuccin Mocha|default|rclick_space|in_sidebar:Spaces arrive in P4
+popover-space|Catppuccin Mocha|default|rclick_space|in_sidebar:Move to space
 rename|Catppuccin Mocha|default|key:r|in_sidebar:esc cancel
 rail|Catppuccin Mocha|rail|probe:toggle|rail_width
 tooltip|Catppuccin Mocha|tooltip|dwell|tooltip_only
@@ -37,10 +37,25 @@ padded|Catppuccin Mocha|padded|scene|always
 strip-macos|Catppuccin Mocha|macos|scene|always
 rail-macos|Catppuccin Mocha|macos-rail|probe:toggle|rail_widened
 rail-macos-plain|Catppuccin Mocha|macos-rail-plain|probe:toggle|rail_width
-settings|Catppuccin Mocha|default|settings|settings_tab"
+settings|Catppuccin Mocha|default|settings|settings_tab
+settings-behaviour|Catppuccin Mocha|default|settings_behaviour|settings_locked
+zen|Catppuccin Mocha|zen|scene|always
+zen-square|Catppuccin Mocha|zen-square|scene|always
+zen-rail|Catppuccin Mocha|zen-rail|probe:toggle|always"
 
 cli() { wezterm cli --no-auto-start "$@"; }
-list() { cli list --format json; }
+# A gui busy with a spawn or a resize can answer an empty body; every helper here parses this, and
+# `set -e` would kill the whole run over one transient. Retry instead.
+list() {
+  for _ in 1 2 3 4 5; do
+    body=$(cli list --format json 2>/dev/null || true)
+    case "$body" in
+      \[*) printf '%s' "$body"; return 0 ;;
+    esac
+    sleep 0.3
+  done
+  echo "[]"
+}
 pick() { list | python3 -c "import json,sys;$1"; }
 sidebars() { pick 'print("\n".join(str(p["pane_id"]) for p in json.load(sys.stdin) if p["title"].startswith("wez-vtabs")))'; }
 tab_ids() { pick 'print(" ".join(str(t) for t in sorted({p["tab_id"] for p in json.load(sys.stdin)})))'; }
@@ -52,6 +67,7 @@ active_sidebar() { sidebar_of "${shot_tab:-$(tab_ids | cut -d' ' -f2)}"; }
 # Pixel centre of a sidebar column, so a click lands inside a three-column span.
 col_x() { echo $((X + WIDTH * (2 * $1 - 1) / (2 * cols))); }
 sidebar_text() { cli get-text --pane-id "$(active_sidebar)"; }
+pane_text() { cli get-text --pane-id "$1"; }
 probe() { cli send-text --no-paste --pane-id "$1" "printf '\\033]1337;SetUserVar=vtabs_shot=$(printf %s "$2" | base64)\\a'
 "; }
 
@@ -145,9 +161,11 @@ step() {
       click_settle=1.5
       quick=1
       ;;
+    # `Move to space` is disabled, and `popover.move` skips disabled rows, so it cannot be selected
+    # and Return would run whatever the cursor skipped onto. The row is visible in the root menu.
     rclick_space)
       point_at 3 logs
-      xdotool key Down Down Down Return
+      xdotool key Down Down
       sleep 1.5
       ;;
     key:*)
@@ -176,6 +194,20 @@ step() {
       sleep 1
       xdotool click 1
       sleep 1.5
+      ;;
+    # `Tab` cycles the nav; Behaviour is the fourth group, and the harness config sets poll_ms,
+    # confirm_close and debug, so those rows are the ones precedence has to lock.
+    settings_behaviour)
+      probe "$(content_of "$(tab_ids | cut -d' ' -f2)")" settings
+      sleep 3.5
+      shot_tab=$(pick 'ps=[p["tab_id"] for p in json.load(sys.stdin) if p["title"].startswith("wez-vtabs-settings")];print(ps[0] if ps else "")' 2>/dev/null || echo "")
+      focus_window || return 1
+      xdotool key Tab
+      sleep 0.4
+      xdotool key Tab
+      sleep 0.4
+      xdotool key Tab
+      sleep 2
       ;;
     probe:*)
       probe "$(content_of "$(tab_ids | cut -d' ' -f2)")" "${1#probe:}"
@@ -227,6 +259,36 @@ check() {
       beside=$(pick "t=$settings_tab_id;print(sum(1 for p in json.load(sys.stdin) if p['tab_id']==t and p['title'].startswith('wez-vtabs:')))")
       [ "$beside" -eq 1 ] || fail_state "the settings tab has $beside sidebars beside it, want 1"
       sidebar_text | grep -qF Settings || fail_state "the sidebar does not list a Settings card"
+      # A page that painted only its chrome passes "not blank"; a nav row beside its divider does not.
+      pane_text "$settings_pane" | grep -q "Layout.*│" ||
+        fail_state "the settings page has no nav row beside its divider"
+      pane_text "$settings_pane" | sed -n 1p | grep -qF "Settings" ||
+        fail_state "the settings page has no header on row 1"
+      pane_text "$settings_pane" | grep -vE "^[[:space:]]*$" | tail -1 | grep -qF "esc" ||
+        fail_state "the settings page has no hint bar on its last row"
+      ;;
+    # `frame = "zen"` insets the terminal as a rounded card inside a tinted frame, so the corner
+    # pixels of the content rect are the frame and the middle is the terminal background.
+    zen_frame)
+      png=$out/$state.png
+      [ -s "$png" ] || fail_state "no window shot to read the frame from"
+      read -r corner middle <<EOF
+$(magick "$png" -format "%[pixel:p{4,4}] %[pixel:p{50%,50%}]" info:)
+EOF
+      [ -n "$corner" ] && [ -n "$middle" ] || fail_state "could not sample the window shot"
+      [ "$corner" != "$middle" ] ||
+        fail_state "the frame tint and the terminal background are the same colour ($corner)"
+      echo "  zen frame $corner, terminal $middle"
+      ;;
+    # An option the host set in wezterm.lua cannot be edited here; the badge is the whole point of
+    # the Behaviour frame, so a page that merely reached the group does not pass.
+    settings_locked)
+      settings_pane=$(pick 'ps=[p for p in json.load(sys.stdin) if p["title"].startswith("wez-vtabs-settings")];print(ps[0]["pane_id"] if ps else "")')
+      [ -n "$settings_pane" ] || fail_state "no pane carries the wez-vtabs-settings: marker"
+      pane_text "$settings_pane" | grep -q "Behaviour" ||
+        fail_state "the nav is not on the Behaviour group"
+      pane_text "$settings_pane" | grep -q "poll_ms.*LOCKED" ||
+        fail_state "the poll_ms row carries no LOCKED badge"
       ;;
     tooltip_only)
       sidebar_text >"$home/after.txt"
@@ -309,6 +371,6 @@ echo "$STATES" | while IFS='|' read -r state scheme variant setup want; do
       *) continue ;;
     esac
   fi
-  shoot "$state" "$scheme" "$variant" "$setup" "$want"
+  shoot "$state" "$scheme" "$variant" "$setup" "$want" || echo "FAIL: $state — the state aborted"
 done
 echo "shots in $out"

@@ -39,7 +39,7 @@ return config
 | `new_tab_button`          | `"ghost"`                                                                    | `"ghost"` \| `"row"` \| `false` |
 | `new_tab_label`           | `"New tab"`                                                                  | string |
 | `corners`                 | `"chamfer"`                                                                  | `"chamfer"` \| `"square"` |
-| `frame`                   | `false`                                                                      | any |
+| `frame`                   | `false`                                                                      | `"zen"` \| `false` \| table |
 | `titlebar`                | `"auto"`                                                                     | `"auto"` \| `"integrate"` \| `"plain"` \| `"macos"` |
 | `context`                 | `"popover"`                                                                  | `"popover"` \| `false` |
 | `popover`                 | `{ width = "auto", follow_pointer = true, fade_ms = 90, overflow = "clip" }` | see below |
@@ -91,6 +91,10 @@ return config
 | `width` | re-asserted on the active tab after every resize, one `AdjustPaneSize` at a time so a lagging mux is not overshot; a divider drag is adopted and survives config reloads until `width` itself changes. A window drag corrects on its first frame and again once it stops, never per frame |
 | `collapsed` | `"rail"` keeps the pane and narrows it, so the toggle stays reachable |
 | `padding` | cells inside the sidebar pane, painted in its own colour; `left = 2` replaces the window padding `edge_to_edge` removes, and mirrors to `right = 2` with `position = "right"`. It is unconditional, so setting `window_padding` yourself leaves one extra cell of air |
+| `frame` | `"zen"` wraps the window in a tinted frame and gives the terminal pane its own rounded card: the plugin generates a window-sized PNG and lets the pane's default-background cells fall transparent over it (a cell with an explicit background stays opaque, so a full-width tmux or vim status line squares off the corners it covers). Sets `window_padding` to `frame.margin` on all four sides and `colors.split` to the frame tint, which also hides the divider between panes the user splits inside the content pane. `inactive_pane_hsb` is skipped: a background layer makes every pane transparent, so there is nothing left to dim. Declines with one warning if you set your own `background`, `window_background_image`, `window_background_opacity` or `text_background_opacity` |
+| `frame.radius` | corner radius in **device** pixels, so it is visually smaller on a HiDPI display. Keep it under one cell height: a program that paints its own background over a corner cell squares that corner off |
+| `frame.margin` | device pixels; also becomes `window_padding` on all four sides, superseding `edge_to_edge` while the frame is on |
+| `frame.border` | `true` derives a hairline that clears 2.0 against the frame tint; `false` omits it; a colour string is taken verbatim |
 | `edge_to_edge` | zeroes wezterm's window padding on the sides the sidebar touches, so its background reaches the window edge; the far side keeps wezterm's `1cell`, and top/bottom are window-global, so the content pane loses its half cell too. It only ever fills in a `window_padding` you left unset, so one set **after** `apply_to_config` wins. The split line stays: pair with `theme = { split = "hidden" }` for a seamless edge |
 | `tab_height` | pad rows around the card's content; independent of `meta` |
 | `meta` | off by default; opt in with `"auto"`, `"cwd"` or `"process"`. The popover header always shows cwd and domain, whatever this says |

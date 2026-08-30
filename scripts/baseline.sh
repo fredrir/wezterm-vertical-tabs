@@ -16,12 +16,21 @@ root=$(cd "$(dirname "$0")/.." && pwd)
 sha=$(cd "$root" && git rev-parse --short HEAD)
 base=${VTABS_BASELINE:-$root/.claude/team/baseline}
 mode=record
-[ "${1:-}" = "--check" ] && mode=check
+pin=
+case "${1:-}" in
+  --check) mode=check ;;
+  # Moves the sticky reference to this run; without it the first recording stays the reference.
+  --pin) pin=1 ;;
+esac
 
 if [ "$mode" = check ]; then
   ref=${VTABS_BASELINE_REF:-}
+  if [ -z "$ref" ] && [ -f "$base/REF" ]; then
+    # The sticky pre-refactor reference: every step measures against it, so drift cannot accumulate
+    # one behaviour-neutral step at a time. `--pin` moves it; VTABS_BASELINE_REF overrides for one run.
+    ref=$base/$(cat "$base/REF")
+  fi
   if [ -z "$ref" ]; then
-    # The newest recorded run that is not this one; a refactor compares against what came before.
     ref=$(ls -1dt "$base"/*/ 2>/dev/null | grep -v "/$sha/$" | head -1 || true)
     ref=${ref%/}
   fi
@@ -63,7 +72,8 @@ for png in "$shots"/*-sidebar.png; do
   hashed=$((hashed + 1))
 done
 # Every state the run was asked for, so a state that stops rendering is a diff, not a silent gap.
-sed -n 's/^\([a-z0-9-]*\)|.*/\1/p' "$root/scripts/screenshot.sh" | sort >"$out/shots/roster"
+sed 's/^STATES="//' "$root/scripts/screenshot.sh" |
+  sed -n 's/^\([a-z0-9-]*\)|.*/\1/p' | sort >"$out/shots/roster"
 echo "$hashed" >"$out/shots/count"
 echo "    $hashed of $(wc -l <"$out/shots/roster" | tr -d ' ') states hashed"
 [ "$hashed" -gt 0 ] || { echo "  no screenshot state rendered; refusing to record an empty baseline"; exit 1; }
@@ -105,6 +115,13 @@ if [ "$mode" = check ]; then
     exit 1
   fi
 else
+  mkdir -p "$base"
+  if [ ! -f "$base/REF" ] || [ -n "$pin" ]; then
+    printf '%s' "$sha" >"$base/REF"
+    echo
+    echo "sticky reference is now $sha"
+  fi
   echo
   echo "baseline for $sha recorded in $out"
+  echo "checks compare against $(cat "$base/REF") unless VTABS_BASELINE_REF says otherwise"
 fi

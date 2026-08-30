@@ -652,15 +652,26 @@ print(rest[-1]["pane_id"] if len(rest)>1 else "")'
 }
 panes_in() { list | python3 -c 'import json,sys; t='"$1"'; print(sum(1 for p in json.load(sys.stdin) if p["tab_id"]==t))'; }
 
-split_net() {
+# One rescue, asserted end to end. $1 is the probe that performs the split.
+rescue_case() {
   split_mark=$(mark)
   cli activate-tab --tab-id "$first" >/dev/null
   sleep 1
   before_sb=$(sidebar_of "$first")
+  # The rescue refuses a sidebar that has not echoed its token, and correctly does nothing. Splitting
+  # before then would read as a miss, so wait for ready rather than for the marker title.
+  n=0
+  while [ "$n" -lt 40 ]; do
+    case "$(probe_line "$first_content" probe_ranks ranks)" in
+      *"$before_sb:backend=true,ready=true"*) break ;;
+    esac
+    n=$((n + 1)); sleep 0.5
+  done
+  [ "$n" -lt 40 ] || { geometry; fail "sidebar $before_sb never authenticated before $1"; }
   before_width=$(settled_width "$first")
   before_panes=$(panes_in "$first")
-  echo "  before the split: $(probe_line "$first_content" probe_ranks ranks)"
-  vtest "$first_content" split_sidebar
+  echo "  before $1: $(probe_line "$first_content" probe_ranks ranks)"
+  vtest "$first_content" "$1"
   sleep 4
   max_panes=$((before_panes + 1))
   echo "  after the split: $(probe_line "$first_content" probe_tree tree)"
@@ -692,7 +703,16 @@ split_net() {
   not_frozen "$before_sb" "$first" "a rescued split"
   no_warnings "$split_mark" "rescuing a split off the sidebar"
   no_dupes "the split rescue"
-  echo "ok: a split off the sidebar is moved to the content side, sidebar intact at $before_width cols"
+  echo "ok: $1 is moved to the content side, sidebar intact at $before_width cols"
+}
+
+split_net() {
+  # Vertical halves the sidebar's rows and stays inside its columns; horizontal halves its columns
+  # and the new pane reaches past them. Only the second exercises the edge test.
+  rescue_case split_sidebar
+  restore_split_panes
+  rescue_case split_sidebar_h
+  restore_split_panes
 
   # `vtabs.action.split` targets the content pane even with the sidebar focused, so nothing has to
   # be rescued at all.
@@ -772,8 +792,19 @@ close_confirmation() {
   sleep 0.5
   vtest "$hot_content" confirm_on
   sleep 0.5
-  victim=$(tab_ids | cut -d' ' -f2)
-  wait_attached "$victim" 12
+  # A tab that already carries a sidebar, so the check measures the confirmation rather than how
+  # long a lazy attach took under load. Falls back to the second tab and waits.
+  victim=$(list | python3 -c '
+import json,sys,collections
+marked=collections.defaultdict(int)
+tabs=set()
+for p in json.load(sys.stdin):
+    tabs.add(p["tab_id"])
+    if p["title"].startswith("wez-vtabs:"): marked[p["tab_id"]] += 1
+ready=sorted(t for t in tabs if marked[t] == 1)
+print(ready[1] if len(ready) > 1 else "")')
+  [ -n "$victim" ] || victim=$(tab_ids | cut -d' ' -f2)
+  wait_attached "$victim" 30
   cli set-tab-title --tab-id "$victim" victim
   cli send-text --no-paste --pane-id "$(content_of "$victim")" "sleep 1000
   "

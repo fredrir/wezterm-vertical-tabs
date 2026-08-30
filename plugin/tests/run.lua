@@ -6614,6 +6614,105 @@ test("a rail is corrected to exactly rail_width, below the 8-column sidebar floo
   config.setup { backend = { path = "/bin/wez-vtabs" } }
 end)
 
+local frame_mod = require "vtabs.frame"
+
+test('frame = "zen" is opt-in, and its renderer is only ever a local one', function()
+  eq(frame_mod.enabled(config.setup { backend = { path = "/bin/wez-vtabs" } }), false, "default off")
+  assert(frame_mod.enabled(config.setup { frame = "zen", backend = { path = "/bin/wez-vtabs" } }))
+  assert(frame_mod.enabled(config.setup { frame = { zen = true }, backend = { path = "/bin/wez-vtabs" } }))
+  eq(frame_mod.enabled(config.setup { frame = { margin = 4 }, backend = { path = "/bin/wez-vtabs" } }), false)
+
+  -- Z1: the table and function forms are keyed by remote host or domain, so a path written for an
+  -- ssh box would become a local execve target.
+  eq(frame_mod.renderer(config.setup { frame = "zen", backend = { path = "/bin/wez-vtabs" } }), "/bin/wez-vtabs")
+  eq(frame_mod.renderer(config.setup { frame = "zen", backend = { path = { archie = "/evil" } } }), nil)
+  eq(
+    frame_mod.renderer(config.setup {
+      frame = "zen",
+      backend = {
+        path = function()
+          return "/evil"
+        end,
+      },
+    }),
+    nil
+  )
+  config.setup { backend = { path = "/bin/wez-vtabs" } }
+end)
+
+test("the frame card is sized from the window, refuses nonsense, and stays inside it", function()
+  local win, gui = setup_window(1)
+  sidebar.ensure(gui)
+  mark_ready(win.tab_list[1])
+  local cfg = config.setup { frame = "zen", meta = "auto", backend = { path = "/bin/wez-vtabs" } }
+  local rect = frame_mod.rect(gui, cfg)
+  assert(rect, "a rect for a normal window")
+  eq(rect.y, 8, "the margin is the frame's own")
+  assert(rect.x >= 8, "the card starts past the sidebar, at " .. rect.x)
+  assert(rect.x + rect.cw <= rect.w, "and ends inside the window")
+  assert(rect.ch + 16 <= rect.h)
+
+  -- Z3: refused, not clamped. A 60000x1 window clears any per-side cap and still asks for 240 MB.
+  local real = getmetatable(gui).get_dimensions
+  for _, bad in ipairs {
+    { pixel_width = 0, pixel_height = 100 },
+    { pixel_width = 60000, pixel_height = 1 },
+    { pixel_width = 12000, pixel_height = 12000 },
+    { pixel_width = 100 },
+    { pixel_width = 1 / 0, pixel_height = 100 },
+  } do
+    gui.get_dimensions = function()
+      return bad
+    end
+    eq(frame_mod.rect(gui, cfg), nil, "refused " .. tostring(bad.pixel_width))
+  end
+  gui.get_dimensions = real
+  config.setup { backend = { path = "/bin/wez-vtabs" } }
+end)
+
+test("the frame declines to a background of the user's own, and to transparency", function()
+  local win, gui = setup_window(1)
+  sidebar.ensure(gui)
+  mark_ready(win.tab_list[1])
+  config.setup { frame = "zen", meta = "auto", backend = { path = "/bin/wez-vtabs" } }
+  eq(frame_mod.refuses(gui), nil, "an untouched window is fair game")
+  -- wezterm hands back an empty list for an unset `background`, which is not a user's choice.
+  gui.overrides = { background = {} }
+  eq(frame_mod.refuses(gui), nil, "an empty list is not a background")
+  gui.overrides = { window_background_opacity = 0.9 }
+  eq(frame_mod.refuses(gui), "window_background_opacity", "transparency composites through the frame")
+  gui.overrides = { text_background_opacity = 0.5 }
+  eq(frame_mod.refuses(gui), "text_background_opacity")
+  gui.overrides = { window_background_image = "/tmp/x.png" }
+  eq(frame_mod.refuses(gui), "window_background_image")
+  gui.overrides = { background = { { source = { File = "/tmp/mine.png" } } } }
+  eq(frame_mod.refuses(gui), "background", "a real one is theirs, not ours to replace")
+  gui.overrides = nil
+  eq(frame_mod.sync(gui), false, "and sync does nothing at all while it declines")
+  config.setup { backend = { path = "/bin/wez-vtabs" } }
+end)
+
+test("installing the frame keeps the padding the titlebar band owns in the same table", function()
+  local win, gui = setup_window(1)
+  sidebar.ensure(gui)
+  mark_ready(win.tab_list[1])
+  local cfg = config.setup { frame = "zen", meta = "auto", backend = { path = "/bin/wez-vtabs" } }
+  gui.overrides = { colors = { cursor_bg = "#ff0000" }, front_end = "WebGpu" }
+  frame_mod.install(gui, "/tmp/frame_mod.png", cfg)
+  local out = gui:get_config_overrides()
+  eq(out.front_end, "WebGpu", "a key the frame does not own survives")
+  eq(out.colors.cursor_bg, "#ff0000", "and so does one inside a table it does touch")
+  eq(#out.background, 1, "one layer")
+  eq(out.background[1].source.File, "/tmp/frame_mod.png")
+  eq(out.background[1].repeat_x, "NoRepeat")
+  eq(out.background[1].width, "100%")
+  eq(out.window_padding.left, 8, "the margin is the padding on every side")
+  eq(out.window_padding.bottom, 8)
+  assert(out.colors.split, "the divider is hidden in the frame tint")
+  gui.overrides = nil
+  config.setup { backend = { path = "/bin/wez-vtabs" } }
+end)
+
 test("every vtabs module is on the config-reload watch list", function()
   local vtabs = dofile(here .. "/../init.lua")
   local watched = {}
@@ -6779,6 +6878,50 @@ test("the rail's narrow width is never adopted as the user's desired width", fun
   assert(geometry.correct(gui), "expanding corrects back")
   eq(sb.cols, 28)
   eq(geometry.desired(wid), 28, "the rail width was not adopted as a divider drag")
+end)
+
+test("P3 §4: options the host set in wezterm.lua are LOCKED on the Behaviour group", function()
+  -- Exactly what the screenshot harness passes, so this is the precedence a shot would show.
+  local cfg = config.setup {
+    backend = { path = "/bin/wez-vtabs" },
+    poll_ms = 200,
+    confirm_close = false,
+    debug = true,
+  }
+  local fields = page.fields(cfg)
+  local by_key = {}
+  for _, row in ipairs(fields) do
+    by_key[row.key] = row
+  end
+  for _, key in ipairs { "poll_ms", "confirm_close", "debug" } do
+    local row = by_key[key]
+    assert(row, key .. " has a form row")
+    eq(row.locked, "wezterm.lua", key .. " is locked by the host config")
+  end
+  eq(by_key.poll_ms.group, "behaviour", "poll_ms lives on the Behaviour group")
+
+  -- An option the host left alone stays editable, so LOCKED names the host, not every row.
+  eq(by_key.width.locked, nil, "width was not set in wezterm.lua")
+
+  local groups = page.groups(fields)
+  local behaviour = nil
+  for i, g in ipairs(groups) do
+    if g == "behaviour" then
+      behaviour = i
+    end
+  end
+  assert(behaviour, "the nav carries a Behaviour group")
+
+  local v = page_view { cfg = cfg, st = { group = behaviour, focus = 1 } }
+  local lines = page_rows(v)
+  local locked_row = nil
+  for _, line in ipairs(lines) do
+    if line:find("poll_ms", 1, true) then
+      locked_row = line
+    end
+  end
+  assert(locked_row, "the Behaviour group renders the poll_ms row")
+  assert(locked_row:find("LOCKED", 1, true), "the poll_ms row carries the LOCKED badge: " .. locked_row)
 end)
 
 print(string.format("%d passed, %d failed", passed, failed))
