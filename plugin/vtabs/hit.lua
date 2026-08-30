@@ -14,10 +14,6 @@ function M.span(hit, x)
   return nil
 end
 
-function M.in_close(hit, x)
-  return M.span(hit, x) == "close"
-end
-
 ---True when `x` is on the row's card surface; cols outside it behave as empty space.
 function M.in_card(hit, x)
   return hit ~= nil and hit.x1 ~= nil and x >= hit.x1 and x <= hit.x2

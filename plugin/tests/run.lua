@@ -246,7 +246,6 @@ test("close column is reserved so hover does not reflow the title", function()
   eq(hit.span(hovered.hits[6], 24), nil)
   eq(hit.span(hovered.hits[6], 28), nil)
   eq(hit.span(hovered.hits[7], 26), "close", "and on the meta row")
-  assert(hit.in_close(hovered.hits[6], 26), "in_close shim")
   eq(usub(b, 26, 26), "x", "glyph sits one col inside the card edge")
   eq(hit.span(plain.hits[3], 26), "close", "active card shows close")
   eq(hit.span(plain.hits[6], 26), nil, "idle card does not")
@@ -260,7 +259,7 @@ end)
 test("pinned entries are one dense row with a pin span, never a close span", function()
   local r = render.render(view { hover = { x = 27, y = 1 } })
   eq(hit.span(r.hits[1], 26), "pin")
-  eq(hit.in_close(r.hits[1], 26), false)
+  eq(hit.span(r.hits[1], 26) == "close", false, "never a close span")
   eq(usub(row_text(r.data, 1), 26, 26), "*", "pin glyph in the close column")
   eq(r.hits[2].kind, "separator", "no meta or gap row after a dense entry")
   local full = render.render(view { opts = { pinned_style = "full" }, hover = { x = 27, y = 1 } })
@@ -2049,9 +2048,16 @@ end)
 
 test("the window title names the content pane while the sidebar holds focus", function()
   local view_only = require "vtabs.view"
-  local sb = { pane_id = 7, title = "wez-vtabs:deadbeef" }
-  local shell = { pane_id = 8, title = "nvim" }
-  local tab = { tab_id = 3, tab_index = 1, tab_title = "" }
+  -- PaneInformation carries only ids, so window_title resolves them through the mux, like wezterm.
+  local win, gui = setup_window(1)
+  sidebar.ensure(gui)
+  local mux_tab = win.tab_list[1]
+  mark_ready(mux_tab)
+  local content = sidebar.content_pane(mux_tab)
+  content.title = "nvim"
+  local sb = { pane_id = sidebar.find(mux_tab):pane_id() }
+  local shell = { pane_id = content:pane_id(), title = "nvim" }
+  local tab = { tab_id = mux_tab:tab_id(), tab_index = 1, tab_title = "" }
   eq(view_only.window_title(tab, sb, { tab }, { sb, shell }), "nvim")
   eq(view_only.window_title(tab, sb, { tab, tab }, { sb, shell }), "[2/2] nvim")
   eq(view_only.window_title(tab, shell, { tab }, { sb, shell }), nil, "wezterm's default is left alone")
@@ -2287,6 +2293,18 @@ test("shorten_path elides middle components and keeps the basename", function()
   eq(sp("", 20), "")
   eq(sp(nil, 20), "")
   eq(sp("~/x", 0), "")
+  -- Windows: no "/" to split on, so the old version right-cut and ate the basename.
+  eq(sp("C:\\Users\\fredrir\\projects\\app", 20), "C:\\U\\f\\projects\\app")
+  eq(sp("C:\\Users\\fredrir\\projects\\vertical-tabs", 20), "…\\vertical-tabs", "left-cut keeps the basename")
+  eq(sp("C:\\Users\\x\\app", 20), "C:\\Users\\x\\app", "a path that fits is untouched")
+  assert(
+    sp("C:\\Users\\x\\projects\\api", 16) ~= sp("C:\\Users\\x\\projects\\web", 16),
+    "windows siblings stay distinguishable"
+  )
+  for _, budget in ipairs { 4, 8, 12, 20, 40 } do
+    local out = sp("C:\\Users\\fredrir\\projects\\wezterm-vertical-tabs\\plugin", budget)
+    assert(util.width(out) <= budget, "windows budget " .. budget .. " overflowed with " .. out)
+  end
   for _, budget in ipairs { 4, 8, 12, 20, 40 } do
     local out = sp("~/projects/wezterm-vertical-tabs/plugin/vtabs", budget)
     assert(util.width(out) <= budget, "budget " .. budget .. " overflowed with " .. out)
@@ -2459,8 +2477,8 @@ local function meta_of(pane_opts, over)
 end
 
 test("the meta line names the cwd for shells and the process for anything else", function()
-  local home = os.getenv "HOME"
-  eq(meta_of { process = "/bin/zsh", cwd = { file_path = "/tmp/work" } }, "/tmp/work")
+  local home = wezterm.home_dir
+  eq(meta_of { process = "/bin/zsh", cwd = { file_path = "/tmp/work" } }, "~/work", "home_dir collapses to ~")
   eq(meta_of { process = "/usr/bin/fish", cwd = { file_path = "/etc" } }, "/etc")
   eq(meta_of { process = "/usr/bin/nvim", cwd = { file_path = "/tmp/work" } }, "nvim · work")
   eq(meta_of { process = "/usr/bin/cargo", cwd = { file_path = "/srv/api" } }, "cargo · api")
@@ -2470,10 +2488,17 @@ test("the meta line names the cwd for shells and the process for anything else",
   end
 end)
 
-test("ssh shows user@host and a mux pane names its domain", function()
-  local user = os.getenv "USER"
+test("ssh names the remote user only when the pane reports one, never the local $USER", function()
   local ssh = meta_of { process = "/usr/bin/ssh", cwd = { file_path = "/home/x", host = "archie" } }
-  eq(ssh, user and user .. "@archie" or "archie")
+  eq(ssh, "archie", "no authority in the cwd means host alone")
+  local named = meta_of {
+    process = "/usr/bin/ssh",
+    cwd = { file_path = "/home/admin", host = "buildbox", username = "admin" },
+  }
+  eq(named, "admin@buildbox", "the URL authority is the only source")
+  local url = meta_of { process = "/usr/bin/ssh", cwd = "file://admin@buildbox/home/admin" }
+  eq(url, "admin@buildbox", "and it is parsed out of the string form too")
+  eq(meta_of { process = "/usr/bin/ssh", cwd = false }, "ssh", "nothing resolvable falls back to the process")
   -- get_foreground_process_name is nil off the local domain, so the domain carries the line.
   eq(meta_of { domain = "SSH:archie", cwd = { file_path = "/home/x/api" } }, "SSH:archie · /home/x/api")
   eq(meta_of { domain = "local", process = nil, cwd = { file_path = "/srv" } }, "/srv")
@@ -2481,7 +2506,7 @@ end)
 
 test("meta = cwd, process and false force one column or none", function()
   local pane = { process = "/usr/bin/nvim", cwd = { file_path = "/tmp/work" } }
-  eq(meta_of(pane, { meta = "cwd" }), "/tmp/work")
+  eq(meta_of(pane, { meta = "cwd" }), "~/work")
   eq(meta_of(pane, { meta = "process" }), "nvim")
   eq(meta_of(pane, { meta = false }), nil)
   eq(meta_of(pane, { tab_height = "row" }), nil, "a one-row card has no meta to resolve")
@@ -2504,14 +2529,14 @@ test("meta is resolved at most once per poll_ms per tab", function()
     calls = calls + 1
     return original(self)
   end
-  eq(model_mod.build(win.gui)[1].meta, "/tmp/first")
+  eq(model_mod.build(win.gui)[1].meta, "~/first")
   pane.cwd = { file_path = "/tmp/second" }
   for _ = 1, 5 do
     model_mod.build(win.gui)
   end
   getmetatable(pane).get_current_working_dir = original
   eq(calls, 1, "five more builds inside one poll cost nothing")
-  eq(model_mod.build(win.gui)[1].meta, "/tmp/first", "the cached value is what renders")
+  eq(model_mod.build(win.gui)[1].meta, "~/first", "the cached value is what renders")
   config.setup(legacy { backend = { path = "/bin/wez-vtabs" } })
 end)
 
@@ -2721,6 +2746,61 @@ test("a dragged card paints its meta row in drag_fg, the loudest colour on that 
     "and by default it is the best the palette can do on drag_bg"
   )
   state.session.drag[wid] = nil
+end)
+
+test("a footer row is a target in its own right, never empty space", function()
+  local win, gui = setup_window(1)
+  sidebar.ensure(gui)
+  local tab = win.tab_list[1]
+  local sb = mark_ready(tab)
+  local clicked = 0
+  local cfg = config.get()
+  cfg.hooks.footer = function()
+    return {
+      { text = "inert" },
+      {
+        text = "live",
+        id = "x",
+        on_click = function()
+          clicked = clicked + 1
+        end,
+      },
+    }
+  end
+  view_mod.sync(gui, { force = true })
+  local hits = state.session.hits[sb:pane_id()]
+  local inert, live
+  for row = 1, 24 do
+    if hits[row] and hits[row].kind == "footer" then
+      if hits[row].entry.on_click then
+        live = row
+      else
+        inert = inert or row
+      end
+    end
+  end
+  assert(inert and live, "both footer rows are hit records")
+  local before = #win.tab_list
+  for _ = 1, 2 do
+    mouse(gui, sb, "down", "left", 5, inert)
+  end
+  eq(#win.tab_list, before, "double-clicking a footer row without on_click opens nothing")
+  mouse(gui, sb, "down", "left", 5, live)
+  eq(clicked, 1, "and a row with on_click still fires it")
+  cfg.hooks.footer = nil
+  config.setup { backend = { path = "/bin/wez-vtabs" } }
+end)
+
+test("a hover repaint tracks any span, not just the close button", function()
+  local win, gui = drag_setup()
+  local sb = sidebar.find(win.tab_list[1])
+  eq(hit.in_close, nil, "the shim is gone")
+  local sent = #sb.sent
+  mouse(gui, sb, "move", "none", 5, 6)
+  local painted = #sb.sent
+  assert(painted > sent, "entering a card repaints")
+  mouse(gui, sb, "move", "none", 26, 6)
+  assert(#sb.sent > painted, "crossing into the close span repaints again")
 end)
 
 os.remove(state.file)

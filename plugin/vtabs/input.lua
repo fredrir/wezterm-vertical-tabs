@@ -69,7 +69,7 @@ local function on_down(gui_window, pane, ev, cfg)
       actions.new_tab(gui_window)
     elseif h.kind == "footer" and h.entry and h.entry.on_click then
       pcall(h.entry.on_click, gui_window, h.entry)
-    elseif double and (h.kind == "space" or h.kind == "strip" or not on_card) then
+    elseif h.kind ~= "footer" and double and (h.kind == "space" or h.kind == "strip" or not on_card) then
       actions.new_tab(gui_window)
     end
   elseif ev.b == "middle" and on_card then
@@ -142,13 +142,13 @@ local function on_wheel(gui_window, ev, cfg)
   session.user_scrolled[wid] = true
 end
 
----Motion only needs a repaint when it crosses a row or the close-button span of the row it is on.
+---Motion only needs a repaint when it crosses a row or a sub-target span of the row it is on.
 local function hover_moved(previous, ev, pid)
   if not previous or previous.y ~= ev.y then
     return true
   end
   local h = hit.at(session.hits[pid], ev.y)
-  return hit.in_close(h, previous.x) ~= hit.in_close(h, ev.x)
+  return hit.span(h, previous.x) ~= hit.span(h, ev.x)
 end
 
 function M.mouse(gui_window, pane, ev)

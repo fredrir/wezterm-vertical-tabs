@@ -25,11 +25,17 @@ function M.pane(tab, opts)
     title = opts.title or "zsh",
     cols = opts.cols or 80,
   }, Pane)
-  return p
+  return p:register()
 end
 
 function Pane:pane_id()
   return self.id
+end
+---`wezterm.mux.get_pane(id)` has to resolve, the way it does against a real mux.
+function Pane:register()
+  local wezterm = require "wezterm"
+  wezterm.panes[self.id] = self
+  return self
 end
 function Pane:tab()
   return self._tab

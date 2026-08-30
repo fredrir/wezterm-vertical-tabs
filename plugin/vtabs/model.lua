@@ -1,3 +1,4 @@
+local wezterm = require "wezterm" ---@type Wezterm
 local config = require "vtabs.config"
 local state = require "vtabs.state"
 local sidebar = require "vtabs.sidebar"
@@ -43,30 +44,49 @@ local REMOTE = { ssh = true, mosh = true, ["mosh-client"] = true, ["ssh.exe"] = 
 local META_TTL_MS = 60000
 local meta_cache = {}
 
+---`file_path` prefixes a Windows drive with a slash (url-funcs/src/lib.rs:60-76); drop it.
+local function local_path(path)
+  if type(path) ~= "string" then
+    return nil
+  end
+  return path:match "^/(%a:[/\\].*)$" or path
+end
+
+local function some(s)
+  return type(s) == "string" and s ~= "" and s or nil
+end
+
+---Path, host and remote user of a pane's OSC 7 cwd. The user comes from the URL authority, never
+---from the environment: `$USER` is who *we* are, not who the remote shell logged in as.
 local function cwd_of(pane)
   local cwd = util.try(function()
     return pane:get_current_working_dir()
   end)
   if not cwd then
-    return nil, nil
+    return nil, nil, nil
   end
   if type(cwd) == "string" then
-    local host, path = cwd:match "^file://([^/]*)(/.*)$"
-    return path or cwd, host ~= "" and host or nil
+    local authority, path = cwd:match "^file://([^/]*)(/.*)$"
+    if not authority then
+      return local_path(cwd), nil, nil
+    end
+    local user, host = authority:match "^([^@]*)@(.*)$"
+    return local_path(path), some(host or authority), some(user)
   end
-  return cwd.file_path, cwd.host
+  return local_path(cwd.file_path), some(cwd.host), some(cwd.username)
 end
 
 ---`~` for the user's home, so the meta line spends its 20 columns on what differs.
 local function tilde(path)
-  local home = os.getenv "HOME"
-  if not path or not home or home == "" then
+  local home = some(wezterm.home_dir) or os.getenv "HOME" or os.getenv "USERPROFILE"
+  if not path or not home then
     return path
   end
   if path == home then
     return "~"
   end
-  if path:sub(1, #home + 1) == home .. "/" then
+  local head = path:sub(1, #home + 1)
+  if head == home .. "/" or head == home .. "\\" then
     return "~" .. path:sub(#home + 1)
   end
   return path
@@ -84,7 +104,7 @@ local function meta_for(pane, cfg)
   if cfg.meta == false then
     return nil
   end
-  local path, host = cwd_of(pane)
+  local path, host, remote_user = cwd_of(pane)
   local dir = tilde(path)
   local process = util.basename(util.try(function()
     return pane:get_foreground_process_name()
@@ -103,8 +123,10 @@ local function meta_for(pane, cfg)
     return join(domain ~= "local" and domain or nil, dir)
   end
   if REMOTE[process] then
-    local user = os.getenv "USER"
-    return host and (user and user .. "@" .. host or host) or process
+    if not host then
+      return process
+    end
+    return remote_user and remote_user .. "@" .. host or host
   end
   if SHELLS[process] then
     return dir
@@ -122,7 +144,14 @@ local function cached_meta(tab_id, pane, cfg, now)
   return meta_cache[tab_id].value
 end
 
+local pruned_at = 0
+
+---Sweeping every build is pointless work on the hot path; entries only expire once per TTL.
 local function prune_meta(now)
+  if now - pruned_at < META_TTL_MS then
+    return
+  end
+  pruned_at = now
   for tab_id, entry in pairs(meta_cache) do
     if now - entry.at > META_TTL_MS then
       meta_cache[tab_id] = nil
@@ -133,6 +162,8 @@ end
 function M.forget_tab(tab_id)
   meta_cache[tab_id] = nil
 end
+
+table.insert(state.forget_tab_hooks, M.forget_tab)
 
 local function included(cfg, tab, mux_win)
   if not cfg.hooks.filter then

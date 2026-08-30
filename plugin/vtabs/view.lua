@@ -1,3 +1,4 @@
+local wezterm = require "wezterm" ---@type Wezterm
 local config = require "vtabs.config"
 local state = require "vtabs.state"
 local sidebar = require "vtabs.sidebar"
@@ -22,13 +23,18 @@ function M.window_title(tab, pane, tabs, panes)
   if type(tab) ~= "table" or type(pane) ~= "table" then
     return nil
   end
-  local is_sidebar = sidebar.marker(pane.title) or state.sidebar_pane_id(tab.tab_id) == pane.pane_id
-  if not is_sidebar then
+  local function backend(info)
+    local resolved = info and util.try(function()
+      return wezterm.mux.get_pane(info.pane_id)
+    end)
+    return resolved ~= nil and sidebar.is_backend(resolved)
+  end
+  if not backend(pane) then
     return nil
   end
   local title = nil
   for _, info in ipairs(panes or {}) do
-    if info.pane_id ~= pane.pane_id and not sidebar.marker(info.title) then
+    if info.pane_id ~= pane.pane_id and not backend(info) then
       title = info.title
       break
     end

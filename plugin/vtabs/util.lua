@@ -88,16 +88,22 @@ function M.shorten_path(path, budget, ellipsis)
   if M.width(path) <= budget then
     return path
   end
+  local sep = (path:find("\\", 1, true) and not path:find("/", 1, true)) and "\\" or "/"
   local parts = {}
-  for part in path:gmatch "[^/]+" do
+  for part in path:gmatch "[^/\\]+" do
     parts[#parts + 1] = part
   end
-  local lead = path:sub(1, 1) == "/" and "/" or ""
+  local lead = ""
+  if parts[1] and parts[1]:match "^%a:$" then
+    lead = table.remove(parts, 1) .. sep
+  elseif path:sub(1, 1) == "/" or path:sub(1, 1) == "\\" then
+    lead = sep
+  end
   if #parts <= 1 then
     return lead .. M.truncate(parts[1] or "", budget - M.width(lead), ellipsis)
   end
   local function joined()
-    return lead .. table.concat(parts, "/")
+    return lead .. table.concat(parts, sep)
   end
   -- Leftmost first, and never the marker or the basename.
   local from = (parts[1] == "~" or parts[1] == "..") and 2 or 1
@@ -116,7 +122,7 @@ function M.shorten_path(path, budget, ellipsis)
   if room < 1 then
     return M.truncate(base, budget, ellipsis)
   end
-  return ellipsis .. "/" .. M.truncate(base, room, ellipsis)
+  return ellipsis .. sep .. M.truncate(base, room, ellipsis)
 end
 
 function M.pad_right(s, cols)

@@ -114,9 +114,14 @@ M.time = {
   end,
 }
 
+M.panes = {}
+
 M.mux = {
   all_windows = function()
     return {}
+  end,
+  get_pane = function(pane_id)
+    return M.panes[pane_id]
   end,
 }
 M.plugin = {

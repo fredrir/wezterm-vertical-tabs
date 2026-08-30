@@ -355,6 +355,9 @@ function M.set_space(tab_id, space_id)
 end
 
 function M.forget_tab(tab_id)
+  for _, fn in ipairs(M.forget_tab_hooks) do
+    fn(tab_id)
+  end
   local k = key(tab_id)
   local pane_id = data.sidebars[k]
   if pane_id then
@@ -380,6 +383,9 @@ end
 
 ---Modules with their own per-window caches register a cleaner here; state must not require them.
 M.forget_hooks = {}
+
+---The same, per tab.
+M.forget_tab_hooks = {}
 
 function M.forget_window(window_id)
   for _, name in ipairs(WINDOW_SESSION) do
