@@ -90,18 +90,8 @@ function M.setup(opts)
   local cfg = util.merge(M.defaults, opts)
   validate(cfg)
 
-  -- Cross-key rules: the second card row exists to carry the meta line, so the two move together.
-  -- Whichever of the pair the user named wins; naming both is resolved in favour of the row count.
-  local named_meta, named_height = opts.meta ~= nil, opts.tab_height ~= nil
-  if named_meta and not named_height then
-    cfg.tab_height = cfg.meta == false and "row" or "card"
-  elseif cfg.tab_height == "row" then
-    cfg.meta = false
-  elseif named_height and not named_meta then
-    cfg.meta = "auto"
-  elseif cfg.meta == false then
-    cfg.tab_height = "row"
-  end
+  -- `tab_height` decides the pad rows and `meta` whether there is a second content line; they are
+  -- independent, so neither key rewrites the other any more.
   -- press mode never hovers a background row, so a hover-only close button would never appear.
   if cfg.hover == "press" and cfg.close_button == "hover" then
     cfg.close_button = "always"

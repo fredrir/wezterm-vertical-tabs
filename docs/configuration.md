@@ -29,9 +29,9 @@ return config
 | `rail_titlebar`           | `"widen"`                                                         | `"widen"` \| `"band"` \| `"none"` |
 | `hide_native_tab_bar`     | `true`                                                            | `true` \| `false` |
 | `poll_ms`                 | `500`                                                             | number >= `50` |
-| `padding`                 | `{ top = 1, left = 2, right = 1 }`                                | `{ top, left, right }` |
-| `window_padding`          | `"auto"`                                                          | `"auto"` \| `false` |
-| `tab_height`              | `"row"`                                                           | `"card"` (`2`) \| `"row"` (`1`) \| `"tall"` (`3`) |
+| `padding`                 | `{ top = 1, left = 1, right = 1 }`                                | `{ top, left, right }` |
+| `edge_to_edge`            | `true`                                                            | `true` \| `false` |
+| `tab_height`              | `"card"`                                                          | `"card"` (`2`) \| `"row"` (`1`) \| `"tall"` (`3`) |
 | `meta`                    | `false`                                                           | `"auto"` \| `"cwd"` \| `"process"` \| `false` |
 | `meta_sep`                | `"  "`                                                            | string |
 | `row_gap`                 | `1`                                                               | number >= `0` |
@@ -87,10 +87,10 @@ return config
 | ------ | ---- |
 | `width` | re-asserted on the active tab after every resize; a divider drag is adopted until the config reloads |
 | `collapsed` | `"rail"` keeps the pane and narrows it, so the toggle stays reachable |
-| `padding` | cells inside the sidebar pane, painted in its own colour; `left = 2` stands in for the window padding the sidebar no longer gets |
-| `window_padding` | `"auto"` zeroes the sides the sidebar touches so its background reaches the window edge; the far side keeps wezterm's `1cell`. `false` never touches it |
-| `tab_height` | moves with `meta`: whichever of the two you name wins, and naming both keeps the row count |
-| `meta` | off by default; any value other than `false` gives the card its second row |
+| `padding` | cells inside the sidebar pane, painted in its own colour, so the card never touches the window edge |
+| `edge_to_edge` | zeroes wezterm's window padding on the sides the sidebar touches, so its background reaches the window edge; the far side keeps wezterm's `1cell`, and top/bottom are window-global, so the content pane loses its half cell too. The split line stays: pair with `theme = { split = "hidden" }` for a seamless edge |
+| `tab_height` | pad rows around the card's content; independent of `meta` |
+| `meta` | off by default; opt in with `"auto"`, `"cwd"` or `"process"`. The popover header always shows cwd and domain, whatever this says |
 | `rail_width` | raised to the traffic-light reserve (typically 9) on macOS with `INTEGRATED_BUTTONS` |
 | `close_button` | treated as `"always"` when `hover = "press"`, where no background row is ever hovered |
 | `context` | `false` removes the mouse trigger only; `m` in keyboard mode still opens the popover |
@@ -186,7 +186,7 @@ the tab's content pane, which then takes focus back.
 | `pane_focus_follows_mouse` | `true`                        | `hover = "follow"` and you left it unset                        |
 | `window_decorations`       | `"INTEGRATED_BUTTONS\|RESIZE"` | macOS, you left it unset, `position = "left"`, `titlebar ~= "plain"` |
 | `inactive_pane_hsb`        | identity                      | you left it unset and `dim_inactive_panes = false` (the default)  |
-| `window_padding`           | sides touching the sidebar `0`, the far side `"1cell"` | you left it unset and `window_padding = "auto"` (the default) |
+| `window_padding`           | sides touching the sidebar `0`, the far side `"1cell"` | you left it unset and `edge_to_edge = true` (the default) |
 | `status_update_interval`   | `min(yours, poll_ms)`         | always                                                          |
 
 `window_decorations = "RESIZE"` alone hides the macOS window buttons and pins the window in

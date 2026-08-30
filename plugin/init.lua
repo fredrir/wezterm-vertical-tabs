@@ -267,7 +267,7 @@ local WEZTERM_SIDE_PADDING = "1cell"
 ---colour. Zeroing the sides the sidebar touches is the only way its page reaches the window edge;
 ---the air comes back as `padding.left`, painted in the sidebar's own colour.
 local function apply_padding(config, cfg)
-  if cfg.window_padding == false or config.window_padding ~= nil then
+  if not cfg.edge_to_edge or config.window_padding ~= nil then
     return
   end
   local outer = cfg.position == "left" and "right" or "left"

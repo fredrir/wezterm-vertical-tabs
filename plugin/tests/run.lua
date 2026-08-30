@@ -177,7 +177,6 @@ local function view(over)
   if opts.meta == nil then
     opts.meta = "auto"
   end
-  opts.padding = opts.padding or { top = 1, left = 1, right = 1 }
   local cfg = config.setup(opts)
   local v = {
     cols = 28,
@@ -3313,7 +3312,7 @@ test("the P1 defaults and their aliases pass validation without warning", functi
   local cfg = config.setup {}
   eq(cfg.padding.top, 1)
   eq(cfg.row_gap, 1)
-  eq(cfg.tab_height, "row")
+  eq(cfg.tab_height, "card")
   eq(cfg.meta, false)
   eq(cfg.separator, "gap")
   eq(cfg.pinned_style, "dense")
@@ -3350,15 +3349,12 @@ test("each new key rejects a bad value and keeps its default", function()
   eq(config.setup({ row_gap = 3 }).row_gap, 3, "a valid value survives")
 end)
 
-test("tab_height and meta stay consistent, and press mode forces an always-on close button", function()
-  eq(config.setup({ tab_height = "row" }).meta, false)
-  eq(config.setup({ meta = false }).tab_height, "row")
-  eq(config.setup({ tab_height = "card" }).meta, "auto", "asking for a second row asks for the line on it")
-  eq(config.setup({ tab_height = "tall" }).meta, "auto")
-  eq(config.setup({ meta = "cwd" }).tab_height, "card", "and asking for the line asks for the row")
-  eq(config.setup({ meta = "auto", tab_height = "row" }).meta, false, "naming both, the row count wins")
-  eq(config.setup({ meta = false, tab_height = "tall" }).tab_height, "row")
-  eq(config.setup({ meta = "cwd", tab_height = "tall" }).tab_height, "tall", "a consistent pair is kept")
+test("tab_height and meta are independent, and press mode forces an always-on close button", function()
+  eq(config.setup({ tab_height = "row" }).meta, false, "the height decides the pads, not the lines")
+  eq(config.setup({ tab_height = "tall" }).meta, false)
+  eq(config.setup({ meta = "cwd" }).tab_height, "card", "and the meta line does not rewrite the height")
+  eq(config.setup({ meta = false }).tab_height, "card")
+  eq(config.setup({ meta = "cwd", tab_height = "tall" }).tab_height, "tall")
   eq(config.setup({ meta = "cwd", tab_height = "tall" }).meta, "cwd")
   eq(config.setup({ hover = "press" }).close_button, "always")
   eq(config.setup({ hover = "press", close_button = "never" }).close_button, "never")
@@ -3488,9 +3484,8 @@ test("the window padding is zeroed on the sides the sidebar touches, and never w
   eq(right.bottom, 0)
   local mine = { left = 8, right = 8, top = 8, bottom = 8 }
   eq(padding({}, mine), mine, "a user value is never overwritten")
-  eq(padding { window_padding = false }, nil, "and false never touches it")
-  eq(config.setup({ window_padding = "sometimes" }).window_padding, "auto", "an unknown value resets")
-  eq(config.defaults.padding.left, 2, "the air the window padding no longer gives is painted by the sidebar")
+  eq(padding { edge_to_edge = false }, nil, "and the opt-out never touches it")
+  eq(config.defaults.padding.left, 1, "the sidebar keeps its own gutter, painted in the page colour")
   config.setup(legacy { backend = { path = "/bin/wez-vtabs" } })
 end)
 
@@ -3543,7 +3538,6 @@ test("meta = cwd, process and false force one column or none", function()
   eq(meta_of(pane, { meta = "process" }), "nvim")
   eq(meta_of(pane, { meta_sep = " · " }), "nvim · work", "the separator is configurable")
   eq(meta_of(pane, { meta = false }), nil)
-  eq(meta_of(pane, { tab_height = "row" }), nil, "a one-row card has no meta to resolve")
 end)
 
 test("a pane that resolves nothing leaves meta nil rather than an empty row", function()
@@ -3730,10 +3724,10 @@ end)
 -- P1-spec §7, verbatim. Injected values in other tests cannot keep a wrong default green.
 local P1_DEFAULTS = {
   width = 28,
-  padding = { top = 1, left = 2, right = 1 },
-  window_padding = "auto",
+  padding = { top = 1, left = 1, right = 1 },
+  edge_to_edge = true,
   row_gap = 1,
-  tab_height = "row",
+  tab_height = "card",
   meta = false,
   separator = "gap",
   pinned_style = "dense",
@@ -3771,8 +3765,7 @@ end)
 test("tab_height accepts the row counts as well as the names", function()
   eq(config.setup({ tab_height = 2 }).tab_height, "card")
   eq(config.setup({ tab_height = 1 }).tab_height, "row")
-  eq(config.setup({ tab_height = 1 }).meta, false, "a one-row card has no meta line")
-  eq(config.setup({ tab_height = 2 }).meta, "auto")
+  eq(config.setup({ tab_height = 3 }).tab_height, "tall")
   config.setup(legacy { backend = { path = "/bin/wez-vtabs" } })
 end)
 
@@ -4421,7 +4414,7 @@ end)
 test("tall cards and the frame are configurable, and false is the frame default", function()
   eq(config.setup({ tab_height = "tall" }).tab_height, "tall")
   eq(config.setup({ tab_height = 3 }).tab_height, "tall")
-  eq(config.setup({ tab_height = "gigantic" }).tab_height, "row", "an unknown height resets")
+  eq(config.setup({ tab_height = "gigantic" }).tab_height, "card", "an unknown height resets")
   eq(config.setup({}).frame, false)
   local framed = config.setup { frame = { margin = 1, corners = "chamfer" } }
   eq(framed.frame.margin, 1)
