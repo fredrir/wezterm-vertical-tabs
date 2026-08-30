@@ -144,12 +144,13 @@ manual binding:
 ```lua
 { key = "b", mods = "CMD", action = vtabs.action.toggle_sidebar }
 { key = "h", mods = "CMD", action = vtabs.action.activate_pane_direction "Left" } -- skips the sidebar
+{ key = "d", mods = "CMD", action = vtabs.action.split "Right" }                 -- splits the shell, not the sidebar
 { key = "1", mods = "CMD", action = vtabs.action.activate_tab(0) }              -- 0-based, -1 = last
 ```
 
 Available: `toggle_sidebar focus_sidebar new_tab close_tab reopen_closed pin_tab
 private_window new_window tear_off rename_tab next_tab prev_tab move_tab_up
-move_tab_down activate_tab(index) activate_pane_direction(dir)`.
+move_tab_down activate_tab(index) activate_pane_direction(dir) split(dir)`.
 
 ### Sidebar keyboard mode
 
@@ -213,6 +214,7 @@ place; the plugin never sets it and warns once if you do.
 ## Public API
 
 `vtabs.apply_to_config(config, opts)`, `vtabs.action.*`,
+`vtabs.action.split "Right"` (also `"Left"`, `"Top"`, `"Bottom"`),
 `vtabs.toggle_sidebar(window)`, `vtabs.show_sidebar(window, bool)`,
 `vtabs.sync(window, { force = true })`, `vtabs.invalidate_theme(window_id?)`,
 `vtabs.is_sidebar_pane(pane)` (true for any pane presenting as a sidebar backend; for skipping, never for trust), `vtabs.window_title(tab, pane, tabs, panes)`, `vtabs.is_private_window(window)`, `vtabs.version`.

@@ -481,6 +481,30 @@ function M.move_relative(gui_window, delta)
   end
 end
 
+local SPLIT = { Right = true, Left = true, Top = true, Bottom = true }
+
+---Splits the tab's content pane, never the sidebar. WezTerm's own `SplitPane` acts on whichever
+---pane is active, which under `hover = "follow"` is the sidebar whenever the pointer is over it.
+function M.split(gui_window, direction)
+  if not SPLIT[direction] then
+    util.warn("split direction must be Right, Left, Top or Bottom, got %s", tostring(direction))
+    return nil
+  end
+  local content = active_content_pane(gui_window)
+  if not content then
+    return nil
+  end
+  local ok, pane = pcall(function()
+    return content:split { direction = direction }
+  end)
+  if not ok or not pane then
+    util.warn("split failed: %s", tostring(pane):match "^[^\n]*")
+    return nil
+  end
+  pane:activate()
+  return pane
+end
+
 function M.activate_pane_direction(gui_window, direction)
   local content = active_content_pane(gui_window)
   if not content then
@@ -556,6 +580,11 @@ M.action = {
   activate_pane_direction = function(direction)
     return callback(function(window)
       M.activate_pane_direction(window, direction)
+    end)
+  end,
+  split = function(direction)
+    return callback(function(window)
+      M.split(window, direction)
     end)
   end,
 }

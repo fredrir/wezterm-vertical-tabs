@@ -504,18 +504,103 @@ local function own_socket()
   return socket:match("gui%-sock%-" .. tostring(pid) .. "$") ~= nil
 end
 
----Kills one pane by id, so no tab or pane has to be activated first. False when the CLI is not usable.
-local function cli_kill(pane_id)
+---Runs `wezterm cli` against the GUI's own socket, so no tab or pane has to be activated first.
+---False when the CLI is not usable here, which is the caller's cue to fall back.
+local function cli(args, key, unavailable)
   local dir = wezterm.executable_dir
   if type(dir) == "string" and own_socket() then
-    local exe = dir .. (platform.is_windows and "\\wezterm.exe" or "/wezterm")
-    local args = { exe, "cli", "--no-auto-start", "kill-pane", "--pane-id", tostring(pane_id) }
-    if util.try(wezterm.run_child_process, args) == true then
+    local argv = { dir .. (platform.is_windows and "\\wezterm.exe" or "/wezterm"), "cli", "--no-auto-start" }
+    for _, arg in ipairs(args) do
+      argv[#argv + 1] = arg
+    end
+    if util.try(wezterm.run_child_process, argv) == true then
       return true
     end
   end
-  util.warn_once("cli-kill", "wezterm cli kill-pane unavailable; closing sidebars by activation")
+  util.warn_once(key, "%s", unavailable)
   return false
+end
+
+local function cli_kill(pane_id)
+  local args = { "kill-pane", "--pane-id", tostring(pane_id) }
+  return cli(args, "cli-kill", "wezterm cli kill-pane unavailable; closing sidebars by activation")
+end
+
+---Moves a pane under `target`, splitting it downwards. `--move-pane-id` relocates an existing pane.
+local function cli_move(pane_id, target_id)
+  local args = { "split-pane", "--move-pane-id", tostring(pane_id), "--pane-id", tostring(target_id), "--bottom" }
+  return cli(args, "cli-move", "wezterm cli split-pane --move-pane-id unavailable; a split sidebar is left as is")
+end
+
+---Panes sharing the sidebar's own columns. Only a split of the sidebar node can put one there: the
+---sidebar is a top-level split, so every content pane is on the other side of it.
+local function intruders(tab, sb)
+  local infos = util.try(function()
+    return tab:panes_with_info()
+  end)
+  if type(infos) ~= "table" then
+    return {}
+  end
+  local box = nil
+  for _, info in ipairs(infos) do
+    if info.pane:pane_id() == sb:pane_id() then
+      box = info
+    end
+  end
+  -- A zoomed pane is reported at the tab's full size, which no column test can read.
+  if not box or box.is_zoomed then
+    return {}
+  end
+  local left, right = box.left or 0, (box.left or 0) + (box.width or 0)
+  local out = {}
+  for _, info in ipairs(infos) do
+    if
+      info.pane:pane_id() ~= sb:pane_id()
+      and (info.left or 0) >= left
+      and (info.left or 0) + (info.width or 0) <= right
+    then
+      out[#out + 1] = info.pane
+    end
+  end
+  return out
+end
+
+---WezTerm splits whichever pane is active, and under `hover = "follow"` that is often the sidebar,
+---which leaves a shell in a column too narrow to use. Move it to the content side instead.
+function M.rescue_splits(gui_window, tab)
+  local content, sb = M.classify(tab)
+  if not sb or #content < 2 then
+    return false
+  end
+  local stuck = intruders(tab, sb)
+  if #stuck == 0 then
+    return false
+  end
+  local inside = {}
+  for _, pane in ipairs(stuck) do
+    inside[pane:pane_id()] = true
+  end
+  local host = nil
+  for _, pane in ipairs(content) do
+    if not inside[pane:pane_id()] then
+      host = pane
+      break
+    end
+  end
+  if not host then
+    return false
+  end
+  local moved = false
+  for _, pane in ipairs(stuck) do
+    moved = cli_move(pane:pane_id(), host:pane_id()) or moved
+  end
+  if moved then
+    classified[tab:tab_id()] = nil
+    util.try(function()
+      require("vtabs.geometry").correct(gui_window)
+    end)
+  end
+  return moved
 end
 
 ---`perform_action` ignores its pane argument, so the intended target must still be active when it runs.
@@ -735,6 +820,7 @@ local function ensure_window(gui_window)
         end
       elseif sb then
         if M.is_ready(sb) then
+          M.rescue_splits(gui_window, tab)
           check_liveness(gui_window, tab, sb, now)
         else
           await_auth(gui_window, tab, sb, now)

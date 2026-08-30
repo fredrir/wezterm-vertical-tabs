@@ -477,6 +477,113 @@ test("attach refuses a tab that already has a sidebar, so a direct caller cannot
   eq(sidebars_in(win.tab_list[#win.tab_list]), 1, "and the path that spawns a tab still gets one")
 end)
 
+---Makes `own_socket` true and records every `wezterm cli` argv the plugin runs.
+-- luacheck: push ignore 122
+local function with_cli(fn)
+  local real_getenv, real_procinfo, real_run = os.getenv, wezterm.procinfo, wezterm.run_child_process
+  local calls = {}
+  os.getenv = function(name)
+    if name == "WEZTERM_UNIX_SOCKET" then
+      return "/tmp/wezterm/gui-sock-4242"
+    end
+    return real_getenv(name)
+  end
+  wezterm.procinfo = {
+    pid = function()
+      return 4242
+    end,
+  }
+  wezterm.run_child_process = function(args)
+    calls[#calls + 1] = table.concat(args, " ")
+    return true, "", ""
+  end
+  local ok, err = pcall(fn, calls)
+  os.getenv, wezterm.procinfo, wezterm.run_child_process = real_getenv, real_procinfo, real_run
+  if not ok then
+    error(err, 0)
+  end
+  return calls
+end
+-- luacheck: pop
+
+test("a pane split off the sidebar is moved to the content side, not left in its column", function()
+  local win, gui = setup_window(1)
+  sidebar.ensure(gui)
+  local tab = win.tab_list[1]
+  local sb = mark_ready(tab)
+  local content = sidebar.content_pane(tab)
+  -- WezTerm split the sidebar, so the new shell shares the sidebar's columns rather than the
+  -- content pane's: `panes_with_info` is the only thing that can tell the two apart.
+  local stuck = fake.pane(tab, { cols = sb.cols })
+  tab.pane_list[#tab.pane_list + 1] = stuck
+  stuck.left, stuck.width, stuck.top = 0, sb.cols, 12
+  sb.left, sb.width = 0, sb.cols
+  content.left, content.width = sb.cols + 1, content.cols
+
+  local calls = with_cli(function()
+    assert(sidebar.rescue_splits(gui, tab), "the intruder is rescued")
+  end)
+  eq(#calls, 1, "one cli call, for the one pane in the wrong column")
+  local want = string.format(
+    "cli --no-auto-start split-pane --move-pane-id %d --pane-id %d --bottom",
+    stuck:pane_id(),
+    content:pane_id()
+  )
+  assert(calls[1]:find(want, 1, true), "moved under the content pane, not the sidebar: " .. calls[1])
+
+  -- The content pane is where it belongs, and the sidebar is not a candidate to move at all.
+  stuck.left, stuck.width = sb.cols + 1, stuck.cols
+  eq(
+    with_cli(function()
+      eq(sidebar.rescue_splits(gui, tab), false, "a pane on the content side is left alone")
+    end)[1],
+    nil
+  )
+  eq(sidebars_in(tab), 1, "and the sidebar is never the pane that moves")
+end)
+
+test("a zoomed pane suspends the split rescue, since every pane then reports the full width", function()
+  local win, gui = setup_window(1)
+  sidebar.ensure(gui)
+  local tab = win.tab_list[1]
+  local sb = mark_ready(tab)
+  local content = sidebar.content_pane(tab)
+  local stuck = fake.pane(tab, { cols = sb.cols })
+  tab.pane_list[#tab.pane_list + 1] = stuck
+  stuck.left, stuck.width = 0, sb.cols
+  sb.left, sb.width, sb.zoomed = 0, sb.cols, true
+  content.left, content.width = sb.cols + 1, content.cols
+  eq(
+    with_cli(function()
+      eq(sidebar.rescue_splits(gui, tab), false, "nothing is moved on a guess")
+    end)[1],
+    nil
+  )
+  sb.zoomed = nil
+end)
+
+test("split targets the content pane, whichever pane the pointer left active", function()
+  local win, gui = setup_window(1)
+  sidebar.ensure(gui)
+  local tab = win.tab_list[1]
+  local sb = mark_ready(tab)
+  local content = sidebar.content_pane(tab)
+  -- Under hover = follow the sidebar holds the pane, which is exactly when SplitPane misfires.
+  sb:activate()
+  local before = #tab.pane_list
+  local pane = actions.split(gui, "Bottom")
+  assert(pane, "a pane was created")
+  eq(#tab.pane_list, before + 1)
+  eq(pane.split_args.direction, "Bottom")
+  assert(not sidebar.is_backend(pane), "the new pane is a shell, not a second sidebar")
+  eq(pane._tab, tab)
+  eq(sidebars_in(tab), 1, "and splitting never doubles the sidebar")
+  assert(content ~= nil)
+  local warned = #wezterm.log
+  eq(actions.split(gui, "Sideways"), nil, "an unknown direction is refused")
+  assert(#wezterm.log > warned, "and says so")
+end)
+
 test("a sidebar with a new pane id but a known token is re-adopted, not duplicated", function()
   local win, gui = setup_window(1)
   sidebar.ensure(gui)
