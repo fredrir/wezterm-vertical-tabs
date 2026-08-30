@@ -28,9 +28,11 @@ while [ "$n" -lt "$runs" ]; do
   n=$((n + 1))
   VTABS_STRESS_SOFT=1 VTABS_STRESS_FAST=1 timeout 2700 \
     xvfb-run -a -s "-screen 0 1600x900x24" sh "$script" "$mode" >"$out/run$n.log" 2>&1 || true
+  # `VTABS_STRESS_SOFT=1` lets a stress run finish with XFAILs, so those are counted separately.
+  grep -h "^XFAIL:" "$out/run$n.log" >>"$out/xfails.txt" 2>/dev/null || true
   if grep -q "^all .* checks passed" "$out/run$n.log"; then
     passed=$((passed + 1))
-    echo "  run $n: pass"
+    echo "  run $n: pass ($(grep -c "^XFAIL:" "$out/run$n.log" || true) xfail)"
   else
     # The failure text minus the ids and counts that differ between runs, so equal causes group.
     grep -h "^FAIL:" "$out/run$n.log" |
@@ -47,5 +49,10 @@ if [ -s "$out/failures.txt" ]; then
     awk -v r="$runs" '{c=$1; $1=""; printf "  %d/%s  %s\n", c, r, substr($0,2)}'
 else
   echo "no failures"
+fi
+if [ -s "$out/xfails.txt" ]; then
+  echo "xfail groups by rate:"
+  sort "$out/xfails.txt" | uniq -c | sort -rn |
+    awk -v r="$runs" '{c=$1; $1=""; printf "  %d/%s  %s\n", c, r, substr($0,2)}'
 fi
 echo "logs in $out"
