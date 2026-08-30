@@ -161,9 +161,11 @@ step() {
       click_settle=1.5
       quick=1
       ;;
+    # `Move to space` is disabled, and `popover.move` skips disabled rows, so it cannot be selected
+    # and Return would run whatever the cursor skipped onto. The row is visible in the root menu.
     rclick_space)
       point_at 3 logs
-      xdotool key Down Down Down Return
+      xdotool key Down Down
       sleep 1.5
       ;;
     key:*)
