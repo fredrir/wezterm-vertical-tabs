@@ -46,6 +46,7 @@ local theme = require "vtabs.theme"
 local keys = require "vtabs.keys"
 local state = require "vtabs.state"
 local hit = require "vtabs.hit"
+local glyphs = require "vtabs.glyphs"
 local model = require "vtabs.model"
 local sidebar = require "vtabs.sidebar"
 local actions = require "vtabs.actions"
@@ -143,14 +144,16 @@ local function items()
 end
 
 local function view(over)
-  local cfg = config.setup(over and over.opts or {})
+  local opts = over and over.opts or {}
+  opts.row_gap = opts.row_gap or 1
+  local cfg = config.setup(opts)
   local v = {
     cols = 28,
     rows = 10,
     items = items(),
     theme = theme.resolve({}, palette("#1e1e2e", "#cdd6f4")),
     cfg = cfg,
-    glyphs = cfg.glyphs,
+    glyphs = glyphs.resolve(cfg.glyphs, {}),
     scroll = 0,
   }
   for k, val in pairs(over or {}) do
@@ -188,54 +191,73 @@ test("every rendered row is exactly cols wide in many configurations", function(
   end
 end)
 
-test("layout: padding, pinned, separator, tabs, new tab", function()
+test("layout: pinned block, separator, 2-row cards, ghost card", function()
   local r = render.render(view())
-  eq(r.hits[1].kind, "space")
-  eq(r.hits[2].tab_id, 1)
-  eq(r.hits[3].kind, "separator")
-  eq(r.hits[4].tab_id, 2)
-  eq(r.hits[5].tab_id, 3)
-  eq(r.hits[6].kind, "new_tab")
-  eq(r.total_rows, 6)
+  eq(r.hits[1].id, 1, "pinned entry is one dense row")
+  eq(r.hits[1].part, "title")
+  eq(r.hits[1].pinned, true)
+  eq(r.hits[2].kind, "separator")
+  eq(r.hits[3].id, 2)
+  eq(r.hits[3].part, "title")
+  eq(r.hits[4].part, "meta")
+  eq(r.hits[4].id, 2)
+  eq(r.hits[5].part, "gap")
+  eq(r.hits[5].slot, r.hits[3].slot)
+  eq(r.hits[6].id, 3)
+  eq(r.total_rows, 8)
+  for row = 8, 10 do
+    eq(r.hits[row].kind, "new_tab", "ghost row " .. row)
+  end
   assert(strip(r.data):find "New Tab")
   assert(strip(r.data):find "…", "long title truncated")
   local sep = render.render(view { opts = { separator = "none" } })
-  eq(sep.hits[3].tab_id, 2)
+  eq(sep.hits[2].id, 2, "no separator row")
 end)
 
 test("close column is reserved so hover does not reflow the title", function()
   local plain = render.render(view())
-  local hovered = render.render(view { hover = { x = 5, y = 5 } })
-  local a, b = row_text(plain.data, 5), row_text(hovered.data, 5)
+  local hovered = render.render(view { hover = { x = 5, y = 6 } })
+  local a, b = row_text(plain.data, 6), row_text(hovered.data, 6)
   eq(a:sub(1, 20), b:sub(1, 20))
-  assert(hovered.hits[5].close, "close span on hover")
-  eq(hovered.hits[5].close.to, 27)
-  eq(usub(b, hovered.hits[5].close.from, hovered.hits[5].close.to), "x")
-  assert(plain.hits[4].close, "active row shows close")
-  eq(plain.hits[5].close, nil)
+  eq(hit.span(hovered.hits[6], 25), "close", "close span on the title row")
+  eq(hit.span(hovered.hits[6], 27), "close")
+  eq(hit.span(hovered.hits[6], 24), nil)
+  eq(hit.span(hovered.hits[6], 28), nil)
+  eq(hit.span(hovered.hits[7], 26), "close", "and on the meta row")
+  assert(hit.in_close(hovered.hits[6], 26), "in_close shim")
+  eq(usub(b, 26, 26), "x", "glyph sits one col inside the card edge")
+  eq(hit.span(plain.hits[3], 26), "close", "active card shows close")
+  eq(hit.span(plain.hits[6], 26), nil, "idle card does not")
 end)
 
 test("unseen marker survives hover and always-close", function()
-  local r = render.render(view { hover = { x = 5, y = 5 }, opts = { close_button = "always" } })
-  assert(row_text(r.data, 5):find("•", 1, true), "unseen dot in marker column")
+  local r = render.render(view { hover = { x = 5, y = 6 }, opts = { close_button = "always" } })
+  eq(usub(row_text(r.data, 6), 2, 2), "•", "unseen dot survives in the gutter")
 end)
 
-test("pinned compact rows show pin glyph and no close", function()
-  local r = render.render(view { hover = { x = 27, y = 2 } })
-  eq(r.hits[2].close, nil)
-  assert(row_text(r.data, 2):find("*", 1, true))
+test("pinned entries are one dense row with a pin span, never a close span", function()
+  local r = render.render(view { hover = { x = 27, y = 1 } })
+  eq(hit.span(r.hits[1], 26), "pin")
+  eq(hit.in_close(r.hits[1], 26), false)
+  eq(usub(row_text(r.data, 1), 26, 26), "*", "pin glyph in the close column")
+  eq(r.hits[2].kind, "separator", "no meta or gap row after a dense entry")
+  local full = render.render(view { opts = { pinned_style = "full" }, hover = { x = 27, y = 1 } })
+  eq(full.hits[2].part, "meta", "pinned_style=full keeps 2-row cards")
 end)
 
-test("drag ghost reorders, renumbers and previews pin state", function()
+test("drag ghost reorders, previews pin state and keeps the plan length", function()
+  local idle = render.render(view())
   local r = render.render(view { drag = { tab_id = 3, over_index = 1, active = true } })
-  eq(r.hits[2].tab_id, 3)
+  eq(r.hits[2].id, 3, "ghost keeps its armed height inside the pinned block")
   eq(r.hits[2].pinned, true)
-  eq(r.hits[3].tab_id, 1)
-  eq(r.hits[4].kind, "separator")
+  eq(r.hits[4].id, 1)
+  eq(r.hits[5].kind, "separator")
+  eq(r.total_rows, idle.total_rows, "plan length is constant across the pin boundary")
   local r2 = render.render(view { drag = { tab_id = 3, over_index = 2, active = true } })
-  eq(r2.hits[4].tab_id, 3)
+  eq(r2.hits[4].id, 3)
   eq(r2.hits[4].pinned, false)
-  eq(r2.hits[5].tab_id, 2)
+  eq(r2.hits[6].id, 2)
+  eq(r2.total_rows, idle.total_rows)
 end)
 
 test("scroll clamps, ensure_visible follows active, footer is sticky", function()
@@ -245,16 +267,18 @@ test("scroll clamps, ensure_visible follows active, footer is sticky", function(
       { tab_id = i, index = i, is_active = i == 25, is_pinned = false, title = "t" .. i, icon = "", has_unseen = false }
   end
   local r = render.render(view { items = many, rows = 10, scroll = 999, footer = { "space: work" } })
-  eq(r.scroll, 23)
-  eq(r.hits[10].kind, "footer")
+  eq(r.total_rows, 90, "3 rows per card")
+  eq(r.scroll, 84, "clamped to max_scroll")
+  eq(r.hits[10].kind, "footer", "footer is the last row, below the ghost card")
+  eq(r.hits[7].kind, "new_tab")
   r = render.render(view { items = many, rows = 10, scroll = 0, ensure_visible = 25 })
-  local found = false
+  local rows_seen = 0
   for row = 1, 10 do
-    if r.hits[row].tab_id == 25 then
-      found = true
+    if r.hits[row].id == 25 then
+      rows_seen = rows_seen + 1
     end
   end
-  assert(found, "active row visible after ensure_visible")
+  assert(rows_seen >= 2, "the whole card is in view, not just its title row")
   assert(r.data:find("▐", 1, true), "scroll indicator drawn")
 end)
 
@@ -580,6 +604,310 @@ test("a sidebar that never becomes ready is left in place and its domain not ret
   end
   eq(warned, 1, "warned once")
   state.session.failed_domains["desktop@"] = nil
+end)
+
+-- implementer-1: P1 render track -------------------------------------------
+
+local function frame_rows(v)
+  local r = render.render(v)
+  local rows = {}
+  for row = 1, v.rows do
+    rows[row] = row_text(r.data, row)
+  end
+  return rows, r
+end
+
+local FRAME_DIR = "/tmp/vtabs-team/p1-frames"
+
+local function dump_frame(name, v)
+  -- "dense" is P1's pinned default; config.VALID only learns it with implementer-2's §7 change
+  if v.cfg.pinned_style == "compact" and v.dense ~= false then
+    v.cfg.pinned_style = "dense"
+  end
+  local rows = frame_rows(v)
+  os.execute("mkdir -p " .. FRAME_DIR)
+  local f = io.open(FRAME_DIR .. "/" .. name .. ".txt", "w")
+  if not f then
+    return rows
+  end
+  f:write "0        1         2\n1234567890123456789012345678\n"
+  for _, line in ipairs(rows) do
+    f:write(line, "\n")
+  end
+  f:close()
+  return rows
+end
+
+local function p1_items()
+  return {
+    {
+      tab_id = 1,
+      index = 1,
+      is_active = false,
+      is_pinned = true,
+      title = "dotfiles",
+      meta = "~/dotfiles",
+      icon = "~",
+      has_unseen = false,
+    },
+    {
+      tab_id = 2,
+      index = 2,
+      is_active = true,
+      is_pinned = false,
+      title = "wezterm-vertical-tabs",
+      meta = "~/projects/wez-plugins",
+      icon = "v",
+      has_unseen = false,
+    },
+    {
+      tab_id = 3,
+      index = 3,
+      is_active = false,
+      is_pinned = false,
+      title = "claude",
+      meta = "~/projects/api",
+      icon = "*",
+      has_unseen = true,
+    },
+  }
+end
+
+local function p1_view(over)
+  local v = view(over)
+  v.items = (over and over.items) or p1_items()
+  return v
+end
+
+test("P1 frames: every row is exactly cols wide in every new state", function()
+  local variants = {
+    p1_view { opts = { separator = "gap" } },
+    p1_view { hover = { x = 5, y = 4 } },
+    p1_view { hover = { x = 26, y = 4 } },
+    p1_view { strip = { rows = 3, toggle = { row = 2, x = 11, x1 = 10, x2 = 13 } } },
+    p1_view { strip = { rows = 2, toggle = { row = 1, x = 2, x1 = 1, x2 = 4 } }, opts = { position = "right" } },
+    p1_view { private = true },
+    p1_view { opts = { meta = false } },
+    p1_view { opts = { icons = false, close_button = "never" } },
+    p1_view { opts = { pinned_style = "full" } },
+    p1_view { hover = { x = 5, y = 9 } },
+    p1_view { rows = 6 },
+    p1_view { rows = 4 },
+    p1_view { opts = { padding = { top = 0, left = 0, right = 0 } } },
+    p1_view { opts = { width = 40 }, cols = 40 },
+    p1_view { drag = { tab_id = 3, over_index = 1, active = true, outside = true } },
+    p1_view { scroll = 3, rows = 8 },
+    p1_view { footer = { { icon = "f", text = "main · 3 dirty", id = "git" } } },
+  }
+  for i, v in ipairs(variants) do
+    local rows = frame_rows(v)
+    for row = 1, v.rows do
+      eq(util.width(rows[row]), v.cols, "variant " .. i .. " row " .. row)
+    end
+  end
+end)
+
+test("P1 grid: landmarks derive from cols and padding", function()
+  local rows = frame_rows(p1_view { opts = { separator = "gap" } })
+  eq(usub(rows[1], 4, 4), "~", "icon at icon_x")
+  eq(usub(rows[1], 6, 13), "dotfiles", "title at title_x1")
+  eq(usub(rows[3], 2, 2), "▎", "active accent bar in the gutter")
+  eq(usub(rows[4], 2, 2), "▎", "and on the meta row")
+  eq(usub(rows[4], 6, 25), "~/projects/wez-plug…", "meta at meta_x1, truncated to its budget")
+  local wide = frame_rows(p1_view { opts = { width = 40, separator = "gap" }, cols = 40 })
+  eq(usub(wide[1], 6, 13), "dotfiles", "title column does not move with width")
+end)
+
+test("P1 chamfer: right side only, 2-row cards only", function()
+  local rows = frame_rows(p1_view { opts = { separator = "gap" } })
+  eq(usub(rows[3], 27, 27), "▙", "top-right chamfer on the active card")
+  eq(usub(rows[4], 27, 27), "▛", "bottom-right chamfer")
+  eq(usub(rows[3], 2, 2), "▎", "col 2 is the gutter, never a chamfer")
+  local one_row = frame_rows(p1_view { opts = { meta = false, separator = "gap" } })
+  for _, line in ipairs(one_row) do
+    assert(not line:find("▙", 1, true) and not line:find("▛", 1, true), "1-row cards are square")
+  end
+  local dense = frame_rows(p1_view { hover = { x = 5, y = 1 }, opts = { separator = "gap" } })
+  assert(not dense[1]:find("▙", 1, true), "a hovered dense pinned row stays square")
+end)
+
+test("P1 hits: one record per row with spans on both card rows", function()
+  local r = render.render(p1_view { hover = { x = 5, y = 4 }, opts = { separator = "gap" } })
+  for _, row in ipairs { 3, 4, 5 } do
+    eq(r.hits[row].kind, "tab", "row " .. row)
+    eq(r.hits[row].id, 2)
+    eq(r.hits[row].slot, 2)
+    eq(r.hits[row].x1, 2)
+    eq(r.hits[row].x2, 27)
+  end
+  eq(r.hits[3].part, "title")
+  eq(r.hits[4].part, "meta")
+  eq(r.hits[5].part, "gap")
+  eq(hit.in_card(r.hits[3], 1), false, "col 1 is page, not card")
+  eq(hit.in_card(r.hits[3], 28), false, "col 28 is the thumb channel")
+  eq(hit.in_card(r.hits[3], 2), true)
+  eq(hit.drop_slot(r.hits, 3, 10, 0), 2, "title row drops at its own slot")
+  eq(hit.drop_slot(r.hits, 4, 10, 0), 2, "meta row too")
+  eq(hit.drop_slot(r.hits, 5, 10, 0), 3, "gap row drops below the card")
+  eq(hit.drop_slot(r.hits, 9, 10, 0), 4, "below the last card")
+end)
+
+test("P1 ghost card: outlined, sticky, exactly cols wide idle and hovered", function()
+  local idle, r = frame_rows(p1_view { opts = { separator = "gap" } })
+  eq(usub(idle[8], 2, 2), "╭")
+  eq(usub(idle[8], 27, 27), "╮")
+  eq(usub(idle[9], 4, 4), "+")
+  eq(usub(idle[9], 6, 13), "New Tab ", "label at title_x1")
+  eq(usub(idle[10], 2, 2), "╰")
+  eq(usub(idle[10], 27, 27), "╯")
+  for row = 8, 10 do
+    eq(r.hits[row].kind, "new_tab")
+    eq(r.hits[row].x1, 2)
+    eq(r.hits[row].x2, 27)
+  end
+  local hover = frame_rows(p1_view { hover = { x = 5, y = 9 }, opts = { separator = "gap" } })
+  eq(usub(hover[8], 3, 3), "─", "solid border on hover")
+  eq(util.width(hover[8]), 28)
+  local tight = render.render(p1_view { rows = 6, opts = { separator = "gap" } })
+  eq(tight.hits[6].kind, "new_tab", "degrades to a single row")
+  local tiny = render.render(p1_view { rows = 2, opts = { separator = "gap" } })
+  eq(tiny.hits[2].kind ~= "new_tab", true, "and drops out entirely rather than starving the list")
+end)
+
+test("P1 strip: reserve rows, toggle span, never over a list row", function()
+  local v =
+    p1_view { strip = { rows = 3, toggle = { row = 2, x = 11, x1 = 10, x2 = 13 } }, opts = { separator = "gap" } }
+  local rows, r = frame_rows(v)
+  eq(usub(rows[2], 11, 11), "«", "toggle glyph at toggle.x")
+  eq(r.hits[1].kind, "strip")
+  eq(r.hits[1].x1, nil, "strip reserve is not clickable")
+  eq(r.hits[2].kind, "toggle")
+  eq(r.hits[2].x1, 10)
+  eq(r.hits[2].x2, 13)
+  eq(r.hits[3].kind, "toggle", "span is 2 rows and stays inside the strip")
+  eq(r.hits[4].kind, "tab", "the list starts below the strip")
+  local right = frame_rows(p1_view {
+    strip = { rows = 2, toggle = { row = 1, x = 2, x1 = 1, x2 = 4 } },
+    opts = { position = "right", separator = "gap" },
+  })
+  eq(usub(right[1], 2, 2), "»", "position=right flips only the glyph")
+end)
+
+test("P1 scroll: thumb by state, edge fade, footer below the ghost card", function()
+  local many = {}
+  for i = 1, 12 do
+    many[i] = {
+      tab_id = i,
+      index = i,
+      is_active = i == 1,
+      is_pinned = false,
+      title = "tab " .. i,
+      meta = "~/p" .. i,
+      icon = "t",
+      has_unseen = false,
+    }
+  end
+  local v = p1_view { items = many, rows = 12, scroll = 4, footer = { "space: work" } }
+  local rows, r = frame_rows(v)
+  eq(r.hits[12].kind, "footer", "footer occupies the last row")
+  eq(r.hits[9].kind, "new_tab")
+  local thumb_rows = 0
+  for row = 1, 8 do
+    if usub(rows[row], 28, 28) == "▐" then
+      thumb_rows = thumb_rows + 1
+    end
+  end
+  assert(thumb_rows > 0, "thumb drawn in col 28")
+  local quiet = render.render(p1_view { items = many, rows = 12, scroll = 4 })
+  assert(quiet.data:find("▐", 1, true), "thumb still drawn when nothing is hovered")
+  local none = render.render(p1_view { items = many, rows = 12, opts = { scroll_indicator = "never" } })
+  assert(not none.data:find("▐", 1, true), "never means never")
+  local short = render.render(p1_view { rows = 20 })
+  assert(not short.data:find("▐", 1, true), "no thumb when everything fits")
+end)
+
+test("P1 glyph guard: groups substitute together, N glyphs survive", function()
+  local base = config.setup({}).glyphs
+  local plain = glyphs.resolve(base, {})
+  eq(plain.corners, "chamfer")
+  eq(plain.chamfer_top, "▙")
+  local no_block = glyphs.resolve(base, { custom_block_glyphs = false })
+  eq(no_block.corners, "square")
+  eq(no_block.chamfer_top, " ")
+  eq(no_block.active, "|")
+  eq(no_block.scroll, "|")
+  local wide = glyphs.resolve(base, { treat_east_asian_ambiguous_width_as_wide = true })
+  eq(wide.active, "|", "ambiguous bar substitutes")
+  eq(wide.ellipsis, "...")
+  eq(wide.chamfer_top, "▙", "neutral block glyphs survive")
+  eq(wide.scroll, "▐")
+  eq(wide.toggle_left, "«")
+  eq(wide.frame_tl, "+", "ghost frame substitutes as a unit")
+  eq(wide.frame_dash, "-", "including its neutral member")
+  local v9 = glyphs.resolve(base, { unicode_version = 14 })
+  eq(v9.frame_tl, "+")
+  local ascii = p1_view { opts = { separator = "gap" } }
+  ascii.glyphs = wide
+  local rows = frame_rows(ascii)
+  for row = 1, ascii.rows do
+    eq(util.width(rows[row]), 28, "ascii ghost frame row " .. row)
+  end
+end)
+
+test("P1 private window: header, inert hit, accent shift", function()
+  local rows, r = frame_rows(p1_view { private = true, opts = { separator = "gap" } })
+  eq(usub(rows[1], 6, 12), "Private")
+  eq(r.hits[1].kind, "space", "the header is inert")
+  eq(r.hits[2].kind, "space")
+  eq(r.hits[3].id, 1, "the list starts below it")
+end)
+
+test("P1 frames are written for design review", function()
+  local design = { separator = "gap", pinned_style = "dense", new_tab_label = "New tab" }
+  dump_frame("tabs", p1_view { rows = 20, opts = design })
+  dump_frame("hover", p1_view { rows = 20, hover = { x = 5, y = 6 }, opts = design })
+  dump_frame("hover-close", p1_view { rows = 20, hover = { x = 26, y = 6 }, opts = design })
+  dump_frame("private", p1_view { rows = 20, private = true, opts = design })
+  dump_frame(
+    "strip-macos",
+    p1_view {
+      rows = 20,
+      strip = { rows = 3, toggle = { row = 2, x = 11, x1 = 10, x2 = 13 } },
+      opts = design,
+    }
+  )
+  local many = {}
+  for i = 1, 12 do
+    many[i] = {
+      tab_id = i,
+      index = i,
+      is_active = i == 4,
+      is_pinned = i == 1,
+      title = "tab number " .. i,
+      meta = "~/projects/repo" .. i,
+      icon = "t",
+      has_unseen = i == 6,
+    }
+  end
+  dump_frame(
+    "overflow",
+    p1_view {
+      items = many,
+      rows = 16,
+      scroll = 4,
+      footer = { { icon = "⚑", text = "main · 3 dirty" } },
+      opts = design,
+    }
+  )
+  os.execute("mkdir -p " .. FRAME_DIR)
+  local f = io.open(FRAME_DIR .. "/collapsed.txt", "w")
+  if f then
+    f:write "collapsed = today's detach: the sidebar pane is closed, so no frame is rendered.\n"
+    f:close()
+  end
+  local probe = io.open(FRAME_DIR .. "/tabs.txt")
+  assert(probe, "frames written")
+  probe:close()
 end)
 
 -- implementer-1: identity, persistence, backend protocol ----------------------
@@ -1236,7 +1564,7 @@ end
 test("press keeps the sidebar of the clicked tab focused and points the drag at it", function()
   local win, gui = drag_setup()
   local sb1 = sidebar.find(win.tab_list[1])
-  local drag = press_row(gui, sb1, 4)
+  local drag = press_row(gui, sb1, 5)
   eq(win.active_tab_ref, win.tab_list[3])
   eq(win.tab_list[3].active, sidebar.find(win.tab_list[3]), "sidebar holds focus, not the shell")
   eq(drag.pane_id, sidebar.find(win.tab_list[3]):pane_id())
@@ -1249,35 +1577,35 @@ test("one row of drift never arms a drag; three rows plus the dwell reorders on 
   for i, t in ipairs(win.tab_list) do
     ids[i] = t.id
   end
-  press_row(gui, sb1, 4)
+  press_row(gui, sb1, 5)
   local sb3 = sidebar.find(win.tab_list[3])
-  mouse(gui, sb3, "drag", "left", 5, 3)
+  mouse(gui, sb3, "drag", "left", 5, 4)
   eq(state.session.drag[gui:window_id()].active, false, "one row is jitter")
-  mouse(gui, sb3, "up", "left", 5, 3)
+  mouse(gui, sb3, "up", "left", 5, 4)
   eq(win.tab_list[3].id, ids[3], "order untouched")
 
-  press_row(gui, sb1, 4)
-  mouse(gui, sb3, "drag", "left", 5, 1)
+  press_row(gui, sb1, 5)
+  mouse(gui, sb3, "drag", "left", 5, 2)
   assert(state.session.drag[gui:window_id()].active, "three rows arms the drag")
-  mouse(gui, sb3, "up", "left", 5, 1)
+  mouse(gui, sb3, "up", "left", 5, 2)
   eq(win.tab_list[1].id, ids[3], "dragged tab took the first slot")
 end)
 
 test("a drag that starts before the dwell elapses is jitter", function()
   local win, gui = drag_setup()
   local sb1 = sidebar.find(win.tab_list[1])
-  press_row(gui, sb1, 4, "hold")
+  press_row(gui, sb1, 5, "hold")
   local sb3 = sidebar.find(win.tab_list[3])
-  mouse(gui, sb3, "drag", "left", 5, 1)
+  mouse(gui, sb3, "drag", "left", 5, 2)
   eq(state.session.drag[gui:window_id()].active, false)
 end)
 
 test("drag events from a pane other than the drag origin are dropped", function()
   local win, gui = drag_setup()
   local sb1 = sidebar.find(win.tab_list[1])
-  press_row(gui, sb1, 4)
+  press_row(gui, sb1, 5)
   local sb2 = sidebar.find(win.tab_list[2])
-  mouse(gui, sb2, "drag", "left", 5, 1)
+  mouse(gui, sb2, "drag", "left", 5, 2)
   eq(state.session.drag[gui:window_id()].active, false)
 end)
 
@@ -1626,11 +1954,18 @@ end)
 test("a paste is charged by its size, so a second large one waits for the budget", function()
   local _, gui, tab, sb, content = key_setup()
   local big = string.rep("eHh4", 21845) .. "eA=="
+  -- the bucket refills from the clock, so both pastes must land in the same tick
+  local real_now = util.now_ms
+  local frozen = real_now()
+  util.now_ms = function()
+    return frozen
+  end
   input.handle(gui, sb, "vtabs", string.format('{"t":"paste","data":"%s"}', big))
   eq(#content.pasted, 1, "the first 64 KiB paste goes through")
   eq(#content.pasted[1], 64 * 1024)
   input.handle(gui, sb, "vtabs", string.format('{"t":"paste","data":"%s"}', big))
   eq(#content.pasted, 1, "the second is over budget")
+  util.now_ms = real_now
   eq(tab.active, content, "focus is still handed over")
 end)
 
