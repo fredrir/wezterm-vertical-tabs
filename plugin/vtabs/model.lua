@@ -186,11 +186,15 @@ function M.build(gui_window)
   prune_meta(now)
   local items = {}
   for _, info in ipairs(mux_win:tabs_with_info()) do
-    local tab = info.tab
-    local pane = included(cfg, tab, mux_win) and sidebar.content_pane(tab) or nil
-    if pane then
+    -- a tab that dies mid-poll drops out of the list instead of failing the whole window
+    local ok, item = pcall(function()
+      local tab = info.tab
+      local pane = included(cfg, tab, mux_win) and sidebar.content_pane(tab) or nil
+      if not pane then
+        return nil
+      end
       local tab_id = tab:tab_id()
-      items[#items + 1] = {
+      return {
         tab_id = tab_id,
         index = info.index + 1,
         is_active = info.is_active,
@@ -203,6 +207,11 @@ function M.build(gui_window)
         end) == true,
         meta = cached_meta(tab_id, pane, cfg, now),
       }
+    end)
+    if ok and item then
+      items[#items + 1] = item
+    elseif not ok then
+      util.warn_once("model-tab", "tab skipped: %s", tostring(item):match "^[^\n]*")
     end
   end
   return items
