@@ -19,7 +19,7 @@ echo "ok: startup leaves one sidebar on the first tab"
 
 # `VTABS_E2E_MACOS=1` fakes the traffic-light reserve on, which is the only way to run the rail's
 # own strip geometry outside macOS. `rail_titlebar` defaults to "widen".
-if [ -n "${VTABS_E2E_MACOS:-}" ]; then
+macos_rail() {
   mac_mark=$(mark)
   mac_sb=$(sidebar_of "$first_tab")
   vtest "$first_content" rail_mode
@@ -28,19 +28,24 @@ if [ -n "${VTABS_E2E_MACOS:-}" ]; then
   sleep 3
   rail_cols=$(cols_of "$mac_sb")
   mac_hits=$(probe_line "$first_content" probe_hits hits)
-  echo "  macOS rail: $rail_cols cols; hits: $mac_hits"
+  reserve=$(probe_line "$first_content" probe_reserve reserve)
+  echo "  macOS rail: $rail_cols cols; reserve $reserve; hits: $mac_hits"
   toggle_hit=$(printf '%s\n' "$mac_hits" | tr ' ' '\n' | grep '^toggle/' | head -1)
   [ -n "$toggle_hit" ] || { sidebar_text "$mac_sb"; fail "the macOS rail has no toggle hit row"; }
   toggle_x2=$(printf '%s' "$toggle_hit" | cut -d/ -f4 | cut -d, -f1 | cut -d- -f2)
   [ "$toggle_x2" -le "$rail_cols" ] ||
     fail "the rail's toggle ends at column $toggle_x2 of a $rail_cols-column rail; it cannot be clicked"
-  [ "$rail_cols" -ge 9 ] ||
-    fail "rail_titlebar=widen left the rail at $rail_cols cols, under the traffic-light reserve"
+  reserve_cols=$(printf '%s' "$reserve" | cut -d' ' -f1)
+  [ "$rail_cols" -ge "$reserve_cols" ] ||
+    fail "rail_titlebar=widen left the rail at $rail_cols cols, under the $reserve_cols-column reserve"
   no_warnings "$mac_mark" "the macOS rail"
   vtest "$first_content" toggle
   sleep 2.5
   no_dupes "the macOS rail"
   echo "ok: the macOS rail is wide enough for the traffic lights and keeps its toggle inside"
+}
+if [ -n "${VTABS_E2E_MACOS:-}" ]; then
+  soft macos_rail
 fi
 
 # ---------------------------------------------------------------- item 5 ---
@@ -538,6 +543,7 @@ close_confirmation() {
   survivor_sb=$(sidebar_of "$survivor")
   survivor_content=$(content_of "$survivor")
   survivor_cols=$(cols_of "$survivor_content")
+  echo "  $(probe_line "$survivor_content" probe_confirm confirm)"
 
   # The close span is 25-27 at width 28; press and release both land on col 26.
   press "$victim_sb" 26 "$victim_row" 0
@@ -589,6 +595,21 @@ soft close_confirmation
 
 deterministic_pins() {
   # ------------------------------------------------ deterministic pins ------
+  # Two polls inside one mux lag: `correct` reads the same stale `cols` twice and issues the same
+  # AdjustPaneSize twice, and the double-applied overshoot is what the drag heuristic then adopts.
+  hot=$(busiest_window_tabs | cut -d' ' -f1)
+  cli activate-tab --tab-id "$hot" >/dev/null
+  sleep 1
+  vtest "$(content_of "$hot")" grow
+  sleep 1
+  echo "  two corrects on one stale width: $(probe_line "$(content_of "$hot")" double_correct "double correct")"
+  case "$(probe_line "$(content_of "$hot")" double_correct "double correct")" in
+    *"true true"*) fail "correct re-issued an AdjustPaneSize that was still in flight" ;;
+  esac
+  vtest "$(content_of "$hot")" shrink
+  sleep 2
+  echo "ok: a second correct does not re-issue an adjust that is still in flight"
+
   # Last, because they are expected to fail until the fix lands: everything above is timing, this
   # is the invariant itself.
   hot=$(tab_ids | cut -d' ' -f1)

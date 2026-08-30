@@ -33,8 +33,8 @@ local VARIANTS = {
   tooltip = { hover = "follow", tooltip = true, tooltip_delay_ms = 3000 },
   anim = { animations = true, animation = { expand_ms = 600, collapse_ms = 600 } },
   padded = base,
-  macos = { titlebar = "integrate" },
-  ["macos-rail"] = { titlebar = "integrate", collapsed = "rail" },
+  macos = { titlebar = "macos" },
+  ["macos-rail"] = { titlebar = "macos", collapsed = "rail" },
 }
 local variant = os.getenv "VTABS_SHOT_OPTS" or "default"
 if variant == "padded" then
@@ -48,19 +48,10 @@ end
 
 -- The traffic-light reserve is keyed off the target triple, so shooting it anywhere else means
 -- lying to `platform` about the platform. Only the reserve is faked; nothing else is patched.
--- `integrated_title_button_style = "MacOsNative"` is rejected off macOS, so the two facts
--- `chrome_for` reads from the effective config are forced at the one place that consumes them.
+-- `titlebar = "macos"` claims the reserve for the strip; `platform.is_mac` is what the titlebar
+-- band reads, and `integrated_title_button_style = "MacOsNative"` is rejected off macOS.
 if variant:find "^macos" then
-  local platform = require "vtabs.platform"
-  platform.is_mac = true
-  local real = platform.strip_geometry
-  platform.strip_geometry = function(dims, opts)
-    opts = opts or {}
-    opts.is_mac = true
-    opts.integrated_buttons = true
-    opts.native_button_style = true
-    return real(dims, opts)
-  end
+  require("vtabs.platform").is_mac = true
   config.window_decorations = "INTEGRATED_BUTTONS|RESIZE"
 end
 

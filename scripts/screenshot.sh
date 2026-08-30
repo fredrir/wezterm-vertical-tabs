@@ -33,7 +33,7 @@ anim-mid|Catppuccin Mocha|anim|toggle_fast|animating
 new-tab-hover|Catppuccin Mocha|default|hover_new_tab|always
 padded|Catppuccin Mocha|padded|scene|always
 strip-macos|Catppuccin Mocha|macos|scene|always
-strip-macos-rail|Catppuccin Mocha|macos-rail|probe:toggle|rail_width"
+rail-macos|Catppuccin Mocha|macos-rail|probe:toggle|rail_width"
 
 cli() { wezterm cli --no-auto-start "$@"; }
 list() { cli list --format json; }

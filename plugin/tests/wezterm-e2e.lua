@@ -40,24 +40,15 @@ end)
 
 -- The traffic-light reserve and the rail's own strip geometry are keyed off the target triple,
 -- so they can only be exercised anywhere else by lying to `platform` about the platform.
--- `integrated_title_button_style = "MacOsNative"` is rejected off macOS, so the two facts
--- `chrome_for` reads from the effective config are forced at the one place that consumes them.
+-- `titlebar = "macos"` claims the reserve for the strip; `platform.is_mac` is what the titlebar
+-- band reads, and `integrated_title_button_style = "MacOsNative"` is rejected off macOS.
 if os.getenv "VTABS_E2E_MACOS" then
-  local platform = require "vtabs.platform"
-  platform.is_mac = true
-  local real = platform.strip_geometry
-  platform.strip_geometry = function(dims, opts)
-    opts = opts or {}
-    opts.is_mac = true
-    opts.integrated_buttons = true
-    opts.native_button_style = true
-    return real(dims, opts)
-  end
+  require("vtabs.platform").is_mac = true
   config.window_decorations = "INTEGRATED_BUTTONS|RESIZE"
 end
 
 vtabs.apply_to_config(config, {
-  titlebar = os.getenv "VTABS_E2E_MACOS" and "integrate" or nil,
+  titlebar = os.getenv "VTABS_E2E_MACOS" and "macos" or nil,
   poll_ms = 200,
   debug = true,
   confirm_close = false,
@@ -148,6 +139,13 @@ local probes = {
         .. tostring(again and again:pane_id())
     )
   end,
+  -- Two polls landing inside one mux lag: the second reads the same stale `cols` as the first.
+  double_correct = function(window)
+    local geometry = require "vtabs.geometry"
+    local a = geometry.correct(window)
+    local b = geometry.correct(window)
+    wezterm.log_info("e2e: double correct " .. tostring(a) .. " " .. tostring(b))
+  end,
   reload = function()
     wezterm.reload_configuration()
   end,
@@ -164,6 +162,32 @@ local probes = {
   confirm_off = function()
     require("vtabs.config").get().confirm_close = false
   end,
+  -- Whether the active tab would ask before closing, and every input to that answer.
+  probe_confirm = function(window)
+    local actions = require "vtabs.actions"
+    local sidebar = require "vtabs.sidebar"
+    local util = require "vtabs.util"
+    local cfg = require("vtabs.config").get()
+    local tab = window:mux_window():active_tab()
+    local content = sidebar.classify(tab)
+    local procs = {}
+    for _, p in ipairs(content) do
+      procs[#procs + 1] = tostring(util.basename(util.try(function()
+        return p:get_foreground_process_name()
+      end)))
+    end
+    wezterm.log_info(
+      string.format(
+        "e2e: confirm cfg %s needs %s procs %s skip %s",
+        tostring(cfg.confirm_close),
+        tostring(actions.needs_confirm(window, tab:tab_id(), "close")),
+        table.concat(procs, ","),
+        table.concat(util.try(function()
+          return window:effective_config().skip_close_confirmation_for_processes_named
+        end) or {}, ",")
+      )
+    )
+  end,
   footer_hook = function()
     require("vtabs.config").get().hooks.footer = function()
       return { { id = "e2e_footer", text = "e2e footer" } }
@@ -174,6 +198,32 @@ local probes = {
   end,
   private_window = function(window)
     require("vtabs.actions").new_window(window, true)
+  end,
+  -- The traffic-light reserve the active sidebar's own dimensions imply, next to the pane it got.
+  probe_reserve = function(window)
+    local platform = require "vtabs.platform"
+    local sidebar = require "vtabs.sidebar"
+    local cfg = require("vtabs.config").get()
+    local sb = sidebar.find(window:mux_window():active_tab())
+    local d = sb and sb:get_dimensions()
+    local g = d
+      and platform.strip_geometry(d, {
+        is_mac = true,
+        integrated_buttons = true,
+        native_button_style = true,
+        position = cfg.position,
+        padding_top = cfg.padding.top,
+        toggle_button = cfg.toggle_button,
+        card_x1 = cfg.padding.left + 1,
+      })
+    wezterm.log_info(
+      string.format(
+        "e2e: reserve %s toggle_x %s pane %s",
+        tostring(g and g.cols),
+        tostring(g and g.toggle_x),
+        tostring(d and d.cols)
+      )
+    )
   end,
   -- The hit map is the only source for the columns a click has to land on; labels move, spans do not.
   probe_hits = function(window)
