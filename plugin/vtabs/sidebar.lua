@@ -71,8 +71,7 @@ local function claim_echoed_token(pane, pid)
   return true
 end
 
----True once the backend in `pane` echoed a token this process minted for it. The only trusted state:
----nothing may close a tab or pane, take its events or send it frames until this holds.
+---True once the backend in `pane` echoed a token this process minted for it: the only trusted state.
 function M.is_ready(pane)
   if not pane or tab_id_of(pane) == nil then
     return false
@@ -90,12 +89,28 @@ function M.is_ready(pane)
   return false
 end
 
-M.is_sidebar = M.is_ready
-
 local RANK = { none = 0, marker = 1, mapped = 2, ready = 3 }
+
+local tick = 0
+local classified = {}
+
+---Title and domain reads cross into the mux; one answer per pane per poll is enough.
+local function has_marker_cached(pane, pid)
+  local seen = session.marker[pid]
+  if seen and seen.tick == tick then
+    return seen.value
+  end
+  local value = M.has_marker(pane) and not M.is_overlay(pane)
+  session.marker[pid] = { tick = tick, value = value }
+  return value
+end
 
 ---How strong a pane's claim to the sidebar role is; a marker alone is the weakest and authorises nothing.
 local function sidebar_rank(pane)
+  local pid = pane:pane_id()
+  if session.ready[pid] then
+    return RANK.ready
+  end
   local tab_id = tab_id_of(pane)
   if tab_id == nil then
     return RANK.none
@@ -103,23 +118,27 @@ local function sidebar_rank(pane)
   if M.is_ready(pane) then
     return RANK.ready
   end
-  if state.sidebar_pane_id(tab_id) == pane:pane_id() then
+  if state.sidebar_pane_id(tab_id) == pid then
     return RANK.mapped
   end
-  if M.has_marker(pane) and not M.is_overlay(pane) and not session.given_up[pane:pane_id()] then
-    return RANK.marker
+  if session.given_up[pid] or not has_marker_cached(pane, pid) then
+    return RANK.none
   end
-  return RANK.none
+  return RANK.marker
 end
 
 function M.is_backend(pane)
   return pane ~= nil and sidebar_rank(pane) > RANK.none
 end
 
----Splits a tab into { content = Pane[], sidebar = Pane|nil }. Exactly one pane can be the sidebar --
----the best claim wins -- so a pane that fakes the title cannot make a tab look empty.
+---Splits a tab into { content = Pane[], sidebar = Pane|nil }; only the best claim holds the role.
 function M.classify(tab)
+  local tab_id = tab:tab_id()
   local panes = tab:panes()
+  local seen = classified[tab_id]
+  if seen and seen.tick == tick and seen.n == #panes then
+    return seen.content, seen.sb
+  end
   local sb, best = nil, RANK.none
   for _, p in ipairs(panes) do
     local rank = sidebar_rank(p)
@@ -134,6 +153,7 @@ function M.classify(tab)
       content[#content + 1] = p
     end
   end
+  classified[tab_id] = { tick = tick, n = #panes, content = content, sb = sb }
   return content, sb
 end
 
@@ -365,6 +385,7 @@ local function await_auth(gui_window, tab, sb, now)
       session.given_up[pid] = true
       session.adopted[pid] = nil
       state.set_sidebar(tab:tab_id(), nil)
+      classified[tab:tab_id()] = nil
     elseif now - (session.authed_at[pid] or 0) > ADOPT_RETRY_MS then
       session.auth_tries[pid] = tries + 1
       M.auth(sb)
@@ -524,6 +545,8 @@ function M.ensure(gui_window)
   local private = state.is_private(wid)
   local now = util.now_ms()
   local seen = {}
+  tick = tick + 1
+  classified = {}
   local tabs = mux_win:tabs_with_info()
 
   resolve_pins(tabs, now)

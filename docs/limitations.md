@@ -31,19 +31,15 @@
 
 ## Sidebar identity
 
-| Evidence | Rank | Grants |
+| Rank | Evidence | Grants |
 | --- | --- | --- |
-| pane echoed a token this process minted for it | 3 | frames, events, close |
-| plugin split the pane in this process | 2 | layout only, until the echo |
-| pane title `wez-vtabs:<hex>` | 1 | adoption: one `auth`, 5 tries, then back to content |
-| anything else | 0 | content |
+| 3 | pane echoed a token this process minted for it | frames, events, width, close |
+| 2 | plugin split the pane in this process | kept out of `content` |
+| 1 | pane title `wez-vtabs:<hex>` | kept out of `content`, 5 `auth` attempts, then content again |
+| 0 | anything else | content |
 
-One pane per tab holds the role: the highest rank wins and every other pane is
-content, so a faked title can neither empty a tab nor displace a live sidebar.
-
-A pane that fakes the title marker is sent an `auth` command on its own stdin,
-so it can echo the token and become the tab's sidebar. It then receives frames
-(every tab's title and cwd in this window) and its events drive tab management
-for that window. This is not a security boundary and is not meant to be: any
-process running as you already has full mux control through `wezterm cli`, and a
-backend spawned in a remote tab's domain is trusted by design.
+One pane per tab holds the role: highest rank wins, every other pane is content.
+A faked title can neither empty a tab nor displace a live sidebar; it can echo
+the `auth` token sent to its own stdin and become that tab's sidebar. Not a
+security boundary: any process running as you can already drive the mux through
+`wezterm cli`.

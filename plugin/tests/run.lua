@@ -390,7 +390,7 @@ test("a sidebar with a new pane id but a known token is re-adopted, not duplicat
   sb.id = sb.id + 1000
   tab.id = tab.id + 1000
   sb.vars = { vtabs_token = token }
-  eq(sidebar.is_sidebar(sb), true)
+  eq(sidebar.is_ready(sb), true)
   sidebar.ensure(gui)
   eq(sidebars_in(tab), 1)
   eq(#tab:panes(), 2)
@@ -402,7 +402,7 @@ test("a pane spoofing vtabs_role or vtabs_token is never a sidebar", function()
   local tab = win.tab_list[1]
   local content = sidebar.content_pane(tab)
   content.vars = { vtabs_role = "sidebar", vtabs_token = state.token_for(sidebar.find(tab):pane_id()) }
-  eq(sidebar.is_sidebar(content), false)
+  eq(sidebar.is_ready(content), false)
   sidebar.ensure(gui)
   eq(#win.tab_list, 1, "tab not closed as orphan")
   local before = #win.actions
@@ -687,7 +687,7 @@ test("a backend pane that outlived the GUI is adopted, not duplicated", function
   restart_vm()
   sidebar.ensure(gui)
   eq(#tab:panes(), panes, "no second sidebar split")
-  eq(sidebar.is_sidebar(sb), false, "not trusted before the echo")
+  eq(sidebar.is_ready(sb), false, "not trusted before the echo")
   local token = state.token_for(sb:pane_id())
   assert(token, "fresh token minted")
   assert(sb.sent[#sb.sent]:find(token, 1, true), "re-authed with it")
@@ -702,7 +702,7 @@ test("a pane faking the title marker is never trusted and closes nothing", funct
   local liar = fake.pane(tab, { title = "wez-vtabs:dead" })
   table.insert(tab.pane_list, 1, liar)
   sidebar.ensure(gui)
-  eq(sidebar.is_sidebar(liar), false, "adoption is not trust")
+  eq(sidebar.is_ready(liar), false, "adoption is not trust")
   local sent = #liar.sent
   require("vtabs.view").sync(gui, { force = true })
   eq(#liar.sent, sent, "no frames")

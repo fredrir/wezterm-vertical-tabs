@@ -122,6 +122,8 @@ impl Parser {
     pub fn feed(&mut self, bytes: &[u8]) -> Vec<Input> {
         self.buf.extend_from_slice(bytes);
         if self.buf.len() > MAX_LINE {
+            // the rest of an abandoned command line must not come back as key events
+            self.discarding |= self.buf.first() == Some(&b'{');
             self.buf.clear();
         }
         self.stalled_flushes = 0;
@@ -873,5 +875,15 @@ mod tests {
         big.resize(MAX_LINE + 2, b'x');
         assert!(p.feed(&big).is_empty());
         assert!(!p.has_pending());
+        assert!(p.feed(b"rest of the same line\x1b[A").is_empty());
+        assert_eq!(feed_into(&mut p, b"\n\x1b[A"), vec![plain("up")]);
+    }
+
+    #[test]
+    fn an_oversized_paste_of_keys_is_not_a_command_line() {
+        let mut p = Parser::new();
+        let big = vec![b'x'; MAX_LINE + 2];
+        assert!(p.feed(&big).is_empty());
+        assert_eq!(feed_into(&mut p, b"y"), vec![plain("y")]);
     }
 }

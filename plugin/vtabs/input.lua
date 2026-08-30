@@ -337,7 +337,7 @@ end
 ---Entry point for the `user-var-changed` event; only registered sidebar panes are trusted.
 function M.handle(gui_window, pane, name, value)
   local cfg = config.get()
-  if name ~= cfg.backend.uservar or not sidebar.is_sidebar(pane) then
+  if name ~= cfg.backend.uservar or not sidebar.is_ready(pane) then
     return
   end
   local ok, ev = pcall(wezterm.json_parse, value)

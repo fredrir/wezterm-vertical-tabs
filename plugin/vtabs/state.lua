@@ -185,6 +185,7 @@ M.session = {
   spawned = {},
   authed_at = {},
   auth_tries = {},
+  marker = {},
   pane_domain = {},
   failed_domains = {},
   given_up = {},
@@ -202,8 +203,20 @@ local WINDOW_SESSION = {
   "last_active",
 }
 
-local PANE_SESSION =
-  { "hits", "frames", "dims", "ready", "seen", "pinged", "sent_at", "adopted", "spawned", "authed_at", "auth_tries" }
+local PANE_SESSION = {
+  "hits",
+  "frames",
+  "dims",
+  "ready",
+  "seen",
+  "pinged",
+  "sent_at",
+  "adopted",
+  "spawned",
+  "authed_at",
+  "auth_tries",
+  "marker",
+}
 
 local function save(persist)
   if wezterm.GLOBAL then
@@ -368,15 +381,15 @@ end
 M.forget_hooks = {}
 
 function M.forget_window(window_id)
-  for _, fn in ipairs(M.forget_hooks) do
-    fn(window_id)
-  end
   for _, name in ipairs(WINDOW_SESSION) do
     M.session[name][window_id] = nil
   end
   data.collapsed[key(window_id)] = nil
   data.focus[key(window_id)] = nil
   data.private[key(window_id)] = nil
+  for _, fn in ipairs(M.forget_hooks) do
+    util.try(fn, window_id)
+  end
   save(false)
 end
 

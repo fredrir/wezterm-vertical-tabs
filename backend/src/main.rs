@@ -23,6 +23,7 @@ fn spawn_stdin_reader() -> Receiver<Vec<u8>> {
         let mut buf = vec![0u8; READ_BUF];
         loop {
             match stdin.read(&mut buf) {
+                Err(err) if err.kind() == io::ErrorKind::Interrupted => continue,
                 Ok(0) | Err(_) => break,
                 Ok(n) => {
                     if tx.send(buf[..n].to_vec()).is_err() {
