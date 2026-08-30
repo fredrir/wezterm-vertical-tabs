@@ -90,7 +90,7 @@ function M.sync(gui_window, opts)
       local pid = sb:pane_id()
       local is_active = info.tab:tab_id() == active_tab_id
       local due = is_active or opts.force or now - (session.sent_at[pid] or 0) >= INACTIVE_REFRESH_MS
-      local cols, rows = nil, nil
+      local cols, rows
       if due then
         cols, rows = dims_of(sb)
       end
