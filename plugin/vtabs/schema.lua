@@ -494,7 +494,7 @@ M.options = {
     type = "table",
     container = true,
     open = true,
-    shown = "`{ elevation = 0 }`",
+    shown = '`{ elevation = 0, split = "auto" }`',
     label = "Theme",
     group = "theme",
     values = "see Theme",
@@ -508,6 +508,14 @@ M.options = {
     max = 0.3,
     docs = false,
     label = "Elevation",
+    group = "theme",
+  },
+  {
+    key = "theme.split",
+    type = "string",
+    default = "auto",
+    docs = false,
+    label = "Split divider",
     group = "theme",
   },
   {

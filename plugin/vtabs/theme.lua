@@ -100,6 +100,15 @@ local function accent_candidate(color, bg, fg)
   return nil
 end
 
+---The page colour as a hex string, from a config table: what `colors.split` must match to vanish.
+function M.page(config)
+  local colors = config and config.colors or {}
+  if type(colors.background) == "string" then
+    return colors.background
+  end
+  return "#1e1e2e"
+end
+
 ---Resolves the user theme against the window's palette into rgb triples; `opts.private` recolours.
 function M.resolve(user, palette, opts)
   user = user or {}

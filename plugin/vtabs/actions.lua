@@ -328,24 +328,15 @@ function M.tear_off(gui_window, tab_id)
   return true
 end
 
+---Opens the popover's inline rename level; nothing here covers the content pane any more.
 function M.rename_tab(gui_window, tab_id)
-  local tab = M.tab_by_id(gui_window, tab_id)
-  local content = active_content_pane(gui_window)
-  if not tab or not content then
+  if not M.tab_by_id(gui_window, tab_id) then
     return
   end
-  gui_window:perform_action(
-    act.PromptInputLine {
-      description = "Rename tab",
-      initial_value = tab:get_title(),
-      action = wezterm.action_callback(function(_, _, line)
-        if line then
-          tab:set_title(line)
-        end
-      end),
-    },
-    content
-  )
+  local popover = require "vtabs.popover"
+  local _, index = model.find(visible(gui_window), tab_id)
+  popover.open(gui_window, tab_id, index or 0)
+  popover.run(gui_window, "rename")
 end
 
 function M.toggle_sidebar(gui_window)

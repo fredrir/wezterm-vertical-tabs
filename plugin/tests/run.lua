@@ -53,6 +53,7 @@ local sidebar = require "vtabs.sidebar"
 local actions = require "vtabs.actions"
 local input = require "vtabs.input"
 local geometry = require "vtabs.geometry"
+local popover = require "vtabs.popover"
 local fake = require "fake_mux"
 local backend = require "vtabs.backend"
 
@@ -1966,14 +1967,20 @@ test("a drag whose pane has no hit map is dropped instead of dropping at slot 1"
   eq(drag.over_index, nil)
 end)
 
-test("right click opens the menu on release, never while the button is held", function()
+test("right click opens the popover on release, never while the button is held", function()
   local win, gui = drag_setup()
   local sb1 = sidebar.find(win.tab_list[1])
   local before = #win.actions
   mouse(gui, sb1, "down", "right", 5, 4)
-  eq(#win.actions, before, "nothing opens under a held button")
+  eq(popover.get(gui:window_id()), nil, "nothing opens under a held button")
+  eq(#win.actions, before, "and no overlay action is performed, ever")
   mouse(gui, sb1, "up", "right", 5, 4)
-  eq(last_action(win).action, "InputSelector")
+  local pop = popover.get(gui:window_id())
+  assert(pop, "the release opens it")
+  eq(pop.tab_id, win.tab_list[1].id)
+  eq(pop.anchor_row, 4, "anchored on the row the press landed on")
+  eq(#win.actions, before, "still no overlay: it is drawn inside the sidebar")
+  popover.close(gui)
 end)
 
 test("hover=press restores content focus on release, hover=follow keeps the sidebar", function()
@@ -2421,6 +2428,34 @@ test("unseen_fg keeps a distinct hue when ansi[4] clears the page, else follows 
   dull.ansi = { base.ansi[1], base.ansi[2], base.ansi[3], "#20202c", base.ansi[5] }
   local low = theme.resolve({}, dull)
   eq(rgb(low.unseen_fg), rgb(low.accent), "a dim ansi[4] falls back to the accent")
+end)
+
+test("a private window renders its header, through the same path the plugin uses", function()
+  local win, gui = drag_setup()
+  local wid = gui:window_id()
+  local seen = nil
+  local render_mod = require "vtabs.render"
+  local original = render_mod.render
+  render_mod.render = function(frame)
+    seen = frame
+    return original(frame)
+  end
+  state.set_private(wid, true)
+  view_mod.invalidate_theme()
+  view_mod.sync(gui, { force = true })
+  render_mod.render = original
+  state.set_private(wid, false)
+  view_mod.invalidate_theme()
+  eq(seen.private, true, "view.sync tells the renderer the window is private")
+  local sb = sidebar.find(win.tab_list[1])
+  local hits = state.session.hits[sb:pane_id()]
+  local header = nil
+  for row = 1, 12 do
+    if hits[row] and hits[row].kind == "space" and row > 1 then
+      header = header or row
+    end
+  end
+  assert(header, "the header row is inert")
 end)
 
 test("a private window derives every accent-tinted surface from private_accent", function()
@@ -3178,6 +3213,246 @@ test("cell counts and durations must be whole numbers", function()
   eq(config.setup({ width = 32 }).width, 32, "a whole number survives")
   eq(config.setup({ theme = { elevation = 0.06 } }).theme.elevation, 0.06, "ratios still take fractions")
   config.setup { backend = { path = "/bin/wez-vtabs" } }
+end)
+
+local function open_popover(row)
+  local win, gui = drag_setup()
+  local sb = sidebar.find(win.tab_list[1])
+  mouse(gui, sb, "down", "right", 5, row or 3)
+  mouse(gui, sb, "up", "right", 5, row or 3)
+  view_mod.sync(gui, { force = true })
+  return win, gui, sb, popover.get(gui:window_id())
+end
+
+test("the popover title wraps on a space, then a slash, then hard", function()
+  eq(rgb(popover.wrap("nvim plugin/vtabs/render.lua", 22, 3)), rgb { "nvim", "plugin/vtabs/", "render.lua" })
+  eq(rgb(popover.wrap("short", 22, 3)), rgb { "short" })
+  local hard = popover.wrap(string.rep("x", 50), 10, 3)
+  eq(#hard, 3)
+  for _, line in ipairs(hard) do
+    assert(util.width(line) <= 10, "each wrapped line fits")
+  end
+end)
+
+test("every popover row is exactly the rect width, header shrunk or not", function()
+  local _, gui = open_popover(3)
+  local cfg = config.get()
+  local resolved = theme.resolve({}, fake.palette)
+  for _, rows in ipairs { 30, 14, 10, 8, 6, 5 } do
+    local rect = popover.rect(gui, rows, 28, resolved, cfg)
+    assert(rect, "a rect at " .. rows .. " rows")
+    eq(rect.h, #rect.rows)
+    assert(rect.y >= 1 and rect.y + rect.h - 1 <= math.max(rows, rect.h), "on screen at " .. rows)
+    for _, row in ipairs(rect.rows) do
+      for _, span in ipairs(row.spans or {}) do
+        assert(span.x >= 1 and span.x + util.width(span.text) - 1 <= rect.w, "span inside the rect")
+      end
+    end
+  end
+  popover.close(gui)
+end)
+
+test("items are never dropped: the header shrinks and the list scrolls instead", function()
+  local _, gui = open_popover(3)
+  local pop = popover.get(gui:window_id())
+  local count = #popover.items(gui, pop.tab_id)
+  for _, rows in ipairs { 30, 16, 12, 10 } do
+    local placed = popover.layout(gui, pop, rows, 28)
+    eq(#placed.items, count, "all items still there at " .. rows .. " rows")
+  end
+  local tall = popover.layout(gui, pop, 30, 28)
+  local short = popover.layout(gui, pop, 12, 28)
+  assert(#short.lines < #tall.lines, "the header is what gives way")
+  popover.close(gui)
+end)
+
+test("selection skips disabled items and first-letter jump lands on an enabled one", function()
+  local _, gui = open_popover(3)
+  local pop = popover.get(gui:window_id())
+  local entries = popover.items(gui, pop.tab_id)
+  local space_at
+  for i, item in ipairs(entries) do
+    if item.id == "space" then
+      space_at = i
+    end
+  end
+  assert(space_at and entries[space_at].disabled, "Move to space is disabled until P4")
+  pop.index = space_at - 1
+  popover.move(gui, 1)
+  assert(pop.index ~= space_at, "the disabled item is stepped over")
+  pop.index = 1
+  assert(popover.jump(gui, "c"), "jumps to Close")
+  assert(not popover.items(gui, pop.tab_id)[pop.index].disabled)
+  pop.index = 1
+  assert(popover.jump(gui, "m"), "jumps past the disabled Move to space to Move to new window")
+  eq(popover.items(gui, pop.tab_id)[pop.index].id, "tear_off")
+  pop.index = 1
+  eq(popover.jump(gui, "q"), false, "no item starts with q, so nothing moves")
+  eq(pop.index, 1)
+  popover.close(gui)
+end)
+
+test("click-away closes without switching tabs; the frame and disabled items are inert", function()
+  local win, gui, sb = open_popover(3)
+  local active = win.active_tab_ref
+  local hits = state.session.hits[sb:pane_id()]
+  local scrim_row, frame_row, item_row
+  for row = 1, 20 do
+    local h = hits[row]
+    if h and h.kind == "scrim" then
+      scrim_row = scrim_row or row
+    elseif h and h.kind == "popover" then
+      if h.id then
+        item_row = item_row or row
+      else
+        frame_row = frame_row or row
+      end
+    end
+  end
+  assert(scrim_row and frame_row and item_row, "scrim, frame and item rows all present")
+  mouse(gui, sb, "down", "left", 5, frame_row)
+  assert(popover.get(gui:window_id()), "the frame does not close it")
+  mouse(gui, sb, "down", "left", 5, scrim_row)
+  eq(popover.get(gui:window_id()), nil, "a click away closes it")
+  eq(win.active_tab_ref, active, "and does not switch tabs")
+end)
+
+test("no tab hit records survive while the popover is open", function()
+  local _, gui, sb = open_popover(3)
+  for _, h in pairs(state.session.hits[sb:pane_id()]) do
+    assert(h.kind == "scrim" or h.kind == "popover", "unexpected " .. tostring(h.kind))
+  end
+  popover.close(gui)
+end)
+
+test("a middle click is ignored while the popover is open, a right click retargets it", function()
+  local win, gui, sb = open_popover(3)
+  local before = #win.tab_list
+  -- Row 3 is the anchor card itself: scrimmed now, a tab row again once the popover closes.
+  local scrim_row = 3
+  eq(state.session.hits[sb:pane_id()][scrim_row].kind, "scrim")
+  mouse(gui, sb, "down", "middle", 5, scrim_row)
+  eq(#win.tab_list, before, "middle does not close a tab through the scrim")
+  assert(popover.get(gui:window_id()), "and does not dismiss")
+  mouse(gui, sb, "down", "right", 5, scrim_row)
+  eq(popover.get(gui:window_id()), nil, "right on the scrim closes")
+  mouse(gui, sb, "up", "right", 5, scrim_row)
+  assert(popover.get(gui:window_id()), "and the release retargets rather than dismissing")
+  popover.close(gui)
+end)
+
+test("raw key forwarding is suppressed while the popover is open", function()
+  local _, gui, sb = open_popover(3)
+  local tab = util.active_tab(gui)
+  local content = sidebar.content_pane(tab)
+  local before = #content.sent
+  input.handle(gui, sb, "vtabs", '{"t":"key","key":"l","raw":"bA=="}')
+  eq(#content.sent, before, "nothing reaches the shell")
+  assert(popover.get(gui:window_id()), "and the popover is still open")
+  input.handle(gui, sb, "vtabs", '{"t":"key","key":"escape"}')
+  eq(popover.get(gui:window_id()), nil, "escape closes it")
+end)
+
+test("rename commits on enter, cancels on escape, and handles the terminal chords", function()
+  local win, gui, sb = open_popover(3)
+  local tab = win.tab_list[1]
+  tab:set_title "render.lua"
+  popover.run(gui, "rename")
+  local pop = popover.get(gui:window_id())
+  eq(pop.level, "rename")
+  eq(pop.buffer, "render.lua")
+  popover.edit(pop, "backspace", {})
+  eq(pop.buffer, "render.lu")
+  popover.edit(pop, "x", {})
+  eq(pop.buffer, "render.lux")
+  popover.edit(pop, "a", { "ctrl" })
+  eq(pop.cursor, 1)
+  popover.edit(pop, "e", { "ctrl" })
+  eq(pop.cursor, 11)
+  popover.edit(pop, "u", { "ctrl" })
+  eq(pop.buffer, "")
+  for ch in ("hello world"):gmatch "." do
+    popover.edit(pop, ch, {})
+  end
+  popover.edit(pop, "w", { "ctrl" })
+  eq(pop.buffer, "hello ")
+  eq(popover.edit(pop, "enter", {}), "commit")
+  popover.commit_rename(gui)
+  eq(tab:get_title(), "hello ")
+  eq(popover.get(gui:window_id()), nil)
+
+  view_mod.sync(gui, { force = true })
+  mouse(gui, sb, "down", "right", 5, 3)
+  mouse(gui, sb, "up", "right", 5, 3)
+  popover.run(gui, "rename")
+  local second = popover.get(gui:window_id())
+  popover.edit(second, "z", {})
+  eq(popover.edit(second, "escape", {}), "cancel")
+  popover.back(gui)
+  eq(tab:get_title(), "hello ", "cancel leaves the title untouched")
+  eq(popover.get(gui:window_id()).level, "root", "escape steps back a level before closing")
+  popover.close(gui)
+end)
+
+test("context = false removes the mouse trigger but not the keyboard one", function()
+  local win, gui = drag_setup()
+  config.setup { backend = { path = "/bin/wez-vtabs" }, context = false }
+  local sb = sidebar.find(win.tab_list[1])
+  mouse(gui, sb, "down", "right", 5, 3)
+  mouse(gui, sb, "up", "right", 5, 3)
+  eq(popover.get(gui:window_id()), nil, "right click does nothing")
+  state.set_focus(gui:window_id(), true)
+  input.handle(gui, sb, "vtabs", '{"t":"key","key":"m"}')
+  assert(popover.get(gui:window_id()), "m in keyboard mode still opens it")
+  popover.close(gui)
+  config.setup { backend = { path = "/bin/wez-vtabs" } }
+end)
+
+test("collapsed = rail keeps the pane and narrows it to rail_width", function()
+  local win, gui = setup_window(1)
+  sidebar.ensure(gui)
+  local tab = win.tab_list[1]
+  local sb = mark_ready(tab)
+  eq(sb.cols, 28)
+  sidebar.set_collapsed(gui, true)
+  eq(#tab:panes(), 2, "the rail keeps the pane")
+  eq(geometry.desired(gui:window_id()), 5)
+  local before = #win.actions
+  assert(geometry.correct(gui), "one correction")
+  eq(#win.actions - before, 1, "exactly one AdjustPaneSize")
+  eq(sb.cols, 5)
+  sidebar.set_collapsed(gui, false)
+  eq(geometry.desired(gui:window_id()), 28)
+  assert(geometry.correct(gui))
+  eq(sb.cols, 28)
+end)
+
+test("the rail toggle centres below the macOS reserve instead of beside it", function()
+  local mac = {
+    is_mac = true,
+    integrated_buttons = true,
+    native_button_style = true,
+    position = "left",
+    padding_top = 1,
+    toggle_button = true,
+    card_x1 = 2,
+    rail = true,
+    rail_width = 5,
+  }
+  local g = platform.strip_geometry(RETINA, mac)
+  eq(g.cols, 9)
+  eq(g.rows_reserved, 2, "the raw reserve, before padding")
+  eq(g.toggle_row, 3, "below the lights, not beside them")
+  eq(g.width, 9, "the rail widens to the reserve")
+  eq(g.toggle_x, 5, "centred in the widened rail")
+  eq(g.rows, 4)
+  local wide = platform.strip_geometry(
+    RETINA,
+    { is_mac = false, rail = true, rail_width = 5, toggle_button = true, padding_top = 1 }
+  )
+  eq(wide.cols, 0)
+  eq(wide.toggle_row, 1)
+  eq(wide.toggle_x, 3, "centre of a 5-column rail")
 end)
 
 os.remove(state.file)

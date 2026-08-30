@@ -81,13 +81,14 @@ local function tab_metrics(tab)
   return cols, zoomed
 end
 
----Width the split can actually hold: `adjust_node_at_cursor` clamps `first.cols` to `[1, width-2]`.
-local function fits(cols, tab_cols)
-  local out = math.max(cols, MIN_WIDTH)
+---Width the split can hold: `adjust_node_at_cursor` clamps `first.cols` to `[1, width-2]`.
+local function fits(cols, tab_cols, floor)
+  floor = floor or MIN_WIDTH
+  local out = math.max(cols, floor)
   if not tab_cols then
     return out
   end
-  return math.min(out, math.max(MIN_WIDTH, tab_cols - MIN_CONTENT))
+  return math.min(out, math.max(floor, tab_cols - MIN_CONTENT))
 end
 
 ---`AdjustPaneSize` shifts the split node's FIRST child: `Right` by `+n`, `Left` by `-n`.
@@ -145,7 +146,9 @@ function M.correct(gui_window)
     return false
   end
 
-  local target = fits(M.desired(wid), tab_cols)
+  -- A rail is deliberately narrower than any sidebar, so the floor must not raise it back.
+  local want = M.desired(wid)
+  local target = fits(want, tab_cols, math.min(MIN_WIDTH, want))
   local attempt = { tab_id = tab_id, tab_cols = tab_cols, target = target, cols = cols }
   local last = attempted[wid]
   -- A mux applies the adjust a poll late, so a width counts as unreachable only after it sits still.

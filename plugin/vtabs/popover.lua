@@ -396,6 +396,124 @@ function M.back(gui_window)
   return M.close(gui_window)
 end
 
+local function frame_row(w, left, fill, right, theme)
+  return { spans = { { x = 1, text = left .. string.rep(fill, math.max(w - 2, 0)) .. right, fg = theme.border } } }
+end
+
+---Right-aligns `hint` so it ends at the interior's last column.
+local function item_row(entry, w, selected, theme)
+  local txt_x1, txt_x2 = 3, w - 2
+  local fg = theme.fg
+  if entry.disabled then
+    fg = theme.disabled_fg
+  elseif selected and entry.id == "close" then
+    fg = theme.close_hover_fg
+  end
+  local spans = {
+    { x = 1, text = "│", fg = theme.border },
+    { x = w, text = "│", fg = theme.border },
+    { x = txt_x1 + 1, text = util.sanitize(entry.label), fg = fg },
+  }
+  if entry.hint then
+    local hint = util.sanitize(entry.hint)
+    spans[#spans + 1] = { x = txt_x2 - util.width(hint) + 1, text = hint, fg = theme.disabled_fg }
+  end
+  return {
+    bg = selected and theme.hover_bg or nil,
+    spans = spans,
+    hit = { kind = "popover", id = entry.id, x1 = 2, x2 = w - 1, disabled = entry.disabled or nil },
+  }
+end
+
+local function text_row(text, tone, w, theme)
+  return {
+    spans = {
+      { x = 1, text = "│", fg = theme.border },
+      { x = w, text = "│", fg = theme.border },
+      { x = 3, text = util.truncate(util.sanitize(text or ""), w - 4, config.get().ellipsis), fg = tone },
+    },
+  }
+end
+
+---The rename field with a block cursor; the buffer scrolls horizontally inside the interior.
+local function rename_rows(pop, w, theme)
+  local budget = w - 4
+  local text = util.sanitize(pop.buffer or "")
+  local chars = {}
+  for _, code in utf8.codes(text) do
+    chars[#chars + 1] = utf8.char(code)
+  end
+  local at = math.max(1, math.min(pop.cursor or #chars + 1, #chars + 1))
+  local from = math.max(1, at - budget + 1)
+  local shown = table.concat(chars, "", from, math.min(#chars, from + budget - 1))
+  local under = chars[at] or " "
+  return {
+    text_row("Rename tab", theme.fg, w, theme),
+    text_row("", theme.meta_fg, w, theme),
+    {
+      spans = {
+        { x = 1, text = "│", fg = theme.border },
+        { x = w, text = "│", fg = theme.border },
+        { x = 3, text = shown, fg = theme.fg },
+        { x = 3 + (at - from), text = under, fg = theme.bg, bg = theme.fg },
+      },
+    },
+    text_row("", theme.meta_fg, w, theme),
+    text_row("⏎ save   esc cancel", theme.meta_fg, w, theme),
+  }
+end
+
+---The rect `render.composite` overlays: absolute placement plus one descriptor per row.
+function M.rect(gui_window, rows, cols, theme, cfg)
+  local pop = session.popover[gui_window:window_id()]
+  if not pop then
+    return nil
+  end
+  local x = cfg.padding.left + 1
+  local w = (cols - cfg.padding.right) - x + 1
+  if w < 8 or rows < 3 then
+    return nil
+  end
+  local body = {}
+  local placed
+  if pop.level == "rename" then
+    local content = rename_rows(pop, w, theme)
+    placed = { a = math.max(1, math.min((pop.anchor_row or 0) + 1, rows - #content - 1)), items = {} }
+    placed.a = math.max(1, math.min(placed.a, math.max(rows - #content - 1, 1)))
+    for _, row in ipairs(content) do
+      body[#body + 1] = row
+    end
+  else
+    placed = M.layout(gui_window, pop, rows, cols)
+    for _, line in ipairs(placed.lines) do
+      body[#body + 1] = text_row(line.text, line.tone == "fg" and theme.fg or theme.meta_fg, w, theme)
+    end
+    pop.index = math.max(1, math.min(pop.index, #placed.items))
+    for i = 1, placed.visible do
+      local entry = placed.items[i + (placed.scroll or 0)]
+      if entry then
+        body[#body + 1] = item_row(entry, w, i + (placed.scroll or 0) == pop.index, theme)
+      end
+    end
+  end
+  local out = { frame_row(w, "╭", "─", "╮", theme) }
+  for _, row in ipairs(body) do
+    out[#out + 1] = row
+  end
+  out[#out + 1] = frame_row(w, "╰", "─", "╯", theme)
+  local y = math.max(1, math.min(placed.a, math.max(rows - #out + 1, 1)))
+  return {
+    x = x,
+    y = y,
+    w = w,
+    h = #out,
+    bg = theme.surface_raised,
+    scrim = theme.scrim,
+    rows = out,
+    outside_hit = { kind = "scrim" },
+  }
+end
+
 function M.sidebar_of(gui_window)
   local tab = util.active_tab(gui_window)
   return tab and sidebar.find(tab) or nil

@@ -11,11 +11,11 @@ end
 
 M.defaults = {
   default = glyph("cod_terminal", ">"),
-  zsh = glyph("dev_terminal", "$"),
-  bash = glyph("dev_terminal", "$"),
+  zsh = glyph("md_console_line", "$"),
+  bash = glyph("md_console_line", "$"),
   fish = glyph("md_fish", "$"),
-  nu = glyph("dev_terminal", "$"),
-  sh = glyph("dev_terminal", "$"),
+  nu = glyph("md_console_line", "$"),
+  sh = glyph("md_console_line", "$"),
   ["cmd.exe"] = glyph("cod_terminal_cmd", ">"),
   ["pwsh.exe"] = glyph("cod_terminal_powershell", ">"),
   ["powershell.exe"] = glyph("cod_terminal_powershell", ">"),

@@ -6,6 +6,7 @@ local sidebar = require "vtabs.sidebar"
 local model = require "vtabs.model"
 local render = require "vtabs.render"
 local geometry = require "vtabs.geometry"
+local popover = require "vtabs.popover"
 local theme = require "vtabs.theme"
 local platform = require "vtabs.platform"
 local glyphs = require "vtabs.glyphs"
@@ -232,6 +233,9 @@ function M.sync(gui_window, opts)
           user_scrolled = session.user_scrolled[wid] == true,
           ensure_visible = not session.user_scrolled[wid] and active_tab_id or nil,
           focus_index = is_active and focus_index or nil,
+          private = state.is_private(wid),
+          rail = state.is_collapsed(wid) and cfg.collapsed == "rail" or nil,
+          popover = is_active and popover.rect(gui_window, dims.viewport_rows, dims.cols, resolved, cfg) or nil,
           footer = footer,
         })
         if not ok then
