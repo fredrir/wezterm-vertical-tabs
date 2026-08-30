@@ -83,7 +83,6 @@ local util = require "vtabs.util"
 ---@class VtabsHit
 ---@field kind string
 ---@field id integer|nil
----@field tab_id integer|nil
 ---@field slot integer|nil
 ---@field part string|nil
 ---@field x1 integer|nil
@@ -237,6 +236,31 @@ local function shows_close(item, cfg, st)
   return st.hovered or item.is_active
 end
 
+---Path-shaped meta keeps its tail: two siblings must not both collapse to their shared parent.
+local function fit_meta(text, budget, glyphs)
+  if util.width(text) <= budget then
+    return text
+  end
+  local sep = " " .. glyphs.meta_sep .. " "
+  local head, tail, at, from = "", text, nil, 1
+  while true do
+    local i = text:find(sep, from, true)
+    if not i then
+      break
+    end
+    at, from = i, i + 1
+  end
+  if at then
+    head, tail = text:sub(1, at + #sep - 1), text:sub(at + #sep)
+  end
+  local lead = tail:sub(1, 1)
+  local room = budget - util.width(head)
+  if (lead ~= "~" and lead ~= "/") or room < 3 then
+    return util.truncate(text, budget, glyphs.ellipsis)
+  end
+  return head .. util.shorten_path(tail, room, glyphs.ellipsis)
+end
+
 ---Renders one row of a card and the sub-targets on it.
 local function card_row(item, ctx, st, part, rows_in_card)
   local theme, cfg, glyphs, g, cols = ctx.theme, ctx.cfg, ctx.glyphs, ctx.grid, ctx.cols
@@ -285,7 +309,7 @@ local function card_row(item, ctx, st, part, rows_in_card)
     end
     -- The drag chip is one object in drag colours; meta_fg is only gated against page and card.
     local meta_fg = st.dragging and theme.drag_fg or theme.meta_fg or theme.dim
-    put(cells, g.meta_x1, util.truncate(meta, g.meta_budget, glyphs.ellipsis), { fg = meta_fg }, g.meta_x2)
+    put(cells, g.meta_x1, fit_meta(meta, g.meta_budget, glyphs), { fg = meta_fg }, g.meta_x2)
     if shows_close(item, cfg, st) and not item.is_pinned then
       spans = { { id = "close", x1 = g.close_x1, x2 = g.close_x2 } }
     end
@@ -407,7 +431,7 @@ function M.render(view)
   local glyphs = view.glyphs
   local g = grid(cfg, cols)
   local ctx = { theme = theme, cfg = cfg, cols = cols, glyphs = glyphs, grid = g }
-  local strip_rows = view.strip and math.max(view.strip.rows or 0, 0) or 0
+  local strip_rows = view.strip and math.max(view.strip.rows or 0, 0) or math.max(cfg.padding.top or 0, 0)
   local footer = {}
   for _, entry in ipairs(view.footer or {}) do
     footer[#footer + 1] = footer_entry(entry)
@@ -474,6 +498,24 @@ function M.render(view)
   local hovered_entry = view.hover and plan[view.hover.y - strip_rows + scroll] or nil
   local hovered_id = hovered_entry and hovered_entry.kind == "tab" and hovered_entry.item.tab_id or nil
 
+  -- a gap row paints nothing, so fading it would leave the cut edge looking solid
+  local function paints(entry)
+    return entry ~= nil and entry.kind ~= "space" and not (entry.kind == "tab" and entry.part == "gap")
+  end
+  local fade_first, fade_last
+  for i = 1, list_rows do
+    if paints(plan[i + scroll]) then
+      fade_first = i
+      break
+    end
+  end
+  for i = list_rows, 1, -1 do
+    if paints(plan[i + scroll]) then
+      fade_last = i
+      break
+    end
+  end
+
   local out = { ansi.HIDE_CURSOR }
   local hits = {}
   local function line(row, cells, fade)
@@ -509,7 +551,7 @@ function M.render(view)
     elseif entry.kind == "separator" then
       cells = new_line(cols, theme.bg, theme.fg)
       for x = g.card_x1, g.card_x2 do
-        put(cells, x, "─", { fg = theme.separator }, x)
+        put(cells, x, glyphs.frame_h, { fg = theme.separator }, x)
       end
       hit = { kind = "separator" }
     else
@@ -525,7 +567,6 @@ function M.render(view)
       hit = {
         kind = "tab",
         id = item.tab_id,
-        tab_id = item.tab_id,
         slot = entry.slot,
         part = entry.part,
         x1 = g.card_x1,
@@ -535,7 +576,7 @@ function M.render(view)
       }
     end
     local fade = nil
-    if (i == 1 and scroll > 0) or (i == list_rows and scroll < max_scroll) then
+    if (i == fade_first and scroll > 0) or (i == fade_last and scroll < max_scroll) then
       fade = 0.5
     end
     if view.drag and view.drag.outside then

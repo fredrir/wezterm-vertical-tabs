@@ -176,6 +176,7 @@ local function view(over)
     cfg = cfg,
     glyphs = glyphs.resolve(cfg.glyphs, {}),
     scroll = 0,
+    strip = { rows = 0 },
   }
   for k, val in pairs(over or {}) do
     if k ~= "opts" then
@@ -548,8 +549,14 @@ test("middle click through input closes the clicked tab", function()
   local sb = mark_ready(first)
   require("vtabs.view").sync(gui, { force = true })
   local hits = state.session.hits[sb:pane_id()]
-  eq(hits[6].id, win.tab_list[2].id, "second card starts three rows below the first")
-  input.handle(gui, sb, "vtabs", '{"t":"mouse","k":"down","b":"middle","x":3,"y":6}')
+  local row = nil
+  for r, h in pairs(hits) do
+    if h.kind == "tab" and h.id == win.tab_list[2].id and h.part == "title" then
+      row = r
+    end
+  end
+  assert(row, "second tab has a card")
+  input.handle(gui, sb, "vtabs", string.format('{"t":"mouse","k":"down","b":"middle","x":3,"y":%d}', row))
   eq(#win.tab_list, 1)
   eq(win.active_tab_ref, first)
 end)
@@ -641,10 +648,6 @@ end
 local FRAME_DIR = "/tmp/vtabs-team/p1-frames"
 
 local function dump_frame(name, v)
-  -- "dense" is P1's pinned default; config.VALID only learns it with implementer-2's §7 change
-  if v.cfg.pinned_style == "compact" and v.dense ~= false then
-    v.cfg.pinned_style = "dense"
-  end
   local rows = frame_rows(v)
   os.execute("mkdir -p " .. FRAME_DIR)
   local f = io.open(FRAME_DIR .. "/" .. name .. ".txt", "w")
@@ -734,7 +737,7 @@ test("P1 grid: landmarks derive from cols and padding", function()
   eq(usub(rows[1], 6, 13), "dotfiles", "title at title_x1")
   eq(usub(rows[3], 2, 2), "▎", "active accent bar in the gutter")
   eq(usub(rows[4], 2, 2), "▎", "and on the meta row")
-  eq(usub(rows[4], 6, 25), "~/projects/wez-plug…", "meta at meta_x1, truncated to its budget")
+  eq(usub(rows[4], 6, 25), "~/p/wez-plugins     ", "meta at meta_x1, elided in the middle")
   local wide = frame_rows(p1_view { opts = { width = 40, separator = "gap" }, cols = 40 })
   eq(usub(wide[1], 6, 13), "dotfiles", "title column does not move with width")
 end)
@@ -883,12 +886,129 @@ test("P1 private window: header, inert hit, accent shift", function()
   eq(r.hits[3].id, 1, "the list starts below it")
 end)
 
+test("P1 strip defaults to padding.top when no caller wired one up", function()
+  local v = p1_view { opts = { padding = { top = 2, left = 1, right = 1 } } }
+  v.strip = nil
+  local r = render.render(v)
+  eq(r.hits[1].kind, "strip", "the reserve owns the rows above the first card")
+  eq(r.hits[2].kind, "strip")
+  eq(r.hits[3].id, 1, "the list starts below it")
+  local flush = p1_view { opts = { padding = { top = 0, left = 1, right = 1 } } }
+  flush.strip = nil
+  eq(render.render(flush).hits[1].id, 1, "padding.top = 0 is flush")
+end)
+
+test("P1 pin span exists only while the glyph is drawn", function()
+  local idle = render.render(p1_view { opts = { separator = "gap" } })
+  eq(hit.span(idle.hits[1], 26), nil, "no invisible click target on a dense row")
+  local hovered = render.render(p1_view { hover = { x = 5, y = 1 }, opts = { separator = "gap" } })
+  eq(hit.span(hovered.hits[1], 26), "pin")
+end)
+
+test("P1 hover=press shows the close button on every card", function()
+  local press = render.render(p1_view { opts = { separator = "gap", hover = "press" } })
+  eq(hit.span(press.hits[6], 26), "close", "an idle card still offers close in press mode")
+  local follow = render.render(p1_view { opts = { separator = "gap", hover = "follow" } })
+  eq(hit.span(follow.hits[6], 26), nil)
+end)
+
+test("P1 rule separator goes through the glyph guard", function()
+  local base = config.setup({}).glyphs
+  local v = p1_view { opts = { separator = "rule" } }
+  v.glyphs = glyphs.resolve(base, { treat_east_asian_ambiguous_width_as_wide = true })
+  local rows = frame_rows(v)
+  eq(usub(rows[2], 2, 2), "-", "ascii rule when the box glyph is unsafe")
+  eq(util.width(rows[2]), 28)
+end)
+
+test("P1 edge fade lands on a painted row, never on a gap", function()
+  local many = {}
+  for i = 1, 12 do
+    many[i] = {
+      tab_id = i,
+      index = i,
+      is_active = false,
+      is_pinned = false,
+      title = "tab " .. i,
+      meta = "~/p" .. i,
+      icon = "t",
+      has_unseen = false,
+    }
+  end
+  -- scroll = 2 puts a gap row first: the fade has to skip it
+  local r = render.render(p1_view { items = many, rows = 12, scroll = 2 })
+  local faded_rows = 0
+  for line in r.data:gmatch "\27%[38;2;%d+;%d+;%d+m" do
+    if line then
+      faded_rows = faded_rows + 1
+    end
+  end
+  assert(faded_rows > 0, "frame paints")
+  eq(r.hits[1].part, "gap", "first list row is a gap at this offset")
+  local plain = render.render(p1_view { items = many, rows = 12, scroll = 0 })
+  assert(r.data ~= plain.data, "a scrolled frame differs from the unscrolled one")
+end)
+
+test("P1 sibling paths stay distinguishable on the meta line", function()
+  local function sibling_items(a, b)
+    return {
+      { tab_id = 1, index = 1, is_active = false, is_pinned = false, title = "api", meta = a, icon = "t" },
+      { tab_id = 2, index = 2, is_active = false, is_pinned = false, title = "web", meta = b, icon = "t" },
+    }
+  end
+  local v = p1_view {
+    items = sibling_items("~/work/acme/services/api", "~/work/acme/services/web"),
+    opts = { separator = "gap" },
+  }
+  local rows = frame_rows(v)
+  local first, second = usub(rows[2], 6, 25), usub(rows[5], 6, 25)
+  assert(first ~= second, "siblings must not collapse to their shared parent")
+  assert(first:find("api", 1, true), "basename kept: " .. first)
+  assert(second:find("web", 1, true), "basename kept: " .. second)
+  eq(util.width(rows[2]), 28)
+  local composite = p1_view {
+    items = sibling_items("nvim · ~/work/acme/services/api", "SSH:archie · ~/work/acme/services/web"),
+    opts = { separator = "gap" },
+  }
+  local comp = frame_rows(composite)
+  assert(usub(comp[2], 6, 25):find("api", 1, true), "the tail after the separator is the path")
+  assert(usub(comp[5], 6, 25):find("web", 1, true))
+  eq(util.width(comp[5]), 28)
+end)
+
 test("P1 frames are written for design review", function()
-  local design = { separator = "gap", pinned_style = "dense", new_tab_label = "New tab" }
-  dump_frame("tabs", p1_view { rows = 20, opts = design })
-  dump_frame("hover", p1_view { rows = 20, hover = { x = 5, y = 6 }, opts = design })
-  dump_frame("hover-close", p1_view { rows = 20, hover = { x = 26, y = 6 }, opts = design })
-  dump_frame("private", p1_view { rows = 20, private = true, opts = design })
+  -- the shared fixture pins row_gap and separator for positional tests; frames want the shipped values
+  local design = { row_gap = config.defaults.row_gap, separator = config.defaults.separator }
+  local function linux_strip(cfg)
+    local geo = require("vtabs.platform").strip_geometry({}, {
+      position = cfg.position,
+      padding_top = cfg.padding.top,
+      toggle_button = cfg.toggle_button,
+      card_x1 = cfg.padding.left + 1,
+    })
+    return {
+      rows = geo.rows,
+      toggle = cfg.toggle_button and {
+        row = geo.toggle_row,
+        x = geo.toggle_x,
+        x1 = math.max(1, geo.toggle_x - 1),
+        x2 = geo.toggle_x + 2,
+      } or nil,
+    }
+  end
+  local function dumped(over)
+    local v = p1_view(over)
+    v.strip = linux_strip(v.cfg)
+    return v
+  end
+  local base = dumped { rows = 20, opts = design }
+  local hover_row = base.strip.rows + 6
+  dump_frame("tabs", base)
+  dump_frame("hover", dumped { rows = 20, hover = { x = 5, y = hover_row }, opts = design })
+  -- identical to hover.txt on purpose: they differ only in close_hover_fg, which stripping removes
+  dump_frame("hover-close", dumped { rows = 20, hover = { x = 26, y = hover_row }, opts = design })
+  dump_frame("drag", dumped { rows = 20, drag = { tab_id = 3, over_index = 1, active = true }, opts = design })
+  dump_frame("private", dumped { rows = 20, private = true, opts = design })
   dump_frame(
     "strip-macos",
     p1_view {
@@ -912,13 +1032,7 @@ test("P1 frames are written for design review", function()
   end
   dump_frame(
     "overflow",
-    p1_view {
-      items = many,
-      rows = 16,
-      scroll = 4,
-      footer = { { icon = "⚑", text = "main · 3 dirty" } },
-      opts = design,
-    }
+    dumped { items = many, rows = 16, scroll = 4, footer = { { icon = "⚑", text = "main · 3 dirty" } }, opts = design }
   )
   os.execute("mkdir -p " .. FRAME_DIR)
   local f = io.open(FRAME_DIR .. "/collapsed.txt", "w")
@@ -1577,6 +1691,15 @@ local function drag_setup()
   return win, gui
 end
 
+---Row a tab's card starts on, read back from the hit map instead of assumed.
+local function title_row(sb, tab_id)
+  for row, h in pairs(state.session.hits[sb:pane_id()] or {}) do
+    if h.kind == "tab" and h.id == tab_id and h.part == "title" then
+      return row
+    end
+  end
+end
+
 local function mouse(gui, sb, kind, button, x, y)
   input.handle(gui, sb, "vtabs", string.format('{"t":"mouse","k":"%s","b":"%s","x":%d,"y":%d}', kind, button, x, y))
 end
@@ -1594,7 +1717,7 @@ end
 test("press keeps the sidebar of the clicked tab focused and points the drag at it", function()
   local win, gui = drag_setup()
   local sb1 = sidebar.find(win.tab_list[1])
-  local drag = press_row(gui, sb1, 9)
+  local drag = press_row(gui, sb1, title_row(sb1, win.tab_list[3].id))
   eq(win.active_tab_ref, win.tab_list[3])
   eq(win.tab_list[3].active, sidebar.find(win.tab_list[3]), "sidebar holds focus, not the shell")
   eq(drag.pane_id, sidebar.find(win.tab_list[3]):pane_id())
@@ -1607,35 +1730,37 @@ test("one row of drift never arms a drag; three rows plus the dwell reorders on 
   for i, t in ipairs(win.tab_list) do
     ids[i] = t.id
   end
-  press_row(gui, sb1, 9)
+  local from = title_row(sb1, ids[3])
+  local onto = title_row(sb1, ids[1])
+  press_row(gui, sb1, from)
   local sb3 = sidebar.find(win.tab_list[3])
-  mouse(gui, sb3, "drag", "left", 5, 8)
+  mouse(gui, sb3, "drag", "left", 5, from - 1)
   eq(state.session.drag[gui:window_id()].active, false, "one row is jitter")
-  mouse(gui, sb3, "up", "left", 5, 8)
+  mouse(gui, sb3, "up", "left", 5, from - 1)
   eq(win.tab_list[3].id, ids[3], "order untouched")
 
-  press_row(gui, sb1, 9)
-  mouse(gui, sb3, "drag", "left", 5, 3)
+  press_row(gui, sb1, from)
+  mouse(gui, sb3, "drag", "left", 5, onto)
   assert(state.session.drag[gui:window_id()].active, "three rows arms the drag")
-  mouse(gui, sb3, "up", "left", 5, 3)
+  mouse(gui, sb3, "up", "left", 5, onto)
   eq(win.tab_list[1].id, ids[3], "dragged tab took the first slot")
 end)
 
 test("a drag that starts before the dwell elapses is jitter", function()
   local win, gui = drag_setup()
   local sb1 = sidebar.find(win.tab_list[1])
-  press_row(gui, sb1, 9, "hold")
+  press_row(gui, sb1, title_row(sb1, win.tab_list[3].id), "hold")
   local sb3 = sidebar.find(win.tab_list[3])
-  mouse(gui, sb3, "drag", "left", 5, 3)
+  mouse(gui, sb3, "drag", "left", 5, title_row(sb1, win.tab_list[1].id))
   eq(state.session.drag[gui:window_id()].active, false)
 end)
 
 test("drag events from a pane other than the drag origin are dropped", function()
   local win, gui = drag_setup()
   local sb1 = sidebar.find(win.tab_list[1])
-  press_row(gui, sb1, 9)
+  press_row(gui, sb1, title_row(sb1, win.tab_list[3].id))
   local sb2 = sidebar.find(win.tab_list[2])
-  mouse(gui, sb2, "drag", "left", 5, 3)
+  mouse(gui, sb2, "drag", "left", 5, title_row(sb1, win.tab_list[1].id))
   eq(state.session.drag[gui:window_id()].active, false)
 end)
 
@@ -1678,10 +1803,12 @@ test("mouse move repaints on a row change and stays quiet inside the row", funct
   local win, gui = drag_setup()
   local sb1 = sidebar.find(win.tab_list[1])
   local sent = #sb1.sent
-  mouse(gui, sb1, "move", "none", 5, 6)
+  -- an inactive card, so hovering it actually changes the frame
+  local row = title_row(sb1, win.tab_list[2].id)
+  mouse(gui, sb1, "move", "none", 5, row)
   local repainted = #sb1.sent
-  assert(repainted > sent, "crossing into a background card repaints")
-  mouse(gui, sb1, "move", "none", 6, 6)
+  assert(repainted > sent, "crossing into a row repaints")
+  mouse(gui, sb1, "move", "none", 6, row)
   eq(#sb1.sent, repainted, "same row, same spans, no frame")
 end)
 
