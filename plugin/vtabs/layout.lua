@@ -98,8 +98,12 @@ function M.strip_actions(cfg, strip, g, rail, cols)
   elseif reserve > 0 then
     -- two clear of the last light, whatever the cell width made the reserve
     base = reserve + 2
+  elseif cfg.position == "right" then
+    base = g.card_x1
   else
-    base = (strip.toggle and strip.toggle.x) or g.card_x1
+    -- no lights to sit beside: the trailing edge is the toolbar convention, and it leaves the
+    -- list's left margin clean. The cluster keeps its order, so the toggle is still its first glyph.
+    base = g.card_x2 - 1 - ACTION_STRIDE * (#list - 1)
   end
   local out = {}
   for i, action in ipairs(list) do

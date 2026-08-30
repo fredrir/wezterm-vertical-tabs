@@ -922,25 +922,34 @@ end)
 test("P1 strip: reserve rows, action cluster, never over a list row", function()
   local v = p1_view { strip = { rows = 3, cols = 0, toggle_row = 2 }, opts = { separator = "gap" } }
   local rows, r = frame_rows(v)
-  eq(usub(rows[2], 3, 3), "«", "with no lights the cluster starts where the toggle already was")
-  eq(usub(rows[2], 6, 6), "+", "and new tab follows one span along")
+  eq(usub(rows[2], 23, 23), "«", "with no lights the cluster right-aligns on card_x2")
+  eq(usub(rows[2], 26, 26), "+", "with the last glyph one column inside the card edge")
   eq(r.hits[1].kind, "strip")
   eq(r.hits[1].x1, nil, "strip reserve is not clickable")
   eq(r.hits[2].kind, "action")
-  eq(r.hits[2].x1, 2)
-  eq(r.hits[2].x2, 7)
-  eq(hit.span(r.hits[2], 2), "toggle")
-  eq(hit.span(r.hits[2], 4), "toggle")
-  eq(hit.span(r.hits[2], 5), "new_tab", "the spans are contiguous, with no dead cell between")
-  eq(hit.span(r.hits[2], 7), "new_tab")
-  eq(hit.span(r.hits[2], 8), nil)
+  eq(r.hits[2].x1, 22)
+  eq(r.hits[2].x2, 27)
+  eq(hit.span(r.hits[2], 22), "toggle", "the cluster keeps its order, so the toggle is still first")
+  eq(hit.span(r.hits[2], 24), "toggle")
+  eq(hit.span(r.hits[2], 25), "new_tab", "the spans are contiguous, with no dead cell between")
+  eq(hit.span(r.hits[2], 27), "new_tab")
+  eq(hit.span(r.hits[2], 21), nil)
+  local three = p1_view {
+    strip = { rows = 3, cols = 0, toggle_row = 2 },
+    opts = { separator = "gap", strip_actions = { "toggle", "new_tab", "settings" } },
+  }
+  three.cfg.hooks.settings = function() end
+  local three_rows = frame_rows(three)
+  eq(usub(three_rows[2], 20, 20), "«", "three actions land on §8's 20 / 23 / 26")
+  eq(usub(three_rows[2], 23, 23), "+")
+  eq(usub(three_rows[2], 26, 26), "⚙")
   eq(r.hits[3].kind, "action", "the band is 2 rows and stays inside the strip")
   eq(r.hits[4].kind, "tab", "the list starts below the strip")
   local right = frame_rows(p1_view {
     strip = { rows = 2, cols = 0, toggle_row = 1 },
     opts = { position = "right", separator = "gap" },
   })
-  eq(usub(right[1], 2, 2), "»", "position=right mirrors the padding and flips the toggle glyph")
+  eq(usub(right[1], 2, 2), "»", "position=right mirrors the cluster to card_x1 and flips the glyph")
   eq(usub(right[1], 5, 5), "+")
 end)
 
@@ -979,22 +988,22 @@ test("addendum 2 A8d: hovering one action lights only its own three columns", fu
   local idle = render.render(base)
   local lit = render.render(p1_view {
     strip = { rows = 3, cols = 0, toggle_row = 2 },
-    hover = { x = 6, y = 2 },
+    hover = { x = 26, y = 2 },
     opts = { separator = "gap" },
   })
   assert(not idle.rows[2]:find(ansi.bg(base.theme.hover_bg), 1, true), "nothing is lit while the pointer is away")
   local body = strip(lit.rows[2])
-  eq(usub(body, 6, 6), "+", "the hovered glyph is still its own")
+  eq(usub(body, 26, 26), "+", "the hovered glyph is still its own")
   local plan = require("vtabs.layout").plan(p1_view {
     strip = { rows = 3, cols = 0, toggle_row = 2 },
-    hover = { x = 6, y = 2 },
+    hover = { x = 26, y = 2 },
     opts = { separator = "gap" },
   })
   eq(plan.rows[2].lit_id, "new_tab", "and only that action is lit")
   eq(plan.rows[3].lit_id, "new_tab", "on both rows of the band")
   local off = require("vtabs.layout").plan(p1_view {
     strip = { rows = 3, cols = 0, toggle_row = 2 },
-    hover = { x = 9, y = 2 },
+    hover = { x = 21, y = 2 },
     opts = { separator = "gap" },
   })
   eq(off.rows[2].lit_id, nil, "a column between the cluster and the list lights nothing")
@@ -1402,7 +1411,7 @@ test("P1 screenshots: icon weight, chamfer, toggle surface, dashed ghost", funct
 
   local lit = render.render(p1_view {
     rows = 20,
-    hover = { x = 3, y = 1 },
+    hover = { x = 23, y = 1 },
     strip = { rows = 2, cols = 0, toggle_row = 1 },
   })
   assert(lit.rows[1]:find(ansi.bg(v.theme.hover_bg), 1, true), "the toggle span reads as a button when hovered")
@@ -3626,6 +3635,38 @@ test("the reserve is ceil(70pt / cell width): 9 cols at 8pt, 8 at 9pt, 7 at 10-1
   end
 end)
 
+test("previewing the reserve off macOS divides by that host's own 1x, not by 72", function()
+  -- the same 8.4 pt cell on every one of them: a preview that reads wider than a Mac is a wrong preview
+  local cases = {
+    { name = "mac 1x", dpi = platform.POINT_DPI, scale = 1 },
+    { name = "mac 2x", dpi = platform.POINT_DPI * 2, scale = 2 },
+    { name = "linux 1x", dpi = platform.LOGICAL_DPI, scale = 1, preview = true },
+    { name = "linux 2x", dpi = platform.LOGICAL_DPI * 2, scale = 2, preview = true },
+    { name = "windows 125%", dpi = 120, scale = 1.25, preview = true },
+  }
+  for _, case in ipairs(cases) do
+    local g = strip_geom({
+      cols = RETINA.cols,
+      viewport_rows = RETINA.viewport_rows,
+      pixel_width = RETINA.pixel_width * case.scale,
+      pixel_height = RETINA.pixel_height * case.scale,
+      dpi = case.dpi,
+    }, { preview = case.preview })
+    eq(g.cols, 9, case.name .. ": same logical cell, same reserve")
+    assert(g.cols <= 9, case.name .. ": 9 is the widest a readable cell produces, never 11 or 12")
+    eq(g.toggle_x, 11, case.name .. ": and the toggle still clears it")
+  end
+  -- and the flag is what does it: 96 dpi read as a 1.33x Mac is the bug
+  local unscaled = strip_geom {
+    cols = RETINA.cols,
+    viewport_rows = RETINA.viewport_rows,
+    pixel_width = RETINA.pixel_width,
+    pixel_height = RETINA.pixel_height,
+    dpi = platform.LOGICAL_DPI,
+  }
+  eq(unscaled.cols, 12, "without the preview flag a 96 dpi host over-reserves by three columns")
+end)
+
 test("a 2x display doubles the pixels and keeps the points, so the reserve does not move", function()
   local one_x = strip_geom(RETINA)
   local two_x = strip_geom {
@@ -3948,7 +3989,13 @@ test("the close span closes and the toggle span collapses the sidebar", function
   eq(#win.tab_list, 2, "a release that slid off the ✕ closes nothing")
 
   assert(not state.is_collapsed(gui:window_id()))
-  mouse(gui, sb1, "down", "left", 2, 1)
+  local strip_hit = state.session.hits[sb1:pane_id()][1]
+  local toggle_x
+  for _, span in ipairs(strip_hit.spans or {}) do
+    toggle_x = span.id == "toggle" and span.x1 or toggle_x
+  end
+  assert(toggle_x, "the strip band carries a toggle span")
+  mouse(gui, sb1, "down", "left", toggle_x, 1)
   assert(state.is_collapsed(gui:window_id()), "the toggle hides the sidebar")
   sidebar.set_collapsed(gui, false)
 end)

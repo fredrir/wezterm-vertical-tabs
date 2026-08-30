@@ -171,10 +171,11 @@ end
 
 ---Whether AppKit is drawing its buttons over this window's grid right now.
 local function lights_overhang(gui_window, cfg)
-  if not platform.is_mac then
+  local c = chrome_for(gui_window, cfg)
+  -- the preview claims the reserve, so it has to claim the overhang too or the two disagree
+  if not (platform.is_mac or c.preview) then
     return false
   end
-  local c = chrome_for(gui_window, cfg)
   if not (c.integrated_buttons and c.native_button_style) then
     return false
   end
@@ -243,6 +244,7 @@ local function strip_for(gui_window, cfg, dims, rail)
   end) or {}
   local g = platform.strip_geometry(dims, {
     is_mac = platform.is_mac or facts.preview,
+    preview = facts.preview and not platform.is_mac or nil,
     integrated_buttons = facts.integrated_buttons,
     native_button_style = facts.native_button_style,
     is_full_screen = window.is_full_screen == true,

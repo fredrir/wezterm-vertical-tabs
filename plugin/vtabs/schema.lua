@@ -131,8 +131,8 @@ M.options = {
     alias = { [3] = "tall", [2] = "card", [1] = "row", [true] = "card", [false] = "row" },
     label = "Card height",
     group = "cards",
-    values = '`"card"` (`2`) \\| `"row"` (`1`) \\| `"tall"` (`3`)',
-    help = "painted rows per tab",
+    values = '`"card"` (`3`) \\| `"row"` (`1`) \\| `"tall"` (`5`)',
+    help = "painted rows per tab: content plus a blank pad row each side, one more with `meta` on",
   },
   {
     key = "meta",
@@ -288,7 +288,7 @@ M.options = {
     default = true,
     label = "Confirm close",
     group = "behaviour",
-    help = "let WezTerm prompt before closing stateful tabs",
+    help = "ask in the sidebar before closing a tab that looks busy; a mux pane reports no process, so it always asks",
   },
   {
     key = "debug",

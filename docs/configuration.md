@@ -31,7 +31,7 @@ return config
 | `poll_ms`                 | `500`                                                                        | number >= `50` |
 | `padding`                 | `{ top = 1, left = 2, right = 1 }`                                           | `{ top, left, right }` |
 | `edge_to_edge`            | `true`                                                                       | `true` \| `false` |
-| `tab_height`              | `"card"`                                                                     | `"card"` (`2`) \| `"row"` (`1`) \| `"tall"` (`3`) |
+| `tab_height`              | `"card"`                                                                     | `"card"` (`3`) \| `"row"` (`1`) \| `"tall"` (`5`) |
 | `meta`                    | `false`                                                                      | `"auto"` \| `"cwd"` \| `"process"` \| `false` |
 | `meta_sep`                | `"  "`                                                                       | string |
 | `row_gap`                 | `0`                                                                          | number >= `0` |

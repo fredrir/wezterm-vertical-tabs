@@ -15,6 +15,10 @@ M.SUPER2 = M.is_mac and "CMD|SHIFT" or "CTRL|SHIFT|ALT"
 -- counts 72 dpi as 1x (wezterm window/src/lib.rs:23), and a pane reports device pixels, so a 2x
 -- display would otherwise halve every count below.
 M.POINT_DPI = 72
+-- Every non-Apple platform calls 96 dpi 1x and scales from there (Windows reports 120 at 125 %), so
+-- previewing the reserve on one of them has to divide by *its* 1x or a plain 96-dpi host reads as
+-- a 1.33x Mac and reserves a third too many columns.
+M.LOGICAL_DPI = 96
 -- wezterm-gui/src/termwindow/render/fancy_tab_bar.rs:382 reserves this much for the traffic lights.
 M.BUTTON_PT = 70
 -- macOS titlebar height; NEEDS-ENG-CONFIRM #1, over-reserving is the safe direction.
@@ -36,7 +40,8 @@ function M.strip_geometry(dims, opts)
     and not opts.is_full_screen
   local cell_h = 0
   if reserve and dims.cols and dims.cols > 0 and dims.viewport_rows and dims.viewport_rows > 0 then
-    local scale = (dims.dpi or M.POINT_DPI) / M.POINT_DPI
+    local base = opts.preview and M.LOGICAL_DPI or M.POINT_DPI
+    local scale = (dims.dpi or base) / base
     local cell_w = (dims.pixel_width or 0) / dims.cols / scale
     cell_h = (dims.pixel_height or 0) / dims.viewport_rows / scale
     if cell_w > 0 and cell_h > 0 then
