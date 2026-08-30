@@ -142,12 +142,24 @@ local probes = {
     window:perform_action(vtabs.action.split "Bottom", window:active_pane())
     wezterm.log_info("e2e: action split from " .. tostring(sb and sb:pane_id()))
   end,
-  -- The direction vocabulary itself: a name the action does not accept must warn, not split.
+  -- "Down" is an alias of "Bottom", so it must really split.
   action_split_down = function(window)
+    local sidebar = require "vtabs.sidebar"
+    local sb = sidebar.find(window:mux_window():active_tab())
+    if sb then
+      sb:activate()
+    end
     local before = #window:mux_window():active_tab():panes()
     window:perform_action(vtabs.action.split "Down", window:active_pane())
     local after = #window:mux_window():active_tab():panes()
     wezterm.log_info(string.format("e2e: split down panes %d -> %d", before, after))
+  end,
+  -- A direction the vocabulary does not name must warn instead of splitting anything.
+  action_split_bogus = function(window)
+    local before = #window:mux_window():active_tab():panes()
+    window:perform_action(vtabs.action.split "Sideways", window:active_pane())
+    local after = #window:mux_window():active_tab():panes()
+    wezterm.log_info(string.format("e2e: split bogus panes %d -> %d", before, after))
   end,
   settings = function(window)
     require("vtabs.actions").open_settings(window)

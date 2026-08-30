@@ -266,277 +266,282 @@ if [ "$mode" = mux ]; then
   sleep 1
 fi
 
-# ---------------------------------------------------------------- item 9 ---
-# Every width check waits for the sidebar to stop moving, then pins the number it settled on.
-settled_width() { # tab_id -> the width once three reads in a row agree, else the last one seen
-  last=""; same=0
-  for _ in $(seq 1 32); do
-    now=$(width_of "$1" 2>/dev/null || echo "?")
-    if [ "$now" = "$last" ]; then
-      same=$((same + 1))
-      [ "$same" -ge 2 ] && { echo "$now"; return 0; }
-    else
-      same=0
-    fi
-    last="$now"
-    sleep 0.25
-  done
-  echo "$last"
-}
-want_width() { # tab_id want label — waits for the wanted width, then fails with what it settled on
-  for _ in $(seq 1 40); do
-    [ "$(width_of "$1" 2>/dev/null || echo '?')" = "$2" ] && return 0
-    sleep 0.25
-  done
-  widths; geometry; fail "$3: sidebar settled at $(settled_width "$1") cols, want $2"
-}
+# `VTABS_STRESS_FAST=1` skips the width traces, which take most of a run, so the groups after
+# them can be exercised on their own.
+if [ -z "${VTABS_STRESS_FAST:-}" ]; then
+  # ---------------------------------------------------------------- item 9 ---
+  # Every width check waits for the sidebar to stop moving, then pins the number it settled on.
+  settled_width() { # tab_id -> the width once three reads in a row agree, else the last one seen
+    last=""; same=0
+    for _ in $(seq 1 32); do
+      now=$(width_of "$1" 2>/dev/null || echo "?")
+      if [ "$now" = "$last" ]; then
+        same=$((same + 1))
+        [ "$same" -ge 2 ] && { echo "$now"; return 0; }
+      else
+        same=0
+      fi
+      last="$now"
+      sleep 0.25
+    done
+    echo "$last"
+  }
+  want_width() { # tab_id want label — waits for the wanted width, then fails with what it settled on
+    for _ in $(seq 1 40); do
+      [ "$(width_of "$1" 2>/dev/null || echo '?')" = "$2" ] && return 0
+      sleep 0.25
+    done
+    widths; geometry; fail "$3: sidebar settled at $(settled_width "$1") cols, want $2"
+  }
 
-vtest "$hot_content" rail_mode
-sleep 0.5
-same_window=$(busiest_window_tabs)
-hot=$(echo "$same_window" | cut -d' ' -f1)
-other=$(echo "$same_window" | cut -d' ' -f2)
-hot_content=$(content_of "$hot")
-cli activate-tab --tab-id "$hot" >/dev/null
-vtest "$(content_of "$hot")" rail_mode
-sleep 0.5
-cli activate-tab --tab-id "$hot" >/dev/null
-want_width "$hot" 28 "before the resize traces"
-trace "baseline $(total_cols) cols"
-
-# A. +30 / -30 cols while expanded.
-vtest "$hot_content" grow
-sleep 2.5
-trace "expanded, +300 px"
-want_width "$hot" 28 "grow while expanded"
-vtest "$hot_content" shrink
-sleep 2.5
-trace "expanded, back to the start"
-want_width "$hot" 28 "shrink while expanded"
-echo "ok: an expanded sidebar keeps its width across grow and shrink"
-
-# B. The same while collapsed to the rail.
-vtest "$hot_content" toggle
-sleep 2
-want_width "$hot" "$rail_want" "collapse to the rail"
-vtest "$hot_content" grow
-sleep 2.5
-trace "rail, +300 px"
-want_width "$hot" "$rail_want" "grow while railed"
-vtest "$hot_content" shrink
-sleep 2.5
-trace "rail, back to the start"
-want_width "$hot" "$rail_want" "shrink while railed"
-vtest "$hot_content" toggle
-sleep 2.5
-want_width "$hot" 28 "expand after resizing the rail"
-echo "ok: a railed sidebar keeps the rail width across grow and shrink"
-
-# C. Repeated resizes 100 ms apart: what a divider-free window drag actually sends.
-vtest "$hot_content" drag_shrink
-sleep 4
-trace "after a 10-step shrink drag"
-want_width "$hot" 28 "a shrink drag"
-vtest "$hot_content" drag_grow
-sleep 4
-trace "after a 10-step grow drag"
-want_width "$hot" 28 "a grow drag"
-echo "ok: ten resizes 100 ms apart leave the sidebar at its configured width"
-
-# D. The reported sequence: expand -> collapse -> change tab -> expand.
-vtest "$hot_content" toggle
-sleep 2
-want_width "$hot" "$rail_want" "collapse before the tab switch"
-cli activate-tab --tab-id "$other" >/dev/null
-sleep 2.5
-trace "collapsed, switched to tab $other"
-want_width "$other" "$rail_want" "a background tab joining the rail"
-vtest "$(content_of "$other")" toggle
-sleep 2.5
-trace "expanded on tab $other"
-want_width "$other" 28 "expand after switching tabs"
-cli activate-tab --tab-id "$hot" >/dev/null
-sleep 2.5
-trace "back on tab $hot"
-want_width "$hot" 28 "the first tab after expand on another tab"
-echo "ok: expand, collapse, switch tab, expand keeps both sidebars at 28"
-
-# E. collapse -> resize -> expand, so the expand target is computed at a width nobody observed.
-vtest "$(content_of "$hot")" toggle
-sleep 2
-want_width "$hot" "$rail_want" "collapse before the resize"
-vtest "$(content_of "$hot")" grow
-sleep 2.5
-vtest "$(content_of "$hot")" toggle
-sleep 2.5
-trace "expanded at the grown size"
-want_width "$hot" 28 "expand after a resize taken while collapsed"
-vtest "$(content_of "$hot")" shrink
-sleep 2.5
-want_width "$hot" 28 "shrink back after that expand"
-echo "ok: collapse, resize, expand restores the configured width"
-
-# F. rail -> activate a background tab (lazy attach) -> expand.
-vtest "$(content_of "$hot")" toggle
-sleep 2
-cli activate-tab --tab-id "$other" >/dev/null
-sleep 2.5
-want_width "$other" "$rail_want" "the background tab under the rail"
-vtest "$(content_of "$other")" toggle
-sleep 2.5
-want_width "$other" 28 "expanding on the lazily corrected tab"
-cli activate-tab --tab-id "$hot" >/dev/null
-sleep 2.5
-want_width "$hot" 28 "the other tab after that expand"
-no_dupes_settled "the width traces" 8
-echo "ok: rail, activate a background tab, expand leaves every sidebar at 28"
-
-# G. A divider drag is the one width the plugin must adopt and keep. `cli adjust-pane-size` moves
-#    the split exactly the way dragging the divider does, so this is the real gesture.
-same_window=$(busiest_window_tabs)
-hot=$(echo "$same_window" | cut -d' ' -f1)
-other=$(echo "$same_window" | cut -d' ' -f2)
-hot_content=$(content_of "$hot")
-cli activate-tab --tab-id "$hot" >/dev/null
-want_width "$hot" 28 "before the drag trace"
-drag_mark=$(mark)
-cli adjust-pane-size --pane-id "$(sidebar_of "$hot")" --amount 12 Right >/dev/null 2>&1 ||
-  cli adjust-pane-size --pane-id "$(sidebar_of "$hot")" --amount 12 Left >/dev/null 2>&1 || true
-sleep 1
-dragged=$(settled_width "$hot")
-trace "after a 12-cell divider drag ($dragged cols)"
-[ "$dragged" != 28 ] || fail "adjust-pane-size did not move the divider; the drag trace cannot run"
-# Two polls plus geometry's settle window is what turns an observed width into the adopted one.
-sleep 3
-echo "  desired after the drag: $(probe_line "$hot_content" probe_desired "desired width")"
-want_width "$hot" "$dragged" "a divider drag"
-no_warnings "$drag_mark" "the divider drag"
-echo "ok: a divider drag to $dragged cols is adopted and held"
-
-vtest "$hot_content" grow
-sleep 3
-trace "dragged width, +300 px"
-want_width "$hot" "$dragged" "growing the window after a drag"
-vtest "$hot_content" shrink
-sleep 3
-trace "dragged width, back to the start"
-want_width "$hot" "$dragged" "shrinking the window after a drag"
-echo "ok: the dragged width survives a grow and a shrink"
-
-vtest "$hot_content" rail_mode
-sleep 0.5
-vtest "$hot_content" toggle
-sleep 2.5
-want_width "$hot" "$rail_want" "collapsing after a drag"
-vtest "$hot_content" toggle
-sleep 3
-trace "expanded again after the rail"
-want_width "$hot" "$dragged" "expanding back to the dragged width"
-cli activate-tab --tab-id "$other" >/dev/null
-sleep 3
-want_width "$other" "$dragged" "a second tab under the dragged width"
-cli activate-tab --tab-id "$hot" >/dev/null
-sleep 2
-no_dupes "the divider drag trace"
-echo "ok: rail and back, and a tab switch, all return to the dragged width"
-
-# Soft: a resize drag over split content currently ends on a width WezTerm dealt rather than the
-# adopted one, so this group pins an open bug.
-split_content_drag() {
-  # H. A split content pane is the branch where `correct` activates the sidebar and restores focus
-  #    on every single correction — including on every `window-resized` of a drag.
-  split_mark=$(mark)
-  extra=$(cli split-pane --pane-id "$hot_content" --right 2>/dev/null || echo "")
-  if [ -n "$extra" ]; then
-    max_panes=3
-    sleep 2
-    before_active=$(probe_line "$hot_content" probe_active "active pane")
-    trace "content split in two"
-    vtest "$hot_content" drag_shrink
-    sleep 5
-    trace "after a shrink drag with the content split"
-    want_width "$hot" "$dragged" "a resize drag over a split content pane"
-    [ "$(list | python3 -c 'import json,sys; t='"$hot"'; print(sum(1 for p in json.load(sys.stdin) if p["tab_id"]==t))')" -eq 3 ] ||
-      { geometry; fail "the resize drag lost a content pane"; }
-    after_active=$(probe_line "$hot_content" probe_active "active pane")
-    [ "$before_active" = "$after_active" ] ||
-      fail "the resize drag moved focus from pane $before_active to $after_active"
-    no_warnings "$split_mark" "a resize drag over a split content pane"
-    vtest "$hot_content" drag_grow
-    sleep 5
-    want_width "$hot" "$dragged" "a grow drag over a split content pane"
-    no_dupes "the split-content drag"
-    echo "ok: a resize drag over split content keeps the width, the panes and the focus"
-    cli kill-pane --pane-id "$extra" >/dev/null 2>&1 || true
-    sleep 2
-    max_panes=2
-  fi
-}
-soft split_content_drag
-
-# I. The rail in a private window: `render` takes its private branch there, and a throw leaves the
-#    pane showing its last frame, which reads exactly like "expand -> collapse acts weird".
-priv_mark=$(mark)
-before_windows=$(window_count)
-known_tabs=" $(tab_ids) "
-vtest "$hot_content" private_window
-for _ in $(seq 1 24); do
-  [ "$(window_count)" -gt "$before_windows" ] && break
+  vtest "$hot_content" rail_mode
   sleep 0.5
-done
-if [ "$(window_count)" -gt "$before_windows" ]; then
-  priv_tab=""
-  for t in $(tab_ids); do
-    case "$known_tabs" in
-      *" $t "*) ;;
-      *) priv_tab=$t ;;
-    esac
-  done
-  if [ -n "$priv_tab" ]; then
-    wait_attached "$priv_tab" 12
-    priv_content=$(content_of "$priv_tab")
-    priv_sb=$(sidebar_of "$priv_tab")
-    renders "$priv_sb" "a private window before the rail"
-    vtest "$priv_content" rail_mode
+  same_window=$(busiest_window_tabs)
+  hot=$(echo "$same_window" | cut -d' ' -f1)
+  other=$(echo "$same_window" | cut -d' ' -f2)
+  hot_content=$(content_of "$hot")
+  cli activate-tab --tab-id "$hot" >/dev/null
+  vtest "$(content_of "$hot")" rail_mode
+  sleep 0.5
+  cli activate-tab --tab-id "$hot" >/dev/null
+  want_width "$hot" 28 "before the resize traces"
+  trace "baseline $(total_cols) cols"
+
+  # A. +30 / -30 cols while expanded.
+  vtest "$hot_content" grow
+  sleep 2.5
+  trace "expanded, +300 px"
+  want_width "$hot" 28 "grow while expanded"
+  vtest "$hot_content" shrink
+  sleep 2.5
+  trace "expanded, back to the start"
+  want_width "$hot" 28 "shrink while expanded"
+  echo "ok: an expanded sidebar keeps its width across grow and shrink"
+
+  # B. The same while collapsed to the rail.
+  vtest "$hot_content" toggle
+  sleep 2
+  want_width "$hot" "$rail_want" "collapse to the rail"
+  vtest "$hot_content" grow
+  sleep 2.5
+  trace "rail, +300 px"
+  want_width "$hot" "$rail_want" "grow while railed"
+  vtest "$hot_content" shrink
+  sleep 2.5
+  trace "rail, back to the start"
+  want_width "$hot" "$rail_want" "shrink while railed"
+  vtest "$hot_content" toggle
+  sleep 2.5
+  want_width "$hot" 28 "expand after resizing the rail"
+  echo "ok: a railed sidebar keeps the rail width across grow and shrink"
+
+  # C. Repeated resizes 100 ms apart: what a divider-free window drag actually sends.
+  vtest "$hot_content" drag_shrink
+  sleep 4
+  trace "after a 10-step shrink drag"
+  want_width "$hot" 28 "a shrink drag"
+  vtest "$hot_content" drag_grow
+  sleep 4
+  trace "after a 10-step grow drag"
+  want_width "$hot" 28 "a grow drag"
+  echo "ok: ten resizes 100 ms apart leave the sidebar at its configured width"
+
+  # D. The reported sequence: expand -> collapse -> change tab -> expand.
+  vtest "$hot_content" toggle
+  sleep 2
+  want_width "$hot" "$rail_want" "collapse before the tab switch"
+  cli activate-tab --tab-id "$other" >/dev/null
+  sleep 2.5
+  trace "collapsed, switched to tab $other"
+  want_width "$other" "$rail_want" "a background tab joining the rail"
+  vtest "$(content_of "$other")" toggle
+  sleep 2.5
+  trace "expanded on tab $other"
+  want_width "$other" 28 "expand after switching tabs"
+  cli activate-tab --tab-id "$hot" >/dev/null
+  sleep 2.5
+  trace "back on tab $hot"
+  want_width "$hot" 28 "the first tab after expand on another tab"
+  echo "ok: expand, collapse, switch tab, expand keeps both sidebars at 28"
+
+  # E. collapse -> resize -> expand, so the expand target is computed at a width nobody observed.
+  vtest "$(content_of "$hot")" toggle
+  sleep 2
+  want_width "$hot" "$rail_want" "collapse before the resize"
+  vtest "$(content_of "$hot")" grow
+  sleep 2.5
+  vtest "$(content_of "$hot")" toggle
+  sleep 2.5
+  trace "expanded at the grown size"
+  want_width "$hot" 28 "expand after a resize taken while collapsed"
+  vtest "$(content_of "$hot")" shrink
+  sleep 2.5
+  want_width "$hot" 28 "shrink back after that expand"
+  echo "ok: collapse, resize, expand restores the configured width"
+
+  # F. rail -> activate a background tab (lazy attach) -> expand.
+  vtest "$(content_of "$hot")" toggle
+  sleep 2
+  cli activate-tab --tab-id "$other" >/dev/null
+  sleep 2.5
+  want_width "$other" "$rail_want" "the background tab under the rail"
+  vtest "$(content_of "$other")" toggle
+  sleep 2.5
+  want_width "$other" 28 "expanding on the lazily corrected tab"
+  cli activate-tab --tab-id "$hot" >/dev/null
+  sleep 2.5
+  want_width "$hot" 28 "the other tab after that expand"
+  no_dupes_settled "the width traces" 8
+  echo "ok: rail, activate a background tab, expand leaves every sidebar at 28"
+
+  # G. A divider drag is the one width the plugin must adopt and keep. `cli adjust-pane-size` moves
+  #    the split exactly the way dragging the divider does, so this is the real gesture.
+  same_window=$(busiest_window_tabs)
+  hot=$(echo "$same_window" | cut -d' ' -f1)
+  other=$(echo "$same_window" | cut -d' ' -f2)
+  hot_content=$(content_of "$hot")
+  cli activate-tab --tab-id "$hot" >/dev/null
+  want_width "$hot" 28 "before the drag trace"
+  drag_mark=$(mark)
+  cli adjust-pane-size --pane-id "$(sidebar_of "$hot")" --amount 12 Right >/dev/null 2>&1 ||
+    cli adjust-pane-size --pane-id "$(sidebar_of "$hot")" --amount 12 Left >/dev/null 2>&1 || true
+  sleep 1
+  dragged=$(settled_width "$hot")
+  trace "after a 12-cell divider drag ($dragged cols)"
+  [ "$dragged" != 28 ] || fail "adjust-pane-size did not move the divider; the drag trace cannot run"
+  # Two polls plus geometry's settle window is what turns an observed width into the adopted one.
+  sleep 3
+  echo "  desired after the drag: $(probe_line "$hot_content" probe_desired "desired width")"
+  want_width "$hot" "$dragged" "a divider drag"
+  no_warnings "$drag_mark" "the divider drag"
+  echo "ok: a divider drag to $dragged cols is adopted and held"
+
+  vtest "$hot_content" grow
+  sleep 3
+  trace "dragged width, +300 px"
+  want_width "$hot" "$dragged" "growing the window after a drag"
+  vtest "$hot_content" shrink
+  sleep 3
+  trace "dragged width, back to the start"
+  want_width "$hot" "$dragged" "shrinking the window after a drag"
+  echo "ok: the dragged width survives a grow and a shrink"
+
+  vtest "$hot_content" rail_mode
+  sleep 0.5
+  vtest "$hot_content" toggle
+  sleep 2.5
+  want_width "$hot" "$rail_want" "collapsing after a drag"
+  vtest "$hot_content" toggle
+  sleep 3
+  trace "expanded again after the rail"
+  want_width "$hot" "$dragged" "expanding back to the dragged width"
+  cli activate-tab --tab-id "$other" >/dev/null
+  sleep 3
+  want_width "$other" "$dragged" "a second tab under the dragged width"
+  cli activate-tab --tab-id "$hot" >/dev/null
+  sleep 2
+  no_dupes "the divider drag trace"
+  echo "ok: rail and back, and a tab switch, all return to the dragged width"
+
+  # Soft: a resize drag over split content currently ends on a width WezTerm dealt rather than the
+  # adopted one, so this group pins an open bug.
+  split_content_drag() {
+    # H. A split content pane is the branch where `correct` activates the sidebar and restores focus
+    #    on every single correction — including on every `window-resized` of a drag.
+    split_mark=$(mark)
+    extra=$(cli split-pane --pane-id "$hot_content" --right 2>/dev/null || echo "")
+    if [ -n "$extra" ]; then
+      max_panes=3
+      sleep 2
+      before_active=$(probe_line "$hot_content" probe_active "active pane")
+      trace "content split in two"
+      vtest "$hot_content" drag_shrink
+      sleep 5
+      trace "after a shrink drag with the content split"
+      want_width "$hot" "$dragged" "a resize drag over a split content pane"
+      [ "$(list | python3 -c 'import json,sys; t='"$hot"'; print(sum(1 for p in json.load(sys.stdin) if p["tab_id"]==t))')" -eq 3 ] ||
+        { geometry; fail "the resize drag lost a content pane"; }
+      after_active=$(probe_line "$hot_content" probe_active "active pane")
+      [ "$before_active" = "$after_active" ] ||
+        fail "the resize drag moved focus from pane $before_active to $after_active"
+      no_warnings "$split_mark" "a resize drag over a split content pane"
+      vtest "$hot_content" drag_grow
+      sleep 5
+      want_width "$hot" "$dragged" "a grow drag over a split content pane"
+      no_dupes "the split-content drag"
+      echo "ok: a resize drag over split content keeps the width, the panes and the focus"
+      cli kill-pane --pane-id "$extra" >/dev/null 2>&1 || true
+      sleep 2
+      max_panes=2
+    fi
+  }
+  soft split_content_drag
+
+  # I. The rail in a private window: `render` takes its private branch there, and a throw leaves the
+  #    pane showing its last frame, which reads exactly like "expand -> collapse acts weird".
+  priv_mark=$(mark)
+  before_windows=$(window_count)
+  known_tabs=" $(tab_ids) "
+  vtest "$hot_content" private_window
+  for _ in $(seq 1 24); do
+    [ "$(window_count)" -gt "$before_windows" ] && break
     sleep 0.5
-    vtest "$priv_content" toggle
-    sleep 2.5
-    renders "$priv_sb" "a private window under the rail"
-    no_warnings "$priv_mark" "a private window under the rail"
-    vtest "$priv_content" toggle
-    sleep 2.5
-    renders "$priv_sb" "a private window expanded again"
-    no_warnings "$priv_mark" "expanding a private window from the rail"
-    no_dupes "the private window rail trace"
-    echo "ok: a private window renders under the rail and after expanding"
-    cli kill-pane --pane-id "$priv_content" >/dev/null 2>&1 || true
-    sleep 2
+  done
+  if [ "$(window_count)" -gt "$before_windows" ]; then
+    priv_tab=""
+    for t in $(tab_ids); do
+      case "$known_tabs" in
+        *" $t "*) ;;
+        *) priv_tab=$t ;;
+      esac
+    done
+    if [ -n "$priv_tab" ]; then
+      wait_attached "$priv_tab" 12
+      priv_content=$(content_of "$priv_tab")
+      priv_sb=$(sidebar_of "$priv_tab")
+      renders "$priv_sb" "a private window before the rail"
+      vtest "$priv_content" rail_mode
+      sleep 0.5
+      vtest "$priv_content" toggle
+      sleep 2.5
+      renders "$priv_sb" "a private window under the rail"
+      no_warnings "$priv_mark" "a private window under the rail"
+      vtest "$priv_content" toggle
+      sleep 2.5
+      renders "$priv_sb" "a private window expanded again"
+      no_warnings "$priv_mark" "expanding a private window from the rail"
+      no_dupes "the private window rail trace"
+      echo "ok: a private window renders under the rail and after expanding"
+      cli kill-pane --pane-id "$priv_content" >/dev/null 2>&1 || true
+      sleep 2
+    fi
   fi
+
+  # J. The rail with a footer hook: the footer adds rows the rail grid has to place too.
+  foot_mark=$(mark)
+  hot=$(tab_ids | cut -d' ' -f1)
+  hot_content=$(content_of "$hot")
+  hot_sb=$(sidebar_of "$hot")
+  cli activate-tab --tab-id "$hot" >/dev/null
+  vtest "$hot_content" footer_hook
+  sleep 2
+  renders "$hot_sb" "an expanded sidebar with a footer hook"
+  vtest "$hot_content" toggle
+  sleep 2.5
+  renders "$hot_sb" "a railed sidebar with a footer hook"
+  no_warnings "$foot_mark" "a railed sidebar with a footer hook"
+  vtest "$hot_content" toggle
+  sleep 2.5
+  renders "$hot_sb" "an expanded sidebar with a footer hook"
+  no_warnings "$foot_mark" "expanding a sidebar with a footer hook"
+  not_frozen "$hot_sb" "$hot" "the footer-hook trace"
+  vtest "$hot_content" no_footer_hook
+  sleep 1.5
+  no_dupes "the footer-hook trace"
+  echo "ok: the rail renders with a footer hook and keeps repainting"
+
+
 fi
-
-# J. The rail with a footer hook: the footer adds rows the rail grid has to place too.
-foot_mark=$(mark)
-hot=$(tab_ids | cut -d' ' -f1)
-hot_content=$(content_of "$hot")
-hot_sb=$(sidebar_of "$hot")
-cli activate-tab --tab-id "$hot" >/dev/null
-vtest "$hot_content" footer_hook
-sleep 2
-renders "$hot_sb" "an expanded sidebar with a footer hook"
-vtest "$hot_content" toggle
-sleep 2.5
-renders "$hot_sb" "a railed sidebar with a footer hook"
-no_warnings "$foot_mark" "a railed sidebar with a footer hook"
-vtest "$hot_content" toggle
-sleep 2.5
-renders "$hot_sb" "an expanded sidebar with a footer hook"
-no_warnings "$foot_mark" "expanding a sidebar with a footer hook"
-not_frozen "$hot_sb" "$hot" "the footer-hook trace"
-vtest "$hot_content" no_footer_hook
-sleep 1.5
-no_dupes "the footer-hook trace"
-echo "ok: the rail renders with a footer hook and keeps repainting"
-
 
 # ------------------------------------------------- reports A, B and C -----
 # A. "1 -> 3 via the shortcut is laggy and passes through tab 2". The shortcut is
@@ -691,14 +696,31 @@ split_net() {
   no_dupes "vtabs.action.split"
   echo "ok: vtabs.action.split targets the content pane with the sidebar focused"
 
-  # The direction vocabulary: "Down" is not one of Right/Left/Top/Bottom.
+  # "Down" is an alias of "Bottom": it splits, below the content, never in the sidebar's columns.
   down_mark=$(mark)
+  down_before=$(panes_in "$first")
+  max_panes=$((down_before + 1))
   echo "  $(probe_line "$first_content" action_split_down "split down panes")"
-  sleep 1
-  down_warn=$(vtabs_warnings "$down_mark")
-  case "$down_warn" in
+  sleep 3
+  [ "$(panes_in "$first")" -eq "$max_panes" ] ||
+    { geometry; fail "split \"Down\" did not add a pane ($down_before -> $(panes_in "$first"))"; }
+  [ -z "$(in_sidebar_columns "$first")" ] ||
+    { geometry; fail "split \"Down\" put a pane in the sidebar's columns: $(in_sidebar_columns "$first")"; }
+  [ "$(sidebar_of "$first")" = "$before_sb" ] || { geometry; fail "split \"Down\" moved the sidebar"; }
+  no_warnings "$down_mark" "split \"Down\""
+  echo "ok: split \"Down\" is an alias of \"Bottom\" and lands beside the content"
+
+  # A direction the vocabulary does not name warns and splits nothing.
+  bogus_mark=$(mark)
+  bogus_before=$(panes_in "$first")
+  echo "  $(probe_line "$first_content" action_split_bogus "split bogus panes")"
+  sleep 2
+  [ "$(panes_in "$first")" -eq "$bogus_before" ] ||
+    { geometry; fail "an unknown split direction added a pane ($bogus_before -> $(panes_in "$first"))"; }
+  bogus_warn=$(vtabs_warnings "$bogus_mark")
+  case "$bogus_warn" in
     *"split direction"*) echo "ok: an unknown split direction warns instead of splitting" ;;
-    *) fail "an unknown split direction neither split nor warned: $down_warn" ;;
+    *) fail "an unknown split direction neither split nor warned: $bogus_warn" ;;
   esac
 
   # Leave the tab as it was; every later pane-count assertion expects a sidebar and one content pane.
