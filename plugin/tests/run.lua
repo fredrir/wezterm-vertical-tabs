@@ -182,9 +182,9 @@ local function view(over)
   local cfg = config.setup(opts)
   local v = {
     cols = 28,
-    -- one more row than the old fixture: padding.bottom reserves the last one, so the list keeps
-    -- the seven rows every positional test in this file counts on
-    rows = 11,
+    -- two more rows than the old fixture: padding.bottom takes the last and the ghost's page row the
+    -- one above it, so the list keeps the seven rows every positional test in this file counts on
+    rows = 12,
     items = items(),
     theme = theme.resolve({}, palette("#1e1e2e", "#cdd6f4")),
     cfg = cfg,
@@ -241,9 +241,11 @@ test("layout: pinned block, separator, padded cards, ghost card", function()
   eq(r.hits[5].slot, r.hits[3].slot)
   eq(r.hits[6].id, 3)
   eq(r.total_rows, 8)
-  for row = 8, 10 do
+  eq(r.hits[8].kind, "space", "a page row above the ghost, so it is as far from the last card as cards are")
+  for row = 9, 11 do
     eq(r.hits[row].kind, "new_tab", "ghost row " .. row)
   end
+  eq(r.hits[12].kind, "space", "and padding.bottom below it")
   assert(strip(r.data):find "New tab")
   assert(strip(r.data):find "…", "long title truncated")
   local sep = render.render(view { opts = { separator = "none" } })
@@ -307,7 +309,7 @@ test("scroll clamps, ensure_visible follows active, footer is sticky", function(
   end
   local r = render.render(view { items = many, rows = 10, scroll = 999, footer = { "space: work" } })
   eq(r.total_rows, 90, "3 rows per card")
-  eq(r.scroll, 85, "clamped to max_scroll")
+  eq(r.scroll, 86, "clamped to max_scroll")
   eq(r.hits[9].kind, "footer", "footer is the last row of content, below the ghost card")
   eq(r.hits[10].kind, "space", "with padding.bottom under it")
   eq(r.hits[6].kind, "new_tab")
@@ -818,9 +820,9 @@ test("P1 grid: landmarks derive from cols and padding", function()
 end)
 
 test("P1 chamfer: the card's own first and last row, right side only", function()
-  local rows = frame_rows(p1_view { rows = 12, opts = { separator = "gap" } })
+  local rows = frame_rows(p1_view { rows = 13, opts = { separator = "gap" } })
   eq(usub(rows[4], 26, 26), " ", "the active card is square")
-  local hovered_rows = frame_rows(p1_view { rows = 12, hover = { x = 5, y = 7 }, opts = { separator = "gap" } })
+  local hovered_rows = frame_rows(p1_view { rows = 13, hover = { x = 5, y = 7 }, opts = { separator = "gap" } })
   eq(usub(hovered_rows[6], 26, 26), "▙", "a hovered card chamfers on its first row")
   eq(usub(hovered_rows[7], 26, 26), " ", "never on the title row, which is no longer an edge")
   eq(usub(hovered_rows[8], 26, 26), "▛", "and closes on its last")
@@ -830,7 +832,7 @@ test("P1 chamfer: the card's own first and last row, right side only", function(
   for _, line in ipairs(one_row) do
     assert(not line:find("▙", 1, true) and not line:find("▛", 1, true), "1-row cards are square")
   end
-  local dense = frame_rows(p1_view { rows = 12, hover = { x = 5, y = 1 }, opts = { separator = "gap" } })
+  local dense = frame_rows(p1_view { rows = 13, hover = { x = 5, y = 1 }, opts = { separator = "gap" } })
   assert(not dense[1]:find("▙", 1, true), "a hovered dense pinned row stays square")
 end)
 
@@ -865,20 +867,21 @@ end)
 
 test("P1 ghost card: outlined, sticky, exactly cols wide idle and hovered", function()
   local idle, r = frame_rows(p1_view { opts = { separator = "gap" } })
-  eq(usub(idle[8], 3, 3), "╭")
-  eq(usub(idle[8], 26, 26), "╮")
-  eq(usub(idle[9], 5, 5), "+")
-  eq(usub(idle[9], 7, 14), "New tab ", "label at title_x1")
-  eq(usub(idle[10], 3, 3), "╰")
-  eq(usub(idle[10], 26, 26), "╯")
-  for row = 8, 10 do
+  eq(usub(idle[9], 3, 3), "╭")
+  eq(usub(idle[9], 26, 26), "╮")
+  eq(usub(idle[10], 5, 5), "+")
+  eq(usub(idle[10], 7, 14), "New tab ", "label at title_x1")
+  eq(usub(idle[11], 3, 3), "╰")
+  eq(usub(idle[11], 26, 26), "╯")
+  for row = 9, 11 do
     eq(r.hits[row].kind, "new_tab")
     eq(r.hits[row].x1, 3)
     eq(r.hits[row].x2, 26)
   end
-  eq(r.hits[11].kind, "space", "padding.bottom gives the ghost the same air the cards get")
-  local hover = frame_rows(p1_view { hover = { x = 5, y = 9 }, opts = { separator = "gap" } })
-  for row = 8, 10 do
+  eq(r.hits[8].kind, "space", "a page row above it")
+  eq(r.hits[12].kind, "space", "and padding.bottom below")
+  local hover = frame_rows(p1_view { hover = { x = 5, y = 10 }, opts = { separator = "gap" } })
+  for row = 9, 11 do
     eq(hover[row], idle[row], "hover redraws no glyph, only recolours row " .. row)
   end
   eq(util.width(hover[8]), 28)
@@ -926,30 +929,26 @@ end)
 test("P1 strip: reserve rows, action cluster, never over a list row", function()
   local v = p1_view { strip = { rows = 3, cols = 0, toggle_row = 2 }, opts = { separator = "gap" } }
   local rows, r = frame_rows(v)
-  eq(usub(rows[2], 22, 22), "«", "with no lights the cluster right-aligns on card_x2")
-  eq(usub(rows[2], 25, 25), "+", "with the last glyph one column inside the card edge")
+  eq(usub(rows[2], 19, 19), "«", "with no lights the cluster right-aligns on card_x2")
+  eq(usub(rows[2], 22, 22), "+")
+  eq(usub(rows[2], 25, 25), "⚙", "with the last glyph one column inside the card edge")
   eq(r.hits[1].kind, "strip")
   eq(r.hits[1].x1, nil, "strip reserve is not clickable")
   eq(r.hits[2].kind, "action")
-  eq(r.hits[2].x1, 21)
+  eq(r.hits[2].x1, 18)
   eq(r.hits[2].x2, 26)
-  eq(hit.span(r.hits[2], 21), "toggle", "the cluster keeps its order, so the toggle is still first")
-  eq(hit.span(r.hits[2], 23), "toggle")
-  eq(hit.span(r.hits[2], 24), "new_tab", "the spans are contiguous, with no dead cell between")
-  eq(hit.span(r.hits[2], 26), "new_tab")
-  eq(hit.span(r.hits[2], 20), nil)
-  local three = p1_view {
+  eq(hit.span(r.hits[2], 18), "toggle", "the cluster keeps its order, so the toggle is still first")
+  eq(hit.span(r.hits[2], 20), "toggle")
+  eq(hit.span(r.hits[2], 21), "new_tab", "the spans are contiguous, with no dead cell between")
+  eq(hit.span(r.hits[2], 24), "settings")
+  eq(hit.span(r.hits[2], 26), "settings")
+  eq(hit.span(r.hits[2], 17), nil)
+  local two = frame_rows(p1_view {
     strip = { rows = 3, cols = 0, toggle_row = 2 },
-    opts = {
-      separator = "gap",
-      strip_actions = { "toggle", "new_tab", "settings" },
-      hooks = { settings = function() end },
-    },
-  }
-  local three_rows = frame_rows(three)
-  eq(usub(three_rows[2], 19, 19), "«", "three actions land on 19 / 22 / 25, one span inside card_x2")
-  eq(usub(three_rows[2], 22, 22), "+")
-  eq(usub(three_rows[2], 25, 25), "⚙")
+    opts = { separator = "gap", strip_actions = { "toggle", "new_tab" } },
+  })
+  eq(usub(two[2], 22, 22), "«", "a shorter cluster still ends one span inside card_x2")
+  eq(usub(two[2], 25, 25), "+")
   eq(r.hits[3].kind, "action", "the band is 2 rows and stays inside the strip")
   eq(r.hits[4].kind, "tab", "the list starts below the strip")
   local right = frame_rows(p1_view {
@@ -967,8 +966,8 @@ test("addendum 2 A8a: every action column derives from the reserve, whatever it 
       strip = { rows = 4, cols = reserve, toggle_row = 1 },
       opts = {
         separator = "gap",
-        strip_actions = { "toggle", "new_tab", "settings" },
-        hooks = { settings = function() end },
+        strip_actions = { "toggle", "new_tab", "settings", "search" },
+        hooks = { search = function() end },
       },
     }
     local rows, r = frame_rows(v)
@@ -977,11 +976,11 @@ test("addendum 2 A8a: every action column derives from the reserve, whatever it 
     eq(usub(rows[1], base + 3, base + 3), "+")
     eq(usub(rows[1], base + 6, base + 6), "⚙")
     local spans = r.hits[1].spans
-    eq(#spans, 3)
+    eq(#spans, 4)
     eq(spans[1].x1, base - 1, reserve .. ": the first span opens on the reserve's last column")
     eq(spans[1].x2, base + 1)
     eq(spans[2].x1, base + 2, reserve .. ": contiguous and non-overlapping")
-    eq(spans[3].x2, base + 7)
+    eq(spans[4].x2, base + 10)
     for _, row in ipairs { 1, 2 } do
       eq(r.hits[row].kind, "action", reserve .. ": both reserved rows take the click")
     end
@@ -989,10 +988,11 @@ test("addendum 2 A8a: every action column derives from the reserve, whatever it 
 
     local bare = p1_view {
       strip = { rows = 4, cols = reserve, toggle_row = 1 },
-      opts = { separator = "gap", strip_actions = { "toggle", "new_tab", "settings" } },
+      opts = { separator = "gap", strip_actions = { "toggle", "new_tab", "settings", "search" } },
     }
     local _, dropped = frame_rows(bare)
-    eq(#dropped.hits[1].spans, 2, reserve .. ": settings is not drawn without a hook to answer it")
+    eq(#dropped.hits[1].spans, 3, reserve .. ": search is not drawn without a hook to answer it")
+    eq(dropped.hits[1].spans[3].id, "settings", reserve .. ": but settings opens the page on its own")
   end
 end)
 
@@ -1006,17 +1006,17 @@ test("addendum 2 A8d: hovering one action lights only its own three columns", fu
   })
   assert(not idle.rows[2]:find(ansi.bg(base.theme.hover_bg), 1, true), "nothing is lit while the pointer is away")
   local body = strip(lit.rows[2])
-  eq(usub(body, 25, 25), "+", "the hovered glyph is still its own")
+  eq(usub(body, 25, 25), "⚙", "the hovered glyph is still its own")
   local plan = require("vtabs.layout").plan(p1_view {
     strip = { rows = 3, cols = 0, toggle_row = 2 },
     hover = { x = 25, y = 2 },
     opts = { separator = "gap" },
   })
-  eq(plan.rows[2].lit_id, "new_tab", "and only that action is lit")
-  eq(plan.rows[3].lit_id, "new_tab", "on both rows of the band")
+  eq(plan.rows[2].lit_id, "settings", "and only that action is lit")
+  eq(plan.rows[3].lit_id, "settings", "on both rows of the band")
   local off = require("vtabs.layout").plan(p1_view {
     strip = { rows = 3, cols = 0, toggle_row = 2 },
-    hover = { x = 20, y = 2 },
+    hover = { x = 17, y = 2 },
     opts = { separator = "gap" },
   })
   eq(off.rows[2].lit_id, nil, "a column between the cluster and the list lights nothing")
@@ -1029,7 +1029,11 @@ test("addendum 2 §8: the rail keeps only what fits, centred", function()
   local rows, r = frame_rows(narrow)
   eq(usub(rows[1], 3, 3), "«", "one action, centred at ceil(width / 2)")
   eq(#r.hits[1].spans, 1)
-  local wide = p1_view { rows = 16, cols = 9, opts = { separator = "gap", width = 9 } }
+  local wide = p1_view {
+    rows = 16,
+    cols = 9,
+    opts = { separator = "gap", width = 9, strip_actions = { "toggle", "new_tab" } },
+  }
   wide.rail = true
   wide.strip = { rows = 2, cols = 0, toggle_row = 1 }
   local wide_rows, wr = frame_rows(wide)
@@ -5128,6 +5132,226 @@ test("context = false removes the mouse trigger but not the keyboard one", funct
   assert(popover.get(gui:window_id()), "m in keyboard mode still opens it")
   popover.close(gui)
   config.setup { backend = { path = "/bin/wez-vtabs" } }
+end)
+
+test("P3 A1: the settings page carries the marker and is never taken for a sidebar", function()
+  local settings = require "vtabs.settings"
+  local win, gui = setup_window(1)
+  attach_all(win, gui)
+  mark_ready(win.tab_list[1])
+  local tab = settings.open(gui)
+  assert(tab, "the page opened")
+  local found, pane = settings.find(win)
+  eq(found, tab, "and find() reaches the same tab")
+  assert(pane:get_title():match "^wez%-vtabs%-settings:%x+$", "A1a: the settings marker")
+  eq(sidebar.is_settings(pane), true, "A1b")
+  eq(sidebar.is_backend(pane), false, "A1b: is_backend is false for the very same pane")
+  eq(sidebar.marker(pane:get_title()), true, "A1d: so the marker never leaks into a tab title")
+  eq(sidebar.has_marker(pane), false, "and the adoption path will not take it")
+
+  -- A1c: a tab holding only the page has no sidebar at all, and the page is its content
+  local bare = win:add_tab { process = "/bin/zsh" }
+  bare.pane_list[1].title = "wez-vtabs-settings:deadbeef"
+  local content, sb = sidebar.classify(bare)
+  eq(sb, nil, "A1c: no pane wins the sidebar contest")
+  eq(#content, 1, "A1c: the page is content")
+  eq(sidebar.find(bare), nil)
+  eq(sidebar.is_backend(bare.pane_list[1]), false, "A1c: rank none")
+  config.setup(legacy { backend = { path = "/bin/wez-vtabs" } })
+end)
+
+test("P3 A1d/A2a: the page is one card called Settings, and one tab per window", function()
+  local settings = require "vtabs.settings"
+  local win, gui = setup_window(1)
+  attach_all(win, gui)
+  mark_ready(win.tab_list[1])
+  local first = settings.open(gui)
+  local count = #win.tab_list
+  local again = settings.open(gui)
+  eq(again, first, "A2a: the second call activates the page instead of spawning another")
+  eq(#win.tab_list, count, "and no tab was added")
+
+  local listed = model.build(gui)
+  local card
+  for _, item in ipairs(listed) do
+    card = item.tab_id == first:tab_id() and item or card
+  end
+  assert(card, "A1d: the page has a card")
+  eq(card.title, "Settings")
+  eq(card.icon, config.get().glyphs.settings, "A1d: with the cog")
+  eq(card.meta, nil, "and no meta line to probe for")
+  assert(not card.title:find("wez-vtabs", 1, true), "A1d: never the raw marker")
+  config.setup(legacy { backend = { path = "/bin/wez-vtabs" } })
+end)
+
+test("P3 A2b: escape closes the settings tab, not whichever tab is active", function()
+  local settings = require "vtabs.settings"
+  local win, gui = setup_window(2)
+  attach_all(win, gui)
+  for _, tab in ipairs(win.tab_list) do
+    mark_ready(tab)
+  end
+  local page = settings.open(gui)
+  local page_id = page:tab_id()
+  local pane = select(2, settings.find(win))
+  -- the page authenticates over the same bridge, so it echoes the token like any other backend
+  pane.vars.vtabs_token = state.token_for(pane:pane_id())
+  local other = win.tab_list[1]
+  win.active_tab_ref = other
+  local before = #win.tab_list
+  input.handle(gui, pane, "vtabs", '{"t":"key","key":"escape"}')
+  eq(#win.tab_list, before - 1, "one tab closed")
+  eq(settings.find(win), nil, "and it was the page")
+  for _, tab in ipairs(win.tab_list) do
+    assert(tab:tab_id() ~= page_id, "the page is gone")
+  end
+  assert(actions.tab_by_id(gui, other:tab_id()), "A2b: the tab that was active survived")
+  config.setup(legacy { backend = { path = "/bin/wez-vtabs" } })
+end)
+
+test("P3 A2c: every trigger reaches actions.open_settings, and only one place spawns the page", function()
+  local settings = require "vtabs.settings"
+  local win, gui = setup_window(1)
+  attach_all(win, gui)
+  mark_ready(win.tab_list[1])
+  local calls = 0
+  local original = settings.open
+  settings.open = function(window)
+    calls = calls + 1
+    return original(window)
+  end
+
+  actions.open_settings(gui)
+  eq(calls, 1, "the action itself")
+  local binding
+  for _, entry in ipairs(keys.build(config.get().keys)) do
+    binding = entry.key == "," and entry or binding
+  end
+  assert(binding, "there is a settings binding")
+  eq(binding.mods, platform.SUPER, "CMD+, on macOS, CTRL+SHIFT+, everywhere else")
+  binding.action.callback(gui)
+  eq(calls, 2, "the key binding")
+  popover.open(gui, win.tab_list[1]:tab_id(), 1)
+  popover.run(gui, "settings")
+  eq(calls, 3, "and the popover item")
+  settings.open = original
+  config.setup(legacy { backend = { path = "/bin/wez-vtabs" } })
+end)
+
+test("P3 A5: settings.json holds only what differs, versioned, and never a symlink", function()
+  local settings = require "vtabs.settings"
+  local schema_mod = require "vtabs.schema"
+  local dir = "/tmp/vtabs-settings-" .. tostring(os.time()) .. tostring(math.random(1e6))
+  os.execute("mkdir -p " .. dir)
+  local path = dir .. "/settings.json"
+  local function with_path(over)
+    local opts = { backend = { path = "/bin/wez-vtabs" }, settings = { path = path } }
+    for k, v in pairs(over or {}) do
+      opts[k] = v
+    end
+    return config.setup(opts)
+  end
+
+  -- A5a: only the non-default keys, and the file names its version
+  local cfg = with_path { width = 32, meta = "cwd" }
+  assert(settings.save(cfg), "the file was written")
+  local f = assert(io.open(path, "r"))
+  local written = wezterm.json_parse(f:read "a")
+  f:close()
+  eq(written.version, 1)
+  eq(written.options.width, 32)
+  eq(written.options.meta, "cwd")
+  eq(written.options.row_gap, nil, "a key still at its default is not written")
+  eq(written.options.position, nil)
+  eq(schema_mod.get(written.options, "settings.path"), path, "but a key the user moved is")
+
+  -- A4c: the file moves a default, opts still wins over it
+  local stored = settings.load(with_path {})
+  eq(stored.width, 32, "the file is read back")
+  eq(config.setup({ backend = { path = "/bin/wez-vtabs" } }, stored).width, 32, "and layers under opts")
+  eq(config.setup({ width = 40, backend = { path = "/bin/wez-vtabs" } }, stored).width, 40, "which always wins")
+
+  -- A5c: unknown keys go, but not the children of an open container
+  local body = wezterm.json_encode {
+    version = 1,
+    options = {
+      width = 30,
+      nonsense = 1,
+      icon_map = { totallymade_up = "x" },
+      theme = { made_up = "#ffffff" },
+      keys = { made_up = { key = "z" } },
+    },
+  }
+  local out = assert(io.open(path, "w"))
+  out:write(body)
+  out:close()
+  local before = #wezterm.log
+  local kept = settings.load(with_path {})
+  eq(kept.width, 30)
+  eq(kept.nonsense, nil, "A5c: an unknown key is dropped")
+  eq(kept.icon_map.totallymade_up, "x", "A5c: but icon_map is open")
+  eq(kept.theme.made_up, "#ffffff", "and so are theme")
+  eq(kept.keys.made_up.key, "z", "and keys")
+  assert(#wezterm.log > before, "with one warning")
+
+  -- A5d: a version we do not know is ignored outright
+  out = assert(io.open(path, "w"))
+  out:write(wezterm.json_encode { version = 99, options = { width = 30 } })
+  out:close()
+  eq(settings.load(with_path {}), nil, "A5d")
+  out = assert(io.open(path, "w"))
+  out:write "{ not json at all"
+  out:close()
+  eq(settings.load(with_path {}), nil, "corrupt is ignored too")
+
+  -- A5f: the descriptor is `any`, so a table survives validation
+  local table_cfg = config.setup { settings = { persist = false }, backend = { path = "/bin/wez-vtabs" } }
+  eq(table_cfg.settings.persist, false, "A5f: the table is kept, not reset to the default")
+  eq(settings.persists(table_cfg), false, "and persist = false never writes")
+  eq(settings.save(table_cfg), false)
+
+  os.remove(path)
+  os.execute("rmdir " .. dir)
+  config.setup(legacy { backend = { path = "/bin/wez-vtabs" } })
+end)
+
+test("P3 A4a/A6a: opts keys are recorded as locked, and replace re-derives the glyphs", function()
+  local settings = require "vtabs.settings"
+  local cfg = config.setup {
+    width = 30,
+    theme = { accent = "#f5c2e7" },
+    backend = { path = "/bin/wez-vtabs" },
+  }
+  assert(config.explicit.width, "A4a: a key the user wrote is explicit")
+  assert(config.explicit["theme.accent"], "A4a: nested too")
+  assert(not config.explicit.row_gap, "and one they left alone is not")
+  eq(config.explicit["backend.path"], true)
+
+  -- A6a: glyphs are derived from icon_map, so replace must not carry a stale table over
+  local edited = util.merge(cfg, { icon_map = { close = "Z" } })
+  edited.glyphs = cfg.glyphs
+  eq(config.replace(edited).glyphs.close, "Z", "A6a: config.replace re-derives cfg.glyphs")
+  eq(config.get().glyphs.close, "Z")
+
+  -- A5e: nothing here arms a timer
+  local before = #wezterm.log
+  settings.persists(config.get())
+  eq(#wezterm.log, before)
+  config.setup(legacy { backend = { path = "/bin/wez-vtabs" } })
+end)
+
+test("P3 A4b: the host's own wezterm keys are recorded before the plugin writes any", function()
+  local vtabs = dofile(here .. "/../init.lua")
+  local hosted =
+    { keys = {}, window_padding = { left = 8, right = 8, top = 8, bottom = 8 }, window_decorations = "TITLE" }
+  vtabs.apply_to_config(hosted, { backend = { path = "/bin/wez-vtabs" } })
+  eq(config.host_config.window_padding.left, 8, "A4b: the host's value, not the one we would write")
+  eq(config.host_config.window_decorations, "TITLE")
+  local bare = { keys = {} }
+  vtabs.apply_to_config(bare, { backend = { path = "/bin/wez-vtabs" } })
+  eq(config.host_config.window_padding, nil, "and nil where the host left it alone")
+  eq(config.host_config.colors_split, nil)
+  config.setup(legacy { backend = { path = "/bin/wez-vtabs" } })
 end)
 
 test("collapsed = rail keeps the pane and narrows it to rail_width", function()

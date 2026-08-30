@@ -35,6 +35,7 @@ local ITEMS = {
   { id = "space", label = "Move to space", hint = "▸", disabled = true },
   { id = "tear_off", label = "Move to new window", action = "tear_off" },
   { id = "duplicate", label = "Duplicate tab" },
+  { id = "settings", label = "Settings…", action = "open_settings", key = "settings" },
   { id = "close_others", label = "Close other tabs", action = "close_others", confirm = "close_others" },
   { id = "close", label = "Close tab", action = "close_tab", key = "close_tab", confirm = "close" },
 }
