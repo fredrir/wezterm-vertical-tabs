@@ -31,19 +31,28 @@
 
 ## Sidebar identity
 
-| Evidence | Rank | Grants |
+| Rank | Evidence | Grants |
 | --- | --- | --- |
-| pane echoed a token this process minted for it | 3 | frames, events, close |
-| plugin split the pane in this process | 2 | layout only, until the echo |
-| pane title `wez-vtabs:<hex>` | 1 | adoption: one `auth`, 5 tries, then back to content |
-| anything else | 0 | content |
+| 3 | pane echoed a token this process minted for it | frames, events, width, close |
+| 2 | plugin split the pane in this process | kept out of `content` |
+| 1 | pane title `wez-vtabs:<hex>` | kept out of `content`, 5 `auth` attempts, then content again |
+| 0 | anything else | content |
 
-One pane per tab holds the role: the highest rank wins and every other pane is
-content, so a faked title can neither empty a tab nor displace a live sidebar.
+One pane per tab holds the role: highest rank wins, every other pane is content.
+A faked title can neither empty a tab nor displace a live sidebar.
 
-A pane that fakes the title marker is sent an `auth` command on its own stdin,
-so it can echo the token and become the tab's sidebar. It then receives frames
-(every tab's title and cwd in this window) and its events drive tab management
-for that window. This is not a security boundary and is not meant to be: any
-process running as you already has full mux control through `wezterm cli`, and a
-backend spawned in a remote tab's domain is trusted by design.
+Rank 1 is a real grant. Any process that can set its pane title — including one
+on an ssh/mux host you have a tab in — is sent `auth` on its own stdin, echoes
+it, and is then that tab's sidebar: it receives every frame for the window (every
+tab's title and cwd, local tabs included) and its events drive tab management,
+including `close_tab` without a prompt. A remote host can only do this in tabs of
+its own domain, within 30 s and 5 attempts per pane.
+
+| Config | Adopts in |
+| --- | --- |
+| `adopt = "auto"` (default) | local/unix domains, domains this process already spawned a backend in, domains listed in `backend.path` |
+| `adopt = true` | any domain, still only the tab's own domain |
+| `adopt = false` | nowhere; a marker pane is content, a surviving sidebar is replaced instead |
+
+Two GUI processes attached to one mux both manage the same tabs and fight over
+the sidebars. Unsupported.

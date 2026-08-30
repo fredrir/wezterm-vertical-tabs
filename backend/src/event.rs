@@ -39,6 +39,12 @@ pub enum Event {
         #[serde(rename = "in")]
         focused: bool,
     },
+    Paste {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        data: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        dropped: Option<&'static str>,
+    },
     Pong {
         #[serde(skip_serializing_if = "Option::is_none")]
         n: Option<u64>,
@@ -51,6 +57,19 @@ impl Event {
             v: VERSION,
             cols,
             rows,
+        }
+    }
+
+    pub fn paste(data: Option<Vec<u8>>) -> Self {
+        match data {
+            Some(bytes) => Event::Paste {
+                data: Some(b64(&bytes)),
+                dropped: None,
+            },
+            None => Event::Paste {
+                data: None,
+                dropped: Some("size"),
+            },
         }
     }
 
@@ -224,6 +243,14 @@ mod tests {
         assert_eq!(
             Event::Focus { focused: false }.to_json(),
             r#"{"t":"focus","in":false}"#
+        );
+        assert_eq!(
+            Event::paste(Some(b"hi".to_vec())).to_json(),
+            r#"{"t":"paste","data":"aGk="}"#
+        );
+        assert_eq!(
+            Event::paste(None).to_json(),
+            r#"{"t":"paste","dropped":"size"}"#
         );
         assert_eq!(Event::Pong { n: None }.to_json(), r#"{"t":"pong"}"#);
         assert_eq!(
