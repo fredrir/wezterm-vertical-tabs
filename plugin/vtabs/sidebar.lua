@@ -106,8 +106,8 @@ local function has_marker_cached(pane, pid)
   return value
 end
 
----How strong a pane's claim to the sidebar role is; a marker alone is the weakest and authorises nothing.
-local function sidebar_rank(pane)
+---How strong a pane's claim to the sidebar role is; `pure` reads the caches without promoting a pane.
+local function sidebar_rank(pane, pure)
   local pid = pane:pane_id()
   if session.ready[pid] then
     return RANK.ready
@@ -116,20 +116,22 @@ local function sidebar_rank(pane)
   if tab_id == nil then
     return RANK.none
   end
-  if M.is_ready(pane) then
+  if not pure and M.is_ready(pane) then
     return RANK.ready
   end
   if state.sidebar_pane_id(tab_id) == pid then
     return RANK.mapped
   end
-  if session.given_up[pid] or not has_marker_cached(pane, pid) then
+  local marker = pure and M.has_marker(pane) and not M.is_overlay(pane) or (not pure and has_marker_cached(pane, pid))
+  if session.given_up[pid] or not marker then
     return RANK.none
   end
   return RANK.marker
 end
 
+---Any pane presenting as a sidebar backend. Side-effect free: for skipping panes, never for trust.
 function M.is_backend(pane)
-  return pane ~= nil and sidebar_rank(pane) > RANK.none
+  return pane ~= nil and sidebar_rank(pane, true) > RANK.none
 end
 
 ---Splits a tab into { content = Pane[], sidebar = Pane|nil }; only the best claim holds the role.
