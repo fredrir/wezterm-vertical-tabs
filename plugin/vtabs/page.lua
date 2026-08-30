@@ -602,7 +602,10 @@ function M.plan(view)
     out.hits[row] = { kind = "space" }
   end
   if rows >= 3 then
-    out.rows[rows - 2] = { kind = "space" }
+    -- the rows carry raw keys, which is what makes them greppable; the descriptor's own label and
+    -- help belong here, where there is room for a sentence and only one row is being asked about
+    local current = shown[focus]
+    out.rows[rows - 2] = { kind = "help", field = current and not current.caveat and current or nil }
     out.hits[rows - 2] = { kind = "space" }
     out.rows[rows - 1] = { kind = "rule" }
     out.hits[rows - 1] = { kind = "chrome" }
@@ -702,6 +705,15 @@ function M.paint(view)
       for x = 2, cols - 1 do
         render.put(cells, x, view.glyphs.rule, { fg = theme.separator }, x)
       end
+    elseif spec and spec.kind == "help" then
+      if spec.field then
+        local option = spec.field.option or {}
+        local words = option.label or spec.field.label:gsub("^%s+", "")
+        if option.help then
+          words = words .. " — " .. option.help
+        end
+        render.put(cells, 2, util.truncate(words, cols - 2, view.glyphs.ellipsis), { fg = dim }, cols)
+      end
     elseif spec and spec.kind == "hints" then
       local text = hints(view.glyphs, cols >= M.PREVIEW_COLS)
       render.put(cells, 2, util.truncate(text, cols - 2, view.glyphs.ellipsis), { fg = dim }, cols)
@@ -761,18 +773,25 @@ function M.paint_field(cells, spec, g, view, theme)
 
   local text = M.value_text(row)
   if row.locked then
-    -- §4: the badge names which of the two reasons it is, so the user knows where to go to change
-    -- it. The value column is 18 cells at 100 and 14 at 60, so the wording steps down to fit
-    -- rather than overrunning the label beside it.
+    -- §4 wants the reason named, but the value column is 18 cells at 100 and 14 at 60 and
+    -- "LOCKED wezterm.lua (host)" is 25. Only the focused row can be about one key at a time, so
+    -- that is where the reason goes; every other row says LOCKED and shows its value.
     local room = math.max(g.value_x2 - g.label_x2 - 1, 1)
-    local badge
-    for _, candidate in ipairs { "LOCKED " .. row.locked, row.locked, "LOCKED " .. SHORT_SOURCE[row.locked] } do
-      if badge == nil and util.width(candidate) <= room then
-        badge = candidate
+    if spec.focused then
+      local badge
+      for _, candidate in ipairs { "LOCKED " .. row.locked, row.locked, "LOCKED " .. SHORT_SOURCE[row.locked] } do
+        if badge == nil and util.width(candidate) <= room then
+          badge = candidate
+        end
       end
+      badge = badge or util.truncate(SHORT_SOURCE[row.locked], room, view.glyphs.ellipsis)
+      render.put(cells, g.value_x2 - util.width(badge) + 1, badge, { fg = theme.unseen_fg }, g.value_x2)
+      return
     end
-    badge = badge or util.truncate(SHORT_SOURCE[row.locked], room, view.glyphs.ellipsis)
-    render.put(cells, g.value_x2 - util.width(badge) + 1, badge, { fg = theme.unseen_fg }, g.value_x2)
+    local shown = util.truncate(text, math.max(room - 9, 1), view.glyphs.ellipsis)
+    local x = g.value_x2 - util.width(shown) + 1
+    render.put(cells, x, shown, { fg = dim }, g.value_x2)
+    render.put(cells, x - 8, "LOCKED", { fg = theme.unseen_fg }, x - 2)
     return
   end
   local shown = util.truncate(text, g.value_x2 - g.label_x2 - 1, view.glyphs.ellipsis)
