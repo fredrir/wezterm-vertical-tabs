@@ -19,6 +19,25 @@ if mux_socket then
 end
 
 config.unix_domains = config.unix_domains or {}
+
+local function sidebar_cols(window)
+  local out = {}
+  for _, info in ipairs(window:mux_window():tabs_with_info()) do
+    for _, pane in ipairs(info.tab:panes()) do
+      local title = pcall(pane.get_title, pane) and pane:get_title() or ""
+      if title:match "^wez%-vtabs:" then
+        out[#out + 1] = tostring(pane:get_dimensions().cols)
+      end
+    end
+  end
+  return table.concat(out, ",")
+end
+
+-- Registered before the plugin, so it reports the width WezTerm dealt out before geometry corrects it.
+wezterm.on("window-resized", function(window)
+  wezterm.log_info("e2e: sidebar cols on resize " .. sidebar_cols(window))
+end)
+
 vtabs.apply_to_config(config, {
   poll_ms = 200,
   debug = true,
@@ -28,10 +47,34 @@ vtabs.apply_to_config(config, {
   icons = false,
 })
 
--- Test-only hook: a pane printing SetUserVar=vtabs_test=<base64 name> triggers a plugin action.
-wezterm.on("user-var-changed", function(window, _, name, value)
-  if name == "vtabs_test" and value == "toggle" then
+local probes = {
+  toggle = function(window)
     vtabs.toggle_sidebar(window)
+  end,
+  grow = function(window)
+    local dims = window:get_dimensions()
+    window:set_inner_size(dims.pixel_width + 300, dims.pixel_height)
+  end,
+  -- An InputSelector replaces the tab's panes, so the active pane becomes a TermWiz overlay pane.
+  probe_overlay = function(window)
+    local pane = window:active_pane()
+    local domain = pane and pane:get_domain_name() or "none"
+    wezterm.log_info("e2e: active pane domain " .. tostring(domain))
+  end,
+  probe_cols = function(window)
+    wezterm.log_info("e2e: sidebar cols now " .. sidebar_cols(window))
+  end,
+}
+
+-- Test-only hook: a pane printing SetUserVar=vtabs_test=<base64 name> triggers a probe.
+wezterm.on("user-var-changed", function(window, _, name, value)
+  local probe = name == "vtabs_test" and probes[value]
+  if not probe then
+    return
+  end
+  local ok, err = xpcall(probe, debug.traceback, window)
+  if not ok then
+    wezterm.log_error("e2e: probe " .. value .. " failed: " .. tostring(err))
   end
 end)
 
