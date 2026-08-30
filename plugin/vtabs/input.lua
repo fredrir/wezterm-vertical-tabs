@@ -18,22 +18,27 @@ local M = {}
 
 local DRAG_TIMEOUT_MS = 3000
 
----Runs the strip button under the pointer. `settings` and `search` are the user's to define, so they
----reach `hooks`; a table entry in `strip_actions` carries its own callback.
+---Runs the strip button under the pointer, through the one dispatch table every other caller reads.
+---A `hooked` button is the user's to point elsewhere, so its hook gets first refusal; the rest are
+---the strip's own controls. A table entry in `strip_actions` carries its own callback.
 local function strip_action(gui_window, id)
   if id == nil then
     return
   end
-  if id == "toggle" then
-    return actions.toggle_sidebar(gui_window)
+  local button = nil
+  for _, entry in ipairs(actions.strip) do
+    button = entry.id == id and entry or button
   end
-  if id == "new_tab" then
-    return actions.new_tab(gui_window)
+  if button and not button.hooked then
+    return actions.run(button.action, gui_window)
   end
   local cfg = config.get()
   local hook = (cfg.hooks or {})[id]
   if type(hook) == "function" then
     return util.try(hook, gui_window)
+  end
+  if button and button.action then
+    return actions.run(button.action, gui_window)
   end
   for _, entry in ipairs(cfg.strip_actions or {}) do
     if type(entry) == "table" and (entry.id or "custom") == id and type(entry.on_click) == "function" then
