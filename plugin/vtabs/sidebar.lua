@@ -20,7 +20,7 @@ local PRUNE_MS = 30000
 local PIN_GRACE_MS = 3000
 
 ---Title the backend sets on itself; adoption evidence only, any process can set a title.
-local MARKER = "^wez%-vtabs"
+local MARKER = "^wez%-vtabs:%x+$"
 
 local session = state.session
 
