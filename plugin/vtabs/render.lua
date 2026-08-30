@@ -175,12 +175,16 @@ local function emit(cells, page_bg, fade)
 end
 
 ---Column grid of §1.1; every landmark derives from `cols` and `padding`.
+local function framed(cfg)
+  return type(cfg.frame) == "table" or cfg.frame == true
+end
+
 local function grid(cfg, cols)
   local pad_l = math.max(cfg.padding.left or 0, 0)
   local pad_r = math.max(cfg.padding.right or 0, 0)
   local g = {}
   g.card_x1 = pad_l + 1
-  g.card_x2 = math.max(cols - pad_r, g.card_x1)
+  g.card_x2 = math.max(cols - pad_r - (framed(cfg) and 1 or 0), g.card_x1)
   g.gutter = g.card_x1
   g.icon_x = g.gutter + 2
   g.title_x1 = g.icon_x + 2
@@ -230,9 +234,19 @@ local function row_colors(item, theme, st)
   return theme.title_idle or theme.fg, theme.bg
 end
 
+local BAR_MIN_CONTRAST = 4.0
+
+---Solarized degenerates `title_active` to `fg`; there the bar is the only thing left to carry active.
+local function needs_bar(theme)
+  if type(theme_mod.contrast) ~= "function" then
+    return true
+  end
+  return theme_mod.contrast(theme.title_active or theme.fg, theme.active_bg) < BAR_MIN_CONTRAST
+end
+
 local function marker(item, theme, st, glyphs)
   local accent = item.is_private and theme.private_accent or theme.accent
-  if item.is_active or st.dragging then
+  if (item.is_active or st.dragging) and needs_bar(theme) then
     return glyphs.active, accent
   end
   if st.focused then
@@ -255,11 +269,11 @@ local function shows_close(item, cfg, st)
 end
 
 ---Path-shaped meta keeps its tail: two siblings must not both collapse to their shared parent.
-local function fit_meta(text, budget, glyphs)
+local function fit_meta(text, budget, glyphs, sep)
   if util.width(text) <= budget then
     return text
   end
-  local sep = " " .. glyphs.meta_sep .. " "
+  sep = sep ~= nil and sep or glyphs.meta_sep
   local head, tail, at, from = "", text, nil, 1
   while true do
     local i = text:find(sep, from, true)
@@ -270,6 +284,11 @@ local function fit_meta(text, budget, glyphs)
   end
   if at then
     head, tail = text:sub(1, at + #sep - 1), text:sub(at + #sep)
+    -- the separator may or may not carry its own spacing; the path starts at the first real byte
+    local lead = tail:match "^%s+"
+    if lead then
+      head, tail = head .. lead, tail:sub(#lead + 1)
+    end
   end
   local room = budget - util.width(head)
   local path_like = tail:sub(1, 1) == "~"
@@ -296,8 +315,8 @@ local function card_row(item, ctx, st, part, rows_in_card)
   local mark, mark_fg = marker(item, theme, st, glyphs)
   if part == "title" then
     put(cells, g.gutter, mark, { fg = mark_fg }, g.gutter)
-  elseif item.is_active or st.dragging then
-    put(cells, g.gutter, glyphs.active, { fg = mark_fg }, g.gutter)
+  elseif (item.is_active or st.dragging) and needs_bar(theme) then
+    put(cells, g.gutter, glyphs.active, { fg = item.is_private and theme.private_accent or theme.accent }, g.gutter)
   end
 
   local spans = nil
@@ -311,7 +330,7 @@ local function card_row(item, ctx, st, part, rows_in_card)
         g.icon_x
       )
     end
-  elseif part == "title" then
+  elseif part == "icon" then
     if cfg.icons and item.icon ~= "" then
       put(
         cells,
@@ -321,8 +340,19 @@ local function card_row(item, ctx, st, part, rows_in_card)
         g.icon_x
       )
     end
+  elseif part == "title" then
+    if cfg.icons and item.icon ~= "" and rows_in_card < 3 then
+      put(
+        cells,
+        g.icon_x,
+        util.sanitize(item.icon),
+        { fg = item.is_private and theme.private_accent or icon_fg },
+        g.icon_x
+      )
+    end
     local title = util.truncate(util.sanitize(item.title), g.title_budget, glyphs.ellipsis)
-    put(cells, g.title_x1, title, { fg = fg, bold = item.is_active }, g.title_x2)
+    local title_fg = item.is_active and not st.dragging and (theme.title_active or fg) or fg
+    put(cells, g.title_x1, title, { fg = title_fg, bold = item.is_active }, g.title_x2)
     local pin_only = item.is_pinned and cfg.pinned_style ~= "full"
     local glyph, glyph_fg, span_id
     if pin_only then
@@ -343,20 +373,25 @@ local function card_row(item, ctx, st, part, rows_in_card)
     return cells, nil
   else
     local meta = util.sanitize(item.meta or "")
+    local sep = cfg.meta_sep ~= nil and cfg.meta_sep or glyphs.meta_sep
     if cfg.show_index then
-      meta = string.format("%d %s %s", item.index, glyphs.meta_sep, meta)
+      meta = string.format("%d%s%s", item.index, sep, meta)
     end
     -- meta_fg is gated against page and card only, never against drag_bg
     local meta_fg = st.dragging and theme.drag_fg or theme.meta_fg or theme.dim
-    put(cells, g.meta_x1, fit_meta(meta, g.meta_budget, glyphs), { fg = meta_fg }, g.meta_x2)
+    put(cells, g.meta_x1, fit_meta(meta, g.meta_budget, glyphs, sep), { fg = meta_fg }, g.meta_x2)
     if shows_close(item, cfg, st) and not item.is_pinned then
       spans = { { id = "close", x1 = g.close_x1, x2 = g.close_x2 } }
     end
   end
 
-  if (item.is_active or st.dragging) and rows_in_card >= 2 and glyphs.corners == "chamfer" then
-    local ch = part == "title" and glyphs.chamfer_top or glyphs.chamfer_bottom
-    cells[g.card_x2] = { ch = ch, fg = bg, bg = theme.bg }
+  -- inverted from P1: the active card is square, so the chamfer is what marks a hover
+  local chamfered = (st.hovered or st.focused) and not item.is_active and not st.dragging
+  if chamfered and rows_in_card >= 2 and glyphs.corners == "chamfer" then
+    if part ~= "icon" then
+      local ch = part == "title" and glyphs.chamfer_top or glyphs.chamfer_bottom
+      cells[g.card_x2] = { ch = ch, fg = bg, bg = theme.bg }
+    end
   end
   return cells, spans
 end
@@ -467,6 +502,28 @@ local function new_tab_rows(cfg, rows, strip_rows, footer_n)
   return 0
 end
 
+---Paints the inner edge in the content's own colour and chamfers the page away from it.
+function M.frame_edge(painted, cols, theme, glyphs, rows)
+  local content = theme.content_bg or theme.bg
+  local first, last
+  for row = 1, rows do
+    if painted[row] then
+      first = first or row
+      last = row
+    end
+  end
+  for row = 1, rows do
+    local cells = painted[row]
+    if cells and cells[cols] then
+      cells[cols] = { ch = " ", fg = theme.fg, bg = content }
+    end
+    if cells and cells[cols - 1] and glyphs.corners == "chamfer" and (row == first or row == last) then
+      local ch = row == first and glyphs.chamfer_top or glyphs.chamfer_bottom
+      cells[cols - 1] = { ch = ch, fg = theme.bg, bg = content }
+    end
+  end
+end
+
 ---Overlays a popover rect on a laid-out frame and scrims every row it does not own.
 ---@param frame table `render.render`'s internal frame: cells, hits, cols, rows, theme
 ---@param rect table `{ x, y, w, h, scrim, bg, rows = { { bg, fg, spans, hit } }, outside_hit }`
@@ -566,12 +623,16 @@ function M.render(view)
     local dense = item.is_pinned and cfg.pinned_style ~= "full"
     local armed_dense = item.armed_pinned ~= nil and item.armed_pinned and cfg.pinned_style ~= "full"
     local one_row = dense or rail or cfg.meta == false
-    local rows_in_card = one_row and 1 or 2
+    local full = cfg.tab_height == "tall" and 3 or 2
+    local rows_in_card = one_row and 1 or full
     if item.armed_pinned ~= nil then
-      rows_in_card = (armed_dense or rail or cfg.meta == false) and 1 or 2
+      rows_in_card = (armed_dense or rail or cfg.meta == false) and 1 or full
     end
     plan[#plan + 1] = { kind = "tab", item = item, slot = slot, part = "title", rows_in_card = rows_in_card }
-    if rows_in_card == 2 then
+    if rows_in_card == 3 then
+      plan[#plan + 1] = { kind = "tab", item = item, slot = slot, part = "icon", rows_in_card = rows_in_card }
+    end
+    if rows_in_card >= 2 then
       plan[#plan + 1] = { kind = "tab", item = item, slot = slot, part = "meta", rows_in_card = rows_in_card }
     end
     if not dense or item.armed_pinned ~= nil then
@@ -775,6 +836,9 @@ function M.render(view)
       line(row, cells)
       hits[row] = { kind = "footer", id = entry.id, entry = entry, x1 = g.card_x1, x2 = g.card_x2 }
     end
+  end
+  if framed(cfg) then
+    M.frame_edge(painted, cols, theme, glyphs, view.rows)
   end
   local frame = {
     cells = painted,
