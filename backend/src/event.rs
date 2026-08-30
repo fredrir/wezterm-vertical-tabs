@@ -32,7 +32,10 @@ pub enum Event {
         #[serde(rename = "in")]
         focused: bool,
     },
-    Pong,
+    Pong {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        n: Option<u64>,
+    },
 }
 
 impl Event {
@@ -202,6 +205,10 @@ mod tests {
             Event::Focus { focused: false }.to_json(),
             r#"{"t":"focus","in":false}"#
         );
-        assert_eq!(Event::Pong.to_json(), r#"{"t":"pong"}"#);
+        assert_eq!(Event::Pong { n: None }.to_json(), r#"{"t":"pong"}"#);
+        assert_eq!(
+            Event::Pong { n: Some(5) }.to_json(),
+            r#"{"t":"pong","n":5}"#
+        );
     }
 }

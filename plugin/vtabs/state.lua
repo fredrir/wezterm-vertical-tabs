@@ -100,6 +100,7 @@ M.session = {
   attaching = {},
   pane_domain = {},
   failed_domains = {},
+  ready_failures = {},
 }
 
 local function save(persist)

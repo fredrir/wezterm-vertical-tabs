@@ -32,7 +32,7 @@ All events carry `"t"`. Columns/rows are 1-based cell coordinates.
 | mouse  | `{"t":"mouse","k":"down"\|"up"\|"drag"\|"move"\|"wheel","b":"left"\|"middle"\|"right"\|"none","x":C,"y":R,"dy":-1\|1,"mods":["shift","ctrl","alt"]}` |
 | key    | `{"t":"key","key":"<name>","mods":["shift","ctrl","alt"]}`                                                                                           |
 | focus  | `{"t":"focus","in":true\|false}`                                                                                                                     |
-| pong   | `{"t":"pong"}`                                                                                                                                       |
+| pong | `{"t":"pong","n":N}` — echoes the ping's `n` (omitted when the ping had none) |
 
 - `dy` is only present for `wheel` (`-1` = up, `1` = down); `b` is `"none"` for wheel.
 - `drag` = motion with a button held (SGR bit 32 + button), `move` = motion with no button.
@@ -53,7 +53,7 @@ All events carry `"t"`. Columns/rows are 1-based cell coordinates.
 | frame   | `{"t":"frame","data":"..."}` | write `data` verbatim to stdout, then flush |
 | clear   | `{"t":"clear"}`              | clear screen, cursor home                   |
 | quit    | `{"t":"quit"}`               | restore terminal and exit 0                 |
-| ping    | `{"t":"ping"}`               | reply with `pong`                           |
+| ping | `{"t":"ping","n":N}` | reply with `pong` carrying the same `n`; WezTerm only fires `user-var-changed` when the value changes, so `n` must vary |
 
 `data` contains raw ANSI (CUP, SGR, …); it never contains a newline.
 Unknown commands are ignored. Malformed JSON lines are ignored.

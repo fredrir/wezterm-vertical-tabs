@@ -4,9 +4,16 @@ use serde::Deserialize;
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(tag = "t", rename_all = "snake_case")]
 pub enum Command {
-    Frame { data: String },
+    Frame {
+        data: String,
+    },
     Clear,
     Quit,
-    Ping,
-    Auth { token: String },
+    Ping {
+        #[serde(default)]
+        n: Option<u64>,
+    },
+    Auth {
+        token: String,
+    },
 }

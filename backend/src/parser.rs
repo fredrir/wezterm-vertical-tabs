@@ -608,7 +608,7 @@ mod tests {
     fn escape_before_command_line() {
         assert_eq!(
             feed(b"\x1b{\"t\":\"ping\"}\n"),
-            vec![plain("escape"), Input::Command(Command::Ping)]
+            vec![plain("escape"), Input::Command(Command::Ping { n: None })]
         );
     }
 
@@ -665,7 +665,10 @@ mod tests {
     fn command_line_split_across_chunks() {
         let mut p = Parser::new();
         assert!(p.feed(b"{\"t\":\"pi").is_empty());
-        assert_eq!(p.feed(b"ng\"}\n"), vec![Input::Command(Command::Ping)]);
+        assert_eq!(
+            p.feed(b"ng\"}\n"),
+            vec![Input::Command(Command::Ping { n: None })]
+        );
     }
 
     #[test]
@@ -673,7 +676,7 @@ mod tests {
         assert_eq!(
             feed(b"{\"t\":\"ping\"}\n\x1b[<0;3;2M"),
             vec![
-                Input::Command(Command::Ping),
+                Input::Command(Command::Ping { n: None }),
                 mouse(MouseKind::Press, Button::Left, 3, 2, 0, Mods::default())
             ]
         );

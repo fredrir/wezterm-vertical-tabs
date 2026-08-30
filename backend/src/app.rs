@@ -47,7 +47,7 @@ impl<W: Write> App<W> {
         match cmd {
             Command::Frame { data } => self.write(data.as_bytes())?,
             Command::Clear => self.write(CLEAR_SCREEN.as_bytes())?,
-            Command::Ping => self.emit(&Event::Pong)?,
+            Command::Ping { n } => self.emit(&Event::Pong { n })?,
             Command::Auth { token } => self.write(set_user_var(TOKEN_VAR, &token).as_bytes())?,
             Command::Quit => return Ok(false),
         }
@@ -109,8 +109,12 @@ mod tests {
     #[test]
     fn ping_answers_with_pong_user_var() {
         let mut a = app();
-        a.handle(Input::Command(Command::Ping)).unwrap();
-        assert_eq!(a.out, set_user_var("vtabs", r#"{"t":"pong"}"#).as_bytes());
+        a.handle(Input::Command(Command::Ping { n: Some(7) }))
+            .unwrap();
+        assert_eq!(
+            a.out,
+            set_user_var("vtabs", r#"{"t":"pong","n":7}"#).as_bytes()
+        );
     }
 
     #[test]

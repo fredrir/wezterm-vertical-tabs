@@ -168,6 +168,14 @@ function M.attach(tab)
     return nil
   end
   local args = backend.spawn_args(cfg, pane_domain)
+  if cfg.debug then
+    util.log(
+      "attach: tab %d domain %s args %s",
+      tab_id,
+      tostring(pane_domain),
+      table.concat(args or {}, " "):sub(1, 80)
+    )
+  end
   if not args then
     util.warn_once(
       "backend-" .. tostring(pane_domain),
@@ -238,12 +246,20 @@ function M.close_orphan(gui_window, tab, sb)
   end
 end
 
----A backend that never answers means the binary is missing there; stop retrying in that domain.
+local MAX_READY_FAILURES = 2
+
+---A backend that repeatedly never answers means the binary is missing there; stop retrying in that domain.
 function M.give_up(gui_window, tab, sb)
   local domain = session.pane_domain[sb:pane_id()] or "local"
-  session.failed_domains[domain] = true
-  util.warn("sidebar backend not responding in domain %s; set backend.path for it", tostring(domain))
+  local failures = (session.ready_failures[domain] or 0) + 1
+  session.ready_failures[domain] = failures
   M.detach(gui_window, tab)
+  if failures >= MAX_READY_FAILURES then
+    session.failed_domains[domain] = true
+    util.warn("sidebar backend not responding in domain %s; set backend.path for it", tostring(domain))
+  else
+    util.warn("sidebar in domain %s did not start, retrying", tostring(domain))
+  end
 end
 
 ---Pings idle sidebars; replaces one whose backend stopped answering.
@@ -257,9 +273,10 @@ local function check_liveness(gui_window, tab, sb, now)
     M.detach(gui_window, tab)
     return false
   end
+  session.ready_failures[session.pane_domain[pid] or "local"] = nil
   if idle > PING_AFTER_MS and (session.pinged[pid] or 0) < seen then
     session.pinged[pid] = now
-    M.send(sb, { t = "ping" })
+    M.send(sb, { t = "ping", n = now })
   end
   return true
 end
