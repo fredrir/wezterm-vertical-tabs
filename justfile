@@ -26,3 +26,6 @@ e2e mode="local": build
 
 build profile="release":
     cd backend && cargo build --locked {{ if profile == "release" { "--release" } else { "" } }}
+
+screenshot:
+    xvfb-run -a -s "-screen 0 1600x900x24" sh scripts/screenshot.sh
