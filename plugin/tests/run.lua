@@ -769,8 +769,8 @@ test("P1 grid: landmarks derive from cols and padding", function()
   local rows = frame_rows(p1_view { opts = { separator = "gap" } })
   eq(usub(rows[1], 4, 4), "~", "icon at icon_x")
   eq(usub(rows[1], 6, 13), "dotfiles", "title at title_x1")
-  eq(usub(rows[3], 2, 2), "▎", "active accent bar in the gutter")
-  eq(usub(rows[4], 2, 2), "▎", "and on the meta row")
+  eq(usub(rows[3], 2, 2), " ", "this palette's title carries active on its own: no bar")
+  eq(usub(rows[4], 2, 2), " ", "on both rows")
   eq(usub(rows[4], 6, 25), "~/p/wez-plugins     ", "meta at meta_x1, elided in the middle")
   local wide = frame_rows(p1_view { opts = { width = 40, separator = "gap" }, cols = 40 })
   eq(usub(wide[1], 6, 13), "dotfiles", "title column does not move with width")
@@ -778,9 +778,11 @@ end)
 
 test("P1 chamfer: right side only, 2-row cards only", function()
   local rows = frame_rows(p1_view { opts = { separator = "gap" } })
-  eq(usub(rows[3], 27, 27), "▙", "top-right chamfer on the active card")
-  eq(usub(rows[4], 27, 27), "▛", "bottom-right chamfer")
-  eq(usub(rows[3], 2, 2), "▎", "col 2 is the gutter, never a chamfer")
+  eq(usub(rows[3], 27, 27), " ", "the active card is square")
+  local hovered_rows = frame_rows(p1_view { hover = { x = 5, y = 6 }, opts = { separator = "gap" } })
+  eq(usub(hovered_rows[6], 27, 27), "▙", "a hovered card chamfers instead")
+  eq(usub(hovered_rows[7], 27, 27), "▛", "bottom-right too")
+  assert(usub(rows[3], 2, 2) ~= "▙", "col 2 is the gutter, never a chamfer")
   local one_row = frame_rows(p1_view { opts = { meta = false, separator = "gap" } })
   for _, line in ipairs(one_row) do
     assert(not line:find("▙", 1, true) and not line:find("▛", 1, true), "1-row cards are square")
@@ -1224,8 +1226,8 @@ test("P1 screenshots: icon weight, chamfer, toggle surface, dashed ghost", funct
   end
   assert(active_row and hover_row, "found both cards")
 
-  eq(usub(rows[active_row], 27, 27), "▙", "the active card keeps its chamfer")
-  eq(usub(rows[hover_row], 27, 27), " ", "a hovered card does not: hover_bg is 1.15 against the page")
+  eq(usub(rows[active_row], 27, 27), " ", "the active card is square")
+  eq(usub(rows[hover_row], 27, 27), "▙", "and the hovered one carries the chamfer")
 
   assert(r.rows[active_row]:find(ansi.fg(v.theme.meta_fg), 1, true), "icon paints at meta weight")
 
@@ -1572,6 +1574,127 @@ test("P3 lazy attach: a sidebar-less background tab is not an orphan", function(
   eq(#listed, 3, "and every tab is still listed")
 end)
 
+test("addendum 5: the accent bar is a per-palette fallback, not a fixture", function()
+  local strong = p1_view { opts = { separator = "gap" } }
+  strong.theme.title_active = { 137, 180, 250 }
+  local strong_rows = frame_rows(strong)
+  eq(usub(strong_rows[3], 2, 2), " ", "an accent title that clears 4.0 needs no bar")
+  eq(usub(strong_rows[4], 2, 2), " ")
+
+  local weak = p1_view { opts = { separator = "gap" } }
+  weak.theme.title_active = weak.theme.meta_fg
+  local weak_rows = frame_rows(weak)
+  eq(usub(weak_rows[3], 2, 2), "▎", "a degenerate title_active brings the bar back")
+  eq(usub(weak_rows[4], 2, 2), "▎", "on both rows of the card")
+end)
+
+test("addendum 5: every palette either clears 4.0 or keeps its bar", function()
+  local palettes = require "palettes"
+  local barred, clear = 0, 0
+  for _, p in ipairs(palettes) do
+    local resolved = theme.resolve({}, p)
+    local title = resolved.title_active or resolved.fg
+    local v = p1_view { opts = { separator = "gap" } }
+    v.theme = resolved
+    local rows = frame_rows(v)
+    local bar = usub(rows[3], 2, 2) == "▎"
+    if theme.contrast(title, resolved.active_bg) < 4.0 then
+      assert(bar, p.name .. " needs the bar and did not draw it")
+      barred = barred + 1
+    else
+      assert(not bar, p.name .. " clears 4.0 but still drew a bar")
+      clear = clear + 1
+    end
+  end
+  eq(barred + clear, #palettes, "every palette classified")
+end)
+
+test("addendum 5: an active tab with unseen output shows the dot once the bar is gone", function()
+  local unseen_items = p1_items()
+  unseen_items[2].has_unseen = true
+  local v = p1_view { items = unseen_items, opts = { separator = "gap" } }
+  v.theme.title_active = { 137, 180, 250 }
+  local rows = frame_rows(v)
+  eq(usub(rows[3], 2, 2), "•", "the freed gutter finally reaches an active tab")
+end)
+
+test("addendum 6: tab_height = tall centres the icon on the middle row", function()
+  local v = p1_view { rows = 20, opts = { separator = "gap" } }
+  v.cfg.tab_height = "tall"
+  local rows, r = frame_rows(v)
+  local title
+  for row = 1, v.rows do
+    local h = r.hits[row]
+    if h and h.kind == "tab" and h.part == "title" and h.id == 2 then
+      title = title or row
+    end
+  end
+  eq(r.hits[title].part, "title")
+  eq(r.hits[title + 1].part, "icon", "the icon owns the middle row")
+  eq(r.hits[title + 2].part, "meta")
+  eq(r.hits[title + 1].slot, r.hits[title].slot, "all three rows are one card")
+  eq(usub(rows[title], 4, 4), " ", "the title row gives its icon column back")
+  eq(usub(rows[title + 1], 4, 4), "v", "and the icon sits between title and meta")
+  for row = 1, v.rows do
+    eq(util.width(rows[row]), 28, "tall row " .. row)
+  end
+end)
+
+test("addendum 4: fit_meta splits on the configured separator", function()
+  local sep_items = p1_items()
+  sep_items[2].meta = "nvim  ~/work/acme/services/api"
+  sep_items[3].meta = "nvim  ~/work/acme/services/web"
+  local v = p1_view { items = sep_items, opts = { separator = "gap" } }
+  v.cfg.meta_sep = "  "
+  local rows = frame_rows(v)
+  assert(usub(rows[4], 6, 25):find("api", 1, true), "two spaces split the composite: " .. usub(rows[4], 6, 25))
+  assert(usub(rows[7], 6, 25):find("web", 1, true))
+  eq(util.width(rows[4]), 28)
+end)
+
+test("addendum 2: frame paints the inner edge and chamfers the page away", function()
+  local plain = render.render(p1_view { rows = 20, opts = { separator = "gap" } })
+  local v = p1_view { rows = 20, opts = { separator = "gap" } }
+  v.cfg.frame = { margin = 1, corners = true, tint = 0.04 }
+  v.theme.content_bg = { 0, 0, 0 }
+  local rows, r = frame_rows(v)
+  for row = 1, v.rows do
+    eq(util.width(rows[row]), 28, "framed row " .. row)
+  end
+  local first, last
+  for row = 1, v.rows do
+    if r.rows[row] then
+      first = first or row
+      last = row
+    end
+  end
+  eq(usub(rows[first], 27, 27), "▙", "the page chamfers away from the content at the top")
+  eq(usub(rows[last], 27, 27), "▛", "and closes at the bottom")
+  assert(r.rows[first]:find(ansi.bg { 0, 0, 0 }, 1, true), "col 28 is painted in the content's colour")
+
+  local card
+  for row = 1, v.rows do
+    if r.hits[row] and r.hits[row].kind == "tab" and r.hits[row].part == "title" then
+      card = card or row
+    end
+  end
+  eq(r.hits[card].x2, 26, "the card grid gives up one column to the frame")
+  local plain_card
+  for row = 1, 20 do
+    if plain.hits[row] and plain.hits[row].kind == "tab" and plain.hits[row].part == "title" then
+      plain_card = plain_card or row
+    end
+  end
+  eq(plain.hits[plain_card].x2, 27, "and keeps it when frame is off")
+end)
+
+test("addendum 2: frame = false changes nothing", function()
+  local off = render.render(p1_view { rows = 20, opts = { separator = "gap" } })
+  local explicit = p1_view { rows = 20, opts = { separator = "gap" } }
+  explicit.cfg.frame = false
+  eq(render.render(explicit).data, off.data, "the default frame is byte-identical to no frame")
+end)
+
 test("P1 frames are written for design review", function()
   -- the shared fixture pins row_gap and separator for positional tests; frames want the shipped values
   local design = { row_gap = config.defaults.row_gap, separator = config.defaults.separator }
@@ -1603,6 +1726,18 @@ test("P1 frames are written for design review", function()
   local pop = dumped { rows = 20, opts = design }
   pop.popover = popover_rect()
   dump_frame("popover-open", pop)
+  local tall = dumped { rows = 20, opts = design }
+  tall.cfg.tab_height = "tall"
+  dump_frame("tall", tall)
+  local framed = dumped { rows = 20, opts = design }
+  framed.cfg.frame = { margin = 1, corners = true, tint = 0.04 }
+  framed.theme.content_bg = framed.theme.bg
+  dump_frame("frame", framed)
+  local unseen = p1_items()
+  unseen[2].has_unseen = true
+  local active_unseen = dumped { rows = 20, items = unseen, opts = design }
+  active_unseen.theme.title_active = { 137, 180, 250 }
+  dump_frame("active-unseen", active_unseen)
   for _, cols in ipairs { 5, 9 } do
     local rail = p1_view { rows = 16, cols = cols, opts = design }
     rail.rail = true
