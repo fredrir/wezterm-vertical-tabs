@@ -774,6 +774,15 @@ test("the backend is told the sidebar background", function()
   assert(sb.split_args.set_environment_variables.VTABS_BG:match "^#%x%x%x%x%x%x$", "hex background passed")
 end)
 
+test("the marker pattern matches the backend title and nothing else", function()
+  for _, title in ipairs { "wez-vtabs:c7a00ec8", "wez-vtabs:00", "wez-vtabs:abcd" } do
+    eq(sidebar.marker(title), true, title)
+  end
+  for _, title in ipairs { "wez-vtabs", "wez-vtabs --version", "wez-vtabs:deploy prod", "my wez-vtabs:00" } do
+    eq(sidebar.marker(title), false, title)
+  end
+end)
+
 test("a marker title never reaches the rendered tab list", function()
   local win, gui = setup_window(1)
   sidebar.ensure(gui)
