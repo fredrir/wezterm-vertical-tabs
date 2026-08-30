@@ -4,7 +4,7 @@ set -eu
 root=$(cd "$(dirname "$0")/../.." && pwd)
 bin="${VTABS_BIN:-$root/backend/target/release/wez-vtabs}"
 [ -x "$bin" ] || { echo "backend binary not found: $bin"; exit 1; }
-log=$(mktemp -t vtabs-e2e)
+log=$(mktemp -t vtabs-e2e.XXXXXX)
 
 mode="${1:-local}"
 home=$(mktemp -d /tmp/vte2e.XXXXXX)
@@ -17,7 +17,8 @@ fi
 echo "mode: $mode"
 # Isolated HOME keeps sockets and the mux pid file away from the real wezterm.
 # shellcheck disable=SC2086
-HOME="$home" VTABS_ROOT="$root" VTABS_BIN="$bin" WEZTERM_LOG=info wezterm --config-file "$root/plugin/tests/wezterm-e2e.lua" \
+mkdir -p "$home/run"
+HOME="$home" XDG_RUNTIME_DIR="$home/run" VTABS_ROOT="$root" VTABS_BIN="$bin" WEZTERM_LOG=info wezterm --config-file "$root/plugin/tests/wezterm-e2e.lua" \
   $launch --class vtabs-e2e >"$log" 2>&1 &
 pid=$!
 cleanup() {
@@ -38,7 +39,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-export WEZTERM_UNIX_SOCKET="$home/.local/share/wezterm/gui-sock-$pid"
+export WEZTERM_UNIX_SOCKET="$home/run/wezterm/gui-sock-$pid"
 for _ in $(seq 1 50); do
   [ -S "$WEZTERM_UNIX_SOCKET" ] && wezterm cli --no-auto-start list >/dev/null 2>&1 && break
   sleep 0.2
@@ -58,6 +59,7 @@ sidebar_text() { cli get-text --pane-id "$1"; }
 active_title() { sidebar_text "$1" | python3 -c 'import sys; rows=[l for l in sys.stdin.read().split("\n") if "▎" in l]; print(rows[0].split("▎",1)[1].split()[0] if rows else "")'; }
 row_of() { sidebar_text "$1" | python3 -c 'import sys; rows=sys.stdin.read().split("\n"); print(next(i+1 for i,l in enumerate(rows) if "'"$2"'" in l))'; }
 click() { cli send-text --no-paste --pane-id "$1" "$(printf '\033[<%s;%s;%sM\033[<%s;%s;%sm' "$4" "$2" "$3" "$4" "$2" "$3")"; }
+geometry() { list | python3 -c 'import json,sys; [print("  win", p["window_id"], "tab", p["tab_id"], "pane", p["pane_id"], p["title"], "left", p["left_col"], "cols", p["size"]["cols"]) for p in json.load(sys.stdin)]'; }
 
 for _ in $(seq 1 40); do
   [ -n "$(sidebar_panes 2>/dev/null)" ] && break
@@ -122,14 +124,23 @@ echo "ok: new tab button spawns tab with sidebar"
 
 cli set-tab-title --tab-id "$third_tab" three
 sleep 1
-drag() { cli send-text --no-paste --pane-id "$1" "$(printf '\033[<0;%s;%sM\033[<32;%s;%sM\033[<32;%s;%sM\033[<0;%s;%sm' "$2" "$3" "$2" "$3" "$4" "$5" "$4" "$5")"; }
-drag "$sb1" 5 "$(row_of "$sb1" three)" 5 "$(row_of "$sb1" one)"
+# The press focuses the sidebar of the pressed tab, so motion and release arrive at $2, not $1.
+# Separate sends keep the events out of one read chunk (the backend coalesces those) and let the dwell pass.
+drag() { # press_pane follow_pane x1 y1 x2 y2
+  cli send-text --no-paste --pane-id "$1" "$(printf '\033[<0;%s;%sM' "$3" "$4")"
+  sleep 0.4
+  cli send-text --no-paste --pane-id "$2" "$(printf '\033[<32;%s;%sM' "$5" "$6")"
+  sleep 0.3
+  cli send-text --no-paste --pane-id "$2" "$(printf '\033[<0;%s;%sm' "$5" "$6")"
+}
+sb3=$(sidebar_of "$third_tab")
+drag "$sb1" "$sb1" 5 "$(row_of "$sb1" one)" 5 6
 sleep 1.5
 [ "$(row_of "$sb1" three)" -lt "$(row_of "$sb1" one)" ] || fail "drag did not reorder tabs"
 echo "ok: drag reorders tabs"
 
 window_count() { list | python3 -c 'import json,sys; print(len({p["window_id"] for p in json.load(sys.stdin)}))'; }
-drag "$sb1" 5 "$(row_of "$sb1" three)" 28 "$(row_of "$sb1" three)"
+drag "$sb1" "$sb3" 5 "$(row_of "$sb1" three)" 28 "$(row_of "$sb1" three)"
 for _ in $(seq 1 16); do
   [ "$(window_count)" -eq 2 ] && break
   sleep 0.5
