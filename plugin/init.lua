@@ -196,6 +196,7 @@ local MODULES = {
   "icons",
   "input",
   "keys",
+  "layout",
   "model",
   "platform",
   "popover",
