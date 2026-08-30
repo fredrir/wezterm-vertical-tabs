@@ -1,4 +1,5 @@
 local wezterm = require "wezterm" ---@type Wezterm
+local mux = require "vtabs.mux"
 local util = require "vtabs.util"
 
 local M = {}
@@ -76,9 +77,7 @@ function M.resolve(icon_map)
 end
 
 local function process_key(pane)
-  local name = util.try(function()
-    return pane:get_foreground_process_name()
-  end)
+  local name = mux.foreground(pane)
   if not name or name == "" then
     return nil
   end

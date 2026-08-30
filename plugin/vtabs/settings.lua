@@ -1,6 +1,7 @@
 local wezterm = require "wezterm" ---@type Wezterm
 local backend = require "vtabs.backend"
 local config = require "vtabs.config"
+local mux = require "vtabs.mux"
 local sidebar = require "vtabs.sidebar"
 local state = require "vtabs.state"
 local util = require "vtabs.util"
@@ -148,14 +149,8 @@ end
 ---The settings tab of this mux window and the pane running the page, or nil.
 ---One page per window: `open` looks here before it spawns anything.
 function M.find(mux_window)
-  local infos = util.try(function()
-    return mux_window:tabs_with_info()
-  end) or {}
-  for _, info in ipairs(infos) do
-    local panes = util.try(function()
-      return info.tab:panes()
-    end) or {}
-    for _, pane in ipairs(panes) do
+  for _, info in ipairs(mux.tabs_with_info(mux_window) or {}) do
+    for _, pane in ipairs(mux.panes(info.tab) or {}) do
       if sidebar.is_settings(pane) then
         return info.tab, pane
       end
@@ -165,9 +160,7 @@ function M.find(mux_window)
 end
 
 local function active_content_pane(gui_window)
-  local tab = util.try(function()
-    return gui_window:mux_window():active_tab()
-  end)
+  local tab = mux.active_tab(mux.call(gui_window, "mux_window"))
   return tab and sidebar.content_pane(tab) or nil
 end
 
@@ -192,9 +185,7 @@ function M.open(gui_window)
   end
   local cfg = config.get()
   local base = active_content_pane(gui_window)
-  local pane_domain = base and util.try(function()
-    return base:get_domain_name()
-  end) or "local"
+  local pane_domain = base and mux.domain(base) or "local"
   local args = backend.spawn_args(cfg, pane_domain, nil, "settings")
   if not args then
     util.warn_once("settings-backend", "no backend for domain %s; settings unavailable", tostring(pane_domain))
@@ -228,17 +219,13 @@ function M.close(gui_window)
   end
   local tab_id = tab:tab_id()
   tab:activate()
-  local active = util.try(function()
-    return gui_window:mux_window():active_tab()
-  end)
+  local active = mux.active_tab(mux.call(gui_window, "mux_window"))
   if not active or active:tab_id() ~= tab_id then
     util.warn_once("settings-close", "settings tab %s would not activate; not closing", tostring(tab_id))
     return false
   end
   -- every edit commits as it is made, so there is nothing to lose to a confirmation prompt
-  util.try(function()
-    gui_window:perform_action(act.CloseCurrentTab { confirm = false }, pane)
-  end)
+  mux.call(gui_window, "perform_action", act.CloseCurrentTab { confirm = false }, pane)
   return true
 end
 
