@@ -4170,10 +4170,26 @@ test("the window padding is zeroed on the sides the sidebar touches, and never w
   eq(config.setup({ position = "right" }).padding.left, 1)
   eq(config.defaults.padding.bottom, 0, "the window's half-cell is the air below, not a sidebar row")
   eq(config.setup({ position = "right", padding = { right = 4 } }).padding.right, 4, "yours wins")
-  eq(config.setup({ position = "right", padding = { right = 4 } }).padding.left, 2, "untouched, unmirrored")
-  eq(config.setup({ position = "right", padding = 3 }).padding.right, 2, "a padding that is not a table")
-  eq(config.setup({ position = "right", padding = { left = -5 } }).padding.left, 2, "and one out of range")
-  eq(config.setup({ position = "right", padding = { left = -5 } }).padding.right, 2, "both come back mirrored")
+  eq(
+    config.setup({ position = "right", padding = { right = 4 } }).padding.left,
+    config.defaults.padding.left,
+    "untouched, unmirrored"
+  )
+  eq(
+    config.setup({ position = "right", padding = 3 }).padding.right,
+    config.defaults.padding.right,
+    "a padding that is not a table"
+  )
+  eq(
+    config.setup({ position = "right", padding = { left = -5 } }).padding.left,
+    config.defaults.padding.left,
+    "and one out of range"
+  )
+  eq(
+    config.setup({ position = "right", padding = { left = -5 } }).padding.right,
+    config.defaults.padding.right,
+    "both come back mirrored"
+  )
   config.setup(legacy { backend = { path = "/bin/wez-vtabs" } })
 end)
 
