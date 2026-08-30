@@ -328,7 +328,7 @@ end
 local function await_auth(gui_window, tab, sb, now)
   local pid = sb:pane_id()
   if state.sidebar_pane_id(tab:tab_id()) ~= pid then
-    if M.has_marker(sb) then
+    if M.has_marker(sb) and not M.is_overlay(sb) then
       adopt(tab, sb, now)
     end
     return
