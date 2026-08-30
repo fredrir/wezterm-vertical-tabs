@@ -234,14 +234,20 @@ local function row_colors(item, theme, st)
   return theme.title_idle or theme.fg, theme.bg
 end
 
-local BAR_MIN_CONTRAST = 4.0
+local BAR_MIN_HUE = 24
 
----Solarized degenerates `title_active` to `fg`; there the bar is the only thing left to carry active.
+---A title that ran out of room and came back as `fg` scores well on contrast and shows no hue at
+---all, so the bar is gated on distance from `fg`, not on contrast against the card.
 local function needs_bar(theme)
-  if type(theme_mod.contrast) ~= "function" then
+  local title, fg = theme.title_active, theme.fg
+  if not title or not fg then
     return true
   end
-  return theme_mod.contrast(theme.title_active or theme.fg, theme.active_bg) < BAR_MIN_CONTRAST
+  local delta = 0
+  for i = 1, 3 do
+    delta = math.max(delta, math.abs((title[i] or 0) - (fg[i] or 0)))
+  end
+  return delta < BAR_MIN_HUE
 end
 
 local function marker(item, theme, st, glyphs)

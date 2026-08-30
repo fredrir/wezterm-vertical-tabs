@@ -170,6 +170,7 @@ impl Run {
             || cmd.ms == 0
             || cmd.ms > MAX_MS
             || !(MIN_FPS..=MAX_FPS).contains(&fps)
+            || cmd.rows.iter().any(|r| r.delay > MAX_MS)
         {
             return Err(Rejected::Bounds);
         }
@@ -200,7 +201,8 @@ impl Run {
     }
 
     pub fn total_ms(&self) -> u64 {
-        self.ms + self.delays.iter().map(|(_, d)| *d).max().unwrap_or(0)
+        self.ms
+            .saturating_add(self.delays.iter().map(|(_, d)| *d).max().unwrap_or(0))
     }
 
     /// The frame for `elapsed`; a late wake skips the ticks it missed instead of replaying them.
@@ -360,6 +362,24 @@ mod tests {
             Run::new(empty, Instant::now()).err(),
             Some(Rejected::Bounds)
         );
+    }
+
+    #[test]
+    fn a_delay_past_the_duration_cap_is_refused() {
+        let mut c = cmd(ROW);
+        c.rows = vec![AnimRow {
+            y: 3,
+            delay: u64::MAX,
+        }];
+        assert_eq!(Run::new(c, Instant::now()).err(), Some(Rejected::Bounds));
+
+        let mut ok = cmd(ROW);
+        ok.rows = vec![AnimRow {
+            y: 3,
+            delay: MAX_MS,
+        }];
+        let run = Run::new(ok, Instant::now()).expect("a delay inside the cap plays");
+        assert_eq!(run.total_ms(), 100 + MAX_MS, "and total_ms does not wrap");
     }
 
     #[test]

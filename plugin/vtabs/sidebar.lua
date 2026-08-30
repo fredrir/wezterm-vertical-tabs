@@ -55,23 +55,37 @@ local function pane_title(pane)
   end)
 end
 
+---Role a backend title claims, from one read: "sidebar", "settings", or nil.
+local function title_role(title)
+  if type(title) ~= "string" then
+    return nil
+  end
+  if title:match(MARKER) then
+    return "sidebar"
+  end
+  if title:match(SETTINGS_MARKER) then
+    return "settings"
+  end
+  return nil
+end
+
 ---Any title this backend sets, in any role: kept out of the tab list whatever the pane is doing.
 function M.marker(title)
-  if type(title) ~= "string" then
-    return false
-  end
-  return title:match(MARKER) ~= nil or title:match(SETTINGS_MARKER) ~= nil
+  return title_role(title) ~= nil
 end
 
 ---Adoption evidence, sidebar role only.
 function M.has_marker(pane)
-  local title = pane_title(pane)
-  return type(title) == "string" and title:match(MARKER) ~= nil
+  return title_role(pane_title(pane)) == "sidebar"
 end
 
 function M.is_settings(pane)
-  local title = pane and pane_title(pane)
-  return type(title) == "string" and title:match(SETTINGS_MARKER) ~= nil
+  return pane ~= nil and title_role(pane_title(pane)) == "settings"
+end
+
+---One title read, classified once: this runs for every pane on the classify hot path.
+local function claims_sidebar(pane)
+  return title_role(pane_title(pane)) == "sidebar" and not M.is_overlay(pane)
 end
 
 ---Re-points the map when the mux renumbers panes; only this process knows the token it minted.
@@ -120,7 +134,7 @@ local function has_marker_cached(pane, pid)
   if seen and seen.tick == tick then
     return seen.value
   end
-  local value = M.has_marker(pane) and not M.is_overlay(pane) and not M.is_settings(pane)
+  local value = claims_sidebar(pane)
   session.marker[pid] = { tick = tick, value = value }
   return value
 end
@@ -143,7 +157,7 @@ local function sidebar_rank(pane, pure)
   end
   local marker
   if pure then
-    marker = M.has_marker(pane) and not M.is_overlay(pane) and not M.is_settings(pane)
+    marker = claims_sidebar(pane)
   else
     marker = has_marker_cached(pane, pid)
   end

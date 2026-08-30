@@ -765,8 +765,8 @@ test("P1 grid: landmarks derive from cols and padding", function()
   local rows = frame_rows(p1_view { opts = { separator = "gap" } })
   eq(usub(rows[1], 4, 4), "~", "icon at icon_x")
   eq(usub(rows[1], 6, 13), "dotfiles", "title at title_x1")
-  eq(usub(rows[3], 2, 2), " ", "this palette's title carries active on its own: no bar")
-  eq(usub(rows[4], 2, 2), " ", "on both rows")
+  eq(usub(rows[3], 2, 2), "▎", "no title_active on this fixture, so the bar carries active")
+  eq(usub(rows[4], 2, 2), "▎", "on both rows")
   eq(usub(rows[4], 6, 25), "~/p/wez-plugins     ", "meta at meta_x1, elided in the middle")
   local wide = frame_rows(p1_view { opts = { width = 40, separator = "gap" }, cols = 40 })
   eq(usub(wide[1], 6, 13), "dotfiles", "title column does not move with width")
@@ -1566,39 +1566,73 @@ test("P3 lazy attach: a sidebar-less background tab is not an orphan", function(
   eq(#listed, 3, "and every tab is still listed")
 end)
 
-test("addendum 5: the accent bar is a per-palette fallback, not a fixture", function()
-  local strong = p1_view { opts = { separator = "gap" } }
-  strong.theme.title_active = { 137, 180, 250 }
-  local strong_rows = frame_rows(strong)
-  eq(usub(strong_rows[3], 2, 2), " ", "an accent title that clears 4.0 needs no bar")
-  eq(usub(strong_rows[4], 2, 2), " ")
+test("addendum 5: the bar is gated on hue distance from fg, not on contrast", function()
+  local function gutter(title)
+    local v = p1_view { opts = { separator = "gap" } }
+    v.theme.title_active = title
+    local rows = frame_rows(v)
+    return usub(rows[3], 2, 2), usub(rows[4], 2, 2)
+  end
+  local fg = p1_view({}).theme.fg
 
-  local weak = p1_view { opts = { separator = "gap" } }
-  weak.theme.title_active = weak.theme.meta_fg
-  local weak_rows = frame_rows(weak)
-  eq(usub(weak_rows[3], 2, 2), "▎", "a degenerate title_active brings the bar back")
-  eq(usub(weak_rows[4], 2, 2), "▎", "on both rows of the card")
+  local r1, r2 = gutter { 137, 180, 250 }
+  eq(r1, " ", "a hue-distinct accent title needs no bar")
+  eq(r2, " ")
+
+  eq(gutter(fg), "▎", "a title that degenerated to fg has no hue left, whatever it scores")
+  eq(gutter { fg[1] + 23, fg[2], fg[3] }, "▎", "23 of one channel is still not a difference")
+  eq(gutter { fg[1] + 24, fg[2], fg[3] }, " ", "24 is")
+  eq(gutter { fg[1] - 26, fg[2] - 26, fg[3] - 26 }, " ", "Nord's 26 keeps its tint")
 end)
 
-test("addendum 5: every palette either clears 4.0 or keeps its bar", function()
+test("addendum 5: the three degenerate palettes keep the bar, Nord does not", function()
   local palettes = require "palettes"
-  local barred, clear = 0, 0
+  local by_name = {}
+  for _, p in ipairs(palettes) do
+    by_name[p.name] = p
+  end
+  -- title_active per addendum 5.2; the three that hit the ceiling come back as exactly fg
+  local cases = {
+    { "Solarized Dark", true },
+    { "Solarized Light", true },
+    { "One Dark", true },
+    { "Nord", false },
+  }
+  for _, case in ipairs(cases) do
+    local p = by_name[case[1]]
+    assert(p, case[1] .. " missing from the palette fixture")
+    local resolved = theme.resolve({}, p)
+    local v = p1_view { opts = { separator = "gap" } }
+    v.theme = resolved
+    v.theme.title_active = case[2] and resolved.fg or { resolved.fg[1] - 26, resolved.fg[2] - 26, resolved.fg[3] - 26 }
+    local rows = frame_rows(v)
+    eq(usub(rows[3], 2, 2) == "▎", case[2], case[1] .. " bar")
+  end
+end)
+
+test("addendum 5: no palette loses both discriminators", function()
+  local palettes = require "palettes"
   for _, p in ipairs(palettes) do
     local resolved = theme.resolve({}, p)
-    local title = resolved.title_active or resolved.fg
     local v = p1_view { opts = { separator = "gap" } }
     v.theme = resolved
     local rows = frame_rows(v)
     local bar = usub(rows[3], 2, 2) == "▎"
-    if theme.contrast(title, resolved.active_bg) < 4.0 then
-      assert(bar, p.name .. " needs the bar and did not draw it")
-      barred = barred + 1
-    else
-      assert(not bar, p.name .. " clears 4.0 but still drew a bar")
-      clear = clear + 1
+    local title = resolved.title_active or resolved.fg
+    local delta = 0
+    for i = 1, 3 do
+      delta = math.max(delta, math.abs(title[i] - resolved.fg[i]))
     end
+    assert(bar or delta >= 24, p.name .. " has neither a bar nor a hue-distinct title")
   end
-  eq(barred + clear, #palettes, "every palette classified")
+end)
+
+test("addendum 5: the active tab's dot comes from has_unseen, not from being active", function()
+  local quiet = p1_items()
+  quiet[2].has_unseen = false
+  local v = p1_view { items = quiet, opts = { separator = "gap" } }
+  v.theme.title_active = { 137, 180, 250 }
+  eq(usub(frame_rows(v)[3], 2, 2), " ", "an active tab with nothing unseen keeps a blank gutter")
 end)
 
 test("addendum 5: an active tab with unseen output shows the dot once the bar is gone", function()
@@ -1685,6 +1719,29 @@ test("addendum 2: frame = false changes nothing", function()
   local explicit = p1_view { rows = 20, opts = { separator = "gap" } }
   explicit.cfg.frame = false
   eq(render.render(explicit).data, off.data, "the default frame is byte-identical to no frame")
+end)
+
+test("addendum: the ghost card closes at every width and on both rails", function()
+  for _, cols in ipairs { 12, 16, 20, 24, 27, 28, 29, 32, 40, 41 } do
+    local v = p1_view { rows = 20, cols = cols, opts = { separator = "gap", width = math.max(cols, 8) } }
+    local rows, r = frame_rows(v)
+    local top
+    for row = 1, v.rows do
+      if r.hits[row] and r.hits[row].kind == "new_tab" then
+        top = top or row
+      end
+    end
+    assert(top, cols .. " cols has a ghost card")
+    local x1, x2 = 2, cols - 1
+    for _, row in ipairs { top, top + 2 } do
+      local line = rows[row]
+      eq(usub(line, x1, x1), row == top and "╭" or "╰", cols .. " cols: corner")
+      eq(usub(line, x2, x2), row == top and "╮" or "╯", cols .. " cols: corner")
+      assert(usub(line, x1 + 1, x1 + 1) ~= " ", cols .. " cols: gap beside the left corner on row " .. row)
+      assert(usub(line, x2 - 1, x2 - 1) ~= " ", cols .. " cols: gap beside the right corner on row " .. row)
+    end
+    eq(util.width(rows[top]), cols)
+  end
 end)
 
 test("P1 frames are written for design review", function()
