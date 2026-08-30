@@ -38,6 +38,8 @@ All events carry `"t"`. Columns/rows are 1-based cell coordinates.
 | focus  | `{"t":"focus","in":true\|false}`                                                                                                                     |
 | paste  | `{"t":"paste","data":"<base64>"}`, or `{"t":"paste","dropped":"size"}` past 64 KiB                                                                   |
 | pong | `{"t":"pong","n":N}` — echoes the ping's `n` (omitted when the ping had none) |
+| anim_done | `{"t":"anim_done","id":N}` — after the last frame, or at once when a command cancels the run |
+| dropped | `{"t":"dropped","what":"anim","reason":"size"\|"bounds"}` — the command was refused whole |
 
 - `dy` is only present for `wheel` (`-1` = up, `1` = down); `b` is `"none"` for wheel.
 - `drag` = motion with a button held (SGR bit 32 + button), `move` = motion with no button.
@@ -67,6 +69,34 @@ All events carry `"t"`. Columns/rows are 1-based cell coordinates.
 | quit    | `{"t":"quit"}`               | restore terminal and exit 0                 |
 | ping | `{"t":"ping","n":N}` | reply with `pong` carrying the same `n`; WezTerm only fires `user-var-changed` when the value changes, so `n` must vary |
 | auth | `{"t":"auth","token":"<hex>"}` | echo user var `vtabs_token`; the title is not touched |
+| anim | `{"t":"anim","id":N,"ms":220,"fps":30,"ease":"outCubic","dir":"in","anchor":"#1e1e2e","rows":[{"y":4,"delay":0}],"data":"<final frame>"}` | interpolate to `data` on the backend's clock |
+
+### anim
+
+| field | meaning |
+| --- | --- |
+| `data` | the final frame for the animated rows, exactly as a `frame` payload: one `ESC[<row>;1H` per row |
+| `anchor` | `#rrggbb` every animated colour is interpolated against |
+| `dir` | `"in"` anchor → `data` (default), `"out"` `data` → anchor |
+| `rows[].y` | row to animate; a row in `data` that is not listed is written unchanged |
+| `rows[].delay` | per-row stagger in ms; row-local `t = clamp((elapsed - delay) / ms, 0, 1)` |
+| `ease` | `linear` (default) \| `outCubic` \| `inOutQuad`; unknown → `linear` |
+| `fps` | 15–60, default 30; frames are generated, so the payload never grows with it |
+
+| rule | detail |
+| --- | --- |
+| start | the `t = 0` frame is written synchronously with the command |
+| cancel | a new `anim`, or any `frame` / `clear` / `quit`, ends the run and emits `anim_done` for it |
+| catch-up | a late wake generates the frame for *now*; skipped ticks are never replayed |
+| self-containment | every generated frame redraws all animated rows, so skipping is safe |
+| termination | the last frame is `data` verbatim, so the terminal ends exactly where Lua asked |
+| bounds | `data` ≤ 8 KiB, `rows` 1–128, `ms` 1–2000, `fps` 15–60, `anchor` `#rrggbb` |
+| refusal | outside those bounds nothing plays: one `dropped` event, `reason` `size` for `data`, `bounds` for the rest |
+| colours | only `ESC[38;2;R;G;Bm` and `ESC[48;2;R;G;Bm` are rewritten; text, CUP, bold and reset pass through byte for byte, including any prefix before the first CUP |
+
+`data` ≤ 8 KiB is half of the 16 KiB read buffer, so a command never needs more than one extra
+read. The bound exists because `pane:send_text` is a blocking write on the pty master and a
+blocking RPC on a mux domain: it keeps the GUI thread's stall short.
 
 `data` contains raw ANSI (CUP, SGR, …); it never contains a newline.
 Unknown commands are ignored. Malformed JSON lines are ignored.

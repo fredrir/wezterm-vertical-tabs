@@ -49,6 +49,13 @@ pub enum Event {
         #[serde(skip_serializing_if = "Option::is_none")]
         n: Option<u64>,
     },
+    AnimDone {
+        id: u64,
+    },
+    Dropped {
+        what: &'static str,
+        reason: &'static str,
+    },
 }
 
 impl Event {
@@ -251,6 +258,18 @@ mod tests {
         assert_eq!(
             Event::paste(None).to_json(),
             r#"{"t":"paste","dropped":"size"}"#
+        );
+        assert_eq!(
+            Event::AnimDone { id: 7 }.to_json(),
+            r#"{"t":"anim_done","id":7}"#
+        );
+        assert_eq!(
+            Event::Dropped {
+                what: "anim",
+                reason: "size"
+            }
+            .to_json(),
+            r#"{"t":"dropped","what":"anim","reason":"size"}"#
         );
         assert_eq!(Event::Pong { n: None }.to_json(), r#"{"t":"pong"}"#);
         assert_eq!(
