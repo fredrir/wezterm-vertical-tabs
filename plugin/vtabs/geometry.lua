@@ -22,6 +22,7 @@ function M.forget_window(window_id)
 end
 
 M.reset = M.forget_window
+table.insert(state.forget_hooks, M.forget_window)
 
 local function pane_cols(pane)
   local d = util.try(function()
@@ -77,12 +78,15 @@ function M.correct(gui_window)
   if restore then
     sb:activate()
   end
-  gui_window:perform_action(act.AdjustPaneSize { direction_for(cfg.position, delta), math.abs(delta) }, sb)
+  local adjusted = util.try(function()
+    return gui_window:perform_action(act.AdjustPaneSize { direction_for(cfg.position, delta), math.abs(delta) }, sb)
+      or true
+  end)
   if restore then
     restore:activate()
   end
   observed[wid].cols = pane_cols(sb) or cols
-  return true
+  return adjusted ~= nil
 end
 
 return M
