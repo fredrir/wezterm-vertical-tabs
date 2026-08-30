@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 
 use crate::command::{AnimCmd, AnimRow};
 
-pub const MAX_DATA: usize = 8 * 1024;
+pub const MAX_DATA: usize = 24 * 1024;
 pub const MAX_ROWS: usize = 128;
 pub const MAX_MS: u64 = 2000;
 pub const MIN_FPS: u32 = 15;

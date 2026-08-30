@@ -407,6 +407,9 @@ function M.composite(frame, rect)
   local x2 = math.min(x1 + (rect.w or cols) - 1, cols)
   local y1 = math.max(rect.y or 1, 1)
   local y2 = math.min(y1 + (rect.h or 0) - 1, frame.rows)
+  if x1 > cols or y1 > frame.rows or x2 < x1 or y2 < y1 then
+    return frame
+  end
   for row, cells in pairs(frame.cells) do
     if row < y1 or row > y2 then
       if scrim > 0 then

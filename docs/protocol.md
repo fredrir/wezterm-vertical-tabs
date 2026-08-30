@@ -90,12 +90,11 @@ All events carry `"t"`. Columns/rows are 1-based cell coordinates.
 | catch-up | a late wake generates the frame for *now*; skipped ticks are never replayed |
 | self-containment | every generated frame redraws all animated rows, so skipping is safe |
 | termination | the last frame is `data` verbatim, so the terminal ends exactly where Lua asked |
-| bounds | `data` ≤ 8 KiB, `rows` 1–128, `ms` 1–2000, `fps` 15–60, `anchor` `#rrggbb` |
+| bounds | `data` ≤ 24 KiB, `rows` 1–128, `ms` 1–2000, `fps` 15–60, `anchor` `#rrggbb` |
 | refusal | outside those bounds nothing plays: one `dropped` event, `reason` `size` for `data`, `bounds` for the rest |
 | colours | only `ESC[38;2;R;G;Bm` and `ESC[48;2;R;G;Bm` are rewritten; text, CUP, bold and reset pass through byte for byte, including any prefix before the first CUP |
 
-`data` ≤ 8 KiB is half of the 16 KiB read buffer, so a command never needs more than one extra
-read. The bound exists because `pane:send_text` is a blocking write on the pty master and a
+`data` ≤ 24 KiB covers a 120-row sidebar at ~180 bytes per row. The bound exists because `pane:send_text` is a blocking write on the pty master and a
 blocking RPC on a mux domain: it keeps the GUI thread's stall short.
 
 `data` contains raw ANSI (CUP, SGR, …); it never contains a newline.

@@ -245,16 +245,20 @@ local function cwd_host(pane)
   return host ~= "" and host or nil
 end
 
+local function clean(s)
+  return type(s) == "string" and util.sanitize(s) or nil
+end
+
 function M.tab_meta(tab, pane)
-  local title = tab:get_title()
+  local title = clean(tab:get_title()) or ""
   if M.marker(title) then
     title = ""
   end
   return {
-    cwd = cwd_path(pane),
-    domain = util.try(function()
+    cwd = clean(cwd_path(pane)),
+    domain = clean(util.try(function()
       return pane:get_domain_name()
-    end),
+    end)),
     title = title ~= "" and title or nil,
     pinned = state.is_pinned(tab:tab_id()),
   }

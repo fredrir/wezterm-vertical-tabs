@@ -4280,5 +4280,38 @@ test("collapsed = hidden bands the window so the macOS lights clear the shell", 
 end)
 
 os.remove(state.file)
+
+-- ===================== lead: post-review fixes (P2) =====================
+
+test("tab_meta sanitises cwd, domain and title at the source", function()
+  local win = fake.window(80)
+  local tab = win:add_tab { title = "raw\155title" }
+  local pane = tab.pane_list[1]
+  pane.cwd = { file_path = "/tmp/\155evil" }
+  local meta = sidebar.tab_meta(tab, pane)
+  eq(meta.cwd, "/tmp/evil")
+  eq(meta.title, "rawtitle")
+  assert(utf8.len(meta.cwd) and utf8.len(meta.title), "valid utf-8 out")
+  assert(util.shorten_path(meta.cwd, 8), "shorten_path no longer raises")
+end)
+
+test("composite ignores a rect that lies entirely outside the pane", function()
+  local plain = render.render(p1_view { rows = 12 })
+  local v = p1_view { rows = 12 }
+  v.popover = popover_rect { y = 40, h = 5 }
+  local out = render.render(v)
+  eq(out.data, plain.data)
+  for row, h in pairs(out.hits) do
+    assert(h.kind ~= "scrim", "row " .. row .. " must not be scrimmed by an invisible popover")
+  end
+end)
+
+test("P2 anim: a 60-row frame fits the 24 KiB bound", function()
+  local frame = render.render(p1_view { rows = 60 })
+  local cmd, reason = anim.build("expand_in", frame, { id = 9, anchor = "#1e1e2e" })
+  assert(cmd, "60 rows must animate, got " .. tostring(reason))
+  assert(#cmd.data <= anim.MAX_DATA)
+end)
+
 print(string.format("%d passed, %d failed", passed, failed))
 os.exit(failed == 0 and 0 or 1)

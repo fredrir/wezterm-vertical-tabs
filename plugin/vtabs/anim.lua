@@ -2,7 +2,7 @@ local ansi = require "vtabs.ansi"
 
 local M = {}
 
-M.MAX_DATA = 8 * 1024
+M.MAX_DATA = 24 * 1024
 M.MAX_ROWS = 128
 
 ---Spec §4.4. `stagger` is per row, capped; collapse runs bottom-to-top, expand top-to-bottom.
