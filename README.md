@@ -1,4 +1,4 @@
-# wez-vertical-tabs
+# wez-vertical-tabs (WiP)
 
 
 ## Installation
