@@ -90,6 +90,10 @@ end
 
 ---Re-points the map when the mux renumbers panes; only this process knows the token it minted.
 local function claim_echoed_token(pane, pid)
+  -- the settings page carries a token of its own; claiming it would hand the tab's sidebar slot away
+  if M.is_settings(pane) then
+    return false
+  end
   local token = user_vars(pane).vtabs_token
   local owner = state.pane_for_token(token)
   if owner == nil or owner == pid then

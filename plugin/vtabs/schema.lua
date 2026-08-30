@@ -126,6 +126,17 @@ M.options = {
     group = "layout",
   },
   {
+    key = "settings",
+    -- `frame`'s shape: a boolean that is also a table, so a user table is never reset by type_ok
+    type = "any",
+    default = true,
+    open = true,
+    label = "Settings page",
+    group = "behaviour",
+    values = "`true` \\| `false` \\| table",
+    help = "the settings page; a table takes `{ persist, path }`, and it is a normal tab running this plugin's backend in its settings role",
+  },
+  {
     key = "edge_to_edge",
     type = "enum",
     enum = { true, "sides", false },
@@ -282,8 +293,8 @@ M.options = {
     type = "list",
     of = "enum",
     enum = { "toggle", "new_tab", "settings", "search" },
-    default = { "toggle", "new_tab" },
-    shown = '`{ "toggle", "new_tab" }`',
+    default = { "toggle", "new_tab", "settings" },
+    shown = '`{ "toggle", "new_tab", "settings" }`',
     label = "Strip actions",
     group = "chrome",
     values = '`"toggle"` \\| `"new_tab"` \\| `"settings"` \\| `"search"` \\| `{ id, icon, on_click }`',

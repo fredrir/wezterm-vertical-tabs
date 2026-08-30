@@ -111,10 +111,32 @@ local function check_unknown(opts, prefix)
   end
 end
 
-function M.setup(opts)
+---Every dotted key the user named in `opts`. The page renders these LOCKED: config-as-code wins,
+---and `merge` loses the distinction the moment it runs.
+local function explicit_keys(opts, prefix, out)
+  out = out or {}
+  for key, value in pairs(opts) do
+    if type(key) == "string" then
+      local path = prefix and (prefix .. "." .. key) or key
+      out[path] = true
+      -- open containers recurse too: the schema cannot validate their children, but the user still
+      -- named them, and naming them is the whole question the page asks
+      if type(value) == "table" then
+        explicit_keys(value, path, out)
+      end
+    end
+  end
+  return out
+end
+
+---`defaults <- stored <- opts`: the settings file may move a default, but never something the
+---user wrote in `wezterm.lua`.
+function M.setup(opts, stored)
   opts = opts or {}
   check_unknown(opts)
-  local cfg = util.merge(M.defaults, opts)
+  M.explicit = explicit_keys(opts)
+  local cfg = util.merge(M.defaults, stored or {})
+  cfg = util.merge(cfg, opts)
   validate(cfg)
 
   -- The wider gutter belongs on the side touching the window edge, so an untouched pair mirrors.
@@ -144,5 +166,18 @@ end
 function M.get()
   return current or M.setup {}
 end
+
+---Swaps the whole resolved config, as the settings page does after an edit. `glyphs` is derived,
+---never carried over: a stale one keeps the old icons after an `icon_map` change.
+function M.replace(tbl)
+  validate(tbl)
+  tbl.glyphs = icons.resolve(tbl.icon_map)
+  current = tbl
+  return current
+end
+
+---What the host set on the WezTerm config before this plugin ran; the page shows these read-only.
+M.host_config = {}
+M.explicit = {}
 
 return M

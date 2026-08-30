@@ -1,5 +1,4 @@
 local wezterm = require "wezterm" ---@type Wezterm
-local platform = require "vtabs.platform"
 local util = require "vtabs.util"
 
 local M = {}
@@ -34,17 +33,6 @@ local function empty()
   }
 end
 
-local function shell(args)
-  if platform.is_windows then
-    return false
-  end
-  return util.try(wezterm.run_child_process, args) == true
-end
-
-local function is_symlink(path)
-  return shell { "test", "-L", path }
-end
-
 local function copy_closed(list)
   local out = {}
   for _, entry in ipairs(type(list) == "table" and list or {}) do
@@ -70,7 +58,7 @@ local function copy_pins(tbl)
 end
 
 local function read_file()
-  if is_symlink(M.file) then
+  if util.is_symlink(M.file) then
     util.warn_once("state-symlink", "state file is a symlink, ignored")
     return nil
   end
@@ -93,34 +81,14 @@ local function read_file()
 end
 
 local last_written = nil
-local tmp_suffix = nil
 
 local function write_file(tbl)
   local body = wezterm.json_encode(tbl)
   if body == last_written then
     return
   end
-  tmp_suffix = tmp_suffix or util.random_token():sub(1, 8)
-  local tmp = M.file .. "." .. tmp_suffix .. ".tmp"
-  local f = io.open(tmp, "w")
-  if not f then
-    util.try(wezterm.run_child_process, { "mkdir", "-m", "700", "-p", state_dir() })
-    f = io.open(tmp, "w")
-  end
-  if not f then
-    util.warn_once("state-file", "cannot write %s", M.file)
-    return
-  end
-  if not platform.is_windows and not shell { "chmod", "600", tmp } then
-    util.warn_once("state-chmod", "cannot restrict %s to 0600", M.file)
-  end
-  f:write(body)
-  f:close()
-  if os.rename(tmp, M.file) then
+  if util.write_private(M.file, body, state_dir(), "state") then
     last_written = body
-  else
-    os.remove(tmp)
-    util.warn_once("state-rename", "cannot replace %s", M.file)
   end
 end
 
@@ -315,6 +283,12 @@ function M.pane_for_token(token)
     end
   end
   return nil
+end
+
+---A token for a backend pane that is not a tab's sidebar - the settings page. The bridge trusts
+---the echo, not the role, so registration is the same; only the tab mapping is not.
+function M.set_token(pane_id, token)
+  data.tokens[key(pane_id)] = token
 end
 
 function M.set_sidebar(tab_id, pane_id, token)

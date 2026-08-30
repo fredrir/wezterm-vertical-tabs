@@ -30,6 +30,7 @@ return config
 | `hide_native_tab_bar`     | `true`                                                                       | `true` \| `false` |
 | `poll_ms`                 | `500`                                                                        | number >= `50` |
 | `padding`                 | `{ top = 1, left = 2, right = 2, bottom = 1 }`                               | `{ top, left, right, bottom }` |
+| `settings`                | `true`                                                                       | `true` \| `false` \| table |
 | `edge_to_edge`            | `true`                                                                       | `true` \| `"sides"` \| `false` |
 | `tab_height`              | `"card"`                                                                     | `"card"` (`3`) \| `"row"` (`1`) \| `"tall"` (`5`) |
 | `meta`                    | `false`                                                                      | `"auto"` \| `"cwd"` \| `"process"` \| `false` |
@@ -42,7 +43,7 @@ return config
 | `titlebar`                | `"auto"`                                                                     | `"auto"` \| `"integrate"` \| `"plain"` \| `"macos"` |
 | `context`                 | `"popover"`                                                                  | `"popover"` \| `false` |
 | `popover`                 | `{ width = "auto", follow_pointer = true, fade_ms = 90, overflow = "clip" }` | see below |
-| `strip_actions`           | `{ "toggle", "new_tab" }`                                                    | `"toggle"` \| `"new_tab"` \| `"settings"` \| `"search"` \| `{ id, icon, on_click }` |
+| `strip_actions`           | `{ "toggle", "new_tab", "settings" }`                                        | `"toggle"` \| `"new_tab"` \| `"settings"` \| `"search"` \| `{ id, icon, on_click }` |
 | `toggle_button`           | `true`                                                                       | `true` \| `false` |
 | `close_button`            | `"hover"`                                                                    | `"hover"` \| `"always"` \| `"never"` |
 | `confirm_close`           | `true`                                                                       | `true` \| `false` |
@@ -103,6 +104,9 @@ return config
 | `popover.overflow` | `"clip"` keeps the menu inside the sidebar. `"grow"` is not implemented yet |
 | `confirm_close` | the question is a popover level in the sidebar, never wezterm's own overlay, which the release after the click that opened it would dismiss. Asked from a key binding it takes the sidebar pane so `Enter` and `Esc` reach it, and hands focus back on close. The overlay is the fallback only when no sidebar can draw the question |
 | `show_index` | renders on the meta line with 2-row cards, inline with `meta = false` |
+| `settings` | the page is a normal tab running the plugin's own backend with `--role settings`; it is never adopted as a sidebar and never appears in the tab list as anything but "Settings" |
+| `settings.persist` | writes only the keys that differ from the defaults, atomically at `0600`, to `$XDG_CONFIG_HOME/wez-vtabs/settings.json`; anything you set in `wezterm.lua` outranks the file |
+| `settings.path` | an absolute path; a relative one is refused and the default used |
 | `titlebar` | `"macos"` forces the traffic-light reserve on any platform, for previews and screenshots; it changes nothing about the real window buttons |
 | `tooltip` | `"auto"` is off in `"press"` mode, where hover never reaches the sidebar |
 | `tooltip_delay_ms` | effective delay is `max(tooltip_delay_ms, poll_ms)`; halved in rail mode |

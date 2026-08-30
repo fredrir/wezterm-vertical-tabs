@@ -1,4 +1,5 @@
 local wezterm = require "wezterm" ---@type Wezterm
+local platform = require "vtabs.platform"
 
 local M = {}
 
@@ -307,6 +308,41 @@ function M.base64_decode(s)
     end
   end
   return table.concat(out)
+end
+
+---True when `path` is a symlink: a file we would otherwise write through without knowing where to.
+function M.is_symlink(path)
+  if platform.is_windows then
+    return false
+  end
+  return M.try(wezterm.run_child_process, { "test", "-L", path }) == true
+end
+
+---Writes `body` to `path` atomically and readable only by its owner: a temp file beside it,
+---chmod 600, then rename. `dir` is created 0700 if the first open fails. Returns true on success.
+function M.write_private(path, body, dir, tag)
+  tag = tag or "file"
+  local tmp = path .. "." .. M.random_token():sub(1, 8) .. ".tmp"
+  local f = io.open(tmp, "w")
+  if not f and dir then
+    M.try(wezterm.run_child_process, { "mkdir", "-m", "700", "-p", dir })
+    f = io.open(tmp, "w")
+  end
+  if not f then
+    M.warn_once(tag .. "-file", "cannot write %s", path)
+    return false
+  end
+  if not platform.is_windows and M.try(wezterm.run_child_process, { "chmod", "600", tmp }) ~= true then
+    M.warn_once(tag .. "-chmod", "cannot restrict %s to 0600", path)
+  end
+  f:write(body)
+  f:close()
+  if os.rename(tmp, path) then
+    return true
+  end
+  os.remove(tmp)
+  M.warn_once(tag .. "-rename", "cannot replace %s", path)
+  return false
 end
 
 function M.random_token()

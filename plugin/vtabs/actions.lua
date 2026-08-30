@@ -310,6 +310,12 @@ function M.new_tab(gui_window, spawn)
   return tab
 end
 
+---The settings page's single owner: the strip button, the key binding and the popover item all
+---call this, so none of them carries a spawn path or a "is one open already?" check of its own.
+function M.open_settings(gui_window)
+  return require("vtabs.settings").open(gui_window)
+end
+
 function M.reopen_closed(gui_window)
   local entry = state.pop_closed()
   if not entry then
@@ -560,6 +566,7 @@ M.action = {
     M.request_close(window, id, nil, nil, true)
   end),
   reopen_closed = callback(M.reopen_closed),
+  open_settings = callback(M.open_settings),
   pin_tab = on_current_tab(M.toggle_pin),
   private_window = callback(function(window)
     M.new_window(window, true)

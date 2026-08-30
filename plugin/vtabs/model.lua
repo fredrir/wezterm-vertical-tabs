@@ -193,6 +193,18 @@ function M.build(gui_window)
         return nil
       end
       local tab_id = tab:tab_id()
+      if sidebar.is_settings(pane) then
+        return {
+          tab_id = tab_id,
+          index = info.index + 1,
+          is_active = info.is_active,
+          is_pinned = state.is_pinned(tab_id),
+          is_private = private,
+          title = "Settings",
+          icon = cfg.icons and cfg.glyphs.settings or "",
+          has_unseen = false,
+        }
+      end
       return {
         tab_id = tab_id,
         index = info.index + 1,

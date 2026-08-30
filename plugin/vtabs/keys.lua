@@ -25,6 +25,7 @@ function M.defaults()
     move_tab_up = { key = "PageUp", mods = SUPER2 },
     move_tab_down = { key = "PageDown", mods = SUPER2 },
     tab_last = { key = "9", mods = SUPER },
+    settings = { key = ",", mods = SUPER },
   }
   if platform.is_mac then
     keys.next_tab_arrow = { key = "RightArrow", mods = "CMD|OPT" }
@@ -37,6 +38,7 @@ function M.defaults()
 end
 
 local ALIASES = {
+  settings = "open_settings",
   private_window_alt = "private_window",
   next_tab_alt = "next_tab",
   prev_tab_alt = "prev_tab",

@@ -298,7 +298,15 @@ end
 function Window:spawn_tab(spawn)
   local tab = self:add_tab { process = "/bin/zsh" }
   tab.spawn = spawn
-  return tab, tab.pane_list[1], self
+  local pane = tab.pane_list[1]
+  -- the real backend sets this title itself once it starts; the fake stands in for that
+  local args = (spawn or {}).args or {}
+  for i, arg in ipairs(args) do
+    if arg == "--role" and args[i + 1] == "settings" then
+      pane.title = string.format("wez-vtabs-settings:%08x", pane.id)
+    end
+  end
+  return tab, pane, self
 end
 
 local Gui = {}
