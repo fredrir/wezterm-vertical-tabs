@@ -6,6 +6,7 @@ local render = require "vtabs.render"
 local geometry = require "vtabs.geometry"
 local theme = require "vtabs.theme"
 local platform = require "vtabs.platform"
+local glyphs = require "vtabs.glyphs"
 local util = require "vtabs.util"
 
 local M = {}
@@ -70,7 +71,11 @@ local function chrome_for(gui_window, cfg)
     if platform.is_mac and asked and not native then
       util.warn_once("button-style", "integrated_title_button_style must be MacOsNative to reserve cells")
     end
-    chrome[wid] = { integrated_buttons = asked, native_button_style = native }
+    chrome[wid] = {
+      integrated_buttons = asked,
+      native_button_style = native,
+      glyphs = glyphs.resolve(cfg.glyphs, effective),
+    }
   end
   return chrome[wid]
 end
@@ -80,7 +85,7 @@ local function strip_for(gui_window, cfg, dims)
   local window = util.try(function()
     return gui_window:get_dimensions()
   end) or {}
-  return platform.strip_geometry(dims, {
+  local g = platform.strip_geometry(dims, {
     is_mac = platform.is_mac,
     integrated_buttons = facts.integrated_buttons,
     native_button_style = facts.native_button_style,
@@ -90,6 +95,11 @@ local function strip_for(gui_window, cfg, dims)
     toggle_button = cfg.toggle_button,
     card_x1 = cfg.padding.left + 1,
   })
+  local toggle = nil
+  if cfg.toggle_button and g.rows > 0 then
+    toggle = { row = g.toggle_row, x = g.toggle_x, x1 = math.max(1, g.toggle_x - 1), x2 = g.toggle_x + 2 }
+  end
+  return { rows = g.rows, cols = g.cols, toggle = toggle }
 end
 
 local function theme_for(gui_window, cfg)
@@ -162,14 +172,15 @@ function M.sync(gui_window, opts)
       local due = is_active or opts.force or now - (session.sent_at[pid] or 0) >= INACTIVE_REFRESH_MS
       local dims = due and dims_of(sb) or nil
       if dims then
+        local strip = strip_for(gui_window, cfg, dims)
         local result = render.render {
           cols = dims.cols,
           rows = dims.viewport_rows,
-          strip = strip_for(gui_window, cfg, dims),
+          strip = strip,
           items = items,
           theme = resolved,
           cfg = cfg,
-          glyphs = cfg.glyphs,
+          glyphs = chrome_for(gui_window, cfg).glyphs,
           hover = is_active and session.hover[wid] or nil,
           drag = is_active and session.drag[wid] or nil,
           scroll = session.scroll[wid] or 0,
@@ -182,7 +193,7 @@ function M.sync(gui_window, opts)
           session.scroll[wid] = result.scroll
         end
         session.hits[pid] = result.hits
-        session.dims[pid] = { cols = dims.cols, rows = dims.viewport_rows }
+        session.dims[pid] = { cols = dims.cols, rows = dims.viewport_rows, strip_rows = strip.rows }
         if opts.force or session.frames[pid] ~= result.data then
           if sidebar.send(sb, { t = "frame", data = result.data }) then
             session.frames[pid] = result.data

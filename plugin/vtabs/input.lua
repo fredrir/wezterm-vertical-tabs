@@ -36,20 +36,25 @@ local function on_down(gui_window, pane, ev, cfg)
   pending_menu[wid] = nil
   state.set_focus(wid, false)
   if cfg.debug then
-    util.log("down hit=%s tab=%s slot=%s", h.kind, tostring(h.tab_id), tostring(h.slot))
+    util.log("down hit=%s tab=%s slot=%s", h.kind, tostring(h.id), tostring(h.slot))
   end
-  local target = h.kind == "tab" and ("tab:" .. h.tab_id) or h.kind
+  -- Cols 1 and 28 carry no card surface, so a click there is empty space, not the row's tab.
+  local on_card = h.kind == "tab" and hit.in_card(h, ev.x)
+  local target = on_card and ("tab:" .. h.id) or h.kind
   local double, last = hit.double_click(session.last_click[wid], target, now, cfg.double_click_ms)
   session.last_click[wid] = last
 
   if ev.b == "left" then
-    if h.kind == "tab" then
-      if hit.in_close(h, ev.x) then
-        actions.close_tab(gui_window, h.tab_id)
+    if on_card then
+      local span = hit.span(h, ev.x)
+      if span == "close" then
+        actions.close_tab(gui_window, h.id)
+      elseif span == "pin" then
+        actions.toggle_pin(gui_window, h.id)
       else
-        local focused = actions.activate_tab(gui_window, h.tab_id, "sidebar")
+        local focused = actions.activate_tab(gui_window, h.id, "sidebar")
         session.drag[wid] = {
-          tab_id = h.tab_id,
+          tab_id = h.id,
           origin_x = ev.x,
           origin_y = ev.y,
           pane_id = focused and focused:pane_id() or pid,
@@ -58,17 +63,19 @@ local function on_down(gui_window, pane, ev, cfg)
           at = now,
         }
       end
+    elseif h.kind == "toggle" and hit.in_card(h, ev.x) then
+      actions.toggle_sidebar(gui_window)
     elseif h.kind == "new_tab" then
       actions.new_tab(gui_window)
-    elseif h.kind == "footer" and h.entry.on_click then
+    elseif h.kind == "footer" and h.entry and h.entry.on_click then
       pcall(h.entry.on_click, gui_window, h.entry)
-    elseif h.kind == "space" and double then
+    elseif double and (h.kind == "space" or h.kind == "strip" or not on_card) then
       actions.new_tab(gui_window)
     end
-  elseif ev.b == "middle" and h.kind == "tab" then
-    actions.close_tab(gui_window, h.tab_id)
-  elseif ev.b == "right" and h.kind == "tab" then
-    pending_menu[wid] = { tab_id = h.tab_id, at = now }
+  elseif ev.b == "middle" and on_card then
+    actions.close_tab(gui_window, h.id)
+  elseif ev.b == "right" and on_card then
+    pending_menu[wid] = { tab_id = h.id, at = now }
   end
 end
 
@@ -89,7 +96,7 @@ local function on_drag(gui_window, pane, ev, cfg)
   end
   if drag.active then
     local dims = session.dims[pid] or { cols = cfg.width, rows = ev.y }
-    drag.over_index = hit.drop_slot(hits, ev.y, dims.rows, cfg.padding.top)
+    drag.over_index = hit.drop_slot(hits, ev.y, dims.rows, dims.strip_rows or 0)
     drag.outside = cfg.tear_off and dx >= TEAR_OFF_TRAVEL and hit.on_inner_edge(ev.x, dims.cols, cfg.position)
   end
   session.hover[wid] = { x = ev.x, y = ev.y, at = drag.at }

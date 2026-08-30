@@ -4,8 +4,23 @@ function M.at(hits, y)
   return hits and hits[y] or { kind = "space" }
 end
 
+---First sub-target under `x`: "close" or "pin" on a card row, else nil.
+function M.span(hit, x)
+  for _, span in ipairs(hit and hit.spans or {}) do
+    if x >= span.x1 and x <= span.x2 then
+      return span.id
+    end
+  end
+  return nil
+end
+
 function M.in_close(hit, x)
-  return hit.close ~= nil and x >= hit.close.from and x <= hit.close.to
+  return M.span(hit, x) == "close"
+end
+
+---True when `x` is on the row's card surface; cols outside it behave as empty space.
+function M.in_card(hit, x)
+  return hit ~= nil and hit.x1 ~= nil and x >= hit.x1 and x <= hit.x2
 end
 
 ---True when `x` is on the sidebar edge that borders the content pane.
@@ -16,23 +31,23 @@ function M.on_inner_edge(x, cols, position)
   return x >= cols
 end
 
----Slot the dragged tab would take when dropped at row `y`.
-function M.drop_slot(hits, y, rows, top_padding)
+---Slot the dragged tab would take when dropped at row `y`; a gap row drops below its card.
+function M.drop_slot(hits, y, rows, strip_rows)
   local hit = M.at(hits, y)
-  if hit.kind == "tab" then
-    return hit.slot
+  if hit.kind == "tab" and hit.slot then
+    return hit.part == "gap" and hit.slot + 1 or hit.slot
   end
   local last_slot = 0
   for row = 1, rows do
     local h = M.at(hits, row)
-    if h.kind == "tab" then
+    if h.kind == "tab" and h.slot then
       last_slot = math.max(last_slot, h.slot)
       if row > y then
         return h.slot
       end
     end
   end
-  if y <= top_padding then
+  if y <= (strip_rows or 0) then
     return 1
   end
   return last_slot + 1
