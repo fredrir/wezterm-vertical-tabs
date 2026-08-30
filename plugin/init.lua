@@ -41,6 +41,7 @@ local input = require "vtabs.input"
 local actions = require "vtabs.actions"
 local keys = require "vtabs.keys"
 local state = require "vtabs.state"
+local mux = require "vtabs.mux"
 local util = require "vtabs.util"
 
 backend.root = root
@@ -94,9 +95,7 @@ M.is_sidebar_pane = sidebar.is_backend
 M.window_title = view.window_title
 
 function M.is_private_window(window)
-  local wid = util.try(function()
-    return window:window_id()
-  end)
+  local wid = mux.window_id(window)
   return wid ~= nil and state.is_private(wid)
 end
 
@@ -206,6 +205,7 @@ local MODULES = {
   "keys",
   "layout",
   "model",
+  "mux",
   "page",
   "platform",
   "popover",

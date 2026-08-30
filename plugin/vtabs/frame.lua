@@ -5,6 +5,7 @@ local backend = require "vtabs.backend"
 local sidebar = require "vtabs.sidebar"
 local theme = require "vtabs.theme"
 local platform = require "vtabs.platform"
+local mux = require "vtabs.mux"
 local util = require "vtabs.util"
 
 local M = {}
@@ -64,9 +65,7 @@ end
 ---must never size a local allocation -- and it is only ever used as a divisor here.
 local function tab_cols(gui_window)
   local tab = util.active_tab(gui_window)
-  local infos = tab and util.try(function()
-    return tab:panes_with_info()
-  end)
+  local infos = tab and mux.panes_with_info(tab)
   if type(infos) ~= "table" or #infos == 0 then
     return nil
   end
@@ -90,9 +89,7 @@ end
 ---sidebar's share comes from our own width invariant. The mux contributes one cell count, as a
 ---divisor. A pane's pixel rect is mux-reported and never sizes anything here.
 function M.rect(gui_window, cfg)
-  local dims = util.try(function()
-    return gui_window:get_dimensions()
-  end)
+  local dims = mux.dims(gui_window)
   if type(dims) ~= "table" then
     return nil
   end
@@ -145,9 +142,7 @@ end
 
 ---Frame tint, card colour and border, from the same palette the sidebar paints itself from.
 function M.colours(gui_window, cfg)
-  local effective = util.try(function()
-    return gui_window:effective_config()
-  end) or {}
+  local effective = mux.effective_config(gui_window) or {}
   local resolved = theme.resolve(cfg.theme, effective.resolved_palette or {}, {
     private = state.is_private(gui_window:window_id()),
   })
@@ -206,9 +201,7 @@ end
 ---A background of the user's own is a deliberate choice, and transparency composites *through* the
 ---frame rather than over it. Either one declines the frame with one warning, never a silent change.
 function M.refuses(gui_window)
-  local effective = util.try(function()
-    return gui_window:effective_config()
-  end) or {}
+  local effective = mux.effective_config(gui_window) or {}
   -- `background` is a Vec in wezterm's config, so an unset one arrives as an empty table, not nil.
   -- The only layer the frame tolerates is the exact file it wrote itself.
   local theirs = effective.background
@@ -289,9 +282,7 @@ end
 ---write from here would reset the band's `top` on the next resize and put the traffic lights back
 ---on the user's shell.
 function M.install(gui_window, path, cfg, paint)
-  local overrides = util.try(function()
-    return gui_window:get_config_overrides()
-  end) or {}
+  local overrides = mux.overrides(gui_window) or {}
   local merged = {}
   for key, value in pairs(overrides) do
     merged[key] = value
@@ -316,9 +307,7 @@ function M.install(gui_window, path, cfg, paint)
   colors.split = (paint or M.colours(gui_window, cfg)).card
   merged.colors = colors
   state.session.applying[gui_window:window_id()] = util.now_ms()
-  util.try(function()
-    gui_window:set_config_overrides(merged)
-  end)
+  mux.call(gui_window, "set_config_overrides", merged)
 end
 
 local function forget(window_id)

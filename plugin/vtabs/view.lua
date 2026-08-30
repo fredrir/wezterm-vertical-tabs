@@ -1,4 +1,3 @@
-local wezterm = require "wezterm" ---@type Wezterm
 local ansi = require "vtabs.ansi"
 local config = require "vtabs.config"
 local state = require "vtabs.state"
@@ -13,6 +12,7 @@ local anim = require "vtabs.anim"
 local theme = require "vtabs.theme"
 local platform = require "vtabs.platform"
 local glyphs = require "vtabs.glyphs"
+local mux = require "vtabs.mux"
 local util = require "vtabs.util"
 
 local M = {}
@@ -31,9 +31,7 @@ function M.window_title(tab, pane, tabs, panes)
     return nil
   end
   local function backend(info)
-    local resolved = info and util.try(function()
-      return wezterm.mux.get_pane(info.pane_id)
-    end)
+    local resolved = info and mux.pane_by_id(info.pane_id)
     return resolved ~= nil and sidebar.is_backend(resolved)
   end
   if not backend(pane) then
@@ -71,9 +69,7 @@ local function fade_context(gui_window)
   if not sb or not sidebar.is_ready(sb) then
     return nil
   end
-  local domain = util.try(function()
-    return sb:get_domain_name()
-  end)
+  local domain = mux.domain(sb)
   if cfg.animations == "auto" and domain ~= "local" then
     return nil
   end
@@ -146,9 +142,7 @@ table.insert(state.forget_hooks, M.invalidate_theme)
 local function chrome_for(gui_window, cfg)
   local wid = gui_window:window_id()
   if not chrome[wid] then
-    local effective = util.try(function()
-      return gui_window:effective_config()
-    end) or {}
+    local effective = mux.effective_config(gui_window) or {}
     local decorations = tostring(effective.window_decorations or "")
     -- `titlebar = "macos"` is the preview knob: it claims the reserve on a machine that has none.
     local preview = cfg.titlebar == "macos"
@@ -181,10 +175,7 @@ local function lights_overhang(gui_window, cfg)
   if not (c.integrated_buttons and c.native_button_style) then
     return false
   end
-  local fullscreen = util.try(function()
-    return gui_window:get_dimensions().is_full_screen
-  end)
-  return fullscreen ~= true
+  return (mux.dims(gui_window) or {}).is_full_screen ~= true
 end
 
 ---`collapsed = "hidden"` detaches the pane that reserved cells for the traffic lights, so nothing
@@ -197,9 +188,7 @@ function M.apply_titlebar_band(gui_window)
   end
   local wid = gui_window:window_id()
   local wanted = cfg.collapsed == "hidden" and state.is_collapsed(wid) and lights_overhang(gui_window, cfg)
-  local overrides = util.try(function()
-    return gui_window:get_config_overrides()
-  end) or {}
+  local overrides = mux.overrides(gui_window) or {}
   local banded = banding[wid] == true
   if wanted == banded then
     return false
@@ -209,9 +198,7 @@ function M.apply_titlebar_band(gui_window)
     merged[key] = value
   end
   if wanted then
-    local user = util.try(function()
-      return gui_window:effective_config().window_padding
-    end) or {}
+    local user = (mux.effective_config(gui_window) or {}).window_padding or {}
     banding_saved[wid] = overrides.window_padding
     merged.window_padding = {
       left = user.left,
@@ -226,9 +213,7 @@ function M.apply_titlebar_band(gui_window)
   banding[wid] = wanted or nil
   -- The override fires `window-config-reloaded`; the guard keeps it from re-entering correction.
   session.applying[wid] = util.now_ms()
-  util.try(function()
-    gui_window:set_config_overrides(merged)
-  end)
+  mux.call(gui_window, "set_config_overrides", merged)
   return true
 end
 
@@ -244,9 +229,7 @@ end
 local function strip_for(gui_window, cfg, dims, rail)
   local facts = chrome_for(gui_window, cfg)
   local wid = gui_window:window_id()
-  local window = util.try(function()
-    return gui_window:get_dimensions()
-  end) or {}
+  local window = mux.dims(gui_window) or {}
   local g = platform.strip_geometry(dims, {
     is_mac = platform.is_mac or facts.preview,
     preview = facts.preview and not platform.is_mac or nil,
@@ -272,9 +255,7 @@ end
 local function theme_for(gui_window, cfg)
   local wid = gui_window:window_id()
   if not themes[wid] then
-    local effective = util.try(function()
-      return gui_window:effective_config()
-    end)
+    local effective = mux.effective_config(gui_window)
     local palette = effective and effective.resolved_palette or {}
     local resolved = theme.resolve(cfg.theme, palette, { private = state.is_private(wid) })
     if cfg.hooks.theme then
@@ -292,9 +273,7 @@ end
 
 ---Nil when the pane cannot report a size; the frame is then skipped rather than painted at a guess.
 local function dims_of(pane)
-  local d = util.try(function()
-    return pane:get_dimensions()
-  end)
+  local d = mux.dims(pane)
   if d and d.cols and d.viewport_rows then
     return d
   end

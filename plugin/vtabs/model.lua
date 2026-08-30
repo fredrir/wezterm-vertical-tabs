@@ -3,6 +3,7 @@ local config = require "vtabs.config"
 local state = require "vtabs.state"
 local sidebar = require "vtabs.sidebar"
 local icons = require "vtabs.icons"
+local mux = require "vtabs.mux"
 local util = require "vtabs.util"
 
 local M = {}
@@ -20,9 +21,7 @@ local function title_for(tab, pane, cfg)
   if title ~= "" and not sidebar.marker(title) then
     return title
   end
-  local pane_title = util.try(function()
-    return pane:get_title()
-  end)
+  local pane_title = mux.title(pane)
   if pane_title and pane_title ~= "" and not sidebar.marker(pane_title) then
     return pane_title
   end
@@ -58,9 +57,7 @@ end
 
 ---Path, host and user of a pane's OSC 7 cwd; the user is the URL's, never the local `$USER`.
 local function cwd_of(pane)
-  local cwd = util.try(function()
-    return pane:get_current_working_dir()
-  end)
+  local cwd = mux.cwd(pane)
   if not cwd then
     return nil, nil, nil
   end
@@ -105,9 +102,7 @@ local function meta_for(pane, cfg)
   end
   local path, host, remote_user = cwd_of(pane)
   local dir = tilde(path)
-  local process = util.basename(util.try(function()
-    return pane:get_foreground_process_name()
-  end))
+  local process = util.basename(mux.foreground(pane))
   if cfg.meta == "cwd" then
     return dir
   end
@@ -116,9 +111,7 @@ local function meta_for(pane, cfg)
   end
   if not process then
     -- A mux pane reports no process (mux/src/pane.rs:331), so name where it is instead.
-    local domain = util.try(function()
-      return pane:get_domain_name()
-    end)
+    local domain = mux.domain(pane)
     return join(domain ~= "local" and domain or nil, dir)
   end
   if REMOTE[process] then
@@ -213,9 +206,7 @@ function M.build(gui_window)
         is_private = private,
         title = util.sanitize(title_for(tab, pane, cfg)),
         icon = cfg.icons and icons.for_pane(pane, cfg.glyphs) or "",
-        has_unseen = util.try(function()
-          return pane:has_unseen_output()
-        end) == true,
+        has_unseen = mux.unseen(pane) == true,
         meta = cached_meta(tab_id, pane, cfg, now),
       }
     end)

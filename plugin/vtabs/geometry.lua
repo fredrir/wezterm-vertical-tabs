@@ -3,6 +3,7 @@ local act = wezterm.action
 local config = require "vtabs.config"
 local state = require "vtabs.state"
 local sidebar = require "vtabs.sidebar"
+local mux = require "vtabs.mux"
 local util = require "vtabs.util"
 
 local M = {}
@@ -94,9 +95,7 @@ table.insert(state.forget_hooks, M.forget_window)
 
 ---Columns, dpi and cell width of a pane; the last two tell a divider drag from a font or DPI change.
 local function pane_metrics(pane)
-  local d = util.try(function()
-    return pane:get_dimensions()
-  end)
+  local d = mux.dims(pane)
   if type(d) ~= "table" or not d.cols or d.cols < 1 then
     return nil
   end
@@ -104,17 +103,13 @@ local function pane_metrics(pane)
 end
 
 local function window_px(gui_window)
-  local d = util.try(function()
-    return gui_window:get_dimensions()
-  end)
+  local d = mux.dims(gui_window)
   return d and d.pixel_width or nil
 end
 
 ---Tab width in cells and whether any pane is zoomed; `panes_with_info` reports the unzoomed layout.
 local function tab_metrics(tab, sb_id)
-  local infos = util.try(function()
-    return tab:panes_with_info()
-  end)
+  local infos = mux.panes_with_info(tab)
   if type(infos) ~= "table" or #infos == 0 then
     return nil, false, 1
   end
@@ -260,19 +255,13 @@ function M.correct(gui_window)
   end
   -- `AdjustPaneSize` ignores its pane argument and moves whichever pane is active, so the sidebar
   -- has to be the active one when it runs -- in a single-content tab as much as any other.
-  local active = util.try(function()
-    return tab:active_pane()
-  end)
+  local active = mux.active_pane(tab)
   local restore = active and active:pane_id() ~= sb:pane_id() and active or nil
   if restore then
     sb:activate()
   end
-  util.try(function()
-    gui_window:perform_action(
-      act.AdjustPaneSize { direction_for(cfg.position, target - cols), math.abs(target - cols) },
-      sb
-    )
-  end)
+  local adjust = act.AdjustPaneSize { direction_for(cfg.position, target - cols), math.abs(target - cols) }
+  mux.call(gui_window, "perform_action", adjust, sb)
   if restore then
     restore:activate()
   end

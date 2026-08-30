@@ -5,6 +5,7 @@ local state = require "vtabs.state"
 local backend = require "vtabs.backend"
 local platform = require "vtabs.platform"
 local theme = require "vtabs.theme"
+local mux = require "vtabs.mux"
 local util = require "vtabs.util"
 
 local M = {}
@@ -29,30 +30,21 @@ local SETTINGS_MARKER = "^wez%-vtabs%-settings:%x+$"
 local session = state.session
 
 local function tab_id_of(pane)
-  local tab = util.try(function()
-    return pane:tab()
-  end)
-  return tab and tab:tab_id() or nil
+  return mux.tab_id(mux.tab_of(pane))
 end
 
 local function user_vars(pane)
-  return util.try(function()
-    return pane:get_user_vars()
-  end) or {}
+  return mux.user_vars(pane) or {}
 end
 
 ---GUI-managed panes (connection UI, debug overlay) cannot host splits.
 function M.is_overlay(pane)
-  local domain = util.try(function()
-    return pane:get_domain_name()
-  end)
+  local domain = mux.domain(pane)
   return type(domain) ~= "string" or domain:find "TermWiz" ~= nil
 end
 
 local function pane_title(pane)
-  return util.try(function()
-    return pane:get_title()
-  end)
+  return mux.title(pane)
 end
 
 ---Role a backend title claims, from one read: "sidebar", "settings", or nil.
@@ -224,9 +216,7 @@ function M.content_pane(tab)
 end
 
 local function cwd_path(pane)
-  local cwd = util.try(function()
-    return pane:get_current_working_dir()
-  end)
+  local cwd = mux.cwd(pane)
   if not cwd then
     return nil
   end
@@ -238,9 +228,7 @@ end
 
 ---Host named in the pane's OSC 7 cwd; panes proxied through a mux server only reveal their host this way.
 local function cwd_host(pane)
-  local cwd = util.try(function()
-    return pane:get_current_working_dir()
-  end)
+  local cwd = mux.cwd(pane)
   if not cwd then
     return nil
   end
@@ -260,9 +248,7 @@ function M.tab_meta(tab, pane)
   end
   return {
     cwd = clean(cwd_path(pane)),
-    domain = clean(util.try(function()
-      return pane:get_domain_name()
-    end)),
+    domain = clean(mux.domain(pane)),
     title = title ~= "" and title or nil,
     pinned = state.is_pinned(tab:tab_id()),
   }
@@ -288,9 +274,7 @@ local fitted = {}
 
 ---Mux-domain splits can grow the tab past the window; re-sending the window size makes the mux refit it.
 local function fit_to_window(tab)
-  local gui = util.try(function()
-    return tab:window():gui_window()
-  end)
+  local gui = mux.call(mux.call(tab, "window"), "gui_window")
   if not gui then
     return
   end
@@ -309,9 +293,8 @@ local function fit_to_window(tab)
 end
 
 local function theme_bg(tab)
-  local palette = util.try(function()
-    return tab:window():gui_window():effective_config().resolved_palette
-  end)
+  local gui = mux.call(mux.call(tab, "window"), "gui_window")
+  local palette = (mux.effective_config(gui) or {}).resolved_palette
   local resolved = util.try(theme.resolve, config.get().theme, palette or {})
   local rgb = resolved and resolved.bg
   if type(rgb) ~= "table" then
@@ -325,9 +308,7 @@ local function attach_domain(cfg, base)
   if cfg.domain ~= "CurrentPaneDomain" then
     return cfg.domain
   end
-  return util.try(function()
-    return base:get_domain_name()
-  end)
+  return mux.domain(base)
 end
 
 ---"auto" adopts only where this plugin spawns backends itself; see docs/limitations.md.
@@ -348,9 +329,7 @@ local function adoptable(tab, sb)
     return false
   end
   local domain = attach_domain(cfg, base)
-  local pane_domain = util.try(function()
-    return sb:get_domain_name()
-  end)
+  local pane_domain = mux.domain(sb)
   if domain == nil or domain ~= pane_domain then
     return false
   end
@@ -541,9 +520,7 @@ end
 ---whether it fits inside the sidebar's box, which a Left/Right split of the sidebar never does.
 ---`panes_with_info` reports the unzoomed layout (`mux/src/tab.rs:88`), so zoom does not enter it.
 local function intruders(tab, sb, position)
-  local infos = util.try(function()
-    return tab:panes_with_info()
-  end)
+  local infos = mux.panes_with_info(tab)
   if type(infos) ~= "table" then
     return {}
   end
@@ -615,15 +592,11 @@ end
 
 ---`perform_action` ignores its pane argument, so the intended target must still be active when it runs.
 local function still_active(gui_window, tab, pane)
-  local active_tab = util.try(function()
-    return gui_window:mux_window():active_tab()
-  end)
+  local active_tab = mux.active_tab(mux.call(gui_window, "mux_window"))
   if not active_tab or active_tab:tab_id() ~= tab:tab_id() then
     return false
   end
-  local active_pane = util.try(function()
-    return active_tab:active_pane()
-  end)
+  local active_pane = mux.active_pane(active_tab)
   return active_pane ~= nil and active_pane:pane_id() == pane:pane_id()
 end
 
@@ -760,17 +733,13 @@ local function prune_windows(now)
     return
   end
   pruned_at = now
-  local windows = util.try(function()
-    return wezterm.mux.all_windows()
-  end)
+  local windows = mux.all_windows()
   if type(windows) ~= "table" or #windows == 0 then
     return
   end
   local live = {}
   for _, w in ipairs(windows) do
-    local id = util.try(function()
-      return w:window_id()
-    end)
+    local id = mux.window_id(w)
     if id then
       live[id] = true
     end
@@ -795,9 +764,7 @@ local function ensure_window(gui_window)
   tick = tick + 1
   classified = {}
   local tabs = mux_win:tabs_with_info()
-  local active_tab = util.try(function()
-    return mux_win:active_tab()
-  end)
+  local active_tab = mux.active_tab(mux_win)
   local active_id = active_tab and active_tab:tab_id() or nil
 
   resolve_pins(tabs, now)

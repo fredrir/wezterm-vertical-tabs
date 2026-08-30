@@ -5,6 +5,7 @@ local state = require "vtabs.state"
 local sidebar = require "vtabs.sidebar"
 local model = require "vtabs.model"
 local hit = require "vtabs.hit"
+local mux = require "vtabs.mux"
 local util = require "vtabs.util"
 
 local M = {}
@@ -159,13 +160,9 @@ end
 
 ---True when WezTerm would prompt before closing any of these panes.
 local function needs_prompt(gui_window, panes)
-  local skip = util.try(function()
-    return gui_window:effective_config().skip_close_confirmation_for_processes_named
-  end) or {}
+  local skip = (mux.effective_config(gui_window) or {}).skip_close_confirmation_for_processes_named or {}
   for _, p in ipairs(panes) do
-    local name = util.basename(util.try(function()
-      return p:get_foreground_process_name()
-    end))
+    local name = util.basename(mux.foreground(p))
     if not name or not util.contains(skip, name) then
       return true
     end
@@ -252,9 +249,7 @@ local function can_confirm(gui_window)
   if not sb or not sidebar.is_ready(sb) or state.is_collapsed(gui_window:window_id()) then
     return false
   end
-  local d = util.try(function()
-    return sb:get_dimensions()
-  end)
+  local d = mux.dims(sb)
   return type(d) == "table" and (d.cols or 0) >= CONFIRM_COLS and (d.viewport_rows or 0) >= CONFIRM_ROWS
 end
 
@@ -282,9 +277,7 @@ function M.new_tab(gui_window, spawn)
   local mux_win = gui_window:mux_window()
   local current = active_content_pane(gui_window)
   if current and not spawn.domain then
-    local domain = util.try(function()
-      return current:get_domain_name()
-    end)
+    local domain = mux.domain(current)
     if domain then
       spawn.domain = { DomainName = domain }
     end
@@ -345,9 +338,7 @@ function M.new_window(gui_window, private)
   local current = active_content_pane(gui_window)
   local spawn = {}
   if current then
-    local domain = util.try(function()
-      return current:get_domain_name()
-    end)
+    local domain = mux.domain(current)
     if domain then
       spawn.domain = { DomainName = domain }
     end
@@ -380,9 +371,7 @@ function M.tear_off(gui_window, tab_id)
     return
   end
   if #content > 1 then
-    util.try(function()
-      gui_window:toast_notification("vtabs", "move to new window needs a single pane", nil, 3000)
-    end)
+    mux.call(gui_window, "toast_notification", "vtabs", "move to new window needs a single pane", nil, 3000)
     return
   end
   local private = state.is_private(gui_window:window_id())
@@ -529,9 +518,7 @@ function M.activate_pane_direction(gui_window, direction)
   if not content then
     return
   end
-  local target = util.try(function()
-    return content:tab():get_pane_direction(direction)
-  end)
+  local target = mux.call(mux.tab_of(content), "get_pane_direction", direction)
   if target and not sidebar.is_backend(target) then
     target:activate()
   end
