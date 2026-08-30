@@ -249,8 +249,10 @@ function M.plan(view)
   for _, entry in ipairs(view.footer or {}) do
     footer[#footer + 1] = footer_entry(entry)
   end
-  local ghost_h = M.new_tab_rows(cfg, view.rows, strip_rows, #footer)
-  local list_rows = math.max(view.rows - strip_rows - ghost_h - #footer, 0)
+  -- new_tab_rows has to see the shortened pane too, or the ghost claims the row padding just reserved
+  local pad_b = math.min(math.max(cfg.padding.bottom or 0, 0), math.max(view.rows - strip_rows, 0))
+  local ghost_h = M.new_tab_rows(cfg, view.rows - pad_b, strip_rows, #footer)
+  local list_rows = math.max(view.rows - strip_rows - ghost_h - #footer - pad_b, 0)
 
   local ordered = M.apply_drag(view.items, view.drag)
   local pinned, rest = util.partition(ordered, function(i)
@@ -457,8 +459,17 @@ function M.plan(view)
     end
   end
 
+  -- painted, not skipped: an unpainted row keeps whatever the pane had there before
+  for i = 1, pad_b do
+    local row = view.rows - pad_b + i
+    if row >= 1 then
+      rows[row] = { kind = "space" }
+      hits[row] = { kind = "space" }
+    end
+  end
+
   for i, entry in ipairs(footer) do
-    local row = view.rows - #footer + i
+    local row = view.rows - pad_b - #footer + i
     if row >= 1 then
       local hovered = view.hover ~= nil and view.hover.y == row and entry.id ~= nil
       rows[row] = { kind = "footer", entry = entry, hovered = hovered }

@@ -262,6 +262,7 @@ end
 
 -- WezTerm's own default; the far side keeps it so only the sidebar's edges change.
 local WEZTERM_SIDE_PADDING = "1cell"
+local WEZTERM_TOP_PADDING = "0.5cell"
 
 ---`window_padding` is window-global, so wezterm's left band frames the sidebar in the terminal
 ---colour. Zeroing the sides the sidebar touches is the only way its page reaches the window edge;
@@ -271,7 +272,10 @@ local function apply_padding(config, cfg)
     return
   end
   local outer = cfg.position == "left" and "right" or "left"
-  config.window_padding = { left = 0, right = 0, top = 0, bottom = 0 }
+  -- window_padding is one rectangle for the whole window, so the sidebar can only reach the top and
+  -- bottom edges by taking the content pane's half-cell with it; "sides" declines that trade.
+  local band = cfg.edge_to_edge == "sides" and WEZTERM_TOP_PADDING or 0
+  config.window_padding = { left = 0, right = 0, top = band, bottom = band }
   config.window_padding[outer] = WEZTERM_SIDE_PADDING
 end
 

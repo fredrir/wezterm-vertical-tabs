@@ -96,9 +96,15 @@ function M.setup(opts)
   -- The sidebar's own gutter replaces the window padding `edge_to_edge` removes, so the wider one
   -- belongs on whichever side touches the window edge.
   if cfg.position == "right" then
+    -- Only the defaults mirror: a user who names a side means that side. A fresh table, because
+    -- `merge` shares the one in `defaults` whenever the user passed no padding at all.
     local given = opts.padding or {}
-    -- A fresh table: `merge` shares the one in `defaults` whenever the user passed no padding.
-    cfg.padding = { top = cfg.padding.top, left = given.left or 1, right = given.right or 2 }
+    cfg.padding = {
+      top = cfg.padding.top,
+      bottom = cfg.padding.bottom,
+      left = given.left or M.defaults.padding.right,
+      right = given.right or M.defaults.padding.left,
+    }
   end
   if cfg.popover.width ~= "auto" and type(cfg.popover.width) ~= "number" then
     util.warn 'popover.width must be "auto" or a number, using auto'
