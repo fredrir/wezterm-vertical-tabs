@@ -205,10 +205,123 @@ function M.dump_styled(name, data, rows_n)
   f:close()
 end
 
+local SCENE_DIR = os.getenv "VTABS_DUMP_SCENES"
+
+local function scene_json(v, indent)
+  local pad = string.rep("  ", indent)
+  if type(v) == "table" then
+    if #v > 0 or next(v) == nil then
+      local parts = {}
+      for _, item in ipairs(v) do
+        parts[#parts + 1] = scene_json(item, indent + 1)
+      end
+      return "[" .. table.concat(parts, ", ") .. "]"
+    end
+    local keys = {}
+    for k in pairs(v) do
+      if type(v[k]) ~= "function" then
+        keys[#keys + 1] = k
+      end
+    end
+    table.sort(keys)
+    local parts = {}
+    for _, k in ipairs(keys) do
+      parts[#parts + 1] = pad .. '  "' .. k .. '": ' .. scene_json(v[k], indent + 1)
+    end
+    return "{\n" .. table.concat(parts, ",\n") .. "\n" .. pad .. "}"
+  elseif type(v) == "number" then
+    if v == math.floor(v) then
+      return string.format("%d", v)
+    end
+    return string.format("%.17g", v)
+  elseif type(v) == "boolean" then
+    return tostring(v)
+  end
+  return '"' .. tostring(v):gsub("\\", "\\\\"):gsub('"', '\\"') .. '"'
+end
+
+---Render-relevant config only; hooks reduce to their names, frame to its boolean.
+local CFG_KEYS = {
+  "position",
+  "new_tab_label",
+  "row_gap",
+  "separator",
+  "tab_height",
+  "meta_sep",
+  "show_index",
+  "icons",
+  "close_button",
+  "hover",
+  "pinned_style",
+}
+
+---The Rust renderer's input: the same view, with Lua-owned resolution already applied.
+function M.dump_scene(name, v)
+  if not SCENE_DIR or SCENE_DIR == "" then
+    return
+  end
+  local layout_mod = require "vtabs.layout"
+  local cfg = {}
+  for _, k in ipairs(CFG_KEYS) do
+    cfg[k] = v.cfg[k]
+  end
+  cfg.padding = {
+    left = v.cfg.padding.left,
+    right = v.cfg.padding.right,
+    top = v.cfg.padding.top,
+    bottom = v.cfg.padding.bottom,
+  }
+  cfg.frame = layout_mod.framed(v.cfg)
+  cfg.new_tab_button = not not v.cfg.new_tab_button
+  cfg.meta = v.cfg.meta ~= false
+  cfg.scroll_indicator = v.cfg.scroll_indicator == false and "never" or v.cfg.scroll_indicator
+  local footer = {}
+  for _, entry in ipairs(v.footer or {}) do
+    footer[#footer + 1] = type(entry) == "string" and { text = entry } or entry
+  end
+  local pop = nil
+  if v.popover then
+    pop = { x = v.popover.x, y = v.popover.y, w = v.popover.w, h = v.popover.h, scrim = v.popover.scrim }
+    pop.bg = v.popover.bg
+    pop.rows = {}
+    for i, row in ipairs(v.popover.rows or {}) do
+      pop.rows[i] = { bg = row.bg, fg = row.fg, spans = row.spans }
+    end
+  end
+  local scene = {
+    cols = v.cols,
+    rows = v.rows,
+    rail = v.rail or false,
+    items = v.items,
+    theme = v.theme,
+    cfg = cfg,
+    glyphs = v.glyphs,
+    strip = v.strip,
+    strip_buttons = layout_mod.resolved_actions(v.cfg),
+    hover = v.hover,
+    drag = v.drag,
+    scroll = v.scroll,
+    focus_index = v.focus_index,
+    ensure_visible = v.ensure_visible,
+    footer = footer,
+    private = v.private or false,
+    user_scrolled = v.user_scrolled or false,
+    popover = pop,
+  }
+  os.execute("mkdir -p " .. SCENE_DIR)
+  local f = io.open(SCENE_DIR .. "/" .. name .. ".json", "w")
+  if not f then
+    return
+  end
+  f:write(scene_json(scene, 0), "\n")
+  f:close()
+end
+
 function M.dump_frame(name, v)
   local rows, r = M.frame_rows(v)
   M.dump_lines(name, rows, v.cols)
   M.dump_styled(name, r.data, v.rows)
+  M.dump_scene(name, v)
   return rows
 end
 

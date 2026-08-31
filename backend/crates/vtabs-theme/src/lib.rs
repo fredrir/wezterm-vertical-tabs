@@ -149,7 +149,7 @@ pub struct UserTheme {
     pub popover_sel_hint: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Deserialize)]
 pub struct Theme {
     pub bg: Rgb,
     pub fg: Rgb,

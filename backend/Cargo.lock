@@ -246,6 +246,7 @@ checksum = "b4ac048d71ede7ee76d585517add45da530660ef4390e49b098733c6e897f254"
 name = "vtabs-core"
 version = "0.1.0"
 dependencies = [
+ "serde",
  "serde_json",
  "vtabs-protocol",
 ]
@@ -290,8 +291,10 @@ dependencies = [
 name = "vtabs-view"
 version = "0.1.0"
 dependencies = [
+ "serde",
  "serde_json",
  "unicode-width",
+ "vtabs-core",
  "vtabs-protocol",
  "vtabs-theme",
 ]

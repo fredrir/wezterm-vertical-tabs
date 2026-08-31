@@ -93,6 +93,9 @@ local function resolved_actions(cfg)
   return out
 end
 
+---Which buttons a config resolves to; v2 sends this list in the model, so it is exported.
+M.resolved_actions = resolved_actions
+
 ---Action glyphs and their 3-column hit spans, left to right on the lights' own row. They sit beside
 ---the traffic lights where there are any, and otherwise on the sidebar's trailing edge, which is the
 ---only place a toolbar fits without eating the list's margin.
