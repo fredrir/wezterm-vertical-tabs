@@ -107,6 +107,7 @@ test("v2 do: the vocabulary is total against the spec", function()
     "blur_sidebar",
     "drag_end",
     "drag_to",
+    "footer",
     "new_tab",
     "open_menu",
     "popover_mouse",

@@ -393,6 +393,19 @@ function DO.popover_wheel(gui_window, _, _, args)
   popover.move(gui_window, (args.dy or 1) > 0 and 1 or -1)
 end
 
+---Footer entries can be id-less closures, so the wire addresses them by index in the sent model.
+function DO.footer(gui_window, _, _, args)
+  local hook = (config.get().hooks or {}).footer
+  if type(hook) ~= "function" then
+    return
+  end
+  local ok, rows = pcall(hook, gui_window:mux_window())
+  local entry = ok and type(rows) == "table" and rows[args.index] or nil
+  if type(entry) == "table" and type(entry.on_click) == "function" then
+    pcall(entry.on_click, gui_window, entry)
+  end
+end
+
 M.DO = DO
 
 ---`do` events from a painting backend; the popover-open guard mirrors v1's click-through dismiss.
