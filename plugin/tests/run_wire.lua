@@ -69,7 +69,7 @@ test("wire: the encoder is deterministic and arrays stay arrays when empty", fun
 end)
 
 test("wire: an open popover rides the model with its row ids", function()
-  local win, gui, sb = H.open_popover(3)
+  local _, gui, sb = H.open_popover(3)
   state.session.proto[sb:pane_id()] = 2
   require("vtabs.view").sync(gui, { force = true })
   local models = v2_lines(sb, "model")
