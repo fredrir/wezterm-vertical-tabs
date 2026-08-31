@@ -1,0 +1,12 @@
+[package]
+name = "vtabs-view"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+vtabs-protocol.workspace = true
+vtabs-theme.workspace = true
+unicode-width.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true

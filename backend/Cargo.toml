@@ -2,6 +2,9 @@
 resolver = "3"
 members = [
   "crates/vtabs-protocol",
+  "crates/vtabs-theme",
+  "crates/vtabs-core",
+  "crates/vtabs-view",
   "crates/vtabs-input",
   "crates/vtabs-runtime",
   "crates/vtabs-zen",
@@ -14,6 +17,10 @@ edition = "2024"
 
 [workspace.dependencies]
 vtabs-protocol = { path = "crates/vtabs-protocol" }
+vtabs-theme = { path = "crates/vtabs-theme" }
+vtabs-core = { path = "crates/vtabs-core" }
+vtabs-view = { path = "crates/vtabs-view" }
+unicode-width = "0.2"
 vtabs-input = { path = "crates/vtabs-input" }
 vtabs-runtime = { path = "crates/vtabs-runtime" }
 vtabs-zen = { path = "crates/vtabs-zen" }

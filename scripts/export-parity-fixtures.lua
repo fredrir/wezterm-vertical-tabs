@@ -1,0 +1,254 @@
+-- Exports Lua-side outputs the ported Rust crates must reproduce byte-for-byte.
+-- Run from the repo root: lua scripts/export-parity-fixtures.lua
+local root = arg[0]:match "^(.*)[/\\]" .. "/.."
+package.path = root .. "/plugin/?.lua;" .. root .. "/plugin/tests/?.lua;" .. package.path
+package.preload.wezterm = function()
+  return require "wezterm_stub"
+end
+
+local theme = require "vtabs.theme"
+local util = require "vtabs.util"
+local glyphs = require "vtabs.glyphs"
+local icons = require "vtabs.icons"
+local platform = require "vtabs.platform"
+local palettes = require "palettes"
+
+local function num(v)
+  if v == math.floor(v) then
+    return string.format("%d", v)
+  end
+  return string.format("%.17g", v)
+end
+
+local function json(v, indent)
+  local pad = string.rep("  ", indent)
+  if type(v) == "table" then
+    if #v > 0 or next(v) == nil then
+      local parts = {}
+      for _, item in ipairs(v) do
+        parts[#parts + 1] = json(item, indent + 1)
+      end
+      return "[" .. table.concat(parts, ", ") .. "]"
+    end
+    local keys = {}
+    for k in pairs(v) do
+      keys[#keys + 1] = k
+    end
+    table.sort(keys)
+    local parts = {}
+    for _, k in ipairs(keys) do
+      parts[#parts + 1] = pad .. '  "' .. k .. '": ' .. json(v[k], indent + 1)
+    end
+    return "{\n" .. table.concat(parts, ",\n") .. "\n" .. pad .. "}"
+  elseif type(v) == "number" then
+    return num(v)
+  elseif type(v) == "boolean" then
+    return tostring(v)
+  end
+  return '"' .. tostring(v):gsub("\\", "\\\\"):gsub('"', '\\"') .. '"'
+end
+
+local function write(path, cases)
+  local f = assert(io.open(root .. "/" .. path, "w"))
+  f:write(json(cases, 0), "\n")
+  f:close()
+  print(("wrote %s (%d cases)"):format(path, #cases))
+end
+
+-- theme.resolve
+local extra = {
+  {
+    name = "tab-bar accent, no cursor",
+    background = "#101014",
+    foreground = "#d0d0d8",
+    tab_bar = { active_tab = { bg_color = "#ff8800" } },
+    ansi = {},
+  },
+  { name = "empty palette" },
+}
+local OVERRIDES = {
+  accent = "#ff0000",
+  elevation = 0.12,
+  hover_bg = "#333333",
+  scrim = 0.5,
+  popover_sel_fg = "#ffffff",
+}
+local theme_cases = {}
+local function add_theme(palette, label, user, opts)
+  theme_cases[#theme_cases + 1] = {
+    name = palette.name .. " / " .. label,
+    palette = palette,
+    user = user,
+    private = opts and opts.private or false,
+    resolved = theme.resolve(user, palette, opts),
+  }
+end
+for _, list in ipairs { palettes, extra } do
+  for _, palette in ipairs(list) do
+    add_theme(palette, "default", {}, {})
+    add_theme(palette, "private", {}, { private = true })
+    add_theme(palette, "overridden", OVERRIDES, {})
+  end
+end
+write("backend/crates/vtabs-theme/tests/fixtures/resolve.json", theme_cases)
+
+-- util width/truncate/pad_right/shorten_path
+local STRINGS = {
+  "", "plain title", "nvim — ~/projects/wez", "你好世界", "mix 你好 end", "🚀 launch",
+  "▙▛▐▎", "•›…", "❮❯", "╭╮╰╯╌╎", "a very long title that will certainly not fit anywhere",
+}
+local text_cases = {}
+for _, s in ipairs(STRINGS) do
+  for _, max in ipairs { 0, 1, 3, 8, 20, 80 } do
+    text_cases[#text_cases + 1] = {
+      s = s,
+      max = max,
+      width = util.width(s),
+      truncated = util.truncate(s, max),
+      truncated_bare = util.truncate(s, max, ""),
+      padded = util.pad_right(s, max),
+    }
+  end
+end
+local PATHS = {
+  "/home/fredrir/projects/wez-plugins/vertical-tabs",
+  "~/projects/wez-plugins/vertical-tabs",
+  "C:\\Users\\fredrir\\Documents\\deep\\nested\\dir",
+  "../relative/path/to/thing",
+  "single",
+  "/",
+  "~/你好/世界/深い/path",
+}
+local path_cases = {}
+for _, p in ipairs(PATHS) do
+  for _, budget in ipairs { 0, 4, 10, 18, 30, 60 } do
+    path_cases[#path_cases + 1] = { path = p, budget = budget, shortened = util.shorten_path(p, budget) }
+  end
+end
+write("backend/crates/vtabs-view/tests/fixtures/text.json", text_cases)
+write("backend/crates/vtabs-view/tests/fixtures/paths.json", path_cases)
+
+-- glyphs.resolve: bases are synthetic; icons defaults under the stub are ASCII, not production
+local glyph_cases = {}
+local BASES = {
+  { name = "empty", base = {} },
+  { name = "wide close", base = { close = "🚀" } },
+  { name = "ghost broken", base = { frame_tl = "X" } },
+  { name = "scroll override", base = { scroll = "S", ellipsis = "~" } },
+}
+local EFFECTIVES = {
+  { name = "default", effective = {} },
+  { name = "no blocks", effective = { custom_block_glyphs = false } },
+  { name = "wide ambiguous", effective = { treat_east_asian_ambiguous_width_as_wide = true } },
+  {
+    name = "no blocks, wide ambiguous",
+    effective = { custom_block_glyphs = false, treat_east_asian_ambiguous_width_as_wide = true },
+  },
+}
+for _, b in ipairs(BASES) do
+  for _, e in ipairs(EFFECTIVES) do
+    glyph_cases[#glyph_cases + 1] = {
+      name = b.name .. " / " .. e.name,
+      base = b.base,
+      custom_block_glyphs = e.effective.custom_block_glyphs ~= false,
+      wide_ambiguous = e.effective.treat_east_asian_ambiguous_width_as_wide == true,
+      resolved = glyphs.resolve(b.base, e.effective),
+    }
+  end
+end
+write("backend/crates/vtabs-view/tests/fixtures/glyphs.json", glyph_cases)
+
+-- util.sanitize: inputs as byte arrays, JSON cannot carry the invalid sequences
+local RAW = {
+  "plain",
+  "tab\ttitle",
+  "esc\27[31mred",
+  string.char(0x9b) .. "csi",
+  "bad\xc3utf",
+  "over\xc0\xaflong",
+  "bidi\226\128\174x",
+  "iso\226\129\166ok",
+  "nul\0mid",
+  "high\xf4\x90\x80\x80plane",
+}
+local sanitize_cases = {}
+for _, s in ipairs(RAW) do
+  local bytes = {}
+  for i = 1, #s do
+    bytes[#bytes + 1] = string.byte(s, i)
+  end
+  sanitize_cases[#sanitize_cases + 1] = { bytes = bytes, out = util.sanitize(s) }
+end
+write("backend/crates/vtabs-core/tests/fixtures/sanitize.json", sanitize_cases)
+
+-- platform.strip_geometry
+local geom_cases = {}
+local DIMS = {
+  { name = "retina mac", cols = 120, viewport_rows = 40, pixel_width = 1680, pixel_height = 1120, dpi = 144 },
+  { name = "1x mac", cols = 100, viewport_rows = 30, pixel_width = 800, pixel_height = 480, dpi = 72 },
+  { name = "linux 96dpi", cols = 120, viewport_rows = 40, pixel_width = 960, pixel_height = 640, dpi = 96 },
+  { name = "no dpi", cols = 80, viewport_rows = 24, pixel_width = 640, pixel_height = 384 },
+  { name = "zero cols", cols = 0, viewport_rows = 0 },
+}
+local GOPTS = {
+  { name = "mac reserve", is_mac = true, integrated_buttons = true, native_button_style = true, position = "left" },
+  {
+    name = "mac reserve toggle",
+    is_mac = true,
+    integrated_buttons = true,
+    native_button_style = true,
+    position = "left",
+    toggle_button = true,
+  },
+  {
+    name = "mac fullscreen",
+    is_mac = true,
+    integrated_buttons = true,
+    native_button_style = true,
+    position = "left",
+    is_full_screen = true,
+    toggle_button = true,
+  },
+  { name = "plain", toggle_button = true, padding_top = 2 },
+  { name = "rail", rail = true, rail_width = 5, toggle_button = true },
+  {
+    name = "mac rail",
+    is_mac = true,
+    integrated_buttons = true,
+    native_button_style = true,
+    position = "left",
+    rail = true,
+    rail_width = 5,
+    toggle_button = true,
+  },
+  {
+    name = "preview",
+    is_mac = true,
+    integrated_buttons = true,
+    native_button_style = true,
+    position = "left",
+    preview = true,
+    card_x1 = 3,
+  },
+}
+for _, d in ipairs(DIMS) do
+  for _, o in ipairs(GOPTS) do
+    geom_cases[#geom_cases + 1] = {
+      name = d.name .. " / " .. o.name,
+      dims = d,
+      opts = o,
+      out = platform.strip_geometry(d, o),
+    }
+  end
+end
+write("backend/crates/vtabs-core/tests/fixtures/geom.json", geom_cases)
+
+-- icons.resolve mechanics only: values under the stub are the ASCII fallbacks, never production
+local icon_cases = {}
+for _, m in ipairs {
+  {},
+  { nvim = "N", ["^cargo%-"] = "R", ["git.*"] = "G" },
+} do
+  icon_cases[#icon_cases + 1] = { icon_map = m, resolved = icons.resolve(m) }
+end
+write("backend/crates/vtabs-core/tests/fixtures/icons_resolve.json", icon_cases)

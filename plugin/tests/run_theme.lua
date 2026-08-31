@@ -14,6 +14,32 @@ local legacy, ready_window = H.legacy, H.ready_window
 -- P1-spec §6.1: the gates every scheme must clear, and the ceiling clamp where it cannot.
 local CEILING_LIMITED = { ["Solarized Dark"] = true, ["Solarized Light"] = true }
 
+local fake = require "fake_mux"
+
+test("the page is tinted by default and elevation = 0 makes it seamless", function()
+  local t = theme.resolve({}, fake.palette)
+  local seamless = theme.resolve({ elevation = 0 }, fake.palette)
+  eq(rgb(seamless.bg), "30,30,46", "0 is exactly the terminal background")
+  assert(t.bg[1] > seamless.bg[1] and t.bg[3] > seamless.bg[3], "the default tint lifts it toward fg")
+  eq(rgb(t.bg), rgb(theme.resolve({ elevation = 0.06 }, fake.palette).bg), "and it is 0.06")
+end)
+
+test("the accent chain is cursor_bg, then tab_bar active, then ansi[5], each behind both gates", function()
+  local base = fake.palette
+  -- Mocha's rosewater cursor clears 3.0 against the page but is 1.06 from the foreground.
+  assert(theme.contrast({ 245, 224, 220 }, { 205, 214, 244 }) < 1.2, "fixture cursor is fg-coloured")
+  eq(rgb(theme.resolve({}, base).accent), "137,180,250", "falls through to ansi[5]")
+  local usable = util.merge(base, { cursor_bg = "#f38ba8" })
+  eq(rgb(theme.resolve({}, usable).accent), "243,139,168", "a cursor that clears both gates wins")
+  local no_cursor = util.merge(base, { cursor_bg = "#242438" })
+  no_cursor.tab_bar = { active_tab = { bg_color = "#74c7ec" } }
+  eq(rgb(theme.resolve({}, no_cursor).accent), "116,199,236", "then the scheme's active tab colour")
+  local flat = util.merge(base, { cursor_bg = "#242438" })
+  flat.tab_bar = { active_tab = { bg_color = "#94e2d5" } }
+  eq(rgb(theme.resolve({}, flat).accent), "137,180,250", "a tab colour too close to fg is skipped too")
+  eq(rgb(theme.resolve({ accent = "#ff0000" }, base).accent), "255,0,0", "a user accent still wins")
+end)
+
 test("every §6.1 gate holds on all ten palettes, or is declared ceiling-limited", function()
   local limited = {}
   for _, p in ipairs(palettes) do
