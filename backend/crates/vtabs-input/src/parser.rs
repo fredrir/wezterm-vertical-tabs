@@ -34,7 +34,7 @@ fn button_from_sgr(cb: u32) -> Button {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Input {
     Mouse(Mouse),
     Focus(bool),

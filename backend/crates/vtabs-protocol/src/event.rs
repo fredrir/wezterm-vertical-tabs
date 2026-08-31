@@ -154,7 +154,7 @@ mod tests {
     fn ready_and_resize() {
         assert_eq!(
             Event::ready(30, 40).to_json(),
-            r#"{"t":"ready","v":1,"cols":30,"rows":40}"#
+            r#"{"t":"ready","v":2,"cols":30,"rows":40}"#
         );
         assert_eq!(
             Event::Resize { cols: 31, rows: 40 }.to_json(),

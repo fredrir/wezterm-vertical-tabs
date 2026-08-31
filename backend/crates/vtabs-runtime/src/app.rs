@@ -2,7 +2,8 @@ use std::io::{self, Write};
 use std::time::Instant;
 
 use vtabs_input::Input;
-use vtabs_protocol::{Command, Event};
+use vtabs_protocol::limits::{MENU_MAX_ITEMS, MODEL_MAX_TABS};
+use vtabs_protocol::{Command, Event, v2};
 
 use crate::anim;
 use crate::log::Logger;
@@ -19,6 +20,16 @@ pub struct App<W: Write> {
     pub size: (u16, u16),
     pub anim: Option<anim::Run>,
     pub seq: u64,
+    pub v2: V2State,
+}
+
+/// Latest v2 state, stored whole per message kind; a bounds breach keeps the previous one.
+#[derive(Default)]
+pub struct V2State {
+    pub config: Option<v2::ConfigMsg>,
+    pub theme: Option<v2::ThemeMsg>,
+    pub model: Option<v2::ModelMsg>,
+    pub menu: Option<v2::MenuMsg>,
 }
 
 impl<W: Write> App<W> {
@@ -71,6 +82,25 @@ impl<W: Write> App<W> {
             Command::Ping { n } => self.emit(&Event::Pong { n })?,
             Command::Auth { token } => self.write(set_user_var(TOKEN_VAR, &token).as_bytes())?,
             Command::Anim(cmd) => self.start_anim(cmd)?,
+            Command::Config(msg) => self.v2.config = Some(msg),
+            Command::Theme(msg) => self.v2.theme = Some(msg),
+            Command::Model(msg) => {
+                if msg.tabs.len() > MODEL_MAX_TABS {
+                    self.emit(&Event::Dropped { what: "model", reason: "bounds" })?;
+                } else {
+                    self.v2.model = Some(msg);
+                }
+            }
+            Command::Menu(msg) => {
+                if msg.items.len() > MENU_MAX_ITEMS {
+                    self.emit(&Event::Dropped { what: "menu", reason: "bounds" })?;
+                } else {
+                    self.v2.menu = Some(msg);
+                }
+            }
+            // Rendering from this state lands in P4b; storing first keeps the wire testable now.
+            Command::Fx(msg) => self.log.log(format!("fx {}", msg.phase)),
+            Command::Notice(msg) => self.log.log(format!("notice {}", msg.text)),
             Command::Quit => {
                 self.cancel_anim()?;
                 return Ok(false);
@@ -166,6 +196,7 @@ mod tests {
             size: (28, 24),
             anim: None,
             seq: 0,
+            v2: V2State::default(),
         }
     }
 

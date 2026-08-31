@@ -25,7 +25,7 @@ pub struct AnimCmd {
 }
 
 /// One JSON object per stdin line; unknown tags fail to parse and are dropped.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(tag = "t", rename_all = "snake_case")]
 pub enum Command {
     Frame {
@@ -40,5 +40,11 @@ pub enum Command {
     Auth {
         token: String,
     },
+    Config(crate::v2::ConfigMsg),
+    Theme(crate::v2::ThemeMsg),
+    Model(crate::v2::ModelMsg),
+    Menu(crate::v2::MenuMsg),
+    Fx(crate::v2::FxMsg),
+    Notice(crate::v2::NoticeMsg),
     Anim(AnimCmd),
 }

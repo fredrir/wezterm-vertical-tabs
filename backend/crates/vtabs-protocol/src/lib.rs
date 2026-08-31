@@ -2,6 +2,7 @@ pub mod command;
 pub mod event;
 pub mod limits;
 pub mod types;
+pub mod v2;
 
 pub use command::{AnimCmd, AnimRow, Command};
 pub use event::Event;

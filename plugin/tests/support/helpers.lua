@@ -288,6 +288,12 @@ function M.dump_scene(name, v)
       pop.rows[i] = { bg = row.bg, fg = row.fg, spans = row.spans }
     end
   end
+  local plain_glyphs = {}
+  for k, val in pairs(v.glyphs) do
+    if type(val) == "string" then
+      plain_glyphs[k] = val
+    end
+  end
   local scene = {
     cols = v.cols,
     rows = v.rows,
@@ -295,7 +301,7 @@ function M.dump_scene(name, v)
     items = v.items,
     theme = v.theme,
     cfg = cfg,
-    glyphs = v.glyphs,
+    glyphs = plain_glyphs,
     strip = v.strip,
     strip_buttons = layout_mod.resolved_actions(v.cfg),
     hover = v.hover,

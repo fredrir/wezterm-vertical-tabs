@@ -76,6 +76,7 @@ pub fn run() -> io::Result<()> {
         size,
         anim: None,
         seq: 0,
+        v2: crate::app::V2State::default(),
     };
     app.write(set_user_var(ROLE_VAR, role.name()).as_bytes())?;
     // Marker only: it lets the plugin find this pane again, it proves nothing and carries no token.
