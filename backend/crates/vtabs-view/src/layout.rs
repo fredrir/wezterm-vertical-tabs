@@ -1,5 +1,5 @@
-//! Port of plugin/vtabs/layout.lua: everything about a frame that does not depend on colour.
-//! The `hits` map is deliberately absent — hit-testing lands in a later phase.
+//! Port of plugin/vtabs/layout.lua: everything about a frame that does not depend on colour,
+//! including the `hits` map that names what each row and column answers for.
 
 use vtabs_core::geom::BUTTON_PITCH_PT;
 
@@ -395,10 +395,117 @@ impl<'a> RowSpec<'a> {
     }
 }
 
+/// Port of hit.lua's `KIND`: what a row answers for when the pointer lands on it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RegionKind {
+    Space,
+    Separator,
+    Strip,
+    Action,
+    Tab,
+    NewTab,
+    Footer,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Span {
+    pub id: String,
+    pub x1: i64,
+    pub x2: i64,
+}
+
+/// One row of the v1 `hits` map. `index` is the footer entry's place in the model's own list,
+/// which is how the wire addresses id-less footer closures.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Region {
+    pub kind: RegionKind,
+    pub id: Option<i64>,
+    pub slot: Option<i64>,
+    pub part: Option<Part>,
+    pub x1: Option<i64>,
+    pub x2: Option<i64>,
+    pub pinned: bool,
+    pub index: Option<i64>,
+    pub spans: Vec<Span>,
+}
+
+impl Region {
+    fn of(kind: RegionKind) -> Self {
+        Region {
+            kind,
+            id: None,
+            slot: None,
+            part: None,
+            x1: None,
+            x2: None,
+            pinned: false,
+            index: None,
+            spans: Vec::new(),
+        }
+    }
+
+    /// `hit.in_card`: true when `x` is on the row's card surface.
+    pub fn in_card(&self, x: i64) -> bool {
+        matches!((self.x1, self.x2), (Some(a), Some(b)) if x >= a && x <= b)
+    }
+
+    /// `hit.span`: first sub-target under `x`.
+    pub fn span(&self, x: i64) -> Option<&str> {
+        self.spans
+            .iter()
+            .find(|s| x >= s.x1 && x <= s.x2)
+            .map(|s| s.id.as_str())
+    }
+}
+
 pub struct Plan<'a> {
     pub grid: Grid,
     pub rail: bool,
     pub rows: Vec<Option<RowSpec<'a>>>,
+    pub regions: Vec<Region>,
+}
+
+impl Plan<'_> {
+    /// `hit.at`: the region at row `y`, or bare space off the end.
+    pub fn at(&self, y: i64) -> Region {
+        if y >= 1 && y <= self.regions.len() as i64 {
+            self.regions[(y - 1) as usize].clone()
+        } else {
+            Region::of(RegionKind::Space)
+        }
+    }
+
+    /// `hit.drop_slot`: the slot a tab dropped at row `y` would take; a gap row drops below its card.
+    pub fn drop_slot(&self, y: i64) -> i64 {
+        let here = self.at(y);
+        if here.kind == RegionKind::Tab
+            && let Some(slot) = here.slot
+        {
+            return if here.part == Some(Part::Gap) {
+                slot + 1
+            } else {
+                slot
+            };
+        }
+        let mut last_slot = 0;
+        for row in 1..=self.regions.len() as i64 {
+            let h = self.at(row);
+            if h.kind == RegionKind::Tab
+                && let Some(slot) = h.slot
+            {
+                last_slot = last_slot.max(slot);
+                if row > y {
+                    return slot;
+                }
+            }
+        }
+        last_slot + 1
+    }
+}
+
+/// `hit.on_inner_edge`: the sidebar edge that borders the content pane.
+pub fn on_inner_edge(x: i64, cols: i64, position: &str) -> bool {
+    if position == "right" { x <= 1 } else { x >= cols }
 }
 
 struct Thumb {
@@ -540,9 +647,16 @@ pub fn plan<'a>(view: &'a RenderInput) -> Plan<'a> {
     }
 
     let mut rows: Vec<Option<RowSpec>> = vec![None; view.rows.max(0) as usize];
-    let mut set = |row: i64, spec: RowSpec<'a>| {
+    let mut regions: Vec<Region> =
+        vec![Region::of(RegionKind::Space); view.rows.max(0) as usize];
+    let set = |rows: &mut Vec<Option<RowSpec<'a>>>, row: i64, spec: RowSpec<'a>| {
         if row >= 1 && row <= view.rows {
             rows[(row - 1) as usize] = Some(spec);
+        }
+    };
+    let mark = |regions: &mut Vec<Region>, row: i64, region: Region| {
+        if row >= 1 && row <= view.rows {
+            regions[(row - 1) as usize] = region;
         }
     };
 
@@ -571,6 +685,7 @@ pub fn plan<'a>(view: &'a RenderInput) -> Plan<'a> {
         let in_band =
             !actions.is_empty() && action_row.is_some_and(|r| row >= r && row <= band_last);
         set(
+            &mut rows,
             row,
             RowSpec::plain(RowKind::Strip {
                 actions: if in_band { actions.clone() } else { Vec::new() },
@@ -578,6 +693,24 @@ pub fn plan<'a>(view: &'a RenderInput) -> Plan<'a> {
                 glyph: action_row == Some(row),
             }),
         );
+        let region = if in_band {
+            Region {
+                x1: Some(actions[0].x1),
+                x2: Some(actions[actions.len() - 1].x2),
+                spans: actions
+                    .iter()
+                    .map(|a| Span {
+                        id: a.id.clone(),
+                        x1: a.x1,
+                        x2: a.x2,
+                    })
+                    .collect(),
+                ..Region::of(RegionKind::Action)
+            }
+        } else {
+            Region::of(RegionKind::Strip)
+        };
+        mark(&mut regions, row, region);
     }
 
     for i in 1..=list_rows {
@@ -593,10 +726,14 @@ pub fn plan<'a>(view: &'a RenderInput) -> Plan<'a> {
             .as_ref()
             .is_some_and(|t| i >= t.first && i < t.first + t.len);
         let thumb_lit = thumb_here && thumb.as_ref().is_some_and(|t| t.lit);
+        let mut region = Region::of(RegionKind::Space);
         let kind = match at(&entries, i + scroll) {
             None | Some(Entry::Space) => RowKind::Space,
             Some(Entry::Header) => RowKind::Header,
-            Some(Entry::Separator) => RowKind::Separator,
+            Some(Entry::Separator) => {
+                region = Region::of(RegionKind::Separator);
+                RowKind::Separator
+            }
             Some(Entry::Tab {
                 item,
                 slot,
@@ -613,6 +750,23 @@ pub fn plan<'a>(view: &'a RenderInput) -> Plan<'a> {
                     pointer_x: view.hover.map(|h| h.x),
                 };
                 let span = card_span(item, cfg, &st, &g, *part);
+                region = Region {
+                    id: Some(item.item.tab_id),
+                    slot: Some(*slot),
+                    part: Some(*part),
+                    x1: Some(g.card_x1),
+                    x2: Some(g.card_x2),
+                    pinned: item.item.is_pinned,
+                    spans: span
+                        .iter()
+                        .map(|s| Span {
+                            id: s.id.to_string(),
+                            x1: s.x1,
+                            x2: s.x2,
+                        })
+                        .collect(),
+                    ..Region::of(RegionKind::Tab)
+                };
                 RowKind::Card {
                     item: *item,
                     part: *part,
@@ -624,6 +778,7 @@ pub fn plan<'a>(view: &'a RenderInput) -> Plan<'a> {
             }
         };
         set(
+            &mut rows,
             row,
             RowSpec {
                 kind,
@@ -632,10 +787,13 @@ pub fn plan<'a>(view: &'a RenderInput) -> Plan<'a> {
                 thumb_lit,
             },
         );
+        mark(&mut regions, row, region);
     }
 
     if ghost_gap > 0 {
-        set(strip_rows + list_rows + 1, RowSpec::plain(RowKind::Space));
+        let row = strip_rows + list_rows + 1;
+        set(&mut rows, row, RowSpec::plain(RowKind::Space));
+        mark(&mut regions, row, Region::of(RegionKind::Space));
     }
     if ghost_h > 0 {
         let base = strip_rows + list_rows + ghost_gap;
@@ -652,6 +810,7 @@ pub fn plan<'a>(view: &'a RenderInput) -> Plan<'a> {
         };
         for i in 1..=ghost_h {
             set(
+                &mut rows,
                 base + i,
                 RowSpec::plain(RowKind::Ghost {
                     shape,
@@ -659,23 +818,49 @@ pub fn plan<'a>(view: &'a RenderInput) -> Plan<'a> {
                     hovered,
                 }),
             );
+            mark(
+                &mut regions,
+                base + i,
+                Region {
+                    x1: Some(g.card_x1),
+                    x2: Some(g.card_x2),
+                    ..Region::of(RegionKind::NewTab)
+                },
+            );
         }
     }
 
     // painted, not skipped: an unpainted row keeps whatever the pane had there before
     for i in 1..=pad_b {
-        set(view.rows - pad_b + i, RowSpec::plain(RowKind::Space));
+        let row = view.rows - pad_b + i;
+        set(&mut rows, row, RowSpec::plain(RowKind::Space));
+        mark(&mut regions, row, Region::of(RegionKind::Space));
     }
 
     for (idx, entry) in view.footer.iter().enumerate() {
         let row = view.rows - pad_b - footer_n + idx as i64 + 1;
         let hovered = view.hover.is_some_and(|h| h.y == row) && entry.id.is_some();
-        set(row, RowSpec::plain(RowKind::Footer { entry, hovered }));
+        set(
+            &mut rows,
+            row,
+            RowSpec::plain(RowKind::Footer { entry, hovered }),
+        );
+        mark(
+            &mut regions,
+            row,
+            Region {
+                x1: Some(g.card_x1),
+                x2: Some(g.card_x2),
+                index: Some(idx as i64 + 1),
+                ..Region::of(RegionKind::Footer)
+            },
+        );
     }
 
     Plan {
         grid: g,
         rail,
         rows,
+        regions,
     }
 }

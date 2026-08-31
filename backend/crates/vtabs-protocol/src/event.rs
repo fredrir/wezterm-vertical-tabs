@@ -12,6 +12,8 @@ pub enum Event {
         v: u8,
         cols: u16,
         rows: u16,
+        /// The capability flip (§P4b): true means Lua must stop sending this pane frames.
+        paints: bool,
     },
     Resize {
         cols: u16,
@@ -55,15 +57,107 @@ pub enum Event {
         what: &'static str,
         reason: &'static str,
     },
+    /// The v2 gesture vocabulary; `a` indexes input.lua's `DO` table.
+    Do {
+        a: &'static str,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        id: Option<DoId>,
+        #[serde(skip_serializing_if = "DoArgs::is_empty")]
+        args: DoArgs,
+    },
+    Note {
+        k: &'static str,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        why: Option<&'static str>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        id: Option<i64>,
+    },
+}
+
+/// A `do` target: tab ids are numbers, strip buttons are their string id.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(untagged)]
+pub enum DoId {
+    Tab(i64),
+    Name(String),
+}
+
+/// Every argument any `do` action carries; each event sets only the ones its handler reads.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize)]
+pub struct DoArgs {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub x: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub y: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub part: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub slot: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub outside: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub row: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub col: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub top: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub user: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dy: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub index: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub k: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub b: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kind: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub disabled: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub inside: Option<bool>,
+}
+
+impl DoArgs {
+    pub fn is_empty(&self) -> bool {
+        *self == DoArgs::default()
+    }
 }
 
 impl Event {
-    pub fn ready(cols: u16, rows: u16) -> Self {
+    pub fn ready(cols: u16, rows: u16, paints: bool) -> Self {
         Event::Ready {
             v: VERSION,
             cols,
             rows,
+            paints,
         }
+    }
+
+    pub fn do_(a: &'static str) -> Self {
+        Event::Do {
+            a,
+            id: None,
+            args: DoArgs::default(),
+        }
+    }
+
+    pub fn do_tab(a: &'static str, id: i64) -> Self {
+        Event::Do {
+            a,
+            id: Some(DoId::Tab(id)),
+            args: DoArgs::default(),
+        }
+    }
+
+    pub fn with(mut self, set: impl FnOnce(&mut DoArgs)) -> Self {
+        if let Event::Do { args, .. } = &mut self {
+            set(args);
+        }
+        self
     }
 
     pub fn paste(data: Option<Vec<u8>>) -> Self {
@@ -153,8 +247,8 @@ mod tests {
     #[test]
     fn ready_and_resize() {
         assert_eq!(
-            Event::ready(30, 40).to_json(),
-            r#"{"t":"ready","v":2,"cols":30,"rows":40}"#
+            Event::ready(30, 40, true).to_json(),
+            r#"{"t":"ready","v":2,"cols":30,"rows":40,"paints":true}"#
         );
         assert_eq!(
             Event::Resize { cols: 31, rows: 40 }.to_json(),
@@ -221,6 +315,54 @@ mod tests {
     }
 
     #[test]
+    fn do_events_match_the_lua_reader() {
+        assert_eq!(
+            Event::do_tab("press_card", 7)
+                .with(|a| {
+                    a.x = Some(5);
+                    a.y = Some(6);
+                    a.part = Some("title");
+                })
+                .to_json(),
+            r#"{"t":"do","a":"press_card","id":7,"args":{"x":5,"y":6,"part":"title"}}"#
+        );
+        assert_eq!(Event::do_("new_tab").to_json(), r#"{"t":"do","a":"new_tab"}"#);
+        assert_eq!(
+            Event::Do {
+                a: "strip",
+                id: Some(DoId::Name("settings".into())),
+                args: DoArgs::default(),
+            }
+            .to_json(),
+            r#"{"t":"do","a":"strip","id":"settings"}"#
+        );
+        assert_eq!(
+            Event::do_("set_scroll")
+                .with(|a| {
+                    a.top = Some(3);
+                    a.user = Some(true);
+                })
+                .to_json(),
+            r#"{"t":"do","a":"set_scroll","args":{"top":3,"user":true}}"#
+        );
+        assert_eq!(
+            Event::do_("popover_mouse")
+                .with(|a| {
+                    a.k = Some("down");
+                    a.b = Some("left");
+                    a.x = Some(4);
+                    a.y = Some(7);
+                    a.kind = Some("popover");
+                    a.id = Some("close".into());
+                    a.disabled = Some(false);
+                    a.inside = Some(true);
+                })
+                .to_json(),
+            r#"{"t":"do","a":"popover_mouse","args":{"x":4,"y":7,"k":"down","b":"left","kind":"popover","id":"close","disabled":false,"inside":true}}"#
+        );
+    }
+
+    #[test]
     fn key_events() {
         assert_eq!(
             Event::key("enter".into(), Mods::default(), b"\r").to_json(),
@@ -271,6 +413,15 @@ mod tests {
             r#"{"t":"dropped","what":"anim","reason":"size"}"#
         );
         assert_eq!(Event::Pong { n: None }.to_json(), r#"{"t":"pong"}"#);
+        assert_eq!(
+            Event::Note {
+                k: "menu_refused",
+                why: Some("bounds"),
+                id: Some(7)
+            }
+            .to_json(),
+            r#"{"t":"note","k":"menu_refused","why":"bounds","id":7}"#
+        );
         assert_eq!(
             Event::Pong { n: Some(5) }.to_json(),
             r#"{"t":"pong","n":5}"#
