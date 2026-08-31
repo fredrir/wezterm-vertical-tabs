@@ -34,7 +34,10 @@ fn a_card_owns_every_row_of_its_slot() {
         })
         .expect("a title row with a pad above it");
     let slot = p.at(title).slot;
-    assert!(slot.is_some() && p.at(title).id.is_some(), "the row names its tab and slot");
+    assert!(
+        slot.is_some() && p.at(title).id.is_some(),
+        "the row names its tab and slot"
+    );
     assert_eq!(p.at(title - 1).part, Some(Part::Pad));
     assert_eq!(p.at(title - 2).part, Some(Part::Pad));
     assert_eq!(p.at(title + 1).part, Some(Part::Pad));

@@ -326,7 +326,10 @@ mod tests {
                 .to_json(),
             r#"{"t":"do","a":"press_card","id":7,"args":{"x":5,"y":6,"part":"title"}}"#
         );
-        assert_eq!(Event::do_("new_tab").to_json(), r#"{"t":"do","a":"new_tab"}"#);
+        assert_eq!(
+            Event::do_("new_tab").to_json(),
+            r#"{"t":"do","a":"new_tab"}"#
+        );
         assert_eq!(
             Event::Do {
                 a: "strip",

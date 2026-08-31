@@ -66,7 +66,10 @@ impl UiState {
         if timeout_ms == 0 {
             return false;
         }
-        if self.hover.is_some_and(|h| now.saturating_sub(h.at) > timeout_ms) {
+        if self
+            .hover
+            .is_some_and(|h| now.saturating_sub(h.at) > timeout_ms)
+        {
             self.hover = None;
             return true;
         }

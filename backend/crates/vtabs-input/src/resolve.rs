@@ -14,13 +14,14 @@ pub const DRAG_DWELL_MS: u64 = 120;
 pub const TEAR_OFF_TRAVEL: i64 = 3;
 
 /// The mirrored `model.drag`: the press may have landed in another backend process (§1.4).
+/// It carries no comparable `began` — `origin.at` is Lua's clock, not this process's — so a drag
+/// this process did not start is gated on travel alone; its dwell was served where it began.
 #[derive(Debug, Clone, Copy)]
 pub struct MirroredDrag {
     pub id: i64,
     pub active: bool,
     pub origin_x: i64,
     pub origin_y: i64,
-    pub began: Ms,
     pub outside: bool,
 }
 
@@ -240,12 +241,13 @@ fn kind_key(kind: RegionKind) -> &'static str {
 }
 
 /// The press that armed this drag may live in another process, so the mirror is the fallback.
-fn pending_drag(k: &Knobs, ui: &UiState) -> Option<(i64, i64, i64, Ms, bool)> {
+/// `None` for the dwell means there is no local clock to measure it against.
+fn pending_drag(k: &Knobs, ui: &UiState) -> Option<(i64, i64, i64, Option<Ms>, bool)> {
     if let Some(d) = ui.drag {
-        return Some((d.tab_id, d.origin_x, d.origin_y, d.began, d.active));
+        return Some((d.tab_id, d.origin_x, d.origin_y, Some(d.began), d.active));
     }
     k.drag
-        .map(|d| (d.id, d.origin_x, d.origin_y, d.began, d.active))
+        .map(|d| (d.id, d.origin_x, d.origin_y, None, d.active))
 }
 
 fn on_drag(plan: &Plan, k: &Knobs, out: &mut Resolution, m: &Mouse, x: i64, y: i64, now: Ms) {
@@ -262,7 +264,8 @@ fn on_drag(plan: &Plan, k: &Knobs, out: &mut Resolution, m: &Mouse, x: i64, y: i
     // a short card must not put its neighbour out of reach: never ask for more than one slot
     let rows_needed = 2.max(DRAG_START_ROWS.min(k.slot_rows - 1));
     let past = dy >= rows_needed || dx >= DRAG_START_COLS;
-    let active = was_active || (past && now.saturating_sub(began) >= DRAG_DWELL_MS);
+    let dwelt = began.is_none_or(|b| now.saturating_sub(b) >= DRAG_DWELL_MS);
+    let active = was_active || (past && dwelt);
     if active {
         let slot = plan.drop_slot(y);
         let outside = k.tear_off && dx >= TEAR_OFF_TRAVEL && on_inner_edge(x, k.cols, k.position);
@@ -280,7 +283,7 @@ fn on_drag(plan: &Plan, k: &Knobs, out: &mut Resolution, m: &Mouse, x: i64, y: i
             tab_id,
             origin_x: ox,
             origin_y: oy,
-            began,
+            began: began.unwrap_or(now),
             active,
         });
     }
@@ -309,10 +312,11 @@ fn on_up(plan: &Plan, k: &Knobs, out: &mut Resolution, m: &Mouse, x: i64, y: i64
 
     if m.button == Button::Right {
         if let Some(a) = armed.filter(|a| a.kind == ArmKind::Menu) {
-            out.events.push(Event::do_tab("open_menu", a.tab_id).with(|args| {
-                args.row = Some(a.row);
-                args.col = Some(a.col);
-            }));
+            out.events
+                .push(Event::do_tab("open_menu", a.tab_id).with(|args| {
+                    args.row = Some(a.row);
+                    args.col = Some(a.col);
+                }));
         }
         return;
     }
@@ -337,8 +341,8 @@ fn on_up(plan: &Plan, k: &Knobs, out: &mut Resolution, m: &Mouse, x: i64, y: i64
         .or_else(|| mirrored.map(|d| (d.active, d.origin_x, d.outside)));
     if let Some((true, origin_x, armed_outside)) = active {
         let travelled = (x - origin_x).abs() >= TEAR_OFF_TRAVEL;
-        let outside = armed_outside
-            || (k.tear_off && travelled && on_inner_edge(x, k.cols, k.position));
+        let outside =
+            armed_outside || (k.tear_off && travelled && on_inner_edge(x, k.cols, k.position));
         let slot = plan.drop_slot(y);
         out.events.push(Event::do_("drag_end").with(|a| {
             a.outside = Some(outside);
@@ -370,21 +374,14 @@ fn on_wheel(k: &Knobs, out: &mut Resolution, dy: i64) {
     }));
 }
 
-const MOVE: &[(&str, i64)] = &[
-    ("down", 1),
-    ("j", 1),
-    ("tab", 1),
-    ("up", -1),
-    ("k", -1),
-];
+const MOVE: &[(&str, i64)] = &[("down", 1), ("j", 1), ("tab", 1), ("up", -1), ("k", -1)];
 
 /// Focus-mode keys Rust owns. `r`/`J`/`K` have no `do` verb, so they fall through to Lua's own
 /// focus branch as plain key events rather than being dropped.
 pub fn key(k: &Knobs, name: &str, mods: Mods, raw: &[u8]) -> Resolution {
     let mut out = Resolution::default();
     let forward = |out: &mut Resolution| {
-        out.events
-            .push(Event::key(name.to_string(), mods, raw));
+        out.events.push(Event::key(name.to_string(), mods, raw));
     };
     if !k.focus_on {
         forward(&mut out);

@@ -10,7 +10,7 @@ use vtabs_protocol::v2::{ConfigMsg, ModelMsg, PopoverBridge, RenderSection, TabR
 
 use crate::glyphs;
 use crate::scene::{
-    Drag, FooterEntry, Hover, Item, PopRow, PopSpan, PopoverRect, Padding, RenderCfg, RenderInput,
+    Drag, FooterEntry, Hover, Item, Padding, PopRow, PopSpan, PopoverRect, RenderCfg, RenderInput,
     Strip, StripButton,
 };
 
@@ -206,7 +206,13 @@ fn user_theme(msg: &ThemeMsg) -> vtabs_theme::UserTheme {
 /// The strip Lua measured, when it sent one; otherwise what this pane's own size implies.
 /// A pane knows its cells but not its pixels, so the macOS traffic-light reserve can only come
 /// from Lua — `toggle_row` present is the signal that it did.
-fn strip_of(cfg: &ConfigMsg, model: &ModelMsg, render: &RenderSection, cols: i64, rows: i64) -> Strip {
+fn strip_of(
+    cfg: &ConfigMsg,
+    model: &ModelMsg,
+    render: &RenderSection,
+    cols: i64,
+    rows: i64,
+) -> Strip {
     if let Some(sent) = model.strip.as_ref().filter(|s| s.toggle_row.is_some()) {
         return Strip {
             rows: sent.rows,
@@ -319,7 +325,11 @@ pub fn enrich(
             is_pinned: tab.pinned,
             is_private: model.private,
             title: title_of(tab),
-            meta: meta_from(tab, cfg.meta.as_deref(), cfg.meta_sep.as_deref().unwrap_or(" ")),
+            meta: meta_from(
+                tab,
+                cfg.meta.as_deref(),
+                cfg.meta_sep.as_deref().unwrap_or(" "),
+            ),
             icon: if cfg.icons {
                 icons::for_process(tab.proc.as_deref().unwrap_or(""), &icon_set).to_string()
             } else {
@@ -468,7 +478,10 @@ mod tests {
             Some("~/src/vtabs".into())
         );
         let tool = tab(Some("nvim"), Some("~/src/vtabs"));
-        assert_eq!(meta_from(&tool, Some("auto"), " "), Some("nvim vtabs".into()));
+        assert_eq!(
+            meta_from(&tool, Some("auto"), " "),
+            Some("nvim vtabs".into())
+        );
         assert_eq!(
             meta_from(&tool, Some("auto"), " · "),
             Some("nvim · vtabs".into()),

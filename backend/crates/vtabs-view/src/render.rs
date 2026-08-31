@@ -465,8 +465,21 @@ fn composite(
     }
 }
 
-/// Lays a frame out into cells without encoding it.
-fn cells(view: &RenderInput) -> (Vec<Option<Vec<Cell>>>, Vec<Option<f64>>) {
+/// A laid-out frame: the cells, the per-row fade, and the plan whose regions answer for them.
+pub struct Frame<'a> {
+    pub cells: Vec<Option<Vec<Cell>>>,
+    pub fades: Vec<Option<f64>>,
+    pub plan: layout::Plan<'a>,
+}
+
+/// Lays a frame out into cells without encoding it; the runtime turns these into ANSI.
+pub fn frame_of(view: &RenderInput) -> Frame<'_> {
+    let (cells, fades, plan) = cells(view);
+    Frame { cells, fades, plan }
+}
+
+#[allow(clippy::type_complexity)]
+fn cells(view: &RenderInput) -> (Vec<Option<Vec<Cell>>>, Vec<Option<f64>>, layout::Plan<'_>) {
     let (cfg, theme, cols) = (&view.cfg, &view.theme, view.cols);
     let glyphs = &view.glyphs;
     let plan = layout::plan(view);
@@ -612,13 +625,13 @@ fn cells(view: &RenderInput) -> (Vec<Option<Vec<Cell>>>, Vec<Option<f64>>) {
     if let Some(rect) = &view.popover {
         composite(&mut painted, cols, view.rows, theme, rect);
     }
-    (painted, fades)
+    (painted, fades, plan)
 }
 
 /// Renders a scene and serializes it in the two golden formats:
 /// (`<scene>.txt` content with its 2-row column ruler, `<scene>.styled.txt` content).
 pub fn golden_dumps(input: &RenderInput) -> (String, String) {
-    let (painted, fades) = cells(input);
+    let (painted, fades, _) = cells(input);
     let mut texts = Vec::with_capacity(painted.len());
     let mut styled = Vec::with_capacity(painted.len());
     for (row, cells) in painted.iter().enumerate() {

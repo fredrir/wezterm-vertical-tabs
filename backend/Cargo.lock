@@ -277,8 +277,10 @@ dependencies = [
  "base64",
  "crossterm",
  "serde_json",
+ "vtabs-core",
  "vtabs-input",
  "vtabs-protocol",
+ "vtabs-view",
 ]
 
 [[package]]

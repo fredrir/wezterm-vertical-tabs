@@ -202,7 +202,11 @@ fn a_drag_needs_both_the_threshold_and_the_dwell() {
         &ev(MouseKind::Drag, Button::Left, 6, y as u16 + 3),
         10,
     );
-    assert_eq!(action(&too_soon.events), None, "past the rows, inside the dwell");
+    assert_eq!(
+        action(&too_soon.events),
+        None,
+        "past the rows, inside the dwell"
+    );
 
     let too_near = mouse(
         &p,
@@ -237,7 +241,7 @@ fn a_drag_armed_in_another_process_still_moves_here() {
         active: true,
         origin_x: 6,
         origin_y: y,
-        began: 0,
+
         outside: false,
     });
     // no local press: the origin can only come from the model (§1.4)
@@ -264,7 +268,7 @@ fn travel_to_the_inner_edge_tears_off() {
         active: true,
         origin_x: 6,
         origin_y: y,
-        began: 0,
+
         outside: false,
     });
     let edge = view.cols as u16;
@@ -444,7 +448,12 @@ fn the_popover_reports_its_input_raw_and_interprets_nothing() {
         Some(&pop),
         &k,
         &UiState::default(),
-        &ev(MouseKind::Press, Button::Left, (rect.x + 1) as u16, rect.y as u16),
+        &ev(
+            MouseKind::Press,
+            Button::Left,
+            (rect.x + 1) as u16,
+            rect.y as u16,
+        ),
         0,
     );
     let a = args(&inside.events);
@@ -485,8 +494,14 @@ fn focus_keys_map_to_verbs_and_the_rest_fall_through() {
         action(&key(&k, "j", Mods::default(), b"j").events),
         Some("set_focus_index")
     );
-    assert_eq!(args(&key(&k, "j", Mods::default(), b"j").events).index, Some(2));
-    assert_eq!(args(&key(&k, "end", Mods::default(), b"").events).index, Some(3));
+    assert_eq!(
+        args(&key(&k, "j", Mods::default(), b"j").events).index,
+        Some(2)
+    );
+    assert_eq!(
+        args(&key(&k, "end", Mods::default(), b"").events).index,
+        Some(3)
+    );
     assert_eq!(
         action(&key(&k, "escape", Mods::default(), b"").events),
         Some("blur_sidebar")

@@ -505,7 +505,11 @@ impl Plan<'_> {
 
 /// `hit.on_inner_edge`: the sidebar edge that borders the content pane.
 pub fn on_inner_edge(x: i64, cols: i64, position: &str) -> bool {
-    if position == "right" { x <= 1 } else { x >= cols }
+    if position == "right" {
+        x <= 1
+    } else {
+        x >= cols
+    }
 }
 
 struct Thumb {
@@ -647,8 +651,7 @@ pub fn plan<'a>(view: &'a RenderInput) -> Plan<'a> {
     }
 
     let mut rows: Vec<Option<RowSpec>> = vec![None; view.rows.max(0) as usize];
-    let mut regions: Vec<Region> =
-        vec![Region::of(RegionKind::Space); view.rows.max(0) as usize];
+    let mut regions: Vec<Region> = vec![Region::of(RegionKind::Space); view.rows.max(0) as usize];
     let set = |rows: &mut Vec<Option<RowSpec<'a>>>, row: i64, spec: RowSpec<'a>| {
         if row >= 1 && row <= view.rows {
             rows[(row - 1) as usize] = Some(spec);
