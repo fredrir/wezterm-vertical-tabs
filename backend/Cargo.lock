@@ -256,7 +256,9 @@ name = "vtabs-input"
 version = "0.1.0"
 dependencies = [
  "serde_json",
+ "vtabs-core",
  "vtabs-protocol",
+ "vtabs-view",
 ]
 
 [[package]]
