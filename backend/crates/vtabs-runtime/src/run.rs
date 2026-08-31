@@ -84,6 +84,7 @@ pub fn run() -> io::Result<()> {
         started: Instant::now(),
         popover: None,
         hover_deadline: None,
+        token: None,
     };
     app.write(set_user_var(ROLE_VAR, role.name()).as_bytes())?;
     // Marker only: it lets the plugin find this pane again, it proves nothing and carries no token.

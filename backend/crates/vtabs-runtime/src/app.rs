@@ -34,6 +34,8 @@ pub struct App<W: Write> {
     /// Where the menu Lua composed sits, from the last frame; the bridge reports against it.
     pub popover: Option<PopoverHits>,
     pub hover_deadline: Option<Instant>,
+    /// The last token Lua authed with; a change means the plugin restarted around us.
+    pub token: Option<String>,
 }
 
 /// Latest v2 state, stored whole per message kind; a bounds breach keeps the previous one.
@@ -229,7 +231,16 @@ impl<W: Write> App<W> {
                 self.write(CLEAR_SCREEN.as_bytes())?
             }
             Command::Ping { n } => self.emit(&Event::Pong { n })?,
-            Command::Auth { token } => self.write(set_user_var(TOKEN_VAR, &token).as_bytes())?,
+            Command::Auth { token } => {
+                self.write(set_user_var(TOKEN_VAR, &token).as_bytes())?;
+                // A new token is a new Lua process: the mux kept this backend but the plugin lost
+                // `store.proto`/`store.paints` with its old state, and only `ready` restores them.
+                // Re-announcing on the same token would ping-pong, since Lua re-auths on ready.
+                if self.token.as_deref() != Some(token.as_str()) {
+                    self.token = Some(token);
+                    self.emit(&Event::ready(self.size.0, self.size.1, self.paints))?;
+                }
+            }
             Command::Anim(cmd) => self.start_anim(cmd)?,
             Command::Config(msg) => self.v2.config = Some(*msg),
             Command::Theme(msg) => self.v2.theme = Some(*msg),
@@ -403,6 +414,7 @@ mod tests {
             started: Instant::now(),
             popover: None,
             hover_deadline: None,
+            token: None,
         }
     }
 
@@ -444,7 +456,10 @@ mod tests {
         }))
         .unwrap();
         // the token never goes in the title: window titles are readable by the whole desktop
-        assert_eq!(a.out, set_user_var("vtabs_token", "abc").as_bytes());
+        let out = String::from_utf8_lossy(&a.out).to_string();
+        assert!(out.starts_with(&set_user_var("vtabs_token", "abc")));
+        // and it lands before the ready that follows it, so `is_ready` passes when that arrives
+        assert!(saw(&a, r#""t":"ready""#));
     }
 
     fn anim_cmd(id: u64, ms: u64) -> Command {
@@ -631,6 +646,34 @@ mod tests {
             dy: 0,
             mods: Mods::default(),
         })
+    }
+
+    #[test]
+    fn a_new_token_re_announces_ready_but_the_same_one_does_not() {
+        let mut a = painting();
+        let auth = |a: &mut App<Vec<u8>>, token: &str| {
+            a.handle(Input::Command(Command::Auth {
+                token: token.into(),
+            }))
+            .unwrap();
+        };
+        auth(&mut a, "first");
+        assert!(saw(&a, r#""t":"ready""#), "the first auth announces");
+        let after = payloads(&a).len();
+
+        // Lua re-auths from its own ready branch; announcing again would ping-pong forever
+        auth(&mut a, "first");
+        assert_eq!(payloads(&a).len(), after, "the same token says nothing new");
+
+        // a gui restart mints a fresh token: store.proto/store.paints must be restored
+        auth(&mut a, "second");
+        let sent = &payloads(&a)[after..];
+        let ready = sent
+            .iter()
+            .find(|p| p.contains(r#""t":"ready""#))
+            .expect("a new token re-announces");
+        assert!(ready.contains(r#""paints":true"#));
+        assert!(ready.contains(r#""v":2"#));
     }
 
     #[test]
