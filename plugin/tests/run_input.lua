@@ -13,6 +13,119 @@ local test, eq, rgb, title_row, palette = H.test, H.eq, H.rgb, H.title_row, H.pa
 local later, mark_ready, mouse, press_row, window = H.later, H.mark_ready, H.mouse, H.press_row, H.window
 local ready_window, key_window = H.ready_window, H.key_window
 
+test("v2 do: press_card activates the tab and arms the drag at its origin", function()
+  local win, gui = ready_window()
+  local sb = sidebar.find(win.tab_list[1])
+  input.handle(gui, sb, "vtabs", '{"t":"do","a":"press_card","id":' .. win.tab_list[3].id .. ',"args":{"x":5,"y":6}}')
+  eq(win.active_tab_ref, win.tab_list[3], "press activates the card's tab")
+  local drag = state.session.drag[gui:window_id()]
+  eq(drag.tab_id, win.tab_list[3].id)
+  eq(drag.origin_x, 5)
+  eq(drag.active, false, "arming is not dragging")
+end)
+
+test("v2 do: drag_to then drag_end reorders through the same action v1 uses", function()
+  local win, gui = ready_window()
+  local sb = sidebar.find(win.tab_list[1])
+  local id = win.tab_list[3].id
+  input.handle(gui, sb, "vtabs", '{"t":"do","a":"press_card","id":' .. id .. ',"args":{"x":5,"y":6}}')
+  input.handle(gui, sb, "vtabs", '{"t":"do","a":"drag_to","args":{"x":5,"y":3,"slot":1,"outside":false}}')
+  eq(state.session.drag[gui:window_id()].over_index, 1)
+  input.handle(gui, sb, "vtabs", '{"t":"do","a":"drag_end","args":{"slot":1}}')
+  eq(state.session.drag[gui:window_id()], nil, "the drag is spent")
+  eq(win.tab_list[1].id, id, "the dragged tab landed on slot 1")
+end)
+
+test("v2 do: window mirrors land in the stores and blur clears focus", function()
+  local win, gui = ready_window(12)
+  local sb = sidebar.find(win.tab_list[1])
+  local wid = gui:window_id()
+  input.handle(gui, sb, "vtabs", '{"t":"do","a":"set_scroll","args":{"top":4,"user":true}}')
+  eq(state.session.scroll[wid], 4)
+  eq(state.session.user_scrolled[wid], true)
+  input.handle(gui, sb, "vtabs", '{"t":"do","a":"set_focus_index","args":{"index":2}}')
+  eq(state.session.focus_index[wid], 2)
+  actions.focus_sidebar(gui)
+  input.handle(gui, sb, "vtabs", '{"t":"do","a":"blur_sidebar"}')
+  eq(state.has_focus(wid), false)
+end)
+
+test("v2 do: popover_mouse keeps v1's arming — destructive on release, scrim closes", function()
+  local win, gui, sb = H.open_popover(3)
+  local tabs_before = #win.tab_list
+  input.handle(
+    gui,
+    sb,
+    "vtabs",
+    '{"t":"do","a":"popover_mouse","args":{"k":"down","b":"left","x":5,"y":7,"kind":"popover","id":"close","inside":true}}'
+  )
+  eq(#win.tab_list, tabs_before, "a destructive item does nothing on the press")
+  input.handle(
+    gui,
+    sb,
+    "vtabs",
+    '{"t":"do","a":"popover_mouse","args":{"k":"up","b":"left","x":5,"y":7,"kind":"popover","id":"close","inside":true}}'
+  )
+  eq(#win.tab_list, tabs_before - 1, "and acts on the matching release")
+
+  local win2, gui2, sb2 = H.open_popover(3)
+  input.handle(
+    gui2,
+    sb2,
+    "vtabs",
+    '{"t":"do","a":"popover_mouse","args":{"k":"down","b":"left","x":2,"y":2,"kind":"scrim"}}'
+  )
+  eq(require("vtabs.popover").get(gui2:window_id()), nil, "a scrim press closes the menu")
+  eq(#win2.tab_list, 3, "and closes nothing else")
+end)
+
+test("v2 paints: a painting pane gets no frames and no fades, but stays fresh", function()
+  local win, gui = ready_window()
+  local sb = sidebar.find(win.tab_list[1])
+  local pid = sb:pane_id()
+  state.session.paints[pid] = true
+  local frames_before = 0
+  for _, sent in ipairs(sb.sent) do
+    if sent:find('"t":"frame"', 1, true) then
+      frames_before = frames_before + 1
+    end
+  end
+  require("vtabs.view").sync(gui, { force = true })
+  local frames_after = 0
+  for _, sent in ipairs(sb.sent) do
+    if sent:find('"t":"frame"', 1, true) then
+      frames_after = frames_after + 1
+    end
+  end
+  eq(frames_after, frames_before, "no frame reaches a painting pane")
+  eq(require("vtabs.view").animate(gui, "expand_in"), false, "no anim either")
+end)
+
+test("v2 do: the vocabulary is total against the spec", function()
+  local expected = {
+    "activate_tab_by_id",
+    "blur_sidebar",
+    "drag_end",
+    "drag_to",
+    "new_tab",
+    "open_menu",
+    "popover_mouse",
+    "press_card",
+    "request_close",
+    "set_focus_index",
+    "set_scroll",
+    "strip",
+    "toggle_pin",
+    "wheel_tab",
+  }
+  local got = {}
+  for name in pairs(input.DO) do
+    got[#got + 1] = name
+  end
+  table.sort(got)
+  eq(table.concat(got, ","), table.concat(expected, ","))
+end)
+
 test("ready records the backend's protocol version, keyed by pane", function()
   local win, gui = ready_window()
   local sb = sidebar.find(win.tab_list[1])

@@ -261,6 +261,148 @@ local function on_wheel(gui_window, ev, cfg)
   store.user_scrolled[wid] = true
 end
 
+---A painting backend reports popover input without interpreting it; the arming stays here.
+local function on_popover_mouse(gui_window, args)
+  local wid = gui_window:window_id()
+  if not popover.get(wid) then
+    return
+  end
+  if args.k == "down" then
+    if args.b == "left" then
+      if args.kind == "scrim" or not args.inside then
+        popover.close(gui_window)
+      elseif args.id and not args.disabled then
+        if ON_RELEASE[args.id] then
+          pending_item[wid] = { id = args.id, at = util.now_ms() }
+        else
+          popover.run(gui_window, args.id)
+        end
+      end
+    elseif args.b == "right" and args.kind == "scrim" then
+      popover.close(gui_window)
+    end
+  elseif args.k == "up" and args.b == "left" then
+    local item = pending_item[wid]
+    pending_item[wid] = nil
+    if item and args.kind == "popover" and args.id == item.id and args.inside then
+      popover.run(gui_window, args.id)
+    end
+  end
+end
+
+---The v2 gesture vocabulary (05-p4b-spec.md). Every handler is internal: nothing here mints a
+---public `vtabs.action.*`, which is what rule 4 protects.
+local DO = {}
+
+function DO.press_card(gui_window, pane, id, args)
+  local wid = gui_window:window_id()
+  local now = util.now_ms()
+  store.drag[wid] = nil
+  pending_menu[wid] = nil
+  pending_close[wid] = nil
+  state.set_focus(wid, false)
+  local focused = actions.activate_tab(gui_window, id, "sidebar")
+  store.drag[wid] = {
+    tab_id = id,
+    origin_x = args.x,
+    origin_y = args.y,
+    pane_id = focused and focused:pane_id() or pane:pane_id(),
+    active = false,
+    began = now,
+    at = now,
+  }
+end
+
+function DO.drag_to(gui_window, _, _, args)
+  local drag = store.drag[gui_window:window_id()]
+  if not drag then
+    return
+  end
+  drag.at = util.now_ms()
+  drag.active = true
+  drag.over_index = args.slot
+  drag.outside = args.outside == true
+end
+
+function DO.drag_end(gui_window, _, _, args)
+  local wid = gui_window:window_id()
+  local drag = store.drag[wid]
+  store.drag[wid] = nil
+  if not drag then
+    return
+  end
+  if args.outside or drag.outside then
+    actions.tear_off(gui_window, drag.tab_id)
+  elseif args.slot or drag.over_index then
+    actions.move_tab_to_slot(gui_window, drag.tab_id, args.slot or drag.over_index)
+  end
+end
+
+function DO.request_close(gui_window, _, id, args)
+  actions.request_close(gui_window, id, args.row, args.col)
+end
+
+function DO.toggle_pin(gui_window, _, id)
+  actions.toggle_pin(gui_window, id)
+end
+
+function DO.open_menu(gui_window, pane, id, args)
+  popover.open(gui_window, id, args.row, args.col)
+  view.invalidate_frames(pane:pane_id())
+end
+
+function DO.new_tab(gui_window)
+  actions.new_tab(gui_window)
+end
+
+function DO.strip(gui_window, _, id)
+  strip_action(gui_window, id)
+end
+
+function DO.set_scroll(gui_window, _, _, args)
+  local wid = gui_window:window_id()
+  store.scroll[wid] = args.top or 0
+  store.user_scrolled[wid] = args.user == true or nil
+end
+
+function DO.wheel_tab(gui_window, _, _, args)
+  actions.activate_relative(gui_window, args.dy or 1)
+end
+
+function DO.set_focus_index(gui_window, _, _, args)
+  store.focus_index[gui_window:window_id()] = args.index
+end
+
+function DO.activate_tab_by_id(gui_window, _, id)
+  actions.activate_tab(gui_window, id)
+  blur(gui_window)
+end
+
+function DO.blur_sidebar(gui_window)
+  blur(gui_window)
+end
+
+function DO.popover_mouse(gui_window, _, _, args)
+  on_popover_mouse(gui_window, args)
+end
+
+M.DO = DO
+
+---`do` events from a painting backend; the popover-open guard mirrors v1's click-through dismiss.
+local function on_do(gui_window, pane, ev)
+  local handler = DO[ev.a]
+  if not handler then
+    return
+  end
+  local wid = gui_window:window_id()
+  if popover.get(wid) and ev.a ~= "popover_mouse" then
+    popover.close(gui_window)
+    view.invalidate_frames(pane:pane_id())
+  end
+  handler(gui_window, pane, ev.id, ev.args or {})
+  view.sync(gui_window)
+end
+
 ---Motion only needs a repaint when it crosses a row or a sub-target span of the row it is on.
 local function hover_moved(previous, ev, pid)
   if not previous or previous.y ~= ev.y then
@@ -599,6 +741,7 @@ function M.handle(gui_window, pane, name, value)
   end
   if ev.t == "ready" then
     store.proto[pane:pane_id()] = tonumber(ev.v) or 1
+    store.paints[pane:pane_id()] = ev.paints == true
     sidebar.auth(pane)
     sidebar.ensure(gui_window)
     view.sync(gui_window, { force = true })
@@ -608,6 +751,10 @@ function M.handle(gui_window, pane, name, value)
     geometry.landed(gui_window:window_id())
     geometry.correct(gui_window)
     view.sync(gui_window, { force = true })
+  elseif ev.t == "do" then
+    on_do(gui_window, pane, ev)
+  elseif ev.t == "note" then
+    util.log("backend note: %s", tostring(ev.k))
   elseif ev.t == "mouse" then
     M.mouse(gui_window, pane, ev)
   elseif ev.t == "key" then

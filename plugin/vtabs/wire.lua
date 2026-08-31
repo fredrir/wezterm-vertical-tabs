@@ -118,6 +118,7 @@ local function config_body(cfg, ctx)
     context = cfg.context,
     hover_timeout_ms = cfg.hover_timeout_ms,
     render = {
+      meta = cfg.meta ~= false,
       padding = cfg.padding,
       frame = layout.framed(cfg),
       tab_height = cfg.tab_height,

@@ -68,7 +68,7 @@ local function fade_context(gui_window)
   end
   local tab = util.active_tab(gui_window)
   local sb = tab and sidebar.find(tab)
-  if not sb or not sidebar.is_ready(sb) then
+  if not sb or not sidebar.is_ready(sb) or store.paints[sb:pane_id()] then
     return nil
   end
   local domain = mux.domain(sb)
@@ -432,7 +432,7 @@ function M.sync(gui_window, opts)
         if result and is_active then
           store.scroll[wid] = result.scroll
         end
-        if result then
+        if result and not store.paints[pid] then
           store.hits[pid] = result.hits
           store.dims[pid] = { cols = dims.cols, rows = dims.viewport_rows }
           local payload = M.payload_for(pid, result, dims, opts.force)
@@ -440,6 +440,9 @@ function M.sync(gui_window, opts)
             store.frames[pid] = { cols = dims.cols, rows = dims.viewport_rows, text = result.rows, n = result.rows_n }
             store.sent_at[pid] = now
           end
+        elseif result then
+          store.dims[pid] = { cols = dims.cols, rows = dims.viewport_rows }
+          store.sent_at[pid] = now
         end
       end
     end

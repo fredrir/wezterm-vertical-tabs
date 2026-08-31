@@ -91,6 +91,7 @@ local SESSION = {
   dims = "pane",
   ready = "pane",
   proto = "pane",
+  paints = "pane",
   seen = "pane",
   pinged = "pane",
   sent_at = "pane",

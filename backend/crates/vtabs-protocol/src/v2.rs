@@ -45,6 +45,9 @@ pub struct ConfigMsg {
 /// The renderer-facing config surface, normalised by Lua exactly as the scene fixtures are.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct RenderSection {
+    /// False when the meta line is off; the mode string ConfigMsg.meta carries what it shows.
+    #[serde(default)]
+    pub meta: bool,
     pub padding: PaddingSpec,
     #[serde(default)]
     pub frame: bool,
