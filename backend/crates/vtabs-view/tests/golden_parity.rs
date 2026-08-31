@@ -12,7 +12,6 @@ fn golden_dir() -> PathBuf {
 }
 
 #[test]
-#[ignore = "unignore when the P4a renderer port lands"]
 fn every_scene_matches_its_goldens() {
     let scenes = golden_dir().join("scenes");
     let frames = golden_dir().join("frames");
