@@ -15,6 +15,7 @@ state.file = os.tmpname()
 ---is part of the contract: a suite loaded out of turn sees warnings already spent.
 for _, suite in ipairs {
   "run_core",
+  "run_mux",
   "run_sidebar",
   "run_render",
   "run_layout",
