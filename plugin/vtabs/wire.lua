@@ -117,6 +117,12 @@ local function config_body(cfg, ctx)
     wheel = cfg.wheel,
     context = cfg.context,
     hover_timeout_ms = cfg.hover_timeout_ms,
+    ellipsis = cfg.ellipsis,
+    popover = {
+      width = cfg.popover.width,
+      follow_pointer = cfg.popover.follow_pointer,
+      overflow = cfg.popover.overflow,
+    },
     render = {
       meta = cfg.meta ~= false,
       padding = cfg.padding,

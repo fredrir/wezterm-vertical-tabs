@@ -101,6 +101,22 @@ test("v2 paints: a painting pane gets no frames and no fades, but stays fresh", 
   eq(require("vtabs.view").animate(gui, "expand_in"), false, "no anim either")
 end)
 
+test("v2 do: a menu verb through the event path acts on the open menu instead of dismissing it", function()
+  local win, gui, sb = H.open_popover(3)
+  input.handle(gui, sb, "vtabs", '{"t":"do","a":"menu_pick","args":{"id":"activate"}}')
+  eq(require("vtabs.popover").get(gui:window_id()), nil, "the pick closed the menu itself")
+  eq(win.active_tab_ref, win.tab_list[1], "and ran the item: tab 1 owns the menu opened over row 3")
+
+  local win2, gui2, sb2 = H.open_popover(3)
+  input.handle(
+    gui2,
+    sb2,
+    "vtabs",
+    '{"t":"do","a":"press_card","id":' .. win2.tab_list[2].id .. ',"args":{"x":5,"y":6}}'
+  )
+  eq(require("vtabs.popover").get(gui2:window_id()), nil, "any other gesture still dismisses first")
+end)
+
 test("v2 do: the vocabulary is total against the spec", function()
   local expected = {
     "activate_tab_by_id",

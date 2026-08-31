@@ -433,6 +433,16 @@ end
 
 M.DO = DO
 
+---Verbs that operate on the open menu; every other gesture dismisses it first, as a v1 click does.
+local MENU_DO = {
+  popover_mouse = true,
+  popover_wheel = true,
+  menu_pick = true,
+  menu_back = true,
+  menu_closed = true,
+  rename_commit = true,
+}
+
 ---`do` events from a painting backend; the popover-open guard mirrors v1's click-through dismiss.
 local function on_do(gui_window, pane, ev)
   local handler = DO[ev.a]
@@ -440,7 +450,7 @@ local function on_do(gui_window, pane, ev)
     return
   end
   local wid = gui_window:window_id()
-  if popover.get(wid) and ev.a ~= "popover_mouse" then
+  if popover.get(wid) and not MENU_DO[ev.a] then
     popover.close(gui_window)
     view.invalidate_frames(pane:pane_id())
   end
