@@ -320,6 +320,10 @@ pub struct MenuMsg {
     #[serde(default)]
     pub open: bool,
     #[serde(default)]
+    pub level: Option<String>,
+    #[serde(default)]
+    pub selected: Option<i64>,
+    #[serde(default)]
     pub anchor: Option<MenuAnchor>,
     #[serde(default)]
     pub target: Option<i64>,

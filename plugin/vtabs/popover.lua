@@ -530,6 +530,50 @@ function M.edit(pop, key, mods)
   return nil
 end
 
+---The v2 menu message for this window's popover, one level at a time; nil when nothing is open.
+function M.wire_body(gui_window)
+  local pop = store.popover[gui_window:window_id()]
+  if not pop then
+    return nil
+  end
+  local tabs = model.build(gui_window)
+  local item = model.find(tabs, pop.tab_id)
+  local body = {
+    open = true,
+    level = pop.level,
+    anchor = { row = pop.anchor_row or 0, col = pop.anchor_col },
+    target = pop.tab_id,
+    selected = pop.index,
+  }
+  if pop.level == "confirm" then
+    local lines = question(gui_window, pop) or {}
+    body.header = { title = lines[1] or "Close?", meta = lines[2] }
+    local items = {}
+    for _, entry in ipairs(CONFIRM_ITEMS) do
+      items[#items + 1] = { id = entry.id, label = entry.label, danger = entry.id == "confirm_close" or nil }
+    end
+    body.items = items
+  elseif pop.level == "rename" then
+    body.header = { title = "Rename tab" }
+    body.items = { { id = "rename_field", mode = "edit", label = "", value = pop.buffer or "" } }
+    body.selected = 1
+  else
+    body.header = item and { title = item.title, meta = item.meta } or nil
+    local items = {}
+    for _, entry in ipairs(M.items(gui_window, pop.tab_id)) do
+      items[#items + 1] = {
+        id = entry.id,
+        label = entry.label,
+        hint = entry.hint,
+        disabled = entry.disabled or nil,
+        danger = entry.confirm and true or nil,
+      }
+    end
+    body.items = items
+  end
+  return body
+end
+
 function M.commit_rename(gui_window)
   local wid = gui_window:window_id()
   local pop = store.popover[wid]

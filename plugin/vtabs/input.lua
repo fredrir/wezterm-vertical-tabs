@@ -389,6 +389,31 @@ function DO.popover_mouse(gui_window, _, _, args)
   on_popover_mouse(gui_window, args)
 end
 
+function DO.menu_pick(gui_window, pane, _, args)
+  if popover.run(gui_window, args.id) then
+    view.invalidate_frames(pane:pane_id())
+  end
+end
+
+function DO.menu_back(gui_window, pane)
+  popover.back(gui_window)
+  view.invalidate_frames(pane:pane_id())
+end
+
+function DO.menu_closed(gui_window, pane)
+  popover.close(gui_window)
+  view.invalidate_frames(pane:pane_id())
+end
+
+---Rust owns the edit buffer; the commit lands it in the v1 state before the shared path applies it.
+function DO.rename_commit(gui_window, _, _, args)
+  local pop = popover.get(gui_window:window_id())
+  if pop and pop.level == "rename" then
+    pop.buffer = tostring(args.text or "")
+    popover.commit_rename(gui_window)
+  end
+end
+
 function DO.popover_wheel(gui_window, _, _, args)
   popover.move(gui_window, (args.dy or 1) > 0 and 1 or -1)
 end

@@ -82,3 +82,38 @@ test("wire: an open popover rides the model with its row ids", function()
   end
   assert(table.concat(ids, ","):find "close", "row identity crosses with the spans")
 end)
+
+test("wire: the menu crosses as its own message, one level at a time", function()
+  local _, gui, sb = H.open_popover(3)
+  state.session.proto[sb:pane_id()] = 2
+  require("vtabs.view").sync(gui, { force = true })
+  local menus = v2_lines(sb, "menu")
+  local last = decode(menus[#menus])
+  eq(last.open, true)
+  eq(last.level, "root")
+  assert(#last.items >= 5, "the root items crossed")
+  local close_item
+  for _, item in ipairs(last.items) do
+    if item.id == "close" then
+      close_item = item
+    end
+  end
+  assert(close_item and close_item.danger, "destructive items are marked")
+
+  require("vtabs.input").DO.menu_closed(gui, sb)
+  require("vtabs.view").sync(gui, { force = true })
+  menus = v2_lines(sb, "menu")
+  eq(decode(menus[#menus]).open, false, "closing crosses too")
+end)
+
+test("wire: menu_pick runs the same path a v1 click does", function()
+  local win, gui, sb = H.open_popover(3)
+  local tabs_before = #win.tab_list
+  require("vtabs.input").DO.menu_pick(gui, sb, nil, { id = "close" })
+  local pop = require("vtabs.popover").get(gui:window_id())
+  if pop then
+    eq(pop.level, "confirm", "a guarded close raises the confirm level")
+    require("vtabs.input").DO.menu_pick(gui, sb, nil, { id = "confirm_close" })
+  end
+  eq(#win.tab_list, tabs_before - 1, "the pick closed the tab")
+end)

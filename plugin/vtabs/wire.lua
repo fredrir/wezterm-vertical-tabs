@@ -265,10 +265,12 @@ end
 function M.sync(gui_window, ctx)
   local wid = gui_window:window_id()
   local cfg = ctx.cfg
+  local menu = require("vtabs.popover").wire_body(gui_window)
   local lines = {
     config = versioned(wid, "config", encode(config_body(cfg, ctx))),
     theme = versioned(wid, "theme", encode(theme_body(cfg, ctx))),
     model = versioned(wid, "model", encode(model_body(cfg, ctx, wid))),
+    menu = versioned(wid, "menu", encode(menu or { open = false })),
   }
   for _, info in ipairs(gui_window:mux_window():tabs_with_info()) do
     local sb = sidebar.find(info.tab)
@@ -279,7 +281,7 @@ function M.sync(gui_window, ctx)
         seen = {}
         sent[pid] = seen
       end
-      for _, kind in ipairs { "config", "theme", "model" } do
+      for _, kind in ipairs { "config", "theme", "model", "menu" } do
         local line = lines[kind]
         if seen[kind] ~= line and sidebar.send_raw(sb, line) then
           seen[kind] = line
