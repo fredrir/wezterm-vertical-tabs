@@ -67,3 +67,18 @@ test("wire: the encoder is deterministic and arrays stay arrays when empty", fun
   eq(wire.encode {}, "{}")
   eq(wire.encode { s = 'quote " and \\ back' }, '{"s":"quote \\" and \\\\ back"}')
 end)
+
+test("wire: an open popover rides the model with its row ids", function()
+  local win, gui, sb = H.open_popover(3)
+  state.session.proto[sb:pane_id()] = 2
+  require("vtabs.view").sync(gui, { force = true })
+  local models = v2_lines(sb, "model")
+  local last = decode(models[#models])
+  assert(last.popover, "the bridge is on the wire")
+  assert(last.popover.h >= 3)
+  local ids = {}
+  for _, row in ipairs(last.popover.rows) do
+    ids[#ids + 1] = tostring(row.id)
+  end
+  assert(table.concat(ids, ","):find "close", "row identity crosses with the spans")
+end)
