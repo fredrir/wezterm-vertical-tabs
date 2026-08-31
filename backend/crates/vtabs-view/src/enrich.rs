@@ -330,7 +330,9 @@ pub fn enrich(
                 cfg.meta.as_deref(),
                 cfg.meta_sep.as_deref().unwrap_or(" "),
             ),
-            icon: if cfg.icons {
+            icon: if cfg.icons && tab.settings {
+                icon_set.map.get("settings").cloned().unwrap_or_default()
+            } else if cfg.icons {
                 icons::for_process(tab.proc.as_deref().unwrap_or(""), &icon_set).to_string()
             } else {
                 String::new()
@@ -402,9 +404,9 @@ pub fn enrich(
                 text: f.text.clone(),
                 icon: f.icon.clone(),
                 id: f.id.clone(),
-                fg: None,
-                bg: None,
-                icon_fg: None,
+                fg: f.fg,
+                bg: f.bg,
+                icon_fg: f.icon_fg,
             })
             .collect(),
         private: model.private,
@@ -466,6 +468,7 @@ mod tests {
             pinned: false,
             private: false,
             unseen: false,
+            settings: false,
             zoomed: false,
         }
     }

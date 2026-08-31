@@ -416,7 +416,10 @@ pub fn key(k: &Knobs, name: &str, mods: Mods, raw: &[u8]) -> Resolution {
     } else if name == "x" || name == "d" || name == "delete" {
         if let Some(id) = of(index) {
             out.events
-                .push(Event::do_tab("request_close", id).with(|a| a.row = Some(index)));
+                .push(Event::do_tab("request_close", id).with(|a| {
+                    a.row = Some(index);
+                    a.from_key = Some(true);
+                }));
         }
     } else if name == "p" {
         if let Some(id) = of(index) {

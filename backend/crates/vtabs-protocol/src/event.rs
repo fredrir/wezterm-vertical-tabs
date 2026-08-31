@@ -96,6 +96,8 @@ pub struct DoArgs {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub outside: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub from_key: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub row: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub col: Option<i64>,

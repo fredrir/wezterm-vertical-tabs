@@ -207,6 +207,7 @@ function M.build(gui_window)
           title = "Settings",
           icon = cfg.icons and cfg.glyphs.settings or "",
           has_unseen = false,
+          is_settings = true,
         }
       end
       local override, tab_title, pane_title = title_parts(tab, pane, cfg)

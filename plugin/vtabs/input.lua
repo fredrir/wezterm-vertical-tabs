@@ -342,7 +342,7 @@ function DO.drag_end(gui_window, _, _, args)
 end
 
 function DO.request_close(gui_window, _, id, args)
-  actions.request_close(gui_window, id, args.row, args.col)
+  actions.request_close(gui_window, id, args.row, args.col, args.from_key == true)
 end
 
 function DO.toggle_pin(gui_window, _, id)

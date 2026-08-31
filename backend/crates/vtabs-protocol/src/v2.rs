@@ -272,6 +272,12 @@ pub struct FooterItem {
     pub text: String,
     #[serde(default)]
     pub icon: Option<String>,
+    #[serde(default)]
+    pub fg: Option<[u8; 3]>,
+    #[serde(default)]
+    pub bg: Option<[u8; 3]>,
+    #[serde(default)]
+    pub icon_fg: Option<[u8; 3]>,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -304,6 +310,8 @@ pub struct TabRecord {
     pub unseen: bool,
     #[serde(default)]
     pub zoomed: bool,
+    #[serde(default)]
+    pub settings: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]

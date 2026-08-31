@@ -385,6 +385,7 @@ function M.sync(gui_window, opts)
   -- After the width settles, so the card is drawn at the pane rect the correction leaves behind.
   require("vtabs.frame").sync(gui_window)
 
+  local wire_strip = nil
   for _, info in ipairs(mux_win:tabs_with_info()) do
     local sb = sidebar.find(info.tab)
     if sb and sidebar.is_ready(sb) then
@@ -395,6 +396,18 @@ function M.sync(gui_window, opts)
       if dims then
         local rail = state.is_collapsed(wid) and cfg.collapsed == "rail" or nil
         local strip = strip_for(gui_window, cfg, dims, rail)
+        if is_active or wire_strip == nil then
+          wire_strip = strip
+        end
+        if store.paints[pid] then
+          -- rect_for's side effect places the popover rect the wire bridge carries
+          if is_active then
+            rect_for(gui_window, dims, resolved, cfg)
+          end
+          store.dims[pid] = { cols = dims.cols, rows = dims.viewport_rows }
+          store.sent_at[pid] = now
+          goto continue
+        end
         -- a title or cwd that breaks one render must not stop the other sidebars in this window
         local ok, result = pcall(render.render, {
           cols = dims.cols,
@@ -422,7 +435,7 @@ function M.sync(gui_window, opts)
         if result and is_active then
           store.scroll[wid] = result.scroll
         end
-        if result and not store.paints[pid] then
+        if result then
           store.hits[pid] = result.hits
           store.dims[pid] = { cols = dims.cols, rows = dims.viewport_rows }
           local payload = M.payload_for(pid, result, dims, opts.force)
@@ -430,10 +443,8 @@ function M.sync(gui_window, opts)
             store.frames[pid] = { cols = dims.cols, rows = dims.viewport_rows, text = result.rows, n = result.rows_n }
             store.sent_at[pid] = now
           end
-        elseif result then
-          store.dims[pid] = { cols = dims.cols, rows = dims.viewport_rows }
-          store.sent_at[pid] = now
         end
+        ::continue::
       end
     end
   end
@@ -445,6 +456,7 @@ function M.sync(gui_window, opts)
     active_tab_id = active_tab_id,
     effective = mux.effective_config(gui_window),
     chrome = chrome_for(gui_window, cfg),
+    strip = wire_strip,
     popover = popover_rect[wid],
     window_dims = mux.dims(gui_window),
   })

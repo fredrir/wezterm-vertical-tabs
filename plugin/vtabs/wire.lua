@@ -176,6 +176,7 @@ local function tab_record(item)
     pinned = item.is_pinned,
     private = item.is_private or false,
     unseen = item.has_unseen,
+    settings = item.is_settings or nil,
   }
 end
 
@@ -206,7 +207,13 @@ local function model_body(cfg, ctx, wid)
       outside = drag.outside == true,
       origin = { x = drag.origin_x, y = drag.origin_y, at = drag.began },
     } or nil,
-    strip = { buttons = buttons },
+    strip = ctx.strip and {
+      rows = ctx.strip.rows,
+      cols = ctx.strip.cols,
+      toggle_row = ctx.strip.toggle_row,
+      cell_w = ctx.strip.cell_w,
+      buttons = buttons,
+    } or { buttons = buttons },
     popover = ctx.popover and (function(rect)
       local rows = M.array()
       for _, row in ipairs(rect.rows or {}) do
