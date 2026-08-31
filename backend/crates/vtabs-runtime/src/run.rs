@@ -69,6 +69,8 @@ pub fn run() -> io::Result<()> {
         log.log("stdin is not a tty; raw mode skipped");
     }
     let size = terminal::size().unwrap_or((0, 0));
+    // The settings screen keeps the v1 frame path until P6, so only the sidebar announces paints.
+    let paints = role == Role::Sidebar;
     let mut app = App {
         out,
         log,
@@ -77,11 +79,17 @@ pub fn run() -> io::Result<()> {
         anim: None,
         seq: 0,
         v2: crate::app::V2State::default(),
+        paints,
+        ui: Default::default(),
+        started: Instant::now(),
+        popover: None,
+        hover_deadline: None,
+        token: None,
     };
     app.write(set_user_var(ROLE_VAR, role.name()).as_bytes())?;
     // Marker only: it lets the plugin find this pane again, it proves nothing and carries no token.
     app.write(title_marker(role, &nonce()).as_bytes())?;
-    app.emit(&Event::ready(size.0, size.1))?;
+    app.emit(&Event::ready(size.0, size.1, paints))?;
 
     let rx = spawn_stdin_reader();
     let mut parser = Parser::new();
@@ -92,6 +100,9 @@ pub fn run() -> io::Result<()> {
     loop {
         let mut deadline = next_tick.min(next_full);
         if let Some(at) = app.next_anim() {
+            deadline = deadline.min(at);
+        }
+        if let Some(at) = app.next_hover() {
             deadline = deadline.min(at);
         }
         let until_tick = deadline.saturating_duration_since(Instant::now());
@@ -112,6 +123,7 @@ pub fn run() -> io::Result<()> {
         }
         let now = Instant::now();
         app.tick_anim(now)?;
+        app.tick_hover(now)?;
         if now >= next_tick {
             next_tick = now + tick;
             if !winch || signal::resized() {

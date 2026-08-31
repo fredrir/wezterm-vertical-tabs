@@ -1,3 +1,4 @@
+pub mod enrich;
 pub mod frame;
 pub mod glyphs;
 pub mod layout;

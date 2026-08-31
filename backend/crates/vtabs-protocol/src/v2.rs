@@ -20,6 +20,9 @@ pub struct ConfigMsg {
     pub icon_map: BTreeMap<String, String>,
     #[serde(default)]
     pub meta: Option<String>,
+    /// Joins `proc` and the directory on the meta line; wire.lua has always sent it.
+    #[serde(default)]
+    pub meta_sep: Option<String>,
     #[serde(default)]
     pub unseen: bool,
     #[serde(default)]

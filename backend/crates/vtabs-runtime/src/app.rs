@@ -1,12 +1,18 @@
 use std::io::{self, Write};
 use std::time::Instant;
 
+use vtabs_core::ui::UiState;
 use vtabs_input::Input;
+use vtabs_input::resolve::{self, Knobs, MirroredDrag};
 use vtabs_protocol::limits::{MENU_MAX_ITEMS, MODEL_MAX_TABS};
 use vtabs_protocol::{Command, Event, v2};
+use vtabs_view::enrich::{PopoverHits, enrich};
+use vtabs_view::layout;
+use vtabs_view::render::frame_of;
 
 use crate::anim;
 use crate::log::Logger;
+use crate::paint::frame_bytes;
 use crate::terminal;
 use crate::uservar::{TOKEN_VAR, set_user_var};
 
@@ -21,6 +27,15 @@ pub struct App<W: Write> {
     pub anim: Option<anim::Run>,
     pub seq: u64,
     pub v2: V2State,
+    /// True for the sidebar role: this process owns the pane's pixels and Lua sends it no frames.
+    pub paints: bool,
+    pub ui: UiState,
+    pub started: Instant,
+    /// Where the menu Lua composed sits, from the last frame; the bridge reports against it.
+    pub popover: Option<PopoverHits>,
+    pub hover_deadline: Option<Instant>,
+    /// The last token Lua authed with; a change means the plugin restarted around us.
+    pub token: Option<String>,
 }
 
 /// Latest v2 state, stored whole per message kind; a bounds breach keeps the previous one.
@@ -57,19 +72,155 @@ impl<W: Write> App<W> {
         self.write(set_user_var(&self.var, &json).as_bytes())
     }
 
+    pub fn now_ms(&self) -> u64 {
+        self.started.elapsed().as_millis() as u64
+    }
+
+    /// Nothing can be drawn or hit-tested until all three commands have landed at least once.
+    fn dressed(&self) -> bool {
+        self.paints
+            && self.v2.config.is_some()
+            && self.v2.theme.is_some()
+            && self.v2.model.is_some()
+    }
+
     /// Returns `Ok(false)` when the backend should exit.
     pub fn handle(&mut self, input: Input) -> io::Result<bool> {
         match input {
-            Input::Mouse(m) => self.emit(&Event::from(m))?,
+            Input::Mouse(m) => {
+                if !self.paints {
+                    self.emit(&Event::from(m))?;
+                } else if self.dressed() {
+                    // a painting backend speaks the gesture vocabulary; `mouse` is never sent
+                    self.gesture(&m)?;
+                }
+            }
             Input::Focus(focused) => self.emit(&Event::Focus { focused })?,
-            Input::Key { name, mods, raw } => self.emit(&Event::key(name, mods, &raw))?,
+            Input::Key { name, mods, raw } => {
+                if self.dressed() {
+                    self.key(&name, mods, &raw)?;
+                } else {
+                    self.emit(&Event::key(name, mods, &raw))?;
+                }
+            }
             Input::Paste(data) => self.emit(&Event::paste(data))?,
             Input::Command(cmd) => return self.run(cmd),
         }
         Ok(true)
     }
 
+    fn gesture(&mut self, m: &vtabs_protocol::Mouse) -> io::Result<()> {
+        let now = self.now_ms();
+        let (ui, events, repaint) = {
+            let (cfg, theme, model) = self.state();
+            let e = enrich(cfg, theme, model, self.dims(), &self.ui);
+            let plan = layout::plan(&e.view);
+            let ordered = ordered_ids(model);
+            let k = knobs(cfg, model, &e.view, &ordered);
+            let r = resolve::mouse(&plan, e.popover.as_ref(), &k, &self.ui, m, now);
+            (r.ui, r.events, r.repaint)
+        };
+        self.ui = ui;
+        self.arm_hover();
+        for event in &events {
+            self.emit(event)?;
+        }
+        if repaint {
+            self.repaint()?;
+        }
+        Ok(())
+    }
+
+    fn key(&mut self, name: &str, mods: vtabs_protocol::Mods, raw: &[u8]) -> io::Result<()> {
+        let events = {
+            let (cfg, theme, model) = self.state();
+            let e = enrich(cfg, theme, model, self.dims(), &self.ui);
+            let ordered = ordered_ids(model);
+            let k = knobs(cfg, model, &e.view, &ordered);
+            resolve::key(&k, name, mods, raw).events
+        };
+        for event in &events {
+            self.emit(event)?;
+        }
+        Ok(())
+    }
+
+    fn state(&self) -> (&v2::ConfigMsg, &v2::ThemeMsg, &v2::ModelMsg) {
+        (
+            self.v2.config.as_ref().expect("dressed"),
+            self.v2.theme.as_ref().expect("dressed"),
+            self.v2.model.as_ref().expect("dressed"),
+        )
+    }
+
+    fn dims(&self) -> (i64, i64) {
+        (i64::from(self.size.0), i64::from(self.size.1))
+    }
+
+    /// Repaints from the stored state; the pane's pixels are this process's to own now.
+    pub fn repaint(&mut self) -> io::Result<()> {
+        if !self.dressed() {
+            return Ok(());
+        }
+        let (bytes, popover) = {
+            let (cfg, theme, model) = self.state();
+            let e = enrich(cfg, theme, model, self.dims(), &self.ui);
+            let frame = frame_of(&e.view);
+            (frame_bytes(&frame, e.view.theme.bg), e.popover)
+        };
+        self.popover = popover;
+        self.write(bytes.as_bytes())
+    }
+
+    /// Hover goes stale on its own clock, so a pointer that left the pane stops lighting a row.
+    fn arm_hover(&mut self) {
+        let ms = self.v2.config.as_ref().map_or(0, |c| c.hover_timeout_ms);
+        self.hover_deadline = (ms > 0 && self.ui.hover.is_some())
+            .then(|| Instant::now() + std::time::Duration::from_millis(ms + 1));
+    }
+
+    pub fn next_hover(&self) -> Option<Instant> {
+        self.hover_deadline
+    }
+
+    pub fn tick_hover(&mut self, now: Instant) -> io::Result<()> {
+        if self.hover_deadline.is_some_and(|at| now >= at) {
+            self.hover_deadline = None;
+            let ms = self.v2.config.as_ref().map_or(0, |c| c.hover_timeout_ms);
+            if self.ui.expire_hover(self.now_ms(), ms) {
+                self.repaint()?;
+            }
+        }
+        Ok(())
+    }
+
     fn run(&mut self, cmd: Command) -> io::Result<bool> {
+        let paints_this = matches!(
+            cmd,
+            Command::Config(_) | Command::Theme(_) | Command::Model(_)
+        );
+        let alive = self.apply(cmd)?;
+        if alive && paints_this && self.paints {
+            self.settle_scroll();
+            self.repaint()?;
+        }
+        Ok(alive)
+    }
+
+    /// The optimistic wheel override retires once the model comes back carrying it.
+    fn settle_scroll(&mut self) {
+        let landed = self
+            .v2
+            .model
+            .as_ref()
+            .and_then(|m| m.scroll)
+            .is_some_and(|s| s.user && Some(s.top) == self.ui.scroll);
+        if landed {
+            self.ui.scroll = None;
+        }
+    }
+
+    fn apply(&mut self, cmd: Command) -> io::Result<bool> {
         match cmd {
             Command::Frame { data } => {
                 self.cancel_anim()?;
@@ -80,7 +231,16 @@ impl<W: Write> App<W> {
                 self.write(CLEAR_SCREEN.as_bytes())?
             }
             Command::Ping { n } => self.emit(&Event::Pong { n })?,
-            Command::Auth { token } => self.write(set_user_var(TOKEN_VAR, &token).as_bytes())?,
+            Command::Auth { token } => {
+                self.write(set_user_var(TOKEN_VAR, &token).as_bytes())?;
+                // A new token is a new Lua process: the mux kept this backend but the plugin lost
+                // `store.proto`/`store.paints` with its old state, and only `ready` restores them.
+                // Re-announcing on the same token would ping-pong, since Lua re-auths on ready.
+                if self.token.as_deref() != Some(token.as_str()) {
+                    self.token = Some(token);
+                    self.emit(&Event::ready(self.size.0, self.size.1, self.paints))?;
+                }
+            }
             Command::Anim(cmd) => self.start_anim(cmd)?,
             Command::Config(msg) => self.v2.config = Some(*msg),
             Command::Theme(msg) => self.v2.theme = Some(*msg),
@@ -184,8 +344,53 @@ impl<W: Write> App<W> {
                 cols: size.0,
                 rows: size.1,
             })?;
+            if self.paints {
+                self.repaint()?;
+            }
         }
         Ok(())
+    }
+}
+
+/// `model.ordered`: pinned first, then the rest, both in the order Lua sent them.
+fn ordered_ids(model: &v2::ModelMsg) -> Vec<i64> {
+    let mut ids: Vec<i64> = model
+        .tabs
+        .iter()
+        .filter(|t| t.pinned)
+        .map(|t| t.id)
+        .collect();
+    ids.extend(model.tabs.iter().filter(|t| !t.pinned).map(|t| t.id));
+    ids
+}
+
+fn knobs<'a>(
+    cfg: &'a v2::ConfigMsg,
+    model: &'a v2::ModelMsg,
+    view: &'a vtabs_view::scene::RenderInput,
+    ordered: &'a [i64],
+) -> Knobs<'a> {
+    let focus = model.focus.unwrap_or_default();
+    Knobs {
+        cols: view.cols,
+        position: &view.cfg.position,
+        double_click_ms: cfg.double_click_ms,
+        tear_off: cfg.tear_off,
+        wheel: cfg.wheel.as_deref().unwrap_or("scroll"),
+        context: cfg.context.as_deref().unwrap_or("popover"),
+        hover_mode: &view.cfg.hover,
+        slot_rows: layout::slot_rows(&view.cfg),
+        focus_on: focus.on,
+        focus_index: focus.index,
+        ordered,
+        drag: model.drag.map(|d| MirroredDrag {
+            id: d.id,
+            active: d.active,
+            origin_x: d.origin.x,
+            origin_y: d.origin.y,
+            outside: d.outside,
+        }),
+        scroll_top: model.scroll.unwrap_or_default().top,
     }
 }
 
@@ -203,6 +408,13 @@ mod tests {
             anim: None,
             seq: 0,
             v2: V2State::default(),
+            // the v1 path is what these tests pin; the painting path has its own below
+            paints: false,
+            ui: Default::default(),
+            started: Instant::now(),
+            popover: None,
+            hover_deadline: None,
+            token: None,
         }
     }
 
@@ -244,7 +456,10 @@ mod tests {
         }))
         .unwrap();
         // the token never goes in the title: window titles are readable by the whole desktop
-        assert_eq!(a.out, set_user_var("vtabs_token", "abc").as_bytes());
+        let out = String::from_utf8_lossy(&a.out).to_string();
+        assert!(out.starts_with(&set_user_var("vtabs_token", "abc")));
+        // and it lands before the ready that follows it, so `is_ready` passes when that arrives
+        assert!(saw(&a, r#""t":"ready""#));
     }
 
     fn anim_cmd(id: u64, ms: u64) -> Command {
@@ -388,6 +603,153 @@ mod tests {
         a.handle(Input::Command(Command::Ping { n: Some(7) }))
             .unwrap();
         assert_eq!(payloads(&a)[1], r#"{"t":"pong","n":7}"#);
+    }
+
+    const CONFIG: &str = r#"{"rev":1,"desired_width":28,"position":"left","icons":true,
+        "meta":"auto","meta_sep":" ","double_click_ms":300,"tear_off":true,"wheel":"scroll",
+        "context":"popover","hover_timeout_ms":1500,
+        "render":{"meta":true,"padding":{"left":1,"right":1,"top":0,"bottom":0},
+        "tab_height":"card","separator":"gap","pinned_style":"compact","close_button":"hover",
+        "scroll_indicator":"auto","new_tab_button":true,"new_tab_label":"New tab","hover":"follow"}}"#;
+    const THEME: &str = r#"{"rev":1,"scheme":{"ansi":[],"brights":[]},"overrides":{}}"#;
+    const MODEL: &str = r#"{"rev":1,"screen":"sidebar","active":1,
+        "strip":{"buttons":[{"id":"toggle"},{"id":"new_tab"}]},
+        "tabs":[{"id":1,"index":1,"title":"one"},{"id":2,"index":2,"title":"two"}]}"#;
+
+    fn painting() -> App<Vec<u8>> {
+        let mut a = app();
+        a.paints = true;
+        a
+    }
+
+    fn dress(a: &mut App<Vec<u8>>) {
+        a.handle(Input::Command(Command::Config(Box::new(
+            serde_json::from_str(CONFIG).unwrap(),
+        ))))
+        .unwrap();
+        a.handle(Input::Command(Command::Theme(Box::new(
+            serde_json::from_str(THEME).unwrap(),
+        ))))
+        .unwrap();
+        a.handle(Input::Command(Command::Model(Box::new(
+            serde_json::from_str(MODEL).unwrap(),
+        ))))
+        .unwrap();
+    }
+
+    fn click(kind: vtabs_protocol::MouseKind, x: u16, y: u16) -> Input {
+        Input::Mouse(vtabs_protocol::Mouse {
+            kind,
+            button: vtabs_protocol::Button::Left,
+            x,
+            y,
+            dy: 0,
+            mods: Mods::default(),
+        })
+    }
+
+    #[test]
+    fn a_new_token_re_announces_ready_but_the_same_one_does_not() {
+        let mut a = painting();
+        let auth = |a: &mut App<Vec<u8>>, token: &str| {
+            a.handle(Input::Command(Command::Auth {
+                token: token.into(),
+            }))
+            .unwrap();
+        };
+        auth(&mut a, "first");
+        assert!(saw(&a, r#""t":"ready""#), "the first auth announces");
+        let after = payloads(&a).len();
+
+        // Lua re-auths from its own ready branch; announcing again would ping-pong forever
+        auth(&mut a, "first");
+        assert_eq!(payloads(&a).len(), after, "the same token says nothing new");
+
+        // a gui restart mints a fresh token: store.proto/store.paints must be restored
+        auth(&mut a, "second");
+        let sent = &payloads(&a)[after..];
+        let ready = sent
+            .iter()
+            .find(|p| p.contains(r#""t":"ready""#))
+            .expect("a new token re-announces");
+        assert!(ready.contains(r#""paints":true"#));
+        assert!(ready.contains(r#""v":2"#));
+    }
+
+    #[test]
+    fn a_painting_backend_draws_the_pane_once_the_state_is_complete() {
+        let mut a = painting();
+        a.handle(Input::Command(Command::Config(Box::new(
+            serde_json::from_str(CONFIG).unwrap(),
+        ))))
+        .unwrap();
+        assert!(
+            !String::from_utf8_lossy(&a.out).contains("\x1b[?25l"),
+            "config alone paints nothing"
+        );
+        dress(&mut a);
+        let painted = String::from_utf8_lossy(&a.out).to_string();
+        assert!(painted.contains("\x1b[?25l"), "the frame hides the cursor");
+        assert!(
+            painted.contains("one") && painted.contains("two"),
+            "both tabs listed"
+        );
+    }
+
+    #[test]
+    fn a_painting_backend_speaks_do_and_never_mouse() {
+        let mut a = painting();
+        dress(&mut a);
+        let before = payloads(&a).len();
+        a.handle(click(vtabs_protocol::MouseKind::Press, 6, 3))
+            .unwrap();
+        let sent = &payloads(&a)[before..];
+        assert!(
+            !sent.iter().any(|p| p.contains(r#""t":"mouse""#)),
+            "v1 mouse is gone: {sent:?}"
+        );
+        assert!(
+            sent.iter().any(|p| p.contains(r#""t":"do""#)),
+            "a gesture was reported: {sent:?}"
+        );
+    }
+
+    #[test]
+    fn input_before_the_first_full_state_is_swallowed() {
+        let mut a = painting();
+        a.handle(click(vtabs_protocol::MouseKind::Press, 6, 3))
+            .unwrap();
+        assert!(a.out.is_empty(), "nothing is drawn and nothing is reported");
+    }
+
+    #[test]
+    fn a_v1_pane_still_gets_the_old_mouse_events() {
+        let mut a = app();
+        a.handle(click(vtabs_protocol::MouseKind::Press, 6, 3))
+            .unwrap();
+        assert!(saw(&a, r#"{"t":"mouse","k":"down""#));
+    }
+
+    #[test]
+    fn hover_expiry_clears_the_highlight_without_a_round_trip() {
+        let mut a = painting();
+        dress(&mut a);
+        a.handle(Input::Mouse(vtabs_protocol::Mouse {
+            kind: vtabs_protocol::MouseKind::Move,
+            button: vtabs_protocol::Button::None,
+            x: 6,
+            y: 3,
+            dy: 0,
+            mods: Mods::default(),
+        }))
+        .unwrap();
+        assert!(a.ui.hover.is_some());
+        assert!(a.next_hover().is_some(), "the clock is armed");
+        a.hover_deadline = Some(Instant::now());
+        a.started = Instant::now() - std::time::Duration::from_secs(60);
+        a.tick_hover(Instant::now()).unwrap();
+        assert!(a.ui.hover.is_none(), "stale hover is dropped");
+        assert!(a.next_hover().is_none());
     }
 
     #[test]

@@ -5,7 +5,7 @@ pub mod types;
 pub mod v2;
 
 pub use command::{AnimCmd, AnimRow, Command};
-pub use event::Event;
+pub use event::{DoArgs, DoId, Event};
 pub use types::{Button, Mods, Mouse, MouseKind};
 
 use base64::Engine as _;
