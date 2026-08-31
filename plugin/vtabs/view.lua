@@ -1,6 +1,7 @@
 local ansi = require "vtabs.ansi"
 local config = require "vtabs.config"
 local state = require "vtabs.state"
+local store = require "vtabs.store"
 local sidebar = require "vtabs.sidebar"
 local settings = require "vtabs.settings"
 local page = require "vtabs.page"
@@ -19,11 +20,12 @@ local M = {}
 
 local INACTIVE_REFRESH_MS = 1000
 
-local themes = {}
-local chrome = {}
-local banding, banding_saved = {}, {}
-local popover_rect = {}
-local session = state.session
+---Declared through `store`, so forgetting a window clears them without a list to keep in step.
+local scope = store.scope "view"
+local themes = scope.window()
+local chrome = scope.window()
+local banding, banding_saved = scope.window(), scope.window()
+local popover_rect = scope.window()
 
 ---WezTerm titles the window after its active pane; under `hover = "follow"` that is the sidebar.
 function M.window_title(tab, pane, tabs, panes)
@@ -73,7 +75,7 @@ local function fade_context(gui_window)
   if cfg.animations == "auto" and domain ~= "local" then
     return nil
   end
-  local cached = session.frames[sb:pane_id()]
+  local cached = store.frames[sb:pane_id()]
   if not cached or not cached.text then
     return nil
   end
@@ -126,17 +128,20 @@ function M.animate_popover(gui_window)
   return command ~= nil and sidebar.send(sb, command) or false
 end
 
+---Without a window id, every window's: a config reload invalidates them all at once.
 function M.invalidate_theme(window_id)
   if window_id then
     themes[window_id] = nil
     chrome[window_id] = nil
     popover_rect[window_id] = nil
-  else
-    themes, chrome, popover_rect = {}, {}, {}
+    return
+  end
+  for _, cache in ipairs { themes, chrome, popover_rect } do
+    for id in pairs(cache) do
+      cache[id] = nil
+    end
   end
 end
-
-table.insert(state.forget_hooks, M.invalidate_theme)
 
 ---macOS shows its buttons only for `INTEGRATED_BUTTONS` with a native style; both gate the reserve.
 local function chrome_for(gui_window, cfg)
@@ -212,7 +217,7 @@ function M.apply_titlebar_band(gui_window)
   end
   banding[wid] = wanted or nil
   -- The override fires `window-config-reloaded`; the guard keeps it from re-entering correction.
-  session.applying[wid] = util.now_ms()
+  store.applying[wid] = util.now_ms()
   mux.call(gui_window, "set_config_overrides", merged)
   return true
 end
@@ -296,7 +301,7 @@ end
 ---Rows whose painted text changed, each with its own CUP; a full frame when the cache cannot be trusted.
 ---@return string|nil `nil` when nothing changed
 function M.payload_for(pid, result, dims, force)
-  local cache = session.frames[pid]
+  local cache = store.frames[pid]
   local stale = force
     or cache == nil
     or cache.cols ~= dims.cols
@@ -320,10 +325,10 @@ end
 ---Drops the row cache for a pane, forcing the next sync to repaint it whole.
 function M.invalidate_frames(pane_id)
   if pane_id then
-    session.frames[pane_id] = nil
+    store.frames[pane_id] = nil
   else
-    for id in pairs(session.frames) do
-      session.frames[id] = nil
+    for id in pairs(store.frames) do
+      store.frames[id] = nil
     end
   end
 end
@@ -351,12 +356,12 @@ local function sync_settings(gui_window, cfg, resolved, opts, now)
     util.warn_once("settings-render", "settings page render failed: %s", tostring(result):match "^[^\n]*")
     return
   end
-  session.hits[pid] = result.hits
-  session.dims[pid] = { cols = dims.cols, rows = dims.viewport_rows }
+  store.hits[pid] = result.hits
+  store.dims[pid] = { cols = dims.cols, rows = dims.viewport_rows }
   local payload = M.payload_for(pid, result, dims, opts.force)
   if payload and sidebar.send(pane, { t = "frame", data = payload }) then
-    session.frames[pid] = { cols = dims.cols, rows = dims.viewport_rows, text = result.rows, n = result.rows_n }
-    session.sent_at[pid] = now
+    store.frames[pid] = { cols = dims.cols, rows = dims.viewport_rows, text = result.rows, n = result.rows_n }
+    store.sent_at[pid] = now
   end
 end
 
@@ -373,7 +378,7 @@ function M.sync(gui_window, opts)
   local footer = footer_for(cfg, mux_win)
   local active_tab = mux_win:active_tab()
   local active_tab_id = active_tab and active_tab:tab_id() or nil
-  local focus_index = state.has_focus(wid) and session.focus_index[wid] or nil
+  local focus_index = state.has_focus(wid) and store.focus_index[wid] or nil
   local now = util.now_ms()
   geometry.sync(gui_window, active_tab_id)
   sync_settings(gui_window, cfg, resolved, opts, now)
@@ -385,7 +390,7 @@ function M.sync(gui_window, opts)
     if sb and sidebar.is_ready(sb) then
       local pid = sb:pane_id()
       local is_active = info.tab:tab_id() == active_tab_id
-      local due = is_active or opts.force or now - (session.sent_at[pid] or 0) >= INACTIVE_REFRESH_MS
+      local due = is_active or opts.force or now - (store.sent_at[pid] or 0) >= INACTIVE_REFRESH_MS
       local dims = due and dims_of(sb) or nil
       if dims then
         local rail = state.is_collapsed(wid) and cfg.collapsed == "rail" or nil
@@ -399,11 +404,11 @@ function M.sync(gui_window, opts)
           theme = resolved,
           cfg = cfg,
           glyphs = chrome_for(gui_window, cfg).glyphs,
-          hover = is_active and session.hover[wid] or nil,
-          drag = is_active and session.drag[wid] or nil,
-          scroll = session.scroll[wid] or 0,
-          user_scrolled = session.user_scrolled[wid] == true,
-          ensure_visible = not session.user_scrolled[wid] and active_tab_id or nil,
+          hover = is_active and store.hover[wid] or nil,
+          drag = is_active and store.drag[wid] or nil,
+          scroll = store.scroll[wid] or 0,
+          user_scrolled = store.user_scrolled[wid] == true,
+          ensure_visible = not store.user_scrolled[wid] and active_tab_id or nil,
           focus_index = is_active and focus_index or nil,
           private = state.is_private(wid),
           rail = rail,
@@ -415,15 +420,15 @@ function M.sync(gui_window, opts)
           result = nil
         end
         if result and is_active then
-          session.scroll[wid] = result.scroll
+          store.scroll[wid] = result.scroll
         end
         if result then
-          session.hits[pid] = result.hits
-          session.dims[pid] = { cols = dims.cols, rows = dims.viewport_rows }
+          store.hits[pid] = result.hits
+          store.dims[pid] = { cols = dims.cols, rows = dims.viewport_rows }
           local payload = M.payload_for(pid, result, dims, opts.force)
           if payload and sidebar.send(sb, { t = "frame", data = payload }) then
-            session.frames[pid] = { cols = dims.cols, rows = dims.viewport_rows, text = result.rows, n = result.rows_n }
-            session.sent_at[pid] = now
+            store.frames[pid] = { cols = dims.cols, rows = dims.viewport_rows, text = result.rows, n = result.rows_n }
+            store.sent_at[pid] = now
           end
         end
       end

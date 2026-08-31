@@ -4,6 +4,7 @@ local state = require "vtabs.state"
 local sidebar = require "vtabs.sidebar"
 local icons = require "vtabs.icons"
 local mux = require "vtabs.mux"
+local store = require "vtabs.store"
 local util = require "vtabs.util"
 
 local M = {}
@@ -41,7 +42,9 @@ local SHELLS = {
 local REMOTE = { ssh = true, mosh = true, ["mosh-client"] = true, ["ssh.exe"] = true }
 
 local META_TTL_MS = 60000
-local meta_cache = {}
+---Declared through `store`, so forgetting a tab clears it without a hook to register.
+local scope = store.scope "model"
+local meta_cache = scope.tab()
 
 ---`file_path` prefixes a Windows drive with a slash (url-funcs/src/lib.rs:60-76); drop it.
 local function local_path(path)
@@ -136,6 +139,8 @@ local function cached_meta(tab_id, pane, cfg, now)
   return meta_cache[tab_id].value
 end
 
+M.forget_tab = scope.forget_tab
+
 local pruned_at = 0
 
 ---Sweeping every build is pointless work on the hot path; entries only expire once per TTL.
@@ -150,12 +155,6 @@ local function prune_meta(now)
     end
   end
 end
-
-function M.forget_tab(tab_id)
-  meta_cache[tab_id] = nil
-end
-
-table.insert(state.forget_tab_hooks, M.forget_tab)
 
 local function included(cfg, tab, mux_win)
   if not cfg.hooks.filter then

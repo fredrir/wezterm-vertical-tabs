@@ -1,6 +1,7 @@
 local wezterm = require "wezterm" ---@type Wezterm
 local config = require "vtabs.config"
 local state = require "vtabs.state"
+local store = require "vtabs.store"
 local backend = require "vtabs.backend"
 local sidebar = require "vtabs.sidebar"
 local theme = require "vtabs.theme"
@@ -306,7 +307,7 @@ function M.install(gui_window, path, cfg, paint)
   -- user's own splits vanish into the card, and the frame margin already hides the sidebar seam.
   colors.split = (paint or M.colours(gui_window, cfg)).card
   merged.colors = colors
-  state.session.applying[gui_window:window_id()] = util.now_ms()
+  store.applying[gui_window:window_id()] = util.now_ms()
   mux.call(gui_window, "set_config_overrides", merged)
 end
 

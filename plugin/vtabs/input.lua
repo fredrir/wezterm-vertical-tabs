@@ -1,6 +1,7 @@
 local wezterm = require "wezterm" ---@type Wezterm
 local config = require "vtabs.config"
 local state = require "vtabs.state"
+local store = require "vtabs.store"
 local sidebar = require "vtabs.sidebar"
 local model = require "vtabs.model"
 local view = require "vtabs.view"
@@ -51,10 +52,11 @@ local DRAG_START_COLS = 2
 local DRAG_DWELL_MS = 120
 local TEAR_OFF_TRAVEL = 3
 
-local session = state.session
-local pending_menu = {}
-local pending_close = {}
-local pending_item = {}
+---Declared through `store`, so a forgotten window takes the pendings with it.
+local scope = store.scope "input"
+local pending_menu = scope.window()
+local pending_close = scope.window()
+local pending_item = scope.window()
 -- Destructive menu items act on the release, like the ✕ and for the same reason.
 local ON_RELEASE = { close = true, close_others = true, confirm_close = true }
 
@@ -98,16 +100,16 @@ end
 local function on_down(gui_window, pane, ev, cfg)
   local wid = gui_window:window_id()
   local pid = pane:pane_id()
-  local h = hit.at(session.hits[pid], ev.y)
+  local h = hit.at(store.hits[pid], ev.y)
   local now = util.now_ms()
   if popover.get(wid) then
     if not on_popover_down(gui_window, pane, h, ev) then
       return
     end
-    h = hit.at(session.hits[pid], ev.y)
+    h = hit.at(store.hits[pid], ev.y)
   end
-  session.hover[wid] = { x = ev.x, y = ev.y, at = now }
-  session.drag[wid] = nil
+  store.hover[wid] = { x = ev.x, y = ev.y, at = now }
+  store.drag[wid] = nil
   pending_menu[wid] = nil
   pending_close[wid] = nil
   state.set_focus(wid, false)
@@ -117,8 +119,8 @@ local function on_down(gui_window, pane, ev, cfg)
   -- Cols 1 and 28 carry no card surface, so a click there is empty space, not the row's tab.
   local on_card = h.kind == "tab" and hit.in_card(h, ev.x)
   local target = on_card and ("tab:" .. h.id) or h.kind
-  local double, last = hit.double_click(session.last_click[wid], target, now, cfg.double_click_ms)
-  session.last_click[wid] = last
+  local double, last = hit.double_click(store.last_click[wid], target, now, cfg.double_click_ms)
+  store.last_click[wid] = last
 
   if ev.b == "left" then
     if on_card then
@@ -129,7 +131,7 @@ local function on_down(gui_window, pane, ev, cfg)
         actions.toggle_pin(gui_window, h.id)
       else
         local focused = actions.activate_tab(gui_window, h.id, "sidebar")
-        session.drag[wid] = {
+        store.drag[wid] = {
           tab_id = h.id,
           origin_x = ev.x,
           origin_y = ev.y,
@@ -164,8 +166,8 @@ local function on_drag(gui_window, pane, ev, cfg)
   if popover.get(wid) then
     return
   end
-  local drag = session.drag[wid]
-  local hits = session.hits[pid]
+  local drag = store.drag[wid]
+  local hits = store.hits[pid]
   if not drag or ev.b ~= "left" or drag.pane_id ~= pid or not hits then
     return
   end
@@ -179,11 +181,11 @@ local function on_drag(gui_window, pane, ev, cfg)
     drag.active = true
   end
   if drag.active then
-    local dims = session.dims[pid] or { cols = cfg.width, rows = ev.y }
+    local dims = store.dims[pid] or { cols = cfg.width, rows = ev.y }
     drag.over_index = hit.drop_slot(hits, ev.y, dims.rows)
     drag.outside = cfg.tear_off and dx >= TEAR_OFF_TRAVEL and hit.on_inner_edge(ev.x, dims.cols, cfg.position)
   end
-  session.hover[wid] = { x = ev.x, y = ev.y, at = drag.at }
+  store.hover[wid] = { x = ev.x, y = ev.y, at = drag.at }
 end
 
 ---A press on the ✕ or a middle click closes only when the release lands on the same target again.
@@ -199,17 +201,17 @@ end
 local function on_up(gui_window, pane, ev, cfg)
   local wid = gui_window:window_id()
   local pid = pane:pane_id()
-  local drag = session.drag[wid]
+  local drag = store.drag[wid]
   local menu_for = pending_menu[wid]
   local close_for = pending_close[wid]
   local item_for = pending_item[wid]
-  session.drag[wid] = nil
+  store.drag[wid] = nil
   pending_menu[wid] = nil
   pending_close[wid] = nil
   pending_item[wid] = nil
   if popover.get(wid) and ev.b ~= "right" then
     if item_for and ev.b == "left" then
-      local h = hit.at(session.hits[pid], ev.y)
+      local h = hit.at(store.hits[pid], ev.y)
       if h.kind == "popover" and h.id == item_for.id and hit.in_card(h, ev.x) then
         popover.run(gui_window, h.id)
         view.invalidate_frames(pid)
@@ -224,13 +226,13 @@ local function on_up(gui_window, pane, ev, cfg)
     end
     return
   end
-  if close_for and released_on(session.hits[pid], ev, close_for) then
+  if close_for and released_on(store.hits[pid], ev, close_for) then
     actions.request_close(gui_window, close_for.tab_id, close_for.row, close_for.col)
     view.invalidate_frames(pid)
     return
   end
-  if drag and drag.active and drag.pane_id == pid and session.hits[pid] then
-    local dims = session.dims[pid] or { cols = cfg.width }
+  if drag and drag.active and drag.pane_id == pid and store.hits[pid] then
+    local dims = store.dims[pid] or { cols = cfg.width }
     local travelled = math.abs(ev.x - drag.origin_x) >= TEAR_OFF_TRAVEL
     if drag.outside or (cfg.tear_off and travelled and hit.on_inner_edge(ev.x, dims.cols, cfg.position)) then
       if actions.tear_off(gui_window, drag.tab_id) then
@@ -255,8 +257,8 @@ local function on_wheel(gui_window, ev, cfg)
     actions.activate_relative(gui_window, ev.dy)
     return
   end
-  session.scroll[wid] = (session.scroll[wid] or 0) + ev.dy
-  session.user_scrolled[wid] = true
+  store.scroll[wid] = (store.scroll[wid] or 0) + ev.dy
+  store.user_scrolled[wid] = true
 end
 
 ---Motion only needs a repaint when it crosses a row or a sub-target span of the row it is on.
@@ -264,7 +266,7 @@ local function hover_moved(previous, ev, pid)
   if not previous or previous.y ~= ev.y then
     return true
   end
-  local h = hit.at(session.hits[pid], ev.y)
+  local h = hit.at(store.hits[pid], ev.y)
   return hit.span(h, previous.x) ~= hit.span(h, ev.x)
 end
 
@@ -274,11 +276,11 @@ function M.mouse(gui_window, pane, ev)
   local had_popover = popover.get(wid) ~= nil
   if ev.k == "move" then
     local pid = pane:pane_id()
-    local moved = hover_moved(session.hover[wid], ev, pid)
-    session.hover[wid] = { x = ev.x, y = ev.y, at = util.now_ms() }
+    local moved = hover_moved(store.hover[wid], ev, pid)
+    store.hover[wid] = { x = ev.x, y = ev.y, at = util.now_ms() }
     -- An open menu owns the pointer: motion moves its selection instead of the list's hover.
     if had_popover then
-      if not popover.point_at(gui_window, hit.at(session.hits[pid], ev.y), ev.x) then
+      if not popover.point_at(gui_window, hit.at(store.hits[pid], ev.y), ev.x) then
         return
       end
       view.invalidate_frames(pid)
@@ -331,11 +333,11 @@ local KEYS = {
   end),
   J = with_focused(function(gui_window, id, index)
     actions.move_tab_to_slot(gui_window, id, index + 1)
-    session.focus_index[gui_window:window_id()] = index + 1
+    store.focus_index[gui_window:window_id()] = index + 1
   end),
   K = with_focused(function(gui_window, id, index)
     actions.move_tab_to_slot(gui_window, id, index - 1)
-    session.focus_index[gui_window:window_id()] = math.max(index - 1, 1)
+    store.focus_index[gui_window:window_id()] = math.max(index - 1, 1)
   end),
   n = function(gui_window)
     actions.new_tab(gui_window)
@@ -351,7 +353,7 @@ local FORWARD_PER_SEC = 60
 local PASTE_MAX_RAW = 96 * 1024
 local PASTE_MAX_BYTES = 64 * 1024
 local BUDGET_TTL_MS = 60000
-local budget = {}
+local budget = scope.pane()
 
 ---Token bucket per source pane, charged by size, so one big paste borrows against the next second.
 local function affordable(pid, now, cost)
@@ -417,7 +419,7 @@ local function handover_target(gui_window, pane, cfg)
   if not sidebar.is_ready(pane) or not tab or not active or tab:tab_id() ~= active:tab_id() then
     return nil
   end
-  if cfg.hover == "press" and not session.drag[wid] then
+  if cfg.hover == "press" and not store.drag[wid] then
     return nil
   end
   local content = sidebar.content_pane(tab)
@@ -527,7 +529,7 @@ function M.key(gui_window, pane, ev)
   end
   local items = model.ordered(model.build(gui_window))
   local count = math.max(#items, 1)
-  local index = math.max(1, math.min(session.focus_index[wid] or 1, count))
+  local index = math.max(1, math.min(store.focus_index[wid] or 1, count))
   local key = ev.key
   local shift = util.contains(ev.mods, "shift")
   local ctrl = util.contains(ev.mods, "ctrl")
@@ -535,13 +537,13 @@ function M.key(gui_window, pane, ev)
   if key == "escape" or key == "q" or (ctrl and key == "c") then
     blur(gui_window)
   elseif key == "tab" and shift then
-    session.focus_index[wid] = math.max(index - 1, 1)
+    store.focus_index[wid] = math.max(index - 1, 1)
   elseif MOVE[key] then
-    session.focus_index[wid] = math.max(1, math.min(index + MOVE[key], count))
+    store.focus_index[wid] = math.max(1, math.min(index + MOVE[key], count))
   elseif key == "home" or key == "g" then
-    session.focus_index[wid] = 1
+    store.focus_index[wid] = 1
   elseif key == "end" or key == "G" then
-    session.focus_index[wid] = count
+    store.focus_index[wid] = count
   elseif key:match "^[1-9]$" then
     local item = items[tonumber(key)]
     if item then
@@ -570,7 +572,7 @@ function M.handle(gui_window, pane, name, value)
   if not ok or type(ev) ~= "table" then
     return
   end
-  session.seen[pane:pane_id()] = util.now_ms()
+  store.seen[pane:pane_id()] = util.now_ms()
   if cfg.debug then
     util.log("handle: %s from pane %d", tostring(ev.t), pane:pane_id())
   end
@@ -580,14 +582,14 @@ function M.handle(gui_window, pane, name, value)
       sidebar.auth(pane)
       view.sync(gui_window, { force = true })
     elseif ev.t == "key" or ev.t == "mouse" then
-      local dims = session.dims[pane:pane_id()] or { cols = 100, rows = 24 }
+      local dims = store.dims[pane:pane_id()] or { cols = 100, rows = 24 }
       local page_view =
         { cols = dims.cols, rows = dims.rows, cfg = cfg, st = settings.page_state(gui_window:window_id()) }
       local handled
       if ev.t == "key" then
         handled = settings.key(gui_window, ev) or page.key(gui_window, page_view, ev)
       elseif ev.k == "down" and ev.b == "left" then
-        handled = page.click(gui_window, page_view, hit.at(session.hits[pane:pane_id()], ev.y), ev.x)
+        handled = page.click(gui_window, page_view, hit.at(store.hits[pane:pane_id()], ev.y), ev.x)
       end
       if handled then
         view.sync(gui_window, { force = true })
@@ -620,13 +622,13 @@ function M.tick(gui_window)
   local cfg = config.get()
   local wid = gui_window:window_id()
   local now = util.now_ms()
-  local hover = session.hover[wid]
+  local hover = store.hover[wid]
   if hover and cfg.hover_timeout_ms > 0 and now - hover.at > cfg.hover_timeout_ms then
-    session.hover[wid] = nil
+    store.hover[wid] = nil
   end
-  local drag = session.drag[wid]
+  local drag = store.drag[wid]
   if drag and now - drag.at > DRAG_TIMEOUT_MS then
-    session.drag[wid] = nil
+    store.drag[wid] = nil
     if cfg.hover == "press" then
       blur(gui_window)
     end
@@ -647,9 +649,9 @@ function M.tick(gui_window)
   end
   local active = util.active_tab(gui_window)
   local active_id = active and active:tab_id() or nil
-  if session.last_active[wid] ~= active_id then
-    session.last_active[wid] = active_id
-    session.user_scrolled[wid] = nil
+  if store.last_active[wid] ~= active_id then
+    store.last_active[wid] = active_id
+    store.user_scrolled[wid] = nil
   end
 end
 
