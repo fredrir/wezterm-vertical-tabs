@@ -281,6 +281,9 @@ local function on_popover_mouse(gui_window, args)
     elseif args.b == "right" and args.kind == "scrim" then
       popover.close(gui_window)
     end
+  elseif args.k == "move" then
+    local record = args.inside and { kind = args.kind, id = args.id } or { kind = "scrim" }
+    popover.point_at(gui_window, record, args.x)
   elseif args.k == "up" and args.b == "left" then
     local item = pending_item[wid]
     pending_item[wid] = nil
@@ -384,6 +387,10 @@ end
 
 function DO.popover_mouse(gui_window, _, _, args)
   on_popover_mouse(gui_window, args)
+end
+
+function DO.popover_wheel(gui_window, _, _, args)
+  popover.move(gui_window, (args.dy or 1) > 0 and 1 or -1)
 end
 
 M.DO = DO

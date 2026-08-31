@@ -110,6 +110,7 @@ test("v2 do: the vocabulary is total against the spec", function()
     "new_tab",
     "open_menu",
     "popover_mouse",
+    "popover_wheel",
     "press_card",
     "request_close",
     "set_focus_index",
