@@ -19,8 +19,16 @@ test:
 
 lint:
     cd backend && cargo fmt --check && cargo clippy --all-targets --locked -- -D warnings
+    cd backend && cargo run -q -p vtabs-protocol --bin gen-lua -- --check
     cd plugin && luacheck init.lua vtabs tests && stylua --check init.lua vtabs tests
     lua scripts/gen-docs.lua --check
+    sh scripts/lint-boundaries.sh
+    sh scripts/lint-crate-deps.sh
+    test ! -s scripts/frozen-v1.sha256 || sha256sum -c scripts/frozen-v1.sha256
+
+# Regenerate plugin/vtabs/gen/protocol.lua from vtabs-protocol/src/limits.rs
+gen-protocol:
+    cd backend && cargo run -q -p vtabs-protocol --bin gen-lua
 
 # Regenerate the options table in docs/configuration.md from plugin/vtabs/schema.lua
 docs:

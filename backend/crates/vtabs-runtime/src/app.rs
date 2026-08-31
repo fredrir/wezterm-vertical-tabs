@@ -1,11 +1,11 @@
 use std::io::{self, Write};
 use std::time::Instant;
 
+use vtabs_input::Input;
+use vtabs_protocol::{Command, Event};
+
 use crate::anim;
-use crate::command::Command;
-use crate::event::Event;
 use crate::log::Logger;
-use crate::parser::Input;
 use crate::terminal;
 use crate::uservar::{TOKEN_VAR, set_user_var};
 
@@ -87,7 +87,7 @@ impl<W: Write> App<W> {
         Ok(())
     }
 
-    fn start_anim(&mut self, cmd: crate::command::AnimCmd) -> io::Result<()> {
+    fn start_anim(&mut self, cmd: vtabs_protocol::AnimCmd) -> io::Result<()> {
         self.cancel_anim()?;
         let id = cmd.id;
         match anim::Run::new(cmd, Instant::now()) {
@@ -156,7 +156,7 @@ impl<W: Write> App<W> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::parser::Mods;
+    use vtabs_protocol::Mods;
 
     fn app() -> App<Vec<u8>> {
         App {
@@ -211,14 +211,14 @@ mod tests {
     }
 
     fn anim_cmd(id: u64, ms: u64) -> Command {
-        Command::Anim(crate::command::AnimCmd {
+        Command::Anim(vtabs_protocol::AnimCmd {
             id,
             ms,
             fps: Some(30),
             ease: Some("linear".into()),
             dir: Some("in".into()),
             anchor: "#000000".into(),
-            rows: vec![crate::command::AnimRow { y: 3, delay: 0 }],
+            rows: vec![vtabs_protocol::AnimRow { y: 3, delay: 0 }],
             data: "\x1b[3;1H\x1b[38;2;200;200;200mhi\x1b[0m".into(),
         })
     }

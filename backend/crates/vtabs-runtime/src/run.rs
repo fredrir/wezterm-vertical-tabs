@@ -3,15 +3,14 @@ use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use wez_vertical_tabs_backend::app::App;
-use wez_vertical_tabs_backend::event::Event;
-use wez_vertical_tabs_backend::log::Logger;
-use wez_vertical_tabs_backend::parser::Parser;
-use wez_vertical_tabs_backend::signal;
-use wez_vertical_tabs_backend::terminal::{self, TerminalGuard};
-use wez_vertical_tabs_backend::uservar::{
-    DEFAULT_VAR, ROLE_VAR, Role, nonce, set_user_var, title_marker,
-};
+use vtabs_input::Parser;
+use vtabs_protocol::Event;
+
+use crate::app::App;
+use crate::log::Logger;
+use crate::signal;
+use crate::terminal::{self, TerminalGuard};
+use crate::uservar::{DEFAULT_VAR, ROLE_VAR, Role, nonce, set_user_var, title_marker};
 
 const SIZE_POLL: Duration = Duration::from_millis(250);
 const WINCH_CHECK: Duration = Duration::from_millis(100);
@@ -57,7 +56,7 @@ fn role_from_args(log: &mut Logger) -> Role {
     Role::default()
 }
 
-fn run() -> io::Result<()> {
+pub fn run() -> io::Result<()> {
     let mut log = Logger::from_env();
     let role = role_from_args(&mut log);
     let var = std::env::var("VTABS_USERVAR").unwrap_or_else(|_| DEFAULT_VAR.to_string());
@@ -124,20 +123,4 @@ fn run() -> io::Result<()> {
         }
     }
     Ok(())
-}
-
-fn main() {
-    // `frame` renders the Zen background and exits; it never touches the terminal or the protocol.
-    let mut args = std::env::args().skip(1);
-    if args.next().as_deref() == Some("frame") {
-        if let Err(err) = wez_vertical_tabs_backend::frame::run(args) {
-            eprintln!("{err}");
-            std::process::exit(2);
-        }
-        return;
-    }
-    if let Err(err) = run() {
-        Logger::from_env().log(format!("exit: {err}"));
-        std::process::exit(1);
-    }
 }

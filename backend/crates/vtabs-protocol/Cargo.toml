@@ -1,0 +1,13 @@
+[package]
+name = "vtabs-protocol"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+base64.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[[bin]]
+name = "gen-lua"
+path = "src/bin/gen-lua.rs"

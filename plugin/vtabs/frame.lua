@@ -7,6 +7,7 @@ local sidebar = require "vtabs.sidebar"
 local theme = require "vtabs.theme"
 local platform = require "vtabs.platform"
 local mux = require "vtabs.mux"
+local protocol = require "vtabs.gen.protocol"
 local util = require "vtabs.util"
 
 local M = {}
@@ -14,8 +15,8 @@ local M = {}
 -- One render is ~90 ms at retina size and `window-resized` fires per frame of a drag, so the gate is
 -- a rate limit as well as a debounce: a burst gets one image, the drag's end gets the next.
 local MIN_GAP_MS = 250
-local MAX_SIDE = 16384
-local MAX_PIXELS = 8192 * 8192
+local MAX_SIDE = protocol.FRAME_MAX_SIDE
+local MAX_PIXELS = protocol.FRAME_MAX_AREA
 
 local current = {}
 local last_at = {}

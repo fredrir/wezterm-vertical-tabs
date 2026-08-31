@@ -237,13 +237,44 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e6e4313cd5fcd3dad5cafa179702e2b244f760991f45397d14d4ebf38247da75"
 
 [[package]]
-name = "wez-vertical-tabs-backend"
+name = "vtabs-input"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "vtabs-protocol",
+]
+
+[[package]]
+name = "vtabs-protocol"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "vtabs-runtime"
 version = "0.1.0"
 dependencies = [
  "base64",
  "crossterm",
- "serde",
  "serde_json",
+ "vtabs-input",
+ "vtabs-protocol",
+]
+
+[[package]]
+name = "vtabs-zen"
+version = "0.1.0"
+
+[[package]]
+name = "wez-vtabs"
+version = "0.1.0"
+dependencies = [
+ "vtabs-protocol",
+ "vtabs-runtime",
+ "vtabs-zen",
 ]
 
 [[package]]

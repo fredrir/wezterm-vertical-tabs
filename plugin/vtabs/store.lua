@@ -90,6 +90,7 @@ local SESSION = {
   frames = "pane",
   dims = "pane",
   ready = "pane",
+  proto = "pane",
   seen = "pane",
   pinged = "pane",
   sent_at = "pane",

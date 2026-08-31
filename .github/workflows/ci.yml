@@ -21,6 +21,11 @@ jobs:
       - run: cargo fmt --check
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo test
+      - name: protocol mirror matches limits.rs
+        run: cargo run -q -p vtabs-protocol --bin gen-lua -- --check
+      - name: crate and boundary rules
+        run: sh scripts/lint-boundaries.sh && sh scripts/lint-crate-deps.sh
+        working-directory: .
   plugin:
     runs-on: ubuntu-latest
     defaults:

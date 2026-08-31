@@ -1,10 +1,9 @@
 use serde::Serialize;
 
-use crate::parser::{Button, Mods, Mouse, MouseKind};
-use crate::uservar::b64;
+use crate::b64;
+use crate::types::{Button, Mods, Mouse, MouseKind};
 
-/// Protocol version carried by `ready`.
-pub const VERSION: u8 = 1;
+pub use crate::limits::VERSION;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "t", rename_all = "snake_case")]

@@ -1,8 +1,7 @@
 use std::io::Read;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use base64::Engine as _;
-use base64::engine::general_purpose::STANDARD;
+pub use vtabs_protocol::b64;
 
 pub const DEFAULT_VAR: &str = "vtabs";
 pub const ROLE_VAR: &str = "vtabs_role";
@@ -38,10 +37,6 @@ impl Role {
             Role::Settings => "wez-vtabs-settings:",
         }
     }
-}
-
-pub fn b64(bytes: &[u8]) -> String {
-    STANDARD.encode(bytes)
 }
 
 pub fn set_user_var(name: &str, value: &str) -> String {

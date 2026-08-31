@@ -9,8 +9,8 @@ use crate::png::{Canvas, RoundRect, parse_colour};
 
 /// The caller is a GUI sizing an allocation from a window it measured, so the bound is on the area
 /// as well as each side: 60000x1 clears any per-side cap and still asks for a 240 MB buffer.
-const MAX_SIDE: u32 = 16384;
-const MAX_AREA: u64 = 8192 * 8192;
+pub const MAX_SIDE: u32 = 16384;
+pub const MAX_AREA: u64 = 8192 * 8192;
 
 pub struct Args {
     pub width: u32,

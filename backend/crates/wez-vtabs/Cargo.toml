@@ -1,0 +1,11 @@
+[package]
+name = "wez-vtabs"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+vtabs-runtime.workspace = true
+vtabs-zen.workspace = true
+
+[dev-dependencies]
+vtabs-protocol.workspace = true

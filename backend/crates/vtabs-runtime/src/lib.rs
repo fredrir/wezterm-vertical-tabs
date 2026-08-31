@@ -1,11 +1,9 @@
 pub mod anim;
 pub mod app;
-pub mod command;
-pub mod event;
-pub mod frame;
 pub mod log;
-pub mod parser;
-pub mod png;
+mod run;
 pub mod signal;
 pub mod terminal;
 pub mod uservar;
+
+pub use run::run;

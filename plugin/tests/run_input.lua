@@ -13,6 +13,13 @@ local test, eq, rgb, title_row, palette = H.test, H.eq, H.rgb, H.title_row, H.pa
 local later, mark_ready, mouse, press_row, window = H.later, H.mark_ready, H.mouse, H.press_row, H.window
 local ready_window, key_window = H.ready_window, H.key_window
 
+test("ready records the backend's protocol version, keyed by pane", function()
+  local win, gui = ready_window()
+  local sb = sidebar.find(win.tab_list[1])
+  input.handle(gui, sb, "vtabs", '{"t":"ready","v":1,"cols":28,"rows":24}')
+  eq(state.session.proto[sb:pane_id()], 1)
+end)
+
 test("press keeps the sidebar of the clicked tab focused and points the drag at it", function()
   local win, gui = ready_window()
   local sb1 = sidebar.find(win.tab_list[1])

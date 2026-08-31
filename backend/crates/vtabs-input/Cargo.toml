@@ -1,0 +1,8 @@
+[package]
+name = "vtabs-input"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+vtabs-protocol.workspace = true
+serde_json.workspace = true

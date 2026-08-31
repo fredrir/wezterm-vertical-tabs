@@ -2,13 +2,12 @@
 
 use std::time::{Duration, Instant};
 
-use crate::command::{AnimCmd, AnimRow};
+use vtabs_protocol::{AnimCmd, AnimRow};
 
-pub const MAX_DATA: usize = 24 * 1024;
-pub const MAX_ROWS: usize = 128;
-pub const MAX_MS: u64 = 2000;
-pub const MIN_FPS: u32 = 15;
-pub const MAX_FPS: u32 = 60;
+pub use vtabs_protocol::limits::{
+    ANIM_MAX_DATA as MAX_DATA, ANIM_MAX_FPS as MAX_FPS, ANIM_MAX_MS as MAX_MS,
+    ANIM_MAX_ROWS as MAX_ROWS, ANIM_MIN_FPS as MIN_FPS,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Rgb(pub u8, pub u8, pub u8);

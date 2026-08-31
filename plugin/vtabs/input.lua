@@ -598,6 +598,7 @@ function M.handle(gui_window, pane, name, value)
     return
   end
   if ev.t == "ready" then
+    store.proto[pane:pane_id()] = tonumber(ev.v) or 1
     sidebar.auth(pane)
     sidebar.ensure(gui_window)
     view.sync(gui_window, { force = true })

@@ -1,76 +1,37 @@
 //! Demultiplexes raw stdin bytes into mouse/key/focus tokens and JSON command lines.
 
-use crate::command::Command;
+use vtabs_protocol::{Button, Command, Mods, Mouse, MouseKind};
 
 const ESC: u8 = 0x1b;
 const MAX_LINE: usize = 1 << 20;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub struct Mods {
-    pub shift: bool,
-    pub alt: bool,
-    pub ctrl: bool,
-}
-
-impl Mods {
-    fn from_sgr(cb: u32) -> Self {
-        Self {
-            shift: cb & 4 != 0,
-            alt: cb & 8 != 0,
-            ctrl: cb & 16 != 0,
-        }
-    }
-
-    fn from_csi_param(param: u32) -> Self {
-        let bits = param.saturating_sub(1);
-        Self {
-            shift: bits & 1 != 0,
-            alt: bits & 2 != 0,
-            ctrl: bits & 4 != 0,
-        }
+fn mods_from_sgr(cb: u32) -> Mods {
+    Mods {
+        shift: cb & 4 != 0,
+        alt: cb & 8 != 0,
+        ctrl: cb & 16 != 0,
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum MouseKind {
-    Press,
-    Release,
-    Drag,
-    Move,
-    Wheel,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Button {
-    Left,
-    Middle,
-    Right,
-    None,
-}
-
-impl Button {
-    fn from_sgr(cb: u32) -> Self {
-        if cb & 128 != 0 {
-            return Button::None;
-        }
-        match cb & 3 {
-            0 => Button::Left,
-            1 => Button::Middle,
-            2 => Button::Right,
-            _ => Button::None,
-        }
+fn mods_from_csi_param(param: u32) -> Mods {
+    let bits = param.saturating_sub(1);
+    Mods {
+        shift: bits & 1 != 0,
+        alt: bits & 2 != 0,
+        ctrl: bits & 4 != 0,
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Mouse {
-    pub kind: MouseKind,
-    pub button: Button,
-    pub x: u16,
-    pub y: u16,
-    /// Only meaningful for `Wheel`: -1 up, 1 down.
-    pub dy: i8,
-    pub mods: Mods,
+fn button_from_sgr(cb: u32) -> Button {
+    if cb & 128 != 0 {
+        return Button::None;
+    }
+    match cb & 3 {
+        0 => Button::Left,
+        1 => Button::Middle,
+        2 => Button::Right,
+        _ => Button::None,
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -425,7 +386,7 @@ fn sgr_mouse(body: &[u8], press: bool) -> Option<Input> {
     let p = params(body);
     let (&cb, &x, &y) = (p.first()?, p.get(1)?, p.get(2)?);
     let (x, y) = (x as u16, y as u16);
-    let mods = Mods::from_sgr(cb);
+    let mods = mods_from_sgr(cb);
     let mouse = if cb & 64 != 0 {
         if cb & 3 >= 2 {
             return None;
@@ -440,7 +401,7 @@ fn sgr_mouse(body: &[u8], press: bool) -> Option<Input> {
             mods,
         }
     } else {
-        let button = Button::from_sgr(cb);
+        let button = button_from_sgr(cb);
         let kind = match (cb & 32 != 0, press, button) {
             (true, _, Button::None) => MouseKind::Move,
             (true, _, _) => MouseKind::Drag,
@@ -471,7 +432,7 @@ fn tilde_key(body: &[u8]) -> Option<Input> {
     };
     let mods = p
         .get(1)
-        .map(|&m| Mods::from_csi_param(m))
+        .map(|&m| mods_from_csi_param(m))
         .unwrap_or_default();
     Some(key(name, mods))
 }
@@ -488,7 +449,7 @@ fn letter_key(body: &[u8], final_byte: u8) -> Option<Input> {
     };
     let mods = params(body)
         .get(1)
-        .map(|&m| Mods::from_csi_param(m))
+        .map(|&m| mods_from_csi_param(m))
         .unwrap_or_default();
     Some(key(name, mods))
 }

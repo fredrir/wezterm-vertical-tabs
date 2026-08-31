@@ -1,0 +1,11 @@
+[package]
+name = "vtabs-runtime"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+vtabs-protocol.workspace = true
+vtabs-input.workspace = true
+base64.workspace = true
+crossterm.workspace = true
+serde_json.workspace = true

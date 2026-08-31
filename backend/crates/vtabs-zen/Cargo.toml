@@ -1,0 +1,6 @@
+[package]
+name = "vtabs-zen"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
