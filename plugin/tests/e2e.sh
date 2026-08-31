@@ -31,6 +31,20 @@ sidebar_text "$sb1" | grep -c "one" >/dev/null || fail "first sidebar does not l
 sidebar_text "$sb1" | grep -c "two" >/dev/null || fail "first sidebar does not list tab two"
 ok "both sidebars render both tabs"
 
+# WezTerm drops a repeated identical user var; the backend's n counter must keep the second key alive.
+cli activate-tab --tab-id "$second_tab"
+sleep 0.5
+content2=$(content_of "$second_tab")
+cli send-text --no-paste --pane-id "$sb2" "jj"
+for _ in $(seq 1 20); do
+  cli get-text --pane-id "$content2" | grep -q "jj" && break
+  sleep 0.5
+done
+cli get-text --pane-id "$content2" | grep -q "jj" ||
+  fail "repeated key swallowed: jj through the sidebar reached the shell as one j"
+cli send-text --no-paste --pane-id "$content2" "$(printf '\025')"
+ok "repeated identical keys both hand over"
+
 settle_width() { # tab_id
   for _ in $(seq 1 24); do
     [ "$(width_of "$1")" -eq 28 ] && return 0

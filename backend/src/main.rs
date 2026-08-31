@@ -76,6 +76,7 @@ fn run() -> io::Result<()> {
         var,
         size,
         anim: None,
+        seq: 0,
     };
     app.write(set_user_var(ROLE_VAR, role.name()).as_bytes())?;
     // Marker only: it lets the plugin find this pane again, it proves nothing and carries no token.

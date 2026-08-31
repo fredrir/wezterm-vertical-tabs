@@ -18,6 +18,7 @@ pub struct App<W: Write> {
     pub var: String,
     pub size: (u16, u16),
     pub anim: Option<anim::Run>,
+    pub seq: u64,
 }
 
 impl<W: Write> App<W> {
@@ -27,7 +28,14 @@ impl<W: Write> App<W> {
     }
 
     pub fn emit(&mut self, event: &Event) -> io::Result<()> {
-        let json = event.to_json();
+        let mut json = event.to_json();
+        // WezTerm fires user-var-changed only on a value change; without n, repeated identical
+        // events are silently dropped. Pong is spared: it echoes the ping's own varying n.
+        if !matches!(event, Event::Pong { .. }) {
+            self.seq += 1;
+            json.truncate(json.len() - 1);
+            json.push_str(&format!(",\"n\":{}}}", self.seq));
+        }
         self.log.log(match event {
             Event::Key { .. } => "event key".to_string(),
             Event::Paste { data, .. } => {
@@ -157,6 +165,7 @@ mod tests {
             var: "vtabs".into(),
             size: (28, 24),
             anim: None,
+            seq: 0,
         }
     }
 
@@ -214,8 +223,21 @@ mod tests {
         })
     }
 
+    fn payloads(a: &App<Vec<u8>>) -> Vec<String> {
+        use base64::Engine as _;
+        String::from_utf8_lossy(&a.out)
+            .split("\x1b]1337;SetUserVar=vtabs=")
+            .skip(1)
+            .filter_map(|rest| rest.split('\x07').next())
+            .map(|b| {
+                let bytes = base64::engine::general_purpose::STANDARD.decode(b).unwrap();
+                String::from_utf8(bytes).unwrap()
+            })
+            .collect()
+    }
+
     fn saw(a: &App<Vec<u8>>, needle: &str) -> bool {
-        String::from_utf8_lossy(&a.out).contains(&crate::uservar::b64(needle.as_bytes()))
+        payloads(a).iter().any(|p| p.contains(needle))
     }
 
     #[test]
@@ -225,7 +247,7 @@ mod tests {
         assert!(a.anim.is_some(), "still playing");
         let painted = String::from_utf8_lossy(&a.out).to_string();
         assert!(painted.contains("\x1b[38;2;0;0;0m"), "t=0 frame written");
-        assert!(!saw(&a, r#"{"t":"anim_done","id":1}"#), "not done yet");
+        assert!(!saw(&a, r#"{"t":"anim_done","id":1"#), "not done yet");
     }
 
     #[test]
@@ -235,7 +257,7 @@ mod tests {
         a.handle(Input::Command(Command::Frame { data: "x".into() }))
             .unwrap();
         assert!(a.anim.is_none(), "cancelled");
-        assert!(saw(&a, r#"{"t":"anim_done","id":2}"#));
+        assert!(saw(&a, r#"{"t":"anim_done","id":2"#));
     }
 
     #[test]
@@ -243,7 +265,7 @@ mod tests {
         let mut a = app();
         a.handle(Input::Command(anim_cmd(3, 500))).unwrap();
         a.handle(Input::Command(anim_cmd(4, 500))).unwrap();
-        assert!(saw(&a, r#"{"t":"anim_done","id":3}"#));
+        assert!(saw(&a, r#"{"t":"anim_done","id":3"#));
         assert_eq!(a.anim.as_ref().map(|r| r.id), Some(4));
     }
 
@@ -252,12 +274,12 @@ mod tests {
         let mut a = app();
         a.handle(Input::Command(anim_cmd(5, 500))).unwrap();
         a.handle(Input::Command(Command::Clear)).unwrap();
-        assert!(saw(&a, r#"{"t":"anim_done","id":5}"#));
+        assert!(saw(&a, r#"{"t":"anim_done","id":5"#));
 
         let mut b = app();
         b.handle(Input::Command(anim_cmd(6, 500))).unwrap();
         assert!(!b.handle(Input::Command(Command::Quit)).unwrap());
-        assert!(saw(&b, r#"{"t":"anim_done","id":6}"#));
+        assert!(saw(&b, r#"{"t":"anim_done","id":6"#));
     }
 
     #[test]
@@ -269,7 +291,7 @@ mod tests {
         cmd.data = "x".repeat(crate::anim::MAX_DATA + 1);
         a.handle(Input::Command(Command::Anim(cmd))).unwrap();
         assert!(a.anim.is_none(), "nothing plays");
-        assert!(saw(&a, r#"{"t":"dropped","what":"anim","reason":"size"}"#));
+        assert!(saw(&a, r#"{"t":"dropped","what":"anim","reason":"size""#));
     }
 
     #[test]
@@ -279,7 +301,7 @@ mod tests {
         let late = std::time::Instant::now() + std::time::Duration::from_millis(200);
         a.tick_anim(late).unwrap();
         assert!(a.anim.is_none());
-        assert!(saw(&a, r#"{"t":"anim_done","id":8}"#));
+        assert!(saw(&a, r#"{"t":"anim_done","id":8"#));
         let before = a.out.len();
         a.tick_anim(late).unwrap();
         assert_eq!(a.out.len(), before, "nothing more is written");
@@ -293,8 +315,42 @@ mod tests {
         a.resize((30, 24)).unwrap();
         assert_eq!(
             a.out,
-            set_user_var("vtabs", r#"{"t":"resize","cols":30,"rows":24}"#).as_bytes()
+            set_user_var("vtabs", r#"{"t":"resize","cols":30,"rows":24,"n":1}"#).as_bytes()
         );
+    }
+
+    #[test]
+    fn repeated_identical_keys_stay_distinct_user_vars() {
+        let mut a = app();
+        for _ in 0..2 {
+            a.handle(Input::Key {
+                name: "j".into(),
+                mods: Mods::default(),
+                raw: b"j".to_vec(),
+            })
+            .unwrap();
+        }
+        assert_eq!(
+            payloads(&a),
+            vec![
+                r#"{"t":"key","key":"j","raw":"ag==","n":1}"#.to_string(),
+                r#"{"t":"key","key":"j","raw":"ag==","n":2}"#.to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn pong_echoes_the_ping_n_untouched() {
+        let mut a = app();
+        a.handle(Input::Key {
+            name: "j".into(),
+            mods: Mods::default(),
+            raw: b"j".to_vec(),
+        })
+        .unwrap();
+        a.handle(Input::Command(Command::Ping { n: Some(7) }))
+            .unwrap();
+        assert_eq!(payloads(&a)[1], r#"{"t":"pong","n":7}"#);
     }
 
     #[test]
@@ -308,7 +364,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             a.out,
-            set_user_var("vtabs", r#"{"t":"key","key":"x","raw":"eA=="}"#).as_bytes()
+            set_user_var("vtabs", r#"{"t":"key","key":"x","raw":"eA==","n":1}"#).as_bytes()
         );
     }
 }

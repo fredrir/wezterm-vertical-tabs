@@ -41,6 +41,10 @@ All events carry `"t"`. Columns/rows are 1-based cell coordinates.
 | anim_done | `{"t":"anim_done","id":N}` — after the last frame, or at once when a command cancels the run |
 | dropped | `{"t":"dropped","what":"anim","reason":"size"\|"bounds"}` — the command was refused whole |
 
+- every event but `pong` carries a monotonic `n`. Current WezTerm fires `user-var-changed` on
+  every set (verified against source and e2e, 20260826), but `n` keeps repeated identical events
+  (two `j` presses) distinct on any version that dedups by value, and makes loss visible. `pong`
+  echoes the ping's `n` instead.
 - `dy` is only present for `wheel` (`-1` = up, `1` = down); `b` is `"none"` for wheel.
 - `drag` = motion with a button held (SGR bit 32 + button), `move` = motion with no button.
 - Consecutive `move`/`drag` events found in one read chunk are coalesced: only the last one is emitted.
@@ -67,7 +71,7 @@ All events carry `"t"`. Columns/rows are 1-based cell coordinates.
 | frame   | `{"t":"frame","data":"..."}` | write `data` verbatim to stdout, then flush |
 | clear   | `{"t":"clear"}`              | clear screen, cursor home                   |
 | quit    | `{"t":"quit"}`               | restore terminal and exit 0                 |
-| ping | `{"t":"ping","n":N}` | reply with `pong` carrying the same `n`; WezTerm only fires `user-var-changed` when the value changes, so `n` must vary |
+| ping | `{"t":"ping","n":N}` | reply with `pong` carrying the same `n`; vary `n` so the reply stays unambiguous even where user vars dedup by value |
 | auth | `{"t":"auth","token":"<hex>"}` | echo user var `vtabs_token`; the title is not touched |
 | anim | `{"t":"anim","id":N,"ms":220,"fps":30,"ease":"outCubic","dir":"in","anchor":"#1e1e2e","rows":[{"y":4,"delay":0}],"data":"<final frame>"}` | interpolate to `data` on the backend's clock |
 
