@@ -21,6 +21,7 @@ local page = require "vtabs.page"
 
 local test, eq, usub, row_text, rgb = H.test, H.eq, H.usub, H.row_text, H.rgb
 local hex, page_rows, dump_lines, legacy, p1_view = H.hex, H.page_rows, H.dump_lines, H.legacy, H.p1_view
+local dump_styled = H.dump_styled
 local page_view, attach_all, mark_ready, window, RETINA = H.page_view, H.attach_all, H.mark_ready, H.window, H.RETINA
 local here, mouse = H.here, H.mouse
 
@@ -162,14 +163,21 @@ test("P3 A2c: every trigger reaches actions.open_settings, and only one place sp
 end)
 
 test("P3 frames are written for design review", function()
-  for _, size in ipairs { { 100, 21 }, { 60, 18 } } do
+  for _, size in ipairs { { 100, 21 }, { 60, 18 }, { 40, 18 } } do
     local pv = page_view { cols = size[1], rows = size[2], st = { group = 2, focus = 4 } }
-    local lines = page_rows(pv)
+    local lines, out = page_rows(pv)
     dump_lines("settings-" .. size[1], lines, size[1])
+    dump_styled("settings-" .. size[1], out.data, size[2])
     for row = 1, size[2] do
       eq(util.width(lines[row]), size[1], size[1] .. "-col row " .. row)
     end
   end
+  -- an uncommitted edit: `preview_cells` merges `pending` into `cfg` (icon_map does the same, A6a),
+  -- so the live preview must show icons off here even though the committed cfg still has them on
+  local pending = page_view { cols = 100, rows = 21, st = { group = 2, focus = 4 }, pending = { icons = false } }
+  local pending_lines, pending_out = page_rows(pending)
+  dump_lines("settings-pending", pending_lines, 100)
+  dump_styled("settings-pending", pending_out.data, 21)
 end)
 
 test("P3 A3a/A3b: the nav is the descriptors' own groups and every option gets a widget", function()

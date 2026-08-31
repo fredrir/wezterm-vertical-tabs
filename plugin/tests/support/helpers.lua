@@ -61,11 +61,69 @@ end
 
 ---The one row extractor: everything painted arrives as one CUP-addressed blob, so a row is the
 ---slice between its own cursor address and the next one.
-function M.row_text(data, row)
+local function row_segment(data, row)
   local seg = data:match("\27%[" .. row .. ";1H(.-)\27%[" .. (row + 1) .. ";1H")
     or data:match("\27%[" .. row .. ";1H(.*)$")
-  seg = seg:gsub("\27%[%d+;%d+H.-\27%[0m$", "")
-  return M.strip(seg)
+  return (seg:gsub("\27%[%d+;%d+H.-\27%[0m$", ""))
+end
+
+function M.row_text(data, row)
+  return M.strip(row_segment(data, row))
+end
+
+---Extends `M.strip`: instead of discarding SGR, replays it into run-length `#fg/#bg[*]:width`
+---spans (`*` = bold), in the order the renderer emitted them. One row's worth at a time.
+local function styled_spans(seg)
+  local spans = {}
+  local fg, bg, bold = { 0, 0, 0 }, { 0, 0, 0 }, false
+  local function push(text)
+    local w = util.width(text)
+    if w <= 0 then
+      return
+    end
+    local key =
+      string.format("#%02x%02x%02x/#%02x%02x%02x%s", fg[1], fg[2], fg[3], bg[1], bg[2], bg[3], bold and "*" or "")
+    local last = spans[#spans]
+    if last and last.key == key then
+      last.w = last.w + w
+    else
+      spans[#spans + 1] = { key = key, w = w }
+    end
+  end
+  local pos, len = 1, #seg
+  while pos <= len do
+    if seg:sub(pos, pos) == "\27" then
+      local s, e, params = seg:find("^\27%[([%d;]*)m", pos)
+      if s then
+        if params == "0" then
+          fg, bg, bold = { 0, 0, 0 }, { 0, 0, 0 }, false
+        elseif params == "1" then
+          bold = true
+        elseif params == "22" then
+          bold = false
+        else
+          local kind, r, g, b = params:match "^(%d+);2;(%d+);(%d+);(%d+)$"
+          if kind == "38" then
+            fg = { tonumber(r), tonumber(g), tonumber(b) }
+          elseif kind == "48" then
+            bg = { tonumber(r), tonumber(g), tonumber(b) }
+          end
+        end
+        pos = e + 1
+      else
+        pos = pos + 1
+      end
+    else
+      local next_esc = seg:find("\27", pos, true)
+      push(seg:sub(pos, (next_esc or len + 1) - 1))
+      pos = next_esc or (len + 1)
+    end
+  end
+  local out = {}
+  for _, span in ipairs(spans) do
+    out[#out + 1] = span.key .. ":" .. span.w
+  end
+  return table.concat(out, " ")
 end
 
 local function rows_of(data, n)
@@ -130,8 +188,28 @@ function M.dump_lines(name, lines, cols)
   return lines
 end
 
+---The styled twin of `dump_lines`: one `#fg/#bg[*]:width` run-list per row, from the same raw
+---ANSI the text dump strips. See `plugin/tests/golden/README.md` for the format.
+function M.dump_styled(name, data, rows_n)
+  if not FRAME_DIR or FRAME_DIR == "" then
+    return
+  end
+  os.execute("mkdir -p " .. FRAME_DIR)
+  local f = io.open(FRAME_DIR .. "/" .. name .. ".styled.txt", "w")
+  if not f then
+    return
+  end
+  for row = 1, rows_n do
+    f:write(string.format("%2d: %s\n", row, styled_spans(row_segment(data, row))))
+  end
+  f:close()
+end
+
 function M.dump_frame(name, v)
-  return M.dump_lines(name, M.frame_rows(v), v.cols)
+  local rows, r = M.frame_rows(v)
+  M.dump_lines(name, rows, v.cols)
+  M.dump_styled(name, r.data, v.rows)
+  return rows
 end
 
 function M.palette(bg, fg)
