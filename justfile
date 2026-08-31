@@ -11,7 +11,7 @@ doctor:
     @sh scripts/doctor.sh
 
 # Everything CI runs
-check: test lint
+check: test lint frames
 
 test:
     cd backend && cargo test --locked
@@ -21,6 +21,10 @@ lint:
     cd backend && cargo fmt --check && cargo clippy --all-targets --locked -- -D warnings
     cd plugin && luacheck init.lua vtabs tests && stylua --check init.lua vtabs tests
     lua scripts/gen-docs.lua --check
+
+# Re-renders every golden scene and byte-compares text + styled dumps; no display, no backend build
+frames:
+    @sh scripts/check-frames.sh
 
 # Regenerate the options table in docs/configuration.md from plugin/vtabs/schema.lua
 docs:
