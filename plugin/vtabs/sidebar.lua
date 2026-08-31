@@ -261,6 +261,13 @@ function M.send(pane, message)
   end)
 end
 
+---For pre-encoded lines: v2 encodes once per window, not once per pane.
+function M.send_raw(pane, line)
+  return pcall(function()
+    pane:send_text(line .. "\n")
+  end)
+end
+
 function M.auth(pane)
   local token = state.token_for(pane:pane_id())
   if token then

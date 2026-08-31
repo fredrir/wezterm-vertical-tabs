@@ -25,6 +25,7 @@ for _, suite in ipairs {
   "run_theme",
   "run_platform",
   "run_view",
+  "run_wire",
   "run_interaction",
   "run_schema",
   "run_popover",

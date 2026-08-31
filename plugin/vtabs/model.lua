@@ -9,24 +9,26 @@ local util = require "vtabs.util"
 
 local M = {}
 
-local function title_for(tab, pane, cfg)
+---The three title sources, separately: v2 sends them raw so Rust can own the fallback.
+local function title_parts(tab, pane, cfg)
+  local override = nil
   if cfg.title then
     local ok, custom = pcall(cfg.title, tab, pane)
     if not ok then
       util.warn_once("hook-title", "title hook failed: %s", tostring(custom))
     elseif custom and custom ~= "" then
-      return custom
+      override = custom
     end
   end
   local title = tab:get_title()
-  if title ~= "" and not sidebar.marker(title) then
-    return title
+  if title == "" or sidebar.marker(title) then
+    title = nil
   end
   local pane_title = mux.title(pane)
-  if pane_title and pane_title ~= "" and not sidebar.marker(pane_title) then
-    return pane_title
+  if not pane_title or pane_title == "" or sidebar.marker(pane_title) then
+    pane_title = nil
   end
-  return "tab " .. tostring(tab:tab_id())
+  return override, title, pane_title
 end
 
 local SHELLS = {
@@ -98,14 +100,24 @@ local function join(prefix, tail)
   return prefix or tail
 end
 
+---One probe of the pane's mux-visible facts; v2 sends these raw, meta composes from them.
+local function facts_for(pane)
+  local path, host, remote_user = cwd_of(pane)
+  return {
+    cwd = tilde(path),
+    host = host,
+    user = remote_user,
+    proc = util.basename(mux.foreground(pane)),
+    domain = mux.domain(pane),
+  }
+end
+
 ---Second card line: cwd for shells, `user@host` for ssh, `proc dir` otherwise, domain when remote.
-local function meta_for(pane, cfg)
+local function meta_from(f, cfg)
   if cfg.meta == false then
     return nil
   end
-  local path, host, remote_user = cwd_of(pane)
-  local dir = tilde(path)
-  local process = util.basename(mux.foreground(pane))
+  local dir, process = f.cwd, f.proc
   if cfg.meta == "cwd" then
     return dir
   end
@@ -114,14 +126,13 @@ local function meta_for(pane, cfg)
   end
   if not process then
     -- A mux pane reports no process (mux/src/pane.rs:331), so name where it is instead.
-    local domain = mux.domain(pane)
-    return join(domain ~= "local" and domain or nil, dir)
+    return join(f.domain ~= "local" and f.domain or nil, dir)
   end
   if REMOTE[process] then
-    if not host then
+    if not f.host then
       return process
     end
-    return remote_user and remote_user .. "@" .. host or host
+    return f.user and f.user .. "@" .. f.host or f.host
   end
   if SHELLS[process] then
     return dir
@@ -129,14 +140,15 @@ local function meta_for(pane, cfg)
   return join(process, dir and util.basename(dir))
 end
 
-local function cached_meta(tab_id, pane, cfg, now)
+local function cached_facts(tab_id, pane, cfg, now)
   local seen = meta_cache[tab_id]
   if seen and now - seen.at < cfg.poll_ms then
-    return seen.value
+    return seen.facts, seen.value
   end
-  local value = util.sanitize(meta_for(pane, cfg) or "")
-  meta_cache[tab_id] = { value = value ~= "" and value or nil, at = now }
-  return meta_cache[tab_id].value
+  local facts = facts_for(pane)
+  local value = util.sanitize(meta_from(facts, cfg) or "")
+  meta_cache[tab_id] = { facts = facts, value = value ~= "" and value or nil, at = now }
+  return facts, meta_cache[tab_id].value
 end
 
 M.forget_tab = scope.forget_tab
@@ -197,16 +209,28 @@ function M.build(gui_window)
           has_unseen = false,
         }
       end
+      local override, tab_title, pane_title = title_parts(tab, pane, cfg)
+      local facts, meta = cached_facts(tab_id, pane, cfg, now)
       return {
         tab_id = tab_id,
         index = info.index + 1,
         is_active = info.is_active,
         is_pinned = state.is_pinned(tab_id),
         is_private = private,
-        title = util.sanitize(title_for(tab, pane, cfg)),
+        title = util.sanitize(override or tab_title or pane_title or ("tab " .. tostring(tab_id))),
         icon = cfg.icons and icons.for_pane(pane, cfg.glyphs) or "",
         has_unseen = mux.unseen(pane) == true,
-        meta = cached_meta(tab_id, pane, cfg, now),
+        meta = meta,
+        raw = {
+          override = override and util.sanitize(override) or nil,
+          title = tab_title and util.sanitize(tab_title) or nil,
+          pane_title = pane_title and util.sanitize(pane_title) or nil,
+          proc = facts.proc,
+          cwd = facts.cwd,
+          host = facts.host,
+          user = facts.user,
+          domain = facts.domain,
+        },
       }
     end)
     if ok and item then

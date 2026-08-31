@@ -217,6 +217,7 @@ local MODULES = {
   "util",
   "version",
   "view",
+  "wire",
 }
 
 ---Every `vtabs/*.lua`, read from disk when wezterm can list it so the static list cannot drift.

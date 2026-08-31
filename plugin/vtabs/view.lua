@@ -381,6 +381,16 @@ function M.sync(gui_window, opts)
   local focus_index = state.has_focus(wid) and store.focus_index[wid] or nil
   local now = util.now_ms()
   geometry.sync(gui_window, active_tab_id)
+  require("vtabs.wire").sync(gui_window, {
+    cfg = cfg,
+    items = items,
+    footer = footer,
+    active_tab_id = active_tab_id,
+    effective = mux.effective_config(gui_window),
+    chrome = chrome_for(gui_window, cfg),
+    theme_override = nil,
+    window_dims = mux.dims(gui_window),
+  })
   sync_settings(gui_window, cfg, resolved, opts, now)
   -- After the width settles, so the card is drawn at the pane rect the correction leaves behind.
   require("vtabs.frame").sync(gui_window)

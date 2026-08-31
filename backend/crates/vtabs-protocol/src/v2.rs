@@ -36,6 +36,62 @@ pub struct ConfigMsg {
     pub context: Option<String>,
     #[serde(default)]
     pub hover_timeout_ms: u64,
+    #[serde(default)]
+    pub render: Option<RenderSection>,
+    #[serde(default)]
+    pub mac: Option<MacFacts>,
+}
+
+/// The renderer-facing config surface, normalised by Lua exactly as the scene fixtures are.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct RenderSection {
+    pub padding: PaddingSpec,
+    #[serde(default)]
+    pub frame: bool,
+    #[serde(default)]
+    pub tab_height: Option<String>,
+    #[serde(default)]
+    pub row_gap: i64,
+    #[serde(default)]
+    pub separator: Option<String>,
+    #[serde(default)]
+    pub pinned_style: Option<String>,
+    #[serde(default)]
+    pub close_button: Option<String>,
+    #[serde(default)]
+    pub show_index: bool,
+    #[serde(default)]
+    pub scroll_indicator: Option<String>,
+    #[serde(default)]
+    pub new_tab_button: bool,
+    #[serde(default)]
+    pub new_tab_label: Option<String>,
+    #[serde(default)]
+    pub hover: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+pub struct PaddingSpec {
+    #[serde(default)]
+    pub left: i64,
+    #[serde(default)]
+    pub right: i64,
+    #[serde(default)]
+    pub top: i64,
+    #[serde(default)]
+    pub bottom: i64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+pub struct MacFacts {
+    #[serde(default)]
+    pub integrated_buttons: bool,
+    #[serde(default)]
+    pub native_button_style: bool,
+    #[serde(default)]
+    pub preview: bool,
+    #[serde(default)]
+    pub is_full_screen: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]

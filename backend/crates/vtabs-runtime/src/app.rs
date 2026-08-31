@@ -82,20 +82,26 @@ impl<W: Write> App<W> {
             Command::Ping { n } => self.emit(&Event::Pong { n })?,
             Command::Auth { token } => self.write(set_user_var(TOKEN_VAR, &token).as_bytes())?,
             Command::Anim(cmd) => self.start_anim(cmd)?,
-            Command::Config(msg) => self.v2.config = Some(msg),
-            Command::Theme(msg) => self.v2.theme = Some(msg),
+            Command::Config(msg) => self.v2.config = Some(*msg),
+            Command::Theme(msg) => self.v2.theme = Some(*msg),
             Command::Model(msg) => {
                 if msg.tabs.len() > MODEL_MAX_TABS {
-                    self.emit(&Event::Dropped { what: "model", reason: "bounds" })?;
+                    self.emit(&Event::Dropped {
+                        what: "model",
+                        reason: "bounds",
+                    })?;
                 } else {
-                    self.v2.model = Some(msg);
+                    self.v2.model = Some(*msg);
                 }
             }
             Command::Menu(msg) => {
                 if msg.items.len() > MENU_MAX_ITEMS {
-                    self.emit(&Event::Dropped { what: "menu", reason: "bounds" })?;
+                    self.emit(&Event::Dropped {
+                        what: "menu",
+                        reason: "bounds",
+                    })?;
                 } else {
-                    self.v2.menu = Some(msg);
+                    self.v2.menu = Some(*msg);
                 }
             }
             // Rendering from this state lands in P4b; storing first keeps the wire testable now.
