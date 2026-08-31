@@ -140,6 +140,9 @@ pub struct ModelMsg {
     pub rev: u64,
     #[serde(default)]
     pub screen: Option<String>,
+    /// The window's collapse mode is Lua state; the pane only knows its width.
+    #[serde(default)]
+    pub rail: bool,
     #[serde(default)]
     pub active: Option<i64>,
     #[serde(default)]

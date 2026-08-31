@@ -195,6 +195,7 @@ local function model_body(cfg, ctx, wid)
   end
   return {
     screen = "sidebar",
+    rail = state.is_collapsed(wid) and cfg.collapsed == "rail" or false,
     active = ctx.active_tab_id,
     focus = { on = state.has_focus(wid), index = store.focus_index[wid] or 1 },
     scroll = { top = store.scroll[wid] or 0, user = store.user_scrolled[wid] == true },
