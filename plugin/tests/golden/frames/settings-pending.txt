@@ -1,0 +1,23 @@
+         1         2         3         4         5         6         7         8         9         10
+1234567890123456789012345678901234567890123456789012345678901234567890123456789012345678901234567890
+ ⚙ Settings                                                                         wez-vtabs 0.1.2 
+ ────────────────────────────────────────────────────────────────────────────────────────────────── 
+                                                                                                    
+   Layout          │  tab_height                        ‹ card ›    ╭──────────────────────────────╮
+ ▎ Cards           │  meta                             ‹ false ›    │                    ❮  +  ⚙   │
+   Chrome          │  meta_sep                              "  "    │                            ▐ │
+   Behaviour       │› row_gap                              ‹ 0 ›    │      zsh                   ▐ │
+   Theme           │  corners                        ‹ chamfer ›    │                            ▐ │
+   Identity        │  close_button                     ‹ hover ›    │                            ▐ │
+   Hooks           │  show_index                         [ off ]    │      init.lua            x ▐ │
+   Backend         │  pinned_style                     ‹ dense ›    │                            ▐ │
+                   │  separator                          ‹ gap ›    │                            ▐ │
+                   │  ellipsis                               "…"    │      cargo run               │
+                   │  icons                               [ on ]    │                              │
+                   │  icon_map                         0 entries    │  ╭╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╮  │
+                   │                                                │  ╎ + New tab              ╎  │
+                   │                                                │  ╰╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╯  │
+                   │                                                ╰──────────────────────────────╯
+ Row gap — blank rows after each card; part of the card's click target                              
+ ────────────────────────────────────────────────────────────────────────────────────────────────── 
+ ↑↓ field   ←→ change   Enter edit   r reset   c copy as Lua   esc close                            

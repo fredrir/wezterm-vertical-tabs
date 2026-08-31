@@ -11,7 +11,7 @@ doctor:
     @sh scripts/doctor.sh
 
 # Everything CI runs
-check: test lint
+check: test lint frames
 
 test:
     cd backend && cargo test --locked
@@ -29,6 +29,10 @@ lint:
 # Regenerate plugin/vtabs/gen/protocol.lua from vtabs-protocol/src/limits.rs
 gen-protocol:
     cd backend && cargo run -q -p vtabs-protocol --bin gen-lua
+
+# Re-renders every golden scene and byte-compares text + styled dumps; no display, no backend build
+frames:
+    @sh scripts/check-frames.sh
 
 # Regenerate the options table in docs/configuration.md from plugin/vtabs/schema.lua
 docs:

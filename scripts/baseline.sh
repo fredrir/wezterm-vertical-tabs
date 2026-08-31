@@ -4,14 +4,15 @@
 #
 # What is recorded, and how it is compared:
 #
-#   frames/     every render frame `plugin/tests/run.lua` can dump   byte for byte
+#   frames/     every render frame `plugin/tests/run.lua` can dump   byte for byte against the
+#               committed goldens in plugin/tests/golden/frames, not against $ref (see below)
 #   shots/      one pixel hash per screenshot state's sidebar crop   hash equality
 #   geometry/   `wezterm cli list` after each e2e step, both modes   text
 #   stress/     the groups that ended XFAIL, per mode                text
 #
 # `--only <kinds>` narrows a run to a comma-separated subset of those four. `--only frames` needs
-# no display and no backend, so it is the seconds-long gate to run between edits; the full run is
-# the gate a step lands on.
+# no display and no backend, so it is the seconds-long gate to run between edits (`just frames`
+# runs the same check standalone); the full run is the gate a step lands on.
 #
 # A refactor step is behaviour-neutral when `--check` reports no differences at all.
 set -eu
@@ -71,11 +72,17 @@ if [ "$mode" = check ]; then
   [ -n "$ref" ] && [ -d "$ref" ] || { echo "no baseline to check against under $base"; exit 1; }
   # A kind the reference never recorded has nothing to differ from, so it is reported as skipped
   # rather than counted as a difference. Old references predate the file and hold all four.
+  # frames is the exception: it now compares against the committed golden dir, never against $ref,
+  # so it is always wanted regardless of what the sticky reference happens to hold.
   held=$ALL
   [ -f "$ref/KINDS" ] && held=$(tr '\n' ' ' <"$ref/KINDS")
   skipped=
   wanted=
   for kind in $kinds; do
+    if [ "$kind" = frames ]; then
+      wanted="$wanted $kind"
+      continue
+    fi
     case " $held " in
       *" $kind "*) wanted="$wanted $kind" ;;
       *) skipped="$skipped $kind" ;;
@@ -163,6 +170,18 @@ if [ "$mode" = check ]; then
   echo
   differences=0
   for kind in $kinds; do
+    if [ "$kind" = frames ]; then
+      # frames graduated to a committed golden dir (plugin/tests/golden/frames); $out/frames above
+      # is already the fresh render, so hand it straight to the same checker `just frames` runs.
+      if sh "$root/scripts/check-frames.sh" "$out/frames" >"$out/frames.diff" 2>&1; then
+        echo "ok: frames identical"
+      else
+        differences=1
+        echo "DIFF: frames"
+        sed 's/^/    /' "$out/frames.diff" | head -20
+      fi
+      continue
+    fi
     if diff -rq "$ref/$kind" "$out/$kind" >"$out/$kind.diff" 2>&1; then
       echo "ok: $kind identical"
     else

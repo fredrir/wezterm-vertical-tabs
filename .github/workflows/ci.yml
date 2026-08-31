@@ -48,4 +48,7 @@ jobs:
       - name: docs table matches the schema
         run: lua scripts/gen-docs.lua --check
         working-directory: .
+      - name: golden frames match plugin/tests/golden/frames
+        run: sh scripts/check-frames.sh
+        working-directory: .
 

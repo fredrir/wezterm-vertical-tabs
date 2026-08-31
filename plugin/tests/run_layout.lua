@@ -40,6 +40,34 @@ local function popover_rect(over)
   return rect
 end
 
+---The confirm sub-level popover.lua raises for a destructive item: question row, danger "Close",
+---then "Cancel" selected (`popover.lua:352-354` keeps Cancel lit so a stray Enter is harmless).
+local function confirm_popover_rect(resolved, over)
+  local rect = {
+    x = 3,
+    y = 6,
+    w = 24,
+    h = 3,
+    scrim = 0.5,
+    rows = {
+      { spans = { { x = 2, text = "Close “nvim”?", bold = true } } },
+      {
+        spans = { { x = 2, text = "Close", fg = resolved.close_hover_fg } },
+        hit = { kind = "popover", id = "confirm_close" },
+      },
+      {
+        bg = resolved.active_bg,
+        spans = { { x = 2, text = "Cancel" } },
+        hit = { kind = "popover", id = "confirm_cancel" },
+      },
+    },
+  }
+  for k, v in pairs(over or {}) do
+    rect[k] = v
+  end
+  return rect
+end
+
 test("P2 composite: the popover owns its rows and scrims the rest", function()
   local v = p1_view { rows = 20 }
   v.popover = popover_rect()
@@ -750,6 +778,9 @@ test("P1 frames are written for design review", function()
   local pop = dumped { rows = 20, opts = design }
   pop.popover = popover_rect()
   dump_frame("popover-open", pop)
+  local confirm = dumped { rows = 20, opts = design }
+  confirm.popover = confirm_popover_rect(confirm.theme)
+  dump_frame("popover-confirm", confirm)
   local tall = dumped { rows = 20, opts = design }
   tall.cfg.tab_height = "tall"
   dump_frame("tall", tall)
@@ -768,12 +799,23 @@ test("P1 frames are written for design review", function()
     rail.strip = { rows = 2, toggle = { row = 1, x = math.ceil(cols / 2), x1 = 1, x2 = cols } }
     dump_frame("rail-" .. cols, rail)
   end
+  -- rail mode is also today's "collapsed" state; a hovered, unseen item pins its colour cues too
+  local collapsed = p1_view { rows = 16, cols = 5, opts = design }
+  collapsed.rail = true
+  collapsed.strip = { rows = 2, toggle = { row = 1, x = 3, x1 = 1, x2 = 5 } }
+  collapsed.hover = { x = 3, y = 6 }
+  dump_frame("collapsed", collapsed)
   dump_frame("hover", dumped { rows = 20, hover = { x = 5, y = hover_row }, opts = design })
   -- identical to hover.txt on purpose: they differ only in close_hover_fg, which stripping removes
   dump_frame("hover-close", dumped { rows = 20, hover = { x = 26, y = hover_row }, opts = design })
   -- identical to the ghost in tabs.txt on purpose: the hover moves colour only, and stripping removes it
   dump_frame("new-tab-hover", dumped { rows = 20, hover = { x = 5, y = 19 }, opts = design })
   dump_frame("drag", dumped { rows = 20, drag = { tab_id = 3, over_index = 1, active = true }, opts = design })
+  -- identical to drag.txt in the text dump on purpose: tear-off paints the edge column in accent, colour only
+  dump_frame(
+    "drag-outside",
+    dumped { rows = 20, drag = { tab_id = 3, over_index = 1, active = true, outside = true }, opts = design }
+  )
   dump_frame("private", dumped { rows = 20, private = true, opts = design })
   dump_frame(
     "strip-macos",
@@ -801,11 +843,6 @@ test("P1 frames are written for design review", function()
     dumped { items = many, rows = 16, scroll = 4, footer = { { icon = "⚑", text = "main · 3 dirty" } }, opts = design }
   )
   if FRAME_DIR and FRAME_DIR ~= "" then
-    local f = io.open(FRAME_DIR .. "/collapsed.txt", "w")
-    if f then
-      f:write "collapsed = today's detach: the sidebar pane is closed, so no frame is rendered.\n"
-      f:close()
-    end
     local probe = io.open(FRAME_DIR .. "/tabs.txt")
     assert(probe, "frames written")
     probe:close()
