@@ -2,6 +2,7 @@ local wezterm = require "wezterm" ---@type Wezterm
 local act = wezterm.action
 local config = require "vtabs.config"
 local state = require "vtabs.state"
+local store = require "vtabs.store"
 local backend = require "vtabs.backend"
 local platform = require "vtabs.platform"
 local theme = require "vtabs.theme"
@@ -26,8 +27,6 @@ local MARKER = "^wez%-vtabs:%x+$"
 
 ---Same backend, other role: a settings pane is content, never a tab list.
 local SETTINGS_MARKER = "^wez%-vtabs%-settings:%x+$"
-
-local session = state.session
 
 local function tab_id_of(pane)
   return mux.tab_id(mux.tab_of(pane))
@@ -107,13 +106,13 @@ function M.is_ready(pane)
     return false
   end
   local pid = pane:pane_id()
-  if session.ready[pid] then
+  if store.ready[pid] then
     return true
   end
   local token = state.token_for(pid)
   if (token and user_vars(pane).vtabs_token == token) or claim_echoed_token(pane, pid) then
-    session.ready[pid] = true
-    session.seen[pid] = util.now_ms()
+    store.ready[pid] = true
+    store.seen[pid] = util.now_ms()
     return true
   end
   return false
@@ -122,23 +121,25 @@ end
 local RANK = { none = 0, marker = 1, mapped = 2, ready = 3 }
 
 local tick = 0
-local classified = {}
+---Declared through `store`, so a forgotten tab or window takes them with it.
+local scope = store.scope "sidebar"
+local classified = scope.tab()
 
 ---Title and domain reads cross into the mux; one answer per pane per poll is enough.
 local function has_marker_cached(pane, pid)
-  local seen = session.marker[pid]
+  local seen = store.marker[pid]
   if seen and seen.tick == tick then
     return seen.value
   end
   local value = claims_sidebar(pane)
-  session.marker[pid] = { tick = tick, value = value }
+  store.marker[pid] = { tick = tick, value = value }
   return value
 end
 
 ---How strong a pane's claim to the sidebar role is; `pure` reads the caches without promoting a pane.
 local function sidebar_rank(pane, pure)
   local pid = pane:pane_id()
-  if session.ready[pid] then
+  if store.ready[pid] then
     return RANK.ready
   end
   local tab_id = tab_id_of(pane)
@@ -157,7 +158,7 @@ local function sidebar_rank(pane, pure)
   else
     marker = has_marker_cached(pane, pid)
   end
-  if session.given_up[pid] or not marker then
+  if store.given_up[pid] or not marker then
     return RANK.none
   end
   return RANK.marker
@@ -206,7 +207,7 @@ function M.content_pane(tab)
   if active and active:pane_id() ~= sb_id then
     return active
   end
-  local remembered = session.content_pane[tab:tab_id()]
+  local remembered = store.content_pane[tab:tab_id()]
   for _, p in ipairs(content) do
     if p:pane_id() == remembered then
       return p
@@ -264,13 +265,13 @@ function M.auth(pane)
   local token = state.token_for(pane:pane_id())
   if token then
     -- whatever the pane painted before is not ours; the next sync must repaint it whole
-    session.frames[pane:pane_id()] = nil
-    session.authed_at[pane:pane_id()] = util.now_ms()
+    store.frames[pane:pane_id()] = nil
+    store.authed_at[pane:pane_id()] = util.now_ms()
     M.send(pane, { t = "auth", token = token })
   end
 end
 
-local fitted = {}
+local fitted = scope.window()
 
 ---Mux-domain splits can grow the tab past the window; re-sending the window size makes the mux refit it.
 local function fit_to_window(tab)
@@ -317,7 +318,7 @@ local function may_adopt(cfg, domain, host, place)
     return cfg.adopt == true
   end
   return backend.is_local(domain, host)
-    or session.spawned_domains[place] == true
+    or store.spawned_domains[place] == true
     or backend.resolve_path(cfg, domain, host) ~= nil
 end
 
@@ -338,12 +339,12 @@ local function adoptable(tab, sb)
 end
 
 local function domain_failed(place, now)
-  local at = session.failed_domains[place]
+  local at = store.failed_domains[place]
   if not at then
     return false
   end
   if now - at > FAILED_DOMAIN_MS then
-    session.failed_domains[place] = nil
+    store.failed_domains[place] = nil
     return false
   end
   return true
@@ -357,7 +358,7 @@ function M.attach(tab)
   local cfg = config.get()
   local tab_id = tab:tab_id()
   local now = util.now_ms()
-  local pending = session.attaching[tab_id]
+  local pending = store.attaching[tab_id]
   if pending and now - pending < ATTACH_RETRY_MS then
     return nil
   end
@@ -381,8 +382,8 @@ function M.attach(tab)
     return nil
   end
   local args = backend.spawn_args(cfg, pane_domain, host)
-  if not session.logged_domains[place] then
-    session.logged_domains[place] = true
+  if not store.logged_domains[place] then
+    store.logged_domains[place] = true
     util.log(
       "domain %s host %s: sidebar command %s",
       pane_domain,
@@ -398,7 +399,7 @@ function M.attach(tab)
     )
     return nil
   end
-  session.attaching[tab_id] = now
+  store.attaching[tab_id] = now
   local domain = cfg.domain == "CurrentPaneDomain" and "CurrentPaneDomain" or { DomainName = cfg.domain }
   local ok, sb = pcall(function()
     return base:split {
@@ -414,13 +415,12 @@ function M.attach(tab)
     util.warn("sidebar split failed: %s", tostring(sb):match "^[^\n]*")
     return nil
   end
-  session.attaching[tab_id] = nil
+  store.attaching[tab_id] = nil
   local pid = sb:pane_id()
   state.set_sidebar(tab_id, pid, util.random_token())
-  session.seen[pid] = now
-  session.spawned[pid] = now
-  session.pane_domain[pid] = place
-  session.spawned_domains[place] = true
+  store.seen[pid] = now
+  store.pane_domain[pid] = place
+  store.spawned_domains[place] = true
   M.auth(sb)
   base:activate()
   if not backend.is_local(pane_domain, host) then
@@ -433,9 +433,9 @@ end
 local function adopt(tab, sb, now)
   local pid = sb:pane_id()
   state.set_sidebar(tab:tab_id(), pid, util.random_token())
-  session.adopted[pid] = now
-  session.auth_tries[pid] = 1
-  session.seen[pid] = now
+  store.adopted[pid] = now
+  store.auth_tries[pid] = 1
+  store.seen[pid] = now
   M.auth(sb)
 end
 
@@ -451,26 +451,26 @@ local function await_auth(gui_window, tab, sb, now)
       adopt(tab, sb, now)
     else
       -- not ours to take over: let it be content so the tab still gets a sidebar
-      session.given_up[sb:pane_id()] = true
+      store.given_up[sb:pane_id()] = true
     end
     return
   end
-  if session.adopted[pid] then
-    local tries = session.auth_tries[pid] or 0
-    if tries >= ADOPT_TRIES or now - session.adopted[pid] > ADOPT_WINDOW_MS then
+  if store.adopted[pid] then
+    local tries = store.auth_tries[pid] or 0
+    if tries >= ADOPT_TRIES or now - store.adopted[pid] > ADOPT_WINDOW_MS then
       -- it kept the marker but never echoed: hand the tab back and treat the pane as content
       util.warn_once("adopt-" .. pid, "pane %d never authenticated; not a sidebar", pid)
-      session.given_up[pid] = true
-      session.adopted[pid] = nil
+      store.given_up[pid] = true
+      store.adopted[pid] = nil
       state.set_sidebar(tab:tab_id(), nil)
       classified[tab:tab_id()] = nil
-    elseif now - (session.authed_at[pid] or 0) > ADOPT_RETRY_MS then
-      session.auth_tries[pid] = tries + 1
+    elseif now - (store.authed_at[pid] or 0) > ADOPT_RETRY_MS then
+      store.auth_tries[pid] = tries + 1
       M.auth(sb)
     end
     return
   end
-  if not session.given_up[pid] and now - (session.seen[pid] or now) > READY_TIMEOUT_MS then
+  if not store.given_up[pid] and now - (store.seen[pid] or now) > READY_TIMEOUT_MS then
     M.give_up(gui_window, tab, sb)
   end
 end
@@ -657,39 +657,39 @@ end
 function M.give_up(_, _, sb)
   local pid = sb:pane_id()
   local now = util.now_ms()
-  local place = session.pane_domain[pid] or "local@"
+  local place = store.pane_domain[pid] or "local@"
   if domain_failed(place, now) then
     return
   end
-  session.failed_domains[place] = now
-  session.given_up[pid] = true
+  store.failed_domains[place] = now
+  store.given_up[pid] = true
   util.warn("sidebar backend did not start in %s; fix backend.path and close that pane", place)
 end
 
 ---Pings idle sidebars; replaces one whose backend stopped answering.
 local function check_liveness(gui_window, tab, sb, now)
   local pid = sb:pane_id()
-  local seen = session.seen[pid] or now
-  session.seen[pid] = seen
+  local seen = store.seen[pid] or now
+  store.seen[pid] = seen
   local idle = now - seen
   if idle > DEAD_AFTER_MS then
     util.warn("sidebar %d unresponsive, restarting", pid)
     M.detach(gui_window, tab)
     return false
   end
-  if idle > PING_AFTER_MS and (session.pinged[pid] or 0) < seen then
-    session.pinged[pid] = now
+  if idle > PING_AFTER_MS and (store.pinged[pid] or 0) < seen then
+    store.pinged[pid] = now
     M.send(sb, { t = "ping", n = now })
   end
   return true
 end
 
 local function record_closed_tabs(wid, seen, private)
-  local previous = session.known_tabs[wid] or {}
+  local previous = store.known_tabs[wid] or {}
   for tab_id in pairs(previous) do
     if not seen[tab_id] then
-      local meta = session.tab_meta[tab_id]
-      if meta and not session.moving[tab_id] and not private then
+      local meta = store.tab_meta[tab_id]
+      if meta and not store.moving[tab_id] and not private then
         state.push_closed(meta)
       end
       local pid = state.sidebar_pane_id(tab_id)
@@ -699,7 +699,7 @@ local function record_closed_tabs(wid, seen, private)
       state.forget_tab(tab_id)
     end
   end
-  session.known_tabs[wid] = seen
+  store.known_tabs[wid] = seen
 end
 
 local pins_deadline = nil
@@ -743,11 +743,6 @@ local function prune_windows(now)
       live[id] = true
     end
   end
-  for id in pairs(fitted) do
-    if not live[id] then
-      fitted[id] = nil
-    end
-  end
   state.forget_windows_except(live)
 end
 
@@ -761,7 +756,10 @@ local function ensure_window(gui_window)
   local now = util.now_ms()
   local seen = {}
   tick = tick + 1
-  classified = {}
+  -- cleared in place: rebinding would hand `store` a table nothing writes to any more
+  for id in pairs(classified) do
+    classified[id] = nil
+  end
   local tabs = mux_win:tabs_with_info()
   local active_tab = mux.active_tab(mux_win)
   local active_id = active_tab and active_tab:tab_id() or nil
@@ -787,9 +785,9 @@ local function ensure_window(gui_window)
       seen[tab_id] = true
       local active = tab:active_pane()
       if active and (not sb or active:pane_id() ~= sb:pane_id()) then
-        session.content_pane[tab_id] = active:pane_id()
+        store.content_pane[tab_id] = active:pane_id()
       end
-      session.tab_meta[tab_id] = M.tab_meta(tab, M.content_pane(tab))
+      store.tab_meta[tab_id] = M.tab_meta(tab, M.content_pane(tab))
       if collapsed then
         if sb and M.is_ready(sb) then
           M.detach(gui_window, tab)
@@ -810,7 +808,7 @@ local function ensure_window(gui_window)
   record_closed_tabs(wid, seen, private)
 end
 
-local ensuring = {}
+local ensuring = scope.window()
 
 ---Splits and closes await, so several event handlers can be inside `ensure` for one window at once.
 function M.ensure(gui_window)

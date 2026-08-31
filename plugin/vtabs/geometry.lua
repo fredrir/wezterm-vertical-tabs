@@ -2,6 +2,7 @@ local wezterm = require "wezterm" ---@type Wezterm
 local act = wezterm.action
 local config = require "vtabs.config"
 local state = require "vtabs.state"
+local store = require "vtabs.store"
 local sidebar = require "vtabs.sidebar"
 local mux = require "vtabs.mux"
 local util = require "vtabs.util"
@@ -22,18 +23,19 @@ local ADOPT_FLOOR_MS = 250
 -- repaint each. The leading edge is corrected, the rest waits for the poll after the drag stops.
 local RESIZE_QUIET_MS = 150
 
-local session = state.session
-local adopted = {}
-local adopted_for = {}
-local observed = {}
-local checked = {}
-local unreachable = {}
-local attempted = {}
-local in_flight = {}
-local driven = {}
-local resized_at = {}
-local rail_reserve = {}
-local last_target = {}
+---Declared through `store`, so forgetting a window clears them without a list to keep in step.
+local scope = store.scope "geometry"
+local adopted = scope.window()
+local adopted_for = scope.window()
+local observed = scope.window()
+local checked = scope.window()
+local unreachable = scope.window()
+local attempted = scope.window()
+local in_flight = scope.window()
+local driven = scope.window()
+local resized_at = scope.window()
+local rail_reserve = scope.window()
+local last_target = scope.window()
 
 ---Target width: the rail when collapsed, else what the user last dragged it to, else `cfg.width`.
 function M.desired(window_id)
@@ -53,19 +55,7 @@ function M.set_rail_cols(window_id, cols)
   rail_reserve[window_id] = (cols or 0) > 0 and cols or nil
 end
 
-function M.forget_window(window_id)
-  adopted[window_id] = nil
-  adopted_for[window_id] = nil
-  observed[window_id] = nil
-  checked[window_id] = nil
-  unreachable[window_id] = nil
-  attempted[window_id] = nil
-  in_flight[window_id] = nil
-  driven[window_id] = nil
-  resized_at[window_id] = nil
-  rail_reserve[window_id] = nil
-  last_target[window_id] = nil
-end
+M.forget_window = scope.forget_window
 
 ---The sidebar reporting its own size means our adjust moved something, so the next one need not
 ---wait its turn. It does not mean the whole delta arrived, so the width stays ours for the floor.
@@ -90,8 +80,6 @@ function M.reset(window_id)
   M.forget_window(window_id)
   adopted[window_id], adopted_for[window_id] = keep, keep and width or nil
 end
-
-table.insert(state.forget_hooks, M.forget_window)
 
 ---Columns, dpi and cell width of a pane; the last two tell a divider drag from a font or DPI change.
 local function pane_metrics(pane)
@@ -159,7 +147,7 @@ function M.correct(gui_window)
   local wid = gui_window:window_id()
   local tab = util.active_tab(gui_window)
   checked[wid] = { tab_id = tab and tab:tab_id() or nil, at = util.now_ms() }
-  if session.drag[wid] then
+  if store.drag[wid] then
     return false
   end
   local sb = tab and sidebar.find(tab)

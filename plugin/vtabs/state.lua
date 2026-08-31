@@ -1,4 +1,5 @@
 local wezterm = require "wezterm" ---@type Wezterm
+local store = require "vtabs.store"
 local util = require "vtabs.util"
 
 local M = {}
@@ -128,71 +129,6 @@ function M.reload()
   load()
 end
 
----Per-process data that must not survive config reloads.
-M.session = {
-  hover = {},
-  drag = {},
-  scroll = {},
-  user_scrolled = {},
-  hits = {},
-  frames = {},
-  dims = {},
-  ready = {},
-  seen = {},
-  pinged = {},
-  sent_at = {},
-  last_click = {},
-  content_pane = {},
-  tab_meta = {},
-  known_tabs = {},
-  moving = {},
-  focus_index = {},
-  applying = {},
-  popover = {},
-  tooltip = {},
-  last_active = {},
-  attaching = {},
-  adopted = {},
-  spawned = {},
-  authed_at = {},
-  auth_tries = {},
-  marker = {},
-  pane_domain = {},
-  failed_domains = {},
-  spawned_domains = {},
-  given_up = {},
-  logged_domains = {},
-}
-
-local WINDOW_SESSION = {
-  "hover",
-  "drag",
-  "scroll",
-  "user_scrolled",
-  "last_click",
-  "known_tabs",
-  "focus_index",
-  "last_active",
-  "applying",
-  "popover",
-  "tooltip",
-}
-
-local PANE_SESSION = {
-  "hits",
-  "frames",
-  "dims",
-  "ready",
-  "seen",
-  "pinged",
-  "sent_at",
-  "adopted",
-  "spawned",
-  "authed_at",
-  "auth_tries",
-  "marker",
-}
-
 local function save(persist)
   if wezterm.GLOBAL then
     wezterm.GLOBAL.vtabs = data
@@ -242,7 +178,7 @@ end
 
 ---True just after we applied a config override, so its reload event can be told apart from a real one.
 function M.applying_recently(window_id, within_ms)
-  local at = M.session.applying[window_id]
+  local at = store.applying[window_id]
   return at ~= nil and (util.now_ms() - at) < (within_ms or 1000)
 end
 
@@ -341,9 +277,6 @@ function M.set_space(tab_id, space_id)
 end
 
 function M.forget_tab(tab_id)
-  for _, fn in ipairs(M.forget_tab_hooks) do
-    fn(tab_id)
-  end
   local k = key(tab_id)
   local pane_id = data.sidebars[k]
   if pane_id then
@@ -352,31 +285,24 @@ function M.forget_tab(tab_id)
   data.pinned[k] = nil
   data.sidebars[k] = nil
   data.space_of[k] = nil
-  M.session.content_pane[tab_id] = nil
-  M.session.tab_meta[tab_id] = nil
-  M.session.moving[tab_id] = nil
-  M.session.attaching[tab_id] = nil
+  store.forget_tab(tab_id)
   save(true)
 end
 
 function M.forget_pane(pane_id)
-  for _, name in ipairs(PANE_SESSION) do
-    M.session[name][pane_id] = nil
-  end
-  M.session.pane_domain[pane_id] = nil
-  M.session.given_up[pane_id] = nil
+  store.forget_pane(pane_id)
 end
 
----Modules with their own per-window caches register a cleaner here; state must not require them.
+---The per-process bus lives in `store` now, where each field is declared with its own scope. This
+---is the name the test suite still reaches it by; production code requires `store` directly.
+M.session = store.fields
+
+---For cleanup a table cannot express: `frame` unlinks the window's PNG here. A cache that only
+---needs forgetting declares its scope through `store` instead and registers nothing.
 M.forget_hooks = {}
 
----The same, per tab.
-M.forget_tab_hooks = {}
-
 function M.forget_window(window_id)
-  for _, name in ipairs(WINDOW_SESSION) do
-    M.session[name][window_id] = nil
-  end
+  store.forget_window(window_id)
   data.collapsed[key(window_id)] = nil
   data.focus[key(window_id)] = nil
   data.private[key(window_id)] = nil
@@ -394,10 +320,8 @@ function M.forget_windows_except(live)
       ids[tonumber(k)] = true
     end
   end
-  for _, name in ipairs(WINDOW_SESSION) do
-    for k in pairs(M.session[name]) do
-      ids[k] = true
-    end
+  for id in pairs(store.window_ids()) do
+    ids[id] = true
   end
   for id in pairs(ids) do
     if not live[id] then

@@ -1,5 +1,6 @@
 local config = require "vtabs.config"
 local state = require "vtabs.state"
+local store = require "vtabs.store"
 local sidebar = require "vtabs.sidebar"
 local model = require "vtabs.model"
 local actions = require "vtabs.actions"
@@ -7,8 +8,6 @@ local keys = require "vtabs.keys"
 local util = require "vtabs.util"
 
 local M = {}
-
-local session = state.session
 
 local MAX_TITLE_ROWS = 3
 local MAX_HINT_COLS = 8
@@ -154,7 +153,7 @@ end
 
 local function header(gui_window, pop, budget)
   local tab_id, level = pop.tab_id, pop.level
-  local meta = session.tab_meta[tab_id] or {}
+  local meta = store.tab_meta[tab_id] or {}
   local item = model.find(model.build(gui_window), tab_id)
   local lines = {}
   if level == "confirm" then
@@ -280,7 +279,7 @@ M.MIN_ROWS = FRAME_ROWS + MIN_ITEM_ROWS
 
 function M.open(gui_window, tab_id, anchor_row, anchor_col)
   local wid = gui_window:window_id()
-  session.popover[wid] = {
+  store.popover[wid] = {
     tab_id = tab_id,
     anchor_row = anchor_row or 0,
     anchor_col = anchor_col,
@@ -290,12 +289,12 @@ function M.open(gui_window, tab_id, anchor_row, anchor_col)
     restore_focus = state.has_focus(wid),
   }
   state.set_focus(wid, true)
-  return session.popover[wid]
+  return store.popover[wid]
 end
 
 ---A popover opened from a key binding has to hold the pane too, or Esc and Enter reach the shell.
 function M.grab_focus(gui_window)
-  local pop = session.popover[gui_window:window_id()]
+  local pop = store.popover[gui_window:window_id()]
   local sb = M.sidebar_of(gui_window)
   if not pop or not sb then
     return false
@@ -307,8 +306,8 @@ end
 
 function M.close(gui_window)
   local wid = gui_window:window_id()
-  local pop = session.popover[wid]
-  session.popover[wid] = nil
+  local pop = store.popover[wid]
+  store.popover[wid] = nil
   if pop and pop.took_pane then
     actions.blur_sidebar(gui_window)
   elseif pop and not pop.restore_focus then
@@ -318,12 +317,12 @@ function M.close(gui_window)
 end
 
 function M.get(window_id)
-  return session.popover[window_id]
+  return store.popover[window_id]
 end
 
 ---Moves the selection by `delta`, skipping disabled items and stopping at the ends.
 function M.move(gui_window, delta)
-  local pop = session.popover[gui_window:window_id()]
+  local pop = store.popover[gui_window:window_id()]
   if not pop then
     return
   end
@@ -345,7 +344,7 @@ end
 ---onto the scrim must not erase a keyboard selection.
 ---@return boolean true when the selection moved and the frame has to be repainted
 function M.point_at(gui_window, record, x)
-  local pop = session.popover[gui_window:window_id()]
+  local pop = store.popover[gui_window:window_id()]
   if not pop or not config.get().popover.follow_pointer then
     return false
   end
@@ -374,7 +373,7 @@ end
 
 ---First-letter jump to the next enabled item starting with `ch`.
 function M.jump(gui_window, ch)
-  local pop = session.popover[gui_window:window_id()]
+  local pop = store.popover[gui_window:window_id()]
   if not pop or type(ch) ~= "string" or ch == "" then
     return false
   end
@@ -392,7 +391,7 @@ function M.jump(gui_window, ch)
 end
 
 function M.selected(gui_window)
-  local pop = session.popover[gui_window:window_id()]
+  local pop = store.popover[gui_window:window_id()]
   if not pop then
     return nil
   end
@@ -401,7 +400,7 @@ end
 
 ---Raises the open popover to its confirm level; Cancel is selected, so a stray Enter is harmless.
 function M.to_confirm(gui_window, kind, from_root)
-  local pop = session.popover[gui_window:window_id()]
+  local pop = store.popover[gui_window:window_id()]
   if not pop then
     return false
   end
@@ -415,7 +414,7 @@ end
 ---Runs an item; `rename` changes level instead of acting, disabled items do nothing.
 function M.run(gui_window, id)
   local wid = gui_window:window_id()
-  local pop = session.popover[wid]
+  local pop = store.popover[wid]
   if not pop then
     return false
   end
@@ -449,7 +448,7 @@ function M.run(gui_window, id)
       end
       M.close(gui_window)
       if id == "duplicate" then
-        local meta = session.tab_meta[tab_id] or {}
+        local meta = store.tab_meta[tab_id] or {}
         actions.new_tab(gui_window, {
           cwd = meta.cwd,
           domain = meta.domain and { DomainName = meta.domain } or nil,
@@ -533,7 +532,7 @@ end
 
 function M.commit_rename(gui_window)
   local wid = gui_window:window_id()
-  local pop = session.popover[wid]
+  local pop = store.popover[wid]
   if not pop or pop.level ~= "rename" then
     return
   end
@@ -549,7 +548,7 @@ local STEPS_BACK = { rename = true }
 
 ---`Esc` steps back a level before it closes.
 function M.back(gui_window)
-  local pop = session.popover[gui_window:window_id()]
+  local pop = store.popover[gui_window:window_id()]
   if pop and (STEPS_BACK[pop.level] or (pop.level == "confirm" and pop.from_root)) then
     pop.level, pop.buffer, pop.cursor = "root", nil, nil
     pop.confirm, pop.count, pop.from_root = nil, nil, nil
@@ -642,7 +641,7 @@ end
 
 ---The rect `render.composite` overlays: absolute placement plus one descriptor per row.
 function M.rect(gui_window, rows, cols, theme, cfg)
-  local pop = session.popover[gui_window:window_id()]
+  local pop = store.popover[gui_window:window_id()]
   if not pop then
     return nil
   end

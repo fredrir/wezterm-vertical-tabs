@@ -42,6 +42,7 @@ local actions = require "vtabs.actions"
 local keys = require "vtabs.keys"
 local state = require "vtabs.state"
 local mux = require "vtabs.mux"
+local store = require "vtabs.store"
 local util = require "vtabs.util"
 
 backend.root = root
@@ -107,11 +108,8 @@ local function register_events(cfg)
   end
   registered = true
 
-  local last_poll = {}
+  local last_poll = store.scope("events").window()
   local min_gap = math.max(50, math.floor(cfg.poll_ms / 4))
-  table.insert(state.forget_hooks, function(wid)
-    last_poll[wid] = nil
-  end)
 
   wezterm.on(
     "update-status",
@@ -214,6 +212,7 @@ local MODULES = {
   "settings",
   "sidebar",
   "state",
+  "store",
   "theme",
   "util",
   "version",

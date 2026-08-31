@@ -2,6 +2,7 @@ local wezterm = require "wezterm" ---@type Wezterm
 local act = wezterm.action
 local config = require "vtabs.config"
 local state = require "vtabs.state"
+local store = require "vtabs.store"
 local sidebar = require "vtabs.sidebar"
 local model = require "vtabs.model"
 local hit = require "vtabs.hit"
@@ -9,8 +10,6 @@ local mux = require "vtabs.mux"
 local util = require "vtabs.util"
 
 local M = {}
-
-local session = state.session
 
 function M.tab_by_id(gui_window, tab_id)
   for _, info in ipairs(gui_window:mux_window():tabs_with_info()) do
@@ -207,7 +206,7 @@ local function close_now(gui_window, tab_id, defer, overlay)
   if #content == 0 then
     return false
   end
-  session.tab_meta[tab_id] = sidebar.tab_meta(tab, content[1])
+  store.tab_meta[tab_id] = sidebar.tab_meta(tab, content[1])
   local previous = util.active_tab(gui_window)
   local switching = previous and previous:tab_id() ~= tab_id
   if switching then
@@ -377,13 +376,13 @@ function M.tear_off(gui_window, tab_id)
   local private = state.is_private(gui_window:window_id())
   local title = tab:get_title()
   local pinned = state.is_pinned(tab_id)
-  session.moving[tab_id] = true
+  store.moving[tab_id] = true
   local ok, new_tab, new_win = pcall(function()
     return content[1]:move_to_new_window()
   end)
   if not ok or not new_tab then
     util.warn("tear-off failed: %s", tostring(new_tab):match "^[^\n]*")
-    session.moving[tab_id] = nil
+    store.moving[tab_id] = nil
     return
   end
   if private and new_win then
@@ -444,7 +443,7 @@ function M.focus_sidebar(gui_window)
     return
   end
   local _, index = model.find(visible(gui_window), tab:tab_id())
-  session.focus_index[wid] = index or 1
+  store.focus_index[wid] = index or 1
   state.set_focus(wid, true)
   sb:activate()
 end
