@@ -69,7 +69,11 @@ test("v2 paints: a painting pane gets no frames and no fades, but stays fresh", 
     end
   end
   eq(frames_after, frames_before, "no frame reaches a painting pane")
-  eq(require("vtabs.view").animate(gui, "expand_in"), false, "no anim either")
+  local sent_before = #sb.sent
+  assert(require("vtabs.view").animate(gui, "expand_in"), "a fade is still asked for")
+  local last = sb.sent[#sb.sent]
+  assert(#sb.sent == sent_before + 1 and last:find('"t":"fx"', 1, true), "as an fx phase, never an anim frame")
+  assert(last:find('"phase":"expand_in"', 1, true))
 end)
 
 test("v2 do: a menu verb through the event path acts on the open menu instead of dismissing it", function()

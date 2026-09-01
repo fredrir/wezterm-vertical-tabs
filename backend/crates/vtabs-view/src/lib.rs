@@ -1,5 +1,6 @@
 pub mod enrich;
 pub mod frame;
+pub mod fx;
 pub mod glyphs;
 pub mod layout;
 pub mod menu;

@@ -4,9 +4,13 @@ use std::time::Instant;
 use vtabs_core::ui::{SettingsUi, UiState};
 use vtabs_input::Input;
 use vtabs_input::resolve::{self, Knobs, MenuView, MirroredDrag, SettingsScreen};
-use vtabs_protocol::limits::{MENU_MAX_ITEMS, MODEL_MAX_FIELDS, MODEL_MAX_TABS};
+use vtabs_protocol::limits::{
+    ANIM_MAX_FPS, ANIM_MAX_MS, ANIM_MIN_FPS, MENU_MAX_ITEMS, MODEL_MAX_FIELDS, MODEL_MAX_TABS,
+};
 use vtabs_protocol::{Command, Event, v2};
 use vtabs_view::enrich::{Enriched, PopoverHits, enrich, glyph_map, theme_of};
+use vtabs_view::frame::Cell;
+use vtabs_view::fx;
 use vtabs_view::layout;
 use vtabs_view::menu::{self, MenuCfg, MenuState, Outcome};
 use vtabs_view::render::frame_of;
@@ -27,6 +31,9 @@ pub struct App<W: Write> {
     pub var: String,
     pub size: (u16, u16),
     pub anim: Option<anim::Run>,
+    pub fx: Option<FxRun>,
+    /// What the pane shows right now: the final frame any fade lands on.
+    pub last_rows: Option<PaintedRows>,
     pub seq: u64,
     pub v2: V2State,
     /// True for the sidebar role: this process owns the pane's pixels and Lua sends it no frames.
@@ -44,6 +51,55 @@ pub struct App<W: Write> {
     pub hover_deadline: Option<Instant>,
     /// The last token Lua authed with; a change means the plugin restarted around us.
     pub token: Option<String>,
+}
+
+/// The rows a repaint wrote, kept so a fade has a final frame to land on.
+pub struct PaintedRows {
+    pub rows: Vec<Option<Vec<Cell>>>,
+    pub fades: Vec<Option<f64>>,
+    pub page_bg: [u8; 3],
+    /// The open menu's rows (1-based y, height), the only rows `popover_in` touches.
+    pub menu_rows: Option<(i64, i64)>,
+}
+
+/// One fade in flight; frames are generated here, nothing crosses the wire per tick.
+pub struct FxRun {
+    rows: Vec<Option<Vec<Cell>>>,
+    fades: Vec<Option<f64>>,
+    page_bg: [u8; 3],
+    animated: Vec<usize>,
+    delays: Vec<u64>,
+    phase: fx::Phase,
+    frame_ms: u64,
+    started: Instant,
+    pub next_at: Instant,
+}
+
+impl FxRun {
+    fn elapsed_ms(&self, now: Instant) -> u64 {
+        now.saturating_duration_since(self.started).as_millis() as u64
+    }
+
+    /// The frame for `now`; a late wake renders now, skipped ticks are never replayed.
+    fn tick(&mut self, now: Instant) -> String {
+        let elapsed = self
+            .elapsed_ms(now)
+            .min(fx::total_ms(&self.phase, &self.delays));
+        let rows = fx::frame_at(
+            &self.rows,
+            &self.animated,
+            &self.delays,
+            &self.phase,
+            self.page_bg,
+            elapsed,
+        );
+        self.next_at = now + std::time::Duration::from_millis(self.frame_ms);
+        rows_bytes(&rows, &self.fades, self.page_bg)
+    }
+
+    fn finished(&self, now: Instant) -> bool {
+        self.elapsed_ms(now) >= fx::total_ms(&self.phase, &self.delays)
+    }
 }
 
 /// Latest v2 state, stored whole per message kind; a bounds breach keeps the previous one.
@@ -362,30 +418,54 @@ impl<W: Write> App<W> {
     }
 
     /// Repaints from the stored state; the pane's pixels are this process's to own now.
+    /// A state change ends any fade: the frame it lands on is this one.
     pub fn repaint(&mut self) -> io::Result<()> {
         if !self.dressed() {
             return Ok(());
         }
-        if let Some(bytes) = self.settings_view().map(|view| {
+        self.fx = None;
+        if let Some((bytes, painted)) = self.settings_view().map(|view| {
             let (cells, fades) = settings::cells(&view);
-            rows_bytes(&cells, &fades, view.theme.bg)
+            let bytes = rows_bytes(&cells, &fades, view.theme.bg);
+            (
+                bytes,
+                PaintedRows {
+                    rows: cells,
+                    fades,
+                    page_bg: view.theme.bg,
+                    menu_rows: None,
+                },
+            )
         }) {
+            self.last_rows = Some(painted);
             return self.write(bytes.as_bytes());
         }
-        let (bytes, popover, outcome, selected) = {
+        let (bytes, popover, outcome, selected, painted) = {
             let (e, outcome) = self.scene();
             let selected = match &outcome {
                 Outcome::Open(placed) => Some(placed.selected),
                 _ => None,
             };
+            let menu_rows = match &outcome {
+                Outcome::Open(placed) => Some((placed.rect.y, placed.rect.h)),
+                _ => None,
+            };
             let frame = frame_of(&e.view);
+            let painted = PaintedRows {
+                rows: frame.cells.clone(),
+                fades: frame.fades.clone(),
+                page_bg: e.view.theme.bg,
+                menu_rows,
+            };
             (
                 frame_bytes(&frame, e.view.theme.bg),
                 e.popover,
                 outcome,
                 selected,
+                painted,
             )
         };
+        self.last_rows = Some(painted);
         self.popover = popover;
         if let Some(selected) = selected {
             self.menu_ui.selected = selected;
@@ -506,8 +586,7 @@ impl<W: Write> App<W> {
                     self.v2.menu = Some(*msg);
                 }
             }
-            // Rendering from this state lands in P4b; storing first keeps the wire testable now.
-            Command::Fx(msg) => self.log.log(format!("fx {}", msg.phase)),
+            Command::Fx(msg) => self.start_fx(&msg)?,
             Command::Notice(msg) => self.log.log(format!("notice {}", msg.text)),
             Command::Quit => {
                 self.cancel_anim()?;
@@ -551,11 +630,85 @@ impl<W: Write> App<W> {
     }
 
     pub fn next_anim(&self) -> Option<Instant> {
-        self.anim.as_ref().map(|run| run.next_at)
+        let v1 = self.anim.as_ref().map(|run| run.next_at);
+        let v2 = self.fx.as_ref().map(|run| run.next_at);
+        match (v1, v2) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
+        }
+    }
+
+    /// A fade over the frame the pane shows: the phase's rows rise out of the page colour.
+    fn start_fx(&mut self, msg: &v2::FxMsg) -> io::Result<()> {
+        let Some(mut phase) = fx::phase_named(&msg.phase) else {
+            self.log.log(format!("fx {}: unknown phase", msg.phase));
+            return Ok(());
+        };
+        let Some(painted) = self.last_rows.as_ref() else {
+            return Ok(());
+        };
+        if let Some(ms) = msg.ms {
+            phase.ms = ms.clamp(1, ANIM_MAX_MS);
+        }
+        let fps = msg.fps.unwrap_or(30).clamp(ANIM_MIN_FPS, ANIM_MAX_FPS);
+        let animated: Vec<usize> = painted
+            .rows
+            .iter()
+            .enumerate()
+            .filter(|(i, row)| {
+                row.is_some()
+                    && match (msg.phase.as_str(), painted.menu_rows) {
+                        ("popover_in", Some((y, h))) => {
+                            let row = *i as i64 + 1;
+                            row >= y && row < y + h
+                        }
+                        ("popover_in", None) => false,
+                        _ => true,
+                    }
+            })
+            .map(|(i, _)| i)
+            .collect();
+        if animated.is_empty() {
+            return Ok(());
+        }
+        let delays = fx::delays(&phase, &animated);
+        let now = Instant::now();
+        let mut run = FxRun {
+            rows: painted.rows.clone(),
+            fades: painted.fades.clone(),
+            page_bg: painted.page_bg,
+            animated,
+            delays,
+            phase,
+            frame_ms: 1000 / u64::from(fps),
+            started: now,
+            next_at: now,
+        };
+        let first = run.tick(now);
+        self.write(first.as_bytes())?;
+        self.fx = Some(run);
+        Ok(())
+    }
+
+    fn tick_fx(&mut self, now: Instant) -> io::Result<()> {
+        let Some(run) = self.fx.as_mut() else {
+            return Ok(());
+        };
+        if now < run.next_at {
+            return Ok(());
+        }
+        let bytes = run.tick(now);
+        let done = run.finished(now);
+        self.write(bytes.as_bytes())?;
+        if done {
+            self.fx = None;
+        }
+        Ok(())
     }
 
     /// Writes the frame for `now`, skipping any tick the loop slept through.
     pub fn tick_anim(&mut self, now: Instant) -> io::Result<()> {
+        self.tick_fx(now)?;
         let Some(run) = self.anim.as_mut() else {
             return Ok(());
         };
@@ -648,6 +801,8 @@ mod tests {
             var: "vtabs".into(),
             size: (28, 24),
             anim: None,
+            fx: None,
+            last_rows: None,
             seq: 0,
             v2: V2State::default(),
             // the v1 path is what these tests pin; the painting path has its own below
@@ -1055,6 +1210,47 @@ mod tests {
 
     fn painted(a: &App<Vec<u8>>) -> String {
         String::from_utf8_lossy(&a.out).to_string()
+    }
+
+    #[test]
+    fn a_fade_runs_on_the_frame_shown_and_a_repaint_lands_it_on_the_final_frame() {
+        let mut a = painting();
+        dress(&mut a);
+        a.out.clear();
+        a.repaint().unwrap();
+        let final_frame = painted(&a);
+        a.out.clear();
+        send(
+            &mut a,
+            Command::Fx(v2::FxMsg {
+                phase: "expand_in".into(),
+                ms: Some(200),
+                fps: Some(30),
+            }),
+        );
+        assert!(a.fx.is_some(), "the fade is running");
+        assert_ne!(
+            painted(&a),
+            final_frame,
+            "t=0 is the anchor colour, not the final frame"
+        );
+        a.out.clear();
+        a.repaint().unwrap();
+        assert!(a.fx.is_none(), "a state repaint ends the fade");
+        assert_eq!(
+            painted(&a),
+            final_frame,
+            "and lands exactly on the final frame"
+        );
+        send(
+            &mut a,
+            Command::Fx(v2::FxMsg {
+                phase: "nope".into(),
+                ms: None,
+                fps: None,
+            }),
+        );
+        assert!(a.fx.is_none(), "an unknown phase plays nothing");
     }
 
     #[test]

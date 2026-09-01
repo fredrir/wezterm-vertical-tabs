@@ -68,12 +68,16 @@ local function fade_context(gui_window)
   end
   local tab = util.active_tab(gui_window)
   local sb = tab and sidebar.find(tab)
-  if not sb or not sidebar.is_ready(sb) or store.paints[sb:pane_id()] then
+  if not sb or not sidebar.is_ready(sb) then
     return nil
   end
   local domain = mux.domain(sb)
   if cfg.animations == "auto" and domain ~= "local" then
     return nil
+  end
+  -- a painting pane fades on its own clock: no frame to send, just the phase
+  if store.paints[sb:pane_id()] then
+    return cfg, sb, nil, nil
   end
   local cached = store.frames[sb:pane_id()]
   if not cached or not cached.text then
@@ -100,6 +104,12 @@ function M.animate(gui_window, phase)
     return false
   end
   local key = PHASE_MS[phase]
+  if not cached then
+    return sidebar.send(
+      sb,
+      { t = "fx", phase = phase, ms = key and cfg.animation[key] or nil, fps = cfg.animation.fps }
+    )
+  end
   local command = anim.build(phase, { rows = cached.text, rows_n = cached.n }, {
     anchor = hex(resolved.bg),
     fps = cfg.animation.fps,
@@ -112,7 +122,13 @@ end
 function M.animate_popover(gui_window)
   local rect = popover_rect[gui_window:window_id()]
   local cfg, sb, cached, resolved = fade_context(gui_window)
-  if not rect or not cfg or cfg.popover.fade_ms <= 0 then
+  if not cfg or cfg.popover.fade_ms <= 0 then
+    return false
+  end
+  if not cached then
+    return sidebar.send(sb, { t = "fx", phase = "popover_in", ms = cfg.popover.fade_ms, fps = cfg.animation.fps })
+  end
+  if not rect then
     return false
   end
   local rows = {}

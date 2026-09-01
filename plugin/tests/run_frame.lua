@@ -222,6 +222,29 @@ test("every vtabs module is on the config-reload watch list", function()
   eq(table.concat(missing, ","), "", "modules not watched, so edits to them would not reload")
 end)
 
+test("a painting pane's toggle fade crosses as fx, on the backend's own clock", function()
+  local win, gui = window(1)
+  sidebar.ensure(gui)
+  local tab = win.tab_list[1]
+  local sb = mark_ready(tab)
+  state.session.paints[sb:pane_id()] = true
+  view_mod.sync(gui, { force = true })
+  local before = #sb.sent
+  actions.toggle_sidebar(gui)
+  local fx, anims = {}, 0
+  for i = before + 1, #sb.sent do
+    if sb.sent[i]:find('"t":"fx"', 1, true) then
+      fx[#fx + 1] = sb.sent[i]:match '"phase":"([%a_]+)"'
+    elseif sb.sent[i]:find('"t":"anim"', 1, true) then
+      anims = anims + 1
+    end
+  end
+  assert(#fx >= 1, "the collapse crosses as fx")
+  eq(anims, 0, "and never as a v1 anim frame")
+  assert(fx[1]:match "^collapse", "with the collapse phase: " .. fx[1])
+  sidebar.set_collapsed(gui, false)
+end)
+
 test("a toggle sends the fade around its single resize, and only on a local domain", function()
   local win, gui = window(1)
   sidebar.ensure(gui)

@@ -77,6 +77,8 @@ pub fn run() -> io::Result<()> {
         var,
         size,
         anim: None,
+        fx: None,
+        last_rows: None,
         seq: 0,
         v2: crate::app::V2State::default(),
         paints,

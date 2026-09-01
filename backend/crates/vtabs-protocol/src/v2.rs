@@ -451,6 +451,10 @@ pub struct MenuConfirm {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct FxMsg {
     pub phase: String,
+    #[serde(default)]
+    pub ms: Option<u64>,
+    #[serde(default)]
+    pub fps: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
