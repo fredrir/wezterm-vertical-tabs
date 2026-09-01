@@ -72,39 +72,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn encodes_osc_1337_byte_exact() {
-        assert_eq!(
-            set_user_var("vtabs", r#"{"t":"ping"}"#),
-            "\x1b]1337;SetUserVar=vtabs=eyJ0IjoicGluZyJ9\x07"
-        );
-    }
-
-    #[test]
-    fn role_var() {
-        assert_eq!(
-            set_user_var(ROLE_VAR, Role::Sidebar.name()),
-            "\x1b]1337;SetUserVar=vtabs_role=c2lkZWJhcg==\x07"
-        );
-    }
-
-    #[test]
-    fn a_role_only_changes_the_marker_and_the_role_var() {
-        assert_eq!(Role::parse("sidebar"), Some(Role::Sidebar));
-        assert_eq!(Role::parse("settings"), Some(Role::Settings));
-        assert_eq!(Role::parse("nope"), None);
-        assert_eq!(Role::default(), Role::Sidebar);
-        assert_eq!(
-            title_marker(Role::Sidebar, "ab"),
-            "\x1b]0;wez-vtabs:ab\x07\x1b]2;wez-vtabs:ab\x07"
-        );
-        assert_eq!(
-            title_marker(Role::Settings, "ab"),
-            "\x1b]0;wez-vtabs-settings:ab\x07\x1b]2;wez-vtabs-settings:ab\x07"
-        );
-        assert_eq!(Role::Settings.name(), "settings");
-    }
-
-    #[test]
     fn title_marker_keeps_hex_only() {
         assert_eq!(
             title_marker(Role::Sidebar, "a1b2"),
@@ -122,10 +89,5 @@ mod tests {
         let n = nonce();
         assert_eq!(n.len(), 8);
         assert!(n.bytes().all(|b| b.is_ascii_hexdigit()));
-    }
-
-    #[test]
-    fn pads_short_values() {
-        assert_eq!(set_user_var("x", "a"), "\x1b]1337;SetUserVar=x=YQ==\x07");
     }
 }

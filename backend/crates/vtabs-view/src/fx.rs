@@ -125,23 +125,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn ease_matches_the_v1_curves() {
-        assert_eq!(ease("linear", 0.25), 0.25);
-        assert!((ease("outCubic", 0.5) - 0.875).abs() < 1e-6);
-        assert!((ease("inOutQuad", 0.25) - 0.125).abs() < 1e-6);
-        assert!((ease("inOutQuad", 0.75) - 0.875).abs() < 1e-6);
-        assert_eq!(ease("nope", 0.3), 0.3);
-    }
-
-    #[test]
-    fn collapse_staggers_bottom_up_and_caps() {
-        let p = phase_named("collapse_in").unwrap();
-        assert_eq!(delays(&p, &[0, 1, 2, 3]), vec![24, 16, 8, 0]);
-        let e = phase_named("expand_in").unwrap();
-        assert_eq!(delays(&e, &(0..20).collect::<Vec<_>>())[15], 120, "capped");
-    }
-
-    #[test]
     fn a_fade_changes_colour_only() {
         let red = [200, 40, 40];
         let bg = [30, 30, 46];

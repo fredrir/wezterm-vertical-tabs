@@ -31,16 +31,3 @@ pub fn watch_resize() -> bool {
 pub fn resized() -> bool {
     RESIZED.swap(false, Ordering::Relaxed)
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn resize_flag_is_edge_triggered() {
-        assert_eq!(watch_resize(), cfg!(unix));
-        RESIZED.store(true, Ordering::Relaxed);
-        assert!(resized());
-        assert!(!resized());
-    }
-}

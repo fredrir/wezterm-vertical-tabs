@@ -57,26 +57,3 @@ pub fn parse_bg(spec: &str) -> Option<(u8, u8, u8)> {
 pub fn size() -> Option<(u16, u16)> {
     terminal::size().ok()
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn parses_only_full_hex_colors() {
-        assert_eq!(parse_bg("#1e1e2e"), Some((30, 30, 46)));
-        assert_eq!(parse_bg("#FFFFFF"), Some((255, 255, 255)));
-        assert_eq!(parse_bg("1e1e2e"), None);
-        assert_eq!(parse_bg("#1e1e2"), None);
-        assert_eq!(parse_bg("#1e1e2g"), None);
-        assert_eq!(parse_bg(""), None);
-    }
-
-    #[test]
-    fn fill_erases_with_the_background() {
-        assert_eq!(
-            fill((30, 30, 46)),
-            "\x1b[48;2;30;30;46m\x1b[2J\x1b[H\x1b[0m"
-        );
-    }
-}

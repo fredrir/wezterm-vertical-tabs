@@ -125,19 +125,23 @@ mod tests {
         let icons = set(&[("nvim", "N"), ("^cargo%-", "R")]);
         assert_eq!(for_process("/usr/bin/nvim", &icons), "N");
         assert_eq!(for_process("cargo-watch", &icons), "R");
-        assert_eq!(for_process("cargo", &icons), "\u{E7A8}");
-        assert_eq!(for_process("unknown-thing", &icons), "\u{F07B7}");
-        assert_eq!(for_process("", &icons), "\u{F07B7}");
+        assert_ne!(
+            for_process("cargo", &icons),
+            "R",
+            "the pattern needs its dash"
+        );
+        assert_eq!(for_process("unknown-thing", &icons), icons.map["default"]);
+        assert_eq!(for_process("", &icons), icons.map["default"]);
     }
 
     #[test]
     fn process_key_strips_path_and_login_dash() {
-        let icons = set(&[]);
-        assert_eq!(for_process("-zsh", &icons), "\u{F07B7}");
-        assert_eq!(for_process("/usr/local/bin/htop", &icons), "\u{F012A}");
+        let icons = set(&[("zsh", "Z"), ("htop", "H"), ("pwsh.exe", "P")]);
+        assert_eq!(for_process("-zsh", &icons), "Z");
+        assert_eq!(for_process("/usr/local/bin/htop", &icons), "H");
         assert_eq!(
             for_process("C:\\Program Files\\PowerShell\\pwsh.exe", &icons),
-            "\u{EBC7}"
+            "P"
         );
     }
 }

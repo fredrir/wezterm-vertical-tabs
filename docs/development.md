@@ -52,22 +52,12 @@ dump-frames <scenes-dir> <out-dir>` renders every scene through `vtabs-view::ren
 and writes both dumps per scene.
 
 ```sh
-just frames                       # re-renders every scene, byte-diffs both dumps against golden/frames
-just check                        # test + lint + frames — everything CI runs
+cd backend && cargo test -p vtabs-view   # golden_parity.rs + settings_parity.rs byte-diff every scene
+just check                               # test + lint — everything CI runs
 ```
 
-A mismatch fails loudly with a unified diff; nothing under `golden/frames` is touched. Re-pin only
-after a reviewed, intentional visual change: re-run, then `git diff` and commit.
-
-## Parity fixtures
-
-Some Rust ports (`vtabs-theme::resolve`, `vtabs-core::{sanitize,geom,icons}`,
-`vtabs-view::{text,glyphs}`) must stay value-identical to the Lua they replaced. Their tests
-(`*_parity.rs`, under each crate's `tests/`) read fixtures exported from the live Lua originals:
-
-```sh
-lua scripts/export-parity-fixtures.lua   # regenerate backend/crates/*/tests/fixtures/*.json
-```
+Re-pin only after a reviewed, intentional visual change: `dump-frames` into `plugin/tests/golden/frames`,
+then `git diff` and commit.
 
 ## Lints
 
@@ -100,13 +90,6 @@ lua scripts/gen-docs.lua --check  # fail when it is stale (run by `just lint`)
 | `docs` | `false` hides the row from the generated table |
 | `shown` | overrides the rendered default cell, backticks included |
 | `label` `group` `help` | settings UI and docs text |
-
-## End-to-end
-
-```sh
-sh plugin/tests/e2e.sh          # local domain
-sh plugin/tests/e2e.sh mux      # through a unix multiplexer domain
-```
 
 ## Dev loop
 

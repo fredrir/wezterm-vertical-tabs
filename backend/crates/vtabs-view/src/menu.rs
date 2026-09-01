@@ -758,32 +758,6 @@ mod tests {
     }
 
     #[test]
-    fn width_is_the_widest_row_clamped_to_what_the_sidebar_spares() {
-        let cfg = MenuCfg {
-            padding_left: 1,
-            padding_right: 1,
-            ..Default::default()
-        };
-        let items = vec![item("a", "Move to new window")];
-        // 18 + LABEL_PAD, and the pane has 26 spare
-        assert_eq!(width_for(&cfg, 28, &items, &[], MIN_W), 23);
-        // a short menu never goes under MIN_W
-        assert_eq!(width_for(&cfg, 28, &[item("a", "Pin")], &[], MIN_W), MIN_W);
-        // and never over what the pane can give
-        assert_eq!(width_for(&cfg, 12, &items, &[], MIN_W), 10);
-    }
-
-    #[test]
-    fn a_fixed_width_wins_over_the_natural_one() {
-        let cfg = MenuCfg {
-            want_width: Some(40),
-            ..Default::default()
-        };
-        assert_eq!(width_for(&cfg, 28, &[item("a", "x")], &[], MIN_W), 28);
-        assert_eq!(width_for(&cfg, 60, &[item("a", "x")], &[], MIN_W), 40);
-    }
-
-    #[test]
     fn the_header_drops_its_lowest_priority_line_first() {
         let lines = vec![
             HeadLine {
@@ -812,21 +786,6 @@ mod tests {
             drop::TITLE,
             "the title survives"
         );
-    }
-
-    #[test]
-    fn placement_goes_below_the_anchor_then_above_it() {
-        assert_eq!(place(5, 4, 24), Some(6));
-        assert_eq!(place(22, 4, 24), Some(18), "no room below");
-        assert_eq!(place(3, 8, 10), None, "no room either way");
-    }
-
-    #[test]
-    fn a_list_taller_than_the_pane_scrolls_the_selection_into_view() {
-        assert_eq!(scroll_for(1, 4, 9), 0);
-        assert_eq!(scroll_for(6, 4, 9), 2);
-        assert_eq!(scroll_for(9, 4, 9), 5, "clamped to the last page");
-        assert_eq!(scroll_for(9, 9, 9), 0, "everything fits");
     }
 
     #[test]

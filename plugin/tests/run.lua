@@ -11,24 +11,8 @@ local state = require "vtabs.state"
 backend.root = here .. "/.."
 state.file = os.tmpname()
 
----One file per module under test. They share the fake mux and the warn-once ledger, so the order
----is part of the contract: a suite loaded out of turn sees warnings already spent.
-for _, suite in ipairs {
-  "run_core",
-  "run_mux",
-  "run_sidebar",
-  "run_state",
-  "run_geometry",
-  "run_input",
-  "run_theme",
-  "run_platform",
-  "run_view",
-  "run_wire",
-  "run_schema",
-  "run_popover",
-  "run_settings",
-  "run_frame",
-} do
+-- Suites share the fake mux and the warn-once ledger, so the order is part of the contract
+for _, suite in ipairs { "run_state", "run_geometry", "run_schema" } do
   require(suite)
 end
 

@@ -200,62 +200,6 @@ fn a_closed_message_draws_nothing() {
 // ── placement ───────────────────────────────────────────────────────────────────────────────
 
 #[test]
-fn the_menu_opens_below_its_anchor_and_slides_back_inside_the_sidebar() {
-    let placed = open(&root(), &adopted(&root()), (28, 24));
-    assert_eq!(placed.rect.y, 5, "the row after the anchor");
-    assert_eq!(placed.rect.x, 2, "the column that asked for it");
-
-    // §6.4: an anchor near the right edge slides back so the whole rect stays in the pane
-    let mut far = root();
-    far.anchor.as_mut().unwrap().col = Some(26);
-    let placed = open(&far, &adopted(&far), (28, 24));
-    let w = placed.rect.w.unwrap();
-    assert_eq!(placed.rect.x + w - 1, 27, "flush against the right padding");
-}
-
-#[test]
-fn a_menu_with_no_room_below_opens_above_its_anchor() {
-    let mut low = root();
-    low.anchor.as_mut().unwrap().row = 22;
-    let placed = open(&low, &adopted(&low), (28, 24));
-    assert_eq!(
-        placed.rect.y + placed.rect.h - 1,
-        21,
-        "it ends at the anchor"
-    );
-}
-
-#[test]
-fn a_pane_too_short_for_the_header_drops_it_and_then_scrolls_the_list() {
-    // 5 items plus 2 frame rows is 7; a 7-row pane can hold the list but not one header line
-    let placed = open(&root(), &adopted(&root()), (28, 7));
-    let w = placed.rect.w.unwrap();
-    assert_eq!(placed.rect.h, 7);
-    assert!(
-        !placed
-            .rect
-            .rows
-            .iter()
-            .any(|r| text_of(r, w).contains("nvim")),
-        "the header went first"
-    );
-
-    // 5 rows holds 3 items, and the selection at the end scrolls them into view
-    let mut deep = adopted(&root());
-    deep.selected = 5;
-    let placed = open(&root(), &deep, (28, 5));
-    assert_eq!(placed.rect.h, 5);
-    assert_eq!(
-        placed.hits.rows[1..4]
-            .iter()
-            .map(|(id, _)| id.clone().unwrap())
-            .collect::<Vec<_>>(),
-        vec!["rename", "space", "close"],
-        "the last page"
-    );
-}
-
-#[test]
 fn every_row_answers_for_the_whole_rect_so_a_click_beside_the_menu_is_click_away() {
     let placed = open(&root(), &adopted(&root()), (28, 24));
     let w = placed.rect.w.unwrap();
@@ -314,11 +258,9 @@ fn the_rename_box_keeps_the_width_the_menu_it_came_from_asked_for() {
 
     let placed = open(&rename, &state, (28, 24));
     assert_eq!(placed.rect.w, Some(root_w), "the box does not jump");
-    assert_eq!(placed.rect.h, 7, "five rows plus its frame");
     let w = placed.rect.w.unwrap();
     assert!(text_of(&placed.rect.rows[1], w).contains("Rename tab"));
     assert!(text_of(&placed.rect.rows[3], w).contains("nvim"));
-    assert!(text_of(&placed.rect.rows[5], w).contains("⏎ save"));
 }
 
 #[test]

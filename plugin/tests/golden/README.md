@@ -7,15 +7,14 @@ committed so a diff is falsifiable.
 
 | Do this | Run |
 |---|---|
-| Check everything against the goldens | `just frames` |
+| Check everything against the goldens | `cd backend && cargo test -p vtabs-view` |
 | Check as part of the full gate | `just check` |
 | Re-render one-off, by hand | `cd backend && cargo run -q -p wez-vtabs -- dump-frames ../plugin/tests/golden/scenes /tmp/frames` |
 | Re-pin after a reviewed, intentional visual change | same as above into `plugin/tests/golden/frames`, then `git diff` and commit |
 
-`just frames` / `sh scripts/check-frames.sh` renders every scene under `scenes/` through the Rust
-renderer into a scratch dir and byte-diffs it against this one. Any mismatch fails loudly with a
-unified diff; nothing here is touched. The Rust suites hold the same gate as tests
-(`vtabs-view/tests/golden_parity.rs`, `settings_parity.rs`).
+`vtabs-view/tests/golden_parity.rs` (sidebar scenes) and `settings_parity.rs` (`settings-*`) render
+every scene under `scenes/` and byte-diff both dumps against this directory; a mismatch fails with
+the diff and nothing here is touched.
 
 ## Scenes
 

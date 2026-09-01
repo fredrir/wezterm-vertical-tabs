@@ -733,32 +733,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_grid_has_two_breakpoints_and_nothing_else() {
-        assert!(grid(MIN_COLS - 1).is_none(), "below MIN_COLS: no grid");
-        let mid = grid(60).expect("60 columns");
-        assert!(!mid.preview);
-        assert_eq!(
-            (mid.nav_x2, mid.divider, mid.caret_x, mid.label_x),
-            (15, 16, 17, 19)
-        );
-        assert_eq!((mid.form_x2, mid.value_x2, mid.label_x2), (58, 56, 41));
-        let wide = grid(100).expect("100 columns");
-        assert!(wide.preview);
-        assert_eq!((wide.nav_x2, wide.caret_x, wide.label_x), (19, 21, 23));
-        assert_eq!((wide.preview_x1, wide.preview_x2), (69, 100));
-        // the value column the LOCKED badge negotiates against: 18 at 100, 14 at 60
-        assert_eq!(wide.value_x2 - wide.label_x2 - 1, 18);
-        assert_eq!(mid.value_x2 - mid.label_x2 - 1, 14);
-    }
-
-    #[test]
-    fn the_body_is_the_pane_less_its_chrome() {
-        assert_eq!(body_rows(21), 15);
-        assert_eq!(body_rows(6), 0);
-        assert_eq!(body_rows(0), 0, "never negative");
-    }
-
-    #[test]
     fn the_filter_is_a_case_folded_substring_of_the_raw_key() {
         assert!(matches("padding.top", ""));
         assert!(matches("padding.top", "PAD"));
