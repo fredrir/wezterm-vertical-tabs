@@ -45,9 +45,16 @@ local function preview_body(cfg, pending)
       icon = map[sample.process] or map.default,
     }
   end
+  local strip = {}
+  for _, action in ipairs(require("vtabs.layout").resolved_actions(merged)) do
+    strip[#strip + 1] = { id = action.id, icon = action.icon }
+  end
   return {
     render = require("vtabs.wire").render_section(merged),
     icons = merged.icons,
+    position = merged.position,
+    meta_sep = merged.meta_sep,
+    strip = strip,
     tabs = tabs,
   }
 end

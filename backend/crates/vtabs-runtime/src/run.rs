@@ -70,7 +70,7 @@ pub fn run() -> io::Result<()> {
     }
     let size = terminal::size().unwrap_or((0, 0));
     // The settings screen keeps the v1 frame path until P6, so only the sidebar announces paints.
-    let paints = role == Role::Sidebar;
+    let paints = true;
     let mut app = App {
         out,
         log,

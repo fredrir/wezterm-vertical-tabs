@@ -752,8 +752,7 @@ function M.handle(gui_window, pane, name, value)
   if sidebar.is_settings(pane) then
     if ev.t == "ready" then
       store.proto[pane:pane_id()] = tonumber(ev.v) or 1
-      -- the page is still Lua-painted until the settings widget lands (07-p6-spec.md step B)
-      store.paints[pane:pane_id()] = false
+      store.paints[pane:pane_id()] = ev.paints == true
       sidebar.auth(pane)
       view.sync(gui_window, { force = true })
     elseif ev.t == "do" then
@@ -761,7 +760,8 @@ function M.handle(gui_window, pane, name, value)
       if require("vtabs.settings_model").act(gui_window, st, ev.a, ev.args) then
         view.sync(gui_window, { force = true })
       end
-    elseif ev.t == "key" or ev.t == "mouse" then
+    elseif (ev.t == "key" or ev.t == "mouse") and not store.paints[pane:pane_id()] then
+      -- a v1 backend still keys the Lua-painted page; a painting one sends verbs, never these
       local dims = store.dims[pane:pane_id()] or { cols = 100, rows = 24 }
       local page_view =
         { cols = dims.cols, rows = dims.rows, cfg = cfg, st = settings.page_state(gui_window:window_id()) }
