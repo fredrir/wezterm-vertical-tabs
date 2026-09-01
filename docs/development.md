@@ -1,6 +1,20 @@
 # Development
 
-## Backend
+## Workspace layout
+
+`backend/` is a Cargo workspace; crate boundaries are enforced (`just lint` runs
+`lint-crate-deps.sh`/`lint-boundaries.sh`, a `cargo tree` + grep check, not just a review comment).
+
+| Crate | Responsibility |
+| --- | --- |
+| `vtabs-protocol` | wire types (`Command`, `Event`, `DoArgs`), `VERSION`, `limits::*`, `bin/gen-lua` |
+| `vtabs-core` | `UiState`, sanitize, `geom::strip_geometry`, `icons`, `lua_pattern` |
+| `vtabs-theme` | palette resolve (`resolve()`), WCAG contrast, mix/luminance |
+| `vtabs-view` | ratatui-free widgets and layout: `enrich`, `frame`, `fx`, `glyphs`, `layout`, `menu`, `render`, `scene`, `settings`, `text` |
+| `vtabs-input` | `parser` (stdin byte demux) + `resolve` (regions/event/`UiState` → `Event`s), pure |
+| `vtabs-runtime` | event loop (`app`), terminal guard, uservar emission, logger, signal handling, paint — the sole stdout writer |
+| `vtabs-zen` | `png` + `frame`, the `wez-vtabs frame` subcommand; zero external dependencies |
+| `wez-vtabs` (bin) | subcommand dispatch: `frame` \| `dump-frames` \| the runtime |
 
 ```sh
 cd backend
@@ -18,6 +32,53 @@ lua tests/run.lua
 luacheck init.lua vtabs tests
 stylua --check init.lua vtabs tests
 ```
+
+## Protocol mirror
+
+`plugin/vtabs/gen/protocol.lua` is generated from `backend/crates/vtabs-protocol/src/limits.rs` —
+the one home for every bound both sides must agree on. Do not hand-edit the generated file.
+
+```sh
+just gen-protocol                 # regenerate plugin/vtabs/gen/protocol.lua
+cargo run -q -p vtabs-protocol --bin gen-lua -- --check   # fail when stale (run by `just lint`)
+```
+
+## The golden oracle
+
+`plugin/tests/golden/scenes/*.json` are committed `RenderInput` scenes; `plugin/tests/golden/frames/`
+holds the byte-exact reference renders — a text dump (`<scene>.txt`, column-ruled, ANSI stripped)
+and a styled dump (`<scene>.styled.txt`, one `#fg/#bg[*]:width` span per run of cells). `wez-vtabs
+dump-frames <scenes-dir> <out-dir>` renders every scene through `vtabs-view::render::golden_dumps`
+and writes both dumps per scene.
+
+```sh
+just frames                       # re-renders every scene, byte-diffs both dumps against golden/frames
+just check                        # test + lint + frames — everything CI runs
+```
+
+A mismatch fails loudly with a unified diff; nothing under `golden/frames` is touched. Re-pin only
+after a reviewed, intentional visual change: re-run, then `git diff` and commit.
+
+## Parity fixtures
+
+Some Rust ports (`vtabs-theme::resolve`, `vtabs-core::{sanitize,geom,icons}`,
+`vtabs-view::{text,glyphs}`) must stay value-identical to the Lua they replaced. Their tests
+(`*_parity.rs`, under each crate's `tests/`) read fixtures exported from the live Lua originals:
+
+```sh
+lua scripts/export-parity-fixtures.lua   # regenerate backend/crates/*/tests/fixtures/*.json
+```
+
+## Lints
+
+```sh
+just lint
+```
+
+| Script | Checks |
+| --- | --- |
+| `scripts/lint-boundaries.sh` | no ANSI escape bytes outside `vtabs-runtime`/`vtabs-input`/ratatui |
+| `scripts/lint-crate-deps.sh` | crate dependency direction (§1.1 of the architecture plan), via `cargo tree` |
 
 ## Options
 

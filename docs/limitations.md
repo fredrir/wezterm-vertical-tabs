@@ -46,14 +46,14 @@
   vars from other panes are ignored. Titles are stripped of control characters
   before rendering.
 - Every sidebar backend, including one on a remote mux host, receives every
-  tab's title and cwd in its frames.
+  tab's title and cwd in model updates.
 - A sidebar whose backend stops answering pings for 20 s is restarted.
 
 ## Sidebar identity
 
 | Rank | Evidence | Grants |
 | --- | --- | --- |
-| 3 | pane echoed a token this process minted for it | frames, events, width, close |
+| 3 | pane echoed a token this process minted for it | model updates, events, width, close |
 | 2 | plugin split the pane in this process | kept out of `content` |
 | 1 | pane title `wez-vtabs:<hex>` | kept out of `content`, 5 `auth` attempts, then content again |
 | 0 | anything else | content |
@@ -63,7 +63,7 @@ A faked title can neither empty a tab nor displace a live sidebar.
 
 Rank 1 is a real grant. Any process that can set its pane title — including one
 on an ssh/mux host you have a tab in — is sent `auth` on its own stdin, echoes
-it, and is then that tab's sidebar: it receives every frame for the window (every
+it, and is then that tab's sidebar: it receives every model update for the window (every
 tab's title and cwd, local tabs included) and its events drive tab management,
 including `close_tab` without a prompt. A remote host can only do this in tabs of
 its own domain, within 30 s and 5 attempts per pane.
@@ -84,7 +84,7 @@ the sidebars. Unsupported.
 | keys, and pastes into an app with `?2004h` | bracketed, so escapes stay data |
 | pastes into an app without `?2004h` | arrives raw, exactly as a clipboard paste would: `send_paste` strips `ESC[201~` and turns `\r` into `\n`, other escapes pass through |
 
-## Remote text in frames
+## Remote text in model updates
 
 | Source | Reaches |
 | --- | --- |
