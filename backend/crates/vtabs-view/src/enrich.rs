@@ -203,6 +203,11 @@ fn user_theme(msg: &ThemeMsg) -> vtabs_theme::UserTheme {
     t
 }
 
+/// The window's resolved theme, so a caller outside the frame — the menu — shares one answer.
+pub fn theme_of(msg: &ThemeMsg, private: bool) -> vtabs_theme::Theme {
+    vtabs_theme::resolve(&user_theme(msg), &palette_of(msg), private)
+}
+
 /// The strip Lua measured, when it sent one; otherwise what this pane's own size implies.
 /// A pane knows its cells but not its pixels, so the macOS traffic-light reserve can only come
 /// from Lua — `toggle_row` present is the signal that it did.
@@ -313,7 +318,7 @@ pub fn enrich(
         cfg.glyphs.custom_block,
         cfg.glyphs.east_asian_wide,
     );
-    let theme = vtabs_theme::resolve(&user_theme(theme), &palette_of(theme), model.private);
+    let theme = theme_of(theme, model.private);
 
     let items: Vec<Item> = model
         .tabs

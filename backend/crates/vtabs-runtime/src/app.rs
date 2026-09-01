@@ -3,11 +3,12 @@ use std::time::Instant;
 
 use vtabs_core::ui::UiState;
 use vtabs_input::Input;
-use vtabs_input::resolve::{self, Knobs, MirroredDrag};
+use vtabs_input::resolve::{self, Knobs, MenuView, MirroredDrag};
 use vtabs_protocol::limits::{MENU_MAX_ITEMS, MODEL_MAX_TABS};
 use vtabs_protocol::{Command, Event, v2};
-use vtabs_view::enrich::{PopoverHits, enrich};
+use vtabs_view::enrich::{Enriched, PopoverHits, enrich, theme_of};
 use vtabs_view::layout;
+use vtabs_view::menu::{self, MenuCfg, MenuState, Outcome};
 use vtabs_view::render::frame_of;
 
 use crate::anim;
@@ -33,6 +34,10 @@ pub struct App<W: Write> {
     pub started: Instant,
     /// Where the menu Lua composed sits, from the last frame; the bridge reports against it.
     pub popover: Option<PopoverHits>,
+    /// The menu's own state: the selection Lua no longer drives and the rename buffer Rust owns.
+    pub menu_ui: MenuState,
+    /// The menu rev a `menu_refused` was already sent for, so a resize does not repeat it.
+    pub noted_menu: Option<u64>,
     pub hover_deadline: Option<Instant>,
     /// The last token Lua authed with; a change means the plugin restarted around us.
     pub token: Option<String>,
@@ -110,10 +115,13 @@ impl<W: Write> App<W> {
     }
 
     fn gesture(&mut self, m: &vtabs_protocol::Mouse) -> io::Result<()> {
+        if self.menu_gesture(m)? {
+            return Ok(());
+        }
         let now = self.now_ms();
         let (ui, events, repaint) = {
-            let (cfg, theme, model) = self.state();
-            let e = enrich(cfg, theme, model, self.dims(), &self.ui);
+            let e = self.scene().0;
+            let (cfg, _, model) = self.state();
             let plan = layout::plan(&e.view);
             let ordered = ordered_ids(model);
             let k = knobs(cfg, model, &e.view, &ordered);
@@ -131,7 +139,43 @@ impl<W: Write> App<W> {
         Ok(())
     }
 
+    /// The open menu answers the pointer itself; `false` hands the gesture back to the list, which
+    /// is v1's `on_popover_down` returning true after it dismissed the menu.
+    fn menu_gesture(&mut self, m: &vtabs_protocol::Mouse) -> io::Result<bool> {
+        let now = self.now_ms();
+        let resolved = match (self.menu_outcome(), self.v2.menu.as_ref()) {
+            (Outcome::Open(placed), Some(msg)) => {
+                let view = MenuView {
+                    level: placed.level,
+                    items: &msg.items,
+                    hits: &placed.hits,
+                    follow_pointer: self.menu_cfg().follow_pointer,
+                };
+                resolve::menu_mouse(&view, &self.menu_ui, &self.ui, m, now)
+            }
+            _ => return Ok(false),
+        };
+        self.ui = resolved.ui;
+        if let Some(state) = resolved.menu {
+            self.menu_ui = state;
+        }
+        self.arm_hover();
+        for event in &resolved.events {
+            self.emit(event)?;
+        }
+        if resolved.fall_through {
+            return Ok(false);
+        }
+        if resolved.repaint {
+            self.repaint()?;
+        }
+        Ok(true)
+    }
+
     fn key(&mut self, name: &str, mods: vtabs_protocol::Mods, raw: &[u8]) -> io::Result<()> {
+        if self.menu_key(name, mods)? {
+            return Ok(());
+        }
         let events = {
             let (cfg, theme, model) = self.state();
             let e = enrich(cfg, theme, model, self.dims(), &self.ui);
@@ -143,6 +187,89 @@ impl<W: Write> App<W> {
             self.emit(event)?;
         }
         Ok(())
+    }
+
+    /// While the menu is open it consumes every key: navigation, first-letter jump, edit buffer.
+    fn menu_key(&mut self, name: &str, mods: vtabs_protocol::Mods) -> io::Result<bool> {
+        let resolved = match (self.menu_outcome(), self.v2.menu.as_ref()) {
+            (Outcome::Open(placed), Some(msg)) => {
+                let view = MenuView {
+                    level: placed.level,
+                    items: &msg.items,
+                    hits: &placed.hits,
+                    follow_pointer: self.menu_cfg().follow_pointer,
+                };
+                resolve::menu_key(&view, &self.menu_ui, &self.ui, name, mods)
+            }
+            _ => return Ok(false),
+        };
+        if let Some(state) = resolved.menu {
+            self.menu_ui = state;
+        }
+        for event in &resolved.events {
+            self.emit(event)?;
+        }
+        if resolved.repaint {
+            self.repaint()?;
+        }
+        Ok(true)
+    }
+
+    fn menu_cfg(&self) -> MenuCfg {
+        let Some(cfg) = self.v2.config.as_ref() else {
+            return MenuCfg::default();
+        };
+        let popover = cfg.popover.clone().unwrap_or_default();
+        let padding = cfg.render.as_ref().map(|r| r.padding).unwrap_or_default();
+        MenuCfg {
+            padding_left: padding.left,
+            padding_right: padding.right,
+            want_width: popover.fixed_width(),
+            ellipsis: cfg.ellipsis.clone().unwrap_or_else(|| "…".into()),
+            follow_pointer: popover.follow_pointer,
+        }
+    }
+
+    /// What the stored menu message asks for, against this pane's size.
+    fn menu_outcome(&self) -> Outcome {
+        let (Some(msg), Some(theme), Some(model)) = (
+            self.v2.menu.as_ref(),
+            self.v2.theme.as_ref(),
+            self.v2.model.as_ref(),
+        ) else {
+            return Outcome::Bridge;
+        };
+        let theme = theme_of(theme, model.private);
+        menu::plan(msg, &self.menu_ui, &self.menu_cfg(), &theme, self.dims())
+    }
+
+    /// The frame's input, with the menu overlaid: an open menu wins over the P4b bridge, and a
+    /// menu that is closed or unplaceable takes the bridge's rect with it.
+    fn scene(&self) -> (Enriched, Outcome) {
+        let (cfg, theme, model) = self.state();
+        let mut e = enrich(cfg, theme, model, self.dims(), &self.ui);
+        let outcome = match self.v2.menu.as_ref() {
+            Some(msg) => menu::plan(
+                msg,
+                &self.menu_ui,
+                &self.menu_cfg(),
+                &e.view.theme,
+                self.dims(),
+            ),
+            None => Outcome::Bridge,
+        };
+        match &outcome {
+            Outcome::Open(placed) => {
+                e.view.popover = Some(placed.rect.clone());
+                e.popover = Some(placed.hits.clone());
+            }
+            Outcome::Closed | Outcome::Refused { .. } => {
+                e.view.popover = None;
+                e.popover = None;
+            }
+            Outcome::Bridge => {}
+        }
+        (e, outcome)
     }
 
     fn state(&self) -> (&v2::ConfigMsg, &v2::ThemeMsg, &v2::ModelMsg) {
@@ -162,14 +289,45 @@ impl<W: Write> App<W> {
         if !self.dressed() {
             return Ok(());
         }
-        let (bytes, popover) = {
-            let (cfg, theme, model) = self.state();
-            let e = enrich(cfg, theme, model, self.dims(), &self.ui);
+        let (bytes, popover, outcome, selected) = {
+            let (e, outcome) = self.scene();
+            let selected = match &outcome {
+                Outcome::Open(placed) => Some(placed.selected),
+                _ => None,
+            };
             let frame = frame_of(&e.view);
-            (frame_bytes(&frame, e.view.theme.bg), e.popover)
+            (
+                frame_bytes(&frame, e.view.theme.bg),
+                e.popover,
+                outcome,
+                selected,
+            )
         };
         self.popover = popover;
+        if let Some(selected) = selected {
+            self.menu_ui.selected = selected;
+        }
+        self.refuse(&outcome)?;
         self.write(bytes.as_bytes())
+    }
+
+    /// An open level that cannot be placed is Lua's to unwind; the note is sent once per message.
+    fn refuse(&mut self, outcome: &Outcome) -> io::Result<()> {
+        let Outcome::Refused { why, level } = outcome else {
+            return Ok(());
+        };
+        let rev = self.v2.menu.as_ref().map(|m| m.rev);
+        if self.noted_menu == rev {
+            return Ok(());
+        }
+        self.noted_menu = rev;
+        let id = self.v2.menu.as_ref().and_then(|m| m.target);
+        self.emit(&Event::Note {
+            k: "menu_refused",
+            why: Some(why),
+            id,
+            a: Some(level.name()),
+        })
     }
 
     /// Hover goes stale on its own clock, so a pointer that left the pane stops lighting a row.
@@ -197,7 +355,7 @@ impl<W: Write> App<W> {
     fn run(&mut self, cmd: Command) -> io::Result<bool> {
         let paints_this = matches!(
             cmd,
-            Command::Config(_) | Command::Theme(_) | Command::Model(_)
+            Command::Config(_) | Command::Theme(_) | Command::Model(_) | Command::Menu(_)
         );
         let alive = self.apply(cmd)?;
         if alive && paints_this && self.paints {
@@ -261,6 +419,7 @@ impl<W: Write> App<W> {
                         reason: "bounds",
                     })?;
                 } else {
+                    self.menu_ui.adopt(&msg);
                     self.v2.menu = Some(*msg);
                 }
             }
@@ -413,6 +572,8 @@ mod tests {
             ui: Default::default(),
             started: Instant::now(),
             popover: None,
+            menu_ui: Default::default(),
+            noted_menu: None,
             hover_deadline: None,
             token: None,
         }
@@ -750,6 +911,113 @@ mod tests {
         a.tick_hover(Instant::now()).unwrap();
         assert!(a.ui.hover.is_none(), "stale hover is dropped");
         assert!(a.next_hover().is_none());
+    }
+
+    const MENU: &str = r#"{"rev":1,"open":true,"level":"root","anchor":{"row":3,"col":2},
+        "target":1,"selected":1,"header":{"title":"one"},
+        "items":[{"id":"activate","label":"Switch to tab"},
+                 {"id":"close","label":"Close tab","danger":true}]}"#;
+    /// The P4b bridge rect, with text no widget of ours would ever draw.
+    const BRIDGED: &str = r#"{"rev":2,"screen":"sidebar","active":1,
+        "tabs":[{"id":1,"index":1,"title":"one"}],
+        "popover":{"x":2,"y":4,"w":18,"h":3,"scrim":0.3,"bg":[10,10,10],
+        "rows":[{"spans":[{"x":1,"text":"BRIDGEROW"}]}]}}"#;
+
+    fn send(a: &mut App<Vec<u8>>, cmd: Command) {
+        a.handle(Input::Command(cmd)).unwrap();
+    }
+
+    fn menu(json: &str) -> Command {
+        Command::Menu(Box::new(serde_json::from_str(json).unwrap()))
+    }
+
+    fn painted(a: &App<Vec<u8>>) -> String {
+        String::from_utf8_lossy(&a.out).to_string()
+    }
+
+    #[test]
+    fn an_open_menu_wins_over_the_bridge_and_a_closed_one_hands_it_back() {
+        let mut a = painting();
+        dress(&mut a);
+        send(
+            &mut a,
+            Command::Model(Box::new(serde_json::from_str(BRIDGED).unwrap())),
+        );
+        assert!(painted(&a).contains("BRIDGEROW"), "the bridge paints alone");
+
+        a.out.clear();
+        send(&mut a, menu(MENU));
+        let frame = painted(&a);
+        assert!(frame.contains("Switch to tab"), "the widget drew it");
+        assert!(!frame.contains("BRIDGEROW"), "and the bridge did not");
+
+        a.out.clear();
+        send(&mut a, menu(r#"{"rev":3,"open":false}"#));
+        assert!(
+            painted(&a).contains("BRIDGEROW"),
+            "a mid-flip mismatch degrades to what Lua composed"
+        );
+    }
+
+    #[test]
+    fn a_menu_that_cannot_be_placed_is_refused_once_and_draws_nothing() {
+        let mut a = painting();
+        a.size = (28, 2);
+        dress(&mut a);
+        let before = payloads(&a).len();
+        send(&mut a, menu(MENU));
+        let sent = &payloads(&a)[before..];
+        let note = sent
+            .iter()
+            .find(|p| p.contains(r#""t":"note""#))
+            .expect("a refusal");
+        assert!(note.contains(r#""k":"menu_refused""#));
+        assert!(note.contains(r#""why":"rows""#));
+        assert!(note.contains(r#""id":1"#) && note.contains(r#""a":"root""#));
+        assert!(!painted(&a).contains("Switch to tab"), "nothing is drawn");
+
+        let after = payloads(&a).len();
+        a.repaint().unwrap();
+        assert_eq!(payloads(&a).len(), after, "and the note is not repeated");
+    }
+
+    #[test]
+    fn while_the_menu_is_open_the_pane_answers_to_it_and_not_to_the_list() {
+        let mut a = painting();
+        dress(&mut a);
+        send(&mut a, menu(MENU));
+        let hits = a.popover.clone().expect("the menu placed itself");
+        let row = hits
+            .rows
+            .iter()
+            .position(|(id, _)| id.as_deref() == Some("activate"))
+            .expect("the item was drawn");
+        let (x, y) = ((hits.x + 1) as u16, (hits.y + row as i64) as u16);
+
+        let before = payloads(&a).len();
+        a.handle(click(vtabs_protocol::MouseKind::Press, x, y))
+            .unwrap();
+        let sent = &payloads(&a)[before..];
+        assert!(
+            sent.iter().any(|p| p.contains(r#""a":"menu_pick""#)),
+            "the item ran: {sent:?}"
+        );
+        assert!(
+            !sent.iter().any(|p| p.contains(r#""a":"press_card""#)),
+            "and the list under it never saw the click"
+        );
+
+        // keys belong to the menu too: escape closes it instead of blurring the sidebar
+        let before = payloads(&a).len();
+        a.handle(Input::Key {
+            name: "escape".into(),
+            mods: Mods::default(),
+            raw: b"\x1b".to_vec(),
+        })
+        .unwrap();
+        let sent = &payloads(&a)[before..];
+        assert!(sent.iter().any(|p| p.contains(r#""a":"menu_closed""#)));
+        assert!(!sent.iter().any(|p| p.contains(r#""a":"blur_sidebar""#)));
     }
 
     #[test]

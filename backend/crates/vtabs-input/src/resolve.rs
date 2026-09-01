@@ -4,9 +4,11 @@
 
 use vtabs_core::ui::{ArmKind, Armed, Ms, PressDrag, UiState};
 use vtabs_protocol::types::{Button, Mods, Mouse, MouseKind};
+use vtabs_protocol::v2::MenuItem;
 use vtabs_protocol::{DoId, Event};
 use vtabs_view::enrich::PopoverHits;
 use vtabs_view::layout::{Part, Plan, RegionKind, on_inner_edge};
+use vtabs_view::menu::{self, Edit, Level, MenuState};
 
 pub const DRAG_START_ROWS: i64 = 3;
 pub const DRAG_START_COLS: i64 = 2;
@@ -48,6 +50,10 @@ pub struct Resolution {
     pub ui: UiState,
     pub events: Vec<Event>,
     pub repaint: bool,
+    /// The menu state this gesture left behind; None when the gesture never reached the menu.
+    pub menu: Option<MenuState>,
+    /// v1's `on_popover_down` returning true: the menu is gone and the click is the list's.
+    pub fall_through: bool,
 }
 
 fn button_name(b: Button) -> &'static str {
@@ -189,7 +195,7 @@ fn on_down(plan: &Plan, k: &Knobs, out: &mut Resolution, m: &Mouse, x: i64, y: i
                     out.events.push(Event::Do {
                         a: "strip",
                         id: Some(DoId::Name(button.to_string())),
-                        args: Default::default(),
+                        args: Box::default(),
                     });
                 }
             } else if region.kind == RegionKind::NewTab {
@@ -372,6 +378,154 @@ fn on_wheel(k: &Knobs, out: &mut Resolution, dy: i64) {
         a.top = Some(top);
         a.user = Some(true);
     }));
+}
+
+/// The open menu, as the resolver needs to read it: what `plan` placed plus the items it placed.
+pub struct MenuView<'a> {
+    pub level: Level,
+    pub items: &'a [MenuItem],
+    pub hits: &'a PopoverHits,
+    pub follow_pointer: bool,
+}
+
+impl MenuView<'_> {
+    fn item(&self, id: &str) -> Option<&MenuItem> {
+        self.items.iter().find(|i| i.id == id)
+    }
+}
+
+fn menu_out(state: &MenuState, ui: &UiState) -> Resolution {
+    Resolution {
+        ui: ui.clone(),
+        menu: Some(state.clone()),
+        ..Default::default()
+    }
+}
+
+fn pick(id: &str) -> Event {
+    Event::do_("menu_pick").with(|a| a.id = Some(id.to_string()))
+}
+
+/// The menu owns the pane while it is open: every pointer event over it is the menu's, and only
+/// the terminal events reach Lua. Destructive items act on the release, like the ✕ and for the
+/// same reason.
+pub fn menu_mouse(v: &MenuView, state: &MenuState, ui: &UiState, m: &Mouse, now: Ms) -> Resolution {
+    let mut out = menu_out(state, ui);
+    let st = out.menu.as_mut().expect("menu state");
+    let (x, y) = (i64::from(m.x), i64::from(m.y));
+    let covers = v.hits.covers(y);
+    let inside = covers && v.hits.inside(x);
+    let row = v.hits.row_at(y).cloned().unwrap_or((None, false));
+
+    match m.kind {
+        MouseKind::Wheel => {
+            let delta = if m.dy > 0 { 1 } else { -1 };
+            let next = menu::move_by(v.items, st.selected, delta);
+            out.repaint = next != st.selected;
+            st.selected = next;
+        }
+        MouseKind::Press => {
+            st.armed = None;
+            match m.button {
+                // A row the menu owns still has columns it does not; those are click-away.
+                Button::Left if !inside => {
+                    st.dismiss();
+                    out.events.push(Event::do_("menu_closed"));
+                }
+                Button::Left => {
+                    if let (Some(id), false) = (row.0.as_deref(), row.1) {
+                        if v.item(id).is_some_and(|i| i.danger) {
+                            st.armed = Some(id.to_string());
+                        } else {
+                            out.events.push(pick(id));
+                        }
+                    }
+                }
+                // Close, then let the release open one for whatever row is now under the pointer.
+                Button::Right if !covers => {
+                    st.dismiss();
+                    out.events.push(Event::do_("menu_closed"));
+                    out.fall_through = true;
+                }
+                _ => {}
+            }
+        }
+        MouseKind::Release => {
+            let armed = st.armed.take();
+            if m.button == Button::Left
+                && let Some(id) = armed
+                && inside
+                && row.0.as_deref() == Some(id.as_str())
+            {
+                out.events.push(pick(&id));
+            }
+        }
+        MouseKind::Move | MouseKind::Drag => {
+            out.ui.set_hover(x, y, now);
+            let over = inside.then_some(row.0.as_deref()).flatten();
+            if let Some(next) =
+                menu::point_at(v.items, v.level, v.follow_pointer, st.selected, over)
+            {
+                st.selected = next;
+                out.repaint = true;
+            }
+        }
+    }
+    out
+}
+
+/// Keys belong to the menu while it is open; nothing is forwarded to the shell.
+pub fn menu_key(
+    v: &MenuView,
+    state: &MenuState,
+    ui: &UiState,
+    name: &str,
+    mods: Mods,
+) -> Resolution {
+    let mut out = menu_out(state, ui);
+    let st = out.menu.as_mut().expect("menu state");
+    out.repaint = true;
+
+    if v.level == Level::Rename {
+        match menu::edit(st, name, mods.ctrl) {
+            Edit::Commit => {
+                let text = st.buffer.clone();
+                out.events
+                    .push(Event::do_("rename_commit").with(|a| a.text = Some(text)));
+            }
+            Edit::Cancel => out.events.push(Event::do_("menu_back")),
+            Edit::Consumed => {}
+        }
+        return out;
+    }
+
+    if name == "escape" || (mods.ctrl && name == "c") {
+        // `back` steps out of a sub-level; at the root there is nothing left to step back to.
+        if v.level == Level::Root {
+            st.dismiss();
+            out.events.push(Event::do_("menu_closed"));
+        } else {
+            out.events.push(Event::do_("menu_back"));
+        }
+    } else if name == "enter" || name == "space" {
+        let at = (st.selected - 1).max(0) as usize;
+        if let Some(item) = v.items.get(at).filter(|i| !i.disabled) {
+            out.events.push(pick(&item.id));
+        }
+    } else if let Some((_, delta)) = MOVE.iter().find(|(key, _)| *key == name) {
+        let delta = if mods.shift { -delta } else { *delta };
+        st.selected = menu::move_by(v.items, st.selected, delta);
+    } else if let Some(ch) = one_char(name)
+        && let Some(next) = menu::jump(v.items, st.selected, ch)
+    {
+        st.selected = next;
+    }
+    out
+}
+
+fn one_char(name: &str) -> Option<char> {
+    let mut chars = name.chars();
+    chars.next().filter(|_| chars.next().is_none())
 }
 
 const MOVE: &[(&str, i64)] = &[("down", 1), ("j", 1), ("tab", 1), ("up", -1), ("k", -1)];

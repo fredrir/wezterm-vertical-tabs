@@ -258,6 +258,7 @@ dependencies = [
  "serde_json",
  "vtabs-core",
  "vtabs-protocol",
+ "vtabs-theme",
  "vtabs-view",
 ]
 

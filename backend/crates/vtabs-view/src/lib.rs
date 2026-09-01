@@ -2,6 +2,7 @@ pub mod enrich;
 pub mod frame;
 pub mod glyphs;
 pub mod layout;
+pub mod menu;
 pub mod render;
 pub mod scene;
 pub mod text;
