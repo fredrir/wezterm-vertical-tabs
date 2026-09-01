@@ -150,10 +150,7 @@ pub struct Placed {
 
 #[derive(Debug, Clone)]
 pub enum Outcome {
-    /// No menu message, or one that says closed: the P4b bridge still owns this frame, so a
-    /// half-flipped plugin degrades to what it drew before.
-    Bridge,
-    /// Told Lua to close and waiting for it: nothing is drawn and nothing is consumed.
+    /// No menu message, or one that says closed: nothing is drawn and nothing is consumed.
     Closed,
     /// `rect()` returned nil. v1 renders nothing and swallows nothing.
     Refused {
@@ -508,7 +505,7 @@ pub fn plan(
     (cols_n, rows): (i64, i64),
 ) -> Outcome {
     if !msg.open {
-        return Outcome::Bridge;
+        return Outcome::Closed;
     }
     if state.dismissed {
         return Outcome::Closed;

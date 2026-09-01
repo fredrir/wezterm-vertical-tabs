@@ -182,11 +182,11 @@ fn a_confirm_that_cannot_be_drawn_is_refused_and_draws_nothing() {
 }
 
 #[test]
-fn a_closed_message_hands_the_frame_back_to_the_bridge() {
+fn a_closed_message_draws_nothing() {
     let closed = msg(r#"{"rev":3,"open":false}"#);
     assert!(matches!(
         menu::plan(&closed, &MenuState::default(), &cfg(), &theme(), (28, 24)),
-        Outcome::Bridge
+        Outcome::Closed
     ));
     // but one this backend already told Lua to close draws nothing at all
     let mut state = adopted(&root());

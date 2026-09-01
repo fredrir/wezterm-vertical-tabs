@@ -261,38 +261,6 @@ local function on_wheel(gui_window, ev, cfg)
   store.user_scrolled[wid] = true
 end
 
----A painting backend reports popover input without interpreting it; the arming stays here.
-local function on_popover_mouse(gui_window, args)
-  local wid = gui_window:window_id()
-  if not popover.get(wid) then
-    return
-  end
-  if args.k == "down" then
-    if args.b == "left" then
-      if args.kind == "scrim" or not args.inside then
-        popover.close(gui_window)
-      elseif args.id and not args.disabled then
-        if ON_RELEASE[args.id] then
-          pending_item[wid] = { id = args.id, at = util.now_ms() }
-        else
-          popover.run(gui_window, args.id)
-        end
-      end
-    elseif args.b == "right" and args.kind == "scrim" then
-      popover.close(gui_window)
-    end
-  elseif args.k == "move" then
-    local record = args.inside and { kind = args.kind, id = args.id } or { kind = "scrim" }
-    popover.point_at(gui_window, record, args.x)
-  elseif args.k == "up" and args.b == "left" then
-    local item = pending_item[wid]
-    pending_item[wid] = nil
-    if item and args.kind == "popover" and args.id == item.id and args.inside then
-      popover.run(gui_window, args.id)
-    end
-  end
-end
-
 ---The v2 gesture vocabulary (05-p4b-spec.md). Every handler is internal: nothing here mints a
 ---public `vtabs.action.*`, which is what rule 4 protects.
 local DO = {}
@@ -385,10 +353,6 @@ function DO.blur_sidebar(gui_window)
   blur(gui_window)
 end
 
-function DO.popover_mouse(gui_window, _, _, args)
-  on_popover_mouse(gui_window, args)
-end
-
 function DO.menu_pick(gui_window, pane, _, args)
   if popover.run(gui_window, args.id) then
     view.invalidate_frames(pane:pane_id())
@@ -414,10 +378,6 @@ function DO.rename_commit(gui_window, _, _, args)
   end
 end
 
-function DO.popover_wheel(gui_window, _, _, args)
-  popover.move(gui_window, (args.dy or 1) > 0 and 1 or -1)
-end
-
 ---Footer entries can be id-less closures, so the wire addresses them by index in the sent model.
 function DO.footer(gui_window, _, _, args)
   local hook = (config.get().hooks or {}).footer
@@ -435,13 +395,28 @@ M.DO = DO
 
 ---Verbs that operate on the open menu; every other gesture dismisses it first, as a v1 click does.
 local MENU_DO = {
-  popover_mouse = true,
-  popover_wheel = true,
   menu_pick = true,
   menu_back = true,
   menu_closed = true,
   rename_commit = true,
 }
+
+---A menu level the backend could not draw: a refused confirm falls through to WezTerm's own
+---overlay for a close, and any other refused level simply closes, so the pane never deadlocks.
+local function on_note(gui_window, pane, ev)
+  if ev.k ~= "menu_refused" then
+    util.log("backend note: %s", tostring(ev.k))
+    return
+  end
+  local wid = gui_window:window_id()
+  local pop = popover.get(wid)
+  popover.close(gui_window)
+  view.invalidate_frames(pane:pane_id())
+  if pop and ev.a == "confirm" and pop.confirm == "close" then
+    actions.close_with_overlay(gui_window, pop.tab_id)
+  end
+  view.sync(gui_window)
+end
 
 ---`do` events from a painting backend; the popover-open guard mirrors v1's click-through dismiss.
 local function on_do(gui_window, pane, ev)
@@ -809,7 +784,7 @@ function M.handle(gui_window, pane, name, value)
   elseif ev.t == "do" then
     on_do(gui_window, pane, ev)
   elseif ev.t == "note" then
-    util.log("backend note: %s", tostring(ev.k))
+    on_note(gui_window, pane, ev)
   elseif ev.t == "mouse" then
     M.mouse(gui_window, pane, ev)
   elseif ev.t == "key" then

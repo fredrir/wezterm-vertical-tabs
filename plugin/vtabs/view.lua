@@ -400,10 +400,6 @@ function M.sync(gui_window, opts)
           wire_strip = strip
         end
         if store.paints[pid] then
-          -- rect_for's side effect places the popover rect the wire bridge carries
-          if is_active then
-            rect_for(gui_window, dims, resolved, cfg)
-          end
           store.dims[pid] = { cols = dims.cols, rows = dims.viewport_rows }
           store.sent_at[pid] = now
           goto continue
@@ -457,7 +453,6 @@ function M.sync(gui_window, opts)
     effective = mux.effective_config(gui_window),
     chrome = chrome_for(gui_window, cfg),
     strip = wire_strip,
-    popover = popover_rect[wid],
     window_dims = mux.dims(gui_window),
   })
 end

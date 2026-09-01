@@ -4,7 +4,6 @@ use vtabs_core::ui::{ArmKind, UiState};
 use vtabs_input::resolve::{Knobs, MirroredDrag, key, mouse};
 use vtabs_protocol::types::{Button, Mods, Mouse, MouseKind};
 use vtabs_protocol::{DoArgs, DoId, Event};
-use vtabs_view::enrich::PopoverHits;
 use vtabs_view::layout::{Part, Plan, RegionKind, plan};
 use vtabs_view::scene::RenderInput;
 
@@ -94,7 +93,6 @@ fn a_press_on_the_card_body_activates_and_arms_the_drag() {
     let y = title_row(&p, view.rows);
     let r = mouse(
         &p,
-        None,
         &knobs(view.cols),
         &UiState::default(),
         &ev(MouseKind::Press, Button::Left, 6, y as u16),
@@ -114,7 +112,6 @@ fn the_close_button_acts_on_the_release_and_only_on_the_same_target() {
     let k = knobs(view.cols);
     let down = mouse(
         &p,
-        None,
         &k,
         &UiState::default(),
         &ev(MouseKind::Press, Button::Left, x as u16, y as u16),
@@ -125,7 +122,6 @@ fn the_close_button_acts_on_the_release_and_only_on_the_same_target() {
 
     let up = mouse(
         &p,
-        None,
         &k,
         &down.ui,
         &ev(MouseKind::Release, Button::Left, x as u16, y as u16),
@@ -135,7 +131,6 @@ fn the_close_button_acts_on_the_release_and_only_on_the_same_target() {
 
     let elsewhere = mouse(
         &p,
-        None,
         &k,
         &down.ui,
         &ev(MouseKind::Release, Button::Left, 3, y as u16),
@@ -153,7 +148,6 @@ fn motion_cancels_an_armed_close() {
     let k = knobs(view.cols);
     let down = mouse(
         &p,
-        None,
         &k,
         &UiState::default(),
         &ev(MouseKind::Press, Button::Left, x as u16, y as u16),
@@ -161,7 +155,6 @@ fn motion_cancels_an_armed_close() {
     );
     let dragged = mouse(
         &p,
-        None,
         &k,
         &down.ui,
         &ev(MouseKind::Drag, Button::Left, x as u16, y as u16 + 1),
@@ -170,7 +163,6 @@ fn motion_cancels_an_armed_close() {
     assert!(dragged.ui.armed.is_none(), "the ✕ disarmed");
     let up = mouse(
         &p,
-        None,
         &k,
         &dragged.ui,
         &ev(MouseKind::Release, Button::Left, x as u16, y as u16),
@@ -187,7 +179,6 @@ fn a_drag_needs_both_the_threshold_and_the_dwell() {
     let k = knobs(view.cols);
     let down = mouse(
         &p,
-        None,
         &k,
         &UiState::default(),
         &ev(MouseKind::Press, Button::Left, 6, y as u16),
@@ -196,7 +187,6 @@ fn a_drag_needs_both_the_threshold_and_the_dwell() {
 
     let too_soon = mouse(
         &p,
-        None,
         &k,
         &down.ui,
         &ev(MouseKind::Drag, Button::Left, 6, y as u16 + 3),
@@ -210,7 +200,6 @@ fn a_drag_needs_both_the_threshold_and_the_dwell() {
 
     let too_near = mouse(
         &p,
-        None,
         &k,
         &down.ui,
         &ev(MouseKind::Drag, Button::Left, 6, y as u16),
@@ -220,7 +209,6 @@ fn a_drag_needs_both_the_threshold_and_the_dwell() {
 
     let go = mouse(
         &p,
-        None,
         &k,
         &down.ui,
         &ev(MouseKind::Drag, Button::Left, 6, y as u16 + 3),
@@ -247,7 +235,6 @@ fn a_drag_armed_in_another_process_still_moves_here() {
     // no local press: the origin can only come from the model (§1.4)
     let r = mouse(
         &p,
-        None,
         &k,
         &UiState::default(),
         &ev(MouseKind::Drag, Button::Left, 6, y as u16 + 3),
@@ -274,7 +261,6 @@ fn travel_to_the_inner_edge_tears_off() {
     let edge = view.cols as u16;
     let r = mouse(
         &p,
-        None,
         &k,
         &UiState::default(),
         &ev(MouseKind::Drag, Button::Left, edge, y as u16),
@@ -284,7 +270,6 @@ fn travel_to_the_inner_edge_tears_off() {
 
     let up = mouse(
         &p,
-        None,
         &k,
         &UiState::default(),
         &ev(MouseKind::Release, Button::Left, edge, y as u16),
@@ -300,12 +285,12 @@ fn the_wheel_scrolls_or_switches_by_config() {
     let view = scene("overflow");
     let p = plan(&view);
     let k = knobs(view.cols);
-    let r = mouse(&p, None, &k, &UiState::default(), &wheel(1), 0);
+    let r = mouse(&p, &k, &UiState::default(), &wheel(1), 0);
     assert_eq!(action(&r.events), Some("set_scroll"));
     assert_eq!(args(&r.events).top, Some(1));
     assert_eq!(r.ui.scroll, Some(1));
     assert!(r.ui.user_scrolled);
-    let again = mouse(&p, None, &k, &r.ui, &wheel(1), 10);
+    let again = mouse(&p, &k, &r.ui, &wheel(1), 10);
     assert_eq!(
         args(&again.events).top,
         Some(2),
@@ -314,7 +299,7 @@ fn the_wheel_scrolls_or_switches_by_config() {
 
     let mut switch = knobs(view.cols);
     switch.wheel = "switch";
-    let s = mouse(&p, None, &switch, &UiState::default(), &wheel(-1), 0);
+    let s = mouse(&p, &switch, &UiState::default(), &wheel(-1), 0);
     assert_eq!(action(&s.events), Some("wheel_tab"));
     assert_eq!(args(&s.events).dy, Some(-1));
 }
@@ -329,7 +314,6 @@ fn a_double_click_off_the_cards_opens_a_tab() {
     let k = knobs(view.cols);
     let one = mouse(
         &p,
-        None,
         &k,
         &UiState::default(),
         &ev(MouseKind::Press, Button::Left, 5, empty as u16),
@@ -338,7 +322,6 @@ fn a_double_click_off_the_cards_opens_a_tab() {
     assert_eq!(action(&one.events), None, "one click is not two");
     let two = mouse(
         &p,
-        None,
         &k,
         &one.ui,
         &ev(MouseKind::Press, Button::Left, 5, empty as u16),
@@ -355,7 +338,6 @@ fn a_right_press_and_release_on_a_card_opens_the_menu() {
     let k = knobs(view.cols);
     let down = mouse(
         &p,
-        None,
         &k,
         &UiState::default(),
         &ev(MouseKind::Press, Button::Right, 6, y as u16),
@@ -364,7 +346,6 @@ fn a_right_press_and_release_on_a_card_opens_the_menu() {
     assert_eq!(down.ui.armed.map(|a| a.kind), Some(ArmKind::Menu));
     let up = mouse(
         &p,
-        None,
         &k,
         &down.ui,
         &ev(MouseKind::Release, Button::Right, 6, y as u16),
@@ -382,7 +363,6 @@ fn a_middle_click_closes_the_card_it_landed_on() {
     let k = knobs(view.cols);
     let down = mouse(
         &p,
-        None,
         &k,
         &UiState::default(),
         &ev(MouseKind::Press, Button::Middle, 6, y as u16),
@@ -390,7 +370,6 @@ fn a_middle_click_closes_the_card_it_landed_on() {
     );
     let up = mouse(
         &p,
-        None,
         &k,
         &down.ui,
         &ev(MouseKind::Release, Button::Middle, 6, y as u16),
@@ -411,7 +390,6 @@ fn a_strip_button_press_names_the_button() {
         .expect("an action row");
     let r = mouse(
         &p,
-        None,
         &knobs(view.cols),
         &UiState::default(),
         &ev(MouseKind::Press, Button::Left, span.x1 as u16, y as u16),
@@ -428,58 +406,6 @@ fn a_strip_button_press_names_the_button() {
         }
         other => panic!("expected a strip do, got {other:?}"),
     }
-}
-
-#[test]
-fn the_popover_reports_its_input_raw_and_interprets_nothing() {
-    let view = scene("popover-open");
-    let p = plan(&view);
-    let rect = view.popover.as_ref().expect("the scene has a menu");
-    let pop = PopoverHits {
-        x: rect.x,
-        y: rect.y,
-        w: rect.w.unwrap_or(20),
-        h: rect.h,
-        rows: vec![(Some("close".into()), false), (None, true)],
-    };
-    let k = knobs(view.cols);
-    let inside = mouse(
-        &p,
-        Some(&pop),
-        &k,
-        &UiState::default(),
-        &ev(
-            MouseKind::Press,
-            Button::Left,
-            (rect.x + 1) as u16,
-            rect.y as u16,
-        ),
-        0,
-    );
-    let a = args(&inside.events);
-    assert_eq!(action(&inside.events), Some("popover_mouse"));
-    assert_eq!(
-        (a.k, a.kind, a.inside),
-        (Some("down"), Some("popover"), Some(true))
-    );
-    assert_eq!(a.id.as_deref(), Some("close"));
-
-    let scrim = mouse(
-        &p,
-        Some(&pop),
-        &k,
-        &UiState::default(),
-        &ev(MouseKind::Press, Button::Left, 1, 1),
-        0,
-    );
-    assert_eq!(args(&scrim.events).kind, Some("scrim"));
-
-    let w = mouse(&p, Some(&pop), &k, &UiState::default(), &wheel(1), 0);
-    assert_eq!(
-        action(&w.events),
-        Some("popover_wheel"),
-        "the wheel moves the menu, not the list"
-    );
 }
 
 #[test]

@@ -6,12 +6,11 @@ use std::collections::BTreeMap;
 
 use vtabs_core::geom::{Dims, StripOpts, strip_geometry};
 use vtabs_core::{basename, icons, ui::UiState};
-use vtabs_protocol::v2::{ConfigMsg, ModelMsg, PopoverBridge, RenderSection, TabRecord, ThemeMsg};
+use vtabs_protocol::v2::{ConfigMsg, ModelMsg, RenderSection, TabRecord, ThemeMsg};
 
 use crate::glyphs;
 use crate::scene::{
-    Drag, FooterEntry, Hover, Item, Padding, PopRow, PopSpan, PopoverRect, RenderCfg, RenderInput,
-    Strip, StripButton,
+    Drag, FooterEntry, Hover, Item, Padding, RenderCfg, RenderInput, Strip, StripButton,
 };
 
 const SHELLS: &[&str] = &[
@@ -262,48 +261,6 @@ fn strip_of(
     }
 }
 
-fn popover_of(bridge: &PopoverBridge) -> (PopoverRect, PopoverHits) {
-    let rows: Vec<PopRow> = bridge
-        .rows
-        .iter()
-        .map(|row| PopRow {
-            bg: row.bg,
-            fg: row.fg,
-            spans: row
-                .spans
-                .iter()
-                .map(|s| PopSpan {
-                    x: s.x,
-                    text: s.text.clone(),
-                    fg: s.fg,
-                    bold: s.bold,
-                })
-                .collect(),
-        })
-        .collect();
-    let hits = PopoverHits {
-        x: bridge.x,
-        y: bridge.y,
-        w: bridge.w,
-        h: bridge.h,
-        rows: bridge
-            .rows
-            .iter()
-            .map(|r| (r.id.clone(), r.disabled))
-            .collect(),
-    };
-    let rect = PopoverRect {
-        x: bridge.x,
-        y: bridge.y,
-        w: Some(bridge.w),
-        h: bridge.h,
-        scrim: bridge.scrim,
-        bg: bridge.bg,
-        rows,
-    };
-    (rect, hits)
-}
-
 pub fn enrich(
     cfg: &ConfigMsg,
     theme: &ThemeMsg,
@@ -347,10 +304,6 @@ pub fn enrich(
         .collect();
 
     let scroll = model.scroll.unwrap_or_default();
-    let (popover_rect, popover_hits) = match model.popover.as_ref().map(popover_of) {
-        Some((rect, hits)) => (Some(rect), Some(hits)),
-        None => (None, None),
-    };
     // the wheel moves the list before the model round-trips, so the local override wins while it holds
     let user_scrolled = ui.user_scrolled || scroll.user;
     let view = RenderInput {
@@ -416,11 +369,11 @@ pub fn enrich(
             .collect(),
         private: model.private,
         user_scrolled,
-        popover: popover_rect,
+        popover: None,
     };
     Enriched {
         view,
-        popover: popover_hits,
+        popover: None,
     }
 }
 

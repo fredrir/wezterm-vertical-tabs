@@ -220,31 +220,6 @@ local function model_body(cfg, ctx, wid)
       cell_w = ctx.strip.cell_w,
       buttons = buttons,
     } or { buttons = buttons },
-    popover = ctx.popover and (function(rect)
-      local rows = M.array()
-      for _, row in ipairs(rect.rows or {}) do
-        local spans = M.array()
-        for _, span in ipairs(row.spans or {}) do
-          spans[#spans + 1] = { x = span.x, text = span.text, fg = span.fg, bold = span.bold }
-        end
-        rows[#rows + 1] = {
-          bg = row.bg,
-          fg = row.fg,
-          spans = spans,
-          id = row.hit and row.hit.id or nil,
-          disabled = row.hit and row.hit.disabled or nil,
-        }
-      end
-      return {
-        x = rect.x,
-        y = rect.y,
-        w = rect.w,
-        h = rect.h,
-        scrim = rect.scrim,
-        bg = rect.bg,
-        rows = rows,
-      }
-    end)(ctx.popover) or nil,
     footer = footer,
     tabs = tabs,
     private = state.is_private(wid),

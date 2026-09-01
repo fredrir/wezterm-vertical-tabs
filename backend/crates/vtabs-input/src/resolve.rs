@@ -56,15 +56,6 @@ pub struct Resolution {
     pub fall_through: bool,
 }
 
-fn button_name(b: Button) -> &'static str {
-    match b {
-        Button::Left => "left",
-        Button::Middle => "middle",
-        Button::Right => "right",
-        Button::None => "none",
-    }
-}
-
 fn part_name(part: Option<Part>) -> Option<&'static str> {
     match part? {
         Part::Pad => Some("pad"),
@@ -72,23 +63,6 @@ fn part_name(part: Option<Part>) -> Option<&'static str> {
         Part::Meta => Some("meta"),
         Part::Gap => Some("gap"),
     }
-}
-
-/// The popover owns the whole sidebar while it is open; Rust reports, Lua decides (P4b bridge).
-fn popover_mouse(pop: &PopoverHits, m: &Mouse, k: &'static str) -> Event {
-    let (x, y) = (i64::from(m.x), i64::from(m.y));
-    let covers = pop.covers(y);
-    let row = pop.row_at(y);
-    Event::do_("popover_mouse").with(|a| {
-        a.k = Some(k);
-        a.b = Some(button_name(m.button));
-        a.x = Some(x);
-        a.y = Some(y);
-        a.kind = Some(if covers { "popover" } else { "scrim" });
-        a.id = row.and_then(|(id, _)| id.clone());
-        a.disabled = row.map(|(_, disabled)| *disabled);
-        a.inside = Some(covers && pop.inside(x));
-    })
 }
 
 /// `hover_moved`: motion only needs a repaint when it crosses a row or a span of the row it is on.
@@ -101,36 +75,12 @@ fn hover_moved(ui: &UiState, plan: &Plan, x: i64, y: i64) -> bool {
     region.span(prev.x) != region.span(x)
 }
 
-pub fn mouse(
-    plan: &Plan,
-    pop: Option<&PopoverHits>,
-    k: &Knobs,
-    ui: &UiState,
-    m: &Mouse,
-    now: Ms,
-) -> Resolution {
+pub fn mouse(plan: &Plan, k: &Knobs, ui: &UiState, m: &Mouse, now: Ms) -> Resolution {
     let mut out = Resolution {
         ui: ui.clone(),
         ..Default::default()
     };
     let (x, y) = (i64::from(m.x), i64::from(m.y));
-
-    if let Some(pop) = pop {
-        match m.kind {
-            MouseKind::Wheel => {
-                out.events
-                    .push(Event::do_("popover_wheel").with(|a| a.dy = Some(i64::from(m.dy))));
-            }
-            MouseKind::Press => out.events.push(popover_mouse(pop, m, "down")),
-            MouseKind::Release => out.events.push(popover_mouse(pop, m, "up")),
-            MouseKind::Move | MouseKind::Drag => {
-                out.ui.set_hover(x, y, now);
-                out.events.push(popover_mouse(pop, m, "move"));
-                out.repaint = true;
-            }
-        }
-        return out;
-    }
 
     match m.kind {
         MouseKind::Move => {

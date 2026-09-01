@@ -125,7 +125,7 @@ impl<W: Write> App<W> {
             let plan = layout::plan(&e.view);
             let ordered = ordered_ids(model);
             let k = knobs(cfg, model, &e.view, &ordered);
-            let r = resolve::mouse(&plan, e.popover.as_ref(), &k, &self.ui, m, now);
+            let r = resolve::mouse(&plan, &k, &self.ui, m, now);
             (r.ui, r.events, r.repaint)
         };
         self.ui = ui;
@@ -237,7 +237,7 @@ impl<W: Write> App<W> {
             self.v2.theme.as_ref(),
             self.v2.model.as_ref(),
         ) else {
-            return Outcome::Bridge;
+            return Outcome::Closed;
         };
         let theme = theme_of(theme, model.private);
         menu::plan(msg, &self.menu_ui, &self.menu_cfg(), &theme, self.dims())
@@ -256,7 +256,7 @@ impl<W: Write> App<W> {
                 &e.view.theme,
                 self.dims(),
             ),
-            None => Outcome::Bridge,
+            None => Outcome::Closed,
         };
         match &outcome {
             Outcome::Open(placed) => {
@@ -267,7 +267,6 @@ impl<W: Write> App<W> {
                 e.view.popover = None;
                 e.popover = None;
             }
-            Outcome::Bridge => {}
         }
         (e, outcome)
     }
@@ -918,11 +917,6 @@ mod tests {
         "items":[{"id":"activate","label":"Switch to tab"},
                  {"id":"close","label":"Close tab","danger":true}]}"#;
     /// The P4b bridge rect, with text no widget of ours would ever draw.
-    const BRIDGED: &str = r#"{"rev":2,"screen":"sidebar","active":1,
-        "tabs":[{"id":1,"index":1,"title":"one"}],
-        "popover":{"x":2,"y":4,"w":18,"h":3,"scrim":0.3,"bg":[10,10,10],
-        "rows":[{"spans":[{"x":1,"text":"BRIDGEROW"}]}]}}"#;
-
     fn send(a: &mut App<Vec<u8>>, cmd: Command) {
         a.handle(Input::Command(cmd)).unwrap();
     }
@@ -936,26 +930,18 @@ mod tests {
     }
 
     #[test]
-    fn an_open_menu_wins_over_the_bridge_and_a_closed_one_hands_it_back() {
+    fn an_open_menu_paints_and_a_closed_one_draws_nothing() {
         let mut a = painting();
         dress(&mut a);
-        send(
-            &mut a,
-            Command::Model(Box::new(serde_json::from_str(BRIDGED).unwrap())),
-        );
-        assert!(painted(&a).contains("BRIDGEROW"), "the bridge paints alone");
-
         a.out.clear();
         send(&mut a, menu(MENU));
-        let frame = painted(&a);
-        assert!(frame.contains("Switch to tab"), "the widget drew it");
-        assert!(!frame.contains("BRIDGEROW"), "and the bridge did not");
+        assert!(painted(&a).contains("Switch to tab"), "the widget drew it");
 
         a.out.clear();
         send(&mut a, menu(r#"{"rev":3,"open":false}"#));
         assert!(
-            painted(&a).contains("BRIDGEROW"),
-            "a mid-flip mismatch degrades to what Lua composed"
+            !painted(&a).contains("Switch to tab"),
+            "a closed menu leaves the list alone"
         );
     }
 

@@ -225,6 +225,11 @@ function M.close_tab(gui_window, tab_id, defer)
   return close_now(gui_window, tab_id, defer, false)
 end
 
+---WezTerm's own confirm overlay, for a sidebar that reported it cannot draw the question.
+function M.close_with_overlay(gui_window, tab_id)
+  return close_now(gui_window, tab_id, false, true)
+end
+
 ---Closes every unpinned tab but `tab_id`, restoring the kept tab once rather than after each close.
 function M.close_others(gui_window, tab_id)
   local previous = util.active_tab(gui_window)

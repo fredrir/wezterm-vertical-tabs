@@ -357,21 +357,6 @@ mod tests {
                 .to_json(),
             r#"{"t":"do","a":"set_scroll","args":{"top":3,"user":true}}"#
         );
-        assert_eq!(
-            Event::do_("popover_mouse")
-                .with(|a| {
-                    a.k = Some("down");
-                    a.b = Some("left");
-                    a.x = Some(4);
-                    a.y = Some(7);
-                    a.kind = Some("popover");
-                    a.id = Some("close".into());
-                    a.disabled = Some(false);
-                    a.inside = Some(true);
-                })
-                .to_json(),
-            r#"{"t":"do","a":"popover_mouse","args":{"x":4,"y":7,"k":"down","b":"left","kind":"popover","id":"close","disabled":false,"inside":true}}"#
-        );
     }
 
     #[test]

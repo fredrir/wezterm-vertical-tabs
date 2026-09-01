@@ -199,49 +199,6 @@ pub struct ModelMsg {
     pub tabs: Vec<TabRecord>,
     #[serde(default)]
     pub private: bool,
-    /// P4b→P5 bridge: Lua still composes the menu; Rust composites and reports its input raw.
-    #[serde(default)]
-    pub popover: Option<PopoverBridge>,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-pub struct PopoverBridge {
-    pub x: i64,
-    pub y: i64,
-    pub w: i64,
-    pub h: i64,
-    #[serde(default)]
-    pub scrim: f64,
-    #[serde(default)]
-    pub bg: Option<[u8; 3]>,
-    #[serde(default)]
-    pub rows: Vec<PopoverBridgeRow>,
-}
-
-#[derive(Debug, Clone, PartialEq, Default, Deserialize)]
-pub struct PopoverBridgeRow {
-    #[serde(default)]
-    pub bg: Option<[u8; 3]>,
-    #[serde(default)]
-    pub fg: Option<[u8; 3]>,
-    #[serde(default)]
-    pub spans: Vec<BridgeSpan>,
-    #[serde(default)]
-    pub id: Option<String>,
-    #[serde(default)]
-    pub disabled: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Default, Deserialize)]
-pub struct BridgeSpan {
-    #[serde(default)]
-    pub x: i64,
-    #[serde(default)]
-    pub text: String,
-    #[serde(default)]
-    pub fg: Option<[u8; 3]>,
-    #[serde(default)]
-    pub bold: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]

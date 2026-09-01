@@ -50,35 +50,6 @@ test("v2 do: window mirrors land in the stores and blur clears focus", function(
   eq(state.has_focus(wid), false)
 end)
 
-test("v2 do: popover_mouse keeps v1's arming — destructive on release, scrim closes", function()
-  local win, gui, sb = H.open_popover(3)
-  local tabs_before = #win.tab_list
-  input.handle(
-    gui,
-    sb,
-    "vtabs",
-    '{"t":"do","a":"popover_mouse","args":{"k":"down","b":"left","x":5,"y":7,"kind":"popover","id":"close","inside":true}}'
-  )
-  eq(#win.tab_list, tabs_before, "a destructive item does nothing on the press")
-  input.handle(
-    gui,
-    sb,
-    "vtabs",
-    '{"t":"do","a":"popover_mouse","args":{"k":"up","b":"left","x":5,"y":7,"kind":"popover","id":"close","inside":true}}'
-  )
-  eq(#win.tab_list, tabs_before - 1, "and acts on the matching release")
-
-  local win2, gui2, sb2 = H.open_popover(3)
-  input.handle(
-    gui2,
-    sb2,
-    "vtabs",
-    '{"t":"do","a":"popover_mouse","args":{"k":"down","b":"left","x":2,"y":2,"kind":"scrim"}}'
-  )
-  eq(require("vtabs.popover").get(gui2:window_id()), nil, "a scrim press closes the menu")
-  eq(#win2.tab_list, 3, "and closes nothing else")
-end)
-
 test("v2 paints: a painting pane gets no frames and no fades, but stays fresh", function()
   local win, gui = ready_window()
   local sb = sidebar.find(win.tab_list[1])
@@ -117,6 +88,22 @@ test("v2 do: a menu verb through the event path acts on the open menu instead of
   eq(require("vtabs.popover").get(gui2:window_id()), nil, "any other gesture still dismisses first")
 end)
 
+test("v2 note: a refused confirm level falls through to WezTerm's overlay, a refused root just closes", function()
+  local win, gui, sb = H.open_popover(3)
+  local pop = require("vtabs.popover").get(gui:window_id())
+  local target = pop.tab_id
+  require("vtabs.popover").to_confirm(gui, "close", true)
+  local before = #win.actions
+  input.handle(gui, sb, "vtabs", '{"t":"note","k":"menu_refused","why":"bounds","a":"confirm","id":' .. target .. "}")
+  eq(require("vtabs.popover").get(gui:window_id()), nil, "the refused level is closed")
+  assert(#win.actions > before, "and WezTerm's overlay close was asked for")
+
+  local win2, gui2, sb2 = H.open_popover(3)
+  input.handle(gui2, sb2, "vtabs", '{"t":"note","k":"menu_refused","why":"bounds","a":"root"}')
+  eq(require("vtabs.popover").get(gui2:window_id()), nil, "a refused root closes")
+  eq(#win2.tab_list, 3, "and closes nothing else")
+end)
+
 test("v2 do: the vocabulary is total against the spec", function()
   local expected = {
     "activate_tab_by_id",
@@ -129,8 +116,6 @@ test("v2 do: the vocabulary is total against the spec", function()
     "menu_pick",
     "new_tab",
     "open_menu",
-    "popover_mouse",
-    "popover_wheel",
     "press_card",
     "rename_commit",
     "request_close",
