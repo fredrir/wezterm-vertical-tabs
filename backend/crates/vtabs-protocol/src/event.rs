@@ -57,13 +57,14 @@ pub enum Event {
         what: &'static str,
         reason: &'static str,
     },
-    /// The v2 gesture vocabulary; `a` indexes input.lua's `DO` table.
+    /// The v2 gesture vocabulary; `a` indexes input.lua's `DO` table. The args are boxed: every
+    /// verb sets a handful of a wide union, and inline they would size every other event too.
     Do {
         a: &'static str,
         #[serde(skip_serializing_if = "Option::is_none")]
         id: Option<DoId>,
         #[serde(skip_serializing_if = "DoArgs::is_empty")]
-        args: DoArgs,
+        args: Box<DoArgs>,
     },
     Note {
         k: &'static str,
@@ -71,6 +72,9 @@ pub enum Event {
         why: Option<&'static str>,
         #[serde(skip_serializing_if = "Option::is_none")]
         id: Option<i64>,
+        /// The level the note is about, so Lua picks its own fallback rather than being told one.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        a: Option<&'static str>,
     },
 }
 
@@ -121,6 +125,9 @@ pub struct DoArgs {
     pub disabled: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub inside: Option<bool>,
+    /// The rename buffer Rust owns, handed back whole on commit.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
 }
 
 impl DoArgs {
@@ -143,7 +150,7 @@ impl Event {
         Event::Do {
             a,
             id: None,
-            args: DoArgs::default(),
+            args: Box::default(),
         }
     }
 
@@ -151,13 +158,13 @@ impl Event {
         Event::Do {
             a,
             id: Some(DoId::Tab(id)),
-            args: DoArgs::default(),
+            args: Box::default(),
         }
     }
 
     pub fn with(mut self, set: impl FnOnce(&mut DoArgs)) -> Self {
         if let Event::Do { args, .. } = &mut self {
-            set(args);
+            set(args.as_mut());
         }
         self
     }
@@ -336,7 +343,7 @@ mod tests {
             Event::Do {
                 a: "strip",
                 id: Some(DoId::Name("settings".into())),
-                args: DoArgs::default(),
+                args: Box::default(),
             }
             .to_json(),
             r#"{"t":"do","a":"strip","id":"settings"}"#
@@ -422,10 +429,11 @@ mod tests {
             Event::Note {
                 k: "menu_refused",
                 why: Some("bounds"),
-                id: Some(7)
+                id: Some(7),
+                a: Some("confirm"),
             }
             .to_json(),
-            r#"{"t":"note","k":"menu_refused","why":"bounds","id":7}"#
+            r#"{"t":"note","k":"menu_refused","why":"bounds","id":7,"a":"confirm"}"#
         );
         assert_eq!(
             Event::Pong { n: Some(5) }.to_json(),

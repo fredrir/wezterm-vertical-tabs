@@ -66,7 +66,7 @@ fn args(events: &[Event]) -> DoArgs {
     events
         .iter()
         .find_map(|e| match e {
-            Event::Do { args, .. } => Some(args.clone()),
+            Event::Do { args, .. } => Some((**args).clone()),
             _ => None,
         })
         .expect("a do event")

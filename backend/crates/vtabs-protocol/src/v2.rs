@@ -39,10 +39,47 @@ pub struct ConfigMsg {
     pub context: Option<String>,
     #[serde(default)]
     pub hover_timeout_ms: u64,
+    /// `cfg.ellipsis`: the menu's own truncation marker, which is not the `ellipsis` glyph.
+    #[serde(default)]
+    pub ellipsis: Option<String>,
+    #[serde(default)]
+    pub popover: Option<PopoverSection>,
     #[serde(default)]
     pub render: Option<RenderSection>,
     #[serde(default)]
     pub mac: Option<MacFacts>,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct PopoverSection {
+    /// `"auto"` or a column count, which is why this stays untyped on the wire.
+    #[serde(default)]
+    pub width: Option<serde_json::Value>,
+    #[serde(default = "yes")]
+    pub follow_pointer: bool,
+    #[serde(default)]
+    pub overflow: Option<String>,
+}
+
+impl PopoverSection {
+    /// The width the user asked for, or None for `"auto"`.
+    pub fn fixed_width(&self) -> Option<i64> {
+        self.width.as_ref().and_then(serde_json::Value::as_i64)
+    }
+}
+
+impl Default for PopoverSection {
+    fn default() -> Self {
+        PopoverSection {
+            width: None,
+            follow_pointer: true,
+            overflow: None,
+        }
+    }
+}
+
+fn yes() -> bool {
+    true
 }
 
 /// The renderer-facing config surface, normalised by Lua exactly as the scene fixtures are.
@@ -333,10 +370,13 @@ pub struct MenuMsg {
     pub items: Vec<MenuItem>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+/// `col` is absent when the menu was opened from a key binding, which knows no column.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
 pub struct MenuAnchor {
+    #[serde(default)]
     pub row: i64,
-    pub col: i64,
+    #[serde(default)]
+    pub col: Option<i64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default, Deserialize)]
