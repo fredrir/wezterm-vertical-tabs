@@ -3,19 +3,11 @@
 use std::path::PathBuf;
 use std::process::exit;
 
-use vtabs_protocol::limits::{
-    ANIM_MAX_DATA, ANIM_MAX_FPS, ANIM_MAX_MS, ANIM_MAX_ROWS, ANIM_MIN_FPS, FRAME_MAX_AREA,
-    FRAME_MAX_SIDE, VERSION,
-};
+use vtabs_protocol::limits::{FRAME_MAX_AREA, FRAME_MAX_SIDE, VERSION};
 
 fn contents() -> String {
     let rows = [
         ("VERSION", VERSION as u64),
-        ("ANIM_MAX_DATA", ANIM_MAX_DATA as u64),
-        ("ANIM_MAX_ROWS", ANIM_MAX_ROWS as u64),
-        ("ANIM_MAX_MS", ANIM_MAX_MS),
-        ("ANIM_MIN_FPS", ANIM_MIN_FPS as u64),
-        ("ANIM_MAX_FPS", ANIM_MAX_FPS as u64),
         ("FRAME_MAX_SIDE", FRAME_MAX_SIDE as u64),
         ("FRAME_MAX_AREA", FRAME_MAX_AREA),
     ];

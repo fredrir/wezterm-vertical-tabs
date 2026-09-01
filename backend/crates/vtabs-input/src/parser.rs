@@ -732,12 +732,9 @@ mod tests {
             feed(b"{\"t\":\"bogus\"}\n{\"t\":\"clear\"}\n"),
             vec![Input::Command(Command::Clear)]
         );
-        assert_eq!(
-            feed(b"{\"t\":\"frame\",\"data\":\"\\u001b[H\"}\n"),
-            vec![Input::Command(Command::Frame {
-                data: "\x1b[H".into()
-            })]
-        );
+        // the retired v1 tags are now unknown tags: ignored whole, never typed at the shell
+        assert!(feed(b"{\"t\":\"frame\",\"data\":\"\\u001b[H\"}\n").is_empty());
+        assert!(feed(b"{\"t\":\"anim\",\"id\":1,\"data\":\"x\"}\n").is_empty());
     }
 
     #[test]
@@ -859,20 +856,23 @@ mod tests {
     #[test]
     fn stalled_command_line_is_dropped_whole() {
         let mut p = Parser::new();
-        assert!(p.feed(b"{\"t\":\"frame\",\"data\":\"\x1b[1;1Hx").is_empty());
+        assert!(
+            p.feed(b"{\"t\":\"model\",\"rev\":1,\"tabs\":[{\"title\":\"\x1b[1;1Hx")
+                .is_empty()
+        );
         assert!(flush_until_stalled(&mut p).is_empty());
         assert!(!p.has_pending());
     }
 
     #[test]
-    fn a_frame_split_by_a_long_gap_yields_no_keys() {
+    fn a_command_line_split_by_a_long_gap_yields_no_keys() {
         let mut p = Parser::new();
         assert!(
-            p.feed(b"{\"t\":\"frame\",\"data\":\"\x1b[1;1Hab")
+            p.feed(b"{\"t\":\"model\",\"rev\":1,\"tabs\":[{\"title\":\"\x1b[1;1Hab")
                 .is_empty()
         );
         assert!(flush_until_stalled(&mut p).is_empty());
-        assert!(p.feed(b"c\x1b[2;1Hd\"}\n").is_empty());
+        assert!(p.feed(b"c\x1b[2;1Hd\"}]}\n").is_empty());
         assert_eq!(feed_into(&mut p, b"x"), vec![plain("x")]);
     }
 
@@ -952,18 +952,6 @@ mod tests {
         assert!(!p.has_pending());
         assert!(p.feed(b"rest of the same line\x1b[A").is_empty());
         assert_eq!(feed_into(&mut p, b"\n\x1b[A"), vec![plain("up")]);
-    }
-
-    #[test]
-    fn a_stalled_anim_line_discards_like_a_frame() {
-        let mut p = Parser::new();
-        assert!(
-            p.feed(b"{\"t\":\"anim\",\"id\":1,\"data\":\"\x1b[3;1Hab")
-                .is_empty()
-        );
-        assert!(flush_until_stalled(&mut p).is_empty());
-        assert!(p.feed(b"c\x1b[4;1Hd\"}\n").is_empty());
-        assert_eq!(feed_into(&mut p, b"x"), vec![plain("x")]);
     }
 
     #[test]

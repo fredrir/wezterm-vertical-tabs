@@ -5,7 +5,7 @@ use vtabs_core::ui::{SettingsUi, UiState};
 use vtabs_input::Input;
 use vtabs_input::resolve::{self, Knobs, MenuView, MirroredDrag, SettingsScreen};
 use vtabs_protocol::limits::{
-    ANIM_MAX_FPS, ANIM_MAX_MS, ANIM_MIN_FPS, MENU_MAX_ITEMS, MODEL_MAX_FIELDS, MODEL_MAX_TABS,
+    FX_MAX_FPS, FX_MAX_MS, FX_MIN_FPS, MENU_MAX_ITEMS, MODEL_MAX_FIELDS, MODEL_MAX_TABS,
 };
 use vtabs_protocol::{Command, Event, v2};
 use vtabs_view::enrich::{Enriched, PopoverHits, enrich, glyph_map, theme_of};
@@ -16,7 +16,6 @@ use vtabs_view::menu::{self, MenuCfg, MenuState, Outcome};
 use vtabs_view::render::frame_of;
 use vtabs_view::settings::{self, SettingsView};
 
-use crate::anim;
 use crate::log::Logger;
 use crate::paint::{frame_bytes, rows_bytes};
 use crate::terminal;
@@ -30,14 +29,11 @@ pub struct App<W: Write> {
     pub log: Logger,
     pub var: String,
     pub size: (u16, u16),
-    pub anim: Option<anim::Run>,
     pub fx: Option<FxRun>,
     /// What the pane shows right now: the final frame any fade lands on.
     pub last_rows: Option<PaintedRows>,
     pub seq: u64,
     pub v2: V2State,
-    /// True for the sidebar role: this process owns the pane's pixels and Lua sends it no frames.
-    pub paints: bool,
     pub ui: UiState,
     pub started: Instant,
     /// Where the menu Lua composed sits, from the last frame; the bridge reports against it.
@@ -120,12 +116,10 @@ impl<W: Write> App<W> {
     pub fn emit(&mut self, event: &Event) -> io::Result<()> {
         let mut json = event.to_json();
         // WezTerm fires user-var-changed only on a value change; without n, repeated identical
-        // events are silently dropped. Pong is spared: it echoes the ping's own varying n.
-        if !matches!(event, Event::Pong { .. }) {
-            self.seq += 1;
-            json.truncate(json.len() - 1);
-            json.push_str(&format!(",\"n\":{}}}", self.seq));
-        }
+        // events are silently dropped.
+        self.seq += 1;
+        json.truncate(json.len() - 1);
+        json.push_str(&format!(",\"n\":{}}}", self.seq));
         self.log.log(match event {
             Event::Key { .. } => "event key".to_string(),
             Event::Paste { data, .. } => {
@@ -142,20 +136,15 @@ impl<W: Write> App<W> {
 
     /// Nothing can be drawn or hit-tested until all three commands have landed at least once.
     fn dressed(&self) -> bool {
-        self.paints
-            && self.v2.config.is_some()
-            && self.v2.theme.is_some()
-            && self.v2.model.is_some()
+        self.v2.config.is_some() && self.v2.theme.is_some() && self.v2.model.is_some()
     }
 
     /// Returns `Ok(false)` when the backend should exit.
     pub fn handle(&mut self, input: Input) -> io::Result<bool> {
         match input {
+            // the backend speaks the gesture vocabulary; a pane with no state yet swallows the click
             Input::Mouse(m) => {
-                if !self.paints {
-                    self.emit(&Event::from(m))?;
-                } else if self.dressed() {
-                    // a painting backend speaks the gesture vocabulary; `mouse` is never sent
+                if self.dressed() {
                     self.gesture(&m)?;
                 }
             }
@@ -521,7 +510,7 @@ impl<W: Write> App<W> {
             Command::Config(_) | Command::Theme(_) | Command::Model(_) | Command::Menu(_)
         );
         let alive = self.apply(cmd)?;
-        if alive && paints_this && self.paints {
+        if alive && paints_this {
             self.settle_scroll();
             self.repaint()?;
         }
@@ -543,15 +532,11 @@ impl<W: Write> App<W> {
 
     fn apply(&mut self, cmd: Command) -> io::Result<bool> {
         match cmd {
-            Command::Frame { data } => {
-                self.cancel_anim()?;
-                self.write(data.as_bytes())?
-            }
             Command::Clear => {
-                self.cancel_anim()?;
-                self.write(CLEAR_SCREEN.as_bytes())?
+                self.write(CLEAR_SCREEN.as_bytes())?;
+                self.repaint()?
             }
-            Command::Ping { n } => self.emit(&Event::Pong { n })?,
+            Command::Ping { n } => self.emit(&Event::Pong { echo: n })?,
             Command::Auth { token } => {
                 self.write(set_user_var(TOKEN_VAR, &token).as_bytes())?;
                 // A new token is a new Lua process: the mux kept this backend but the plugin lost
@@ -559,10 +544,9 @@ impl<W: Write> App<W> {
                 // Re-announcing on the same token would ping-pong, since Lua re-auths on ready.
                 if self.token.as_deref() != Some(token.as_str()) {
                     self.token = Some(token);
-                    self.emit(&Event::ready(self.size.0, self.size.1, self.paints))?;
+                    self.emit(&Event::ready(self.size.0, self.size.1))?;
                 }
             }
-            Command::Anim(cmd) => self.start_anim(cmd)?,
             Command::Config(msg) => self.v2.config = Some(*msg),
             Command::Theme(msg) => self.v2.theme = Some(*msg),
             Command::Model(msg) => {
@@ -588,54 +572,13 @@ impl<W: Write> App<W> {
             }
             Command::Fx(msg) => self.start_fx(&msg)?,
             Command::Notice(msg) => self.log.log(format!("notice {}", msg.text)),
-            Command::Quit => {
-                self.cancel_anim()?;
-                return Ok(false);
-            }
+            Command::Quit => return Ok(false),
         }
         Ok(true)
     }
 
-    /// Lua always wins: whatever was playing ends where it stands and is reported done.
-    fn cancel_anim(&mut self) -> io::Result<()> {
-        if let Some(run) = self.anim.take() {
-            self.emit(&Event::AnimDone { id: run.id })?;
-        }
-        Ok(())
-    }
-
-    fn start_anim(&mut self, cmd: vtabs_protocol::AnimCmd) -> io::Result<()> {
-        self.cancel_anim()?;
-        let id = cmd.id;
-        match anim::Run::new(cmd, Instant::now()) {
-            Ok(mut run) => {
-                if let Some(frame) = run.tick(Instant::now()) {
-                    self.write(frame.as_bytes())?;
-                }
-                if run.finished() {
-                    self.emit(&Event::AnimDone { id })?;
-                } else {
-                    self.anim = Some(run);
-                }
-            }
-            Err(why) => {
-                self.log.log(format!("anim {id} dropped: {}", why.reason()));
-                self.emit(&Event::Dropped {
-                    what: "anim",
-                    reason: why.reason(),
-                })?;
-            }
-        }
-        Ok(())
-    }
-
-    pub fn next_anim(&self) -> Option<Instant> {
-        let v1 = self.anim.as_ref().map(|run| run.next_at);
-        let v2 = self.fx.as_ref().map(|run| run.next_at);
-        match (v1, v2) {
-            (Some(a), Some(b)) => Some(a.min(b)),
-            (a, b) => a.or(b),
-        }
+    pub fn next_fx(&self) -> Option<Instant> {
+        self.fx.as_ref().map(|run| run.next_at)
     }
 
     /// A fade over the frame the pane shows: the phase's rows rise out of the page colour.
@@ -648,9 +591,9 @@ impl<W: Write> App<W> {
             return Ok(());
         };
         if let Some(ms) = msg.ms {
-            phase.ms = ms.clamp(1, ANIM_MAX_MS);
+            phase.ms = ms.clamp(1, FX_MAX_MS);
         }
-        let fps = msg.fps.unwrap_or(30).clamp(ANIM_MIN_FPS, ANIM_MAX_FPS);
+        let fps = msg.fps.unwrap_or(30).clamp(FX_MIN_FPS, FX_MAX_FPS);
         let animated: Vec<usize> = painted
             .rows
             .iter()
@@ -690,7 +633,8 @@ impl<W: Write> App<W> {
         Ok(())
     }
 
-    fn tick_fx(&mut self, now: Instant) -> io::Result<()> {
+    /// Writes the frame for `now`, skipping any tick the loop slept through.
+    pub fn tick_fx(&mut self, now: Instant) -> io::Result<()> {
         let Some(run) = self.fx.as_mut() else {
             return Ok(());
         };
@@ -702,25 +646,6 @@ impl<W: Write> App<W> {
         self.write(bytes.as_bytes())?;
         if done {
             self.fx = None;
-        }
-        Ok(())
-    }
-
-    /// Writes the frame for `now`, skipping any tick the loop slept through.
-    pub fn tick_anim(&mut self, now: Instant) -> io::Result<()> {
-        self.tick_fx(now)?;
-        let Some(run) = self.anim.as_mut() else {
-            return Ok(());
-        };
-        let frame = run.tick(now);
-        let done = run.finished();
-        let id = run.id;
-        if let Some(frame) = frame {
-            self.write(frame.as_bytes())?;
-        }
-        if done {
-            self.anim = None;
-            self.emit(&Event::AnimDone { id })?;
         }
         Ok(())
     }
@@ -739,9 +664,7 @@ impl<W: Write> App<W> {
                 cols: size.0,
                 rows: size.1,
             })?;
-            if self.paints {
-                self.repaint()?;
-            }
+            self.repaint()?;
         }
         Ok(())
     }
@@ -800,13 +723,10 @@ mod tests {
             log: Logger::from_env(),
             var: "vtabs".into(),
             size: (28, 24),
-            anim: None,
             fx: None,
             last_rows: None,
             seq: 0,
             v2: V2State::default(),
-            // the v1 path is what these tests pin; the painting path has its own below
-            paints: false,
             ui: Default::default(),
             started: Instant::now(),
             popover: None,
@@ -816,18 +736,6 @@ mod tests {
             hover_deadline: None,
             token: None,
         }
-    }
-
-    #[test]
-    fn frame_is_written_verbatim() {
-        let mut a = app();
-        assert!(
-            a.handle(Input::Command(Command::Frame {
-                data: "\x1b[1;1Hhi".into()
-            }))
-            .unwrap()
-        );
-        assert_eq!(a.out, b"\x1b[1;1Hhi");
     }
 
     #[test]
@@ -844,7 +752,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             a.out,
-            set_user_var("vtabs", r#"{"t":"pong","n":7}"#).as_bytes()
+            set_user_var("vtabs", r#"{"t":"pong","echo":7,"n":1}"#).as_bytes()
         );
     }
 
@@ -862,19 +770,6 @@ mod tests {
         assert!(saw(&a, r#""t":"ready""#));
     }
 
-    fn anim_cmd(id: u64, ms: u64) -> Command {
-        Command::Anim(vtabs_protocol::AnimCmd {
-            id,
-            ms,
-            fps: Some(30),
-            ease: Some("linear".into()),
-            dir: Some("in".into()),
-            anchor: "#000000".into(),
-            rows: vec![vtabs_protocol::AnimRow { y: 3, delay: 0 }],
-            data: "\x1b[3;1H\x1b[38;2;200;200;200mhi\x1b[0m".into(),
-        })
-    }
-
     fn payloads(a: &App<Vec<u8>>) -> Vec<String> {
         use base64::Engine as _;
         String::from_utf8_lossy(&a.out)
@@ -890,73 +785,6 @@ mod tests {
 
     fn saw(a: &App<Vec<u8>>, needle: &str) -> bool {
         payloads(a).iter().any(|p| p.contains(needle))
-    }
-
-    #[test]
-    fn an_anim_writes_its_first_frame_at_once_and_keeps_running() {
-        let mut a = app();
-        a.handle(Input::Command(anim_cmd(1, 100))).unwrap();
-        assert!(a.anim.is_some(), "still playing");
-        let painted = String::from_utf8_lossy(&a.out).to_string();
-        assert!(painted.contains("\x1b[38;2;0;0;0m"), "t=0 frame written");
-        assert!(!saw(&a, r#"{"t":"anim_done","id":1"#), "not done yet");
-    }
-
-    #[test]
-    fn a_frame_command_cancels_the_run_and_reports_it_done() {
-        let mut a = app();
-        a.handle(Input::Command(anim_cmd(2, 500))).unwrap();
-        a.handle(Input::Command(Command::Frame { data: "x".into() }))
-            .unwrap();
-        assert!(a.anim.is_none(), "cancelled");
-        assert!(saw(&a, r#"{"t":"anim_done","id":2"#));
-    }
-
-    #[test]
-    fn a_new_anim_cancels_the_old_one() {
-        let mut a = app();
-        a.handle(Input::Command(anim_cmd(3, 500))).unwrap();
-        a.handle(Input::Command(anim_cmd(4, 500))).unwrap();
-        assert!(saw(&a, r#"{"t":"anim_done","id":3"#));
-        assert_eq!(a.anim.as_ref().map(|r| r.id), Some(4));
-    }
-
-    #[test]
-    fn clear_and_quit_cancel_too() {
-        let mut a = app();
-        a.handle(Input::Command(anim_cmd(5, 500))).unwrap();
-        a.handle(Input::Command(Command::Clear)).unwrap();
-        assert!(saw(&a, r#"{"t":"anim_done","id":5"#));
-
-        let mut b = app();
-        b.handle(Input::Command(anim_cmd(6, 500))).unwrap();
-        assert!(!b.handle(Input::Command(Command::Quit)).unwrap());
-        assert!(saw(&b, r#"{"t":"anim_done","id":6"#));
-    }
-
-    #[test]
-    fn an_oversized_anim_is_dropped_with_a_reason() {
-        let mut a = app();
-        let Command::Anim(mut cmd) = anim_cmd(7, 100) else {
-            unreachable!()
-        };
-        cmd.data = "x".repeat(crate::anim::MAX_DATA + 1);
-        a.handle(Input::Command(Command::Anim(cmd))).unwrap();
-        assert!(a.anim.is_none(), "nothing plays");
-        assert!(saw(&a, r#"{"t":"dropped","what":"anim","reason":"size""#));
-    }
-
-    #[test]
-    fn a_finished_run_emits_done_once() {
-        let mut a = app();
-        a.handle(Input::Command(anim_cmd(8, 30))).unwrap();
-        let late = std::time::Instant::now() + std::time::Duration::from_millis(200);
-        a.tick_anim(late).unwrap();
-        assert!(a.anim.is_none());
-        assert!(saw(&a, r#"{"t":"anim_done","id":8"#));
-        let before = a.out.len();
-        a.tick_anim(late).unwrap();
-        assert_eq!(a.out.len(), before, "nothing more is written");
     }
 
     #[test]
@@ -992,7 +820,7 @@ mod tests {
     }
 
     #[test]
-    fn pong_echoes_the_ping_n_untouched() {
+    fn pong_echoes_the_ping_in_echo_and_carries_its_own_n() {
         let mut a = app();
         a.handle(Input::Key {
             name: "j".into(),
@@ -1002,7 +830,7 @@ mod tests {
         .unwrap();
         a.handle(Input::Command(Command::Ping { n: Some(7) }))
             .unwrap();
-        assert_eq!(payloads(&a)[1], r#"{"t":"pong","n":7}"#);
+        assert_eq!(payloads(&a)[1], r#"{"t":"pong","echo":7,"n":2}"#);
     }
 
     const CONFIG: &str = r#"{"rev":1,"desired_width":28,"position":"left","icons":true,
@@ -1015,12 +843,6 @@ mod tests {
     const MODEL: &str = r#"{"rev":1,"screen":"sidebar","active":1,
         "strip":{"buttons":[{"id":"toggle"},{"id":"new_tab"}]},
         "tabs":[{"id":1,"index":1,"title":"one"},{"id":2,"index":2,"title":"two"}]}"#;
-
-    fn painting() -> App<Vec<u8>> {
-        let mut a = app();
-        a.paints = true;
-        a
-    }
 
     fn dress(a: &mut App<Vec<u8>>) {
         a.handle(Input::Command(Command::Config(Box::new(
@@ -1050,7 +872,7 @@ mod tests {
 
     #[test]
     fn a_new_token_re_announces_ready_but_the_same_one_does_not() {
-        let mut a = painting();
+        let mut a = app();
         let auth = |a: &mut App<Vec<u8>>, token: &str| {
             a.handle(Input::Command(Command::Auth {
                 token: token.into(),
@@ -1078,7 +900,7 @@ mod tests {
 
     #[test]
     fn a_painting_backend_draws_the_pane_once_the_state_is_complete() {
-        let mut a = painting();
+        let mut a = app();
         a.handle(Input::Command(Command::Config(Box::new(
             serde_json::from_str(CONFIG).unwrap(),
         ))))
@@ -1096,6 +918,18 @@ mod tests {
         );
     }
 
+    #[test]
+    fn clear_wipes_the_pane_and_draws_it_again() {
+        let mut a = app();
+        dress(&mut a);
+        a.out.clear();
+        a.handle(Input::Command(Command::Clear)).unwrap();
+        let out = painted(&a);
+        // a repaint alone leaves untouched rows as they were; only the wipe clears stale bytes
+        assert!(out.starts_with(CLEAR_SCREEN), "the pane is wiped first");
+        assert!(out.contains("one") && out.contains("two"), "then redrawn");
+    }
+
     const SETTINGS_MODEL: &str = r#"{"rev":2,"screen":"settings","version":"9.9.9",
         "groups":[{"id":"layout","label":"Layout"},{"id":"cards","label":"Cards"}],
         "fields":[
@@ -1104,7 +938,7 @@ mod tests {
 
     #[test]
     fn a_settings_model_paints_the_page_and_answers_for_its_own_keys() {
-        let mut a = painting();
+        let mut a = app();
         a.size = (100, 21);
         dress(&mut a);
         a.out.clear();
@@ -1141,7 +975,7 @@ mod tests {
 
     #[test]
     fn a_painting_backend_speaks_do_and_never_mouse() {
-        let mut a = painting();
+        let mut a = app();
         dress(&mut a);
         let before = payloads(&a).len();
         a.handle(click(vtabs_protocol::MouseKind::Press, 6, 3))
@@ -1159,23 +993,15 @@ mod tests {
 
     #[test]
     fn input_before_the_first_full_state_is_swallowed() {
-        let mut a = painting();
+        let mut a = app();
         a.handle(click(vtabs_protocol::MouseKind::Press, 6, 3))
             .unwrap();
         assert!(a.out.is_empty(), "nothing is drawn and nothing is reported");
     }
 
     #[test]
-    fn a_v1_pane_still_gets_the_old_mouse_events() {
-        let mut a = app();
-        a.handle(click(vtabs_protocol::MouseKind::Press, 6, 3))
-            .unwrap();
-        assert!(saw(&a, r#"{"t":"mouse","k":"down""#));
-    }
-
-    #[test]
     fn hover_expiry_clears_the_highlight_without_a_round_trip() {
-        let mut a = painting();
+        let mut a = app();
         dress(&mut a);
         a.handle(Input::Mouse(vtabs_protocol::Mouse {
             kind: vtabs_protocol::MouseKind::Move,
@@ -1214,7 +1040,7 @@ mod tests {
 
     #[test]
     fn a_fade_runs_on_the_frame_shown_and_a_repaint_lands_it_on_the_final_frame() {
-        let mut a = painting();
+        let mut a = app();
         dress(&mut a);
         a.out.clear();
         a.repaint().unwrap();
@@ -1255,7 +1081,7 @@ mod tests {
 
     #[test]
     fn an_open_menu_paints_and_a_closed_one_draws_nothing() {
-        let mut a = painting();
+        let mut a = app();
         dress(&mut a);
         a.out.clear();
         send(&mut a, menu(MENU));
@@ -1271,7 +1097,7 @@ mod tests {
 
     #[test]
     fn a_menu_that_cannot_be_placed_is_refused_once_and_draws_nothing() {
-        let mut a = painting();
+        let mut a = app();
         a.size = (28, 2);
         dress(&mut a);
         let before = payloads(&a).len();
@@ -1293,7 +1119,7 @@ mod tests {
 
     #[test]
     fn while_the_menu_is_open_the_pane_answers_to_it_and_not_to_the_list() {
-        let mut a = painting();
+        let mut a = app();
         dress(&mut a);
         send(&mut a, menu(MENU));
         let hits = a.popover.clone().expect("the menu placed itself");

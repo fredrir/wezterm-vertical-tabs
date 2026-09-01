@@ -69,19 +69,15 @@ pub fn run() -> io::Result<()> {
         log.log("stdin is not a tty; raw mode skipped");
     }
     let size = terminal::size().unwrap_or((0, 0));
-    // The settings screen keeps the v1 frame path until P6, so only the sidebar announces paints.
-    let paints = true;
     let mut app = App {
         out,
         log,
         var,
         size,
-        anim: None,
         fx: None,
         last_rows: None,
         seq: 0,
         v2: crate::app::V2State::default(),
-        paints,
         ui: Default::default(),
         started: Instant::now(),
         popover: None,
@@ -94,7 +90,8 @@ pub fn run() -> io::Result<()> {
     app.write(set_user_var(ROLE_VAR, role.name()).as_bytes())?;
     // Marker only: it lets the plugin find this pane again, it proves nothing and carries no token.
     app.write(title_marker(role, &nonce()).as_bytes())?;
-    app.emit(&Event::ready(size.0, size.1, paints))?;
+    // `paints` is the capability flip Lua reads to refuse a backend that cannot draw for itself.
+    app.emit(&Event::ready(size.0, size.1))?;
 
     let rx = spawn_stdin_reader();
     let mut parser = Parser::new();
@@ -104,7 +101,7 @@ pub fn run() -> io::Result<()> {
     let mut next_full = Instant::now() + SIZE_FALLBACK;
     loop {
         let mut deadline = next_tick.min(next_full);
-        if let Some(at) = app.next_anim() {
+        if let Some(at) = app.next_fx() {
             deadline = deadline.min(at);
         }
         if let Some(at) = app.next_hover() {
@@ -127,7 +124,7 @@ pub fn run() -> io::Result<()> {
             }
         }
         let now = Instant::now();
-        app.tick_anim(now)?;
+        app.tick_fx(now)?;
         app.tick_hover(now)?;
         if now >= next_tick {
             next_tick = now + tick;
