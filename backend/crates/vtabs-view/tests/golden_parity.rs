@@ -21,6 +21,8 @@ fn every_scene_matches_its_goldens() {
             let name = e.ok()?.file_name().into_string().ok()?;
             name.strip_suffix(".json").map(str::to_string)
         })
+        // settings-* scenes are the settings screen's; its own widget test gates them
+        .filter(|name| !name.starts_with("settings-"))
         .collect();
     names.sort();
     assert!(

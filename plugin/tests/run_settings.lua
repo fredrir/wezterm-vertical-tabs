@@ -168,6 +168,7 @@ test("P3 frames are written for design review", function()
     local lines, out = page_rows(pv)
     dump_lines("settings-" .. size[1], lines, size[1])
     dump_styled("settings-" .. size[1], out.data, size[2])
+    H.dump_settings_scene("settings-" .. size[1], pv)
     for row = 1, size[2] do
       eq(util.width(lines[row]), size[1], size[1] .. "-col row " .. row)
     end
@@ -178,6 +179,7 @@ test("P3 frames are written for design review", function()
   local pending_lines, pending_out = page_rows(pending)
   dump_lines("settings-pending", pending_lines, 100)
   dump_styled("settings-pending", pending_out.data, 21)
+  H.dump_settings_scene("settings-pending", pending)
 end)
 
 test("P3 A3a/A3b: the nav is the descriptors' own groups and every option gets a widget", function()
@@ -1036,4 +1038,58 @@ test("P3 §4: options the host set in wezterm.lua are LOCKED on the Behaviour gr
   end
   assert(locked_row, "the Behaviour group renders the poll_ms row")
   assert(locked_row:find("LOCKED", 1, true), "the poll_ms row carries the LOCKED badge: " .. locked_row)
+end)
+
+test("settings_model: the body carries every form row pre-rendered, its nav and its preview", function()
+  local settings_model = require "vtabs.settings_model"
+  local cfg = config.setup { backend = { path = "/bin/wez-vtabs" } }
+  local body = settings_model.body(cfg, { group = 1, focus = 1 }, nil)
+  eq(body.screen, "settings")
+  eq(type(body.version), "string")
+  assert(#body.fields > 20, "the whole form crossed")
+  assert(#body.groups >= 5, "the nav groups crossed")
+  eq(body.groups[1].id, "layout")
+  eq(body.groups[1].label, "Layout")
+  local width
+  for _, f in ipairs(body.fields) do
+    if f.key == "width" then
+      width = f
+    end
+  end
+  assert(width, "the width row is there")
+  eq(width.widget, "stepper")
+  eq(width.value_text, "‹ 28 ›")
+  eq(width.changed, false)
+  eq(#body.preview.tabs, 3)
+  eq(body.preview.render.padding.left, cfg.padding.left)
+  local pending = settings_model.body(cfg, {}, { icons = false })
+  eq(pending.preview.icons, false, "the preview reflects a pending edit")
+end)
+
+test("settings_model: the verbs commit through page.commit like the v1 keys do", function()
+  local settings_model = require "vtabs.settings_model"
+  local win = require("fake_mux").window()
+  win:add_tab { title = "t1" }
+  local gui = win.gui
+  config.setup { backend = { path = "/bin/wez-vtabs" } }
+  local st = {}
+  local before = config.get().width
+  settings_model.act(gui, st, "nudge_option", { key = "width", delta = 1 })
+  eq(config.get().width, before + 1, "nudge steps and commits")
+  settings_model.act(gui, st, "reset_option", { key = "width" })
+  eq(config.get().width, config.defaults.width, "reset restores the default")
+  settings_model.act(gui, st, "activate_option", { key = "new_tab_label" })
+  assert(st.editing and st.editing.key == "new_tab_label", "a text field opens an edit buffer")
+  for _, ch in ipairs { "backspace", "backspace", "backspace", "X" } do
+    settings_model.act(gui, st, "edit_key", { key = ch })
+  end
+  settings_model.act(gui, st, "edit_key", { key = "enter" })
+  eq(st.editing, nil, "enter commits and closes the buffer")
+  assert(config.get().new_tab_label:sub(-1) == "X", "the typed text landed")
+  settings_model.act(gui, st, "activate_option", { key = "keys.close_tab" })
+  eq(st.armed, "keys.close_tab", "a recorder arms")
+  settings_model.act(gui, st, "record_chord", { key = "t", mods = { "CTRL" } })
+  eq(st.armed, nil)
+  eq(config.get().keys.close_tab.key, "t", "the chord committed")
+  eq(settings_model.act(gui, st, "nope", {}), false, "unknown verbs are not ours")
 end)

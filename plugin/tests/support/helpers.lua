@@ -323,6 +323,36 @@ function M.dump_scene(name, v)
   f:close()
 end
 
+---The settings screen's scene: the wire model plus the pane facts and local ui state the
+---renderer starts from. Painting is Rust's from P6; the goldens stay the gate.
+function M.dump_settings_scene(name, pv)
+  if not SCENE_DIR or SCENE_DIR == "" then
+    return
+  end
+  local st = pv.st or {}
+  local plain_glyphs = {}
+  for k, val in pairs(pv.glyphs) do
+    if type(val) == "string" then
+      plain_glyphs[k] = val
+    end
+  end
+  local scene = {
+    cols = pv.cols,
+    rows = pv.rows,
+    theme = pv.theme,
+    glyphs = plain_glyphs,
+    ui = { group = st.group or 1, focus = st.focus or 1, scroll = st.scroll or 0, filter = st.filter or "" },
+    model = require("vtabs.settings_model").body(pv.cfg, st, pv.pending),
+  }
+  os.execute("mkdir -p " .. SCENE_DIR)
+  local f = io.open(SCENE_DIR .. "/" .. name .. ".json", "w")
+  if not f then
+    return
+  end
+  f:write(scene_json(scene, 0), "\n")
+  f:close()
+end
+
 function M.dump_frame(name, v)
   local rows, r = M.frame_rows(v)
   M.dump_lines(name, rows, v.cols)

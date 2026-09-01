@@ -751,8 +751,16 @@ function M.handle(gui_window, pane, name, value)
   -- the settings page shares the bridge but none of the sidebar's hit map; it answers for itself
   if sidebar.is_settings(pane) then
     if ev.t == "ready" then
+      store.proto[pane:pane_id()] = tonumber(ev.v) or 1
+      -- the page is still Lua-painted until the settings widget lands (07-p6-spec.md step B)
+      store.paints[pane:pane_id()] = false
       sidebar.auth(pane)
       view.sync(gui_window, { force = true })
+    elseif ev.t == "do" then
+      local st = settings.page_state(gui_window:window_id())
+      if require("vtabs.settings_model").act(gui_window, st, ev.a, ev.args) then
+        view.sync(gui_window, { force = true })
+      end
     elseif ev.t == "key" or ev.t == "mouse" then
       local dims = store.dims[pane:pane_id()] or { cols = 100, rows = 24 }
       local page_view =

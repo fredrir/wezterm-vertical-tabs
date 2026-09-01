@@ -668,6 +668,8 @@ local SAMPLE = {
   },
 }
 
+M.SAMPLE = SAMPLE
+
 ---Composed from guarded glyphs rather than written out: the arrows are East Asian Ambiguous and
 ---U+23CE is in barely any monospace font, so both go through the same fallback every glyph does.
 local function hints(glyphs, wide)

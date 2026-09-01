@@ -210,6 +210,7 @@ local MODULES = {
   "render",
   "schema",
   "settings",
+  "settings_model",
   "sidebar",
   "state",
   "store",

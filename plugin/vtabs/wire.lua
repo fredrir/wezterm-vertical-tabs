@@ -95,6 +95,25 @@ local function normalized_overrides(user)
   return out
 end
 
+---The renderer-facing config surface, normalised exactly as the scene fixtures are.
+function M.render_section(cfg)
+  return {
+    meta = cfg.meta ~= false,
+    padding = cfg.padding,
+    frame = layout.framed(cfg),
+    tab_height = cfg.tab_height,
+    row_gap = cfg.row_gap,
+    separator = cfg.separator,
+    pinned_style = cfg.pinned_style,
+    close_button = cfg.close_button,
+    show_index = cfg.show_index,
+    scroll_indicator = cfg.scroll_indicator == false and "never" or cfg.scroll_indicator,
+    new_tab_button = not not cfg.new_tab_button,
+    new_tab_label = cfg.new_tab_label,
+    hover = cfg.hover,
+  }
+end
+
 local function config_body(cfg, ctx)
   local effective = ctx.effective or {}
   local window = ctx.window_dims or {}
@@ -123,21 +142,7 @@ local function config_body(cfg, ctx)
       follow_pointer = cfg.popover.follow_pointer,
       overflow = cfg.popover.overflow,
     },
-    render = {
-      meta = cfg.meta ~= false,
-      padding = cfg.padding,
-      frame = layout.framed(cfg),
-      tab_height = cfg.tab_height,
-      row_gap = cfg.row_gap,
-      separator = cfg.separator,
-      pinned_style = cfg.pinned_style,
-      close_button = cfg.close_button,
-      show_index = cfg.show_index,
-      scroll_indicator = cfg.scroll_indicator == false and "never" or cfg.scroll_indicator,
-      new_tab_button = not not cfg.new_tab_button,
-      new_tab_label = cfg.new_tab_label,
-      hover = cfg.hover,
-    },
+    render = M.render_section(cfg),
     mac = {
       integrated_buttons = ctx.chrome and ctx.chrome.integrated_buttons or false,
       native_button_style = ctx.chrome and ctx.chrome.native_button_style or false,
@@ -227,7 +232,8 @@ local function model_body(cfg, ctx, wid)
 end
 
 ---Bumps the per-window rev only when the body changed; the encoded string is the change detector.
-local function versioned(wid, kind, body)
+---`tag` is the wire's `t` when it differs from the dedupe kind: two models share one tag.
+local function versioned(wid, kind, body, tag)
   local per = revs[wid]
   if not per then
     per = {}
@@ -237,7 +243,7 @@ local function versioned(wid, kind, body)
   if not entry or entry.body ~= body then
     entry = { rev = (entry and entry.rev or 0) + 1, body = body }
     per[kind] = entry
-    entry.line = string.format('{"t":"%s","rev":%d,%s', kind, entry.rev, body:sub(2))
+    entry.line = string.format('{"t":"%s","rev":%d,%s', tag or kind, entry.rev, body:sub(2))
   end
   return entry.line
 end
@@ -253,22 +259,35 @@ function M.sync(gui_window, ctx)
     model = versioned(wid, "model", encode(model_body(cfg, ctx, wid))),
     menu = versioned(wid, "menu", encode(menu or { open = false })),
   }
-  for _, info in ipairs(gui_window:mux_window():tabs_with_info()) do
-    local sb = sidebar.find(info.tab)
-    if sb and sidebar.is_ready(sb) and (store.proto[sb:pane_id()] or 1) >= 2 then
-      local pid = sb:pane_id()
-      local seen = sent[pid]
-      if not seen then
-        seen = {}
-        sent[pid] = seen
-      end
-      for _, kind in ipairs { "config", "theme", "model", "menu" } do
-        local line = lines[kind]
-        if seen[kind] ~= line and sidebar.send_raw(sb, line) then
-          seen[kind] = line
-        end
+  local function push(pane, kinds)
+    local pid = pane:pane_id()
+    local seen = sent[pid]
+    if not seen then
+      seen = {}
+      sent[pid] = seen
+    end
+    for _, kind in ipairs(kinds) do
+      local line = lines[kind]
+      if seen[kind] ~= line and sidebar.send_raw(pane, line) then
+        seen[kind] = line
       end
     end
+  end
+  local mux_win = gui_window:mux_window()
+  for _, info in ipairs(mux_win:tabs_with_info()) do
+    local sb = sidebar.find(info.tab)
+    if sb and not sidebar.is_settings(sb) and sidebar.is_ready(sb) and (store.proto[sb:pane_id()] or 1) >= 2 then
+      push(sb, { "config", "theme", "model", "menu" })
+    end
+  end
+  -- The settings pane shares config and theme but has a screen of its own: one model, its own kind.
+  local settings = require "vtabs.settings"
+  local _, page_pane = settings.find(mux_win)
+  if page_pane and sidebar.is_ready(page_pane) and (store.proto[page_pane:pane_id()] or 1) >= 2 then
+    local st = settings.page_state(wid)
+    local body = require("vtabs.settings_model").body(cfg, st, nil)
+    lines.settings = versioned(wid, "settings", encode(body), "model")
+    push(page_pane, { "config", "theme", "settings" })
   end
 end
 

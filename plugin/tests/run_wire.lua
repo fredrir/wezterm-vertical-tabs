@@ -102,3 +102,22 @@ test("wire: menu_pick runs the same path a v1 click does", function()
   end
   eq(#win.tab_list, tabs_before - 1, "the pick closed the tab")
 end)
+
+test("wire: the settings pane gets its own screen, beside the shared config and theme", function()
+  local win, gui = ready_window()
+  local settings = require "vtabs.settings"
+  local tab = settings.open(gui)
+  assert(tab, "the page opened")
+  local _, pane = settings.find(win)
+  assert(pane, "and has a pane")
+  pane.vars.vtabs_token = state.token_for(pane:pane_id())
+  state.session.proto[pane:pane_id()] = 2
+  view.sync(gui, { force = true })
+  local models = v2_lines(pane, "model")
+  assert(#models >= 1, "a model reached the page")
+  local last = decode(models[#models])
+  eq(last.screen, "settings")
+  assert(#last.fields > 20)
+  eq(#v2_lines(pane, "config"), 1, "config shared")
+  eq(#v2_lines(pane, "menu"), 0, "no menu for the page")
+end)

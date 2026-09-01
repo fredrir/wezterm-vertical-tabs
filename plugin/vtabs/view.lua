@@ -344,6 +344,11 @@ local function sync_settings(gui_window, cfg, resolved, opts, now)
   if not dims or dims.cols == 0 then
     return
   end
+  if store.paints[pid] then
+    store.dims[pid] = { cols = dims.cols, rows = dims.viewport_rows }
+    store.sent_at[pid] = now
+    return
+  end
   local ok, result = pcall(page.paint, {
     cols = dims.cols,
     rows = dims.viewport_rows,

@@ -199,6 +199,82 @@ pub struct ModelMsg {
     pub tabs: Vec<TabRecord>,
     #[serde(default)]
     pub private: bool,
+    /// `screen == "settings"` only: the form, in order, with everything a row shows pre-rendered.
+    #[serde(default)]
+    pub fields: Vec<SettingsField>,
+    #[serde(default)]
+    pub groups: Vec<SettingsGroup>,
+    #[serde(default)]
+    pub caveat: Option<Vec<String>>,
+    #[serde(default)]
+    pub version: Option<String>,
+    #[serde(default)]
+    pub preview: Option<SettingsPreview>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct SettingsGroup {
+    pub id: String,
+    pub label: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default, Deserialize)]
+pub struct SettingsLock {
+    pub text: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default, Deserialize)]
+pub struct SettingsEditing {
+    #[serde(default)]
+    pub buffer: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct SettingsField {
+    pub key: String,
+    #[serde(default)]
+    pub label: String,
+    #[serde(default)]
+    pub group: String,
+    #[serde(default)]
+    pub widget: String,
+    #[serde(default)]
+    pub value_text: String,
+    #[serde(default)]
+    pub changed: bool,
+    #[serde(default)]
+    pub locked: Option<SettingsLock>,
+    #[serde(default)]
+    pub depth: i64,
+    #[serde(default)]
+    pub help: String,
+    #[serde(default)]
+    pub editing: Option<SettingsEditing>,
+    #[serde(default)]
+    pub armed: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct SettingsPreview {
+    pub render: RenderSection,
+    #[serde(default)]
+    pub icons: bool,
+    #[serde(default)]
+    pub tabs: Vec<PreviewTab>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct PreviewTab {
+    pub id: i64,
+    pub index: i64,
+    #[serde(default)]
+    pub title: String,
+    #[serde(default)]
+    pub meta: Option<String>,
+    #[serde(default)]
+    pub active: bool,
+    #[serde(default)]
+    pub icon: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]

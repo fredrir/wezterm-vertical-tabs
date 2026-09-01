@@ -7,6 +7,8 @@ fn dump_frames(scenes: &str, out: &str) -> Result<(), String> {
         .map_err(|e| format!("{scenes}: {e}"))?
         .filter_map(|e| e.ok())
         .filter(|e| e.path().extension().is_some_and(|x| x == "json"))
+        // settings-* scenes belong to the settings screen; its own gate renders them
+        .filter(|e| !e.file_name().to_string_lossy().starts_with("settings-"))
         .collect();
     entries.sort_by_key(|e| e.file_name());
     for entry in entries {
