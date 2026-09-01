@@ -26,6 +26,9 @@ jobs:
       - name: crate and boundary rules
         run: sh scripts/lint-boundaries.sh && sh scripts/lint-crate-deps.sh
         working-directory: .
+      - name: golden frames match plugin/tests/golden/frames
+        run: sh scripts/check-frames.sh
+        working-directory: .
   plugin:
     runs-on: ubuntu-latest
     defaults:
@@ -48,7 +51,5 @@ jobs:
       - name: docs table matches the schema
         run: lua scripts/gen-docs.lua --check
         working-directory: .
-      - name: golden frames match plugin/tests/golden/frames
-        run: sh scripts/check-frames.sh
         working-directory: .
 
