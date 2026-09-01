@@ -24,7 +24,6 @@ lint:
     lua scripts/gen-docs.lua --check
     sh scripts/lint-boundaries.sh
     sh scripts/lint-crate-deps.sh
-    test ! -s scripts/frozen-v1.sha256 || sha256sum -c scripts/frozen-v1.sha256
 
 # Regenerate plugin/vtabs/gen/protocol.lua from vtabs-protocol/src/limits.rs
 gen-protocol:

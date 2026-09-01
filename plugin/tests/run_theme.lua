@@ -3,13 +3,10 @@ local wezterm = require "wezterm"
 local util = require "vtabs.util"
 local config = require "vtabs.config"
 local theme = require "vtabs.theme"
-local state = require "vtabs.state"
-local sidebar = require "vtabs.sidebar"
-local view_mod = require "vtabs.view"
 local palettes = require "palettes"
 
 local test, eq, rgb, hex, palette = H.test, H.eq, H.rgb, H.hex, H.palette
-local legacy, ready_window = H.legacy, H.ready_window
+local legacy = H.legacy
 
 -- P1-spec §6.1: the gates every scheme must clear, and the ceiling clamp where it cannot.
 local CEILING_LIMITED = { ["Solarized Dark"] = true, ["Solarized Light"] = true }
@@ -105,34 +102,6 @@ test("unseen_fg keeps a distinct hue when ansi[4] clears the page, else follows 
   dull.ansi = { base.ansi[1], base.ansi[2], base.ansi[3], "#20202c", base.ansi[5] }
   local low = theme.resolve({}, dull)
   eq(rgb(low.unseen_fg), rgb(low.accent), "a dim ansi[4] falls back to the accent")
-end)
-
-test("a private window renders its header, through the same path the plugin uses", function()
-  local win, gui = ready_window()
-  local wid = gui:window_id()
-  local seen = nil
-  local render_mod = require "vtabs.render"
-  local original = render_mod.render
-  render_mod.render = function(frame)
-    seen = frame
-    return original(frame)
-  end
-  state.set_private(wid, true)
-  view_mod.invalidate_theme()
-  view_mod.sync(gui, { force = true })
-  render_mod.render = original
-  state.set_private(wid, false)
-  view_mod.invalidate_theme()
-  eq(seen.private, true, "view.sync tells the renderer the window is private")
-  local sb = sidebar.find(win.tab_list[1])
-  local hits = state.session.hits[sb:pane_id()]
-  local header = nil
-  for row = 1, 12 do
-    if hits[row] and hits[row].kind == "space" and row > 1 then
-      header = header or row
-    end
-  end
-  assert(header, "the header row is inert")
 end)
 
 test("a private window derives every accent-tinted surface from private_accent", function()

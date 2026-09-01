@@ -271,8 +271,6 @@ end
 function M.auth(pane)
   local token = state.token_for(pane:pane_id())
   if token then
-    -- whatever the pane painted before is not ours; the next sync must repaint it whole
-    store.frames[pane:pane_id()] = nil
     store.authed_at[pane:pane_id()] = util.now_ms()
     M.send(pane, { t = "auth", token = token })
   end
@@ -671,6 +669,23 @@ function M.give_up(_, _, sb)
   store.failed_domains[place] = now
   store.given_up[pid] = true
   util.warn("sidebar backend did not start in %s; fix backend.path and close that pane", place)
+end
+
+---A backend that announced less than v2 or does not paint cannot be driven: its place is not
+---retried for a while and the pane is left for the user, as a backend that never answered is.
+function M.refuse_v1(pane, version)
+  local pid = pane:pane_id()
+  local place = store.pane_domain[pid] or "local@"
+  store.given_up[pid] = true
+  if not domain_failed(place, util.now_ms()) then
+    store.failed_domains[place] = util.now_ms()
+    util.warn_once(
+      "v1-" .. place,
+      "backend in %s speaks protocol v%s and cannot paint; update it (backend.path) and close that pane",
+      place,
+      tostring(version)
+    )
+  end
 end
 
 ---Pings idle sidebars; replaces one whose backend stopped answering.

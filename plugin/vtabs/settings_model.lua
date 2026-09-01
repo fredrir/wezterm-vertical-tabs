@@ -46,7 +46,7 @@ local function preview_body(cfg, pending)
     }
   end
   local strip = {}
-  for _, action in ipairs(require("vtabs.layout").resolved_actions(merged)) do
+  for _, action in ipairs(require("vtabs.actions").resolved_strip(merged)) do
     strip[#strip + 1] = { id = action.id, icon = action.icon }
   end
   return {

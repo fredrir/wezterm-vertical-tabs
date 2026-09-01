@@ -1,31 +1,20 @@
-local ansi = require "vtabs.ansi"
 local config = require "vtabs.config"
 local state = require "vtabs.state"
 local store = require "vtabs.store"
 local sidebar = require "vtabs.sidebar"
-local settings = require "vtabs.settings"
-local page = require "vtabs.page"
 local model = require "vtabs.model"
-local render = require "vtabs.render"
 local geometry = require "vtabs.geometry"
-local popover = require "vtabs.popover"
-local anim = require "vtabs.anim"
-local theme = require "vtabs.theme"
 local platform = require "vtabs.platform"
-local glyphs = require "vtabs.glyphs"
 local mux = require "vtabs.mux"
 local util = require "vtabs.util"
 
 local M = {}
 
-local INACTIVE_REFRESH_MS = 1000
-
 ---Declared through `store`, so forgetting a window clears them without a list to keep in step.
 local scope = store.scope "view"
-local themes = scope.window()
+local theme_hooks = scope.window()
 local chrome = scope.window()
 local banding, banding_saved = scope.window(), scope.window()
-local popover_rect = scope.window()
 
 ---WezTerm titles the window after its active pane; under `hover = "follow"` that is the sidebar.
 function M.window_title(tab, pane, tabs, panes)
@@ -60,7 +49,7 @@ function M.window_title(tab, pane, tabs, panes)
   return title
 end
 
----Everything a fade needs, or nil when this window cannot play one.
+---The active tab's painting sidebar when this window may fade, or nil.
 local function fade_context(gui_window)
   local cfg = config.get()
   if cfg.animations == "off" then
@@ -71,88 +60,42 @@ local function fade_context(gui_window)
   if not sb or not sidebar.is_ready(sb) then
     return nil
   end
-  local domain = mux.domain(sb)
-  if cfg.animations == "auto" and domain ~= "local" then
+  if cfg.animations == "auto" and mux.domain(sb) ~= "local" then
     return nil
   end
-  -- a painting pane fades on its own clock: no frame to send, just the phase
-  if store.paints[sb:pane_id()] then
-    return cfg, sb, nil, nil
-  end
-  local cached = store.frames[sb:pane_id()]
-  if not cached or not cached.text then
-    return nil
-  end
-  local resolved = themes[gui_window:window_id()]
-  if not resolved or not resolved.bg then
-    return nil
-  end
-  return cfg, sb, cached, resolved
-end
-
-local function hex(rgb)
-  return string.format("#%02x%02x%02x", rgb[1], rgb[2], rgb[3])
+  return cfg, sb
 end
 
 -- The configured duration is the fade the user sees; the pre-resize phase keeps its own constant.
 local PHASE_MS = { expand_in = "expand_ms", collapse_in = "collapse_ms" }
 
----Fades the active tab's sidebar through one phase; the width still changes in a single step.
+---Fades the active tab's sidebar through one phase on the backend's own clock.
 function M.animate(gui_window, phase)
-  local cfg, sb, cached, resolved = fade_context(gui_window)
+  local cfg, sb = fade_context(gui_window)
   if not cfg then
     return false
   end
   local key = PHASE_MS[phase]
-  if not cached then
-    return sidebar.send(
-      sb,
-      { t = "fx", phase = phase, ms = key and cfg.animation[key] or nil, fps = cfg.animation.fps }
-    )
-  end
-  local command = anim.build(phase, { rows = cached.text, rows_n = cached.n }, {
-    anchor = hex(resolved.bg),
-    fps = cfg.animation.fps,
-    ms = key and cfg.animation[key] or nil,
-  })
-  return command ~= nil and sidebar.send(sb, command) or false
+  return sidebar.send(sb, { t = "fx", phase = phase, ms = key and cfg.animation[key] or nil, fps = cfg.animation.fps })
 end
 
 ---The menu rises out of the sidebar surface in one colour fade over its own rows; nothing on close.
 function M.animate_popover(gui_window)
-  local rect = popover_rect[gui_window:window_id()]
-  local cfg, sb, cached, resolved = fade_context(gui_window)
+  local cfg, sb = fade_context(gui_window)
   if not cfg or cfg.popover.fade_ms <= 0 then
     return false
   end
-  if not cached then
-    return sidebar.send(sb, { t = "fx", phase = "popover_in", ms = cfg.popover.fade_ms, fps = cfg.animation.fps })
-  end
-  if not rect then
-    return false
-  end
-  local rows = {}
-  for row = rect.y, rect.y + rect.h - 1 do
-    rows[#rows + 1] = row
-  end
-  local command = anim.build("popover_in", { rows = cached.text, rows_n = cached.n }, {
-    anchor = hex(resolved.bg),
-    fps = cfg.animation.fps,
-    ms = cfg.popover.fade_ms,
-    rows = rows,
-  })
-  return command ~= nil and sidebar.send(sb, command) or false
+  return sidebar.send(sb, { t = "fx", phase = "popover_in", ms = cfg.popover.fade_ms, fps = cfg.animation.fps })
 end
 
 ---Without a window id, every window's: a config reload invalidates them all at once.
 function M.invalidate_theme(window_id)
   if window_id then
-    themes[window_id] = nil
+    theme_hooks[window_id] = nil
     chrome[window_id] = nil
-    popover_rect[window_id] = nil
     return
   end
-  for _, cache in ipairs { themes, chrome, popover_rect } do
+  for _, cache in ipairs { theme_hooks, chrome } do
     for id in pairs(cache) do
       cache[id] = nil
     end
@@ -180,7 +123,6 @@ local function chrome_for(gui_window, cfg)
       integrated_buttons = asked,
       native_button_style = native,
       preview = preview,
-      glyphs = glyphs.resolve(cfg.glyphs, effective),
     }
   end
   return chrome[wid]
@@ -238,13 +180,6 @@ function M.apply_titlebar_band(gui_window)
   return true
 end
 
----Remembered so the fade can be played over exactly the rows the menu took.
-local function rect_for(gui_window, dims, resolved, cfg)
-  local rect = popover.rect(gui_window, dims.viewport_rows, dims.cols, resolved, cfg)
-  popover_rect[gui_window:window_id()] = rect
-  return rect
-end
-
 ---A rail has no room beside the lights, so its toggle centres below them; without telling
 ---`strip_geometry` which mode it is in, the toggle lands off the end of the rail.
 local function strip_for(gui_window, cfg, dims, rail)
@@ -273,23 +208,25 @@ local function strip_for(gui_window, cfg, dims, rail)
   return { rows = g.rows, cols = g.cols, cell_w = g.cell_w, toggle = toggle, toggle_row = g.toggle_row }
 end
 
-local function theme_for(gui_window, cfg)
+---What `hooks.theme` answers for this window, cached until a reload; nil when it has nothing to say.
+local function theme_override_for(gui_window, cfg)
   local wid = gui_window:window_id()
-  if not themes[wid] then
-    local effective = mux.effective_config(gui_window)
-    local palette = effective and effective.resolved_palette or {}
-    local resolved = theme.resolve(cfg.theme, palette, { private = state.is_private(wid) })
+  if theme_hooks[wid] == nil then
+    local custom = false
     if cfg.hooks.theme then
-      local ok, custom = pcall(cfg.hooks.theme, gui_window, resolved)
+      local effective = mux.effective_config(gui_window)
+      local palette = effective and effective.resolved_palette or {}
+      local resolved = require("vtabs.theme").resolve(cfg.theme, palette, { private = state.is_private(wid) })
+      local ok, answer = pcall(cfg.hooks.theme, gui_window, resolved)
       if not ok then
-        util.warn_once("hook-theme", "theme hook failed: %s", tostring(custom))
-      elseif type(custom) == "table" then
-        resolved = theme.resolve(custom, palette)
+        util.warn_once("hook-theme", "theme hook failed: %s", tostring(answer))
+      elseif type(answer) == "table" then
+        custom = answer
       end
     end
-    themes[wid] = resolved
+    theme_hooks[wid] = custom
   end
-  return themes[wid]
+  return theme_hooks[wid] or nil
 end
 
 ---Nil when the pane cannot report a size; the frame is then skipped rather than painted at a guess.
@@ -313,81 +250,8 @@ local function footer_for(cfg, mux_win)
   return type(rows) == "table" and rows or nil
 end
 
----Re-renders sidebars in the window; inactive tabs refresh lazily, frames are sent only when changed.
----Rows whose painted text changed, each with its own CUP; a full frame when the cache cannot be trusted.
----@return string|nil `nil` when nothing changed
-function M.payload_for(pid, result, dims, force)
-  local cache = store.frames[pid]
-  local stale = force
-    or cache == nil
-    or cache.cols ~= dims.cols
-    or cache.rows ~= dims.viewport_rows
-    or cache.n ~= result.rows_n
-  if stale then
-    return result.data
-  end
-  local parts = {}
-  for row = 1, result.rows_n do
-    if cache.text[row] ~= result.rows[row] then
-      parts[#parts + 1] = ansi.cup(row, 1) .. result.rows[row]
-    end
-  end
-  if #parts == 0 then
-    return nil
-  end
-  return ansi.HIDE_CURSOR .. table.concat(parts) .. ansi.RESET
-end
-
----Drops the row cache for a pane, forcing the next sync to repaint it whole.
-function M.invalidate_frames(pane_id)
-  if pane_id then
-    store.frames[pane_id] = nil
-  else
-    for id in pairs(store.frames) do
-      store.frames[id] = nil
-    end
-  end
-end
-
----The settings page: the same bridge, the same row-diff, its own frame producer.
-local function sync_settings(gui_window, cfg, resolved, opts, now)
-  local _, pane = settings.find(gui_window:mux_window())
-  if not pane or not sidebar.is_ready(pane) then
-    return
-  end
-  local pid = pane:pane_id()
-  local dims = dims_of(pane)
-  if not dims or dims.cols == 0 then
-    return
-  end
-  if store.paints[pid] then
-    store.dims[pid] = { cols = dims.cols, rows = dims.viewport_rows }
-    store.sent_at[pid] = now
-    return
-  end
-  local ok, result = pcall(page.paint, {
-    cols = dims.cols,
-    rows = dims.viewport_rows,
-    cfg = cfg,
-    theme = resolved,
-    glyphs = chrome_for(gui_window, cfg).glyphs,
-    st = settings.page_state(gui_window:window_id()),
-  })
-  if not ok then
-    util.warn_once("settings-render", "settings page render failed: %s", tostring(result):match "^[^\n]*")
-    return
-  end
-  store.hits[pid] = result.hits
-  store.dims[pid] = { cols = dims.cols, rows = dims.viewport_rows }
-  local payload = M.payload_for(pid, result, dims, opts.force)
-  if payload and sidebar.send(pane, { t = "frame", data = payload }) then
-    store.frames[pid] = { cols = dims.cols, rows = dims.viewport_rows, text = result.rows, n = result.rows_n }
-    store.sent_at[pid] = now
-  end
-end
-
-function M.sync(gui_window, opts)
-  opts = opts or {}
+---Publishes this window's state: the wire sends whatever changed to every painting pane.
+function M.sync(gui_window)
   local cfg = config.get()
   if cfg.debug then
     util.log("sync: window %d", gui_window:window_id())
@@ -395,14 +259,11 @@ function M.sync(gui_window, opts)
   local mux_win = gui_window:mux_window()
   local wid = gui_window:window_id()
   local items = model.build(gui_window)
-  local resolved = theme_for(gui_window, cfg)
   local footer = footer_for(cfg, mux_win)
   local active_tab = mux_win:active_tab()
   local active_tab_id = active_tab and active_tab:tab_id() or nil
-  local focus_index = state.has_focus(wid) and store.focus_index[wid] or nil
   local now = util.now_ms()
   geometry.sync(gui_window, active_tab_id)
-  sync_settings(gui_window, cfg, resolved, opts, now)
   -- After the width settles, so the card is drawn at the pane rect the correction leaves behind.
   require("vtabs.frame").sync(gui_window)
 
@@ -412,60 +273,18 @@ function M.sync(gui_window, opts)
     if sb and sidebar.is_ready(sb) then
       local pid = sb:pane_id()
       local is_active = info.tab:tab_id() == active_tab_id
-      local due = is_active or opts.force or now - (store.sent_at[pid] or 0) >= INACTIVE_REFRESH_MS
-      local dims = due and dims_of(sb) or nil
+      local dims = dims_of(sb)
       if dims then
         local rail = state.is_collapsed(wid) and cfg.collapsed == "rail" or nil
         local strip = strip_for(gui_window, cfg, dims, rail)
         if is_active or wire_strip == nil then
           wire_strip = strip
         end
-        if store.paints[pid] then
-          store.dims[pid] = { cols = dims.cols, rows = dims.viewport_rows }
-          store.sent_at[pid] = now
-          goto continue
-        end
-        -- a title or cwd that breaks one render must not stop the other sidebars in this window
-        local ok, result = pcall(render.render, {
-          cols = dims.cols,
-          rows = dims.viewport_rows,
-          strip = strip,
-          items = items,
-          theme = resolved,
-          cfg = cfg,
-          glyphs = chrome_for(gui_window, cfg).glyphs,
-          hover = is_active and store.hover[wid] or nil,
-          drag = is_active and store.drag[wid] or nil,
-          scroll = store.scroll[wid] or 0,
-          user_scrolled = store.user_scrolled[wid] == true,
-          ensure_visible = not store.user_scrolled[wid] and active_tab_id or nil,
-          focus_index = is_active and focus_index or nil,
-          private = state.is_private(wid),
-          rail = rail,
-          popover = is_active and rect_for(gui_window, dims, resolved, cfg) or nil,
-          footer = footer,
-        })
-        if not ok then
-          util.warn_once("render-failed", "sidebar render failed: %s", tostring(result):match "^[^\n]*")
-          result = nil
-        end
-        if result and is_active then
-          store.scroll[wid] = result.scroll
-        end
-        if result then
-          store.hits[pid] = result.hits
-          store.dims[pid] = { cols = dims.cols, rows = dims.viewport_rows }
-          local payload = M.payload_for(pid, result, dims, opts.force)
-          if payload and sidebar.send(sb, { t = "frame", data = payload }) then
-            store.frames[pid] = { cols = dims.cols, rows = dims.viewport_rows, text = result.rows, n = result.rows_n }
-            store.sent_at[pid] = now
-          end
-        end
-        ::continue::
+        store.dims[pid] = { cols = dims.cols, rows = dims.viewport_rows }
+        store.sent_at[pid] = now
       end
     end
   end
-  -- After the frame loop so the popover rect this poll placed is the one the bridge carries.
   require("vtabs.wire").sync(gui_window, {
     cfg = cfg,
     items = items,
@@ -474,6 +293,7 @@ function M.sync(gui_window, opts)
     effective = mux.effective_config(gui_window),
     chrome = chrome_for(gui_window, cfg),
     strip = wire_strip,
+    theme_override = theme_override_for(gui_window, cfg),
     window_dims = mux.dims(gui_window),
   })
 end

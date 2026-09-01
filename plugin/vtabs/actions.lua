@@ -5,7 +5,6 @@ local state = require "vtabs.state"
 local store = require "vtabs.store"
 local sidebar = require "vtabs.sidebar"
 local model = require "vtabs.model"
-local hit = require "vtabs.hit"
 local mux = require "vtabs.mux"
 local util = require "vtabs.util"
 
@@ -138,7 +137,9 @@ function M.move_tab_to_slot(gui_window, tab_id, slot)
       pinned_others = pinned_others + 1
     end
   end
-  local should_pin = hit.should_pin(slot, pinned_others, state.is_pinned(tab_id))
+  -- pinned when it lands inside the pinned block, which grows by one when the dragged tab was in it
+  local block = pinned_others + (state.is_pinned(tab_id) and 1 or 0)
+  local should_pin = slot >= 1 and slot <= block
   if state.is_pinned(tab_id) ~= should_pin then
     state.set_pinned(tab_id, should_pin)
     for _, item in ipairs(items) do
@@ -687,6 +688,40 @@ M.action.split = function(direction)
   return callback(function(window)
     M.split(window, direction)
   end)
+end
+
+---Which strip buttons a config resolves to, left to right; the model carries this list.
+local ACTION_DEFAULT, ACTION_BY_ID = {}, {}
+for _, button in ipairs(M.strip) do
+  ACTION_BY_ID[button.id] = button
+  if button.default then
+    ACTION_DEFAULT[#ACTION_DEFAULT + 1] = button.id
+  end
+end
+
+function M.resolved_strip(cfg)
+  local wanted = cfg.strip_actions
+  if type(wanted) ~= "table" or #wanted == 0 then
+    wanted = ACTION_DEFAULT
+  end
+  local hooks = cfg.hooks or {}
+  local out = {}
+  for _, entry in ipairs(wanted) do
+    local button = ACTION_BY_ID[entry]
+    if type(entry) == "table" and entry.on_click then
+      out[#out + 1] = { id = entry.id or "custom", icon = entry.icon }
+    elseif entry == "toggle" then
+      if cfg.toggle_button then
+        out[#out + 1] = { id = "toggle" }
+      end
+    elseif button then
+      -- no `action` means no built-in behaviour, so the glyph is drawn only when a hook answers it
+      if button.action or hooks[entry] then
+        out[#out + 1] = { id = entry }
+      end
+    end
+  end
+  return out
 end
 
 return M

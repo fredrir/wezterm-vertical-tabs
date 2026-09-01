@@ -180,10 +180,10 @@ end)
 
 test("windows the mux forgot are dropped from state", function()
   state.set_collapsed(4242, true)
-  state.session.hover[4242] = { x = 1, y = 1 }
+  state.session.scroll[4242] = 4
   state.forget_windows_except { [1] = true }
   eq(state.is_collapsed(4242), false)
-  eq(state.session.hover[4242], nil)
+  eq(state.session.scroll[4242], nil)
 end)
 
 test("tokens do not repeat and are 16 bytes of hex", function()
@@ -247,9 +247,10 @@ test("a marker pane before the sidebar in pane order does not steal the role", f
   eq(sidebar.find(tab):pane_id(), sb:pane_id(), "ranked above a bare marker")
   sidebar.ensure(gui)
   eq(state.token_for(sb:pane_id()), token, "token kept")
+  state.session.proto[sb:pane_id()] = 2
   local sent = #sb.sent
   require("vtabs.view").sync(gui, { force = true })
-  assert(#sb.sent > sent, "frames still go to the real sidebar")
+  assert(#sb.sent > sent, "the model still goes to the real sidebar")
   eq(#liar.sent, 0, "the liar is never written to")
 end)
 

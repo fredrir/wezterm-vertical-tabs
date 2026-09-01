@@ -7,10 +7,9 @@ local sidebar = require "vtabs.sidebar"
 local actions = require "vtabs.actions"
 local input = require "vtabs.input"
 local geometry = require "vtabs.geometry"
-local popover = require "vtabs.popover"
 
-local test, eq, rgb, title_row, palette = H.test, H.eq, H.rgb, H.title_row, H.palette
-local later, mark_ready, mouse, press_row, window = H.later, H.mark_ready, H.mouse, H.press_row, H.window
+local test, eq, rgb, palette = H.test, H.eq, H.rgb, H.palette
+local later, mark_ready, window = H.later, H.mark_ready, H.window
 local ready_window, key_window = H.ready_window, H.key_window
 
 test("v2 do: press_card activates the tab and arms the drag at its origin", function()
@@ -80,7 +79,7 @@ test("v2 do: a menu verb through the event path acts on the open menu instead of
   local win, gui, sb = H.open_popover(3)
   input.handle(gui, sb, "vtabs", '{"t":"do","a":"menu_pick","args":{"id":"activate"}}')
   eq(require("vtabs.popover").get(gui:window_id()), nil, "the pick closed the menu itself")
-  eq(win.active_tab_ref, win.tab_list[1], "and ran the item: tab 1 owns the menu opened over row 3")
+  eq(win.active_tab_ref, win.tab_list[3], "and ran the item for the tab the menu was opened for")
 
   local win2, gui2, sb2 = H.open_popover(3)
   input.handle(
@@ -137,115 +136,20 @@ test("v2 do: the vocabulary is total against the spec", function()
   eq(table.concat(got, ","), table.concat(expected, ","))
 end)
 
-test("ready records the backend's protocol version, keyed by pane", function()
+test("ready records a v2 painting backend, and refuses anything less", function()
   local win, gui = ready_window()
   local sb = sidebar.find(win.tab_list[1])
-  input.handle(gui, sb, "vtabs", '{"t":"ready","v":1,"cols":28,"rows":24}')
-  eq(state.session.proto[sb:pane_id()], 1)
-end)
-
-test("press keeps the sidebar of the clicked tab focused and points the drag at it", function()
-  local win, gui = ready_window()
-  local sb1 = sidebar.find(win.tab_list[1])
-  local drag = press_row(gui, sb1, title_row(sb1, win.tab_list[3].id))
-  eq(win.active_tab_ref, win.tab_list[3])
-  eq(win.tab_list[3].active, sidebar.find(win.tab_list[3]), "sidebar holds focus, not the shell")
-  eq(drag.pane_id, sidebar.find(win.tab_list[3]):pane_id())
-end)
-
-test("one row of drift never arms a drag; three rows plus the dwell reorders on release", function()
-  local win, gui = ready_window()
-  local sb1 = sidebar.find(win.tab_list[1])
-  local ids = {}
-  for i, t in ipairs(win.tab_list) do
-    ids[i] = t.id
-  end
-  local from = title_row(sb1, ids[3])
-  local onto = title_row(sb1, ids[1])
-  press_row(gui, sb1, from)
-  local sb3 = sidebar.find(win.tab_list[3])
-  mouse(gui, sb3, "drag", "left", 5, from - 1)
-  eq(state.session.drag[gui:window_id()].active, false, "one row is jitter")
-  mouse(gui, sb3, "up", "left", 5, from - 1)
-  eq(win.tab_list[3].id, ids[3], "order untouched")
-
-  press_row(gui, sb1, from)
-  mouse(gui, sb3, "drag", "left", 5, onto)
-  assert(state.session.drag[gui:window_id()].active, "three rows arms the drag")
-  mouse(gui, sb3, "up", "left", 5, onto)
-  eq(win.tab_list[1].id, ids[3], "dragged tab took the first slot")
-end)
-
-test("a drag that starts before the dwell elapses is jitter", function()
-  local win, gui = ready_window()
-  local sb1 = sidebar.find(win.tab_list[1])
-  press_row(gui, sb1, title_row(sb1, win.tab_list[3].id), "hold")
-  local sb3 = sidebar.find(win.tab_list[3])
-  mouse(gui, sb3, "drag", "left", 5, title_row(sb1, win.tab_list[1].id))
-  eq(state.session.drag[gui:window_id()].active, false)
-end)
-
-test("drag events from a pane other than the drag origin are dropped", function()
-  local win, gui = ready_window()
-  local sb1 = sidebar.find(win.tab_list[1])
-  press_row(gui, sb1, title_row(sb1, win.tab_list[3].id))
+  input.handle(gui, sb, "vtabs", '{"t":"ready","v":2,"paints":true,"cols":28,"rows":24}')
+  eq(state.session.proto[sb:pane_id()], 2)
+  eq(state.session.paints[sb:pane_id()], true)
   local sb2 = sidebar.find(win.tab_list[2])
-  mouse(gui, sb2, "drag", "left", 5, title_row(sb1, win.tab_list[1].id))
-  eq(state.session.drag[gui:window_id()].active, false)
-end)
-
-test("a drag whose pane has no hit map is dropped instead of dropping at slot 1", function()
-  local win, gui = ready_window()
-  local sb1 = sidebar.find(win.tab_list[1])
-  local drag = press_row(gui, sb1, 3)
-  state.session.hits[sb1:pane_id()] = nil
-  mouse(gui, sb1, "drag", "left", 5, 6)
-  eq(drag.active, false)
-  eq(drag.over_index, nil)
-end)
-
-test("right click opens the popover on release, never while the button is held", function()
-  local win, gui = ready_window()
-  local sb1 = sidebar.find(win.tab_list[1])
-  local before = #win.actions
-  mouse(gui, sb1, "down", "right", 5, 4)
-  eq(popover.get(gui:window_id()), nil, "nothing opens under a held button")
-  eq(#win.actions, before, "and no overlay action is performed, ever")
-  mouse(gui, sb1, "up", "right", 5, 4)
-  local pop = popover.get(gui:window_id())
-  assert(pop, "the release opens it")
-  eq(pop.tab_id, win.tab_list[1].id)
-  eq(pop.anchor_row, 4, "anchored on the row the press landed on")
-  eq(#win.actions, before, "still no overlay: it is drawn inside the sidebar")
-  popover.close(gui)
-end)
-
-test("hover=press restores content focus on release, hover=follow keeps the sidebar", function()
-  local win, gui = ready_window()
-  local tab = win.tab_list[1]
-  local sb1 = sidebar.find(tab)
-  press_row(gui, sb1, 3)
-  eq(tab.active, sb1)
-  mouse(gui, sb1, "up", "left", 5, 3)
-  eq(tab.active, sb1, "follow leaves the sidebar active")
-  config.setup { hover = "press", backend = { path = "/bin/wez-vtabs" } }
-  press_row(gui, sb1, 3)
-  mouse(gui, sb1, "up", "left", 5, 3)
-  assert(tab.active ~= sb1, "press mode hands focus back")
-  config.setup { backend = { path = "/bin/wez-vtabs" } }
-end)
-
-test("mouse move repaints on a row change and stays quiet inside the row", function()
-  local win, gui = ready_window()
-  local sb1 = sidebar.find(win.tab_list[1])
-  local sent = #sb1.sent
-  -- an inactive card, so hovering it actually changes the frame
-  local row = title_row(sb1, win.tab_list[2].id)
-  mouse(gui, sb1, "move", "none", 5, row)
-  local repainted = #sb1.sent
-  assert(repainted > sent, "crossing into a row repaints")
-  mouse(gui, sb1, "move", "none", 6, row)
-  eq(#sb1.sent, repainted, "same row, same spans, no frame")
+  input.handle(gui, sb2, "vtabs", '{"t":"ready","v":1,"cols":28,"rows":24}')
+  eq(state.session.proto[sb2:pane_id()], nil, "a v1 backend is not recorded")
+  eq(state.session.given_up[sb2:pane_id()], true, "it is given up on")
+  assert(state.session.failed_domains["local@"], "and its domain is not retried for a while")
+  -- the ledger is process-wide; later fixtures attach in local@ again
+  state.session.failed_domains["local@"] = nil
+  state.session.given_up[sb2:pane_id()] = nil
 end)
 
 test("base64_decode round-trips and refuses malformed input", function()

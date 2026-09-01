@@ -8,7 +8,6 @@ end
 
 local theme = require "vtabs.theme"
 local util = require "vtabs.util"
-local glyphs = require "vtabs.glyphs"
 local icons = require "vtabs.icons"
 local platform = require "vtabs.platform"
 local palettes = require "palettes"
@@ -128,35 +127,7 @@ end
 write("backend/crates/vtabs-view/tests/fixtures/text.json", text_cases)
 write("backend/crates/vtabs-view/tests/fixtures/paths.json", path_cases)
 
--- glyphs.resolve: bases are synthetic; icons defaults under the stub are ASCII, not production
-local glyph_cases = {}
-local BASES = {
-  { name = "empty", base = {} },
-  { name = "wide close", base = { close = "🚀" } },
-  { name = "ghost broken", base = { frame_tl = "X" } },
-  { name = "scroll override", base = { scroll = "S", ellipsis = "~" } },
-}
-local EFFECTIVES = {
-  { name = "default", effective = {} },
-  { name = "no blocks", effective = { custom_block_glyphs = false } },
-  { name = "wide ambiguous", effective = { treat_east_asian_ambiguous_width_as_wide = true } },
-  {
-    name = "no blocks, wide ambiguous",
-    effective = { custom_block_glyphs = false, treat_east_asian_ambiguous_width_as_wide = true },
-  },
-}
-for _, b in ipairs(BASES) do
-  for _, e in ipairs(EFFECTIVES) do
-    glyph_cases[#glyph_cases + 1] = {
-      name = b.name .. " / " .. e.name,
-      base = b.base,
-      custom_block_glyphs = e.effective.custom_block_glyphs ~= false,
-      wide_ambiguous = e.effective.treat_east_asian_ambiguous_width_as_wide == true,
-      resolved = glyphs.resolve(b.base, e.effective),
-    }
-  end
-end
-write("backend/crates/vtabs-view/tests/fixtures/glyphs.json", glyph_cases)
+-- glyphs.resolve moved to Rust with its fixture committed; vtabs-view/tests/fixtures/glyphs.json is final
 
 -- util.sanitize: inputs as byte arrays, JSON cannot carry the invalid sequences
 local RAW = {

@@ -70,11 +70,9 @@ end
 ---in none of them, and two that nothing ever cleared. Here the lifetime is the declaration.
 ---`process` is keyed by a domain name, which outlives every window that ever reached it.
 local SESSION = {
-  hover = "window",
   drag = "window",
   scroll = "window",
   user_scrolled = "window",
-  last_click = "window",
   known_tabs = "window",
   focus_index = "window",
   last_active = "window",
@@ -86,8 +84,6 @@ local SESSION = {
   moving = "tab",
   attaching = "tab",
 
-  hits = "pane",
-  frames = "pane",
   dims = "pane",
   ready = "pane",
   proto = "pane",

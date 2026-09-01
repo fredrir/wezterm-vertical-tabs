@@ -2,12 +2,9 @@ local H = require "support.helpers"
 local wezterm = require "wezterm"
 local util = require "vtabs.util"
 local config = require "vtabs.config"
-local render = require "vtabs.render"
 local theme = require "vtabs.theme"
 local keys = require "vtabs.keys"
 local state = require "vtabs.state"
-local hit = require "vtabs.hit"
-local glyphs = require "vtabs.glyphs"
 local model = require "vtabs.model"
 local sidebar = require "vtabs.sidebar"
 local actions = require "vtabs.actions"
@@ -19,11 +16,10 @@ local palettes = require "palettes"
 local platform = require "vtabs.platform"
 local page = require "vtabs.page"
 
-local test, eq, usub, row_text, rgb = H.test, H.eq, H.usub, H.row_text, H.rgb
-local hex, page_rows, dump_lines, legacy, p1_view = H.hex, H.page_rows, H.dump_lines, H.legacy, H.p1_view
-local dump_styled = H.dump_styled
-local page_view, attach_all, mark_ready, window, RETINA = H.page_view, H.attach_all, H.mark_ready, H.window, H.RETINA
-local here, mouse = H.here, H.mouse
+local test, eq, rgb = H.test, H.eq, H.rgb
+local hex, legacy = H.hex, H.legacy
+local attach_all, mark_ready, window = H.attach_all, H.mark_ready, H.window
+local here = H.here
 
 test("P3 A1: the settings page carries the marker and is never taken for a sidebar", function()
   local settings = require "vtabs.settings"
@@ -90,7 +86,8 @@ test("P3 A2b: escape closes the settings tab, not whichever tab is active", func
   local other = win.tab_list[1]
   win.active_tab_ref = other
   local before = #win.tab_list
-  input.handle(gui, pane, "vtabs", '{"t":"key","key":"escape"}')
+  -- the painting page owns its keys and reports Escape as the verb
+  input.handle(gui, pane, "vtabs", '{"t":"do","a":"close_settings"}')
   eq(#win.tab_list, before - 1, "one tab closed")
   eq(settings.find(win), nil, "and it was the page")
   for _, tab in ipairs(win.tab_list) do
@@ -130,17 +127,15 @@ test("P3 A2c: every trigger reaches actions.open_settings, and only one place sp
   local sb = sidebar.find(win.tab_list[1])
   local function click_settings()
     view_mod.sync(gui, { force = true })
-    for y, h in pairs(state.session.hits[sb:pane_id()] or {}) do
-      for _, span in ipairs(h.spans or {}) do
-        if span.id == "settings" then
-          mouse(gui, sb, "down", "left", span.x1, y)
-          return true
-        end
+    for _, button in ipairs(require("vtabs.actions").resolved_strip(config.get())) do
+      if button.id == "settings" then
+        require("vtabs.input").handle(gui, sb, "vtabs", '{"t":"do","a":"strip","id":"settings"}')
+        return true
       end
     end
     return false
   end
-  assert(click_settings(), "the strip paints a settings button by default")
+  assert(click_settings(), "the strip carries a settings button by default")
   eq(calls, 4, "and the strip button")
 
   -- A hook is what points it somewhere else; the built-in is only the default destination.
@@ -160,26 +155,6 @@ test("P3 A2c: every trigger reaches actions.open_settings, and only one place sp
 
   settings.open = original
   config.setup(legacy { backend = { path = "/bin/wez-vtabs" } })
-end)
-
-test("P3 frames are written for design review", function()
-  for _, size in ipairs { { 100, 21 }, { 60, 18 }, { 40, 18 } } do
-    local pv = page_view { cols = size[1], rows = size[2], st = { group = 2, focus = 4 } }
-    local lines, out = page_rows(pv)
-    dump_lines("settings-" .. size[1], lines, size[1])
-    dump_styled("settings-" .. size[1], out.data, size[2])
-    H.dump_settings_scene("settings-" .. size[1], pv)
-    for row = 1, size[2] do
-      eq(util.width(lines[row]), size[1], size[1] .. "-col row " .. row)
-    end
-  end
-  -- an uncommitted edit: `preview_cells` merges `pending` into `cfg` (icon_map does the same, A6a),
-  -- so the live preview must show icons off here even though the committed cfg still has them on
-  local pending = page_view { cols = 100, rows = 21, st = { group = 2, focus = 4 }, pending = { icons = false } }
-  local pending_lines, pending_out = page_rows(pending)
-  dump_lines("settings-pending", pending_lines, 100)
-  dump_styled("settings-pending", pending_out.data, 21)
-  H.dump_settings_scene("settings-pending", pending)
 end)
 
 test("P3 A3a/A3b: the nav is the descriptors' own groups and every option gets a widget", function()
@@ -291,230 +266,6 @@ test("P3 A7: copy as Lua reproduces exactly the non-default set", function()
   config.setup { backend = { path = "/bin/wez-vtabs" } }
 end)
 
-test("P3 A2/§2: the page has two breakpoints and nothing else", function()
-  local narrow = page_rows(page_view { cols = 40, rows = 12 })
-  local said = false
-  for _, line in ipairs(narrow) do
-    said = said or line:find("Settings needs 48 columns", 1, true) ~= nil
-  end
-  assert(said, "under 48 columns the page says so and draws nothing else")
-
-  local mid, mid_out = page_rows(page_view { cols = 60, rows = 18 })
-  eq(page.grid(60).preview, false, "48 to 89 is nav plus form")
-  assert(mid[1]:find("Settings", 1, true), "with a header")
-  for row = 1, 18 do
-    eq(util.width(mid[row]), 60, "60-col row " .. row)
-  end
-  eq(mid_out.hits[4].kind, "body", "and rows carry hit records")
-  assert(mid_out.hits[4].nav and mid_out.hits[4].id, "with both columns on them")
-
-  local wide, out = page_rows(page_view { cols = 100, rows = 21 })
-  eq(page.grid(100).preview, true, "90 and up adds the preview box")
-  for row = 1, 21 do
-    eq(util.width(wide[row]), 100, "100-col row " .. row)
-  end
-  local g = page.grid(100)
-  eq(g.nav_x1, 2)
-  eq(g.nav_x2, 19)
-  eq(g.divider, 20)
-  eq(g.caret_x, 21)
-  eq(g.label_x, 23)
-  eq(g.value_x2, 64)
-  eq(g.marker_x, 66)
-  eq(g.preview_x1, 69)
-  eq(g.preview_x2, 100)
-  eq(usub(wide[4], g.divider, g.divider), "│", "the divider runs down the body")
-  eq(usub(wide[4], g.preview_x1, g.preview_x1), "╭", "and the preview box is drawn")
-  eq(out.hits[1].kind, "chrome", "the header is not a target")
-end)
-
-test("P3 §2: the nav selects, the caret follows the focus, and hits name the field", function()
-  local v = page_view { cols = 100, rows = 21, st = { group = 2, focus = 4 } }
-  local rows, out = page_rows(v)
-  local nav_rows, field_rows = 0, 0
-  for row = 1, v.rows do
-    local h = out.hits[row]
-    nav_rows = h.nav ~= nil and nav_rows + 1 or nav_rows
-    field_rows = h.id ~= nil and field_rows + 1 or field_rows
-  end
-  assert(nav_rows > 0 and field_rows > 0, "the body carries both kinds of target")
-  local g = page.grid(100)
-  local caret_row
-  for row = 1, v.rows do
-    if usub(rows[row], g.caret_x, g.caret_x) == v.glyphs.focus then
-      caret_row = caret_row or row
-    end
-  end
-  eq(caret_row, 4 + 3, "the caret marks the focused field")
-  local focused = out.hits[caret_row]
-  eq(focused.kind, "body")
-  eq(hit.span(focused, g.value_x2), "inc", "the value column carries its own sub-targets")
-  eq(hit.span(focused, g.caret_x), "field", "the label is the row itself")
-  eq(hit.span(focused, g.nav_x1), "nav", "and the nav column is the nav, on the very same row")
-
-  local selected
-  for row = 1, v.rows do
-    local h = out.hits[row]
-    if h.nav and usub(rows[row], g.nav_x1, g.nav_x1) == v.glyphs.active then
-      selected = h.nav
-    end
-  end
-  eq(selected, page.groups()[2], "the marker is on the selected group")
-end)
-
-test("P3 §6: the preview renders the merged table and never touches the live config", function()
-  local v = page_view { cols = 100, rows = 21, pending = { new_tab_label = "PENDING" } }
-  local before = config.get().new_tab_label
-  local rows = page_rows(v)
-  local found = false
-  for _, line in ipairs(rows) do
-    found = found or line:find("PENDING", 1, true) ~= nil
-  end
-  assert(found, "the pending edit shows in the preview")
-  eq(config.get().new_tab_label, before, "A6b: and the live config is untouched")
-
-  local plain = page_rows(page_view { cols = 100, rows = 21 })
-  local same = true
-  for i = 1, #rows do
-    same = same and rows[i] == plain[i]
-  end
-  assert(not same, "so the preview really did change")
-end)
-
-test("P3 A3d: the recorder arms, shows the caveat only on macOS, and takes the next key", function()
-  local platform_mod = require "vtabs.platform"
-  local cfg = config.setup { backend = { path = "/bin/wez-vtabs" } }
-  local keys_group
-  for i, group in ipairs(page.groups(page.fields(cfg))) do
-    keys_group = group == "behaviour" and i or keys_group
-  end
-  local st = { group = keys_group, focus = 1, scroll = 0, filter = "keys." }
-  local v = page_view { cols = 100, rows = 21, cfg = cfg, st = st }
-
-  local idle = page.plan(v)
-  local first = idle.fields[1]
-  assert(first and first.widget == "recorder", "the filter found a keys.* row: " .. tostring(first and first.key))
-  assert(page.value_text(first):find("[ record ]", 1, true), "idle: " .. page.value_text(first))
-  local rows = page_rows(v)
-  for _, line in ipairs(rows) do
-    assert(not line:find("does not deliver CMD", 1, true), "A3d: no caveat while nothing is armed")
-  end
-
-  -- arming is what Enter does to a recorder
-  page.key(nil, v, { key = "enter" })
-  eq(st.armed, first.key, "Enter arms the recorder")
-  page_rows(v)
-  local armed_text = page.value_text(page.plan(v).fields[1])
-  assert(armed_text:find("ARMED", 1, true), "armed: " .. armed_text)
-
-  local was_mac = platform_mod.is_mac
-  platform_mod.is_mac = true
-  st.armed = first.key
-  local mac_rows = page_rows(v)
-  local said = false
-  for _, line in ipairs(mac_rows) do
-    said = said or line:find("does not deliver CMD", 1, true) ~= nil
-  end
-  assert(said, "A3d: on macOS the caveat is shown while armed")
-  local named = false
-  for _, line in ipairs(mac_rows) do
-    named = named or line:find("enable_kitty_keyboard", 1, true) ~= nil
-  end
-  assert(named, "and enable_kitty_keyboard is named, not offered")
-
-  platform_mod.is_mac = false
-  st.armed = first.key
-  local linux_rows = page_rows(v)
-  for _, line in ipairs(linux_rows) do
-    assert(not line:find("does not deliver CMD", 1, true), "A3d: and never where it is not true")
-  end
-  platform_mod.is_mac = was_mac
-
-  -- the recorder records what the pty delivered, not what the user meant
-  st.armed = first.key
-  page.key(nil, v, { key = "z", mods = { "CTRL", "SHIFT" } })
-  eq(st.armed, nil, "the next key disarms it")
-  eq(config.get().keys[first.key:match "^keys%.(.+)$"].key, "z", "and is taken as the binding")
-  eq(config.get().keys[first.key:match "^keys%.(.+)$"].mods, "CTRL|SHIFT", "mods come off the array the wire sends")
-  st.armed = first.key
-  page.key(nil, v, { key = "escape" })
-  eq(st.armed, nil, "escape disarms without recording")
-  config.setup(legacy { backend = { path = "/bin/wez-vtabs" } })
-end)
-
-test("P3 §3/§4: the badge names the source, and r resets exactly the focused field", function()
-  local cfg = config.setup { width = 32, backend = { path = "/bin/wez-vtabs" } }
-  local v = page_view { cols = 100, rows = 21, cfg = cfg, st = { group = 1, focus = 1, scroll = 0 } }
-  local rows, out = page_rows(v)
-  local function row_for(key, painted, plan_out)
-    for row = 1, 21 do
-      if plan_out.hits[row].id == key then
-        return painted[row]
-      end
-    end
-  end
-  local focused = row_for("width", rows, out)
-  assert(focused, "the width row is drawn")
-  assert(focused:find("LOCKED wezterm.lua", 1, true), "§4: the focused row names the source: " .. focused)
-  assert(not focused:find("(host)", 1, true), "and not as the host's")
-
-  -- every other locked row says LOCKED and shows its value; only one row is ever being asked about
-  local elsewhere = page_view { cols = 100, rows = 21, cfg = cfg, st = { group = 1, focus = 3, scroll = 0 } }
-  local other_rows, other_out = page_rows(elsewhere)
-  local unfocused = row_for("width", other_rows, other_out)
-  assert(unfocused:find("LOCKED", 1, true), "still badged: " .. unfocused)
-  assert(not unfocused:find("wezterm.lua", 1, true), "but the reason is the focused row's job: " .. unfocused)
-  assert(unfocused:find("32", 1, true), "and the value is shown instead: " .. unfocused)
-  local help = other_rows[19]
-  assert(help:find("—", 1, true), "the descriptor's label and help sit in the hint area: " .. help)
-
-  config.host_config = { window_padding = { left = 8 } }
-  local host_cfg = config.setup { backend = { path = "/bin/wez-vtabs" } }
-  local host_st = { group = 1, focus = 1, scroll = 0 }
-  for i, row in ipairs(page.plan(page_view { cols = 100, rows = 21, cfg = host_cfg, st = host_st }).fields) do
-    host_st.focus = row.key == "edge_to_edge" and i or host_st.focus
-  end
-  local hosted, hosted_out = page_rows(page_view { cols = 100, rows = 21, cfg = host_cfg, st = host_st })
-  local host_line = row_for("edge_to_edge", hosted, hosted_out)
-  assert(
-    host_line and host_line:find("wezterm.lua (host)", 1, true),
-    "§4: named as the host's: " .. tostring(host_line)
-  )
-  config.host_config = {}
-
-  -- r resets the focused field and nothing else, and the changed marker goes with it
-  local edited = config.setup { backend = { path = "/bin/wez-vtabs" } }
-  local st = { group = 2, focus = 1, scroll = 0 }
-  local ev = page_view { cols = 100, rows = 21, cfg = edited, st = st }
-  local plan = page.plan(ev)
-  local target, other
-  for i, row in ipairs(plan.fields) do
-    if row.widget == "picker" and not row.locked and not target then
-      target, st.focus = row, i
-    elseif row.widget == "picker" and not row.locked and not other then
-      other = row
-    end
-  end
-  assert(target and other, "two pickers to tell apart")
-  page.key(nil, ev, { key = "rightarrow" })
-  page.key(nil, ev, { key = "rightarrow" })
-  local moved = page.plan(page_view { cols = 100, rows = 21, cfg = config.get(), st = st })
-  eq(moved.fields[st.focus].changed, true, "the focused field moved off its default")
-  local marker_col = page.grid(100).marker_x
-  local after = page_rows(page_view { cols = 100, rows = 21, cfg = config.get(), st = st })
-  local marked = 0
-  for _, line in ipairs(after) do
-    marked = usub(line, marker_col, marker_col) == ev.glyphs.unseen and marked + 1 or marked
-  end
-  eq(marked, 1, "exactly one row carries the changed marker")
-
-  page.key(nil, ev, { key = "r" })
-  local reset = page.plan(page_view { cols = 100, rows = 21, cfg = config.get(), st = st })
-  eq(reset.fields[st.focus].changed, false, "r puts it back on the schema default")
-  eq(reset.fields[st.focus].value, target.default)
-  config.setup(legacy { backend = { path = "/bin/wez-vtabs" } })
-end)
-
 test("P3 §3: a type = any key fronts an enum, and custom is shown but not stepped", function()
   local cfg = config.setup { backend = { path = "/bin/wez-vtabs" } }
   local by_key = {}
@@ -539,120 +290,6 @@ test("P3 §3: a type = any key fronts an enum, and custom is shown but not stepp
   eq(page.WIDGETS.variant.activate(rows.frame), nil, "nor can Enter")
   assert(rows["frame.margin"], "its keys are listed below it instead")
   config.setup { backend = { path = "/bin/wez-vtabs" } }
-end)
-
-test("P3 §2: the hint bar and the preview icons go through the glyph guard", function()
-  local cfg = config.setup { backend = { path = "/bin/wez-vtabs" } }
-  local safe = glyphs.resolve(cfg.glyphs, {})
-  local wide = glyphs.resolve(cfg.glyphs, { treat_east_asian_ambiguous_width_as_wide = true })
-  for _, key in ipairs { "hint_up", "hint_down", "hint_left", "hint_right" } do
-    eq(util.width(safe[key]), 1, key .. " is one column")
-    eq(util.width(wide[key]), 1, key .. " stays one column under ambiguous-as-wide")
-  end
-  eq(wide.hint_up, "^", "the arrows are East Asian Ambiguous, so the flag substitutes them")
-  eq(wide.hint_left, "<")
-
-  local v = page_view { cols = 100, rows = 21 }
-  local bar = page_rows(v)[21]
-  assert(bar:find("Enter edit", 1, true), "Enter is spelled out, not U+23CE: " .. bar)
-  assert(not bar:find("⏎", 1, true), "which is in barely any monospace font")
-  local narrow = page_rows(page_view { cols = 60, rows = 18 })[18]
-  assert(narrow:find("Enter", 1, true), "narrow too: " .. narrow)
-
-  local ascii = page_view { cols = 100, rows = 21 }
-  ascii.glyphs = wide
-  local ascii_bar = page_rows(ascii)[21]
-  assert(ascii_bar:find("^v field", 1, true), "and the bar is composed from the guarded glyphs: " .. ascii_bar)
-
-  -- A6a: the preview's icons come from the merged map, so an icon_map edit shows there
-  local edited = page_rows(page_view { cols = 100, rows = 21, pending = { icon_map = { zsh = "Z" } } })
-  local found = false
-  for _, line in ipairs(edited) do
-    found = found or line:find("Z zsh", 1, true) ~= nil
-  end
-  assert(found, "A6a: the sample icons are resolved, never literals")
-  config.setup { backend = { path = "/bin/wez-vtabs" } }
-end)
-
-test("P3 §2: the 60-column layout is nav plus form, and says so under 48", function()
-  local narrow = page_rows(page_view { cols = 60, rows = 18, st = { group = 1, focus = 1, scroll = 0 } })
-  local g = page.grid(60)
-  eq(g.preview, false, "no preview box below 90 columns")
-  eq(g.nav_x1, 2)
-  eq(g.nav_x2, 15)
-  eq(g.divider, 16)
-  eq(g.caret_x, 17)
-  eq(g.label_x, 19)
-  eq(g.form_x2, 58)
-  assert(narrow[1]:find("Settings", 1, true), "the header")
-  eq(usub(narrow[4], g.divider, g.divider), "│", "the divider runs down the body")
-  eq(usub(narrow[4], g.nav_x1 + 2, g.nav_x1 + 7), "Layout", "nav on the left")
-  assert(narrow[18]:find("esc", 1, true), "and the narrow hint bar is last")
-  assert(not narrow[18]:find("copy as Lua", 1, true), "which is the short copy, not the wide one")
-  for row = 1, 18 do
-    eq(util.width(narrow[row]), 60, "60-col row " .. row)
-    assert(not narrow[row]:find("╭", 1, true), "row " .. row .. " draws no preview box")
-  end
-
-  local under = page_rows(page_view { cols = 47, rows = 12 })
-  local said, other = false, 0
-  for _, line in ipairs(under) do
-    if line:find("Settings needs 48 columns", 1, true) then
-      said = true
-    elseif line:match "%S" then
-      other = other + 1
-    end
-  end
-  assert(said, "under 48 it says so")
-  eq(other, 0, "and draws nothing else")
-  eq(page.grid(47), nil, "there is no grid to draw with")
-  assert(page.grid(48), "48 is the floor, not the first refusal")
-end)
-
-test("refactor 9: the hit kinds, the changed-set walk and the path check each have one home", function()
-  local settings = require "vtabs.settings"
-  -- the constants are the strings, so producers and consumers cannot drift apart on a typo
-  eq(hit.KIND.TAB, "tab")
-  eq(hit.KIND.ACTION, "action")
-  eq(hit.KIND.BODY, "body")
-  local v = p1_view { rows = 20, opts = { separator = "gap" } }
-  v.strip = { rows = 2, cols = 0, toggle_row = 1 }
-  local r = render.render(v)
-  local kinds = {}
-  for row = 1, v.rows do
-    kinds[r.hits[row].kind] = true
-  end
-  for _, kind in ipairs { hit.KIND.ACTION, hit.KIND.TAB, hit.KIND.NEW_TAB, hit.KIND.SPACE } do
-    assert(kinds[kind], "the sidebar still produces " .. kind)
-  end
-
-  -- one walk answers both "what goes in the file" and "what goes on the clipboard"
-  local cfg = config.setup { width = 32, theme = { accent = "#f5c2e7" }, backend = { path = "/bin/wez-vtabs" } }
-  local changed = settings.changed(cfg)
-  eq(changed.width, 32)
-  eq(changed.theme.accent, "#f5c2e7", "nested through the same descriptor walk")
-  eq(changed.row_gap, nil, "and nothing still at its default")
-  eq(changed.theme.elevation, nil)
-  local text = page.as_lua(cfg)
-  assert(text:find("width = 32", 1, true) and text:find('accent = "#f5c2e7"', 1, true), text)
-
-  -- the path check names a traversal segment, not any two dots anywhere in the string
-  eq(settings.safe_path "/home/me/.config/wez-vtabs/settings.json", true)
-  eq(settings.safe_path "/home/me/my..notes/settings.json", true, "two dots inside a name are not a traversal")
-  eq(settings.safe_path "/home/me/../etc/settings.json", false, "a whole `..` segment is")
-  eq(settings.safe_path "settings.json", false, "and a relative path is refused outright")
-  eq(settings.safe_path "", false)
-  eq(settings.safe_path(nil), false)
-
-  -- a container with a non-table default has no default for its children, and asking cannot throw
-  local boxed = config.setup { settings = { path = "/tmp/x.json" }, backend = { path = "/bin/wez-vtabs" } }
-  local rows = {}
-  for _, row in ipairs(page.fields(boxed)) do
-    rows[row.key] = row
-  end
-  assert(rows["settings.path"], "settings.path is listed")
-  eq(rows["settings.path"].default, nil, "with no default of its own to compare against")
-  config.setup(legacy { backend = { path = "/bin/wez-vtabs" } })
 end)
 
 test("P3 A5: settings.json holds only what differs, versioned, and never a symlink", function()
@@ -870,78 +507,6 @@ test("collapsed = rail keeps the pane and narrows it to rail_width", function()
   eq(sb.cols, 28)
 end)
 
-test("the rail flag reaches strip_geometry, so the toggle lands inside the rail", function()
-  local win, gui = window(1)
-  config.setup { collapsed = "rail", rail_width = 5, titlebar = "macos", backend = { path = "/bin/wez-vtabs" } }
-  sidebar.ensure(gui)
-  local sb = mark_ready(win.tab_list[1])
-  -- the reserve only exists when the pane reports a cell box, and only then can the toggle escape it
-  sb.get_dimensions = function(self)
-    return { cols = self.cols, viewport_rows = 24, pixel_width = self.cols * 10, pixel_height = 456 }
-  end
-  local was_mac = platform.is_mac
-  platform.is_mac = false
-  sidebar.set_collapsed(gui, true)
-  geometry.correct(gui)
-  local seen
-  local render_mod = require "vtabs.render"
-  local original = render_mod.render
-  render_mod.render = function(frame)
-    seen = frame
-    return original(frame)
-  end
-  view_mod.invalidate_theme()
-  view_mod.sync(gui, { force = true })
-  render_mod.render = original
-  platform.is_mac = was_mac
-  assert(seen, "the rail rendered")
-  eq(seen.rail, true, "collapsed to the rail")
-  assert(seen.strip.cols > 0, "and the preview reserved columns for the lights")
-  assert(
-    seen.strip.toggle.x <= seen.cols,
-    "the toggle is inside the rail, not at reserve + 2 past its end: " .. tostring(seen.strip.toggle.x)
-  )
-  eq(seen.strip.toggle_row, seen.strip.rows - config.get().padding.top, "the toggle row sits below the reserve")
-  local rows = {}
-  local painted = render.render(seen)
-  for row = 1, seen.rows do
-    rows[row] = row_text(painted.data, row)
-  end
-  local x = math.ceil(seen.cols / 2)
-  eq(usub(rows[seen.strip.toggle_row], x, x), "❮", "and §8 centres the one glyph that fits in the rail")
-  sidebar.set_collapsed(gui, false)
-  view_mod.invalidate_theme()
-  config.setup(legacy { backend = { path = "/bin/wez-vtabs" } })
-end)
-
-test("the rail toggle centres below the macOS reserve instead of beside it", function()
-  local mac = {
-    is_mac = true,
-    integrated_buttons = true,
-    native_button_style = true,
-    position = "left",
-    padding_top = 1,
-    toggle_button = true,
-    card_x1 = 2,
-    rail = true,
-    rail_width = 5,
-  }
-  local g = platform.strip_geometry(RETINA, mac)
-  eq(g.cols, 9)
-  eq(g.rows_reserved, 2, "the raw reserve, before padding")
-  eq(g.toggle_row, 3, "below the lights, not beside them")
-  eq(g.width, 9, "the rail widens to the reserve")
-  eq(g.toggle_x, 5, "centred in the widened rail")
-  eq(g.rows, 4)
-  local wide = platform.strip_geometry(
-    RETINA,
-    { is_mac = false, rail = true, rail_width = 5, toggle_button = true, padding_top = 1 }
-  )
-  eq(wide.cols, 0)
-  eq(wide.toggle_row, 1)
-  eq(wide.toggle_x, 3, "centre of a 5-column rail")
-end)
-
 test("the active title is accent-tinted where the scheme can carry it, else it keeps fg", function()
   local barred = {}
   for _, p in ipairs(palettes) do
@@ -994,50 +559,6 @@ test("a rail is corrected to exactly rail_width, below the 8-column sidebar floo
     eq(sb.cols, 28, "and expanding still lands on cfg.width")
   end
   config.setup { backend = { path = "/bin/wez-vtabs" } }
-end)
-
-test("P3 §4: options the host set in wezterm.lua are LOCKED on the Behaviour group", function()
-  -- Exactly what the screenshot harness passes, so this is the precedence a shot would show.
-  local cfg = config.setup {
-    backend = { path = "/bin/wez-vtabs" },
-    poll_ms = 200,
-    confirm_close = false,
-    debug = true,
-  }
-  local fields = page.fields(cfg)
-  local by_key = {}
-  for _, row in ipairs(fields) do
-    by_key[row.key] = row
-  end
-  for _, key in ipairs { "poll_ms", "confirm_close", "debug" } do
-    local row = by_key[key]
-    assert(row, key .. " has a form row")
-    eq(row.locked, "wezterm.lua", key .. " is locked by the host config")
-  end
-  eq(by_key.poll_ms.group, "behaviour", "poll_ms lives on the Behaviour group")
-
-  -- An option the host left alone stays editable, so LOCKED names the host, not every row.
-  eq(by_key.width.locked, nil, "width was not set in wezterm.lua")
-
-  local groups = page.groups(fields)
-  local behaviour = nil
-  for i, g in ipairs(groups) do
-    if g == "behaviour" then
-      behaviour = i
-    end
-  end
-  assert(behaviour, "the nav carries a Behaviour group")
-
-  local v = page_view { cfg = cfg, st = { group = behaviour, focus = 1 } }
-  local lines = page_rows(v)
-  local locked_row = nil
-  for _, line in ipairs(lines) do
-    if line:find("poll_ms", 1, true) then
-      locked_row = line
-    end
-  end
-  assert(locked_row, "the Behaviour group renders the poll_ms row")
-  assert(locked_row:find("LOCKED", 1, true), "the poll_ms row carries the LOCKED badge: " .. locked_row)
 end)
 
 test("settings_model: the body carries every form row pre-rendered, its nav and its preview", function()

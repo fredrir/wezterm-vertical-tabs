@@ -191,4 +191,9 @@ end
 M.host_config = {}
 M.explicit = {}
 
+---A framed sidebar keeps its last column for the content edge.
+function M.framed(cfg)
+  return type(cfg.frame) == "table" or cfg.frame == true
+end
+
 return M

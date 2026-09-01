@@ -1,5 +1,5 @@
 local wezterm = require "wezterm" ---@type Wezterm
-local layout = require "vtabs.layout"
+local config = require "vtabs.config"
 local sidebar = require "vtabs.sidebar"
 local state = require "vtabs.state"
 local store = require "vtabs.store"
@@ -100,7 +100,7 @@ function M.render_section(cfg)
   return {
     meta = cfg.meta ~= false,
     padding = cfg.padding,
-    frame = layout.framed(cfg),
+    frame = config.framed(cfg),
     tab_height = cfg.tab_height,
     row_gap = cfg.row_gap,
     separator = cfg.separator,
@@ -202,7 +202,7 @@ local function model_body(cfg, ctx, wid)
   end
   local drag = store.drag[wid]
   local buttons = M.array()
-  for _, action in ipairs(layout.resolved_actions(cfg)) do
+  for _, action in ipairs(require("vtabs.actions").resolved_strip(cfg)) do
     buttons[#buttons + 1] = { id = action.id, icon = action.icon }
   end
   return {

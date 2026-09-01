@@ -359,31 +359,6 @@ test("activate_relative wraps over visible tabs only", function()
   cfg.hooks.filter = nil
 end)
 
-test("middle click through input closes the clicked tab", function()
-  local win, gui = window(2)
-  sidebar.ensure(gui)
-  local first = win.tab_list[1]
-  win.active_tab_ref = first
-  local sb = mark_ready(first)
-  require("vtabs.view").sync(gui, { force = true })
-  local hits = state.session.hits[sb:pane_id()]
-  local row = nil
-  for r, h in pairs(hits) do
-    if h.kind == "tab" and h.id == win.tab_list[2].id and h.part == "title" then
-      row = r
-    end
-  end
-  assert(row, "second tab has a card")
-  local function middle(kind)
-    input.handle(gui, sb, "vtabs", string.format('{"t":"mouse","k":"%s","b":"middle","x":3,"y":%d}', kind, row))
-  end
-  middle "down"
-  eq(#win.tab_list, 2, "the press alone closes nothing; the overlay would die on the release")
-  middle "up"
-  eq(#win.tab_list, 1)
-  eq(win.active_tab_ref, first)
-end)
-
 test("reopen_closed pushes the entry back when spawning fails", function()
   local win, gui = window(1)
   sidebar.ensure(gui)

@@ -8,10 +8,7 @@ local view = require "vtabs.view"
 local geometry = require "vtabs.geometry"
 local actions = require "vtabs.actions"
 local popover = require "vtabs.popover"
-local hit = require "vtabs.hit"
-local layout = require "vtabs.layout"
 local settings = require "vtabs.settings"
-local page = require "vtabs.page"
 local mux = require "vtabs.mux"
 local util = require "vtabs.util"
 
@@ -47,218 +44,10 @@ local function strip_action(gui_window, id)
     end
   end
 end
-local DRAG_START_ROWS = 3
-local DRAG_START_COLS = 2
-local DRAG_DWELL_MS = 120
-local TEAR_OFF_TRAVEL = 3
-
----Declared through `store`, so a forgotten window takes the pendings with it.
 local scope = store.scope "input"
-local pending_menu = scope.window()
-local pending_close = scope.window()
-local pending_item = scope.window()
--- Destructive menu items act on the release, like the ✕ and for the same reason.
-local ON_RELEASE = { close = true, close_others = true, confirm_close = true }
 
 local function blur(gui_window)
   actions.blur_sidebar(gui_window)
-end
-
----Press keeps the sidebar as the tab's active pane so the drag and the release reach it too.
----While a popover is open it takes the whole sidebar: left acts, right retargets, middle is inert.
-local function on_popover_down(gui_window, pane, h, ev)
-  -- Nothing the menu painted is under this click, so it is not on screen at all: dismiss it and let
-  -- the click through, or a pane too narrow to draw it would swallow every click until Esc.
-  if h.kind ~= "popover" and h.kind ~= "scrim" then
-    popover.close(gui_window)
-    view.invalidate_frames(pane:pane_id())
-    return true
-  end
-  -- A row the menu owns still has columns the menu does not; those are click-away, not the item.
-  local inside = h.kind == "popover" and hit.in_card(h, ev.x)
-  if ev.b == "left" then
-    if h.kind == "scrim" or not inside then
-      popover.close(gui_window)
-      view.invalidate_frames(pane:pane_id())
-    elseif h.id and not h.disabled then
-      if ON_RELEASE[h.id] then
-        pending_item[gui_window:window_id()] = { id = h.id, at = util.now_ms() }
-      else
-        popover.run(gui_window, h.id)
-        view.invalidate_frames(pane:pane_id())
-      end
-    end
-  elseif ev.b == "right" and h.kind == "scrim" then
-    -- Close, repaint, then let the release open one for whatever row is now under the pointer.
-    popover.close(gui_window)
-    view.invalidate_frames(pane:pane_id())
-    view.sync(gui_window)
-    return true
-  end
-end
-
-local function on_down(gui_window, pane, ev, cfg)
-  local wid = gui_window:window_id()
-  local pid = pane:pane_id()
-  local h = hit.at(store.hits[pid], ev.y)
-  local now = util.now_ms()
-  if popover.get(wid) then
-    if not on_popover_down(gui_window, pane, h, ev) then
-      return
-    end
-    h = hit.at(store.hits[pid], ev.y)
-  end
-  store.hover[wid] = { x = ev.x, y = ev.y, at = now }
-  store.drag[wid] = nil
-  pending_menu[wid] = nil
-  pending_close[wid] = nil
-  state.set_focus(wid, false)
-  if cfg.debug then
-    util.log("down hit=%s tab=%s slot=%s", h.kind, tostring(h.id), tostring(h.slot))
-  end
-  -- Cols 1 and 28 carry no card surface, so a click there is empty space, not the row's tab.
-  local on_card = h.kind == "tab" and hit.in_card(h, ev.x)
-  local target = on_card and ("tab:" .. h.id) or h.kind
-  local double, last = hit.double_click(store.last_click[wid], target, now, cfg.double_click_ms)
-  store.last_click[wid] = last
-
-  if ev.b == "left" then
-    if on_card then
-      local span = hit.span(h, ev.x)
-      if span == "close" then
-        pending_close[wid] = { tab_id = h.id, at = now, row = ev.y, col = ev.x }
-      elseif span == "pin" then
-        actions.toggle_pin(gui_window, h.id)
-      else
-        local focused = actions.activate_tab(gui_window, h.id, "sidebar")
-        store.drag[wid] = {
-          tab_id = h.id,
-          origin_x = ev.x,
-          origin_y = ev.y,
-          pane_id = focused and focused:pane_id() or pid,
-          active = false,
-          began = now,
-          at = now,
-        }
-      end
-    elseif h.kind == "action" and hit.in_card(h, ev.x) then
-      strip_action(gui_window, hit.span(h, ev.x))
-    elseif h.kind == "new_tab" then
-      actions.new_tab(gui_window)
-    elseif h.kind == "footer" and h.entry and h.entry.on_click then
-      pcall(h.entry.on_click, gui_window, h.entry)
-    elseif h.kind ~= "footer" and double and (h.kind == "space" or h.kind == "strip" or not on_card) then
-      actions.new_tab(gui_window)
-    end
-  elseif ev.b == "middle" and on_card then
-    pending_close[wid] = { tab_id = h.id, at = now, row = ev.y, col = ev.x }
-  elseif ev.b == "right" and on_card and cfg.context == "popover" then
-    pending_menu[wid] = { tab_id = h.id, at = now, row = ev.y, col = ev.x }
-  end
-end
-
-local function on_drag(gui_window, pane, ev, cfg)
-  local wid = gui_window:window_id()
-  local pid = pane:pane_id()
-  -- Motion cancels an armed close: wezterm drops the capture on release, so a release over the
-  -- content pane still arrives here with translated coordinates that could land back on the ✕.
-  pending_close[wid] = nil
-  if popover.get(wid) then
-    return
-  end
-  local drag = store.drag[wid]
-  local hits = store.hits[pid]
-  if not drag or ev.b ~= "left" or drag.pane_id ~= pid or not hits then
-    return
-  end
-  drag.at = util.now_ms()
-  local dx = math.abs(ev.x - drag.origin_x)
-  local dy = math.abs(ev.y - drag.origin_y)
-  -- a short card must not put its neighbour out of reach: never ask for more than one slot of travel
-  local rows_needed = math.max(2, math.min(DRAG_START_ROWS, layout.slot_rows(cfg) - 1))
-  local past_threshold = dy >= rows_needed or dx >= DRAG_START_COLS
-  if not drag.active and past_threshold and drag.at - drag.began >= DRAG_DWELL_MS then
-    drag.active = true
-  end
-  if drag.active then
-    local dims = store.dims[pid] or { cols = cfg.width, rows = ev.y }
-    drag.over_index = hit.drop_slot(hits, ev.y, dims.rows)
-    drag.outside = cfg.tear_off and dx >= TEAR_OFF_TRAVEL and hit.on_inner_edge(ev.x, dims.cols, cfg.position)
-  end
-  store.hover[wid] = { x = ev.x, y = ev.y, at = drag.at }
-end
-
----A press on the ✕ or a middle click closes only when the release lands on the same target again.
-local function released_on(hits, ev, pending)
-  local h = hit.at(hits, ev.y)
-  if h.kind ~= "tab" or h.id ~= pending.tab_id or not hit.in_card(h, ev.x) then
-    return false
-  end
-  return ev.b == "middle" or hit.span(h, ev.x) == "close"
-end
-
----Everything that closes or opens a level acts on the release; a held button cancels an overlay.
-local function on_up(gui_window, pane, ev, cfg)
-  local wid = gui_window:window_id()
-  local pid = pane:pane_id()
-  local drag = store.drag[wid]
-  local menu_for = pending_menu[wid]
-  local close_for = pending_close[wid]
-  local item_for = pending_item[wid]
-  store.drag[wid] = nil
-  pending_menu[wid] = nil
-  pending_close[wid] = nil
-  pending_item[wid] = nil
-  if popover.get(wid) and ev.b ~= "right" then
-    if item_for and ev.b == "left" then
-      local h = hit.at(store.hits[pid], ev.y)
-      if h.kind == "popover" and h.id == item_for.id and hit.in_card(h, ev.x) then
-        popover.run(gui_window, h.id)
-        view.invalidate_frames(pid)
-      end
-    end
-    return
-  end
-  if ev.b == "right" then
-    if menu_for then
-      popover.open(gui_window, menu_for.tab_id, menu_for.row, menu_for.col)
-      view.invalidate_frames(pid)
-    end
-    return
-  end
-  if close_for and released_on(store.hits[pid], ev, close_for) then
-    actions.request_close(gui_window, close_for.tab_id, close_for.row, close_for.col)
-    view.invalidate_frames(pid)
-    return
-  end
-  if drag and drag.active and drag.pane_id == pid and store.hits[pid] then
-    local dims = store.dims[pid] or { cols = cfg.width }
-    local travelled = math.abs(ev.x - drag.origin_x) >= TEAR_OFF_TRAVEL
-    if drag.outside or (cfg.tear_off and travelled and hit.on_inner_edge(ev.x, dims.cols, cfg.position)) then
-      if actions.tear_off(gui_window, drag.tab_id) then
-        return
-      end
-    elseif drag.over_index then
-      actions.move_tab_to_slot(gui_window, drag.tab_id, drag.over_index)
-    end
-  end
-  if cfg.hover == "press" then
-    blur(gui_window)
-  end
-end
-
-local function on_wheel(gui_window, ev, cfg)
-  local wid = gui_window:window_id()
-  if popover.get(wid) then
-    popover.move(gui_window, ev.dy > 0 and 1 or -1)
-    return
-  end
-  if cfg.wheel == "switch" then
-    actions.activate_relative(gui_window, ev.dy)
-    return
-  end
-  store.scroll[wid] = (store.scroll[wid] or 0) + ev.dy
-  store.user_scrolled[wid] = true
 end
 
 ---The v2 gesture vocabulary (05-p4b-spec.md). Every handler is internal: nothing here mints a
@@ -269,8 +58,6 @@ function DO.press_card(gui_window, pane, id, args)
   local wid = gui_window:window_id()
   local now = util.now_ms()
   store.drag[wid] = nil
-  pending_menu[wid] = nil
-  pending_close[wid] = nil
   state.set_focus(wid, false)
   local focused = actions.activate_tab(gui_window, id, "sidebar")
   store.drag[wid] = {
@@ -317,9 +104,8 @@ function DO.toggle_pin(gui_window, _, id)
   actions.toggle_pin(gui_window, id)
 end
 
-function DO.open_menu(gui_window, pane, id, args)
+function DO.open_menu(gui_window, _, id, args)
   popover.open(gui_window, id, args.row, args.col)
-  view.invalidate_frames(pane:pane_id())
 end
 
 function DO.new_tab(gui_window)
@@ -353,20 +139,16 @@ function DO.blur_sidebar(gui_window)
   blur(gui_window)
 end
 
-function DO.menu_pick(gui_window, pane, _, args)
-  if popover.run(gui_window, args.id) then
-    view.invalidate_frames(pane:pane_id())
-  end
+function DO.menu_pick(gui_window, _, _, args)
+  popover.run(gui_window, args.id)
 end
 
-function DO.menu_back(gui_window, pane)
+function DO.menu_back(gui_window)
   popover.back(gui_window)
-  view.invalidate_frames(pane:pane_id())
 end
 
-function DO.menu_closed(gui_window, pane)
+function DO.menu_closed(gui_window)
   popover.close(gui_window)
-  view.invalidate_frames(pane:pane_id())
 end
 
 ---Rust owns the edit buffer; the commit lands it in the v1 state before the shared path applies it.
@@ -403,7 +185,7 @@ local MENU_DO = {
 
 ---A menu level the backend could not draw: a refused confirm falls through to WezTerm's own
 ---overlay for a close, and any other refused level simply closes, so the pane never deadlocks.
-local function on_note(gui_window, pane, ev)
+local function on_note(gui_window, ev)
   if ev.k ~= "menu_refused" then
     util.log("backend note: %s", tostring(ev.k))
     return
@@ -411,7 +193,6 @@ local function on_note(gui_window, pane, ev)
   local wid = gui_window:window_id()
   local pop = popover.get(wid)
   popover.close(gui_window)
-  view.invalidate_frames(pane:pane_id())
   if pop and ev.a == "confirm" and pop.confirm == "close" then
     actions.close_with_overlay(gui_window, pop.tab_id)
   end
@@ -427,52 +208,9 @@ local function on_do(gui_window, pane, ev)
   local wid = gui_window:window_id()
   if popover.get(wid) and not MENU_DO[ev.a] then
     popover.close(gui_window)
-    view.invalidate_frames(pane:pane_id())
   end
   handler(gui_window, pane, ev.id, ev.args or {})
   view.sync(gui_window)
-end
-
----Motion only needs a repaint when it crosses a row or a sub-target span of the row it is on.
-local function hover_moved(previous, ev, pid)
-  if not previous or previous.y ~= ev.y then
-    return true
-  end
-  local h = hit.at(store.hits[pid], ev.y)
-  return hit.span(h, previous.x) ~= hit.span(h, ev.x)
-end
-
-function M.mouse(gui_window, pane, ev)
-  local cfg = config.get()
-  local wid = gui_window:window_id()
-  local had_popover = popover.get(wid) ~= nil
-  if ev.k == "move" then
-    local pid = pane:pane_id()
-    local moved = hover_moved(store.hover[wid], ev, pid)
-    store.hover[wid] = { x = ev.x, y = ev.y, at = util.now_ms() }
-    -- An open menu owns the pointer: motion moves its selection instead of the list's hover.
-    if had_popover then
-      if not popover.point_at(gui_window, hit.at(store.hits[pid], ev.y), ev.x) then
-        return
-      end
-      view.invalidate_frames(pid)
-    elseif not moved then
-      return
-    end
-  elseif ev.k == "down" then
-    on_down(gui_window, pane, ev, cfg)
-  elseif ev.k == "drag" then
-    on_drag(gui_window, pane, ev, cfg)
-  elseif ev.k == "up" then
-    on_up(gui_window, pane, ev, cfg)
-  elseif ev.k == "wheel" then
-    on_wheel(gui_window, ev, cfg)
-  end
-  view.sync(gui_window)
-  -- The fade needs the frame that put the menu on screen, so it plays after that sync, not before.
-  if not had_popover and popover.get(wid) then
-    view.animate_popover(gui_window)
-  end
 end
 
 local MOVE = { down = 1, j = 1, tab = 1, up = -1, k = -1 }
@@ -657,43 +395,8 @@ local function forward_paste(gui_window, pane, ev, cfg)
   end)
 end
 
-local POP_MOVE = { down = 1, j = 1, tab = 1, up = -1, k = -1 }
-
----Keys belong to the popover while it is open; nothing is forwarded to the shell.
-local function popover_key(gui_window, pane, ev)
-  local pop = popover.get(gui_window:window_id())
-  local key, mods = ev.key, ev.mods
-  view.invalidate_frames(pane:pane_id())
-  if pop.level == "rename" then
-    local done = popover.edit(pop, key, mods)
-    if done == "commit" then
-      popover.commit_rename(gui_window)
-    elseif done == "cancel" then
-      popover.back(gui_window)
-    end
-    return
-  end
-  if key == "escape" or (util.contains(mods, "ctrl") and key == "c") then
-    popover.back(gui_window)
-  elseif key == "enter" or key == "space" then
-    local item = popover.selected(gui_window)
-    if item then
-      popover.run(gui_window, item.id)
-    end
-  elseif POP_MOVE[key] then
-    popover.move(gui_window, util.contains(mods, "shift") and -POP_MOVE[key] or POP_MOVE[key])
-  elseif type(key) == "string" and utf8.len(key) == 1 then
-    popover.jump(gui_window, key)
-  end
-end
-
 function M.key(gui_window, pane, ev)
   local wid = gui_window:window_id()
-  if popover.get(wid) then
-    popover_key(gui_window, pane, ev)
-    view.sync(gui_window)
-    return
-  end
   if not state.has_focus(wid) then
     forward_key(gui_window, pane, ev, config.get())
     view.sync(gui_window)
@@ -751,8 +454,13 @@ function M.handle(gui_window, pane, name, value)
   -- the settings page shares the bridge but none of the sidebar's hit map; it answers for itself
   if sidebar.is_settings(pane) then
     if ev.t == "ready" then
-      store.proto[pane:pane_id()] = tonumber(ev.v) or 1
-      store.paints[pane:pane_id()] = ev.paints == true
+      local v = tonumber(ev.v) or 1
+      if v < 2 or ev.paints ~= true then
+        sidebar.refuse_v1(pane, v)
+        return
+      end
+      store.proto[pane:pane_id()] = v
+      store.paints[pane:pane_id()] = true
       sidebar.auth(pane)
       view.sync(gui_window, { force = true })
     elseif ev.t == "do" then
@@ -760,26 +468,17 @@ function M.handle(gui_window, pane, name, value)
       if require("vtabs.settings_model").act(gui_window, st, ev.a, ev.args) then
         view.sync(gui_window, { force = true })
       end
-    elseif (ev.t == "key" or ev.t == "mouse") and not store.paints[pane:pane_id()] then
-      -- a v1 backend still keys the Lua-painted page; a painting one sends verbs, never these
-      local dims = store.dims[pane:pane_id()] or { cols = 100, rows = 24 }
-      local page_view =
-        { cols = dims.cols, rows = dims.rows, cfg = cfg, st = settings.page_state(gui_window:window_id()) }
-      local handled
-      if ev.t == "key" then
-        handled = settings.key(gui_window, ev) or page.key(gui_window, page_view, ev)
-      elseif ev.k == "down" and ev.b == "left" then
-        handled = page.click(gui_window, page_view, hit.at(store.hits[pane:pane_id()], ev.y), ev.x)
-      end
-      if handled then
-        view.sync(gui_window, { force = true })
-      end
     end
     return
   end
   if ev.t == "ready" then
-    store.proto[pane:pane_id()] = tonumber(ev.v) or 1
-    store.paints[pane:pane_id()] = ev.paints == true
+    local v = tonumber(ev.v) or 1
+    if v < 2 or ev.paints ~= true then
+      sidebar.refuse_v1(pane, v)
+      return
+    end
+    store.proto[pane:pane_id()] = v
+    store.paints[pane:pane_id()] = true
     sidebar.auth(pane)
     sidebar.ensure(gui_window)
     view.sync(gui_window, { force = true })
@@ -792,9 +491,7 @@ function M.handle(gui_window, pane, name, value)
   elseif ev.t == "do" then
     on_do(gui_window, pane, ev)
   elseif ev.t == "note" then
-    on_note(gui_window, pane, ev)
-  elseif ev.t == "mouse" then
-    M.mouse(gui_window, pane, ev)
+    on_note(gui_window, ev)
   elseif ev.t == "key" then
     M.key(gui_window, pane, ev)
   elseif ev.t == "paste" then
@@ -803,30 +500,17 @@ function M.handle(gui_window, pane, name, value)
   end
 end
 
----Expires stale hover/drag state; called from the status poll.
+---Expires a stale drag; called from the status poll.
 function M.tick(gui_window)
   local cfg = config.get()
   local wid = gui_window:window_id()
   local now = util.now_ms()
-  local hover = store.hover[wid]
-  if hover and cfg.hover_timeout_ms > 0 and now - hover.at > cfg.hover_timeout_ms then
-    store.hover[wid] = nil
-  end
   local drag = store.drag[wid]
   if drag and now - drag.at > DRAG_TIMEOUT_MS then
     store.drag[wid] = nil
     if cfg.hover == "press" then
       blur(gui_window)
     end
-  end
-  if pending_menu[wid] and now - pending_menu[wid].at > DRAG_TIMEOUT_MS then
-    pending_menu[wid] = nil
-  end
-  if pending_close[wid] and now - pending_close[wid].at > DRAG_TIMEOUT_MS then
-    pending_close[wid] = nil
-  end
-  if pending_item[wid] and now - pending_item[wid].at > DRAG_TIMEOUT_MS then
-    pending_item[wid] = nil
   end
   for pid, b in pairs(budget) do
     if now - b.at > BUDGET_TTL_MS then
