@@ -65,15 +65,19 @@ fn row_bytes(cells: &[Cell], page_bg: Rgb, fade: Option<f64>) -> String {
 }
 
 /// The whole frame as one write: an unpainted row is skipped, keeping whatever the pane had there.
-pub fn frame_bytes(frame: &Frame, page_bg: Rgb) -> String {
+pub fn rows_bytes(rows: &[Option<Vec<Cell>>], fades: &[Option<f64>], page_bg: Rgb) -> String {
     let mut out = String::from(HIDE_CURSOR);
-    for (i, cells) in frame.cells.iter().enumerate() {
+    for (i, cells) in rows.iter().enumerate() {
         let Some(cells) = cells else { continue };
         cup(&mut out, i + 1);
-        out.push_str(&row_bytes(cells, page_bg, frame.fades[i]));
+        out.push_str(&row_bytes(cells, page_bg, fades.get(i).copied().flatten()));
     }
     out.push_str(RESET);
     out
+}
+
+pub fn frame_bytes(frame: &Frame, page_bg: Rgb) -> String {
+    rows_bytes(&frame.cells, &frame.fades, page_bg)
 }
 
 #[cfg(test)]

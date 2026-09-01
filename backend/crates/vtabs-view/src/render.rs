@@ -632,16 +632,5 @@ fn cells(view: &RenderInput) -> (Vec<Option<Vec<Cell>>>, Vec<Option<f64>>, layou
 /// (`<scene>.txt` content with its 2-row column ruler, `<scene>.styled.txt` content).
 pub fn golden_dumps(input: &RenderInput) -> (String, String) {
     let (painted, fades, _) = cells(input);
-    let mut texts = Vec::with_capacity(painted.len());
-    let mut styled = Vec::with_capacity(painted.len());
-    for (row, cells) in painted.iter().enumerate() {
-        let cells = cells.as_deref().unwrap_or(&[]);
-        let (text, spans) = frame::emit(cells, input.theme.bg, fades[row]);
-        texts.push(text);
-        styled.push(spans);
-    }
-    (
-        frame::dump_text(&texts, input.cols),
-        frame::dump_styled(&styled),
-    )
+    frame::dumps(&painted, &fades, input.theme.bg, input.cols)
 }

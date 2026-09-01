@@ -84,6 +84,7 @@ pub fn run() -> io::Result<()> {
         started: Instant::now(),
         popover: None,
         menu_ui: Default::default(),
+        settings_ui: Default::default(),
         noted_menu: None,
         hover_deadline: None,
         token: None,

@@ -5,4 +5,5 @@ pub mod layout;
 pub mod menu;
 pub mod render;
 pub mod scene;
+pub mod settings;
 pub mod text;
