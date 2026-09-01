@@ -1,4 +1,3 @@
-pub mod anim;
 pub mod app;
 pub mod log;
 pub mod paint;

@@ -4,7 +4,7 @@ pub mod limits;
 pub mod types;
 pub mod v2;
 
-pub use command::{AnimCmd, AnimRow, Command};
+pub use command::Command;
 pub use event::{DoArgs, DoId, Event};
 pub use types::{Button, Mods, Mouse, MouseKind};
 

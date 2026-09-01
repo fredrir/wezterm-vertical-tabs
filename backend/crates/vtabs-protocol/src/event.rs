@@ -1,7 +1,7 @@
 use serde::Serialize;
 
 use crate::b64;
-use crate::types::{Button, Mods, Mouse, MouseKind};
+use crate::types::Mods;
 
 pub use crate::limits::VERSION;
 
@@ -12,22 +12,12 @@ pub enum Event {
         v: u8,
         cols: u16,
         rows: u16,
-        /// The capability flip (§P4b): true means Lua must stop sending this pane frames.
+        /// Always true since P8; Lua refuses a backend that announces anything else.
         paints: bool,
     },
     Resize {
         cols: u16,
         rows: u16,
-    },
-    Mouse {
-        k: &'static str,
-        b: &'static str,
-        x: u16,
-        y: u16,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        dy: Option<i8>,
-        #[serde(skip_serializing_if = "Vec::is_empty")]
-        mods: Vec<&'static str>,
     },
     Key {
         key: String,
@@ -46,12 +36,10 @@ pub enum Event {
         #[serde(skip_serializing_if = "Option::is_none")]
         dropped: Option<&'static str>,
     },
+    /// `echo` is the ping's own `n`; the monotonic `n` every event carries is added on emit.
     Pong {
         #[serde(skip_serializing_if = "Option::is_none")]
-        n: Option<u64>,
-    },
-    AnimDone {
-        id: u64,
+        echo: Option<u64>,
     },
     Dropped {
         what: &'static str,
@@ -145,12 +133,12 @@ impl DoArgs {
 }
 
 impl Event {
-    pub fn ready(cols: u16, rows: u16, paints: bool) -> Self {
+    pub fn ready(cols: u16, rows: u16) -> Self {
         Event::Ready {
             v: VERSION,
             cols,
             rows,
-            paints,
+            paints: true,
         }
     }
 
@@ -203,35 +191,6 @@ impl Event {
     }
 }
 
-impl From<Mouse> for Event {
-    fn from(m: Mouse) -> Self {
-        let (k, dy) = match m.kind {
-            MouseKind::Press => ("down", None),
-            MouseKind::Release => ("up", None),
-            MouseKind::Drag => ("drag", None),
-            MouseKind::Move => ("move", None),
-            MouseKind::Wheel => ("wheel", Some(m.dy)),
-        };
-        Event::Mouse {
-            k,
-            b: button_name(m.button),
-            x: m.x,
-            y: m.y,
-            dy,
-            mods: mods_list(m.mods),
-        }
-    }
-}
-
-fn button_name(button: Button) -> &'static str {
-    match button {
-        Button::Left => "left",
-        Button::Middle => "middle",
-        Button::Right => "right",
-        Button::None => "none",
-    }
-}
-
 pub fn mods_list(mods: Mods) -> Vec<&'static str> {
     let mut list = Vec::new();
     if mods.shift {
@@ -250,84 +209,15 @@ pub fn mods_list(mods: Mods) -> Vec<&'static str> {
 mod tests {
     use super::*;
 
-    fn mouse(kind: MouseKind, button: Button, dy: i8, mods: Mods) -> Mouse {
-        Mouse {
-            kind,
-            button,
-            x: 3,
-            y: 2,
-            dy,
-            mods,
-        }
-    }
-
     #[test]
     fn ready_and_resize() {
         assert_eq!(
-            Event::ready(30, 40, true).to_json(),
+            Event::ready(30, 40).to_json(),
             r#"{"t":"ready","v":2,"cols":30,"rows":40,"paints":true}"#
         );
         assert_eq!(
             Event::Resize { cols: 31, rows: 40 }.to_json(),
             r#"{"t":"resize","cols":31,"rows":40}"#
-        );
-    }
-
-    #[test]
-    fn mouse_down_without_mods() {
-        let ev = Event::from(mouse(MouseKind::Press, Button::Left, 0, Mods::default()));
-        assert_eq!(
-            ev.to_json(),
-            r#"{"t":"mouse","k":"down","b":"left","x":3,"y":2}"#
-        );
-    }
-
-    #[test]
-    fn mouse_up_with_mods_in_spec_order() {
-        let ev = Event::from(mouse(
-            MouseKind::Release,
-            Button::Right,
-            0,
-            Mods {
-                shift: true,
-                alt: true,
-                ctrl: true,
-            },
-        ));
-        assert_eq!(
-            ev.to_json(),
-            r#"{"t":"mouse","k":"up","b":"right","x":3,"y":2,"mods":["shift","ctrl","alt"]}"#
-        );
-    }
-
-    #[test]
-    fn mouse_drag_and_move() {
-        let drag = Event::from(mouse(MouseKind::Drag, Button::Middle, 0, Mods::default()));
-        assert_eq!(
-            drag.to_json(),
-            r#"{"t":"mouse","k":"drag","b":"middle","x":3,"y":2}"#
-        );
-        let mv = Event::from(mouse(MouseKind::Move, Button::None, 0, Mods::default()));
-        assert_eq!(
-            mv.to_json(),
-            r#"{"t":"mouse","k":"move","b":"none","x":3,"y":2}"#
-        );
-    }
-
-    #[test]
-    fn wheel_carries_dy_and_no_button() {
-        let ev = Event::from(mouse(
-            MouseKind::Wheel,
-            Button::None,
-            -1,
-            Mods {
-                ctrl: true,
-                ..Mods::default()
-            },
-        ));
-        assert_eq!(
-            ev.to_json(),
-            r#"{"t":"mouse","k":"wheel","b":"none","x":3,"y":2,"dy":-1,"mods":["ctrl"]}"#
         );
     }
 
@@ -406,18 +296,14 @@ mod tests {
             r#"{"t":"paste","dropped":"size"}"#
         );
         assert_eq!(
-            Event::AnimDone { id: 7 }.to_json(),
-            r#"{"t":"anim_done","id":7}"#
-        );
-        assert_eq!(
             Event::Dropped {
-                what: "anim",
-                reason: "size"
+                what: "model",
+                reason: "bounds"
             }
             .to_json(),
-            r#"{"t":"dropped","what":"anim","reason":"size"}"#
+            r#"{"t":"dropped","what":"model","reason":"bounds"}"#
         );
-        assert_eq!(Event::Pong { n: None }.to_json(), r#"{"t":"pong"}"#);
+        assert_eq!(Event::Pong { echo: None }.to_json(), r#"{"t":"pong"}"#);
         assert_eq!(
             Event::Note {
                 k: "menu_refused",
@@ -428,9 +314,10 @@ mod tests {
             .to_json(),
             r#"{"t":"note","k":"menu_refused","why":"bounds","id":7,"a":"confirm"}"#
         );
+        // `echo` is the ping's own number; App::emit appends the monotonic `n` on top of it
         assert_eq!(
-            Event::Pong { n: Some(5) }.to_json(),
-            r#"{"t":"pong","n":5}"#
+            Event::Pong { echo: Some(5) }.to_json(),
+            r#"{"t":"pong","echo":5}"#
         );
     }
 }
