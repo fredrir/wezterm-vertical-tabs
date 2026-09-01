@@ -1,5 +1,6 @@
 //! Demultiplexes raw stdin bytes into mouse/key/focus tokens and JSON command lines.
 
+use vtabs_protocol::limits::LINE_MAX;
 use vtabs_protocol::{Button, Command, Mods, Mouse, MouseKind};
 
 const ESC: u8 = 0x1b;
@@ -47,6 +48,11 @@ pub enum Input {
     /// Bracketed paste; `None` once it grew past the size cap.
     Paste(Option<Vec<u8>>),
     Command(Command),
+    /// A command line refused whole; the runtime reports it as `dropped{what,reason}`.
+    Dropped {
+        what: &'static str,
+        reason: &'static str,
+    },
 }
 
 #[derive(Default)]
@@ -269,6 +275,15 @@ fn parse_command_line(bytes: &[u8], wait: Wait) -> Step {
         };
     };
     let line = &bytes[..end];
+    if line.len() > LINE_MAX {
+        return Step::Token(
+            Input::Dropped {
+                what: "line",
+                reason: "size",
+            },
+            end + 1,
+        );
+    }
     match serde_json::from_slice::<Command>(line) {
         Ok(cmd) => Step::Token(Input::Command(cmd), end + 1),
         Err(_) => Step::Skip(end + 1),
@@ -487,6 +502,30 @@ fn key(name: impl Into<String>, mods: Mods) -> Input {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_command_line_past_line_max_is_dropped_whole_and_reported() {
+        let mut p = Parser::new();
+        let mut line = br#"{"t":"model","rev":1,"tabs":["#.to_vec();
+        while line.len() < LINE_MAX + 16 {
+            line.extend_from_slice(br#"{"id":1,"index":1},"#);
+        }
+        line.extend_from_slice(b"]}\n");
+        let out = p.feed(&line);
+        assert_eq!(
+            out,
+            vec![Input::Dropped {
+                what: "line",
+                reason: "size"
+            }],
+            "one refusal, no keys, nothing applied"
+        );
+        let next = p.feed(b"x");
+        assert!(
+            matches!(next.as_slice(), [Input::Key { name, .. }] if name == "x"),
+            "and the stream continues: {next:?}"
+        );
+    }
 
     /// Existing expectations are written without `raw`; dedicated tests below cover it.
     fn bare(inputs: Vec<Input>) -> Vec<Input> {

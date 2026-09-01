@@ -149,6 +149,7 @@ impl<W: Write> App<W> {
                 }
             }
             Input::Focus(focused) => self.emit(&Event::Focus { focused })?,
+            Input::Dropped { what, reason } => self.emit(&Event::Dropped { what, reason })?,
             Input::Key { name, mods, raw } => {
                 if self.dressed() {
                     self.key(&name, mods, &raw)?;
