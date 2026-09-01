@@ -161,7 +161,7 @@ test("a tab the skip list names closes without a question, and so does confirm_c
   local sb2 = sidebar.find(opted.tab_list[1])
   make_busy(opted.tab_list[1])
   config.setup { meta = "auto", confirm_close = false, backend = { path = "/bin/wez-vtabs" } }
-  view_mod.sync(opted_gui, { force = true })
+  view_mod.sync(opted_gui)
   ask_close(opted_gui, sb2, opted.tab_list[1])
   eq(popover.get(opted_gui:window_id()), nil, "confirm_close = false never asks")
   eq(#opted.tab_list, 2)

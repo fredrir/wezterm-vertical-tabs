@@ -336,7 +336,7 @@ local function handover_target(gui_window, pane, cfg)
   if not content or content:pane_id() == pane:pane_id() then
     return nil
   end
-  if sidebar.is_backend(content) or sidebar.is_overlay(content) then
+  if sidebar.is_backend(content) or sidebar.is_settings(content) or sidebar.is_overlay(content) then
     return nil
   end
   local domain = mux.domain(pane)
@@ -462,11 +462,11 @@ function M.handle(gui_window, pane, name, value)
       store.proto[pane:pane_id()] = v
       store.paints[pane:pane_id()] = true
       sidebar.auth(pane)
-      view.sync(gui_window, { force = true })
+      view.sync(gui_window)
     elseif ev.t == "do" then
       local st = settings.page_state(gui_window:window_id())
       if require("vtabs.settings_model").act(gui_window, st, ev.a, ev.args) then
-        view.sync(gui_window, { force = true })
+        view.sync(gui_window)
       end
     end
     return
@@ -481,13 +481,13 @@ function M.handle(gui_window, pane, name, value)
     store.paints[pane:pane_id()] = true
     sidebar.auth(pane)
     sidebar.ensure(gui_window)
-    view.sync(gui_window, { force = true })
+    view.sync(gui_window)
   elseif ev.t == "resize" then
     -- The sidebar reporting its own new size is the one signal that is never a poll behind the mux,
     -- so it is also the proof that the adjust in flight has landed.
     geometry.landed(gui_window:window_id())
     geometry.correct(gui_window)
-    view.sync(gui_window, { force = true })
+    view.sync(gui_window)
   elseif ev.t == "do" then
     on_do(gui_window, pane, ev)
   elseif ev.t == "note" then

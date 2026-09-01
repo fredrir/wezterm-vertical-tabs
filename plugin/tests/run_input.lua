@@ -60,7 +60,7 @@ test("v2 paints: a painting pane gets no frames and no fades, but stays fresh", 
       frames_before = frames_before + 1
     end
   end
-  require("vtabs.view").sync(gui, { force = true })
+  require("vtabs.view").sync(gui)
   local frames_after = 0
   for _, sent in ipairs(sb.sent) do
     if sent:find('"t":"frame"', 1, true) then

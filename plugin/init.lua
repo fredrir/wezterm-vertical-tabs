@@ -154,7 +154,7 @@ local function register_events(cfg)
       if not state.applying_recently(wid) then
         geometry.reset(wid)
       end
-      view.sync(window, { force = true })
+      view.sync(window)
     end)
   )
 
@@ -178,7 +178,7 @@ local function register_events(cfg)
       if gui then
         local ok, err = pcall(function()
           sidebar.ensure(gui)
-          view.sync(gui, { force = true })
+          view.sync(gui)
         end)
         if not ok and not window_gone(err) then
           util.warn("gui-attached: %s", tostring(err))

@@ -427,7 +427,7 @@ local function resize_now(gui_window, collapsing)
   view.animate(gui_window, collapsing and "collapse_out" or "expand_out")
   view.apply_titlebar_band(gui_window)
   geometry.correct(gui_window)
-  view.sync(gui_window, { force = true })
+  view.sync(gui_window)
   view.animate(gui_window, collapsing and "collapse_in" or "expand_in")
 end
 

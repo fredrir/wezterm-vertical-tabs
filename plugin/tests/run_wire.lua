@@ -27,7 +27,7 @@ test("wire: a v2 sidebar receives config, theme and model; a v1 one receives non
   local sb1 = sidebar.find(win.tab_list[1])
   local sb2 = sidebar.find(win.tab_list[2])
   state.session.proto[sb1:pane_id()] = 2
-  view.sync(gui, { force = true })
+  view.sync(gui)
   for _, kind in ipairs { "config", "theme", "model" } do
     eq(#v2_lines(sb1, kind), 1, kind .. " sent once to the v2 pane")
     eq(#v2_lines(sb2, kind), 0, kind .. " never sent to the v1 pane")
@@ -46,13 +46,13 @@ test("wire: an unchanged window sends nothing again; a change bumps only that me
   local win, gui = ready_window(2)
   local sb = sidebar.find(win.tab_list[1])
   state.session.proto[sb:pane_id()] = 2
-  view.sync(gui, { force = true })
+  view.sync(gui)
   local before = #sb.sent
-  view.sync(gui, { force = true })
+  view.sync(gui)
   eq(#v2_lines(sb, "model"), 1, "identical model deduped")
   eq(#v2_lines(sb, "config"), 1, "identical config deduped")
   win.tab_list[2].title = "renamed"
-  view.sync(gui, { force = true })
+  view.sync(gui)
   local models = v2_lines(sb, "model")
   eq(#models, 2, "a retitle resends the model")
   eq(decode(models[2]).rev, 2, "and bumps its rev")
@@ -71,7 +71,7 @@ end)
 test("wire: the menu crosses as its own message, one level at a time", function()
   local _, gui, sb = H.open_popover(3)
   state.session.proto[sb:pane_id()] = 2
-  require("vtabs.view").sync(gui, { force = true })
+  require("vtabs.view").sync(gui)
   local menus = v2_lines(sb, "menu")
   local last = decode(menus[#menus])
   eq(last.open, true)
@@ -86,7 +86,7 @@ test("wire: the menu crosses as its own message, one level at a time", function(
   assert(close_item and close_item.danger, "destructive items are marked")
 
   require("vtabs.input").DO.menu_closed(gui, sb)
-  require("vtabs.view").sync(gui, { force = true })
+  require("vtabs.view").sync(gui)
   menus = v2_lines(sb, "menu")
   eq(decode(menus[#menus]).open, false, "closing crosses too")
 end)
@@ -112,7 +112,7 @@ test("wire: the settings pane gets its own screen, beside the shared config and 
   assert(pane, "and has a pane")
   pane.vars.vtabs_token = state.token_for(pane:pane_id())
   state.session.proto[pane:pane_id()] = 2
-  view.sync(gui, { force = true })
+  view.sync(gui)
   local models = v2_lines(pane, "model")
   assert(#models >= 1, "a model reached the page")
   local last = decode(models[#models])

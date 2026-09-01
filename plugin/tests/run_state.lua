@@ -132,7 +132,7 @@ test("a pane faking the title marker is never trusted and closes nothing", funct
   sidebar.ensure(gui)
   eq(sidebar.is_ready(liar), false, "adoption is not trust")
   local sent = #liar.sent
-  require("vtabs.view").sync(gui, { force = true })
+  require("vtabs.view").sync(gui)
   eq(#liar.sent, sent, "no frames")
   table.remove(tab.pane_list, 2)
   local tabs = #win.tab_list
@@ -249,7 +249,7 @@ test("a marker pane before the sidebar in pane order does not steal the role", f
   eq(state.token_for(sb:pane_id()), token, "token kept")
   state.session.proto[sb:pane_id()] = 2
   local sent = #sb.sent
-  require("vtabs.view").sync(gui, { force = true })
+  require("vtabs.view").sync(gui)
   assert(#sb.sent > sent, "the model still goes to the real sidebar")
   eq(#liar.sent, 0, "the liar is never written to")
 end)

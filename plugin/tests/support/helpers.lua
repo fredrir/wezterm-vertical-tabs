@@ -135,7 +135,7 @@ function M.window(n, opts)
   end
   win.active_tab_ref = win.tab_list[1]
   if opts.sync then
-    require("vtabs.view").sync(gui, { force = true })
+    require("vtabs.view").sync(gui)
   end
   return win, gui
 end
@@ -160,7 +160,7 @@ function M.open_popover(index)
   local sb = sidebar.find(win.tab_list[1])
   local tab = win.tab_list[index or 1]
   input.handle(gui, sb, "vtabs", '{"t":"do","a":"open_menu","id":' .. tab.id .. ',"args":{"row":3,"col":5}}')
-  require("vtabs.view").sync(gui, { force = true })
+  require("vtabs.view").sync(gui)
   return win, gui, sb, popover.get(gui:window_id())
 end
 

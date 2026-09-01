@@ -228,7 +228,7 @@ test("a painting pane's toggle fade crosses as fx, on the backend's own clock", 
   local tab = win.tab_list[1]
   local sb = mark_ready(tab)
   state.session.paints[sb:pane_id()] = true
-  view_mod.sync(gui, { force = true })
+  view_mod.sync(gui)
   local before = #sb.sent
   actions.toggle_sidebar(gui)
   local fx, anims = {}, 0

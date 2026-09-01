@@ -126,7 +126,7 @@ test("P3 A2c: every trigger reaches actions.open_settings, and only one place sp
   -- The strip paints a ⚙ by default, so clicking it has to reach the page like everything else.
   local sb = sidebar.find(win.tab_list[1])
   local function click_settings()
-    view_mod.sync(gui, { force = true })
+    view_mod.sync(gui)
     for _, button in ipairs(require("vtabs.actions").resolved_strip(config.get())) do
       if button.id == "settings" then
         require("vtabs.input").handle(gui, sb, "vtabs", '{"t":"do","a":"strip","id":"settings"}')
