@@ -153,38 +153,6 @@ test("every §6.3 key is present and overridable", function()
   assert(rgb(lifted) ~= "1,2,3" and theme.contrast(lifted, t.bg) >= 3.0, "an unreadable accent is lifted")
 end)
 
-test("shorten_path elides middle components and keeps the basename", function()
-  local sp = util.shorten_path
-  eq(sp("~/projects/wez-plugins/vertical-tabs", 20), "~/p/w/vertical-tabs")
-  eq(sp("~/projects/wezterm-vertical-tabs/plugin/vtabs", 20), "~/p/w/plugin/vtabs")
-  eq(sp("/usr/local/share/doc/wezterm/examples", 20), "/u/l/s/d/w/examples")
-  eq(sp("~/Documents/notes", 20), "~/Documents/notes", "a path that fits is untouched")
-  assert(sp("~/projects/api", 12) ~= sp("~/projects/web", 12), "siblings stay distinguishable")
-  eq(sp("~/projects/api", 12), "~/p/api")
-  eq(sp("~/a/very-long-basename-that-alone-overflows", 20), "…/very-long-basenam…")
-  eq(util.width(sp("~/a/very-long-basename-that-alone-overflows", 20)), 20)
-  eq(sp("~", 20), "~")
-  eq(sp("", 20), "")
-  eq(sp(nil, 20), "")
-  eq(sp("~/x", 0), "")
-  -- Windows: no "/" to split on, so the old version right-cut and ate the basename.
-  eq(sp("C:\\Users\\fredrir\\projects\\app", 20), "C:\\U\\f\\projects\\app")
-  eq(sp("C:\\Users\\fredrir\\projects\\vertical-tabs", 20), "…\\vertical-tabs", "left-cut keeps the basename")
-  eq(sp("C:\\Users\\x\\app", 20), "C:\\Users\\x\\app", "a path that fits is untouched")
-  assert(
-    sp("C:\\Users\\x\\projects\\api", 16) ~= sp("C:\\Users\\x\\projects\\web", 16),
-    "windows siblings stay distinguishable"
-  )
-  for _, budget in ipairs { 4, 8, 12, 20, 40 } do
-    local out = sp("C:\\Users\\fredrir\\projects\\wezterm-vertical-tabs\\plugin", budget)
-    assert(util.width(out) <= budget, "windows budget " .. budget .. " overflowed with " .. out)
-  end
-  for _, budget in ipairs { 4, 8, 12, 20, 40 } do
-    local out = sp("~/projects/wezterm-vertical-tabs/plugin/vtabs", budget)
-    assert(util.width(out) <= budget, "budget " .. budget .. " overflowed with " .. out)
-  end
-end)
-
 test("the P1 defaults and their aliases pass validation without warning", function()
   local before = #wezterm.log
   local cfg = config.setup {}

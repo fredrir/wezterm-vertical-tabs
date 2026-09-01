@@ -91,41 +91,7 @@ for _, list in ipairs { palettes, extra } do
 end
 write("backend/crates/vtabs-theme/tests/fixtures/resolve.json", theme_cases)
 
--- util width/truncate/pad_right/shorten_path
-local STRINGS = {
-  "", "plain title", "nvim — ~/projects/wez", "你好世界", "mix 你好 end", "🚀 launch",
-  "▙▛▐▎", "•›…", "❮❯", "╭╮╰╯╌╎", "a very long title that will certainly not fit anywhere",
-}
-local text_cases = {}
-for _, s in ipairs(STRINGS) do
-  for _, max in ipairs { 0, 1, 3, 8, 20, 80 } do
-    text_cases[#text_cases + 1] = {
-      s = s,
-      max = max,
-      width = util.width(s),
-      truncated = util.truncate(s, max),
-      truncated_bare = util.truncate(s, max, ""),
-      padded = util.pad_right(s, max),
-    }
-  end
-end
-local PATHS = {
-  "/home/fredrir/projects/wez-plugins/vertical-tabs",
-  "~/projects/wez-plugins/vertical-tabs",
-  "C:\\Users\\fredrir\\Documents\\deep\\nested\\dir",
-  "../relative/path/to/thing",
-  "single",
-  "/",
-  "~/你好/世界/深い/path",
-}
-local path_cases = {}
-for _, p in ipairs(PATHS) do
-  for _, budget in ipairs { 0, 4, 10, 18, 30, 60 } do
-    path_cases[#path_cases + 1] = { path = p, budget = budget, shortened = util.shorten_path(p, budget) }
-  end
-end
-write("backend/crates/vtabs-view/tests/fixtures/text.json", text_cases)
-write("backend/crates/vtabs-view/tests/fixtures/paths.json", path_cases)
+-- text/paths fixtures moved to Rust with the helpers; vtabs-view/tests/fixtures/{text,paths}.json are final
 
 -- glyphs.resolve moved to Rust with its fixture committed; vtabs-view/tests/fixtures/glyphs.json is final
 
