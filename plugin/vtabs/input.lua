@@ -143,6 +143,12 @@ function DO.menu_pick(gui_window, _, _, args)
   popover.run(gui_window, args.id)
 end
 
+function DO.switch_space(gui_window, _, id)
+  if type(id) == "string" then
+    actions.switch_space(gui_window, id)
+  end
+end
+
 function DO.menu_back(gui_window)
   popover.back(gui_window)
 end
@@ -252,6 +258,12 @@ local KEYS = {
   n = function(gui_window)
     actions.new_tab(gui_window)
     blur(gui_window)
+  end,
+  ["]"] = function(gui_window)
+    actions.cycle_space(gui_window, 1)
+  end,
+  ["["] = function(gui_window)
+    actions.cycle_space(gui_window, -1)
   end,
 }
 KEYS.space, KEYS.d, KEYS.delete = KEYS.enter, KEYS.x, KEYS.x

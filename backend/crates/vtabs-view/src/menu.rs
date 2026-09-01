@@ -42,6 +42,8 @@ pub enum Level {
     Root,
     Confirm,
     Rename,
+    /// "Move to space ▸": plain rows like the root, but a sub-level, so Esc steps back to it.
+    Spaces,
 }
 
 impl Level {
@@ -49,6 +51,7 @@ impl Level {
         match msg.level.as_deref() {
             Some("confirm") => Level::Confirm,
             Some("rename") => Level::Rename,
+            Some("spaces") => Level::Spaces,
             _ => Level::Root,
         }
     }
@@ -58,6 +61,7 @@ impl Level {
             Level::Root => "root",
             Level::Confirm => "confirm",
             Level::Rename => "rename",
+            Level::Spaces => "spaces",
         }
     }
 }
@@ -118,7 +122,7 @@ impl MenuState {
         let sig = (name.to_string(), msg.items.clone());
         if self.sig.as_ref() != Some(&sig) {
             self.sig = Some(sig);
-            self.selected = msg.selected.unwrap_or(1);
+            self.selected = first_enabled(&msg.items, msg.selected.unwrap_or(1));
             self.armed = None;
             self.dismissed = false;
             if level == Level::Rename {
@@ -208,6 +212,21 @@ fn floor_boundary(s: &str, at: usize) -> usize {
 
 fn cols(n: i64) -> usize {
     usize::try_from(n).unwrap_or(0)
+}
+
+/// A `selected` that names a row that cannot act — the current space on the `spaces` level — would
+/// leave the highlight on a dead row; the nearest enabled one takes it, forward first.
+fn first_enabled(items: &[MenuItem], from: i64) -> i64 {
+    let n = items.len() as i64;
+    if from < 1 || from > n || !items[cols(from - 1)].disabled {
+        return from;
+    }
+    let forward = move_by(items, from, 1);
+    if forward != from {
+        forward
+    } else {
+        move_by(items, from, -1)
+    }
 }
 
 fn label_width(item: &MenuItem) -> i64 {
@@ -334,7 +353,7 @@ fn header(msg: &MenuMsg, level: Level, budget: i64, ellipsis: &str) -> Vec<HeadL
             drop: drop::META,
         });
     }
-    if level == Level::Root && !lines.is_empty() {
+    if matches!(level, Level::Root | Level::Spaces) && !lines.is_empty() {
         lines.push(HeadLine {
             text: String::new(),
             meta_tone: true,
@@ -513,7 +532,7 @@ pub fn plan(
     let level = Level::of(msg);
     let head = head_texts(msg, level);
     let floor = match level {
-        Level::Rename => state.root_width.unwrap_or(MIN_W),
+        Level::Rename | Level::Spaces => state.root_width.unwrap_or(MIN_W),
         _ => MIN_W,
     };
     let w = width_for(cfg, cols_n, &msg.items, &head, floor);

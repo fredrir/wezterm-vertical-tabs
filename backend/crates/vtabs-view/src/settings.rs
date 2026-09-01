@@ -1,7 +1,7 @@
 //! Port of page.lua's rendering and navigation half: `grid`, `body_rows`, `matches`, `plan`,
-//! `paint`/`paint_field`/`paint_preview`, `hints` and the click spans. Lua keeps the schema glue
-//! (`fields`, `lock_for`, `commit`, the pending ledger) and sends one `screen:"settings"` model;
-//! every value column here arrives pre-rendered, so no widget is re-implemented (§4.3 #3).
+//! `paint`/`paint_field`, `hints` and the click spans. Lua keeps the schema glue (`fields`,
+//! `lock_for`, `commit`, the pending ledger) and sends one `screen:"settings"` model; every value
+//! column here arrives pre-rendered, so no widget is re-implemented (§4.3 #3).
 
 use std::collections::BTreeMap;
 
@@ -10,20 +10,12 @@ use vtabs_protocol::v2::{ModelMsg, SettingsField, SettingsGroup};
 use vtabs_theme::Theme;
 
 use crate::frame::{self, Cell, Style};
-use crate::render;
-use crate::scene::{Item, Padding, RenderCfg, RenderInput, Strip, StripButton};
 use crate::text;
 
-/// Below this the page says so and draws nothing else; above PREVIEW_COLS the preview box appears.
+/// Below this the page says so and draws nothing else; from WIDE_COLS the header and the hints
+/// spell themselves out.
 pub const MIN_COLS: i64 = 48;
-pub const PREVIEW_COLS: i64 = 90;
-
-/// The 28-column preview the box blits, exactly as `page.preview_cells` builds it.
-const PREVIEW_WIDTH: i64 = 28;
-
-/// `layout.lua`'s ACTION_DEFAULT. The wire's `preview` carries no `strip_actions`, so a config
-/// that changed the cluster still previews the shipped one until Lua sends `preview.strip`.
-const DEFAULT_ACTIONS: [&str; 3] = ["toggle", "new_tab", "settings"];
+pub const WIDE_COLS: i64 = 90;
 
 /// Shorter wording for a value column too narrow to name the source in full.
 fn short_source(locked: &str) -> &str {
@@ -35,20 +27,16 @@ fn short_source(locked: &str) -> &str {
     }
 }
 
-/// Column landmarks. Two breakpoints and nothing else: under MIN_COLS the page says so, under
-/// PREVIEW_COLS it is nav plus form, above it the preview box appears.
+/// Column landmarks: a 14-column nav, a divider, and the form filling the rest of the pane.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Grid {
     pub cols: i64,
-    pub preview: bool,
     pub nav_x1: i64,
     pub nav_x2: i64,
     pub divider: i64,
     pub caret_x: i64,
     pub label_x: i64,
     pub label_x2: i64,
-    pub preview_x1: i64,
-    pub preview_x2: i64,
     pub form_x2: i64,
     pub marker_x: i64,
     pub value_x2: i64,
@@ -58,29 +46,20 @@ pub fn grid(cols: i64) -> Option<Grid> {
     if cols < MIN_COLS {
         return None;
     }
-    let preview = cols >= PREVIEW_COLS;
-    let nav_w = if preview { 18 } else { 14 };
-    let nav_x2 = 1 + nav_w;
+    let nav_x2 = 1 + 14;
     let divider = nav_x2 + 1;
     // §2's column table: caret one clear of the divider, label two clear of the caret
     let caret_x = divider + 1;
     let label_x = caret_x + 2;
-    let (preview_x1, preview_x2, form_x2) = if preview {
-        (cols - 31, cols, cols - 31 - 3)
-    } else {
-        (0, 0, cols - 2)
-    };
+    let form_x2 = cols - 2;
     Some(Grid {
         cols,
-        preview,
         nav_x1: 2,
         nav_x2,
         divider,
         caret_x,
         label_x,
         label_x2: label_x + 22,
-        preview_x1,
-        preview_x2,
         form_x2,
         marker_x: form_x2,
         value_x2: form_x2 - 2,
@@ -119,7 +98,6 @@ pub struct Body<'a> {
     pub caveat: Option<&'a str>,
     pub field: Option<&'a SettingsField>,
     pub focused: bool,
-    pub preview_index: Option<i64>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -205,9 +183,6 @@ pub struct SettingsView<'a> {
     pub ui: &'a SettingsUi,
     pub theme: Theme,
     pub glyphs: BTreeMap<String, String>,
-    /// The preview sidebar's side; `preview.render` carries no position of its own.
-    pub position: String,
-    pub meta_sep: Option<String>,
 }
 
 impl SettingsView<'_> {
@@ -324,7 +299,6 @@ pub fn plan<'a>(v: &SettingsView<'a>) -> Plan<'a> {
                 caveat,
                 field: entry,
                 focused: entry.is_some() && (i + scroll) == focus,
-                preview_index: g.preview.then_some(i),
             }),
         );
         // one row can carry a nav entry and a form row at once, so the column decides which was clicked
@@ -398,101 +372,6 @@ fn hints(v: &SettingsView, wide: bool) -> String {
     }
 }
 
-fn some(value: &Option<String>, fallback: &str) -> String {
-    value
-        .as_deref()
-        .filter(|v| !v.is_empty())
-        .unwrap_or(fallback)
-        .to_string()
-}
-
-/// A 28-column sidebar built from the pending config Lua already merged. The preview is the real
-/// renderer, not a mock-up, which is what makes it worth showing at all.
-fn preview_input(v: &SettingsView) -> Option<RenderInput> {
-    let p = v.model.preview.as_ref()?;
-    let r = &p.render;
-    let items = p
-        .tabs
-        .iter()
-        .map(|t| Item {
-            tab_id: t.id,
-            index: t.index,
-            is_active: t.active,
-            is_pinned: false,
-            is_private: false,
-            title: t.title.clone(),
-            meta: t.meta.clone(),
-            icon: t.icon.clone(),
-            has_unseen: false,
-        })
-        .collect();
-    let strip_buttons: Vec<StripButton> = if p.strip.is_empty() {
-        DEFAULT_ACTIONS
-            .iter()
-            .map(|id| StripButton {
-                id: (*id).to_string(),
-                icon: None,
-            })
-            .collect()
-    } else {
-        p.strip
-            .iter()
-            .map(|b| StripButton {
-                id: b.id.clone(),
-                icon: b.icon.clone(),
-            })
-            .collect()
-    };
-    Some(RenderInput {
-        cols: PREVIEW_WIDTH,
-        rows: body_rows(v.rows) - 2,
-        rail: false,
-        items,
-        theme: v.theme.clone(),
-        cfg: RenderCfg {
-            padding: Padding {
-                left: r.padding.left,
-                right: r.padding.right,
-                top: r.padding.top,
-                bottom: r.padding.bottom,
-            },
-            frame: r.frame,
-            position: v.position.clone(),
-            new_tab_button: r.new_tab_button,
-            new_tab_label: some(&r.new_tab_label, "New tab"),
-            row_gap: r.row_gap,
-            separator: some(&r.separator, "gap"),
-            tab_height: some(&r.tab_height, "card"),
-            meta: r.meta,
-            meta_sep: v.meta_sep.clone(),
-            show_index: r.show_index,
-            icons: p.icons,
-            close_button: some(&r.close_button, "hover"),
-            hover: some(&r.hover, "follow"),
-            pinned_style: some(&r.pinned_style, "compact"),
-            scroll_indicator: some(&r.scroll_indicator, "auto"),
-        },
-        glyphs: v.glyphs.clone(),
-        strip: Some(Strip {
-            rows: 1,
-            cols: 0,
-            toggle_row: Some(1),
-            cell_w: None,
-            toggle: None,
-        }),
-        strip_buttons,
-        hover: None,
-        drag: None,
-        scroll: 0,
-        focus_index: None,
-        ensure_visible: None,
-        footer: Vec::new(),
-        private: false,
-        user_scrolled: false,
-        popover: None,
-    })
-}
-
 /// Paints a planned page. The same three cell primitives the sidebar uses, then the same encoder.
 pub fn cells(v: &SettingsView) -> (Vec<Option<Vec<Cell>>>, Vec<Option<f64>>) {
     let plan = plan(v);
@@ -500,12 +379,6 @@ pub fn cells(v: &SettingsView) -> (Vec<Option<Vec<Cell>>>, Vec<Option<f64>>) {
     let dim = theme.meta_fg;
     let ellipsis = v.ellipsis();
     let n = v.rows.max(0) as usize;
-
-    let input = plan
-        .grid
-        .filter(|g| g.preview)
-        .and_then(|_| preview_input(v));
-    let preview = input.as_ref().map(render::frame_of);
 
     let mut painted: Vec<Option<Vec<Cell>>> = Vec::with_capacity(n);
     for row in 0..n {
@@ -526,7 +399,7 @@ pub fn cells(v: &SettingsView) -> (Vec<Option<Vec<Cell>>>, Vec<Option<f64>>) {
                 };
                 frame::put(&mut cells, 2, &head, &style, cols);
                 let version = v.model.version.as_deref().unwrap_or("");
-                let tag = if cols < PREVIEW_COLS {
+                let tag = if cols < WIDE_COLS {
                     version.to_string()
                 } else {
                     format!("wez-vtabs {version}")
@@ -546,7 +419,7 @@ pub fn cells(v: &SettingsView) -> (Vec<Option<Vec<Cell>>>, Vec<Option<f64>>) {
                 }
             }
             Some(Row::Hints) => {
-                let text = trunc(&hints(v, cols >= PREVIEW_COLS), cols - 2, ellipsis);
+                let text = trunc(&hints(v, cols >= WIDE_COLS), cols - 2, ellipsis);
                 frame::put(&mut cells, 2, &text, &Style::fg(dim), cols);
             }
             Some(Row::Body(body)) => {
@@ -591,9 +464,6 @@ pub fn cells(v: &SettingsView) -> (Vec<Option<Vec<Cell>>>, Vec<Option<f64>>) {
                 }
                 if let Some(field) = body.field {
                     paint_field(&mut cells, field, body.focused, &g, v);
-                }
-                if let (Some(frame), Some(index)) = (preview.as_ref(), body.preview_index) {
-                    paint_preview(&mut cells, index, frame, &g, v);
                 }
             }
             Some(Row::Space) | None => {}
@@ -662,70 +532,39 @@ fn paint_field(cells: &mut [Cell], row: &SettingsField, focused: bool, g: &Grid,
     }
 }
 
-/// Blits one row of the real 28-column frame into the preview box.
-fn paint_preview(
-    cells: &mut [Cell],
-    index: i64,
-    frame_in: &render::Frame,
-    g: &Grid,
-    v: &SettingsView,
-) {
-    let theme = &v.theme;
-    let border = theme.border_idle;
-    // the box is as tall as the frame it was *asked* for, which is what page.lua measures
-    let box_h = body_rows(v.rows) - 2;
-    if index == 1 || index == box_h + 2 {
-        let (left, right) = if index == 1 {
-            (v.glyph("frame_tl"), v.glyph("frame_tr"))
-        } else {
-            (v.glyph("frame_bl"), v.glyph("frame_br"))
-        };
-        let rule = v.glyph("rule");
-        frame::put(cells, g.preview_x1, left, &Style::fg(border), g.preview_x1);
-        for x in (g.preview_x1 + 1)..=(g.preview_x2 - 1) {
-            frame::put(cells, x, rule, &Style::fg(border), x);
-        }
-        frame::put(cells, g.preview_x2, right, &Style::fg(border), g.preview_x2);
-        return;
-    }
-    if index > box_h + 2 {
-        return;
-    }
-    frame::put(cells, g.preview_x1, "│", &Style::fg(border), g.preview_x1);
-    frame::put(cells, g.preview_x2, "│", &Style::fg(border), g.preview_x2);
-    let Some(source) = frame_in
-        .cells
-        .get(usize::try_from(index - 2).unwrap_or(usize::MAX))
-        .and_then(Option::as_ref)
-    else {
-        return;
-    };
-    let last = (source.len() as i64).min(g.preview_x2 - g.preview_x1 - 3);
-    for x in 1..=last {
-        let cell = source[(x - 1) as usize];
-        // a continuation cell owns no text, so the box keeps its own blank there
-        if cell.ch.is_none() {
-            continue;
-        }
-        let Ok(at) = usize::try_from(g.preview_x1 + x) else {
-            continue;
-        };
-        if let Some(slot) = cells.get_mut(at) {
-            *slot = Cell {
-                ch: cell.ch,
-                fg: cell.fg,
-                bg: cell.bg,
-                bold: cell.bold,
-                scrim: 0.0,
-            };
-        }
-    }
-}
-
 /// The two golden serializations, so the parity test compares what the runtime encodes.
 pub fn golden_dumps(v: &SettingsView) -> (String, String) {
     let (painted, fades) = cells(v);
     frame::dumps(&painted, &fades, v.theme.bg, v.cols)
+}
+
+/// A committed `settings-*` scene: the model body plus the pane facts the wire never carries.
+/// `rev` is stamped at send time, so the fixture stores the body without it.
+#[derive(serde::Deserialize)]
+pub struct Scene {
+    pub cols: i64,
+    pub rows: i64,
+    pub theme: Theme,
+    pub glyphs: BTreeMap<String, String>,
+    #[serde(default)]
+    pub ui: SettingsUi,
+    pub model: serde_json::Map<String, serde_json::Value>,
+}
+
+/// Renders a scene the way the runtime would, for the parity gate and `dump-frames` alike.
+pub fn scene_dumps(scene: &Scene) -> Result<(String, String), serde_json::Error> {
+    let mut body = scene.model.clone();
+    body.insert("rev".into(), serde_json::json!(1));
+    let model: ModelMsg = serde_json::from_value(serde_json::Value::Object(body))?;
+    let view = SettingsView {
+        cols: scene.cols,
+        rows: scene.rows,
+        model: &model,
+        ui: &scene.ui,
+        theme: scene.theme.clone(),
+        glyphs: scene.glyphs.clone(),
+    };
+    Ok(golden_dumps(&view))
 }
 
 #[cfg(test)]

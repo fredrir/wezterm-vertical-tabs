@@ -199,6 +199,11 @@ pub struct ModelMsg {
     pub tabs: Vec<TabRecord>,
     #[serde(default)]
     pub private: bool,
+    /// The active space's id, Lua's to decide; each entry's highlight is derived from it here.
+    #[serde(default)]
+    pub space: Option<String>,
+    #[serde(default)]
+    pub spaces: Vec<SpaceItem>,
     /// `screen == "settings"` only: the form, in order, with everything a row shows pre-rendered.
     #[serde(default)]
     pub fields: Vec<SettingsField>,
@@ -208,8 +213,6 @@ pub struct ModelMsg {
     pub caveat: Option<Vec<String>>,
     #[serde(default)]
     pub version: Option<String>,
-    #[serde(default)]
-    pub preview: Option<SettingsPreview>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -252,32 +255,6 @@ pub struct SettingsField {
     pub editing: Option<SettingsEditing>,
     #[serde(default)]
     pub armed: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-pub struct SettingsPreview {
-    pub render: RenderSection,
-    #[serde(default)]
-    pub icons: bool,
-    #[serde(default)]
-    pub tabs: Vec<PreviewTab>,
-    /// `layout.resolved_actions(merged)`; empty falls back to the shipped default cluster.
-    #[serde(default)]
-    pub strip: Vec<StripButton>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub struct PreviewTab {
-    pub id: i64,
-    pub index: i64,
-    #[serde(default)]
-    pub title: String,
-    #[serde(default)]
-    pub meta: Option<String>,
-    #[serde(default)]
-    pub active: bool,
-    #[serde(default)]
-    pub icon: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
@@ -335,6 +312,18 @@ pub struct StripButton {
     pub id: String,
     #[serde(default)]
     pub icon: Option<String>,
+}
+
+/// One switcher entry; the tab count travels on the menu's `spaces` level, not here.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct SpaceItem {
+    pub id: String,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub icon: Option<String>,
+    #[serde(default)]
+    pub unseen: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default, Deserialize)]

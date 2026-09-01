@@ -241,21 +241,24 @@ impl Canvas {
         }
     }
 
-    /// Fraction of the pixel at `x, y` inside a rounded rectangle, by 4x4 supersampling. Sampling
-    /// beats an analytic solve here: the same routine serves the fill and its border.
+    fn get(&self, x: u32, y: u32) -> [u8; 4] {
+        let at = ((y as usize) * (self.width as usize) + x as usize) * 4;
+        [
+            self.pixels[at],
+            self.pixels[at + 1],
+            self.pixels[at + 2],
+            self.pixels[at + 3],
+        ]
+    }
+
+    /// Fraction of the pixel at `x, y` inside a rounded rectangle, from the signed distance of its
+    /// centre: exact on a straight edge, smooth on an arc, and uniform for a stroke of any width,
+    /// where 4x4 supersampling had 17 levels and beaded along the corners.
     fn coverage(&self, x: u32, y: u32, rect: &RoundRect) -> f32 {
-        const N: u32 = 4;
-        let mut inside = 0u32;
-        for sy in 0..N {
-            for sx in 0..N {
-                let px = x as f32 + (sx as f32 + 0.5) / N as f32;
-                let py = y as f32 + (sy as f32 + 0.5) / N as f32;
-                if rect.contains(px, py) {
-                    inside += 1;
-                }
-            }
+        if rect.w <= 0.0 || rect.h <= 0.0 {
+            return 0.0;
         }
-        inside as f32 / (N * N) as f32
+        (0.5 - rect.distance(x as f32 + 0.5, y as f32 + 0.5)).clamp(0.0, 1.0)
     }
 
     /// True where a pixel needs sampling: within a pixel of a straight edge, or inside a corner's
@@ -281,6 +284,46 @@ impl Canvas {
                 } else {
                     self.set(x, y, fill);
                 }
+            }
+        }
+    }
+
+    /// The card and its border in one pass: an edge pixel mixes page, stroke and fill once, where
+    /// painting the fill and then the ring over it left a fill-coloured halo outside the stroke.
+    pub fn rounded_card(
+        &mut self,
+        rect: &RoundRect,
+        fill: [u8; 4],
+        border: Option<([u8; 4], f32)>,
+    ) {
+        let border = border.filter(|(_, width)| *width > 0.0);
+        let inner = border.map(|(_, width)| rect.inset(width));
+        let (x0, y0, x1, y1) = rect.bounds(self.width, self.height);
+        for y in y0..y1 {
+            for x in x0..x1 {
+                let plain = !Self::needs_sampling(rect, x, y)
+                    && inner
+                        .as_ref()
+                        .is_none_or(|i| !Self::needs_sampling(i, x, y));
+                if plain {
+                    self.set(x, y, fill);
+                    continue;
+                }
+                let cover = self.coverage(x, y, rect);
+                let ring = match (&inner, border) {
+                    (Some(i), Some(_)) => (cover - self.coverage(x, y, i)).clamp(0.0, cover),
+                    _ => 0.0,
+                };
+                let stroke = border.map_or(fill, |(colour, _)| colour);
+                let page = self.get(x, y);
+                let mut out = [0u8; 4];
+                for (i, slot) in out.iter_mut().enumerate() {
+                    let mixed = page[i] as f32 * (1.0 - cover)
+                        + stroke[i] as f32 * ring
+                        + fill[i] as f32 * (cover - ring);
+                    *slot = mixed.round().clamp(0.0, 255.0) as u8;
+                }
+                self.set(x, y, out);
             }
         }
     }
@@ -362,36 +405,14 @@ impl RoundRect {
         (x0.min(x1), y0.min(y1), x1, y1)
     }
 
-    /// Inside the rectangle, and — within a corner's quadrant — inside that corner's quarter circle.
-    fn contains(&self, px: f32, py: f32) -> bool {
-        if self.w <= 0.0 || self.h <= 0.0 {
-            return false;
-        }
-        let (x0, y0) = (self.x, self.y);
-        let (x1, y1) = (self.x + self.w, self.y + self.h);
-        if px < x0 || px > x1 || py < y0 || py > y1 {
-            return false;
-        }
-        let r = self.r;
-        if r <= 0.0 {
-            return true;
-        }
-        let cx = if px < x0 + r {
-            x0 + r
-        } else if px > x1 - r {
-            x1 - r
-        } else {
-            return true;
-        };
-        let cy = if py < y0 + r {
-            y0 + r
-        } else if py > y1 - r {
-            y1 - r
-        } else {
-            return true;
-        };
-        let (dx, dy) = (px - cx, py - cy);
-        dx * dx + dy * dy <= r * r
+    /// Signed distance from a point to the outline, negative inside: the rounded-box distance
+    /// field, so the arcs and the straight runs are one continuous function.
+    fn distance(&self, px: f32, py: f32) -> f32 {
+        let (half_w, half_h) = (self.w / 2.0, self.h / 2.0);
+        let qx = (px - self.x - half_w).abs() - half_w + self.r;
+        let qy = (py - self.y - half_h).abs() - half_h + self.r;
+        let outside = (qx.max(0.0).powi(2) + qy.max(0.0).powi(2)).sqrt();
+        outside + qx.max(qy).min(0.0) - self.r
     }
 }
 
@@ -547,8 +568,75 @@ mod tests {
     fn a_radius_larger_than_the_rectangle_clamps_instead_of_inverting_it() {
         let rect = RoundRect::new(0.0, 0.0, 10.0, 4.0, 99.0);
         assert_eq!(rect.r, 2.0);
-        assert!(rect.contains(5.0, 2.0));
-        assert!(!rect.contains(0.1, 0.1), "the corner is still cut");
+        assert!(rect.distance(5.0, 2.0) < 0.0);
+        assert!(rect.distance(0.1, 0.1) > 0.0, "the corner is still cut");
+    }
+
+    fn pixel(canvas: &Canvas, x: u32, y: u32) -> [u8; 4] {
+        canvas.get(x, y)
+    }
+
+    /// Two passes blended the card under the stroke first, so the outer edge pixel carried the
+    /// card's colour outside the line; one pass mixes page and stroke alone there.
+    #[test]
+    fn a_bordered_card_has_no_fill_halo_outside_the_stroke() {
+        let page = [0, 0, 0, 255];
+        let card = [255, 255, 255, 255];
+        let line = [255, 0, 0, 255];
+        let mut canvas = Canvas::new(30, 30, page);
+        // half-pixel offset: the outer edge splits pixel column 5 exactly in two
+        let rect = RoundRect::new(5.5, 5.5, 20.0, 20.0, 0.0);
+        canvas.rounded_card(&rect, card, Some((line, 1.0)));
+        assert_eq!(
+            pixel(&canvas, 5, 15),
+            [128, 0, 0, 255],
+            "page and stroke only"
+        );
+        assert_eq!(
+            pixel(&canvas, 6, 15),
+            [255, 128, 128, 255],
+            "stroke and card only"
+        );
+        assert_eq!(pixel(&canvas, 15, 15), card);
+        assert_eq!(pixel(&canvas, 3, 15), page);
+    }
+
+    #[test]
+    fn a_half_pixel_border_is_a_uniform_hairline() {
+        let page = [0, 0, 0, 255];
+        let card = [255, 255, 255, 255];
+        let line = [255, 0, 0, 255];
+        let mut canvas = Canvas::new(30, 30, page);
+        let rect = RoundRect::new(5.0, 5.0, 20.0, 20.0, 4.0);
+        canvas.rounded_card(&rect, card, Some((line, 0.5)));
+        let top: Vec<[u8; 4]> = (10..20).map(|x| pixel(&canvas, x, 5)).collect();
+        let left: Vec<[u8; 4]> = (10..20).map(|y| pixel(&canvas, 5, y)).collect();
+        assert!(
+            top.iter().all(|p| *p == top[0]),
+            "one value along the top edge"
+        );
+        assert_eq!(top, left, "and the same value down the left edge");
+        assert_eq!(top[0], [255, 128, 128, 255], "half stroke, half card");
+    }
+
+    #[test]
+    fn the_one_pass_card_matches_the_two_pass_one_away_from_the_stroke() {
+        let page = [0x1e, 0x1e, 0x2e, 255];
+        let card = [0x11, 0x11, 0x1b, 255];
+        let line = [0x45, 0x47, 0x5a, 255];
+        let rect = RoundRect::new(7.5, 4.25, 33.0, 21.0, 7.0);
+        let mut one = Canvas::new(50, 32, page);
+        one.rounded_card(&rect, card, Some((line, 1.5)));
+        let mut two = Canvas::new(50, 32, page);
+        two.rounded_rect(&rect, card);
+        two.rounded_border(&rect, line, 1.5);
+        assert_eq!(pixel(&one, 25, 15), pixel(&two, 25, 15), "the middle");
+        assert_eq!(pixel(&one, 1, 1), pixel(&two, 1, 1), "the page");
+        assert_eq!(
+            pixel(&one, 25, 5),
+            pixel(&two, 25, 5),
+            "the stroke's own pixel"
+        );
     }
 
     #[test]

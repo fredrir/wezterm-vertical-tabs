@@ -3,12 +3,12 @@
 //! state that follows plus the events to emit.
 
 use vtabs_core::ui::{ArmKind, Armed, Ms, PressDrag, SettingsUi, UiState};
+use vtabs_protocol::Event;
 use vtabs_protocol::event::mods_list;
 use vtabs_protocol::types::{Button, Mods, Mouse, MouseKind};
 use vtabs_protocol::v2::{MenuItem, SettingsField};
-use vtabs_protocol::{DoId, Event};
 use vtabs_view::enrich::PopoverHits;
-use vtabs_view::layout::{Part, Plan, RegionKind, on_inner_edge};
+use vtabs_view::layout::{Part, Plan, RegionKind, on_inner_edge, space_neighbour};
 use vtabs_view::menu::{self, Edit, Level, MenuState};
 use vtabs_view::settings::{self, SpanId};
 
@@ -45,6 +45,9 @@ pub struct Knobs<'a> {
     pub ordered: &'a [i64],
     pub drag: Option<MirroredDrag>,
     pub scroll_top: i64,
+    /// `model.spaces` ids in switcher order and which is active, so the wheel can step between them.
+    pub space_ids: &'a [&'a str],
+    pub active_space: Option<usize>,
 }
 
 #[derive(Debug, Default)]
@@ -95,7 +98,7 @@ pub fn mouse(plan: &Plan, k: &Knobs, ui: &UiState, m: &Mouse, now: Ms) -> Resolu
         MouseKind::Press => on_down(plan, k, &mut out, m, x, y, now),
         MouseKind::Drag => on_drag(plan, k, &mut out, m, x, y, now),
         MouseKind::Release => on_up(plan, k, &mut out, m, x, y),
-        MouseKind::Wheel => on_wheel(k, &mut out, i64::from(m.dy)),
+        MouseKind::Wheel => on_wheel(plan, k, &mut out, y, i64::from(m.dy)),
     }
     out
 }
@@ -146,11 +149,8 @@ fn on_down(plan: &Plan, k: &Knobs, out: &mut Resolution, m: &Mouse, x: i64, y: i
                 }
             } else if region.kind == RegionKind::Action && region.in_card(x) {
                 if let Some(button) = region.span(x) {
-                    out.events.push(Event::Do {
-                        a: "strip",
-                        id: Some(DoId::Name(button.to_string())),
-                        args: Box::default(),
-                    });
+                    out.events
+                        .push(Event::do_named("strip", button.to_string()));
                 }
             } else if region.kind == RegionKind::NewTab {
                 out.events.push(Event::do_("new_tab"));
@@ -158,6 +158,12 @@ fn on_down(plan: &Plan, k: &Knobs, out: &mut Resolution, m: &Mouse, x: i64, y: i
                 if let Some(index) = region.index {
                     out.events
                         .push(Event::do_("footer").with(|a| a.index = Some(index)));
+                }
+            } else if region.kind == RegionKind::Spaces {
+                // before the double-click arm: a second tap on a space must not open a tab
+                if let Some(space) = region.span(x) {
+                    out.events
+                        .push(Event::do_named("switch_space", space.to_string()));
                 }
             } else if double
                 && matches!(region.kind, RegionKind::Space | RegionKind::Strip) | !on_card
@@ -197,6 +203,7 @@ fn kind_key(kind: RegionKind) -> &'static str {
         RegionKind::Tab => "tab",
         RegionKind::NewTab => "new_tab",
         RegionKind::Footer => "footer",
+        RegionKind::Spaces => "spaces",
     }
 }
 
@@ -317,7 +324,14 @@ fn on_up(plan: &Plan, k: &Knobs, out: &mut Resolution, m: &Mouse, x: i64, y: i64
     }
 }
 
-fn on_wheel(k: &Knobs, out: &mut Resolution, dy: i64) {
+fn on_wheel(plan: &Plan, k: &Knobs, out: &mut Resolution, y: i64, dy: i64) {
+    if plan.at(y).kind == RegionKind::Spaces {
+        // the model is the truth here: nothing is applied early, and the ends are silent
+        if let Some(space) = space_neighbour(k.space_ids, k.active_space, dy.signum()) {
+            out.events.push(Event::do_named("switch_space", space));
+        }
+        return;
+    }
     if k.wheel == "switch" {
         out.events
             .push(Event::do_("wheel_tab").with(|a| a.dy = Some(dy)));

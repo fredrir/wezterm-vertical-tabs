@@ -5,12 +5,12 @@
 use std::collections::BTreeMap;
 
 use vtabs_core::geom::{Dims, StripOpts, strip_geometry};
-use vtabs_core::{basename, icons, ui::UiState};
-use vtabs_protocol::v2::{ConfigMsg, ModelMsg, RenderSection, TabRecord, ThemeMsg};
+use vtabs_core::{basename, icons, sanitize, ui::UiState};
+use vtabs_protocol::v2::{ConfigMsg, ModelMsg, RenderSection, SpaceItem, TabRecord, ThemeMsg};
 
 use crate::glyphs;
 use crate::scene::{
-    Drag, FooterEntry, Hover, Item, Padding, RenderCfg, RenderInput, Strip, StripButton,
+    Drag, FooterEntry, Hover, Item, Padding, RenderCfg, RenderInput, SpaceEntry, Strip, StripButton,
 };
 
 const SHELLS: &[&str] = &[
@@ -131,6 +131,19 @@ fn render_defaults() -> RenderSection {
         new_tab_label: None,
         hover: None,
     }
+}
+
+/// The switcher shows one glyph per space: the icon as sent, else the name's initial, else a dot.
+fn space_icon(space: &SpaceItem) -> String {
+    let icon = sanitize(space.icon.as_deref().unwrap_or("").as_bytes());
+    if !icon.trim().is_empty() {
+        return icon;
+    }
+    sanitize(space.name.as_bytes())
+        .chars()
+        .find(|c| !c.is_whitespace())
+        .map(|c| c.to_string())
+        .unwrap_or_else(|| "·".to_string())
 }
 
 fn text(value: &Option<String>, fallback: &str) -> String {
@@ -367,6 +380,17 @@ pub fn enrich(
                 icon_fg: f.icon_fg,
             })
             .collect(),
+        spaces: model
+            .spaces
+            .iter()
+            .map(|s| SpaceEntry {
+                id: s.id.clone(),
+                name: s.name.clone(),
+                icon: space_icon(s),
+                is_active: model.space.as_deref() == Some(s.id.as_str()),
+                has_unseen: s.unseen,
+            })
+            .collect(),
         private: model.private,
         user_scrolled,
         popover: None,
@@ -409,6 +433,48 @@ pub fn glyph_map(cfg: &ConfigMsg) -> BTreeMap<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn space(icon: Option<&str>, name: &str) -> SpaceItem {
+        SpaceItem {
+            id: name.to_lowercase(),
+            name: name.into(),
+            icon: icon.map(str::to_string),
+            unseen: false,
+        }
+    }
+
+    #[test]
+    fn a_space_shows_its_icon_else_its_initial_else_a_dot() {
+        assert_eq!(space_icon(&space(Some("󰋜"), "Home")), "󰋜");
+        assert_eq!(space_icon(&space(None, "Home")), "H");
+        assert_eq!(space_icon(&space(Some("  "), " pi")), "p");
+        assert_eq!(
+            space_icon(&space(Some("\u{7}"), "")),
+            "·",
+            "a control byte is no glyph"
+        );
+        assert_eq!(space_icon(&space(None, "")), "·");
+    }
+
+    #[test]
+    fn the_active_space_is_the_one_the_model_names() {
+        let cfg: ConfigMsg = serde_json::from_str(r#"{"rev":1,"desired_width":28}"#).unwrap();
+        let theme: ThemeMsg = serde_json::from_str(r#"{"rev":1}"#).unwrap();
+        let model: ModelMsg = serde_json::from_str(
+            r#"{"rev":1,"space":"pi","spaces":[{"id":"home","name":"Home"},{"id":"pi","icon":"@","unseen":true}]}"#,
+        )
+        .unwrap();
+        let view = enrich(&cfg, &theme, &model, (28, 20), &UiState::default()).view;
+        let seen: Vec<(&str, bool, bool, &str)> = view
+            .spaces
+            .iter()
+            .map(|s| (s.id.as_str(), s.is_active, s.has_unseen, s.icon.as_str()))
+            .collect();
+        assert_eq!(
+            seen,
+            vec![("home", false, false, "H"), ("pi", true, true, "@")]
+        );
+    }
 
     fn tab(proc: Option<&str>, cwd: Option<&str>) -> TabRecord {
         TabRecord {

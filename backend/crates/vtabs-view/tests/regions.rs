@@ -164,3 +164,51 @@ fn the_inner_edge_follows_the_sidebar_position() {
     assert!(on_inner_edge(1, 28, "right"));
     assert!(!on_inner_edge(2, 28, "right"));
 }
+
+fn switcher_row(p: &vtabs_view::layout::Plan, rows: i64) -> i64 {
+    (1..=rows)
+        .find(|&y| p.at(y).kind == RegionKind::Spaces)
+        .expect("a switcher row")
+}
+
+#[test]
+fn the_switcher_is_the_outermost_row_and_carries_one_span_per_space() {
+    let view = scene("spaces");
+    let p = plan(&view);
+    let row = switcher_row(&p, view.rows);
+    assert_eq!(row, view.rows, "below the footer, above nothing");
+    assert_eq!(
+        p.at(row - 1).kind,
+        RegionKind::Space,
+        "with a blank row above it"
+    );
+    let at = p.at(row);
+    assert_eq!(at.spans.len(), view.spaces.len());
+    // centred in the 26-column card on the strip's 3-cell pitch
+    for (space, x) in view.spaces.iter().zip([11, 14, 17]) {
+        for col in x - 1..=x + 1 {
+            assert_eq!(at.span(col), Some(space.id.as_str()), "column {col}");
+        }
+    }
+    assert_eq!(at.span(9), None, "the row is inert beside the icons");
+    assert_eq!(at.span(19), None);
+}
+
+#[test]
+fn a_narrow_rail_shows_the_active_space_and_its_click_cycles() {
+    let mut view = scene("spaces-rail");
+    view.cols = 5;
+    let p = plan(&view);
+    let at = p.at(switcher_row(&p, view.rows));
+    assert_eq!(at.spans.len(), 1, "five columns hold one icon");
+    assert_eq!((at.x1, at.x2), (Some(2), Some(4)));
+    // `claude` is active; the lone slot answers for the space after it
+    assert_eq!(at.span(3), Some("pi"));
+}
+
+#[test]
+fn without_spaces_no_row_is_a_switcher() {
+    let view = scene("tabs");
+    let p = plan(&view);
+    assert!((1..=view.rows).all(|y| p.at(y).kind != RegionKind::Spaces));
+}

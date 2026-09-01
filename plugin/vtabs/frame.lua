@@ -4,6 +4,7 @@ local state = require "vtabs.state"
 local store = require "vtabs.store"
 local backend = require "vtabs.backend"
 local sidebar = require "vtabs.sidebar"
+local spaces = require "vtabs.spaces"
 local theme = require "vtabs.theme"
 local platform = require "vtabs.platform"
 local mux = require "vtabs.mux"
@@ -38,6 +39,11 @@ end
 function M.inset(cfg)
   local want = math.floor(tonumber(options(cfg).inset) or 6)
   return math.min(math.max(want, 0), M.margin(cfg))
+end
+
+---Stroke width in device pixels; fractions are honoured, so `0.5` is a true hairline.
+function M.border_width(cfg)
+  return math.max(tonumber(options(cfg).border_width) or 1, 0)
 end
 
 ---The renderer runs on *this* machine. Only the plain string form of `backend.path` can name it,
@@ -135,6 +141,7 @@ function M.rect(gui_window, cfg)
     cw = math.floor(cw),
     ch = math.floor(ch),
     radius = math.max(whole(options(cfg).radius) or 8, 0),
+    border_width = M.border_width(cfg),
   }
 end
 
@@ -142,22 +149,25 @@ local function hex(rgb)
   return string.format("#%02x%02x%02x", rgb[1], rgb[2], rgb[3])
 end
 
----Frame tint, card colour and border, from the same palette the sidebar paints itself from.
+---Frame tint, card colour and border, from the same palette the sidebar paints itself from, with
+---the active space's theme laid over it; `border = "accent"` takes that space's accent.
 function M.colours(gui_window, cfg)
   local effective = mux.effective_config(gui_window) or {}
-  local resolved = theme.resolve(cfg.theme, effective.resolved_palette or {}, {
-    private = state.is_private(gui_window:window_id()),
-  })
+  local palette = effective.resolved_palette or {}
+  local wid = gui_window:window_id()
+  local resolved = theme.resolve(spaces.theme_for(cfg, wid, palette), palette, { private = state.is_private(wid) })
   local want = options(cfg).border
   local border = nil
-  if want ~= false then
+  if want == "accent" then
+    border = hex(resolved.accent)
+  elseif want ~= false then
     border = type(want) == "string" and want or hex(resolved.border_idle)
   end
   return { fill = hex(resolved.bg), card = hex(resolved.content_bg), border = border }
 end
 
 local function key_of(rect)
-  return table.concat({ rect.w, rect.h, rect.x, rect.y, rect.cw, rect.ch, rect.radius }, "x")
+  return table.concat({ rect.w, rect.h, rect.x, rect.y, rect.cw, rect.ch, rect.radius, rect.border_width }, "x")
 end
 
 local function dir_for()
@@ -168,14 +178,6 @@ local function dir_for()
     end
   end
   return "/tmp/wez-vtabs"
-end
-
-local function fnv1a(s)
-  local hash = 2166136261
-  for i = 1, #s do
-    hash = (hash ~ s:byte(i)) * 16777619 % 4294967296
-  end
-  return string.format("%08x", hash)
 end
 
 local process_key = nil
@@ -196,7 +198,7 @@ function M.path_for(window_id, rect, paint)
   -- The geometry and the colours are both in the name: wezterm's path+mtime cache can never serve a
   -- stale image, and neither can our own `readable()` reuse after a theme change.
   paint = paint or {}
-  local tint = fnv1a(table.concat({ paint.fill or "", paint.card or "", paint.border or "" }, "|"))
+  local tint = util.fnv1a(table.concat({ paint.fill or "", paint.card or "", paint.border or "" }, "|"))
   return string.format("%s/frame-%s-%d-%s-%s.png", dir_for(), process_id(), window_id, key_of(rect), tint)
 end
 
@@ -250,6 +252,8 @@ function M.render(gui_window, cfg, rect, paint)
     tostring(rect.ch),
     "--radius",
     tostring(rect.radius),
+    "--border-width",
+    tostring(rect.border_width),
     "--fill",
     paint.fill,
     "--card-fill",

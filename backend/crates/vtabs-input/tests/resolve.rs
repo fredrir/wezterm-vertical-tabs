@@ -29,6 +29,8 @@ fn knobs<'a>(cols: i64) -> Knobs<'a> {
         ordered: &[],
         drag: None,
         scroll_top: 0,
+        space_ids: &[],
+        active_space: None,
     }
 }
 
@@ -451,4 +453,123 @@ fn focus_keys_map_to_verbs_and_the_rest_fall_through() {
 fn keys_flow_untouched_while_focus_is_off() {
     let r = key(&knobs(28), "j", Mods::default(), b"j");
     assert!(matches!(r.events.first(), Some(Event::Key { .. })));
+}
+
+fn switcher_row(p: &Plan, rows: i64) -> i64 {
+    (1..=rows)
+        .find(|&y| p.at(y).kind == RegionKind::Spaces)
+        .expect("a switcher row")
+}
+
+fn switched_to(events: &[Event]) -> Option<String> {
+    events.iter().find_map(|e| match e {
+        Event::Do {
+            a: "switch_space",
+            id: Some(DoId::Name(id)),
+            ..
+        } => Some(id.clone()),
+        _ => None,
+    })
+}
+
+#[test]
+fn a_press_on_a_space_icon_switches_to_it_and_a_second_tap_opens_no_tab() {
+    let view = scene("spaces");
+    let p = plan(&view);
+    let y = switcher_row(&p, view.rows) as u16;
+    let k = knobs(view.cols);
+    let first = mouse(
+        &p,
+        &k,
+        &UiState::default(),
+        &ev(MouseKind::Press, Button::Left, 17, y),
+        0,
+    );
+    assert_eq!(switched_to(&first.events).as_deref(), Some("pi"));
+    assert_eq!(first.events.len(), 1);
+    let second = mouse(
+        &p,
+        &k,
+        &first.ui,
+        &ev(MouseKind::Press, Button::Left, 17, y),
+        100,
+    );
+    assert_eq!(switched_to(&second.events).as_deref(), Some("pi"));
+    assert_ne!(
+        action(&second.events),
+        Some("new_tab"),
+        "a double tap on the switcher is two switches, not a tab"
+    );
+    let own = mouse(
+        &p,
+        &k,
+        &UiState::default(),
+        &ev(MouseKind::Press, Button::Left, 14, y),
+        0,
+    );
+    assert_eq!(
+        switched_to(&own.events).as_deref(),
+        Some("claude"),
+        "the active slot names itself; Lua no-ops it"
+    );
+    let beside = mouse(
+        &p,
+        &k,
+        &UiState::default(),
+        &ev(MouseKind::Press, Button::Left, 3, y),
+        0,
+    );
+    assert!(
+        beside.events.is_empty(),
+        "the row is inert beside the icons"
+    );
+}
+
+#[test]
+fn the_wheel_over_the_switcher_steps_between_spaces_and_stops_at_the_ends() {
+    let view = scene("spaces");
+    let p = plan(&view);
+    let y = switcher_row(&p, view.rows) as u16;
+    let ids = ["home", "claude", "pi"];
+    let mut k = knobs(view.cols);
+    k.space_ids = &ids;
+    k.active_space = Some(1);
+    let turn = |dy: i8| Mouse {
+        kind: MouseKind::Wheel,
+        button: Button::None,
+        x: 14,
+        y,
+        dy,
+        mods: Mods::default(),
+    };
+    let down = mouse(&p, &k, &UiState::default(), &turn(1), 0);
+    assert_eq!(switched_to(&down.events).as_deref(), Some("pi"));
+    assert!(
+        down.ui.scroll.is_none(),
+        "nothing is applied before the model comes back"
+    );
+    let up = mouse(&p, &k, &UiState::default(), &turn(-1), 0);
+    assert_eq!(switched_to(&up.events).as_deref(), Some("home"));
+    k.active_space = Some(2);
+    let end = mouse(&p, &k, &UiState::default(), &turn(1), 0);
+    assert!(end.events.is_empty(), "silent past the last space");
+    let list = mouse(&p, &k, &UiState::default(), &wheel(1), 0);
+    assert_eq!(
+        action(&list.events),
+        Some("set_scroll"),
+        "away from the switcher the wheel is the list's"
+    );
+}
+
+#[test]
+fn the_space_cycling_keys_fall_through_to_lua_in_focus_mode() {
+    let mut k = knobs(28);
+    k.focus_on = true;
+    for name in ["[", "]"] {
+        let r = key(&k, name, Mods::default(), name.as_bytes());
+        assert!(
+            matches!(r.events.as_slice(), [Event::Key { key, .. }] if key == name),
+            "{name} is Lua's focus branch's"
+        );
+    }
 }

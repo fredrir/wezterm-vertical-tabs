@@ -156,6 +156,15 @@ function M.sorted_keys(t)
   return keys
 end
 
+---FNV-1a of `s` as eight hex digits: a stable, cheap fingerprint for cache keys and colour slots.
+function M.fnv1a(s)
+  local hash = 2166136261
+  for i = 1, #s do
+    hash = (hash ~ s:byte(i)) * 16777619 % 4294967296
+  end
+  return string.format("%08x", hash)
+end
+
 function M.active_tab(gui_window)
   return M.try(function()
     return gui_window:mux_window():active_tab()

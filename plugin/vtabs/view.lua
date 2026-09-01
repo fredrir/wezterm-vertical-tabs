@@ -6,6 +6,7 @@ local model = require "vtabs.model"
 local geometry = require "vtabs.geometry"
 local platform = require "vtabs.platform"
 local mux = require "vtabs.mux"
+local spaces = require "vtabs.spaces"
 local util = require "vtabs.util"
 
 local M = {}
@@ -208,15 +209,22 @@ local function strip_for(gui_window, cfg, dims, rail)
   return { rows = g.rows, cols = g.cols, cell_w = g.cell_w, toggle = toggle, toggle_row = g.toggle_row }
 end
 
----What `hooks.theme` answers for this window, cached until a reload; nil when it has nothing to say.
-local function theme_override_for(gui_window, cfg)
+---What `hooks.theme` answers for this window, cached per space until a reload; nil when it has
+---nothing to say. `base` is the theme the hook is shown: the user's with the space's laid over it.
+local function theme_override_for(gui_window, cfg, base, space)
   local wid = gui_window:window_id()
-  if theme_hooks[wid] == nil then
+  local per = theme_hooks[wid]
+  if not per then
+    per = {}
+    theme_hooks[wid] = per
+  end
+  local key = space or ""
+  if per[key] == nil then
     local custom = false
     if cfg.hooks.theme then
       local effective = mux.effective_config(gui_window)
       local palette = effective and effective.resolved_palette or {}
-      local resolved = require("vtabs.theme").resolve(cfg.theme, palette, { private = state.is_private(wid) })
+      local resolved = require("vtabs.theme").resolve(base, palette, { private = state.is_private(wid) })
       local ok, answer = pcall(cfg.hooks.theme, gui_window, resolved)
       if not ok then
         util.warn_once("hook-theme", "theme hook failed: %s", tostring(answer))
@@ -224,9 +232,9 @@ local function theme_override_for(gui_window, cfg)
         custom = answer
       end
     end
-    theme_hooks[wid] = custom
+    per[key] = custom
   end
-  return theme_hooks[wid] or nil
+  return per[key] or nil
 end
 
 ---Nil when the pane cannot report a size; the frame is then skipped rather than painted at a guess.
@@ -258,7 +266,8 @@ function M.sync(gui_window)
   end
   local mux_win = gui_window:mux_window()
   local wid = gui_window:window_id()
-  local items = model.build(gui_window)
+  local survey = model.survey(gui_window)
+  local items = survey.visible
   local footer = footer_for(cfg, mux_win)
   local active_tab = mux_win:active_tab()
   local active_tab_id = active_tab and active_tab:tab_id() or nil
@@ -285,15 +294,20 @@ function M.sync(gui_window)
       end
     end
   end
+  local effective = mux.effective_config(gui_window)
+  local theme_base = spaces.theme_for(cfg, wid, effective and effective.resolved_palette or nil)
   require("vtabs.wire").sync(gui_window, {
     cfg = cfg,
     items = items,
     footer = footer,
     active_tab_id = active_tab_id,
-    effective = mux.effective_config(gui_window),
+    effective = effective,
     chrome = chrome_for(gui_window, cfg),
     strip = wire_strip,
-    theme_override = theme_override_for(gui_window, cfg),
+    theme_base = theme_base,
+    theme_override = theme_override_for(gui_window, cfg, theme_base, survey.space),
+    space = survey.space,
+    spaces = survey.spaces,
     window_dims = mux.dims(gui_window),
   })
 end

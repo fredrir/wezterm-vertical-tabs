@@ -598,6 +598,32 @@ fn cells(view: &RenderInput) -> (Vec<Option<Vec<Cell>>>, Vec<Option<f64>>, layou
                     Some(bg),
                 )
             }
+            RowKind::Spaces { slots, lit_id } => {
+                let mut cells = frame::new_line(cols, theme.bg, theme.fg);
+                for slot in slots {
+                    let lit = lit_id.as_deref() == Some(slot.id.as_str());
+                    // the active slot wears the pill the active card does; hover is the strip's
+                    let (fg, fill) = if slot.active {
+                        (theme.accent, Some(theme.active_bg))
+                    } else if lit {
+                        (theme.fg, Some(theme.hover_bg))
+                    } else if slot.unseen {
+                        (theme.unseen_fg, None)
+                    } else {
+                        (theme.dim, None)
+                    };
+                    if let Some(bg) = fill {
+                        frame::fill(&mut cells, slot.x1, slot.x2, bg);
+                    }
+                    let fg = if slot.cut {
+                        frame::faded(fg, theme.bg, 0.5)
+                    } else {
+                        fg
+                    };
+                    frame::put(&mut cells, slot.x, &slot.icon, &Style::fg(fg), slot.x2);
+                }
+                cells
+            }
         };
         if spec.thumb && cols >= 1 && (cols as usize) <= cells.len() {
             let fg = if spec.thumb_lit {
@@ -608,7 +634,10 @@ fn cells(view: &RenderInput) -> (Vec<Option<Vec<Cell>>>, Vec<Option<f64>>, layou
             let ch = glyph(glyphs, "scroll").and_then(first_char);
             cells[(cols - 1) as usize] = Cell::new(ch, fg, theme.bg);
         }
-        let chrome = matches!(spec.kind, RowKind::Strip { .. } | RowKind::Footer { .. });
+        let chrome = matches!(
+            spec.kind,
+            RowKind::Strip { .. } | RowKind::Footer { .. } | RowKind::Spaces { .. }
+        );
         if view.drag.is_some_and(|d| d.outside) && !chrome {
             let edge = if cfg.position == "right" { 1 } else { cols };
             if edge >= 1 && (edge as usize) <= cells.len() {

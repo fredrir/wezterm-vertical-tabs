@@ -26,6 +26,8 @@ function M.defaults()
     move_tab_down = { key = "PageDown", mods = SUPER2 },
     tab_last = { key = "9", mods = SUPER },
     settings = { key = ",", mods = SUPER },
+    next_space = { key = "e", mods = SUPER },
+    prev_space = { key = "e", mods = SUPER2 },
   }
   if platform.is_mac then
     keys.next_tab_arrow = { key = "RightArrow", mods = "CMD|OPT" }
@@ -85,8 +87,19 @@ function M.build(user)
   return out
 end
 
+-- wezterm accepts several spellings of one modifier, so `SUPER+t` and `CMD+t` are the same chord.
+local MOD_ALIAS = { CMD = "SUPER", WIN = "SUPER", OPT = "ALT", META = "ALT", NONE = false }
+
 local function signature(binding)
-  return tostring(binding.key) .. "|" .. tostring(binding.mods or "")
+  local mods = {}
+  for part in tostring(binding.mods or ""):upper():gmatch "[^|%s]+" do
+    local mod = MOD_ALIAS[part]
+    if mod ~= false then
+      mods[#mods + 1] = mod or part
+    end
+  end
+  table.sort(mods)
+  return tostring(binding.key) .. "|" .. table.concat(mods, "|")
 end
 
 ---Appends bindings the user has not already defined, so user keys always win.

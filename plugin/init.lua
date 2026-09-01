@@ -209,6 +209,7 @@ local MODULES = {
   "sidebar_attach",
   "sidebar_identity",
   "sidebar_rescue",
+  "spaces",
   "state",
   "store",
   "theme",
@@ -296,20 +297,20 @@ local function apply_padding(config, cfg)
   config.window_padding[outer] = WEZTERM_SIDE_PADDING
 end
 
----macOS hides close/minimise/zoom unless the decorations ask for them; `RESIZE` alone also pins
----the window in place. Only a left-hand sidebar reserves cells for them, so only it opts in.
+---macOS hides close/minimise/zoom unless the decorations ask for them. Only a left-hand sidebar
+---reserves cells for them, so only it opts in; a bare `RESIZE` is read as the wish for no title
+---bar, not for no buttons, and gets them back the same way. `titlebar = "plain"` declines both.
 local function apply_decorations(config, cfg)
-  if not platform.is_mac then
+  if not platform.is_mac or cfg.position ~= "left" or cfg.titlebar == "plain" then
     return
   end
   local decorations = config.window_decorations
-  if decorations == nil then
-    if cfg.position == "left" and cfg.titlebar ~= "plain" then
-      config.window_decorations = "INTEGRATED_BUTTONS|RESIZE"
-    end
-  elseif decorations == "RESIZE" then
-    util.warn_once("decorations", 'window_decorations = "RESIZE" hides the macOS window buttons')
+  if decorations ~= nil and decorations ~= "RESIZE" then
+    return
   end
+  config.window_decorations = "INTEGRATED_BUTTONS|RESIZE"
+  -- the key is the plugin's from here, so the page offers `titlebar` instead of locking it
+  config_mod.host_config.window_decorations = nil
 end
 
 ---@param config Config

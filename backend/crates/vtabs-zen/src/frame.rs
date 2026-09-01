@@ -93,10 +93,8 @@ impl Args {
         let (x, y, w, h) = self.card;
         if w > 0.0 && h > 0.0 {
             let rect = RoundRect::new(x, y, w, h, self.radius);
-            canvas.rounded_rect(&rect, self.card_fill);
-            if let Some(colour) = self.border {
-                canvas.rounded_border(&rect, colour, self.border_width);
-            }
+            let border = self.border.map(|colour| (colour, self.border_width));
+            canvas.rounded_card(&rect, self.card_fill, border);
         }
         canvas.to_png()
     }
@@ -245,6 +243,17 @@ mod tests {
         let at = bad.iter().position(|a| a == "#1e1e2e").unwrap();
         bad[at] = "not-a-colour".into();
         assert!(Args::parse(bad.into_iter()).is_err());
+    }
+
+    #[test]
+    fn the_border_width_is_a_device_pixel_unless_told_otherwise_and_never_negative() {
+        let default = Args::parse(minimal(&[]).into_iter()).unwrap();
+        assert_eq!(default.border_width, 1.0);
+        let hairline = Args::parse(minimal(&["--border-width", "0.5"]).into_iter()).unwrap();
+        assert_eq!(hairline.border_width, 0.5);
+        let negative = Args::parse(minimal(&["--border-width", "-2"]).into_iter()).unwrap();
+        assert_eq!(negative.border_width, 0.0);
+        assert!(Args::parse(minimal(&["--border-width", "thin"]).into_iter()).is_err());
     }
 
     #[test]

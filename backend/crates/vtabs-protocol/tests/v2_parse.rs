@@ -39,6 +39,8 @@ fn v2_lines_parse() {
             "origin":{"x":5,"y":6,"at":1712345678901}},
         "strip":{"buttons":[{"id":"toggle"},{"id":"open_settings"}]},
         "footer":[{"text":"main"}],
+        "space":"home",
+        "spaces":[{"id":"home","name":"Home","icon":"H"},{"id":"work","unseen":true}],
         "tabs":[{"id":7,"index":1,"title":"nvim","pane_title":"nvim - x","override":null,
             "proc":"nvim","cwd":"~/p/x","host":null,"user":null,"domain":"local",
             "pinned":false,"private":false,"unseen":false}],"private":false}"##;
@@ -48,6 +50,17 @@ fn v2_lines_parse() {
     assert_eq!(m.tabs[0].proc.as_deref(), Some("nvim"));
     assert_eq!(m.drag.unwrap().origin.x, 5);
     assert_eq!(m.strip.unwrap().buttons.len(), 2);
+    assert_eq!(m.space.as_deref(), Some("home"));
+    assert_eq!(m.spaces.len(), 2);
+    assert_eq!(m.spaces[0].icon.as_deref(), Some("H"));
+    assert_eq!((m.spaces[1].name.as_str(), m.spaces[1].unseen), ("", true));
+
+    // a model from a plugin without spaces parses with none, so the switcher never appears
+    let bare = r##"{"t":"model","rev":1,"screen":"sidebar","tabs":[]}"##;
+    let Command::Model(m) = parse(bare) else {
+        panic!("not model")
+    };
+    assert!(m.space.is_none() && m.spaces.is_empty());
 
     let Command::Fx(fx) = parse(r##"{"t":"fx","phase":"expand"}"##) else {
         panic!()

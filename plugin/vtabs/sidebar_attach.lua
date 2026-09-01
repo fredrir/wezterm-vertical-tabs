@@ -4,6 +4,7 @@ local config = require "vtabs.config"
 local state = require "vtabs.state"
 local store = require "vtabs.store"
 local backend = require "vtabs.backend"
+local spaces = require "vtabs.spaces"
 local theme = require "vtabs.theme"
 local mux = require "vtabs.mux"
 local util = require "vtabs.util"
@@ -47,8 +48,9 @@ end
 
 local function theme_bg(tab)
   local gui = mux.call(mux.call(tab, "window"), "gui_window")
-  local palette = (mux.effective_config(gui) or {}).resolved_palette
-  local resolved = util.try(theme.resolve, config.get().theme, palette or {})
+  local palette = (mux.effective_config(gui) or {}).resolved_palette or {}
+  local base = spaces.theme_for(config.get(), mux.window_id(gui), palette)
+  local resolved = util.try(theme.resolve, base, palette)
   local rgb = resolved and resolved.bg
   if type(rgb) ~= "table" then
     return nil

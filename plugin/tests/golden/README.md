@@ -69,5 +69,6 @@ SGR it finds.
 | `private` | a private-window tab |
 | `strip-macos` | the macOS integrated-button strip geometry |
 | `overflow` | more tabs than rows, scrolled |
-| `settings-100`, `settings-60`, `settings-40` | the settings screen at preview / no-preview / too-narrow widths |
-| `settings-pending` | settings screen with an uncommitted edit — the live preview must reflect `pending`, not the saved config |
+| `spaces` | the space switcher at the foot: active pill, hovered slot, unseen slot |
+| `spaces-rail` | the same three spaces on a 9-column rail, on the strip's own pitch |
+| `settings-100`, `settings-60`, `settings-40` | the settings screen at wide / narrow / too-narrow widths |

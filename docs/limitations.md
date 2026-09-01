@@ -48,6 +48,11 @@
 - Every sidebar backend, including one on a remote mux host, receives every
   tab's title and cwd in model updates.
 - A sidebar whose backend stops answering pings for 20 s is restarted.
+- Spaces are per GUI window. A tab WezTerm itself closes (not the plugin) hands
+  focus to the physical neighbour, which may sit in another space; the sidebar
+  then follows it. Assignments are keyed by tab id and gated like pins. A
+  template id built from a remote hostname is shown on every sidebar of the
+  window, remote ones included.
 
 ## Sidebar identity
 

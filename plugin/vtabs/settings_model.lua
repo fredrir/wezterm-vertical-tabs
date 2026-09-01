@@ -1,5 +1,4 @@
 local config = require "vtabs.config"
-local icons = require "vtabs.icons"
 local page = require "vtabs.page"
 local util = require "vtabs.util"
 local version = require "vtabs.version"
@@ -30,37 +29,8 @@ local function field_body(row, st)
   }
 end
 
----The 28-column preview's own input: the merged config's render surface and the three fixed tabs.
-local function preview_body(cfg, pending)
-  local merged = util.merge(cfg, pending or {})
-  local map = icons.resolve(merged.icon_map)
-  local tabs = {}
-  for i, sample in ipairs(page.SAMPLE) do
-    tabs[i] = {
-      id = sample.tab_id,
-      index = sample.index,
-      title = sample.title,
-      meta = sample.meta,
-      active = sample.is_active,
-      icon = map[sample.process] or map.default,
-    }
-  end
-  local strip = {}
-  for _, action in ipairs(require("vtabs.actions").resolved_strip(merged)) do
-    strip[#strip + 1] = { id = action.id, icon = action.icon }
-  end
-  return {
-    render = require("vtabs.wire").render_section(merged),
-    icons = merged.icons,
-    position = merged.position,
-    meta_sep = merged.meta_sep,
-    strip = strip,
-    tabs = tabs,
-  }
-end
-
----The settings screen's model, one message: fields in form order, nav groups, caveat, preview.
-function M.body(cfg, st, pending)
+---The settings screen's model, one message: fields in form order, nav groups, caveat.
+function M.body(cfg, st)
   cfg = cfg or config.get()
   st = st or {}
   local fields, groups = {}, {}
@@ -81,7 +51,6 @@ function M.body(cfg, st, pending)
     groups = groups,
     fields = fields,
     caveat = caveat,
-    preview = preview_body(cfg, pending),
   }
 end
 

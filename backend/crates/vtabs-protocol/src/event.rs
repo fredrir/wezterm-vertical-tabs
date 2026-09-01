@@ -158,6 +158,15 @@ impl Event {
         }
     }
 
+    /// A verb aimed at something Lua names by string: a strip button, a space.
+    pub fn do_named(a: &'static str, id: String) -> Self {
+        Event::Do {
+            a,
+            id: Some(DoId::Name(id)),
+            args: Box::default(),
+        }
+    }
+
     pub fn with(mut self, set: impl FnOnce(&mut DoArgs)) -> Self {
         if let Event::Do { args, .. } = &mut self {
             set(args.as_mut());
@@ -238,13 +247,12 @@ mod tests {
             r#"{"t":"do","a":"new_tab"}"#
         );
         assert_eq!(
-            Event::Do {
-                a: "strip",
-                id: Some(DoId::Name("settings".into())),
-                args: Box::default(),
-            }
-            .to_json(),
+            Event::do_named("strip", "settings".into()).to_json(),
             r#"{"t":"do","a":"strip","id":"settings"}"#
+        );
+        assert_eq!(
+            Event::do_named("switch_space", "work".into()).to_json(),
+            r#"{"t":"do","a":"switch_space","id":"work"}"#
         );
         assert_eq!(
             Event::do_("set_scroll")

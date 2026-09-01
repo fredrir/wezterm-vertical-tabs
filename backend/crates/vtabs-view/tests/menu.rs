@@ -280,3 +280,33 @@ fn the_selection_is_local_until_the_level_or_its_items_change() {
     state.adopt(&confirm());
     assert_eq!(state.selected, 2, "and so does a new level");
 }
+
+fn spaces() -> MenuMsg {
+    msg(
+        r#"{"rev":4,"open":true,"level":"spaces","anchor":{"row":4,"col":2},"target":7,"selected":1,
+        "header":{"title":"Move to space","meta":"nvim"},
+        "items":[{"id":"space:home","label":"Home","hint":"3","disabled":true},
+                 {"id":"space:claude","label":"Claude","hint":"1"},
+                 {"id":"space:pi","label":"pi"},
+                 {"id":"space_auto","label":"Auto (follow rules)","disabled":true}]}"#,
+    )
+}
+
+#[test]
+fn the_spaces_level_keeps_the_root_width_and_starts_past_the_current_space() {
+    let mut state = adopted(&root());
+    let root_w = open(&root(), &state, (28, 24)).rect.w.unwrap();
+    state.adopt(&spaces());
+    assert_eq!(
+        state.selected, 2,
+        "selected:1 names the disabled current space; the first live row takes it"
+    );
+    let placed = open(&spaces(), &state, (28, 24));
+    assert_eq!(placed.level, Level::Spaces);
+    let w = placed.rect.w.unwrap();
+    assert!(
+        w >= root_w,
+        "the sub-level never draws narrower than the root it came from"
+    );
+    assert!(text_of(&placed.rect.rows[1], w).contains("Move to space"));
+}

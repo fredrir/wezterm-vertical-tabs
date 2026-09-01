@@ -136,6 +136,20 @@ pub struct FooterEntry {
     pub icon_fg: Option<Rgb>,
 }
 
+/// One entry of the space switcher at the foot; `is_active` is derived from `model.space`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct SpaceEntry {
+    pub id: String,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub icon: String,
+    #[serde(default)]
+    pub is_active: bool,
+    #[serde(default)]
+    pub has_unseen: bool,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct PopSpan {
     #[serde(default = "one")]
@@ -206,6 +220,8 @@ pub struct RenderInput {
     pub ensure_visible: Option<i64>,
     #[serde(default)]
     pub footer: Vec<FooterEntry>,
+    #[serde(default)]
+    pub spaces: Vec<SpaceEntry>,
     #[serde(default)]
     pub private: bool,
     #[serde(default)]

@@ -1015,51 +1015,6 @@
         "id": "backend",
         "label": "Backend"
       }],
-    "preview": {
-      "icons": true,
-      "render": {
-        "close_button": "hover",
-        "frame": false,
-        "hover": "follow",
-        "meta": false,
-        "new_tab_button": true,
-        "new_tab_label": "New tab",
-        "padding": {
-          "bottom": 0,
-          "left": 1,
-          "right": 1,
-          "top": 0
-        },
-        "pinned_style": "dense",
-        "row_gap": 0,
-        "scroll_indicator": "auto",
-        "separator": "gap",
-        "show_index": false,
-        "tab_height": "card"
-      },
-      "tabs": [{
-          "active": false,
-          "icon": "$",
-          "id": 1,
-          "index": 1,
-          "meta": "~/",
-          "title": "zsh"
-        }, {
-          "active": true,
-          "icon": "v",
-          "id": 2,
-          "index": 2,
-          "meta": "~/.config",
-          "title": "init.lua"
-        }, {
-          "active": false,
-          "icon": "r",
-          "id": 3,
-          "index": 3,
-          "meta": "~/src",
-          "title": "cargo run"
-        }]
-    },
     "screen": "settings",
     "version": "0.1.2"
   },

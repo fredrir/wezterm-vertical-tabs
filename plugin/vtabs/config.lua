@@ -1,6 +1,7 @@
 local util = require "vtabs.util"
 local icons = require "vtabs.icons"
 local schema = require "vtabs.schema"
+local spaces = require "vtabs.spaces"
 
 local M = {}
 
@@ -19,13 +20,14 @@ local function in_enum(option, value)
 end
 
 ---A list entry is either one of the option's named ids or a caller-supplied `{ id, ... }` entry.
+---A list *of* tables only has its shape checked here; the option's own validator judges each entry.
 local function list_ok(option, value)
   if type(value) ~= "table" then
     return false
   end
   for _, entry in ipairs(value) do
     if type(entry) == "table" then
-      if type(entry.id) ~= "string" then
+      if option.of ~= "table" and type(entry.id) ~= "string" then
         return false
       end
     elseif option.of ~= "enum" or not in_enum(option, entry) then
@@ -64,7 +66,8 @@ local function reason(option, value)
     return string.format("invalid %s=%s, using default", option.key, tostring(value))
   end
   if option.type == "list" then
-    return string.format("%s must be a list of %s, using default", option.key, table.concat(option.enum, ", "))
+    local of = option.enum and table.concat(option.enum, ", ") or (option.of or "table") .. " entries"
+    return string.format("%s must be a list of %s, using default", option.key, of)
   end
   if option.type == "number" then
     local kind = option.integer and "whole number" or "number"
@@ -170,6 +173,7 @@ function M.normalise(cfg)
     util.warn 'tear_off="outside" is not supported, using edge'
     cfg.tear_off = true
   end
+  spaces.validate(cfg)
   return cfg
 end
 

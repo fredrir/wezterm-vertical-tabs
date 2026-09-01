@@ -79,6 +79,7 @@ return config
 | `hooks.footer`            | `nil`                                                                        | `fun(mux_window): rows` |
 | `hooks.theme`             | `nil`                                                                        | `fun(window, theme): theme` |
 | `hooks.route`             | `nil`                                                                        | `fun(meta): space_id` |
+| `spaces`                  | `{}`                                                                         | list of `{ id, name, icon, theme, match }` |
 | `backend.path`            | `nil`                                                                        | string \| table \| `fun(domain, host)` |
 | `backend.repo`            | `"fredrir/wezterm-vertical-tabs"`                                            | string |
 | `backend.version`         | plugin version                                                               | string |
@@ -95,7 +96,8 @@ return config
 | `frame.radius` | corner radius in **device** pixels, so it is visually smaller on a HiDPI display. Keep it under one cell height: a program that paints its own background over a corner cell squares that corner off |
 | `frame.margin` | device px of tint **outside** the card |
 | `frame.inset` | device px of air **inside** the card, between the border and the first cell. Clamped to `frame.margin`. The card grows by it and `window_padding` absorbs it, so the outer gutter stays `frame.margin` |
-| `frame.border` | `true` derives a hairline that clears 2.0 against the frame tint; `false` omits it; a colour string is taken verbatim |
+| `frame.border` | `true` derives a hairline that clears 2.0 against the frame tint; `false` omits it; `"accent"` takes the active space's accent; any other colour string is taken verbatim |
+| `frame.border_width` | stroke in **device** px, default `1`; fractions are honoured, so `0.5` is a true hairline |
 | `edge_to_edge` | zeroes wezterm's window padding on the sides the sidebar touches, so its background reaches the window edge; the far side keeps wezterm's `1cell`, and top/bottom are window-global, so the content pane loses its half cell too. It only ever fills in a `window_padding` you left unset, so one set **after** `apply_to_config` wins. The split line stays: pair with `theme = { split = "hidden" }` for a seamless edge |
 | `tab_height` | pad rows around the card's content; independent of `meta` |
 | `meta` | off by default; opt in with `"auto"`, `"cwd"` or `"process"`. The popover header always shows cwd and domain, whatever this says |
@@ -122,6 +124,56 @@ return config
 | `theme.elevation` | `0.06` = the default tint, `0` = seamless with the terminal background; capped at `0.3`. `theme.content_bg` stays untinted, which is what `frame` paints its gutter with |
 | `adopt` | `"auto"` adopts only where this plugin spawns backends; see `docs/limitations.md` |
 | `backend.path` | keyed by host or domain; `host` comes from the pane's OSC 7 cwd |
+| `spaces` | per-window tab groups; see Spaces |
+| `hooks.route` | runs before the rules; `meta = { tab_id, window_id, title, proc, cwd, host, user, domain, remote, space, manual }`; return a space id, or nil for no opinion |
+
+## Spaces
+
+Per-window groups of tabs, each with its own look and a switcher on the sidebar's last row. Off
+until `spaces` has an entry or `hooks.route` is set.
+
+```lua
+spaces = {
+  { id = "home",   icon = "󰋜" },                                            -- first = default
+  { id = "claude", name = "Claude", icon = "", theme = { accent = "#f5c2e7" }, match = { proc = "claude" } },
+  { id = "work",   icon = "", match = { cwd = { "~/work", "~/src/acme/*" } } },
+  { id = "$host",  icon = "󰒋", match = { remote = true }, theme = "auto" },  -- one space per host
+},
+```
+
+| entry field | value |
+| --- | --- |
+| `id` | required; `$domain` `$host` `$user` `$proc` `$cwd` make it a template: one space per distinct value |
+| `name` | `id` |
+| `icon` | one glyph; templates share it |
+| `theme` | table merged over `theme` \| `"auto"` (accent from the scheme's own hues, stable per id) \| `nil` (inherit) |
+| `match` | rule below; absent = never routed to, reached by hand or as the default |
+
+| match field | matches |
+| --- | --- |
+| `domain` `host` `user` `proc` `title` | a glob (`*`) or a list of globs (any of); every field given must match |
+| `cwd` | same; without `*` a path prefix, so `"~/work"` takes `~/work/x` |
+| `remote` | `true` \| `false` — not this machine, judged by domain and the OSC 7 host |
+
+| when | the tab goes to |
+| --- | --- |
+| first seen, `hooks.route` answers | that space; an id no entry declares makes a dynamic space |
+| first seen, a rule matches | the first matching entry, in order |
+| first seen, nothing matches | the window's active space |
+| its process, cwd or host changes and a rule matches | that space — sticky: when nothing matches, nothing moves |
+| moved by hand | stays until the popover's `Auto (follow rules)` |
+
+| situation | result |
+| --- | --- |
+| a tab in another space is activated (new tab, routed tab, `wezterm cli`) | the sidebar follows it |
+| switch to an empty space | list empty, the current tab stays on screen, `new_tab` lands there; nothing is spawned |
+| the active tab is closed or moved away | its neighbour in the same space takes over; the last tab of a space takes the sidebar along |
+| `next_tab` `prev_tab` `tab_N` `close_others`, reorder | inside the space |
+| settings tab | shown in every space, never counted |
+| a dynamic space empties | disappears; a declared one stays |
+| switcher | one icon per space, from two spaces up; active in the accent, unseen output in `unseen_fg`; skipped when the pane has no row to spare |
+| restart | assignments persist with the pins and return once a sidebar pane proves the mux survived |
+| cap | `32` spaces per window (`MODEL_MAX_SPACES`); a template past it warns once and routes nowhere |
 
 ## Keys
 
@@ -140,6 +192,7 @@ return config
 | `next_tab_arrow` / `prev_tab_arrow`    | `CMD+OPT+Right` / `Left`      | —                            | cycle                           |
 | `move_tab_up` / `move_tab_down`        | `CMD+SHIFT+PageUp/Down`       | `CTRL+SHIFT+ALT+PageUp/Down` | reorder                         |
 | `tab_1` … `tab_8`, `tab_last`          | `CMD+1` … `CMD+9`             | `CTRL+SHIFT+1` … `9`         | jump to visible tab             |
+| `next_space` / `prev_space`            | `CMD+e` / `CMD+SHIFT+e`       | `CTRL+SHIFT+e` / `CTRL+SHIFT+ALT+e` | cycle spaces             |
 
 ```lua
 keys = {
@@ -148,6 +201,9 @@ keys = {
 }
 ```
 
+A chord already in `config.keys` is yours however its modifiers are spelled: `SUPER`, `CMD` and
+`WIN` are one key, so are `ALT`, `OPT` and `META`, and `SHIFT|CMD` is `CMD|SHIFT`.
+
 manual binding:
 
 ```lua
@@ -155,18 +211,20 @@ manual binding:
 { key = "h", mods = "CMD", action = vtabs.action.activate_pane_direction "Left" } -- skips the sidebar
 { key = "d", mods = "CMD", action = vtabs.action.split "Right" }                 -- splits the shell, not the sidebar
 { key = "1", mods = "CMD", action = vtabs.action.activate_tab(0) }              -- 0-based, -1 = last
+{ key = "1", mods = "CMD|OPT", action = vtabs.action.switch_space "home" }
 ```
 
 Available: `toggle_sidebar focus_sidebar new_tab close_tab reopen_closed pin_tab
 private_window new_window tear_off rename_tab next_tab prev_tab move_tab_up
-move_tab_down activate_tab(index) activate_pane_direction(dir) split(dir)`.
+move_tab_down next_space prev_space activate_tab(index) activate_pane_direction(dir) split(dir)
+switch_space(id) move_to_space(id)`.
 
 ### Sidebar keyboard mode
 
 `focus_sidebar` moves focus into the sidebar: `j`/`k`/arrows/`Tab`/`Shift+Tab`
 move, `g`/`G`/`Home`/`End` jump, `1`–`9` switch directly, `Enter`/`Space`
 switch, `x`/`d`/`Delete` close, `p` pin, `n` new tab, `r` rename, `m` menu,
-`J`/`K` reorder, `Esc`/`q`/`Ctrl+C` leave.
+`J`/`K` reorder, `]`/`[` next/previous space, `Esc`/`q`/`Ctrl+C` leave.
 
 Keys that reach the sidebar while it is *not* in keyboard mode are forwarded to
 the tab's content pane, which then takes focus back.
@@ -194,6 +252,9 @@ the tab's content pane, which then takes focus back.
 | drop on a gap row                          | insert below that tab                                                            |
 | click the toggle `«`                       | hide the sidebar; `toggle_sidebar` brings it back                                |
 | right click a tab                          | action popover, drawn inside the sidebar                                         |
+| "Move to space ▸" in the popover           | lists the spaces; `Auto (follow rules)` hands a hand-moved tab back to the rules |
+| click a space icon                         | switch to that space; when only one fits, the click steps to the next            |
+| wheel over the space icons                 | previous / next space                                                            |
 | click away from an open popover            | dismiss without switching tabs; a click level with an item but outside the menu counts as away |
 | click a destructive menu item              | runs on release, and only if the release is still on the same item               |
 | wheel over an open popover                 | move its selection                                                               |
@@ -204,15 +265,16 @@ the tab's content pane, which then takes focus back.
 | -------------------------- | ----------------------------- | --------------------------------------------------------------- |
 | `enable_tab_bar`           | `false`                       | `hide_native_tab_bar = true`                                    |
 | `pane_focus_follows_mouse` | `true`                        | `hover = "follow"` and you left it unset                        |
-| `window_decorations`       | `"INTEGRATED_BUTTONS\|RESIZE"` | macOS, you left it unset, `position = "left"`, `titlebar ~= "plain"` |
+| `window_decorations`       | `"INTEGRATED_BUTTONS\|RESIZE"` | macOS, you left it unset or set `"RESIZE"`, `position = "left"`, `titlebar ~= "plain"` |
 | `inactive_pane_hsb`        | identity                      | you left it unset and `dim_inactive_panes = false` (the default)  |
 | `window_padding`           | sides touching the sidebar `0`, the far side `"1cell"` | you left it unset and `edge_to_edge = true` (the default) |
 | `window_padding`           | `frame.margin + frame.inset` on all four sides | you left it unset and `frame = "zen"`; supersedes `edge_to_edge` |
 | `colors.split`             | the card colour               | `frame = "zen"`; splits you make inside the content pane vanish into the card, and the frame margin already hides the sidebar seam |
 | `status_update_interval`   | `min(yours, poll_ms)`         | always                                                          |
 
-`window_decorations = "RESIZE"` alone hides the macOS window buttons and pins the window in
-place; the plugin never sets it and warns once if you do.
+`window_decorations = "RESIZE"` alone hides the macOS window buttons, so the plugin reads it as
+the wish for no title bar and adds `INTEGRATED_BUTTONS`: the lights land on the sidebar's reserve
+instead of vanishing. `titlebar = "plain"` keeps them hidden; any other value is left alone.
 
 | focus                | behaviour                                                                                  |
 | -------------------- | ------------------------------------------------------------------------------------------ |
@@ -226,6 +288,7 @@ place; the plugin never sets it and warns once if you do.
 
 `vtabs.apply_to_config(config, opts)`, `vtabs.action.*`,
 `vtabs.action.split "Right"` (also `"Left"`, `"Top"`, `"Bottom"`),
+`vtabs.action.switch_space(id)`, `vtabs.action.move_to_space(id)`,
 `vtabs.toggle_sidebar(window)`, `vtabs.show_sidebar(window, bool)`,
 `vtabs.sync(window, { force = true })`, `vtabs.invalidate_theme(window_id?)`,
 `vtabs.is_sidebar_pane(pane)` (true for any pane presenting as a sidebar backend; for skipping, never for trust), `vtabs.window_title(tab, pane, tabs, panes)`, `vtabs.is_private_window(window)`, `vtabs.version`.

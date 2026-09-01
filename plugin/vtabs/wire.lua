@@ -155,7 +155,7 @@ end
 local function theme_body(cfg, ctx)
   local palette = (ctx.effective or {}).resolved_palette or {}
   local tab_bar = palette.tab_bar or {}
-  local user = ctx.theme_override or cfg.theme or {}
+  local user = ctx.theme_override or ctx.theme_base or cfg.theme or {}
   return {
     scheme = {
       background = hexc(palette.background),
@@ -191,11 +191,24 @@ local function tab_record(item)
   }
 end
 
+---The switcher only earns its row once there is something to switch between.
+local function spaces_body(list)
+  if type(list) ~= "table" or #list < 2 then
+    return nil
+  end
+  local out = M.array()
+  for _, space in ipairs(list) do
+    out[#out + 1] = { id = space.id, name = space.name, icon = space.icon, unseen = space.unseen }
+  end
+  return out
+end
+
 local function model_body(cfg, ctx, wid)
   local tabs = M.array()
   for _, item in ipairs(ctx.items or {}) do
     tabs[#tabs + 1] = tab_record(item)
   end
+  local spaces = spaces_body(ctx.spaces)
   local footer = M.array()
   for _, entry in ipairs(ctx.footer or {}) do
     footer[#footer + 1] = type(entry) == "string" and { text = entry } or entry
@@ -228,6 +241,8 @@ local function model_body(cfg, ctx, wid)
     footer = footer,
     tabs = tabs,
     private = state.is_private(wid),
+    space = spaces and ctx.space or nil,
+    spaces = spaces,
   }
 end
 
@@ -285,7 +300,7 @@ function M.sync(gui_window, ctx)
   local _, page_pane = settings.find(mux_win)
   if page_pane and sidebar.is_ready(page_pane) and (store.proto[page_pane:pane_id()] or 1) >= 2 then
     local st = settings.page_state(wid)
-    local body = require("vtabs.settings_model").body(cfg, st, nil)
+    local body = require("vtabs.settings_model").body(cfg, st)
     lines.settings = versioned(wid, "settings", encode(body), "model")
     push(page_pane, { "config", "theme", "settings" })
   end

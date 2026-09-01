@@ -3,7 +3,7 @@
 
 use vtabs_core::geom::BUTTON_PITCH_PT;
 
-use crate::scene::{FooterEntry, Item, RenderCfg, RenderInput, Strip, StripButton};
+use crate::scene::{FooterEntry, Item, RenderCfg, RenderInput, SpaceEntry, Strip, StripButton};
 
 /// Column grid of §1.1; every landmark derives from `cols` and `padding`.
 #[derive(Debug, Clone, Copy)]
@@ -151,6 +151,87 @@ pub fn strip_actions(
         }
     }
     (out, Some(row))
+}
+
+/// One switcher slot: the glyph, its column, its click span, and the space a click on it targets.
+#[derive(Debug, Clone)]
+pub struct SpaceSlot {
+    pub id: String,
+    pub icon: String,
+    pub x: i64,
+    pub x1: i64,
+    pub x2: i64,
+    pub active: bool,
+    pub unseen: bool,
+    /// The list continues past this end of the window, so the glyph paints faded.
+    pub cut: bool,
+}
+
+/// The space `delta` steps from the active one, or None at either end: the switcher never wraps.
+pub fn space_neighbour(ids: &[&str], active: Option<usize>, delta: i64) -> Option<String> {
+    let at = active? as i64 + delta;
+    if at < 0 || at >= ids.len() as i64 {
+        return None;
+    }
+    Some(ids[at as usize].to_string())
+}
+
+/// One row of space icons at the foot, plus a blank row above it when the pane can spare one; the
+/// list keeps the same 3-row floor the ghost card respects.
+fn spaces_rows(room: i64, n: usize) -> i64 {
+    if n == 0 {
+        0
+    } else if room >= 5 {
+        2
+    } else if room >= 3 {
+        1
+    } else {
+        0
+    }
+}
+
+/// The switcher's slots, centred in the card span on the strip's own pitch. Past the width, a
+/// window of slots around the active one, its cut ends faded; a lone slot is a cycle button.
+fn space_slots(spaces: &[SpaceEntry], g: &Grid, stride: i64, cols: i64) -> Vec<SpaceSlot> {
+    let n = spaces.len() as i64;
+    if n == 0 || stride < 1 {
+        return Vec::new();
+    }
+    let card_w = g.card_x2 - g.card_x1 + 1;
+    let max_n = ((card_w - 3) / stride + 1).clamp(1, n);
+    let active = spaces.iter().position(|s| s.is_active);
+    let from = if max_n >= n {
+        0
+    } else {
+        (active.unwrap_or(0) as i64 - max_n / 2).clamp(0, n - max_n)
+    };
+    let first_x1 = g.card_x1 + (card_w - max_n * stride) / 2;
+    let mut out = Vec::new();
+    for i in 0..max_n {
+        let at = (from + i) as usize;
+        let space = &spaces[at];
+        let x1 = first_x1 + stride * i;
+        let x2 = x1 + stride - 1;
+        if x1 < 1 || x2 > cols {
+            continue;
+        }
+        let target = if max_n == 1 && n > 1 {
+            spaces[(at + 1) % n as usize].id.clone()
+        } else {
+            space.id.clone()
+        };
+        out.push(SpaceSlot {
+            id: target,
+            icon: space.icon.clone(),
+            x: x1 + (stride - 1) / 2,
+            x1,
+            x2,
+            active: space.is_active,
+            unseen: space.has_unseen,
+            cut: (i == 0 && from > 0) || (i == max_n - 1 && from + max_n < n),
+        });
+    }
+    out
 }
 
 /// A list item as the plan sees it: drag may reseat a copy at another slot with a different pinning.
@@ -374,6 +455,10 @@ pub enum RowKind<'a> {
         entry: &'a FooterEntry,
         hovered: bool,
     },
+    Spaces {
+        slots: Vec<SpaceSlot>,
+        lit_id: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -405,6 +490,7 @@ pub enum RegionKind {
     Tab,
     NewTab,
     Footer,
+    Spaces,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -540,9 +626,12 @@ pub fn plan<'a>(view: &'a RenderInput) -> Plan<'a> {
         .bottom
         .max(0)
         .min((view.rows - strip_rows).max(0));
-    let ghost_h = new_tab_rows(cfg, view.rows - pad_b - 1, strip_rows, footer_n);
+    // the switcher outranks the ghost: it is claimed first, so the ghost is what degrades
+    let spaces_h = spaces_rows(view.rows - strip_rows - footer_n - pad_b, view.spaces.len());
+    let foot_n = footer_n + spaces_h;
+    let ghost_h = new_tab_rows(cfg, view.rows - pad_b - 1, strip_rows, foot_n);
     let ghost_gap = i64::from(ghost_h == 3);
-    let list_rows = (view.rows - strip_rows - ghost_gap - ghost_h - footer_n - pad_b).max(0);
+    let list_rows = (view.rows - strip_rows - ghost_gap - ghost_h - foot_n - pad_b).max(0);
 
     let ordered = apply_drag(&view.items, view.drag.as_ref());
     let (pinned, rest): (Vec<LItem<'a>>, Vec<LItem<'a>>) =
@@ -841,7 +930,7 @@ pub fn plan<'a>(view: &'a RenderInput) -> Plan<'a> {
     }
 
     for (idx, entry) in view.footer.iter().enumerate() {
-        let row = view.rows - pad_b - footer_n + idx as i64 + 1;
+        let row = view.rows - pad_b - spaces_h - footer_n + idx as i64 + 1;
         let hovered = view.hover.is_some_and(|h| h.y == row) && entry.id.is_some();
         set(
             &mut rows,
@@ -860,10 +949,145 @@ pub fn plan<'a>(view: &'a RenderInput) -> Plan<'a> {
         );
     }
 
+    if spaces_h > 0 {
+        let row = view.rows - pad_b;
+        if spaces_h == 2 {
+            set(&mut rows, row - 1, RowSpec::plain(RowKind::Space));
+            mark(&mut regions, row - 1, Region::of(RegionKind::Space));
+        }
+        let slots = space_slots(&view.spaces, &g, action_stride(view.strip.as_ref()), cols);
+        let lit_id = view
+            .hover
+            .filter(|h| h.y == row)
+            .and_then(|h| slots.iter().find(|s| h.x >= s.x1 && h.x <= s.x2))
+            .map(|s| s.id.clone());
+        let region = match (slots.first(), slots.last()) {
+            (Some(first), Some(last)) => Region {
+                x1: Some(first.x1),
+                x2: Some(last.x2),
+                spans: slots
+                    .iter()
+                    .map(|s| Span {
+                        id: s.id.clone(),
+                        x1: s.x1,
+                        x2: s.x2,
+                    })
+                    .collect(),
+                ..Region::of(RegionKind::Spaces)
+            },
+            _ => Region::of(RegionKind::Spaces),
+        };
+        set(
+            &mut rows,
+            row,
+            RowSpec::plain(RowKind::Spaces { slots, lit_id }),
+        );
+        mark(&mut regions, row, region);
+    }
+
     Plan {
         grid: g,
         rail,
         rows,
         regions,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn spaces(n: usize, active: usize) -> Vec<SpaceEntry> {
+        (0..n)
+            .map(|i| SpaceEntry {
+                id: format!("s{i}"),
+                name: format!("s{i}"),
+                icon: i.to_string(),
+                is_active: i == active,
+                has_unseen: false,
+            })
+            .collect()
+    }
+
+    fn columns(slots: &[SpaceSlot]) -> Vec<i64> {
+        slots.iter().map(|s| s.x).collect()
+    }
+
+    #[test]
+    fn the_switcher_takes_two_rows_when_the_pane_can_spare_them_and_none_without_spaces() {
+        assert_eq!(spaces_rows(20, 3), 2);
+        assert_eq!(
+            spaces_rows(5, 3),
+            2,
+            "gap, icons and a 3-row list still fit"
+        );
+        assert_eq!(spaces_rows(4, 3), 1, "the gap goes first");
+        assert_eq!(spaces_rows(3, 3), 1);
+        assert_eq!(spaces_rows(2, 3), 0, "then the row itself");
+        assert_eq!(spaces_rows(20, 0), 0);
+    }
+
+    #[test]
+    fn slots_sit_centred_on_the_strip_pitch_and_their_spans_touch() {
+        let slots = space_slots(&spaces(3, 1), &rail_grid(9), 3, 9);
+        assert_eq!(columns(&slots), vec![2, 5, 8]);
+        assert_eq!((slots[0].x1, slots[0].x2), (1, 3));
+        assert_eq!((slots[2].x1, slots[2].x2), (7, 9));
+        assert!(slots[1].active && !slots[0].active);
+        assert!(
+            slots.iter().all(|s| !s.cut),
+            "nothing hidden, nothing faded"
+        );
+        let two = space_slots(&spaces(2, 0), &rail_grid(9), 3, 9);
+        assert_eq!(
+            columns(&two),
+            vec![3, 6],
+            "two icons centre between the same edges"
+        );
+    }
+
+    #[test]
+    fn past_the_width_a_window_around_the_active_space_shows_with_faded_cut_ends() {
+        let late = space_slots(&spaces(5, 3), &rail_grid(9), 3, 9);
+        let ids: Vec<&str> = late.iter().map(|s| s.id.as_str()).collect();
+        assert_eq!(ids, vec!["s2", "s3", "s4"]);
+        assert_eq!(
+            late.iter().map(|s| s.cut).collect::<Vec<_>>(),
+            vec![true, false, false],
+            "the list continues to the left only"
+        );
+        let early = space_slots(&spaces(5, 0), &rail_grid(9), 3, 9);
+        let ids: Vec<&str> = early.iter().map(|s| s.id.as_str()).collect();
+        assert_eq!(ids, vec!["s0", "s1", "s2"]);
+        assert!(early[2].cut && !early[0].cut);
+    }
+
+    #[test]
+    fn a_lone_slot_shows_the_active_space_and_targets_the_next_one() {
+        let slots = space_slots(&spaces(3, 1), &rail_grid(5), 3, 5);
+        assert_eq!(slots.len(), 1, "a five-column rail holds one icon");
+        assert_eq!(slots[0].x, 3);
+        assert_eq!((slots[0].icon.as_str(), slots[0].active), ("1", true));
+        assert_eq!(slots[0].id, "s2", "a click steps on");
+        let last = space_slots(&spaces(3, 2), &rail_grid(5), 3, 5);
+        assert_eq!(
+            last[0].id, "s0",
+            "and wraps, or the last space would be a dead end"
+        );
+        let only = space_slots(&spaces(1, 0), &rail_grid(5), 3, 5);
+        assert_eq!(
+            only[0].id, "s0",
+            "with one space there is nowhere else to go"
+        );
+    }
+
+    #[test]
+    fn the_neighbour_stops_at_the_ends_and_needs_an_active_space() {
+        let ids = ["a", "b", "c"];
+        assert_eq!(space_neighbour(&ids, Some(1), 1).as_deref(), Some("c"));
+        assert_eq!(space_neighbour(&ids, Some(1), -1).as_deref(), Some("a"));
+        assert_eq!(space_neighbour(&ids, Some(2), 1), None);
+        assert_eq!(space_neighbour(&ids, Some(0), -1), None);
+        assert_eq!(space_neighbour(&ids, None, 1), None);
     }
 }

@@ -434,3 +434,39 @@ fn the_rename_buffer_commits_the_text_rust_owns() {
     assert_eq!(verbs(&done.events), vec!["rename_commit"]);
     assert_eq!(args(&done.events).text.as_deref(), Some("nvie"));
 }
+
+/// The "Move to space ▸" level as popover.lua composes it: the current space cannot be picked.
+fn spaces() -> MenuMsg {
+    msg(
+        r#"{"rev":4,"open":true,"level":"spaces","anchor":{"row":4,"col":2},"target":7,"selected":1,
+        "header":{"title":"Move to space","meta":"nvim"},
+        "items":[{"id":"space:home","label":"Home","hint":"3","disabled":true},
+                 {"id":"space:claude","label":"Claude","hint":"1"},
+                 {"id":"space:pi","label":"pi"},
+                 {"id":"space_auto","label":"Auto (follow rules)","disabled":true}]}"#,
+    )
+}
+
+#[test]
+fn the_spaces_level_steps_back_on_esc_and_never_rests_on_the_current_space() {
+    let sub = opened(spaces());
+    let plain = Mods::default();
+    assert_eq!(
+        verbs(&key(&sub, &sub.state, "escape", plain).events),
+        vec!["menu_back"],
+        "a sub-level, whatever its rows look like"
+    );
+    assert_eq!(
+        sub.state.selected, 2,
+        "selected:1 names the disabled current space, so the first live row takes the highlight"
+    );
+    let picked = key(&sub, &sub.state, "enter", plain);
+    assert_eq!(verbs(&picked.events), vec!["menu_pick"]);
+    assert_eq!(args(&picked.events).id.as_deref(), Some("space:claude"));
+    let up = key(&sub, &sub.state, "k", plain).menu.unwrap();
+    assert_eq!(up.selected, 2, "k cannot climb onto the current space");
+    let down = key(&sub, &up, "j", plain).menu.unwrap();
+    assert_eq!(down.selected, 3);
+    let past = key(&sub, &down, "j", plain).menu.unwrap();
+    assert_eq!(past.selected, 3, "nor land on the disabled Auto row");
+}

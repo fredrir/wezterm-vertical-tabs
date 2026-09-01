@@ -5,6 +5,7 @@ local sidebar = require "vtabs.sidebar"
 local model = require "vtabs.model"
 local actions = require "vtabs.actions"
 local keys = require "vtabs.keys"
+local spaces = require "vtabs.spaces"
 local util = require "vtabs.util"
 
 local M = {}
@@ -17,7 +18,7 @@ local ITEMS = {
   { id = "activate", label = "Switch to tab", action = "activate_tab" },
   { id = "pin", label = "Pin tab", action = "pin_tab", key = "pin_tab" },
   { id = "rename", label = "Rename…", level = "rename" },
-  { id = "space", label = "Move to space", hint = "▸", disabled = true },
+  { id = "space", label = "Move to space", hint = "▸", level = "spaces" },
   { id = "tear_off", label = "Move to new window", action = "tear_off" },
   { id = "duplicate", label = "Duplicate tab" },
   { id = "settings", label = "Settings…", action = "open_settings", key = "settings" },
@@ -71,6 +72,8 @@ function M.items(gui_window, tab_id)
       entry.label = state.is_pinned(tab_id) and "Unpin tab" or "Pin tab"
     elseif spec.id == "close_others" then
       entry.disabled = #tabs <= 1
+    elseif spec.id == "space" then
+      entry.disabled = not spaces.enabled(config.get())
     end
     out[#out + 1] = entry
   end
@@ -177,6 +180,20 @@ function M.run(gui_window, id)
     actions.run(kind == "close_others" and "close_others_now" or "close_tab_now", gui_window, tab_id)
     return true
   end
+  if pop.level == "spaces" then
+    if id == "space_auto" then
+      M.close(gui_window)
+      actions.move_to_space(gui_window, tab_id, nil, false)
+      return true
+    end
+    local space = type(id) == "string" and id:match "^space:(.+)$" or nil
+    if not space then
+      return false
+    end
+    M.close(gui_window)
+    actions.move_to_space(gui_window, tab_id, space, true)
+    return true
+  end
   for _, entry in ipairs(M.items(gui_window, tab_id)) do
     if entry.id == id then
       if entry.disabled then
@@ -184,6 +201,11 @@ function M.run(gui_window, id)
       end
       if entry.confirm and actions.needs_confirm(gui_window, tab_id, entry.confirm) then
         return M.to_confirm(gui_window, entry.confirm, true)
+      end
+      if entry.level == "spaces" then
+        pop.level = "spaces"
+        pop.index = 1
+        return true
       end
       if entry.level == "rename" then
         local tab = actions.tab_by_id(gui_window, tab_id)
@@ -215,8 +237,9 @@ function M.wire_body(gui_window)
   if not pop then
     return nil
   end
-  local tabs = model.build(gui_window)
-  local item = model.find(tabs, pop.tab_id)
+  -- the whole window, not the visible list: a tab that just left the space still heads its menu
+  local survey = model.survey(gui_window)
+  local item = model.find(survey.all, pop.tab_id)
   local body = {
     open = true,
     level = pop.level,
@@ -224,7 +247,26 @@ function M.wire_body(gui_window)
     target = pop.tab_id,
     selected = pop.index,
   }
-  if pop.level == "confirm" then
+  if pop.level == "spaces" then
+    local current = state.space_of(pop.tab_id)
+    body.header = { title = "Move to space", meta = item and item.title or nil }
+    local items = {}
+    for _, space in ipairs(survey.spaces or {}) do
+      local icon = space.icon and space.icon ~= "" and (space.icon .. " ") or ""
+      items[#items + 1] = {
+        id = "space:" .. space.id,
+        label = icon .. space.name,
+        hint = space.count > 0 and tostring(space.count) or nil,
+        disabled = space.id == current or nil,
+      }
+    end
+    items[#items + 1] = {
+      id = "space_auto",
+      label = "Auto (follow rules)",
+      disabled = not state.space_manual(pop.tab_id) or nil,
+    }
+    body.items = items
+  elseif pop.level == "confirm" then
     local lines = question(gui_window, pop) or {}
     body.header = { title = lines[1] or "Close?", meta = lines[2] }
     local items = {}
@@ -267,7 +309,7 @@ function M.commit_rename(gui_window)
 end
 
 -- A confirm the user reached through the menu has a menu to go back to; one raised by the ✕ does not.
-local STEPS_BACK = { rename = true }
+local STEPS_BACK = { rename = true, spaces = true }
 
 ---`Esc` steps back a level before it closes.
 function M.back(gui_window)

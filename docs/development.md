@@ -45,11 +45,12 @@ cargo run -q -p vtabs-protocol --bin gen-lua -- --check   # fail when stale (run
 
 ## The golden oracle
 
-`plugin/tests/golden/scenes/*.json` are committed `RenderInput` scenes; `plugin/tests/golden/frames/`
+`plugin/tests/golden/scenes/*.json` are committed scenes — a sidebar `RenderInput`, or for
+`settings-*` the settings model plus ui state (`vtabs-view::settings::Scene`); `plugin/tests/golden/frames/`
 holds the byte-exact reference renders — a text dump (`<scene>.txt`, column-ruled, ANSI stripped)
 and a styled dump (`<scene>.styled.txt`, one `#fg/#bg[*]:width` span per run of cells). `wez-vtabs
 dump-frames <scenes-dir> <out-dir>` renders every scene through `vtabs-view::render::golden_dumps`
-and writes both dumps per scene.
+or `settings::scene_dumps` and writes both dumps per scene.
 
 ```sh
 cd backend && cargo test -p vtabs-view   # golden_parity.rs + settings_parity.rs byte-diff every scene

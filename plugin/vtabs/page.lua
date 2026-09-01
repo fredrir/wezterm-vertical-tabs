@@ -6,10 +6,6 @@ local util = require "vtabs.util"
 
 local M = {}
 
--- Below this the page says so and draws nothing else; above PREVIEW_COLS the preview box appears.
-M.MIN_COLS = 48
-M.PREVIEW_COLS = 90
-
 local GROUP_LABELS = {
   layout = "Layout",
   cards = "Cards",
@@ -483,31 +479,6 @@ M.CAVEAT = {
 function M.caveat_applies()
   return platform.is_mac == true
 end
-
----Three fixed fake tabs, so the preview says the same thing whatever the user happens to have open.
-local SAMPLE = {
-  { tab_id = 1, index = 1, is_active = false, is_pinned = false, title = "zsh", meta = "~/", process = "zsh" },
-  {
-    tab_id = 2,
-    index = 2,
-    is_active = true,
-    is_pinned = false,
-    title = "init.lua",
-    meta = "~/.config",
-    process = "nvim",
-  },
-  {
-    tab_id = 3,
-    index = 3,
-    is_active = false,
-    is_pinned = false,
-    title = "cargo run",
-    meta = "~/src",
-    process = "cargo",
-  },
-}
-
-M.SAMPLE = SAMPLE
 
 local function deep_copy(value)
   if type(value) ~= "table" then

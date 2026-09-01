@@ -40,8 +40,6 @@ fn view<'a>(model: &'a ModelMsg, ui: &'a SettingsUi) -> SettingsView<'a> {
         ui,
         theme: theme(),
         glyphs: BTreeMap::new(),
-        position: "left".into(),
-        meta_sep: None,
     }
 }
 

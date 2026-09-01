@@ -12,6 +12,8 @@ pub const LINE_MAX: usize = 64 * 1024;
 pub const MODEL_MAX_TABS: usize = 200;
 pub const MENU_MAX_ITEMS: usize = 64;
 pub const MODEL_MAX_FIELDS: usize = 512;
+/// Mirrored to Lua, which creates spaces and refuses at the cap rather than lose the whole model.
+pub const MODEL_MAX_SPACES: usize = 32;
 
 /// `fx`: an out-of-range duration or rate is clamped, since a fade is cosmetic.
 pub const FX_MAX_MS: u64 = 2000;

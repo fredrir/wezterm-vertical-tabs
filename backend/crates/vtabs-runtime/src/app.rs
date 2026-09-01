@@ -5,7 +5,8 @@ use vtabs_core::ui::{SettingsUi, UiState};
 use vtabs_input::Input;
 use vtabs_input::resolve::{self, Knobs, MenuView, MirroredDrag, SettingsScreen};
 use vtabs_protocol::limits::{
-    FX_MAX_FPS, FX_MAX_MS, FX_MIN_FPS, MENU_MAX_ITEMS, MODEL_MAX_FIELDS, MODEL_MAX_TABS,
+    FX_MAX_FPS, FX_MAX_MS, FX_MIN_FPS, MENU_MAX_ITEMS, MODEL_MAX_FIELDS, MODEL_MAX_SPACES,
+    MODEL_MAX_TABS,
 };
 use vtabs_protocol::{Command, Event, v2};
 use vtabs_view::enrich::{Enriched, PopoverHits, enrich, glyph_map, theme_of};
@@ -173,7 +174,8 @@ impl<W: Write> App<W> {
             let (cfg, _, model) = self.state();
             let plan = layout::plan(&e.view);
             let ordered = ordered_ids(model);
-            let k = knobs(cfg, model, &e.view, &ordered);
+            let space_ids = space_ids(model);
+            let k = knobs(cfg, model, &e.view, &ordered, &space_ids);
             let r = resolve::mouse(&plan, &k, &self.ui, m, now);
             (r.ui, r.events, r.repaint)
         };
@@ -269,8 +271,7 @@ impl<W: Write> App<W> {
         Ok(())
     }
 
-    /// The settings widget's input, from the same three messages the sidebar reads. `position` and
-    /// `meta_sep` come off the config: `preview.render` carries neither.
+    /// The settings widget's input, from the same three messages the sidebar reads.
     fn settings_view(&self) -> Option<SettingsView<'_>> {
         let (cfg, theme, model) = (
             self.v2.config.as_ref()?,
@@ -287,12 +288,6 @@ impl<W: Write> App<W> {
             ui: &self.settings_ui,
             theme: theme_of(theme, model.private),
             glyphs: glyph_map(cfg),
-            position: cfg
-                .position
-                .clone()
-                .filter(|p| !p.is_empty())
-                .unwrap_or_else(|| "left".into()),
-            meta_sep: cfg.meta_sep.clone(),
         })
     }
 
@@ -304,7 +299,8 @@ impl<W: Write> App<W> {
             let (cfg, theme, model) = self.state();
             let e = enrich(cfg, theme, model, self.dims(), &self.ui);
             let ordered = ordered_ids(model);
-            let k = knobs(cfg, model, &e.view, &ordered);
+            let space_ids = space_ids(model);
+            let k = knobs(cfg, model, &e.view, &ordered, &space_ids);
             resolve::key(&k, name, mods, raw).events
         };
         for event in &events {
@@ -551,7 +547,10 @@ impl<W: Write> App<W> {
             Command::Config(msg) => self.v2.config = Some(*msg),
             Command::Theme(msg) => self.v2.theme = Some(*msg),
             Command::Model(msg) => {
-                if msg.tabs.len() > MODEL_MAX_TABS || msg.fields.len() > MODEL_MAX_FIELDS {
+                if msg.tabs.len() > MODEL_MAX_TABS
+                    || msg.fields.len() > MODEL_MAX_FIELDS
+                    || msg.spaces.len() > MODEL_MAX_SPACES
+                {
                     self.emit(&Event::Dropped {
                         what: "model",
                         reason: "bounds",
@@ -683,13 +682,22 @@ fn ordered_ids(model: &v2::ModelMsg) -> Vec<i64> {
     ids
 }
 
+fn space_ids(model: &v2::ModelMsg) -> Vec<&str> {
+    model.spaces.iter().map(|s| s.id.as_str()).collect()
+}
+
 fn knobs<'a>(
     cfg: &'a v2::ConfigMsg,
     model: &'a v2::ModelMsg,
     view: &'a vtabs_view::scene::RenderInput,
     ordered: &'a [i64],
+    space_ids: &'a [&'a str],
 ) -> Knobs<'a> {
     let focus = model.focus.unwrap_or_default();
+    let active_space = model
+        .space
+        .as_deref()
+        .and_then(|active| space_ids.iter().position(|id| *id == active));
     Knobs {
         cols: view.cols,
         position: &view.cfg.position,
@@ -710,6 +718,8 @@ fn knobs<'a>(
             outside: d.outside,
         }),
         scroll_top: model.scroll.unwrap_or_default().top,
+        space_ids,
+        active_space,
     }
 }
 
@@ -869,6 +879,69 @@ mod tests {
             dy: 0,
             mods: Mods::default(),
         })
+    }
+
+    fn model(a: &mut App<Vec<u8>>, json: &str) {
+        a.handle(Input::Command(Command::Model(Box::new(
+            serde_json::from_str(json).unwrap(),
+        ))))
+        .unwrap();
+    }
+
+    #[test]
+    fn a_model_past_the_space_bound_is_dropped_whole() {
+        let mut a = app();
+        dress(&mut a);
+        let spaces: Vec<String> = (0..=MODEL_MAX_SPACES)
+            .map(|i| format!(r#"{{"id":"s{i}"}}"#))
+            .collect();
+        let over = format!(
+            r#"{{"rev":2,"screen":"sidebar","active":1,"space":"s0","spaces":[{}],
+                "tabs":[{{"id":1,"index":1,"title":"one"}}]}}"#,
+            spaces.join(",")
+        );
+        model(&mut a, &over);
+        assert!(saw(&a, r#""t":"dropped","what":"model","reason":"bounds""#));
+        assert_eq!(
+            a.v2.model.as_ref().unwrap().rev,
+            1,
+            "the previous model is kept"
+        );
+    }
+
+    #[test]
+    fn a_press_on_a_space_icon_asks_lua_to_switch() {
+        let mut a = app();
+        dress(&mut a);
+        model(
+            &mut a,
+            r#"{"rev":2,"screen":"sidebar","active":1,"space":"home",
+                "spaces":[{"id":"home","icon":"~"},{"id":"work","icon":"w"}],
+                "tabs":[{"id":1,"index":1,"title":"one"}]}"#,
+        );
+        let (row, x) = {
+            let rows = a.dims().1;
+            let e = a.scene().0;
+            let plan = layout::plan(&e.view);
+            let row = (1..=rows)
+                .find(|&y| plan.at(y).kind == layout::RegionKind::Spaces)
+                .expect("a switcher row");
+            let x = plan
+                .at(row)
+                .spans
+                .iter()
+                .find(|s| s.id == "work")
+                .map(|s| s.x1)
+                .expect("the work slot");
+            (row, x)
+        };
+        a.handle(click(
+            vtabs_protocol::MouseKind::Press,
+            x as u16,
+            row as u16,
+        ))
+        .unwrap();
+        assert!(saw(&a, r#""t":"do","a":"switch_space","id":"work""#));
     }
 
     #[test]

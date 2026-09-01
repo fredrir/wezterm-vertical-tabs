@@ -100,12 +100,19 @@ Sidebar pane (`screen:"sidebar"`):
          "origin":{"x":5,"y":6,"at":1712345678901}},
  "strip":{"rows":1,"cols":28,"buttons":[{"id":"toggle"},{"id":"settings"}]},
  "footer":[{"text":"New tab"}],
+ "space":"home",
+ "spaces":[{"id":"home","name":"Home","icon":"󰋜","unseen":false},
+           {"id":"pi","name":"pi","icon":"󰒋","unseen":true}],
  "tabs":[
    {"id":7,"index":1,"title":"nvim","pane_title":"nvim — x","proc":"nvim",
     "cwd":"~/p/x","host":"pi","user":"f","domain":"local",
     "panes":2,"pinned":false,"private":false,"unseen":false,"zoomed":false}],
  "private":false}
 ```
+
+`spaces` is the switcher at the sidebar's foot, in order; `space` names the active one and is the
+only source of that fact — Rust derives each slot's highlight from it. Both are absent when the
+plugin has no spaces, and the row is not drawn. `tabs` already holds only the active space's tabs.
 
 Settings pane (`screen:"settings"`) gets a model of its own instead of the tabs list — its own
 `rev` sequence, sent only to the settings-role pane in the window:
@@ -117,9 +124,7 @@ Settings pane (`screen:"settings"`) gets a model of its own instead of the tabs 
    "value_text":"0","changed":false,"depth":1,"help":"top",
    "locked":{"text":"wezterm.lua"},"editing":{"buffer":"12"},"armed":false}],
  "caveat":["…"],
- "version":"0.1.2",
- "preview":{"render":{"...":"..."},"icons":true,"position":"left","strip":[{"id":"toggle"}],
-   "tabs":[{"id":1,"index":1,"title":"nvim","meta":"~/p/x","active":true,"icon":""}]}}
+ "version":"0.1.2"}
 ```
 
 `focus`, `scroll` and `drag` are Lua-authoritative mirrors: Rust applies the gesture optimistically
@@ -153,6 +158,7 @@ live in the widget kind, not in a typed value.
 | `root` (default) | `popover.items()` rows | `danger` on `close`/`close_others` |
 | `confirm` | the question in `header.title`, then Close (`danger`)/Cancel | `selected:2` — Cancel is armed |
 | `rename` | one `{"id":"rename_field","mode":"edit","value":"<current title>"}` | Rust owns the buffer + cursor |
+| `spaces` | one `{"id":"space:<id>","label":<name>,"hint":"<tab count>"}` per space, the current one `disabled` | a sub-level: Esc is `menu_back`; never narrower than the root it came from |
 
 `selected` is adopted only when `(level, items)` changes; otherwise selection is Rust-local.
 Lua decides *whether* an item needs confirming (it counts panes via mux); Rust runs the confirm
@@ -177,7 +183,8 @@ Columns/rows are 1-based cell coordinates.
 | `dropped` | `{"t":"dropped","what":"model"\|"menu","reason":"bounds","n":15}` — the command was refused whole, previous state kept |
 
 - `id` on a `do` event is a tab id (number) for tab-addressed verbs, or a string for a strip
-  button (`"toggle"`, `"settings"`); omitted for verbs with no target.
+  button (`"toggle"`, `"settings"`) and for `switch_space` (the space id); omitted for verbs with
+  no target.
 - `raw` is the base64 of the exact bytes the key was decoded from (≤ 16), so the plugin can forward
   them to another pane verbatim. Omitted when empty.
 - A CSI/SS3 sequence the parser does not name is `"key":"unknown"` with its bytes in `raw`.
@@ -214,6 +221,9 @@ Ported from `input.lua`'s `on_down`/`on_drag`/`on_up`/`on_wheel` into `vtabs-inp
 | left press, strip button | | `do{a:"strip",id:<button id>}` |
 | left press, new-tab ghost row | | `do{a:"new_tab"}` |
 | left press, footer row | | `do{a:"footer",args:{index}}` — index into the sent model's footer list |
+| left press, a space icon | | `do{a:"switch_space",id:<space id>}`; a lone visible icon targets the next space, so it cycles |
+| double press on the switcher row | | nothing — never `new_tab` |
+| wheel over the switcher row | either wheel mode | `do{a:"switch_space",id:<neighbour>}`, no wrap, silent at the ends, nothing applied early |
 | wheel | `config.wheel=="scroll"` | `do{a:"set_scroll",args:{top,user:true}}` (optimistic local apply) |
 | wheel | `config.wheel=="switch"` | `do{a:"wheel_tab",args:{dy}}` |
 | release, no close/menu/drag outcome, `config.hover=="press"` | | `do{a:"blur_sidebar"}` |
@@ -281,6 +291,7 @@ Rust never predicts a commit: every verb above sends intent, and the next `model
 | --- | --- | --- |
 | `model.tabs` | 200 (`MODEL_MAX_TABS`) | `dropped{what:"model",reason:"bounds"}`; previous model kept |
 | `model.fields` | 512 (`MODEL_MAX_FIELDS`) | `dropped{what:"model",reason:"bounds"}`; previous model kept |
+| `model.spaces` | 32 (`MODEL_MAX_SPACES`, mirrored to Lua, which refuses at the cap) | `dropped{what:"model",reason:"bounds"}`; previous model kept |
 | `menu.items` | 64 (`MENU_MAX_ITEMS`) | `dropped{what:"menu",reason:"bounds"}`; previous menu kept |
 | any command line | 64 KiB (`LINE_MAX`, `limits.rs`) | the documented contract; the actual backstop is the stdin buffer below |
 | stdin buffer | 1 MiB, or ~300ms with no `\n` | the line is discarded silently — never replayed as key events, no event emitted |

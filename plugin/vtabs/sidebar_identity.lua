@@ -254,11 +254,14 @@ function M.tab_meta(tab, pane)
   if M.marker(title) then
     title = ""
   end
+  local tab_id = tab:tab_id()
   return {
     cwd = clean(cwd_path(pane)),
     domain = clean(mux.domain(pane)),
     title = title ~= "" and title or nil,
-    pinned = state.is_pinned(tab:tab_id()),
+    pinned = state.is_pinned(tab_id),
+    space = state.space_of(tab_id),
+    space_manual = state.space_manual(tab_id) or nil,
   }
 end
 

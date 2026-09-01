@@ -4,6 +4,7 @@ local state = require "vtabs.state"
 local sidebar = require "vtabs.sidebar"
 local icons = require "vtabs.icons"
 local mux = require "vtabs.mux"
+local spaces = require "vtabs.spaces"
 local store = require "vtabs.store"
 local util = require "vtabs.util"
 
@@ -180,11 +181,14 @@ local function included(cfg, tab, mux_win)
   return keep ~= false
 end
 
----Builds the list of visible sidebar items for a window, in physical order.
-function M.build(gui_window)
+---Walks every tab of the window once: what each is, which space holds it, which space the window
+---shows and what the switcher lists. `build` is the visible half of the same walk.
+---@return { all: table, visible: table, space: string|nil, spaces: table|nil }
+function M.survey(gui_window)
   local cfg = config.get()
   local mux_win = gui_window:mux_window()
-  local private = state.is_private(gui_window:window_id())
+  local wid = gui_window:window_id()
+  local private = state.is_private(wid)
   local now = util.now_ms()
   prune_meta(now)
   local items = {}
@@ -240,7 +244,43 @@ function M.build(gui_window)
       util.warn_once("model-tab", "tab skipped: %s", tostring(item):match "^[^\n]*")
     end
   end
-  return items
+  if not spaces.enabled(cfg) then
+    return { all = items, visible = items }
+  end
+  local present, active_item = {}, nil
+  for _, entry in ipairs(spaces.statics(cfg)) do
+    if not spaces.is_template(entry.id) then
+      present[entry.id] = true
+    end
+  end
+  for _, item in ipairs(items) do
+    -- the settings page has no space: it shows in every one and never pulls the sidebar anywhere
+    if not item.is_settings then
+      item.space = spaces.assign(cfg, wid, item, present)
+      if item.space then
+        present[item.space] = true
+      end
+    end
+    if item.is_active then
+      active_item = item
+    end
+  end
+  if active_item then
+    spaces.reconcile(wid, active_item.tab_id, active_item.space)
+  end
+  local active = spaces.active(cfg, wid, present)
+  local visible = {}
+  for _, item in ipairs(items) do
+    if item.space == nil or item.space == active then
+      visible[#visible + 1] = item
+    end
+  end
+  return { all = items, visible = visible, space = active, spaces = spaces.summary(cfg, wid, items) }
+end
+
+---The sidebar's list for a window: the active space's tabs, in physical order.
+function M.build(gui_window)
+  return M.survey(gui_window).visible
 end
 
 ---Rendered order: pinned first, then the rest, both in physical order.

@@ -6,6 +6,7 @@ local store = require "vtabs.store"
 local sidebar = require "vtabs.sidebar"
 local model = require "vtabs.model"
 local mux = require "vtabs.mux"
+local spaces = require "vtabs.spaces"
 local util = require "vtabs.util"
 
 local M = {}
@@ -210,12 +211,16 @@ local function close_now(gui_window, tab_id, defer, overlay)
   store.tab_meta[tab_id] = sidebar.tab_meta(tab, content[1])
   local previous = util.active_tab(gui_window)
   local switching = previous and previous:tab_id() ~= tab_id
+  -- WezTerm hands focus to the physical neighbour, which may live in another space
+  local heir = (not switching and not defer and not overlay) and M.space_heir(gui_window, tab_id) or nil
   if switching then
     tab:activate()
   end
   gui_window:perform_action(act.CloseCurrentTab { confirm = overlay == true }, content[1])
   if switching and not overlay and not defer then
     previous:activate()
+  elseif heir then
+    heir:activate()
   end
   return true
 end
@@ -333,6 +338,9 @@ function M.reopen_closed(gui_window)
     state.push_closed(entry)
     return
   end
+  if entry.space then
+    state.set_space(tab:tab_id(), entry.space, entry.space_manual == true)
+  end
   if entry.pinned then
     M.set_pinned(gui_window, tab:tab_id(), true)
   end
@@ -382,6 +390,7 @@ function M.tear_off(gui_window, tab_id)
   local private = state.is_private(gui_window:window_id())
   local title = tab:get_title()
   local pinned = state.is_pinned(tab_id)
+  local space, manual = state.space_of(tab_id), state.space_manual(tab_id)
   store.moving[tab_id] = true
   local ok, new_tab, new_win = pcall(function()
     return content[1]:move_to_new_window()
@@ -396,6 +405,9 @@ function M.tear_off(gui_window, tab_id)
   end
   if pinned then
     state.set_pinned(new_tab:tab_id(), true)
+  end
+  if space then
+    state.set_space(new_tab:tab_id(), space, manual)
   end
   if title ~= "" then
     new_tab:set_title(title)
@@ -529,6 +541,105 @@ function M.activate_pane_direction(gui_window, direction)
   end
 end
 
+---The tab that takes over when `tab_id` leaves the active space: the next visible one, else the
+---previous, never the settings page. Nil when the list is not partitioned or nothing is left.
+function M.space_heir(gui_window, tab_id)
+  if not spaces.enabled(config.get()) then
+    return nil
+  end
+  local items = visible(gui_window)
+  local _, at = model.find(items, tab_id)
+  if not at then
+    return nil
+  end
+  local function pick(from, to, step)
+    for i = from, to, step do
+      local item = items[i]
+      if item and not item.is_settings then
+        return M.tab_by_id(gui_window, item.tab_id)
+      end
+    end
+    return nil
+  end
+  return pick(at + 1, #items, 1) or pick(at - 1, 1, -1)
+end
+
+---Shows space `id`: its last active tab if that still lives there, else its first. An empty space
+---keeps the current tab on screen and leaves the list for `new_tab` to fill; nothing is spawned,
+---so cycling through spaces never litters shells.
+function M.switch_space(gui_window, id)
+  if type(id) ~= "string" or not spaces.enabled(config.get()) then
+    return false
+  end
+  local survey = model.survey(gui_window)
+  if id == survey.space then
+    return false
+  end
+  local known = false
+  for _, space in ipairs(survey.spaces or {}) do
+    known = known or space.id == id
+  end
+  if not known then
+    return false
+  end
+  local wid = gui_window:window_id()
+  local remembered = spaces.last_tab_in(wid, id)
+  local first, candidate = nil, nil
+  for _, item in ipairs(model.ordered(survey.all)) do
+    if item.space == id then
+      first = first or item.tab_id
+      if item.tab_id == remembered then
+        candidate = item.tab_id
+      end
+    end
+  end
+  spaces.set_active(wid, id)
+  store.focus_index[wid] = 1
+  candidate = candidate or first
+  if candidate then
+    M.activate_tab(gui_window, candidate)
+  end
+  return true
+end
+
+---Steps through the switcher's order, wrapping at either end.
+function M.cycle_space(gui_window, delta)
+  local survey = model.survey(gui_window)
+  local list = survey.spaces or {}
+  if #list < 2 then
+    return false
+  end
+  local at = 1
+  for i, space in ipairs(list) do
+    if space.id == survey.space then
+      at = i
+    end
+  end
+  return M.switch_space(gui_window, list[((at - 1 + delta) % #list) + 1].id)
+end
+
+---Moves one tab by hand, or with `id == nil` hands it back to the rules. Moving the active tab
+---keeps the user where they are when a neighbour can take over; the last tab of a space takes the
+---sidebar with it.
+function M.move_to_space(gui_window, tab_id, id, manual)
+  local survey = model.survey(gui_window)
+  local item = model.find(survey.all, tab_id)
+  if not item or item.is_settings or (id ~= nil and id == item.space) then
+    return false
+  end
+  local heir = (item.is_active and id ~= nil) and M.space_heir(gui_window, tab_id) or nil
+  spaces.move(tab_id, id, manual)
+  if id == nil or not item.is_active then
+    return true
+  end
+  if heir then
+    M.activate_tab(gui_window, heir:tab_id())
+  else
+    spaces.set_active(gui_window:window_id(), id)
+  end
+  return true
+end
+
 local function current_tab_id(gui_window)
   local tab = util.active_tab(gui_window)
   return tab and tab:tab_id() or nil
@@ -591,6 +702,18 @@ M.dispatch = {
       M.activate_relative(window, -1)
     end,
     label = "Previous tab",
+  },
+  next_space = {
+    run = function(window)
+      M.cycle_space(window, 1)
+    end,
+    label = "Next space",
+  },
+  prev_space = {
+    run = function(window)
+      M.cycle_space(window, -1)
+    end,
+    label = "Previous space",
   },
   move_tab_up = {
     run = function(window)
@@ -687,6 +810,16 @@ end
 M.action.split = function(direction)
   return callback(function(window)
     M.split(window, direction)
+  end)
+end
+M.action.switch_space = function(id)
+  return callback(function(window)
+    M.switch_space(window, id)
+  end)
+end
+M.action.move_to_space = function(id)
+  return on_current_tab(function(window, tab_id)
+    M.move_to_space(window, tab_id, id, true)
   end)
 end
 

@@ -17,8 +17,10 @@ end
 
 M.file = state_dir() .. "/state.json"
 
----Only id-free data survives the process; pane/tab/window ids are re-used by the next mux.
-local PERSISTED = { "closed", "pinned" }
+---Only id-free data survives the process; pane/tab/window ids are re-used by the next mux. Pins
+---and space assignments are keyed by tab id and only restored once a surviving pane proves the mux
+---that minted them lived on.
+local PERSISTED = { "closed", "pinned", "space_of", "space_manual" }
 
 local function empty()
   return {
@@ -28,10 +30,16 @@ local function empty()
     private = {},
     closed = {},
     space_of = {},
-    spaces = {},
+    space_manual = {},
+    dynamic_spaces = {},
+    active_space = {},
     collapsed = {},
     focus = {},
   }
+end
+
+local function short_string(value)
+  return type(value) == "string" and #value <= 64 and value or nil
 end
 
 local function copy_closed(list)
@@ -42,6 +50,8 @@ local function copy_closed(list)
         cwd = type(entry.cwd) == "string" and entry.cwd or nil,
         domain = type(entry.domain) == "string" and entry.domain or nil,
         title = type(entry.title) == "string" and entry.title or nil,
+        space = short_string(entry.space),
+        space_manual = entry.space_manual == true or nil,
       }
     end
   end
@@ -53,6 +63,16 @@ local function copy_pins(tbl)
   for k, v in pairs(type(tbl) == "table" and tbl or {}) do
     if type(k) == "string" and v == true then
       out[k] = true
+    end
+  end
+  return out
+end
+
+local function copy_ids(tbl)
+  local out = {}
+  for k, v in pairs(type(tbl) == "table" and tbl or {}) do
+    if type(k) == "string" and short_string(v) then
+      out[k] = v
     end
   end
   return out
@@ -94,13 +114,13 @@ local function write_file(tbl)
 end
 
 local data = empty()
-local deferred_pins = nil
+local deferred = nil
 
----Pins are keyed by tab id, so they are only meaningful while the mux that minted them lives.
+---Pins and spaces are keyed by tab id, so they are only meaningful while the mux that minted them lives.
 local function load()
   local saved = wezterm.GLOBAL and wezterm.GLOBAL.vtabs or nil
   data = empty()
-  deferred_pins = nil
+  deferred = nil
   if type(saved) == "table" then
     for k, v in pairs(saved) do
       if type(v) == "table" and data[k] then
@@ -118,7 +138,11 @@ local function load()
     return
   end
   data.closed = copy_closed(file.closed)
-  deferred_pins = copy_pins(file.pinned)
+  deferred = {
+    pinned = copy_pins(file.pinned),
+    space_of = copy_ids(file.space_of),
+    space_manual = copy_pins(file.space_manual),
+  }
 end
 
 load()
@@ -155,24 +179,28 @@ function M.set_pinned(tab_id, pinned)
   save(true)
 end
 
----True while pins read from the file wait for proof that the mux that minted their tab ids survived.
+---True while pins and spaces read from the file wait for proof that the mux that minted their tab
+---ids survived.
 function M.pins_pending()
-  return deferred_pins ~= nil
+  return deferred ~= nil
 end
 
+---The file wins over anything assigned provisionally while the proof was pending.
 function M.restore_pins()
-  if not deferred_pins then
+  if not deferred then
     return
   end
-  for k, v in pairs(deferred_pins) do
-    data.pinned[k] = v
+  for _, name in ipairs { "pinned", "space_of", "space_manual" } do
+    for k, v in pairs(deferred[name]) do
+      data[name][k] = v
+    end
   end
-  deferred_pins = nil
+  deferred = nil
   save(true)
 end
 
 function M.discard_pins()
-  deferred_pins = nil
+  deferred = nil
   save(true)
 end
 
@@ -271,8 +299,41 @@ function M.space_of(tab_id)
   return data.space_of[key(tab_id)]
 end
 
-function M.set_space(tab_id, space_id)
+function M.space_manual(tab_id)
+  return data.space_manual[key(tab_id)] == true
+end
+
+---A hand move reaches disk at once; a rule's verdict is re-derived by the same rule after a
+---restart, so it rides along with the next write instead of costing one of its own.
+function M.set_space(tab_id, space_id, manual)
   data.space_of[key(tab_id)] = space_id
+  data.space_manual[key(tab_id)] = manual == true or nil
+  save(manual == true)
+end
+
+function M.active_space(window_id)
+  return data.active_space[key(window_id)]
+end
+
+function M.set_active_space(window_id, space_id)
+  if data.active_space[key(window_id)] == space_id then
+    return
+  end
+  data.active_space[key(window_id)] = space_id
+  save(false)
+end
+
+---Spaces no entry declares under their id: the ones a template or the route hook produced.
+function M.dynamic_space(space_id)
+  return data.dynamic_spaces[space_id]
+end
+
+function M.dynamic_spaces()
+  return data.dynamic_spaces
+end
+
+function M.set_dynamic_space(space_id, meta)
+  data.dynamic_spaces[space_id] = meta
   save(false)
 end
 
@@ -285,6 +346,7 @@ function M.forget_tab(tab_id)
   data.pinned[k] = nil
   data.sidebars[k] = nil
   data.space_of[k] = nil
+  data.space_manual[k] = nil
   store.forget_tab(tab_id)
   save(true)
 end
@@ -306,6 +368,7 @@ function M.forget_window(window_id)
   data.collapsed[key(window_id)] = nil
   data.focus[key(window_id)] = nil
   data.private[key(window_id)] = nil
+  data.active_space[key(window_id)] = nil
   for _, fn in ipairs(M.forget_hooks) do
     util.try(fn, window_id)
   end
@@ -315,7 +378,7 @@ end
 ---Drops state for windows the mux no longer knows; `live` is a set of window ids.
 function M.forget_windows_except(live)
   local ids = {}
-  for _, name in ipairs { "collapsed", "focus", "private" } do
+  for _, name in ipairs { "collapsed", "focus", "private", "active_space" } do
     for k in pairs(data[name]) do
       ids[tonumber(k)] = true
     end

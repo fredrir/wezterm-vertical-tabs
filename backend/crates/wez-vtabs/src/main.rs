@@ -7,17 +7,22 @@ fn dump_frames(scenes: &str, out: &str) -> Result<(), String> {
         .map_err(|e| format!("{scenes}: {e}"))?
         .filter_map(|e| e.ok())
         .filter(|e| e.path().extension().is_some_and(|x| x == "json"))
-        // settings-* scenes belong to the settings screen; its own gate renders them
-        .filter(|e| !e.file_name().to_string_lossy().starts_with("settings-"))
         .collect();
     entries.sort_by_key(|e| e.file_name());
     for entry in entries {
         let path = entry.path();
         let name = path.file_stem().unwrap().to_string_lossy().to_string();
         let raw = std::fs::read_to_string(&path).map_err(|e| format!("{name}: {e}"))?;
-        let scene: vtabs_view::scene::RenderInput =
-            serde_json::from_str(&raw).map_err(|e| format!("{name}: {e}"))?;
-        let (text, styled) = vtabs_view::render::golden_dumps(&scene);
+        // settings-* scenes carry the settings model; every other scene is a sidebar RenderInput
+        let (text, styled) = if name.starts_with("settings-") {
+            let scene: vtabs_view::settings::Scene =
+                serde_json::from_str(&raw).map_err(|e| format!("{name}: {e}"))?;
+            vtabs_view::settings::scene_dumps(&scene).map_err(|e| format!("{name}: {e}"))?
+        } else {
+            let scene: vtabs_view::scene::RenderInput =
+                serde_json::from_str(&raw).map_err(|e| format!("{name}: {e}"))?;
+            vtabs_view::render::golden_dumps(&scene)
+        };
         std::fs::write(format!("{out}/{name}.txt"), text).map_err(|e| e.to_string())?;
         std::fs::write(format!("{out}/{name}.styled.txt"), styled).map_err(|e| e.to_string())?;
     }
