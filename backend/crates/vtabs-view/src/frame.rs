@@ -189,3 +189,21 @@ pub fn dump_styled(rows: &[String]) -> String {
     }
     out
 }
+
+/// Both golden serializations of a laid-out frame, whichever widget laid it out.
+pub fn dumps(
+    rows: &[Option<Vec<Cell>>],
+    fades: &[Option<f64>],
+    page_bg: Rgb,
+    cols: i64,
+) -> (String, String) {
+    let mut texts = Vec::with_capacity(rows.len());
+    let mut styled = Vec::with_capacity(rows.len());
+    for (row, cells) in rows.iter().enumerate() {
+        let fade = fades.get(row).copied().flatten();
+        let (text, spans) = emit(cells.as_deref().unwrap_or(&[]), page_bg, fade);
+        texts.push(text);
+        styled.push(spans);
+    }
+    (dump_text(&texts, cols), dump_styled(&styled))
+}

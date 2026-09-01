@@ -128,6 +128,14 @@ pub struct DoArgs {
     /// The rename buffer Rust owns, handed back whole on commit.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub text: Option<String>,
+    /// The settings verbs' target: an option key, or the raw key name for `edit_key`/`record_chord`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub key: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub delta: Option<i64>,
+    /// `record_chord` only; settings_model.lua joins the list with `|`.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub mods: Vec<&'static str>,
 }
 
 impl DoArgs {
@@ -224,7 +232,7 @@ fn button_name(button: Button) -> &'static str {
     }
 }
 
-fn mods_list(mods: Mods) -> Vec<&'static str> {
+pub fn mods_list(mods: Mods) -> Vec<&'static str> {
     let mut list = Vec::new();
     if mods.shift {
         list.push("shift");

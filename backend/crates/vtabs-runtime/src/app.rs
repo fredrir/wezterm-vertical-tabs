@@ -1,19 +1,20 @@
 use std::io::{self, Write};
 use std::time::Instant;
 
-use vtabs_core::ui::UiState;
+use vtabs_core::ui::{SettingsUi, UiState};
 use vtabs_input::Input;
-use vtabs_input::resolve::{self, Knobs, MenuView, MirroredDrag};
-use vtabs_protocol::limits::{MENU_MAX_ITEMS, MODEL_MAX_TABS};
+use vtabs_input::resolve::{self, Knobs, MenuView, MirroredDrag, SettingsScreen};
+use vtabs_protocol::limits::{MENU_MAX_ITEMS, MODEL_MAX_FIELDS, MODEL_MAX_TABS};
 use vtabs_protocol::{Command, Event, v2};
-use vtabs_view::enrich::{Enriched, PopoverHits, enrich, theme_of};
+use vtabs_view::enrich::{Enriched, PopoverHits, enrich, glyph_map, theme_of};
 use vtabs_view::layout;
 use vtabs_view::menu::{self, MenuCfg, MenuState, Outcome};
 use vtabs_view::render::frame_of;
+use vtabs_view::settings::{self, SettingsView};
 
 use crate::anim;
 use crate::log::Logger;
-use crate::paint::frame_bytes;
+use crate::paint::{frame_bytes, rows_bytes};
 use crate::terminal;
 use crate::uservar::{TOKEN_VAR, set_user_var};
 
@@ -36,6 +37,8 @@ pub struct App<W: Write> {
     pub popover: Option<PopoverHits>,
     /// The menu's own state: the selection Lua no longer drives and the rename buffer Rust owns.
     pub menu_ui: MenuState,
+    /// The settings screen's nav, focus and filter; local by design, nothing persists (§4.3 #9).
+    pub settings_ui: SettingsUi,
     /// The menu rev a `menu_refused` was already sent for, so a resize does not repeat it.
     pub noted_menu: Option<u64>,
     pub hover_deadline: Option<Instant>,
@@ -115,7 +118,7 @@ impl<W: Write> App<W> {
     }
 
     fn gesture(&mut self, m: &vtabs_protocol::Mouse) -> io::Result<()> {
-        if self.menu_gesture(m)? {
+        if self.settings_gesture(m)? || self.menu_gesture(m)? {
             return Ok(());
         }
         let now = self.now_ms();
@@ -172,8 +175,83 @@ impl<W: Write> App<W> {
         Ok(true)
     }
 
+    /// The settings screen owns its pane whole: no sidebar plan, no menu, no key forwarded.
+    fn settings_gesture(&mut self, m: &vtabs_protocol::Mouse) -> io::Result<bool> {
+        let resolved = {
+            let Some(view) = self.settings_view() else {
+                return Ok(false);
+            };
+            let plan = settings::plan(&view);
+            let screen = SettingsScreen {
+                plan: &plan,
+                editing: view.editing(),
+                armed: view.armed(),
+            };
+            resolve::settings_mouse(&screen, &self.settings_ui, m)
+        };
+        self.apply_settings(resolved)?;
+        Ok(true)
+    }
+
+    fn settings_key(&mut self, name: &str, mods: vtabs_protocol::Mods) -> io::Result<bool> {
+        let resolved = {
+            let Some(view) = self.settings_view() else {
+                return Ok(false);
+            };
+            let plan = settings::plan(&view);
+            let screen = SettingsScreen {
+                plan: &plan,
+                editing: view.editing(),
+                armed: view.armed(),
+            };
+            resolve::settings_key(&screen, &self.settings_ui, name, mods)
+        };
+        self.apply_settings(resolved)?;
+        Ok(true)
+    }
+
+    fn apply_settings(&mut self, resolved: resolve::Resolution) -> io::Result<()> {
+        if let Some(state) = resolved.settings {
+            self.settings_ui = state;
+        }
+        for event in &resolved.events {
+            self.emit(event)?;
+        }
+        if resolved.repaint {
+            self.repaint()?;
+        }
+        Ok(())
+    }
+
+    /// The settings widget's input, from the same three messages the sidebar reads. `position` and
+    /// `meta_sep` come off the config: `preview.render` carries neither.
+    fn settings_view(&self) -> Option<SettingsView<'_>> {
+        let (cfg, theme, model) = (
+            self.v2.config.as_ref()?,
+            self.v2.theme.as_ref()?,
+            self.v2.model.as_ref()?,
+        );
+        if model.screen.as_deref() != Some("settings") {
+            return None;
+        }
+        Some(SettingsView {
+            cols: self.dims().0,
+            rows: self.dims().1,
+            model,
+            ui: &self.settings_ui,
+            theme: theme_of(theme, model.private),
+            glyphs: glyph_map(cfg),
+            position: cfg
+                .position
+                .clone()
+                .filter(|p| !p.is_empty())
+                .unwrap_or_else(|| "left".into()),
+            meta_sep: cfg.meta_sep.clone(),
+        })
+    }
+
     fn key(&mut self, name: &str, mods: vtabs_protocol::Mods, raw: &[u8]) -> io::Result<()> {
-        if self.menu_key(name, mods)? {
+        if self.settings_key(name, mods)? || self.menu_key(name, mods)? {
             return Ok(());
         }
         let events = {
@@ -287,6 +365,12 @@ impl<W: Write> App<W> {
     pub fn repaint(&mut self) -> io::Result<()> {
         if !self.dressed() {
             return Ok(());
+        }
+        if let Some(bytes) = self.settings_view().map(|view| {
+            let (cells, fades) = settings::cells(&view);
+            rows_bytes(&cells, &fades, view.theme.bg)
+        }) {
+            return self.write(bytes.as_bytes());
         }
         let (bytes, popover, outcome, selected) = {
             let (e, outcome) = self.scene();
@@ -402,7 +486,7 @@ impl<W: Write> App<W> {
             Command::Config(msg) => self.v2.config = Some(*msg),
             Command::Theme(msg) => self.v2.theme = Some(*msg),
             Command::Model(msg) => {
-                if msg.tabs.len() > MODEL_MAX_TABS {
+                if msg.tabs.len() > MODEL_MAX_TABS || msg.fields.len() > MODEL_MAX_FIELDS {
                     self.emit(&Event::Dropped {
                         what: "model",
                         reason: "bounds",
@@ -571,6 +655,7 @@ mod tests {
             ui: Default::default(),
             started: Instant::now(),
             popover: None,
+            settings_ui: Default::default(),
             menu_ui: Default::default(),
             noted_menu: None,
             hover_deadline: None,
@@ -853,6 +938,49 @@ mod tests {
         assert!(
             painted.contains("one") && painted.contains("two"),
             "both tabs listed"
+        );
+    }
+
+    const SETTINGS_MODEL: &str = r#"{"rev":2,"screen":"settings","version":"9.9.9",
+        "groups":[{"id":"layout","label":"Layout"},{"id":"cards","label":"Cards"}],
+        "fields":[
+          {"key":"width","label":"width","group":"layout","widget":"stepper","value_text":"< 28 >"},
+          {"key":"position","label":"position","group":"layout","widget":"picker","value_text":"< left >"}]}"#;
+
+    #[test]
+    fn a_settings_model_paints_the_page_and_answers_for_its_own_keys() {
+        let mut a = painting();
+        a.size = (100, 21);
+        dress(&mut a);
+        a.out.clear();
+        a.handle(Input::Command(Command::Model(Box::new(
+            serde_json::from_str(SETTINGS_MODEL).unwrap(),
+        ))))
+        .unwrap();
+        let painted = String::from_utf8_lossy(&a.out).to_string();
+        assert!(painted.contains("Settings"), "the header names the screen");
+        assert!(
+            painted.contains("Layout") && painted.contains("width"),
+            "nav and form: {painted:?}"
+        );
+        assert!(!painted.contains("one"), "the sidebar's tabs are not here");
+
+        let before = payloads(&a).len();
+        a.handle(Input::Key {
+            name: "r".into(),
+            mods: Mods::default(),
+            raw: b"r".to_vec(),
+        })
+        .unwrap();
+        let sent = &payloads(&a)[before..];
+        assert!(
+            sent.iter()
+                .any(|p| p.contains(r#""a":"reset_option""#) && p.contains(r#""key":"width""#)),
+            "the verb names the focused key: {sent:?}"
+        );
+        assert!(
+            !sent.iter().any(|p| p.contains(r#""t":"key""#)),
+            "the page owns the keyboard: {sent:?}"
         );
     }
 

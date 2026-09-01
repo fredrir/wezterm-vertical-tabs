@@ -261,6 +261,9 @@ pub struct SettingsPreview {
     pub icons: bool,
     #[serde(default)]
     pub tabs: Vec<PreviewTab>,
+    /// `layout.resolved_actions(merged)`; empty falls back to the shipped default cluster.
+    #[serde(default)]
+    pub strip: Vec<StripButton>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]

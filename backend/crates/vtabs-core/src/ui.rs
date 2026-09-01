@@ -94,6 +94,54 @@ impl UiState {
     }
 }
 
+/// The settings screen's local state: what `settings.page_state(wid)` kept in Lua, minus the edit
+/// buffer and the armed key — those stay Lua's (§4.3 #1/#5). Nav and filter never cross the wire.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+#[serde(default)]
+pub struct SettingsUi {
+    /// 1-based index into `model.groups`.
+    pub group: i64,
+    /// 1-based index into the rows the filter left showing, caveat lines included.
+    pub focus: i64,
+    pub scroll: i64,
+    pub filter: String,
+    pub filtering: bool,
+}
+
+impl Default for SettingsUi {
+    fn default() -> Self {
+        SettingsUi {
+            group: 1,
+            focus: 1,
+            scroll: 0,
+            filter: String::new(),
+            filtering: false,
+        }
+    }
+}
+
+impl SettingsUi {
+    /// page.lua's `type_into` on the filter slot. Backspace drops one **byte**, not one character:
+    /// the v1 defect 07-p6-spec.md says to carry rather than silently fix.
+    pub fn type_filter(&mut self, key: &str) {
+        match key {
+            "escape" => {
+                self.filtering = false;
+                self.filter.clear();
+            }
+            "enter" => self.filtering = false,
+            "backspace" => {
+                let mut bytes = std::mem::take(&mut self.filter).into_bytes();
+                bytes.pop();
+                self.filter = String::from_utf8_lossy(&bytes).into_owned();
+            }
+            // v1 appends only a key that arrived as one character, so "space" never reaches it
+            _ if key.chars().count() == 1 => self.filter.push_str(key),
+            _ => {}
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

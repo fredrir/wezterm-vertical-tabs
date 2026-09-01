@@ -2,13 +2,15 @@
 //! and the focus-mode keymap. Pure — it reads the plan and the pointer state and returns the
 //! state that follows plus the events to emit.
 
-use vtabs_core::ui::{ArmKind, Armed, Ms, PressDrag, UiState};
+use vtabs_core::ui::{ArmKind, Armed, Ms, PressDrag, SettingsUi, UiState};
+use vtabs_protocol::event::mods_list;
 use vtabs_protocol::types::{Button, Mods, Mouse, MouseKind};
-use vtabs_protocol::v2::MenuItem;
+use vtabs_protocol::v2::{MenuItem, SettingsField};
 use vtabs_protocol::{DoId, Event};
 use vtabs_view::enrich::PopoverHits;
 use vtabs_view::layout::{Part, Plan, RegionKind, on_inner_edge};
 use vtabs_view::menu::{self, Edit, Level, MenuState};
+use vtabs_view::settings::{self, SpanId};
 
 pub const DRAG_START_ROWS: i64 = 3;
 pub const DRAG_START_COLS: i64 = 2;
@@ -52,6 +54,8 @@ pub struct Resolution {
     pub repaint: bool,
     /// The menu state this gesture left behind; None when the gesture never reached the menu.
     pub menu: Option<MenuState>,
+    /// The settings screen's local nav/filter state, likewise.
+    pub settings: Option<SettingsUi>,
     /// v1's `on_popover_down` returning true: the menu is gone and the click is the list's.
     pub fall_through: bool,
 }
@@ -538,6 +542,131 @@ pub fn key(k: &Knobs, name: &str, mods: Mods, raw: &[u8]) -> Resolution {
         out.events.push(Event::do_("new_tab"));
     } else {
         forward(&mut out);
+    }
+    out
+}
+
+/// The settings screen as the resolver reads it: the plan it just painted, plus the two modal
+/// facts only the model can answer for — Lua owns the edit buffer and the armed recorder.
+pub struct SettingsScreen<'a> {
+    pub plan: &'a settings::Plan<'a>,
+    pub editing: bool,
+    pub armed: bool,
+}
+
+fn settings_out(ui: &SettingsUi) -> Resolution {
+    Resolution {
+        settings: Some(ui.clone()),
+        repaint: true,
+        ..Default::default()
+    }
+}
+
+/// A verb for the focused option, or nothing: a locked row is consumed and left alone, exactly as
+/// `page.key` does. What the widget *means* is Lua's to decide — Rust never predicts a commit.
+fn option_verb(a: &'static str, field: Option<&SettingsField>) -> Option<Event> {
+    let key = field.filter(|f| f.locked.is_none())?.key.clone();
+    Some(Event::do_(a).with(|args| args.key = Some(key)))
+}
+
+fn option_step(field: Option<&SettingsField>, delta: i64) -> Option<Event> {
+    Some(option_verb("nudge_option", field)?.with(|args| args.delta = Some(delta)))
+}
+
+fn bare(mods: Mods) -> bool {
+    !mods.shift && !mods.ctrl && !mods.alt
+}
+
+/// One key from the settings pane. Nav, the filter and the focus are Rust's; everything that
+/// commits crosses as a `do` verb. Nothing is forwarded: while the page is up the keyboard is its.
+pub fn settings_key(s: &SettingsScreen, ui: &SettingsUi, name: &str, mods: Mods) -> Resolution {
+    let mut out = settings_out(ui);
+    let st = out.settings.as_mut().expect("settings state");
+
+    // page.key's order: the edit buffer, then the filter, then the armed recorder, then the keymap
+    if s.editing {
+        out.events
+            .push(Event::do_("edit_key").with(|a| a.key = Some(name.to_string())));
+        return out;
+    }
+    if st.filtering {
+        st.focus = 1;
+        st.type_filter(name);
+        return out;
+    }
+    if s.armed {
+        // whatever the pty delivered is the binding; that is the only thing this side can observe
+        out.events.push(Event::do_("record_chord").with(|a| {
+            a.key = Some(name.to_string());
+            a.mods = mods_list(mods);
+        }));
+        return out;
+    }
+
+    let field = s.plan.focused();
+    let count = s.plan.count().max(1);
+    let groups = (s.plan.groups.len() as i64).max(1);
+    match name {
+        "j" | "down" => st.focus = (st.focus + 1).clamp(1, count),
+        "k" | "up" => st.focus = (st.focus - 1).clamp(1, count),
+        "tab" => {
+            st.group = st.group.rem_euclid(groups) + 1;
+            (st.focus, st.scroll) = (1, 0);
+        }
+        "left" => out.events.extend(option_step(field, -1)),
+        "right" => out.events.extend(option_step(field, 1)),
+        "enter" | "space" | " " => out.events.extend(option_verb("activate_option", field)),
+        "r" => out.events.extend(option_verb("reset_option", field)),
+        "c" => out.events.push(Event::do_("settings_copy")),
+        "/" => {
+            st.filtering = true;
+            st.filter.clear();
+            st.focus = 1;
+        }
+        // §4.3 #8, the one deliberate fix: v1's settings.key ate these before the page saw them,
+        // so `q` closed the page mid-edit. Here the modal branches above have already returned.
+        "escape" => out.events.push(Event::do_("close_settings")),
+        "q" if bare(mods) => out.events.push(Event::do_("close_settings")),
+        _ => out.repaint = false,
+    }
+    out
+}
+
+/// `page.click`, routed by the column the hit record says it landed in. v1 answers the left press
+/// and nothing else — there is no wheel scrolling on this screen, and none is added here.
+pub fn settings_mouse(s: &SettingsScreen, ui: &SettingsUi, m: &Mouse) -> Resolution {
+    let mut out = settings_out(ui);
+    out.repaint = false;
+    if m.kind != MouseKind::Press || m.button != Button::Left {
+        return out;
+    }
+    let Some(hit) = s.plan.hit_at(i64::from(m.y)) else {
+        return out;
+    };
+    let Some(span) = hit.span(i64::from(m.x)) else {
+        return out;
+    };
+    let st = out.settings.as_mut().expect("settings state");
+    out.repaint = true;
+    if span != SpanId::Nav
+        && let Some(index) = hit.index
+    {
+        st.focus = index;
+    }
+    match span {
+        SpanId::Nav => {
+            let at = hit
+                .nav
+                .and_then(|id| s.plan.groups.iter().position(|g| g.id == id));
+            if let Some(at) = at {
+                st.group = at as i64 + 1;
+                (st.focus, st.scroll) = (1, 0);
+            }
+        }
+        SpanId::Dec => out.events.extend(option_step(hit.field, -1)),
+        SpanId::Inc => out.events.extend(option_step(hit.field, 1)),
+        SpanId::Value => out.events.extend(option_verb("activate_option", hit.field)),
+        SpanId::Field => {}
     }
     out
 }
