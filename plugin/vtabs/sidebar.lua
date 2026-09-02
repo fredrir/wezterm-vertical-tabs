@@ -9,6 +9,7 @@ local M = {}
 
 M.is_overlay = identity.is_overlay
 M.marker = identity.marker
+M.forget_split = identity.forget_split
 M.title = identity.title
 M.has_marker = identity.has_marker
 M.is_settings = identity.is_settings
@@ -25,6 +26,7 @@ M.auth = identity.auth
 M.attach = attach.attach
 M.detach = attach.detach
 M.close_orphan = attach.close_orphan
+M.retire = attach.retire
 M.give_up = attach.give_up
 M.refuse_v1 = attach.refuse_v1
 M.ensure = attach.ensure

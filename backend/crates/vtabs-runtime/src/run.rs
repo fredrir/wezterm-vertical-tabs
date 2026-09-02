@@ -118,6 +118,7 @@ pub fn run() -> io::Result<()> {
         noted_menu: None,
         hover_deadline: None,
         token: None,
+        cli: crate::cli::Cli::from_env(),
     };
     app.write(set_user_var(ROLE_VAR, role.name()).as_bytes())?;
     // Marker only: it lets the plugin find this pane again, it proves nothing and carries no token.

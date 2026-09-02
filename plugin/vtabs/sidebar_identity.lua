@@ -153,6 +153,11 @@ local function sidebar_rank(pane, pure)
   if tab_id == nil then
     return RANK.none
   end
+  -- On its way out: it keeps the slot so no second sidebar splits in beside it, and it is never
+  -- content, whatever title it carries.
+  if store.quitting[pid] then
+    return RANK.marker
+  end
   local mapped = state.sidebar_pane_id(tab_id) == pid
   if not mapped and not claims(pane, pid, pure) then
     return RANK.none

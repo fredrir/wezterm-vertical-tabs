@@ -64,6 +64,13 @@ pub enum Event {
         #[serde(skip_serializing_if = "Option::is_none")]
         a: Option<&'static str>,
     },
+    /// What a `kill` or `rescue` did on the server: `detail` is the count moved, or the error.
+    Cli {
+        op: &'static str,
+        ok: bool,
+        #[serde(skip_serializing_if = "String::is_empty")]
+        detail: String,
+    },
 }
 
 /// A `do` target: tab ids are numbers, strip buttons are their string id.

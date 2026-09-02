@@ -29,7 +29,7 @@ return config
 | `rail_titlebar`           | `"widen"`                                                                    | `"widen"` \| `"band"` \| `"none"` |
 | `hide_native_tab_bar`     | `true`                                                                       | `true` \| `false` |
 | `poll_ms`                 | `500`                                                                        | number >= `50` |
-| `padding`                 | `{ top = 0, left = 1, right = 1, bottom = 0 }`                               | `{ top, left, right, bottom }` |
+| `padding`                 | `{ top = 1, left = 2, right = 2, bottom = 1 }`                               | `{ top, left, right, bottom }` |
 | `settings`                | `true`                                                                       | `true` \| `false` \| table |
 | `edge_to_edge`            | `"sides"`                                                                    | `true` \| `"sides"` \| `false` |
 | `tab_height`              | `"card"`                                                                     | `"card"` (`3`) \| `"row"` (`1`) \| `"tall"` (`5`) |
@@ -93,7 +93,7 @@ return config
 | ------ | ---- |
 | `width` | re-asserted on the active tab after every resize, one `AdjustPaneSize` at a time so a lagging mux is not overshot; a divider drag is adopted and survives config reloads until `width` itself changes. A window drag corrects on its first frame and again once it stops, never per frame |
 | `collapsed` | `"rail"` keeps the pane and narrows it, so the toggle stays reachable |
-| `padding` | cells inside the sidebar pane, painted in its own colour; `left = 2` replaces the window padding `edge_to_edge` removes, and mirrors to `right = 2` with `position = "right"`. It is unconditional, so setting `window_padding` yourself leaves one extra cell of air |
+| `padding` | cells inside the sidebar pane, painted in its own colour. The default uses two columns horizontally and one row vertically because terminal cells are roughly twice as tall as they are wide. It is unconditional, so setting `window_padding` yourself adds to this air |
 | `frame` | `"zen"` wraps the window in a tinted frame and gives the terminal pane its own rounded card: a window-sized PNG behind the grid, over which the pane's default-background cells fall transparent (a cell with an explicit background stays opaque, so a full-width tmux or vim status line squares off the corners it covers). The sidebar paints the same tint the PNG does, so the two read as one surface. Declines with one warning if you set your own `background`, `window_background_image`, `window_background_opacity` or `text_background_opacity` |
 | `frame.radius` | corner radius in **device** pixels, so it is visually smaller on a HiDPI display. Keep it under one cell height: a program that paints its own background over a corner cell squares that corner off |
 | `frame.margin` | device px of tint **outside** the card |
@@ -123,7 +123,7 @@ return config
 | `animation.expand_ms` | the fade in after the resize; the short pre-resize phase keeps its own constant. Same for `collapse_ms` |
 | `dim_inactive_panes` | wezterm dims the idle pane by default, which makes the sidebar change shade as focus moves |
 | `theme.split` | `"auto"` leaves wezterm's divider; `"hidden"` or a colour repaints **every** split in the window, not just the sidebar's |
-| `theme.elevation` | `0.06` = the default tint, `0` = seamless with the terminal background; capped at `0.3`. `theme.content_bg` stays untinted, which is what `frame` paints its gutter with |
+| `theme.elevation` | `0.06` = the default darker sidebar shade, `0` = seamless with the terminal background; capped at `0.3`. Dark palettes amplify the step so it remains visible near black. `theme.content_bg` stays untinted, which is what `frame` paints its gutter with |
 | `adopt` | `"auto"` adopts only where this plugin spawns backends; see `docs/limitations.md` |
 | `backend.path` | keyed by host or domain; `host` comes from the pane's OSC 7 cwd |
 | `spaces` | per-window tab groups; see Spaces |
@@ -269,7 +269,7 @@ the tab's content pane, which then takes focus back.
 | `pane_focus_follows_mouse` | `true`                        | `hover = "follow"` and you left it unset                        |
 | `window_decorations`       | `"INTEGRATED_BUTTONS\|RESIZE"` | macOS, you left it unset or set `"RESIZE"`, `position = "left"`, `titlebar ~= "plain"` |
 | `inactive_pane_hsb`        | identity                      | you left it unset and `dim_inactive_panes = false` (the default)  |
-| `window_padding`           | sides touching the sidebar `0`, the far side `"1cell"` | you left it unset and `edge_to_edge = true` (the default) |
+| `window_padding`           | side touching the sidebar `0`, far side `"1cell"`, top/bottom `"0.5cell"` | you left it unset and `edge_to_edge = "sides"` (the default) |
 | `window_padding`           | `frame.margin + frame.inset` on all four sides | you left it unset and `frame = "zen"`; supersedes `edge_to_edge` |
 | `colors.split`             | the card colour               | `frame = "zen"`; splits you make inside the content pane vanish into the card, and the frame margin already hides the sidebar seam |
 | `status_update_interval`   | `min(yours, poll_ms)`         | always                                                          |
@@ -304,8 +304,8 @@ WezTerm runs only the first `format-window-title` handler; register yours before
 
 | key              | default                                                                        |
 | ---------------- | ------------------------------------------------------------------------------ |
-| `bg`             | `resolved_palette.background`                                                  |
-| `elevation`      | `0.06` — tint `bg` toward `fg`; `0` is seamless with the terminal               |
+| `bg`             | `resolved_palette.background` shaded toward black by `elevation`               |
+| `elevation`      | `0.06` — darken `bg`; `0` is seamless with the terminal                        |
 | `content_bg`     | `resolved_palette.background`, untinted; painted by `frame`                    |
 | `title_active`   | `fg` mixed toward `accent`, lifted to 4.5 against `active_bg`; the accent bar returns when it lands within 24 channel units of `fg` |
 | `fg`             | `resolved_palette.foreground`                                                  |

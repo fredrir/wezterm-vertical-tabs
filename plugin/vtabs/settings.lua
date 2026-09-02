@@ -12,7 +12,6 @@ local schema = require "vtabs.schema"
 
 local M = {}
 
-local act = wezterm.action
 local VERSION = 1
 
 local function opt(cfg, key, fallback)
@@ -215,27 +214,15 @@ function M.open(gui_window)
   return gate.run(gui_window:window_id(), "settings_open", open, gui_window)
 end
 
----Closes the settings tab by id. `CloseCurrentTab` ignores the pane it is handed, so the tab has to
----be the active one first or the wrong tab dies.
-local function close(gui_window)
-  local tab, pane = M.find(gui_window:mux_window())
-  if not tab then
-    return false
-  end
-  local tab_id = tab:tab_id()
-  tab:activate()
-  local active = mux.active_tab(mux.call(gui_window, "mux_window"))
-  if not active or active:tab_id() ~= tab_id then
-    util.warn_once("settings-close", "settings tab %s would not activate; not closing", tostring(tab_id))
-    return false
-  end
-  -- every edit commits as it is made, so there is nothing to lose to a confirmation prompt
-  mux.call(gui_window, "perform_action", act.CloseCurrentTab { confirm = false }, pane)
-  return true
-end
-
+---Closes the settings tab: the page is a backend pane, so it is retired like a sidebar and the tab
+---goes with it. Every edit commits as it is made, so there is nothing to lose to a prompt.
 function M.close(gui_window)
-  return gate.run(gui_window:window_id(), "settings_close", close, gui_window)
+  local tab, pane = M.find(gui_window:mux_window())
+  if not tab or not sidebar.is_ready(pane) then
+    return false
+  end
+  sidebar.retire(gui_window, tab, pane)
+  return true
 end
 
 ---Per-window page state: which group, which field, the scroll, the filter, what is being edited.

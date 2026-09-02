@@ -62,7 +62,7 @@ end
 
 function M.cli_kill(pane)
   local args = { "kill-pane", "--pane-id", tostring(pane:pane_id()) }
-  return cli_on(pane, args, "cli-kill", "wezterm cli kill-pane unavailable; closing sidebars by activation")
+  return cli_on(pane, args, "cli-kill", "wezterm cli kill-pane unavailable here; a backend on the server kills instead")
 end
 
 ---Moves a pane under `target`, splitting it downwards. `--move-pane-id` relocates an existing pane.
@@ -73,9 +73,12 @@ local function cli_move(pane, target)
     pane,
     args,
     "cli-move",
-    "wezterm cli split-pane --move-pane-id unavailable; a split sidebar is left as is"
+    "wezterm cli split-pane --move-pane-id unavailable here; the tab's backend moves the pane instead"
   )
 end
+
+-- A mux applies the move a poll late; one request per tab is outstanding at a time.
+local RESCUE_WAIT_MS = 2000
 
 ---Panes in the sidebar's column band. The band is the width the sidebar is *meant* to have, never
 ---the one it currently reports: a `SplitHorizontal` halves the sidebar's own box, which drags its
@@ -118,7 +121,9 @@ local function may_host(pane)
 end
 
 ---WezTerm splits whichever pane is active, and under `hover = "follow"` that is often the sidebar,
----which leaves a shell in a column too narrow to use. Move it to the content side instead.
+---which leaves a shell in a column too narrow to use. Move it to the content side instead: through
+---the GUI's cli where that reaches the pane, else by the tab's own backend, which runs on the
+---server the pane lives on and answers with a `cli` event.
 local function rescue_splits(gui_window, tab)
   local content, sb = identity.classify(tab)
   -- A pane that only claims the role by its title must never decide that another one moves.
@@ -126,7 +131,9 @@ local function rescue_splits(gui_window, tab)
     return false
   end
   local geometry = require "vtabs.geometry"
-  local stuck = intruders(tab, sb, config.get().position, geometry.desired(gui_window:window_id()))
+  local cfg = config.get()
+  local band = geometry.desired(gui_window:window_id())
+  local stuck = intruders(tab, sb, cfg.position, band)
   if #stuck == 0 then
     return false
   end
@@ -143,6 +150,14 @@ local function rescue_splits(gui_window, tab)
   end
   if not host then
     return false
+  end
+  if mux.domain(sb) ~= "local" then
+    local tab_id, now = tab:tab_id(), util.now_ms()
+    if now - (store.rescued[tab_id] or 0) < RESCUE_WAIT_MS then
+      return false
+    end
+    store.rescued[tab_id] = now
+    return identity.send(sb, { t = "rescue", band = band, position = cfg.position })
   end
   local moved = false
   for _, pane in ipairs(stuck) do
@@ -184,7 +199,7 @@ function M.check_liveness(gui_window, tab, sb, now)
   if misses >= UNANSWERED_MAX then
     util.warn("sidebar %d unresponsive, restarting", pid)
     -- required here: the poll that calls this lives in attach, so a load-time require would cycle
-    require("vtabs.sidebar_attach").detach(gui_window, tab)
+    require("vtabs.sidebar_attach").detach(gui_window, tab, true)
     return false
   end
   store.unanswered[pid] = misses

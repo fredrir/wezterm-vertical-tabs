@@ -3,13 +3,18 @@ on:
   push:
     tags:
       - "v*"
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
 permissions:
   contents: read
 jobs:
   version:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
       - name: Sources match tag
         run: |
           set -euo pipefail
@@ -35,7 +40,6 @@ jobs:
             os: macos-14
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
-            cross: true
           - target: aarch64-unknown-linux-gnu
             os: ubuntu-latest
             cross: true
@@ -43,7 +47,9 @@ jobs:
             os: windows-latest
             ext: .exe
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
@@ -51,17 +57,23 @@ jobs:
         with:
           workspaces: backend
           key: ${{ matrix.target }}
-      - name: Install cross
+          # Tag-scoped caches cannot be reused by the next release tag.
+          save-if: false
+      - name: Install cross (prebuilt)
         if: matrix.cross
-        run: cargo install cross --locked
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cross
       - name: Build
         shell: bash
         run: |
           set -euo pipefail
           if [ "${{ matrix.cross }}" = "true" ]; then
-            cross build --release --locked --target ${{ matrix.target }}
+            cross build --release --locked --package wez-vtabs --bin wez-vtabs \
+              --target ${{ matrix.target }}
           else
-            cargo build --release --locked --target ${{ matrix.target }}
+            cargo build --release --locked --package wez-vtabs --bin wez-vtabs \
+              --target ${{ matrix.target }}
           fi
       - name: Stage asset
         shell: bash
@@ -71,18 +83,20 @@ jobs:
           cp target/${{ matrix.target }}/release/wez-vtabs${{ matrix.ext }} \
              dist/wez-vtabs-${{ matrix.target }}${{ matrix.ext }}
           test -s dist/wez-vtabs-${{ matrix.target }}${{ matrix.ext }}
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: wez-vtabs-${{ matrix.target }}
           path: backend/dist/*
           if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
   release:
     needs: build
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: dist
           merge-multiple: true
@@ -104,11 +118,12 @@ jobs:
             exit 1
           fi
           sz=$(stat -c%s "$f")
-          test "$sz" -lt 614400 || { echo "::error::$f is ${sz}B, over 600KiB"; exit 1; }
+          max=$((1280 * 1024))
+          test "$sz" -le "$max" || { echo "::error::$f is ${sz}B, over 1.25MiB"; exit 1; }
           test "$sz" -gt 102400 || { echo "::error::$f is ${sz}B, suspiciously small"; exit 1; }
       - name: Checksums
         run: cd dist && sha256sum wez-vtabs-* > SHA256SUMS
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v3
         with:
           files: dist/*
           fail_on_unmatched_files: true

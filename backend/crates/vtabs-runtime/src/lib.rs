@@ -1,4 +1,5 @@
 pub mod app;
+pub mod cli;
 pub mod log;
 pub mod paint;
 mod run;

@@ -17,6 +17,7 @@ use vtabs_view::menu::{self, MenuCfg, MenuState, Outcome};
 use vtabs_view::render::frame_of;
 use vtabs_view::settings::{self, SettingsView};
 
+use crate::cli::Cli;
 use crate::log::Logger;
 use crate::paint::{changed_rows_bytes, rows_bytes};
 use crate::uservar::{TOKEN_VAR, set_user_var};
@@ -57,6 +58,8 @@ pub struct App<W: Write> {
     pub hover_deadline: Option<Instant>,
     /// The last token Lua authed with; a change means the plugin restarted around us.
     pub token: Option<String>,
+    /// The server's own `wezterm cli`, where this pane has one to act for.
+    pub cli: Option<Cli>,
 }
 
 /// The rows a repaint wrote, kept so a fade has a final frame to land on.
@@ -638,9 +641,36 @@ impl<W: Write> App<W> {
             }
             Command::Fx(msg) => self.start_fx(&msg)?,
             Command::Notice(msg) => self.log.log(format!("notice {}", msg.text)),
+            Command::Kill { title } => {
+                let done = self
+                    .cli
+                    .as_ref()
+                    .ok_or_else(|| "no cli here".to_string())
+                    .and_then(|cli| cli.kill_by_title(&title));
+                self.report("kill", done.map(|()| String::new()))?;
+            }
+            Command::Rescue { band, position } => {
+                let right = position.as_deref() == Some("right");
+                let done = self
+                    .cli
+                    .as_ref()
+                    .ok_or_else(|| "no cli here".to_string())
+                    .and_then(|cli| cli.rescue(i64::from(band), right));
+                self.report("rescue", done.map(|n| n.to_string()))?;
+            }
             Command::Quit => return Ok(false),
         }
         Ok(true)
+    }
+
+    /// One `cli` event per server-side verb: the count or an empty detail on success, the error otherwise.
+    fn report(&mut self, op: &'static str, done: Result<String, String>) -> io::Result<()> {
+        self.log.log(format!("cli {op}: {done:?}"));
+        let (ok, detail) = match done {
+            Ok(detail) => (true, detail),
+            Err(detail) => (false, detail),
+        };
+        self.emit(&Event::Cli { op, ok, detail })
     }
 
     pub fn next_fx(&self) -> Option<Instant> {
@@ -849,7 +879,28 @@ mod tests {
             noted_menu: None,
             hover_deadline: None,
             token: None,
+            cli: None,
         }
+    }
+
+    #[test]
+    fn a_kill_or_rescue_with_no_cli_to_run_reports_the_failure() {
+        let mut a = app();
+        a.handle(Input::Command(Command::Kill {
+            title: "wez-vtabs:abcd".into(),
+        }))
+        .unwrap();
+        a.handle(Input::Command(Command::Rescue {
+            band: 28,
+            position: None,
+        }))
+        .unwrap();
+        let sent = payloads(&a);
+        assert!(
+            sent[0].starts_with(r#"{"t":"cli","op":"kill","ok":false,"detail":"no cli here""#),
+            "{sent:?}"
+        );
+        assert!(sent[1].starts_with(r#"{"t":"cli","op":"rescue","ok":false"#));
     }
 
     #[test]

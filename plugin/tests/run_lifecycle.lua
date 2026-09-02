@@ -437,3 +437,65 @@ test("a wheel tick the backend already applied waits for the poll instead of a s
   view.sync(gui)
   eq(models(), before + 1, "which carries it")
 end)
+
+test("a sidebar that ignores quit is killed by another backend on its server, by title", function()
+  local win, gui = H.window(2, { attach = true, ready = true })
+  local tab, helper_tab = win.tab_list[1], win.tab_list[2]
+  local sb, helper = sidebar.find(tab), sidebar.find(helper_tab)
+  sb:send_text "\27]2;wez-vtabs:abcd\7"
+  sb.hung = true
+  local clock = H.clock()
+  local acted = #win.actions
+  sidebar.detach(gui, tab)
+  eq(#tab:panes(), 2, "quit went unheard")
+  clock.advance(2100)
+  sidebar.ensure(gui)
+  assert(helper.sent[#helper.sent]:find('"kill"', 1, true), "the helper was asked")
+  assert(helper.sent[#helper.sent]:find("wez-vtabs:abcd", 1, true), "by title")
+  eq(helper.killed, 1)
+  eq(#tab:panes(), 1, "and the server killed it")
+  eq(#win.actions, acted, "nothing closed by activation")
+  eq(H.sidebars_in(helper_tab), 1, "the helper is untouched")
+  clock.restore()
+end)
+
+test("a split that landed in the sidebar's column on a mux domain is moved by the tab's own backend", function()
+  local win, gui = H.window(1, { attach = true, ready = true })
+  local tab = win.tab_list[1]
+  local sb, shell = sidebar.find(tab), tab.pane_list[2]
+  for _, p in ipairs(tab.pane_list) do
+    p.domain = "localmux"
+  end
+  store.proto[sb:pane_id()] = 2
+  -- SplitHorizontal on the sidebar: a shell inside the 28 columns the sidebar is meant to have
+  local stray = fake.pane(tab, { title = "zsh", cols = 13, domain = "localmux" })
+  stray.left = 15
+  table.insert(tab.pane_list, 2, stray)
+  local spawned = #wezterm.spawned
+  sidebar.ensure(gui)
+  assert(sb.sent[#sb.sent]:find('"rescue"', 1, true), "the backend was asked: " .. sb.sent[#sb.sent])
+  eq(sb.moved, 1, "and moved the stray under the shell")
+  eq(tab.pane_list[2], shell)
+  eq(tab.pane_list[3], stray)
+  eq(#wezterm.spawned, spawned, "no cli from the GUI")
+  local before = #sb.sent
+  sidebar.ensure(gui)
+  eq(#sb.sent, before, "not asked again while the move lands")
+end)
+
+test("split takes a spawn command for the new pane, or a function of the content pane", function()
+  local _, gui, _, sb, content = H.key_window(1)
+  local seen = nil
+  local below = actions.split(gui, "Down", function(base)
+    seen = base
+    return { domain = "CurrentPaneDomain" }
+  end)
+  eq(seen, content, "the content pane, never the sidebar")
+  eq(below.split_args.direction, "Bottom")
+  eq(below.split_args.domain, "CurrentPaneDomain")
+  assert(sb ~= below)
+  local pane = actions.split(gui, "Right", { args = { "zsh", "-l" }, set_environment_variables = { A = "1" } })
+  eq(pane.split_args.direction, "Right")
+  eq(pane.split_args.args[2], "-l")
+  eq(pane.split_args.set_environment_variables.A, "1")
+end)

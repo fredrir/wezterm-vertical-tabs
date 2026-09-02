@@ -389,25 +389,52 @@ test("ensure clears its guard when a pass throws", function()
   eq(sidebars_in(tab), 1, "the next pass runs")
 end)
 
-test("detach never closes a pane that is no longer the active one", function()
+test("detach tells the backend to quit; nothing is activated and no close action runs", function()
+  local win, gui = window(2)
+  sidebar.ensure(gui)
+  local tab = win.tab_list[1]
+  local sb = mark_ready(tab)
+  win.active_tab_ref = tab
+  sb.activate = function()
+    error "the sidebar must not be activated to close it"
+  end
+  local acted = #win.actions
+  sidebar.detach(gui, tab)
+  assert(sb.sent[#sb.sent]:find('"quit"', 1, true), "quit sent")
+  eq(#tab:panes(), 1, "the pane closed with its process")
+  eq(#win.actions, acted, "CloseCurrentPane never ran")
+  eq(state.sidebar_pane_id(tab:tab_id()), nil)
+end)
+
+test("a backend that will not quit is closed by activation only when nothing on its server can kill it", function()
   local win, gui = window(2)
   sidebar.ensure(gui)
   local tab, other = win.tab_list[1], win.tab_list[2]
   local sb = mark_ready(tab)
+  sb.hung = true
   win.active_tab_ref = tab
-  -- another handler activates a different tab while the sidebar activation is in flight
+  local clock = H.clock()
+  local acted = #win.actions
+  sidebar.detach(gui, tab)
+  eq(#tab:panes(), 2, "quit went unheard")
+  clock.advance(2100)
+  -- the last rung, and the focus race it guards against: another handler moved the focus
   sb.activate = function()
     other:activate()
   end
-  local panes, tabs, acted = #tab:panes(), #win.tab_list, #win.actions
-  sidebar.detach(gui, tab)
-  eq(#tab:panes(), panes, "the sidebar is left open")
-  eq(#win.tab_list, tabs, "no tab closed")
+  sidebar.ensure(gui)
+  eq(#tab:panes(), 2, "the sidebar is left open")
   eq(#win.actions, acted, "CloseCurrentPane never ran")
   sb.activate = nil
+  win.active_tab_ref = tab
+  clock.advance(2100)
+  sidebar.ensure(gui)
+  eq(#tab:panes(), 1, "closed by activation once the focus holds")
+  eq(#win.actions, acted + 1)
+  clock.restore()
 end)
 
-test("close_orphan never closes a tab that lost focus", function()
+test("an orphan tab closes with its sidebar's process; the active tab is never touched", function()
   local win, gui = window(2)
   attach_all(win, gui)
   local victim, other = win.tab_list[2], win.tab_list[1]
@@ -415,11 +442,11 @@ test("close_orphan never closes a tab that lost focus", function()
   table.remove(victim.pane_list, 2)
   win.active_tab_ref = other
   victim.activate = function()
-    other:activate()
+    error "the orphan tab must not be activated to close it"
   end
   local acted = #win.actions
   sidebar.close_orphan(gui, victim, sb)
-  eq(#win.tab_list, 2, "the tab survives")
+  eq(#win.tab_list, 1, "the tab went with the pane")
+  eq(win.active_tab_ref, other)
   eq(#win.actions, acted, "CloseCurrentTab never ran")
-  victim.activate = nil
 end)

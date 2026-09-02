@@ -76,12 +76,73 @@ function Pane:get_dimensions()
   local cell = self.cell_width or 10
   return { cols = self.cols, viewport_rows = 24, pixel_width = self.cols * cell, dpi = self.dpi or 96 }
 end
+---Panes of `tab` inside the sidebar band, the way the backend's `rescue_plan` sees them.
+local function intruders_in(tab, own, band)
+  local out = {}
+  for _, info in ipairs(tab:panes_with_info()) do
+    if info.pane ~= own and info.left <= band then
+      out[#out + 1] = info.pane
+    end
+  end
+  return out
+end
+
+---What the real backend does with a command line; a `hung` pane hears nothing, like a dead one.
+---`quit` exits, and an exited pane closes; `kill` and `rescue` run the server's cli.
+local function obey(pane, text)
+  local verb = text:match '^{"t":"(%w+)"' or text:match '"t":"(%w+)"'
+  if pane.hung or not verb then
+    return
+  end
+  if verb == "quit" then
+    M.kill_pane(pane)
+  elseif verb == "kill" then
+    -- the server lists every pane it holds: here, every pane of this window's tabs
+    local title = text:match '"title":"([^"]*)"'
+    for _, tab in ipairs(pane._tab._window.tab_list) do
+      for _, p in ipairs { table.unpack(tab.pane_list) } do
+        if p.title == title then
+          M.kill_pane(p)
+          pane.killed = (pane.killed or 0) + 1
+        end
+      end
+    end
+  elseif verb == "rescue" then
+    local band = tonumber(text:match '"band":(%d+)') or 0
+    local tab = pane._tab
+    for _, moved in ipairs(intruders_in(tab, pane, band)) do
+      local host = nil
+      for _, p in ipairs(tab.pane_list) do
+        if p ~= pane and p ~= moved and not tostring(p.title):find "^wez%-vtabs" then
+          host = p
+          break
+        end
+      end
+      if host then
+        M.cli {
+          "wezterm",
+          "cli",
+          "--no-auto-start",
+          "split-pane",
+          "--move-pane-id",
+          tostring(moved.id),
+          "--pane-id",
+          tostring(host.id),
+        }
+        moved.left = nil
+        pane.moved = (pane.moved or 0) + 1
+      end
+    end
+  end
+end
+
 function Pane:send_text(text)
   self.sent[#self.sent + 1] = text
   local title = text:match "\27%]0;(.-)\7" or text:match "\27%]2;(.-)\7"
   if title then
     self.title = title
   end
+  obey(self, text)
 end
 function Pane:paste(text)
   self.pasted[#self.pasted + 1] = text
