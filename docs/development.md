@@ -258,6 +258,10 @@ just restart --pane 17       # kill only pane 17, then restart the GUI
 just restart --mux           # last resort: replace localmux and lose every pane
 ```
 
+A GUI panic is logged to `~/.local/share/wezterm/wezterm-gui-log-<pid>.txt` by WezTerm's own panic
+hook. `just restart` keeps any such log as `dev-logs/crash-<name>.txt` before the next GUI's log
+buries it, and `just doctor` lists what it kept alongside the GUI logs and macOS crash reports.
+
 Bare `just dev` is quiet while healthy. It prints compiler/test diagnostics, WezTerm and plugin
 warnings or errors, unexpected sandbox-process exits, and warnings for unusually high aggregate
 RAM, CPU, process count, or sandbox disk use. The default warning thresholds are 1024 MiB RAM, 40%
@@ -293,6 +297,7 @@ HOME=$(mktemp -d) WEZTERM_LOG=info wezterm --config-file scripts/probe-coroutine
 | `move_to_new_window`            | `actions.lua` `tear_off`                                            |
 | `set_inner_size`                | `sidebar_attach.lua` `fit_to_window`                                |
 | `cli split-pane --move-pane-id` | `sidebar_rescue.lua` `rescue_splits`                                |
+| `cli adjust-pane-size`          | `vtabs-runtime` `cli.rs` `adjust`, asked by `geometry.lua` `correct` |
 
 ## Applying a build
 

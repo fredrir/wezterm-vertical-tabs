@@ -754,3 +754,85 @@ test("the poll counts a held key by switches to known tabs; a burst of new tabs 
   fake.close_window(win)
   config.setup { backend = { path = "/bin/wez-vtabs" } }
 end)
+
+test("a poll arms a heartbeat per window that keeps polling at poll_ms until the window is gone", function()
+  local wezterm = require "wezterm"
+  local fake = require "fake_mux"
+  local sidebar = require "vtabs.sidebar"
+  local init = require "init"
+  init.apply_to_config({}, {
+    settings = { path = "/nonexistent/vtabs-test-settings.json" },
+    backend = { path = "/bin/wez-vtabs" },
+  })
+  local handlers = wezterm.handlers["update-status"]
+  local poll = handlers[#handlers]
+  local clock = H.clock()
+  local win = fake.window()
+  win:add_tab { title = "a" }
+  wezterm.timers = {}
+  poll(win.gui)
+  eq(#wezterm.timers, 1, "one beat armed")
+  eq(wezterm.timers[1].secs, config.get().poll_ms / 1000)
+  poll(win.gui)
+  eq(#wezterm.timers, 1, "a second status poll does not arm a second one")
+  -- a tab spawned while nothing prints in the window: only the beat sees it
+  local quiet = win:add_tab { title = "quiet" }
+  win.active_tab_ref = quiet
+  clock.advance(config.get().poll_ms)
+  wezterm.fire_timers()
+  assert(sidebar.find(quiet), "the beat's poll served it")
+  eq(#wezterm.timers, 1, "and re-armed itself")
+  -- the window closes: the beat finds it gone and stops
+  win.gui.mux_window = function()
+    error "window not found in mux"
+  end
+  wezterm.fire_timers()
+  eq(#wezterm.timers, 0, "no beat outlives its window")
+  win.gui.mux_window = nil
+  fake.close_window(win)
+  clock.restore()
+  config.setup { backend = { path = "/bin/wez-vtabs" } }
+end)
+
+test("a tab the hand stopped on is marked visited, and a later pass attaches it in the background", function()
+  local wezterm = require "wezterm"
+  local fake = require "fake_mux"
+  local sidebar = require "vtabs.sidebar"
+  local store = require "vtabs.store"
+  local geometry = require "vtabs.geometry"
+  local init = require "init"
+  init.apply_to_config({}, {
+    settings = { path = "/nonexistent/vtabs-test-settings.json" },
+    backend = { path = "/bin/wez-vtabs" },
+  })
+  local handlers = wezterm.handlers["update-status"]
+  local poll = handlers[#handlers]
+  local clock = H.clock()
+  local win = fake.window()
+  local first = win:add_tab { title = "a" }
+  local second = win:add_tab { title = "b" }
+  poll(win.gui)
+  eq(store.visited[first:tab_id()], true, "the tab shown is visited")
+  eq(store.visited[second:tab_id()], nil, "the background one is not")
+  -- the hand stops on the second while the window is busy: nothing is split into it on that pass
+  clock.advance(1000)
+  win.active_tab_ref = second
+  local switching = geometry.switching
+  geometry.switching = function()
+    return false
+  end
+  local ensure = sidebar.ensure
+  sidebar.ensure = function() end
+  poll(win.gui)
+  sidebar.ensure, geometry.switching = ensure, switching
+  eq(store.visited[second:tab_id()], true, "visited all the same")
+  eq(sidebar.find(second), nil, "still owed its sidebar")
+  -- the hand has moved on; the next pass pays the debt in the background
+  win.active_tab_ref = first
+  clock.advance(1000)
+  poll(win.gui)
+  assert(sidebar.find(second), "attached without being active")
+  fake.close_window(win)
+  clock.restore()
+  config.setup { backend = { path = "/bin/wez-vtabs" } }
+end)

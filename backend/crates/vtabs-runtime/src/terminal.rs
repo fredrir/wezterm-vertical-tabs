@@ -59,3 +59,10 @@ pub fn parse_bg(spec: &str) -> Option<(u8, u8, u8)> {
 pub fn size() -> Option<(u16, u16)> {
     terminal::size().ok()
 }
+
+/// The pane's pixel size from the pty's winsize; WezTerm sets it on every resize. None where the
+/// host left it at zero, and the strip then falls back to what the plugin measured.
+pub fn pixels() -> Option<(u16, u16)> {
+    let size = terminal::window_size().ok()?;
+    (size.width > 0 && size.height > 0).then_some((size.width, size.height))
+}

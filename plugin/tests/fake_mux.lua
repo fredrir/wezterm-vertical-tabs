@@ -12,6 +12,9 @@ local function await(tag)
     async.yield(tag)
   end
 end
+-- When true, a backend's server-side `adjust` is queued rather than applied, the way a mux server
+-- answers later; `apply_remote` lands the next one.
+M.remote_lag = false
 
 local next_id = { pane = 0, tab = 0, window = 0 }
 local function alloc(kind)
@@ -124,6 +127,38 @@ local function obey_payload(pane, frame_token, payload)
         end
       end
     end
+  elseif verb == "adjust" then
+    -- `Cli::adjust` on the server: from the tab's active pane, via this pane when that one cannot
+    -- reach the sidebar's split, focus handed back unless parked.
+    local direction = payload:match '"direction":"(%a+)"'
+    local amount = tonumber(payload:match '"amount":(%d+)') or 0
+    local park = payload:find('"park":true', 1, true) ~= nil
+    local tab = pane._tab
+    local function apply()
+      local was = tab.active
+      local first = tab.pane_list[1]
+      local dance = was ~= pane and (was.width or was.cols) ~= tab:width() - first.cols - 1
+      if dance then
+        tab.active = pane
+      end
+      if amount > 0 then
+        tab:adjust_from_active(direction, amount)
+      end
+      local owed = pane.parked or (dance and was or nil)
+      pane.parked = nil
+      if park then
+        pane.parked = owed
+      elseif owed then
+        tab.active = owed
+      end
+      pane.adjusted = (pane.adjusted or 0) + 1
+    end
+    if M.remote_lag then
+      pane.queued = pane.queued or {}
+      pane.queued[#pane.queued + 1] = apply
+    else
+      apply()
+    end
   elseif verb == "rescue" then
     local band = tonumber(payload:match '"band":(%d+)') or 0
     local tab = pane._tab
@@ -232,6 +267,16 @@ end
 function M.kill_pane(pane)
   M.detach_pane(pane)
   require("wezterm").panes[pane.id] = nil
+end
+
+---Lands the oldest queued server-side adjust of `pane`; false when there is none.
+function M.apply_remote(pane)
+  local apply = pane.queued and table.remove(pane.queued, 1)
+  if not apply then
+    return false
+  end
+  apply()
+  return true
 end
 
 local Tab = {}

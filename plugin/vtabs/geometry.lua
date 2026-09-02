@@ -16,9 +16,10 @@ local util = require "vtabs.util"
 ---On a local domain that is the whole story: a correction reads the tree, acts, and reads it again.
 ---On a mux domain the tree is a mirror. Every pane resize round-trips to the server, whose
 ---`TabResized` makes the client fetch the pane list and rebuild the mirror, sometimes to an
----intermediate state (wezterm-client/src/domain.rs `process_pane_list`). So on a mux domain one
----adjust is in flight at a time, released by the sidebar's own size report, and a divider is read
----as the user's hand only once it has sat still across a round trip.
+---intermediate state (wezterm-client/src/domain.rs `process_pane_list`). So on a mux domain the
+---sidebar's own backend resizes the split on the server, once the frames have stopped; one adjust
+---is in flight at a time, released by the sidebar's own size report; and a divider is read as the
+---user's hand only once it has sat still across a round trip.
 local M = {}
 
 local MIN_WIDTH = 8
@@ -145,6 +146,12 @@ function M.landed(window_id, pane_id, cols)
   if pending and pending.pane_id == pane_id and cols == pending.target then
     pending.reported = true
   end
+end
+
+---The server refused the adjust in flight (its `cli` answer said so): nothing is coming, so the
+---next reading may ask again at once.
+function M.abandon(window_id)
+  pending_adjust[window_id] = nil
 end
 
 ---A config reload only invalidates a dragged width when `width` itself changed: every edit to
@@ -485,9 +492,30 @@ local function correct(gui_window, snapshot)
     return false
   end
 
+  local dir, n = direction_for(cfg.position, target - cols), int(math.abs(target - cols))
+  if remote then
+    -- The server's tree is the truth a mux GUI mirrors, and every pane resize the GUI sends makes
+    -- the client fetch the pane list and rebuild the whole mirror; a correction issued here would
+    -- cost one such rebuild per pane and echo back stale widths. So the sidebar's own backend
+    -- resizes the split on the server: one change there, one rebuild, no echo. Once per settle,
+    -- not per frame -- during a burst the frames alone already cost a rebuild per pane.
+    if not quiet then
+      return false
+    end
+    if cfg.debug then
+      util.log("geometry: tab %d sidebar %d -> %d of %d cols (server)", tab_id, cols, target, layout.cols)
+    end
+    if not sidebar.send(sb, { t = "adjust", direction = dir, amount = n, park = false }) then
+      return false
+    end
+    pending_adjust[wid] = { tab_id = tab_id, pane_id = sb_id, target = target, at = now }
+    settled[wid] = nil
+    follow_up(gui_window, wid, "pending", REMOTE_WAIT_MS + 20)
+    return true
+  end
+
   local active = layout.active
   local dance = needs_dance(layout, sb_id, tab_id, wid)
-  local dir, n = direction_for(cfg.position, target - cols), int(math.abs(target - cols))
   local adjust = act.AdjustPaneSize { dir, n }
   local action = adjust
   local steps = nil
@@ -522,15 +550,6 @@ local function correct(gui_window, snapshot)
     )
   end
   mux.call(gui_window, "perform_action", action, sb)
-
-  if remote then
-    -- The mirror will be rebuilt from the server's pane list, more than once, before this lands;
-    -- nothing read from it meanwhile is a drag, and no second adjust goes out on top of this one.
-    pending_adjust[wid] = { tab_id = tab_id, pane_id = sb_id, target = target, at = now }
-    settled[wid] = nil
-    follow_up(gui_window, wid, "pending", REMOTE_WAIT_MS + 20)
-    return true
-  end
 
   -- `perform_action` awaited the GUI, so the tree already shows what the adjust did.
   local after = read_layout(tab, sb_id, cfg.position)

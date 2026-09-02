@@ -18,7 +18,7 @@ local scope = store.scope "view"
 local chrome = scope.window()
 local banding, banding_saved = scope.window(), scope.window()
 local effective = scope.window()
-local last_strip_metrics = scope.window()
+local last_strip_dpi = scope.window()
 
 ---`effective_config` hands over the whole config as a Lua table, every colour scheme included, on
 ---each call. Nothing read from it moves without a reload, and a reload drops this.
@@ -199,25 +199,13 @@ function M.apply_titlebar_band(gui_window)
   return true
 end
 
-local function raw_metrics(dims)
-  if not dims then
-    return nil
-  end
-  return {
-    cols = dims.cols,
-    viewport_rows = dims.viewport_rows,
-    pixel_width = dims.pixel_width,
-    pixel_height = dims.pixel_height,
-    dpi = dims.dpi,
-  }
-end
-
----Fresh chrome plus active-pane metrics for Rust's sole strip-geometry calculation.
-local function strip_facts(gui_window, cfg, metrics, window, observed)
+---Fresh chrome plus the window's dpi for Rust's sole strip-geometry calculation. The pane's cells
+---and pixel size the backend measures for itself; the dpi is the one number it cannot.
+local function strip_facts(gui_window, cfg, dpi, window, observed)
   local facts = chrome_for(gui_window, cfg, observed)
   window = window or {}
   return {
-    metrics = metrics,
+    dpi = dpi,
     chrome = {
       is_mac = platform.is_mac,
       integrated_buttons = facts.integrated_buttons,
@@ -334,21 +322,22 @@ function M.sync(gui_window)
   end
 
   -- Only the active tab's current sidebar can describe the shared model. A missing observation may
-  -- reuse that exact pane's last metrics, never a background or replaced pane's measurements.
+  -- reuse that exact pane's last dpi, never a background or replaced pane's.
   local active = observed.active
   local active_sb = active and active.sidebar or nil
   local active_pid = active_sb and active_sb:pane_id() or nil
-  local metrics = active_sb and raw_metrics(dims_of(active_sb, observed)) or nil
-  if metrics then
-    last_strip_metrics[wid] = { tab_id = active_tab_id, pane_id = active_pid, value = metrics }
+  local dims = active_sb and dims_of(active_sb, observed) or nil
+  local dpi = dims and dims.dpi or nil
+  if dpi then
+    last_strip_dpi[wid] = { tab_id = active_tab_id, pane_id = active_pid, value = dpi }
   else
-    local cached = last_strip_metrics[wid]
+    local cached = last_strip_dpi[wid]
     if cached and cached.tab_id == active_tab_id and cached.pane_id == active_pid then
-      metrics = cached.value
+      dpi = cached.value
     end
   end
-  -- Chrome and fullscreen are deliberately rebuilt even when pane metrics came from the cache.
-  local wire_strip = strip_facts(gui_window, cfg, metrics, window, observed)
+  -- Chrome and fullscreen are deliberately rebuilt even when the dpi came from the cache.
+  local wire_strip = strip_facts(gui_window, cfg, dpi, window, observed)
   local config_now = observed.effective
   require("vtabs.wire").sync(gui_window, {
     cfg = cfg,

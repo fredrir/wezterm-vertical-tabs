@@ -55,6 +55,9 @@ pub struct UiState {
     pub scroll: Option<i64>,
     pub user_scrolled: bool,
     pub drag: Option<PressDrag>,
+    /// The pane's pixel size as its pty reports it, when the host set one: the runtime's own
+    /// measurement, so a resize needs no model round trip to lay the strip out again.
+    pub pixels: Option<(u32, u32)>,
 }
 
 impl UiState {

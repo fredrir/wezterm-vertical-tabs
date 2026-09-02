@@ -114,7 +114,7 @@ fn run_command(command: &mut Command, timeout: Duration, label: &str) -> Result<
     })
 }
 
-/// The fields of `wezterm cli list --format json` the two verbs read.
+/// The fields of `wezterm cli list --format json` the verbs read.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PaneInfo {
     pub pane_id: u64,
@@ -122,6 +122,7 @@ pub struct PaneInfo {
     pub title: String,
     pub left_col: i64,
     pub cols: i64,
+    pub is_active: bool,
 }
 
 /// `cli list --format json`, one entry per pane; malformed entries are skipped.
@@ -143,9 +144,34 @@ pub fn panes_from_json(json: &str) -> Result<Vec<PaneInfo>, String> {
                 title: v.get("title")?.as_str()?.to_string(),
                 left_col,
                 cols,
+                is_active: v.get("is_active").and_then(Value::as_bool).unwrap_or(false),
             })
         })
         .collect())
+}
+
+/// Which pane must hold focus for an `adjust-pane-size` to reach the sidebar's own split, and the
+/// pane displaced to make that so. The walk starts at the tab's active pane and stops at the first
+/// horizontal split above it (mux/src/tab.rs `adjust_pane_size`): from the sidebar that is the
+/// root; from a content pane it is the root only when the pane spans the whole content column,
+/// since every horizontal split narrows its children and a vertical one never does.
+/// `Ok(None)` when the active pane already reaches it, `Ok(Some(id))` naming the content pane to
+/// hand focus back to once the sidebar has taken it.
+pub fn adjust_plan(panes: &[PaneInfo], own: u64) -> Result<Option<u64>, String> {
+    let me = panes
+        .iter()
+        .find(|p| p.pane_id == own)
+        .ok_or_else(|| format!("own pane {own} not listed"))?;
+    let tab: Vec<&PaneInfo> = panes.iter().filter(|p| p.tab_id == me.tab_id).collect();
+    let tab_cols = tab.iter().map(|p| p.left_col + p.cols).max().unwrap_or(0);
+    let content_width = tab_cols - me.cols - 1;
+    let Some(active) = tab.iter().find(|p| p.is_active) else {
+        return Err("no active pane in this tab".into());
+    };
+    if active.pane_id == own || active.cols == content_width {
+        return Ok(None);
+    }
+    Ok(Some(active.pane_id))
 }
 
 pub struct Cli {
@@ -256,6 +282,47 @@ impl Cli {
             .map(|_| ())
     }
 
+    /// Resizes this pane's own split by `amount` cells in `direction`. A content pane that cannot
+    /// reach the split hands focus to this pane for the adjust; `parked` is one it kept from an
+    /// earlier `park`, and the answer is the pane still owed its focus back (only with `park`).
+    /// `amount` 0 does nothing but the hand-back.
+    pub fn adjust(
+        &self,
+        direction: &str,
+        amount: u32,
+        park: bool,
+        parked: Option<u64>,
+    ) -> Result<Option<u64>, String> {
+        if direction != "Left" && direction != "Right" {
+            return Err(format!(
+                "adjust: direction must be Left or Right, not {direction}"
+            ));
+        }
+        let own = self.own_pane.to_string();
+        let displaced = adjust_plan(&self.list()?, self.own_pane)?;
+        if displaced.is_some() {
+            self.run(&["activate-pane", "--pane-id", &own])?;
+        }
+        if amount > 0 {
+            self.run(&[
+                "adjust-pane-size",
+                "--pane-id",
+                &own,
+                "--amount",
+                &amount.to_string(),
+                direction,
+            ])?;
+        }
+        let owed = parked.or(displaced);
+        if park {
+            return Ok(owed);
+        }
+        if let Some(pane) = owed {
+            self.run(&["activate-pane", "--pane-id", &pane.to_string()])?;
+        }
+        Ok(None)
+    }
+
     /// Moves every intruder under the host; the count moved, or the first failure.
     pub fn rescue(&self, band: i64, right: bool) -> Result<usize, String> {
         let (intruders, host) = rescue_plan(&self.list()?, self.own_pane, band, right)?;
@@ -309,6 +376,7 @@ mod parser_tests {
                 title: "valid".into(),
                 left_col: 0,
                 cols: 80,
+                is_active: false,
             }]
         );
     }

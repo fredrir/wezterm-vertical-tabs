@@ -543,8 +543,13 @@ pub struct DragOrigin {
 
 #[derive(Debug, Clone, PartialEq, Default, Deserialize)]
 pub struct StripState {
+    /// Legacy: a plugin that measures the pane for the backend. Current plugins send `dpi` alone;
+    /// the backend measures its own cells and the pty's pixel size.
     #[serde(default)]
     pub metrics: Option<PaneMetrics>,
+    /// The window's dpi, the one measurement a pane cannot take for itself.
+    #[serde(default)]
+    pub dpi: Option<f64>,
     #[serde(default)]
     pub chrome: Option<ChromeFacts>,
     #[serde(default)]

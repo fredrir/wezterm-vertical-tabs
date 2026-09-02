@@ -198,31 +198,39 @@ test("a frame that lands while an adjust is in flight is corrected by the next c
   eq(sb.cols, 28)
 end)
 
+---Frames the sidebar's backend was asked to resize the split with, server-side.
+local function adjusts_sent(sb, from)
+  local n = 0
+  for i = (from or 0) + 1, #sb.sent do
+    if sb.sent[i]:find('"t":"adjust"', 1, true) then
+      n = n + 1
+    end
+  end
+  return n
+end
+
 test("a remote correction stays singular until the mux applies it", function()
   local win, gui, tab, sb = settled_tab()
   local clock = H.clock()
   local content = sidebar.content_pane(tab)
   sb.domain, content.domain = "e2emux", "e2emux"
-  local real = getmetatable(gui).perform_action
-  local queued = nil
-  gui.perform_action = function(_, action, pane)
-    win.actions[#win.actions + 1] = { action = action, pane = pane }
-    queued = { action = action, pane = pane }
-  end
+  fake.remote_lag = true
+  local before_actions, before_sent = #win.actions, #sb.sent
 
   win:resize(40)
   assert(geometry.correct(gui), "the first remote correction is sent")
-  local after_first = #win.actions
+  eq(adjusts_sent(sb, before_sent), 1, "to the sidebar's own backend, which resizes the split on the server")
+  eq(#win.actions, before_actions, "nothing through the GUI's mirror")
   eq(sb.cols, 48, "the fake remote mux has not applied it yet")
   eq(geometry.correct(gui), false, "a poll cannot enqueue the same delta again")
-  eq(#win.actions, after_first, "only one remote adjustment is in flight")
+  eq(adjusts_sent(sb, before_sent), 1, "only one remote adjustment is in flight")
 
-  real(gui, queued.action, queued.pane)
-  eq(sb.cols, 28, "the remote mux eventually applies the queued correction")
+  assert(fake.apply_remote(sb), "the remote mux eventually applies the queued correction")
+  eq(sb.cols, 28)
   eq(geometry.correct(gui), false, "the observed target starts a stability window")
   clock.advance(geometry.REMOTE_APPLY_MS)
   eq(geometry.correct(gui), false, "the stable target clears the in-flight record")
-  gui.perform_action = nil
+  fake.remote_lag = false
   clock.restore()
 end)
 
@@ -781,7 +789,7 @@ test("the split tree, not the pane's own size report, is the width corrected fro
   sb.get_dimensions = nil
 end)
 
-test("the backend's resize report corrects from the tree and publishes, with no width of its own", function()
+test("the backend's resize report corrects from the tree and publishes nothing, with no width of its own", function()
   local win, gui, _, sb = settled_tab()
   local input = require "vtabs.input"
   local store = require "vtabs.store"
@@ -789,28 +797,22 @@ test("the backend's resize report corrects from the tree and publishes, with no 
   store.proto[sb:pane_id()] = protocol.VERSION
   win:resize(6)
   eq(sb.cols, 31)
+  local sent = #sb.sent
   input.handle(gui, sb, "vtabs", '{"t":"resize","cols":31,"rows":24,"n":2}')
   eq(sb.cols, 28, "the report triggered a correction")
   eq(last_action(win).arg[2], 3)
+  eq(#sb.sent, sent, "and no publish: the pane repainted itself, and a report per frame is not a generation per frame")
 end)
 
----A tab whose panes live on a mux domain, with the host's adjust queued the way a mux client
----answers: at once, applied later.
+---A tab whose panes live on a mux domain, the backend's server-side adjust queued the way a mux
+---server answers: acknowledged at once, applied later.
 local function remote_tab()
   local win, gui, tab, sb = settled_tab()
   local content = sidebar.content_pane(tab)
   sb.domain, content.domain = "e2emux", "e2emux"
-  local real = getmetatable(gui).perform_action
-  local queued = {}
-  gui.perform_action = function(_, action, pane)
-    win.actions[#win.actions + 1] = { action = action, pane = pane }
-    queued[#queued + 1] = action
-  end
+  fake.remote_lag = true
   local function apply()
-    local action = table.remove(queued, 1)
-    if action then
-      real(gui, action, sb)
-    end
+    return fake.apply_remote(sb)
   end
   return win, gui, tab, sb, apply
 end
@@ -821,14 +823,14 @@ test("on a mux domain the sidebar's own size report releases the adjust in fligh
   win:resize(10)
   assert(geometry.correct(gui), "sent")
   eq(geometry.correct(gui), false, "and nothing more while it is in flight")
-  apply()
-  eq(sb.cols, 28, "the mux applied it")
+  assert(apply(), "the mux applied it")
+  eq(sb.cols, 28)
   geometry.landed(wid, sb:pane_id(), 28)
   eq(geometry.correct(gui), false, "in order")
   eq(geometry.inspect(wid).pending, nil, "released by the report; no stability window to wait out")
   win:resize(4)
   assert(geometry.correct(gui), "so the next frame's correction goes out at once")
-  gui.perform_action = nil
+  fake.remote_lag = false
 end)
 
 test("a mux mirror rebuilt to a stale width around an adjust in flight is neither chased nor adopted", function()
@@ -841,11 +843,11 @@ test("a mux mirror rebuilt to a stale width around an adjust in flight is neithe
   -- the server applies it, but the mirror is rebuilt from a pane list answered just before that
   apply()
   eq(sb.cols, 28)
-  local sent = #win.actions
+  local sent = #sb.sent
   clock.advance(50)
   tab:set_split(29)
   eq(geometry.correct(gui), false, "an echo of the old width is not chased")
-  eq(#win.actions, sent, "no second adjust on top of the first")
+  eq(#sb.sent, sent, "no second adjust on top of the first")
   -- the report arrives while the mirror still shows the echo
   geometry.landed(wid, sb:pane_id(), 28)
   clock.advance(50)
@@ -857,7 +859,7 @@ test("a mux mirror rebuilt to a stale width around an adjust in flight is neithe
   eq(geometry.correct(gui), false)
   eq(geometry.inspect(wid).pending, nil, "cleared once report and mirror agree")
   eq(geometry.desired(wid), 28, "the width is still cfg.width")
-  gui.perform_action = nil
+  fake.remote_lag = false
   clock.restore()
 end)
 
@@ -866,14 +868,60 @@ test("an unreported mux adjust stops blocking after its wait, and the width is a
   local clock = H.clock()
   win:resize(10)
   assert(geometry.correct(gui))
-  local sent = #win.actions
+  local sent = #sb.sent
   clock.advance(300)
   eq(geometry.correct(gui), false, "the mux may still be applying it")
-  eq(#win.actions, sent)
+  eq(#sb.sent, sent)
   clock.advance(400)
   assert(geometry.correct(gui), "a server that lost it is not waited on forever")
+  eq(adjusts_sent(sb, sent), 1, "asked once more")
   eq(sb.cols, 33, "the fake never applied either")
-  gui.perform_action = nil
+  fake.remote_lag = false
+  clock.restore()
+end)
+
+test("a server that refuses the adjust releases the wait at once", function()
+  local win, gui, _, sb, _ = remote_tab()
+  local wid = gui:window_id()
+  local input = require "vtabs.input"
+  local store = require "vtabs.store"
+  store.proto[sb:pane_id()] = require("vtabs.gen.protocol").VERSION
+  win:resize(10)
+  assert(geometry.correct(gui))
+  local sent = #sb.sent
+  eq(geometry.correct(gui), false, "in flight")
+  input.handle(gui, sb, "vtabs", '{"t":"cli","op":"adjust","ok":false,"detail":"no cli here"}')
+  eq(geometry.inspect(wid).pending, nil, "nothing is coming: the record is dropped")
+  assert(geometry.correct(gui), "and the width is asked for again without waiting out the round trip")
+  eq(adjusts_sent(sb, sent), 1)
+  fake.remote_lag = false
+end)
+
+test("on a mux domain the frames of a resize are left to the server, and one adjust follows the settle", function()
+  local win, gui, tab, sb = settled_tab()
+  local content = sidebar.content_pane(tab)
+  sb.domain, content.domain = "e2emux", "e2emux"
+  local wid = gui:window_id()
+  local clock = H.clock()
+  local before_actions, sent = #win.actions, #sb.sent
+  for _, d in ipairs { 5, 3, 2 } do
+    geometry.on_resize(wid)
+    win:resize(d)
+    eq(
+      geometry.correct(gui),
+      false,
+      "a frame on a mux domain is not corrected: each adjust costs a mirror rebuild per pane"
+    )
+    clock.advance(30)
+  end
+  assert(sb.cols > 28, "the frames dealt the sidebar columns")
+  eq(adjusts_sent(sb, sent), 0)
+  clock.advance(geometry.RESIZE_QUIET_MS)
+  assert(geometry.correct(gui), "the settle corrects once")
+  eq(adjusts_sent(sb, sent), 1, "server-side, through the sidebar's backend")
+  eq(#win.actions, before_actions, "never through the GUI's mirror")
+  eq(sb.cols, 28, "the backend resized the split")
+  eq(tab.active, content, "and handed focus back")
   clock.restore()
 end)
 

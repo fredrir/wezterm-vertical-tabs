@@ -58,4 +58,16 @@ pub enum Command {
         #[serde(default)]
         position: Option<String>,
     },
+    /// Resize this pane's own split on the server by `amount` cells, `direction` being
+    /// `AdjustPaneSize`'s `Left` or `Right`, through the server's own `wezterm cli`: on a mux
+    /// domain the server's tree is the truth the GUI mirrors, so one change there is one change
+    /// everywhere. The walk starts at the tab's active pane; when that pane cannot reach the
+    /// sidebar's split, the sidebar takes focus for the adjust and hands it back, unless `park`
+    /// keeps it (a resize burst) until an adjust without `park` follows.
+    Adjust {
+        direction: String,
+        amount: u32,
+        #[serde(default)]
+        park: bool,
+    },
 }

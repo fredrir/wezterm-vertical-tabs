@@ -49,6 +49,11 @@ pub struct App<W: Write> {
     pub size: (u16, u16),
     /// Asked before every frame, so no paint trusts a size the pane no longer has.
     pub probe: fn() -> Option<(u16, u16)>,
+    /// The pty's pixel size, asked beside `probe`: the strip's cell metrics come from here, so a
+    /// resize lays it out again with no model round trip.
+    pub pixel_probe: fn() -> Option<(u16, u16)>,
+    /// The content pane a server-side `adjust` with `park` displaced, owed its focus back.
+    pub parked_focus: Option<u64>,
     /// A size change wipes the pane before the next frame.
     pub needs_clear: bool,
     pub fx: Option<FxRun>,
@@ -1725,6 +1730,23 @@ impl<W: Write> App<W> {
                     .and_then(|cli| cli.rescue(i64::from(band), right));
                 self.report("rescue", done.map(|n| n.to_string()))?;
             }
+            Command::Adjust {
+                direction,
+                amount,
+                park,
+            } => {
+                let parked = self.parked_focus.take();
+                let done = self
+                    .cli
+                    .as_ref()
+                    .ok_or_else(|| "no cli here".to_string())
+                    .and_then(|cli| cli.adjust(&direction, amount, park, parked));
+                let done = done.map(|owed| {
+                    self.parked_focus = owed;
+                    owed.map(|id| id.to_string()).unwrap_or_default()
+                });
+                self.report("adjust", done)?;
+            }
             Command::Quit => return Ok(Applied::Quit),
         }
         Ok(Applied::Continue)
@@ -1826,11 +1848,15 @@ impl<W: Write> App<W> {
         Ok(())
     }
 
-    /// Asks the terminal; `true` when the size moved and the pane needs a fresh frame.
+    /// Asks the terminal; `true` when the size moved and the pane needs a fresh frame. The pixel
+    /// size rides along: a dpi change moves it without moving a cell, and the strip follows it.
     fn sync_size(&mut self) -> io::Result<bool> {
+        let pixels = (self.pixel_probe)().map(|(w, h)| (u32::from(w), u32::from(h)));
+        let repixeled = pixels != self.ui.pixels;
+        self.ui.pixels = pixels;
         match (self.probe)() {
             Some(size) if size != self.size => self.adopt_size(size).map(|()| true),
-            _ => Ok(false),
+            _ => Ok(repixeled),
         }
     }
 

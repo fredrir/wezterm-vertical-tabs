@@ -506,9 +506,10 @@ local function ensure_window(gui_window)
         else
           await_auth(gui_window, tab, sb, now)
         end
-      elseif tab_id == active_id and not require("vtabs.geometry").switching(wid) then
+      elseif (tab_id == active_id or store.visited[tab_id]) and not require("vtabs.geometry").switching(wid) then
         -- background tabs attach when they are first activated: 20 splits at once cost ~460 ms,
-        -- and a tab a held key is only passing through gets nothing split into it at all
+        -- and a tab a held key is only passing through gets nothing split into it at all. One
+        -- the user did stop on while this pass was busy is still owed its sidebar.
         M.attach(tab)
       end
     end

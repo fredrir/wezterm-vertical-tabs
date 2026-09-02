@@ -99,34 +99,64 @@ local function register_events(cfg)
 
   local events = store.scope "events"
   local last_poll, shown_tab, unfocused = events.window(), events.window(), events.window()
+  local beating = events.window()
   local min_gap = math.max(50, math.floor(cfg.poll_ms / 4))
   -- A window nobody is typing in still shows its sidebar, so it keeps polling, at half the rate.
   local idle_gap = cfg.poll_ms * 2
 
+  local function poll(window)
+    local wid = window:window_id()
+    local now = util.now_ms()
+    -- WezTerm fires `update-status` on a tab switch too, native key bindings included. That poll
+    -- is never rate-gated: the new tab's sidebar attaches, corrects and highlights with the switch.
+    local tab = util.active_tab(window)
+    local tab_id = tab and tab:tab_id() or nil
+    local switched = shown_tab[wid] ~= tab_id
+    local gap = unfocused[wid] and idle_gap or min_gap
+    if not switched and last_poll[wid] and now - last_poll[wid] < gap then
+      return
+    end
+    -- A switch to a tab this window already had is what a held key repeats; a tab just spawned
+    -- is new here and is served at once however fast it arrived.
+    if switched and shown_tab[wid] ~= nil and (store.known_tabs[wid] or {})[tab_id] then
+      geometry.on_switch(wid)
+    end
+    shown_tab[wid] = tab_id
+    last_poll[wid] = now
+    -- A tab the hand stopped on is owed its sidebar even when this pass finds the window busy.
+    if tab_id and not geometry.switching(wid) then
+      store.visited[tab_id] = true
+    end
+    sidebar.ensure(window)
+    input.tick(window)
+    view.sync(window)
+  end
+
+  -- WezTerm re-arms `update-status` only after a title update, so a window with nothing printing
+  -- in it gets no polls at all. The plugin's own clock keeps every window at `poll_ms`, gated the
+  -- same way, until the window is gone.
+  local function heartbeat(window, wid)
+    if beating[wid] then
+      return
+    end
+    beating[wid] = true
+    local beat
+    beat = function()
+      if not alive(window) then
+        beating[wid] = nil
+        return
+      end
+      reported("heartbeat", poll)(window)
+      wezterm.time.call_after(cfg.poll_ms / 1000, beat)
+    end
+    wezterm.time.call_after(cfg.poll_ms / 1000, beat)
+  end
+
   wezterm.on(
     "update-status",
     guarded("update-status", function(window)
-      local wid = window:window_id()
-      local now = util.now_ms()
-      -- WezTerm fires this on a tab switch too, native key bindings included. That poll is never
-      -- rate-gated: the new tab's sidebar attaches, corrects and highlights with the switch.
-      local tab = util.active_tab(window)
-      local tab_id = tab and tab:tab_id() or nil
-      local switched = shown_tab[wid] ~= tab_id
-      local gap = unfocused[wid] and idle_gap or min_gap
-      if not switched and last_poll[wid] and now - last_poll[wid] < gap then
-        return
-      end
-      -- A switch to a tab this window already had is what a held key repeats; a tab just spawned
-      -- is new here and is served at once however fast it arrived.
-      if switched and shown_tab[wid] ~= nil and (store.known_tabs[wid] or {})[tab_id] then
-        geometry.on_switch(wid)
-      end
-      shown_tab[wid] = tab_id
-      last_poll[wid] = now
-      sidebar.ensure(window)
-      input.tick(window)
-      view.sync(window)
+      poll(window)
+      heartbeat(window, window:window_id())
     end)
   )
 

@@ -272,7 +272,7 @@ local function model_body(cfg, ctx, wid)
       origin = { x = drag.origin_x, y = drag.origin_y, at = drag.began },
     } or nil,
     strip = ctx.strip and {
-      metrics = ctx.strip.metrics,
+      dpi = ctx.strip.dpi,
       chrome = ctx.strip.chrome,
       buttons = buttons,
     } or { buttons = buttons },

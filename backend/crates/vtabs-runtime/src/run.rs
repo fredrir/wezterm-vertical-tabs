@@ -104,6 +104,8 @@ pub fn run() -> io::Result<()> {
         var,
         size,
         probe: terminal::size,
+        pixel_probe: terminal::pixels,
+        parked_focus: None,
         needs_clear: false,
         fx: None,
         last_rows: None,

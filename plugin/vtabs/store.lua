@@ -83,6 +83,7 @@ local SESSION = {
   tab_meta = "tab",
   moving = "tab",
   discarded = "tab",
+  visited = "tab",
   attaching = "tab",
   rescued = "tab",
 

@@ -59,6 +59,16 @@ if [ -n "$last" ]; then
 else
   row "last dev logs" "none ${dim}(just dev)${off}"
 fi
+for kept in $(ls -1t "$devlogs"/crash-*.txt 2>/dev/null | head -3); do
+  row "kept panic" "$(printf '%s' "$kept" | sed "s|$HOME|~|")"
+  grep -h 'panic at' "$kept" | tail -1 | cut -c1-160 | while IFS= read -r l; do printf '  %s
+' "$l"; done
+done
+for log in $(grep -l 'panic at' "$data"/wezterm/wezterm-gui-log-*.txt 2>/dev/null | head -3); do
+  row "gui log panic" "$(printf '%s' "$log" | sed "s|$HOME|~|")"
+  grep -h 'panic at' "$log" | tail -1 | cut -c1-160 | while IFS= read -r l; do printf '  %s
+' "$l"; done
+done
 reports="$HOME/Library/Logs/DiagnosticReports"
 if [ -d "$reports" ]; then
   latest=$(ls -1t "$reports"/wezterm-gui-*.ips 2>/dev/null | head -1 | sed "s|$HOME|~|")

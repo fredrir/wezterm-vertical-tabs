@@ -231,6 +231,9 @@ local function on_cli(gui_window, pane, ev)
       tostring(ev.op),
       tostring(ev.detail)
     )
+    if ev.op == "adjust" then
+      geometry.abandon(gui_window:window_id())
+    end
     return
   end
   if ev.op == "rescue" then
@@ -598,10 +601,10 @@ function M.handle(gui_window, pane, name, value)
   elseif ev.t == "resize" then
     -- The sidebar reporting its own size is the one per-frame signal a divider drag gives, and on
     -- a mux domain the proof that the server applied the adjust in flight; the width itself is
-    -- read from the tab's split tree.
+    -- read from the tab's split tree. Nothing is published for it: the pane has already repainted
+    -- itself at the new size, and a publish per report is a generation per frame across every tab.
     geometry.landed(gui_window:window_id(), pane:pane_id(), tonumber(ev.cols))
     geometry.correct(gui_window)
-    view.sync(gui_window)
   elseif ev.t == "theme_hook_request" then
     theme_bridge.answer_hook(gui_window, pane, ev)
   elseif ev.t == "space_route_hook_request" then

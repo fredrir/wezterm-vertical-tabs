@@ -181,18 +181,28 @@ pub fn theme_of(msg: &ThemeMsg, private: bool) -> crate::theme::Theme {
     crate::theme::resolve(&msg.overrides, &msg.scheme, private)
 }
 
-/// The sole strip geometry calculation, from raw WezTerm pane metrics and host chrome facts.
+/// The sole strip geometry calculation, from the pane as this process measures it (cells from the
+/// terminal, `pixels` from the pty's winsize), the window dpi and chrome facts Lua sends, and,
+/// for a plugin that still measures the pane itself, its pane metrics.
 fn strip_of(
     cfg: &EngineConfig,
     model: &SidebarModel,
     cols: i64,
     rows: i64,
+    pixels: Option<(u32, u32)>,
 ) -> (Strip, Option<i64>) {
     let sent = model.strip.as_ref();
     let metrics_fact = sent.and_then(|strip| strip.metrics);
     let chrome_fact = sent.and_then(|strip| strip.chrome);
     let metrics = metrics_fact.unwrap_or_default();
     let chrome = chrome_fact.unwrap_or_default();
+    let measured = pixels
+        .filter(|(w, h)| *w > 0 && *h > 0)
+        .map(|(w, h)| (f64::from(w), f64::from(h)));
+    let (pixel_width, pixel_height) =
+        measured.unwrap_or((metrics.pixel_width, metrics.pixel_height));
+    let sized = measured.is_some() || metrics_fact.is_some();
+    let dpi = metrics.dpi.or(sent.and_then(|strip| strip.dpi));
     let position_left = !cfg.render.position.is_right();
     let reserve_disabled = !position_left
         || chrome_fact.is_some_and(|facts| {
@@ -202,21 +212,18 @@ fn strip_of(
                 || facts.is_full_screen
         });
     let toggle_button = sent.is_some_and(|s| s.buttons.iter().any(|b| b.id == "toggle"));
+    // The terminal's own cell count is the pane this process paints; a plugin's copy can lag it.
     let g = strip_geometry(
         Dims {
-            cols: if metrics.cols > 0 {
-                metrics.cols
+            cols: if cols > 0 { cols as u32 } else { metrics.cols },
+            viewport_rows: if rows > 0 {
+                rows as u32
             } else {
-                cols.max(0) as u32
-            },
-            viewport_rows: if metrics.viewport_rows > 0 {
                 metrics.viewport_rows
-            } else {
-                rows.max(0) as u32
             },
-            pixel_width: metrics.pixel_width,
-            pixel_height: metrics.pixel_height,
-            dpi: metrics.dpi,
+            pixel_width,
+            pixel_height,
+            dpi,
         },
         StripOpts {
             is_mac: chrome.is_mac || chrome.preview,
@@ -242,7 +249,7 @@ fn strip_of(
         },
         if reserve_disabled {
             Some(0)
-        } else if metrics_fact.is_some() && chrome_fact.is_some() {
+        } else if sized && chrome_fact.is_some() {
             Some(i64::from(g.cols))
         } else {
             None
@@ -293,7 +300,7 @@ pub fn enrich(
         .collect();
 
     let scroll = model.scroll.unwrap_or_default();
-    let (strip, rail_reserve) = strip_of(cfg, model, cols, rows);
+    let (strip, rail_reserve) = strip_of(cfg, model, cols, rows, ui.pixels);
     // the wheel moves the list before the model round-trips, so the local override wins while it holds
     let user_scrolled = ui.user_scrolled || scroll.user;
     let view = RenderInput {

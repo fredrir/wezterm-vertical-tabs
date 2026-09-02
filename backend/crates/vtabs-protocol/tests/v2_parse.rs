@@ -105,7 +105,7 @@ fn v2_lines_parse() {
         "focus":{"on":false,"index":1},"scroll":{"top":4,"user":true},
         "drag":{"id":7,"active":true,"slot":3,"outside":false,
             "origin":{"x":5,"y":6,"at":1712345678901}},
-        "strip":{"metrics":{"cols":28,"viewport_rows":30,"pixel_width":235,"pixel_height":570,"dpi":144},
+        "strip":{"dpi":144,"metrics":{"cols":28,"viewport_rows":30,"pixel_width":235,"pixel_height":570,"dpi":144},
             "chrome":{"is_mac":true,"integrated_buttons":true,"native_button_style":true,
                 "preview":false,"is_full_screen":false},
             "buttons":[{"id":"toggle"},{"id":"open_settings"}]},
@@ -127,6 +127,7 @@ fn v2_lines_parse() {
         235.0
     );
     assert!(m.strip.as_ref().unwrap().chrome.unwrap().is_mac);
+    assert_eq!(m.strip.as_ref().unwrap().dpi, Some(144.0));
     assert_eq!(m.space.as_deref(), Some("home"));
     assert_eq!(m.spaces.len(), 2);
     assert_eq!(m.spaces[0].icon.as_deref(), Some("H"));

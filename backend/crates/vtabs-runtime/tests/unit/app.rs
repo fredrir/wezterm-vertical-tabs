@@ -21,6 +21,8 @@ fn app() -> App<Vec<u8>> {
         var: "vtabs".into(),
         size: (28, 24),
         probe: test_probe,
+        pixel_probe: || None,
+        parked_focus: None,
         needs_clear: false,
         fx: None,
         last_rows: None,
@@ -63,6 +65,18 @@ fn a_kill_or_rescue_with_no_cli_to_run_reports_the_failure() {
         "{sent:?}"
     );
     assert!(sent[1].starts_with(r#"{"t":"cli","op":"rescue","ok":false"#));
+    a.handle(Input::Command(Command::Adjust {
+        direction: "Left".into(),
+        amount: 5,
+        park: false,
+    }))
+    .unwrap();
+    let sent = payloads(&a);
+    assert!(
+        sent[2].starts_with(r#"{"t":"cli","op":"adjust","ok":false,"detail":"no cli here""#),
+        "an adjust with no cli reports the failure the same way: {}",
+        sent[2]
+    );
 }
 
 #[test]

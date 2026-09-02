@@ -199,7 +199,21 @@ terminate_mux() {
   fi
 }
 
+# A panic in the GUI being replaced is in its own log alone, under a name the next GUI's log will
+# bury; kept beside the dev logs, where doctor looks.
+archive_gui_panics() {
+  for log in "$data"/wezterm/wezterm-gui-log-*.txt; do
+    [ -f "$log" ] || continue
+    grep -q 'panic at' "$log" 2>/dev/null || continue
+    kept="$devlogs/crash-$(basename "$log" .txt).txt"
+    [ -f "$kept" ] && continue
+    mkdir -p "$devlogs"
+    cp "$log" "$kept" && say "  kept panic log $kept"
+  done
+}
+
 open_gui() {
+  archive_gui_panics
   say "  opening $gui_app"
   open -na "$gui_app"
 }

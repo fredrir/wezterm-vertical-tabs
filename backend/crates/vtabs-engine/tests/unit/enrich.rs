@@ -227,6 +227,7 @@ fn raw_geometry_model(chrome: ChromeFacts, rail: bool, toggle: bool) -> SidebarM
                 pixel_height: 570.0,
                 dpi: None,
             }),
+            dpi: None,
             chrome: Some(chrome),
             buttons: toggle
                 .then(|| StripButton {
@@ -250,7 +251,7 @@ fn raw_pane_and_chrome_facts_are_the_only_strip_geometry_input() {
         ..Default::default()
     };
 
-    let (strip, reserve) = strip_of(&cfg, &raw_geometry_model(mac, false, true), 28, 30);
+    let (strip, reserve) = strip_of(&cfg, &raw_geometry_model(mac, false, true), 28, 30, None);
     assert_eq!((strip.rows, strip.cols, strip.toggle_row), (3, 9, Some(1)));
     assert_eq!(reserve, Some(9));
 
@@ -260,7 +261,13 @@ fn raw_pane_and_chrome_facts_are_the_only_strip_geometry_input() {
         native_button_style: true,
         ..Default::default()
     };
-    let (strip, reserve) = strip_of(&cfg, &raw_geometry_model(preview, false, true), 28, 30);
+    let (strip, reserve) = strip_of(
+        &cfg,
+        &raw_geometry_model(preview, false, true),
+        28,
+        30,
+        None,
+    );
     assert_eq!((strip.rows, strip.cols), (3, 9));
     assert_eq!(reserve, Some(9), "preview uses non-Mac logical DPI");
 
@@ -268,21 +275,27 @@ fn raw_pane_and_chrome_facts_are_the_only_strip_geometry_input() {
         is_full_screen: true,
         ..mac
     };
-    let (strip, reserve) = strip_of(&cfg, &raw_geometry_model(fullscreen, false, true), 28, 30);
+    let (strip, reserve) = strip_of(
+        &cfg,
+        &raw_geometry_model(fullscreen, false, true),
+        28,
+        30,
+        None,
+    );
     assert_eq!((strip.rows, strip.cols, strip.toggle_row), (2, 0, Some(2)));
     assert_eq!(reserve, Some(0), "fullscreen clears Lua's prior reserve");
 
-    let (strip, reserve) = strip_of(&cfg, &raw_geometry_model(mac, true, true), 28, 30);
+    let (strip, reserve) = strip_of(&cfg, &raw_geometry_model(mac, true, true), 28, 30, None);
     assert_eq!((strip.rows, strip.cols, strip.toggle_row), (4, 9, Some(3)));
     assert_eq!(reserve, Some(9), "rail toggle sits below the lights");
 
-    let (strip, reserve) = strip_of(&cfg, &raw_geometry_model(mac, false, false), 28, 30);
+    let (strip, reserve) = strip_of(&cfg, &raw_geometry_model(mac, false, false), 28, 30, None);
     assert_eq!((strip.rows, strip.cols), (3, 9));
     assert_eq!(reserve, Some(9), "no toggle still reserves native chrome");
 
     let mut no_metrics = raw_geometry_model(fullscreen, false, true);
     no_metrics.strip.as_mut().unwrap().metrics = None;
-    let (_, reserve) = strip_of(&cfg, &no_metrics, 28, 30);
+    let (_, reserve) = strip_of(&cfg, &no_metrics, 28, 30, None);
     assert_eq!(
         reserve,
         Some(0),
@@ -291,7 +304,7 @@ fn raw_pane_and_chrome_facts_are_the_only_strip_geometry_input() {
 
     let mut enabled_without_metrics = raw_geometry_model(mac, false, true);
     enabled_without_metrics.strip.as_mut().unwrap().metrics = None;
-    let (_, reserve) = strip_of(&cfg, &enabled_without_metrics, 28, 30);
+    let (_, reserve) = strip_of(&cfg, &enabled_without_metrics, 28, 30, None);
     assert_eq!(reserve, None, "a positive reserve requires current metrics");
 
     let right = EngineConfig::try_from(
@@ -301,10 +314,47 @@ fn raw_pane_and_chrome_facts_are_the_only_strip_geometry_input() {
         .unwrap(),
     )
     .unwrap();
-    let (_, reserve) = strip_of(&right, &enabled_without_metrics, 28, 30);
+    let (_, reserve) = strip_of(&right, &enabled_without_metrics, 28, 30, None);
     assert_eq!(
         reserve,
         Some(0),
         "right position conclusively has no reserve"
+    );
+}
+
+#[test]
+fn the_pane_measures_its_own_pixels_and_lua_supplies_only_the_dpi() {
+    let cfg = geometry_cfg();
+    let mac = ChromeFacts {
+        is_mac: true,
+        integrated_buttons: true,
+        native_button_style: true,
+        ..Default::default()
+    };
+    // a current plugin: no pane metrics at all, the dpi alone, and the pty's own pixel size
+    let mut own = raw_geometry_model(mac, false, true);
+    let strip = own.strip.as_mut().unwrap();
+    strip.metrics = None;
+    strip.dpi = None;
+    let (strip_out, reserve) = strip_of(&cfg, &own, 28, 30, Some((235, 570)));
+    assert_eq!((strip_out.rows, strip_out.cols), (3, 9));
+    assert_eq!(reserve, Some(9), "the pty's pixel size is a size");
+    // the pty's measurement outranks a legacy plugin's copy of it
+    let stale = raw_geometry_model(mac, false, true);
+    let (fresh, _) = strip_of(&cfg, &stale, 28, 30, Some((470, 570)));
+    assert!(
+        fresh.cols < 9,
+        "twice the pixels per cell halves the reserve"
+    );
+    // zero pixels (a host that sets none) fall back to whatever the plugin sent
+    let (legacy, reserve) = strip_of(&cfg, &stale, 28, 30, Some((0, 0)));
+    assert_eq!((legacy.cols, reserve), (9, Some(9)));
+    // a dpi sent beside the chrome scales the points the same way a metrics dpi did
+    let mut hi = own.clone();
+    hi.strip.as_mut().unwrap().dpi = Some(144.0);
+    let (scaled, _) = strip_of(&cfg, &hi, 28, 30, Some((235, 570)));
+    assert!(
+        scaled.cols > 9,
+        "at 144 dpi a point is more pixels, so 70pt is more cells"
     );
 }

@@ -60,10 +60,17 @@ commands carrying no proof of the active session are consumed without changing b
 | `quit`              | `{"t":"quit"}`                                                      | restore the terminal and exit 0                                              |
 | `kill`              | `{"t":"kill","title":"wez-vtabs:1a2b"}`                          | kill the one pane with that backend marker; answer with `cli`                |
 | `rescue`            | `{"t":"rescue","band":28,"position":"left"}`                   | move other panes out of the sidebar band through the existing CLI bridge    |
+| `adjust`            | `{"t":"adjust","direction":"Left","amount":3,"park":false}`     | resize this pane's split on the server, from the tab's active pane; answer with `cli` |
 
-`kill` and `rescue` run the server's own `wezterm cli --no-auto-start`, found beside
+`kill`, `rescue` and `adjust` run the server's own `wezterm cli --no-auto-start`, found beside
 `WEZTERM_EXECUTABLE_DIR`, against `WEZTERM_UNIX_SOCKET`, acting for `WEZTERM_PANE`: the GUI's mux
 client cannot reach a mux-domain pane, and closing one by activation has aborted it.
+
+`adjust` is the width correction on a mux domain, where the GUI's split tree is a mirror rebuilt
+from the server's pane list after every pane resize: the split is resized where the tree is
+authoritative, once the frames have stopped. `adjust-pane-size` walks up from the tab's active
+pane, so when that pane cannot reach the sidebar's split the backend's own pane is activated for
+it and the focus handed back; with `park` it stays on the sidebar, owed to the next `adjust`.
 
 Unknown commands are ignored. Malformed JSON lines are ignored.
 
@@ -203,7 +210,7 @@ Sidebar pane (`screen:"sidebar"`):
  "scroll":{"top":4,"user":true},
  "drag":{"id":7,"active":true,"slot":3,"outside":false,
          "origin":{"x":5,"y":6,"at":1712345678901}},
- "strip":{"metrics":{"cols":28,"viewport_rows":30,"pixel_width":235,"pixel_height":570,"dpi":144},
+ "strip":{"dpi":144,
           "chrome":{"is_mac":true,"integrated_buttons":true,"native_button_style":true,
                     "preview":false,"is_full_screen":false},
           "buttons":[{"id":"toggle"},{"id":"settings"}]},
@@ -218,8 +225,10 @@ Sidebar pane (`screen:"sidebar"`):
  "private":false}
 ```
 
-`strip.metrics` and `strip.chrome` are raw WezTerm observations. Lua never sends derived strip
-rows, reserved columns, cell width, or toggle coordinates. `vtabs-engine::geom` derives all of
+`strip.dpi` and `strip.chrome` are raw WezTerm observations; the pane's own cells and pixel size
+the backend measures for itself, and the dpi is the one number it cannot. An older Lua sends
+`strip.metrics` (`cols`, `viewport_rows`, `pixel_width`, `pixel_height`, `dpi`) instead, which is
+still read. Lua never sends derived strip rows, reserved columns, cell width, or toggle coordinates. `vtabs-engine::geom` derives all of
 those for rendering. When its traffic-light column reserve changes, the backend returns
 `intent{a:"set_rail_reserve",cols}`; Lua passes that value to `geometry.lua` solely to implement
 `rail_titlebar="widen"` in the host mux.
@@ -304,7 +313,7 @@ hatch.
 | `pong`               | `{"t":"pong","n":13,"echo":7}` — `echo` is the ping's own `n`                                                          |
 | `note`               | `{"t":"note","k":"menu_refused","why":"rows","id":7,"a":"confirm","n":14}`                                   |
 | `dropped`            | `{"t":"dropped","what":"model","reason":"bounds","n":15}` — pending transaction is invalidated                     |
-| `cli`                | `{"t":"cli","op":"kill","ok":true,"detail":"1","n":16}` — count or error detail                                  |
+| `cli`                | `{"t":"cli","op":"kill","ok":true,"detail":"1","n":16}` — `op` is `kill`, `rescue` or `adjust`; count or error detail |
 
 Every `intent` is tagged by `a` and carries only that variant's fields. In particular,
 `set_rail_reserve` is `{"t":"intent","a":"set_rail_reserve","cols":9}`. The legacy `do`
