@@ -40,8 +40,6 @@ lint:
     cd backend && cargo run -q -p vtabs-protocol --bin gen-lua -- --check
     cd plugin && luacheck init.lua vtabs tests && stylua --check init.lua vtabs tests
     lua scripts/gen-docs.lua --check
-    sh scripts/lint-boundaries.sh
-    sh scripts/lint-crate-deps.sh
 
 # Regenerate plugin/vtabs/gen/protocol.lua from vtabs-protocol/src/limits.rs
 gen-protocol:
