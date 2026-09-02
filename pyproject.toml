@@ -1,0 +1,27 @@
+[project]
+name = "vertical-tabs-tui-tests"
+version = "0.0.0"
+requires-python = "==3.14.7"
+dependencies = []
+
+[dependency-groups]
+test = [
+  "pytest==9.1.1",
+  "pytest-asyncio==1.4.0",
+  "tui-test==0.1.0b2",
+]
+
+[tool.uv]
+default-groups = ["test"]
+package = false
+
+[tool.pytest.ini_options]
+addopts = ["-ra", "--strict-config", "--strict-markers"]
+asyncio_default_fixture_loop_scope = "function"
+asyncio_mode = "strict"
+markers = [
+  "smoke: representative startup, render, and shutdown checks",
+  "tui: black-box tests that exercise wez-vtabs in a real PTY",
+  "wezterm_e2e: opt-in smoke tests that launch an isolated real WezTerm GUI",
+]
+testpaths = ["tests/tui"]

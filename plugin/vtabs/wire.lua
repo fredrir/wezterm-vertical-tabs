@@ -118,10 +118,8 @@ local function config_body(cfg, ctx)
   local effective = ctx.effective or {}
   local window = ctx.window_dims or {}
   return {
-    desired_width = cfg.width,
     rail_width = cfg.rail_width,
     position = cfg.position,
-    collapsed = cfg.collapsed,
     icons = cfg.icons,
     icon_map = cfg.icon_map or {},
     meta = cfg.meta ~= false and cfg.meta or nil,
@@ -130,7 +128,6 @@ local function config_body(cfg, ctx)
       custom_block = effective.custom_block_glyphs ~= false,
       east_asian_wide = effective.treat_east_asian_ambiguous_width_as_wide == true,
     },
-    animate = cfg.animations ~= "off",
     double_click_ms = cfg.double_click_ms,
     tear_off = cfg.tear_off,
     wheel = cfg.wheel,
@@ -162,13 +159,10 @@ local function theme_body(cfg, ctx)
       background = hexc(palette.background),
       foreground = hexc(palette.foreground),
       cursor_bg = hexc(palette.cursor_bg),
-      selection_bg = hexc(palette.selection_bg),
       active_tab_bg = hexc((tab_bar.active_tab or {}).bg_color),
       ansi = M.array(palette.ansi or {}),
-      brights = M.array(palette.brights or {}),
     },
     overrides = normalized_overrides(user),
-    elevation = tonumber(user.elevation),
   }
 end
 
@@ -186,7 +180,6 @@ local function tab_record(item)
     user = raw and raw.user or nil,
     domain = raw and raw.domain or nil,
     pinned = item.is_pinned,
-    private = item.is_private or false,
     unseen = item.has_unseen,
     settings = item.is_settings or nil,
   }

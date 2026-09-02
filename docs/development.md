@@ -31,6 +31,45 @@ luacheck init.lua vtabs tests
 stylua --check init.lua vtabs tests
 ```
 
+## Black-box TUI tests
+
+The Python suite drives the real `wez-vtabs` binary through an isolated pseudo-terminal. Install
+[`uv`](https://docs.astral.sh/uv/) and run:
+
+```sh
+just test-tui
+just test-tui -k resize          # focused local run
+```
+
+`just test-tui` builds the debug `wez-vtabs` executable once, installs exactly the dependencies in
+`uv.lock`, and gives that executable to pytest through `WEZ_VTABS_BIN`. Each test still launches a
+new process and PTY session, so mutable terminal state cannot leak between tests. A direct pytest
+run may omit `WEZ_VTABS_BIN`; the session fixture then performs one fallback Cargo build for the
+whole run.
+
+These tests protect behavior at the terminal boundary: public OSC user-variable events, caller-
+supplied content appearing or disappearing, meaningful interaction results, resize/reflow, input
+recovery, bounds handling, and clean shutdown. They deliberately do not pin borders, margins,
+spacing, coordinates, built-in button labels, or whole-screen snapshots. A visual refactor should
+only require a test change when it changes an actual user-facing contract.
+
+Keep scenarios short and outcome-driven. Use fixed terminal sizes and explicit waits, never sleeps,
+network access, wall-clock assertions, or shared sessions. The full suite is part of `just test`;
+CI runs it on Linux in the existing Rust job and runs only the representative `smoke` subset on
+macOS to keep CPU and runner use modest.
+
+For the deliberately small, real-GUI smoke test, install WezTerm and run this from a macOS desktop
+session or a Linux graphical session (`DISPLAY` or `WAYLAND_DISPLAY` must be available):
+
+```sh
+just test-wezterm-e2e
+```
+
+That explicit command sets the suite's opt-in gate, builds the backend once, and starts an isolated
+WezTerm instance using `plugin/tests/wezterm-e2e.lua`. It is not a normal PR gate: hosted GUI setup
+would add a comparatively slow package download and display-server dependency to a fast PTY suite.
+See `tests/wezterm/README.md` for the isolation and assertion policy.
+
 ## Protocol mirror
 
 ```sh
@@ -118,8 +157,11 @@ HOME=$(mktemp -d) WEZTERM_LOG=info wezterm --config-file scripts/probe-coroutine
 ```sh
 just deploy                  
 just deploy --from-prd
-just deploy --from-release
+just deploy --from-release    # newest published GitHub release
 ```
+
+`just tag` merges `dev` into `main`, creates the next patch release, then fast-forwards and pushes
+`dev` to the same release commit. This keeps both branches' version metadata in sync.
 
 ## Local development config
 

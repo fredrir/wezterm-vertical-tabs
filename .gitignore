@@ -1,5 +1,11 @@
 backend/target
 
+.venv/
+.pytest_cache/
+.pytest-artifacts/
+__pycache__/
+*.py[cod]
+
 plugin/lua_modules
 plugin/luarocks
 plugin/lua

@@ -1,5 +1,4 @@
 local util = require "vtabs.util"
-local icons = require "vtabs.icons"
 local schema = require "vtabs.schema"
 local spaces = require "vtabs.spaces"
 
@@ -146,7 +145,6 @@ function M.setup(opts, stored)
   -- independent, so neither key rewrites the other any more.
 
   M.normalise(cfg)
-  cfg.glyphs = icons.resolve(cfg.icon_map)
   current = cfg
   return cfg
 end
@@ -177,12 +175,10 @@ function M.get()
   return current or M.setup {}
 end
 
----Swaps the whole resolved config, as the settings page does after an edit. `glyphs` is derived,
----never carried over: a stale one keeps the old icons after an `icon_map` change.
+---Swaps the whole resolved config, as the settings page does after an edit.
 function M.replace(tbl)
   validate(tbl)
   M.normalise(tbl)
-  tbl.glyphs = icons.resolve(tbl.icon_map)
   current = tbl
   return current
 end

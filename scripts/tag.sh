@@ -47,10 +47,11 @@ git commit -m "Release $new_tag"
 echo "Creating release $new_tag..."
 git tag -a "$new_tag" -m "Release $new_tag"
 
-echo "Pushing main and $new_tag..."
-git push --atomic origin main "$new_tag"
-
-echo "Switching to dev"
+echo "Fast-forwarding dev to the release commit..."
 git switch dev
+git merge --ff-only main
+
+echo "Pushing main, dev and $new_tag..."
+git push --atomic origin main dev "$new_tag"
 
 echo "Released $new_tag"

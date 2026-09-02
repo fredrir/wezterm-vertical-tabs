@@ -1,65 +1,65 @@
-//! Port of icons.lua. Glyphs are the real wezterm.nerdfonts values (extracted from WezTerm
-//! 20260826); the ASCII column is the fallback icons.lua uses when nerdfonts is absent.
+//! Process and chrome icon defaults. Glyphs are the real `wezterm.nerdfonts` values extracted
+//! from WezTerm 20260826.
 
 use std::collections::BTreeMap;
 
 use crate::lua_pattern;
 
-/// key, nerd-font glyph, ASCII fallback
-pub const DEFAULTS: &[(&str, &str, &str)] = &[
-    ("default", "\u{F07B7}", ">"),
-    ("zsh", "\u{F07B7}", "$"),
-    ("bash", "\u{F07B7}", "$"),
-    ("fish", "\u{F023A}", "$"),
-    ("nu", "\u{F07B7}", "$"),
-    ("sh", "\u{F07B7}", "$"),
-    ("cmd.exe", "\u{EBC4}", ">"),
-    ("pwsh.exe", "\u{EBC7}", ">"),
-    ("powershell.exe", "\u{EBC7}", ">"),
-    ("nvim", "\u{E6AE}", "v"),
-    ("vim", "\u{E62B}", "v"),
-    ("vi", "\u{E62B}", "v"),
-    ("hx", "\u{F0B0F}", "h"),
-    ("ssh", "\u{F0318}", "@"),
-    ("mosh", "\u{F0318}", "@"),
-    ("docker", "\u{F0868}", "d"),
-    ("git", "\u{E702}", "g"),
-    ("lazygit", "\u{E702}", "g"),
-    ("node", "\u{E718}", "n"),
-    ("bun", "\u{F031E}", "n"),
-    ("deno", "\u{F031E}", "n"),
-    ("python", "\u{E73C}", "p"),
-    ("python3", "\u{E73C}", "p"),
-    ("cargo", "\u{E7A8}", "r"),
-    ("rustc", "\u{E7A8}", "r"),
+/// key, glyph
+const DEFAULTS: &[(&str, &str)] = &[
+    ("default", "\u{F07B7}"),
+    ("zsh", "\u{F07B7}"),
+    ("bash", "\u{F07B7}"),
+    ("fish", "\u{F023A}"),
+    ("nu", "\u{F07B7}"),
+    ("sh", "\u{F07B7}"),
+    ("cmd.exe", "\u{EBC4}"),
+    ("pwsh.exe", "\u{EBC7}"),
+    ("powershell.exe", "\u{EBC7}"),
+    ("nvim", "\u{E6AE}"),
+    ("vim", "\u{E62B}"),
+    ("vi", "\u{E62B}"),
+    ("hx", "\u{F0B0F}"),
+    ("ssh", "\u{F0318}"),
+    ("mosh", "\u{F0318}"),
+    ("docker", "\u{F0868}"),
+    ("git", "\u{E702}"),
+    ("lazygit", "\u{E702}"),
+    ("node", "\u{E718}"),
+    ("bun", "\u{F031E}"),
+    ("deno", "\u{F031E}"),
+    ("python", "\u{E73C}"),
+    ("python3", "\u{E73C}"),
+    ("cargo", "\u{E7A8}"),
+    ("rustc", "\u{E7A8}"),
     // dev_go (U+E724) is a blank glyph in both Nerd Fonts; seti_go actually draws something
-    ("go", "\u{E627}", "G"),
-    ("make", "\u{EB6D}", "m"),
-    ("htop", "\u{F012A}", "%"),
-    ("btop", "\u{F012A}", "%"),
-    ("top", "\u{F012A}", "%"),
-    ("tmux", "\u{EBC8}", "t"),
-    ("claude", "\u{F06A9}", "*"),
-    ("mux", "\u{F0318}", "@"),
-    ("pinned", "\u{F0403}", "*"),
-    ("private", "\u{F05F9}", "~"),
+    ("go", "\u{E627}"),
+    ("make", "\u{EB6D}"),
+    ("htop", "\u{F012A}"),
+    ("btop", "\u{F012A}"),
+    ("top", "\u{F012A}"),
+    ("tmux", "\u{EBC8}"),
+    ("claude", "\u{F06A9}"),
+    ("mux", "\u{F0318}"),
+    ("pinned", "\u{F0403}"),
+    ("private", "\u{F05F9}"),
     // U+2716 is in no monospace cmap we checked; the thick Material close is in-font
-    ("close", "\u{F1398}", "x"),
-    ("new_tab", "\u{EA60}", "+"),
+    ("close", "\u{F1398}"),
+    ("new_tab", "\u{EA60}"),
     // The strip trio is uniform and light; ⚙ is the recorded exception to the in-font rule
-    ("strip_new_tab", "+", "+"),
-    ("settings", "⚙", "⚙"),
-    ("search", "\u{EA6D}", "/"),
-    ("unseen", "\u{F09DE}", "•"),
-    ("focus", "›", "›"),
-    ("active", "▎", "▎"),
-    ("scroll", "▐", "▐"),
+    ("strip_new_tab", "+"),
+    ("settings", "⚙"),
+    ("search", "\u{EA6D}"),
+    ("unseen", "\u{F09DE}"),
+    ("focus", "›"),
+    ("active", "▎"),
+    ("scroll", "▐"),
 ];
 
 pub struct IconSet {
     pub map: BTreeMap<String, String>,
     /// Lua-pattern keys from icon_map, in sorted-key order.
-    pub patterns: Vec<(String, String)>,
+    patterns: Vec<(String, String)>,
 }
 
 fn is_pattern(key: &str) -> bool {
@@ -71,7 +71,7 @@ fn is_pattern(key: &str) -> bool {
 pub fn resolve(icon_map: &BTreeMap<String, String>) -> IconSet {
     let mut map: BTreeMap<String, String> = DEFAULTS
         .iter()
-        .map(|&(k, glyph, _)| (k.to_string(), glyph.to_string()))
+        .map(|&(key, glyph)| (key.to_string(), glyph.to_string()))
         .collect();
     for (key, value) in icon_map {
         map.insert(key.clone(), value.clone());
@@ -105,43 +105,4 @@ pub fn for_process<'a>(foreground: &str, icons: &'a IconSet) -> &'a str {
         }
     }
     &icons.map["default"]
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn set(pairs: &[(&str, &str)]) -> IconSet {
-        resolve(
-            &pairs
-                .iter()
-                .map(|&(k, v)| (k.to_string(), v.to_string()))
-                .collect(),
-        )
-    }
-
-    #[test]
-    fn overrides_and_patterns() {
-        let icons = set(&[("nvim", "N"), ("^cargo%-", "R")]);
-        assert_eq!(for_process("/usr/bin/nvim", &icons), "N");
-        assert_eq!(for_process("cargo-watch", &icons), "R");
-        assert_ne!(
-            for_process("cargo", &icons),
-            "R",
-            "the pattern needs its dash"
-        );
-        assert_eq!(for_process("unknown-thing", &icons), icons.map["default"]);
-        assert_eq!(for_process("", &icons), icons.map["default"]);
-    }
-
-    #[test]
-    fn process_key_strips_path_and_login_dash() {
-        let icons = set(&[("zsh", "Z"), ("htop", "H"), ("pwsh.exe", "P")]);
-        assert_eq!(for_process("-zsh", &icons), "Z");
-        assert_eq!(for_process("/usr/local/bin/htop", &icons), "H");
-        assert_eq!(
-            for_process("C:\\Program Files\\PowerShell\\pwsh.exe", &icons),
-            "P"
-        );
-    }
 }

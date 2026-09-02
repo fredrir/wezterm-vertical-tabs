@@ -1,5 +1,3 @@
-//! Port of platform.lua's strip_geometry; parity pinned by tests/geom_parity.rs.
-
 // AppKit sizes the window buttons in points; macOS counts 72 dpi as 1x, everything else 96.
 pub const POINT_DPI: f64 = 72.0;
 pub const LOGICAL_DPI: f64 = 96.0;

@@ -53,10 +53,10 @@ Unknown commands are ignored. Malformed JSON lines are ignored.
 ### config
 
 ```json
-{"t":"config","rev":3,"desired_width":28,"rail_width":5,"position":"left","collapsed":"rail",
- "icons":true,"icon_map":{"nvim":"󰉯"},"meta":"cwd","meta_sep":" · ","unseen":true,
+{"t":"config","rev":3,"rail_width":5,"position":"left",
+ "icons":true,"icon_map":{"nvim":"󰉯"},"meta":"cwd","meta_sep":" · ",
  "glyphs":{"custom_block":true,"east_asian_wide":false},
- "animate":true,"double_click_ms":300,"tear_off":true,
+ "double_click_ms":300,"tear_off":true,
  "wheel":"scroll","context":"popover","hover_timeout_ms":1200,"hover_highlight":true,"ellipsis":"…",
  "popover":{"width":null,"follow_pointer":true,"overflow":null},
  "render":{"meta":true,"padding":{"left":2,"right":2,"top":1,"bottom":1},"frame":false,
@@ -71,11 +71,9 @@ Unknown commands are ignored. Malformed JSON lines are ignored.
 ```json
 {"t":"theme","rev":7,
  "scheme":{"background":"#1e1e2e","foreground":"#cdd6f4","cursor_bg":"#f5e0dc",
-           "selection_bg":"#585b70","active_tab_bg":"#313244",
-           "ansi":["#45475a","#f38ba8","#a6e3a1","#f9e2af","#89b4fa","#f5c2e7","#94e2d5","#bac2de"],
-           "brights":["#585b70","#f38ba8","#a6e3a1","#f9e2af","#89b4fa","#f5c2e7","#94e2d5","#a6adc8"]},
- "overrides":{"accent":"#89b4fa"},
- "elevation":0.06}
+           "active_tab_bg":"#313244",
+           "ansi":["#45475a","#f38ba8","#a6e3a1","#f9e2af","#89b4fa","#f5c2e7","#94e2d5","#bac2de"]},
+ "overrides":{"accent":"#89b4fa","elevation":0.06}}
 ```
 
 Only Lua can read `effective_config.resolved_palette`; Rust (`vtabs-theme`) resolves the ~30-entry
@@ -101,7 +99,7 @@ Sidebar pane (`screen:"sidebar"`):
  "tabs":[
    {"id":7,"index":1,"title":"nvim","pane_title":"nvim — x","proc":"nvim",
     "cwd":"~/p/x","host":"pi","user":"f","domain":"local",
-    "panes":2,"pinned":false,"private":false,"unseen":false,"zoomed":false}],
+    "pinned":false,"unseen":false}],
  "private":false}
 ```
 

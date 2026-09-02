@@ -2,7 +2,6 @@ local wezterm = require "wezterm" ---@type Wezterm
 local config = require "vtabs.config"
 local state = require "vtabs.state"
 local sidebar = require "vtabs.sidebar"
-local icons = require "vtabs.icons"
 local mux = require "vtabs.mux"
 local spaces = require "vtabs.spaces"
 local store = require "vtabs.store"
@@ -188,7 +187,6 @@ function M.survey(gui_window)
   local cfg = config.get()
   local mux_win = gui_window:mux_window()
   local wid = gui_window:window_id()
-  local private = state.is_private(wid)
   local now = util.now_ms()
   prune_meta(now)
   local items = {}
@@ -207,9 +205,7 @@ function M.survey(gui_window)
           index = info.index + 1,
           is_active = info.is_active,
           is_pinned = state.is_pinned(tab_id),
-          is_private = private,
           title = "Settings",
-          icon = cfg.icons and cfg.glyphs.settings or "",
           has_unseen = false,
           is_settings = true,
         }
@@ -221,9 +217,7 @@ function M.survey(gui_window)
         index = info.index + 1,
         is_active = info.is_active,
         is_pinned = state.is_pinned(tab_id),
-        is_private = private,
         title = util.sanitize(override or tab_title or pane_title or ("tab " .. tostring(tab_id))),
-        icon = cfg.icons and icons.for_pane(pane, cfg.glyphs) or "",
         has_unseen = mux.unseen(pane) == true,
         meta = meta,
         raw = {
