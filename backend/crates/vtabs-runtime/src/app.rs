@@ -19,7 +19,6 @@ use vtabs_view::settings::{self, SettingsView};
 
 use crate::log::Logger;
 use crate::paint::{frame_bytes, rows_bytes};
-use crate::terminal;
 use crate::uservar::{TOKEN_VAR, set_user_var};
 
 const CLEAR_SCREEN: &str = "\x1b[2J\x1b[H";
@@ -30,6 +29,10 @@ pub struct App<W: Write> {
     pub log: Logger,
     pub var: String,
     pub size: (u16, u16),
+    /// Asked before every frame, so no paint trusts a size the pane no longer has.
+    pub probe: fn() -> Option<(u16, u16)>,
+    /// A size change wipes the pane before the next frame.
+    pub needs_clear: bool,
     pub fx: Option<FxRun>,
     /// What the pane shows right now: the final frame any fade lands on.
     pub last_rows: Option<PaintedRows>,
@@ -409,7 +412,11 @@ impl<W: Write> App<W> {
         if !self.dressed() {
             return Ok(());
         }
+        self.sync_size()?;
         self.fx = None;
+        if std::mem::take(&mut self.needs_clear) {
+            self.out.write_all(CLEAR_SCREEN.as_bytes())?;
+        }
         if let Some((bytes, painted)) = self.settings_view().map(|view| {
             let (cells, fades) = settings::cells(&view);
             let bytes = rows_bytes(&cells, &fades, view.theme.bg);
@@ -424,7 +431,9 @@ impl<W: Write> App<W> {
             )
         }) {
             self.last_rows = Some(painted);
-            return self.write(bytes.as_bytes());
+            self.write(bytes.as_bytes())?;
+            self.log_paint();
+            return Ok(());
         }
         let (bytes, popover, outcome, selected, painted) = {
             let (e, outcome) = self.scene();
@@ -457,7 +466,15 @@ impl<W: Write> App<W> {
             self.menu_ui.selected = selected;
         }
         self.refuse(&outcome)?;
-        self.write(bytes.as_bytes())
+        self.write(bytes.as_bytes())?;
+        self.log_paint();
+        Ok(())
+    }
+
+    fn log_paint(&mut self) {
+        let rev = self.v2.model.as_ref().map_or(0, |m| m.rev);
+        let (cols, rows) = self.size;
+        self.log.log(format!("paint {cols}x{rows} rev {rev}"));
     }
 
     /// An open level that cannot be placed is Lua's to unwind; the note is sent once per message.
@@ -531,6 +548,7 @@ impl<W: Write> App<W> {
         match cmd {
             Command::Clear => {
                 self.write(CLEAR_SCREEN.as_bytes())?;
+                self.needs_clear = false;
                 self.repaint()?
             }
             Command::Ping { n } => self.emit(&Event::Pong { echo: n })?,
@@ -633,14 +651,18 @@ impl<W: Write> App<W> {
         Ok(())
     }
 
-    /// Writes the frame for `now`, skipping any tick the loop slept through.
+    /// Writes the frame for `now`, skipping any tick the loop slept through; a pane that changed
+    /// size under the fade gets the final frame instead.
     pub fn tick_fx(&mut self, now: Instant) -> io::Result<()> {
+        if !self.fx.as_ref().is_some_and(|run| now >= run.next_at) {
+            return Ok(());
+        }
+        if self.sync_size()? {
+            return self.repaint();
+        }
         let Some(run) = self.fx.as_mut() else {
             return Ok(());
         };
-        if now < run.next_at {
-            return Ok(());
-        }
         let bytes = run.tick(now);
         let done = run.finished(now);
         self.write(bytes.as_bytes())?;
@@ -651,22 +673,36 @@ impl<W: Write> App<W> {
     }
 
     pub fn poll_size(&mut self) -> io::Result<()> {
-        let Some(size) = terminal::size() else {
-            return Ok(());
-        };
-        self.resize(size)
-    }
-
-    fn resize(&mut self, size: (u16, u16)) -> io::Result<()> {
-        if size != self.size {
-            self.size = size;
-            self.emit(&Event::Resize {
-                cols: size.0,
-                rows: size.1,
-            })?;
+        if self.sync_size()? {
             self.repaint()?;
         }
         Ok(())
+    }
+
+    /// Asks the terminal; `true` when the size moved and the pane needs a fresh frame.
+    fn sync_size(&mut self) -> io::Result<bool> {
+        match (self.probe)() {
+            Some(size) if size != self.size => self.adopt_size(size).map(|()| true),
+            _ => Ok(false),
+        }
+    }
+
+    /// Applies a size without asking the terminal.
+    pub fn resize(&mut self, size: (u16, u16)) -> io::Result<()> {
+        if size != self.size {
+            self.adopt_size(size)?;
+            self.repaint()?;
+        }
+        Ok(())
+    }
+
+    fn adopt_size(&mut self, size: (u16, u16)) -> io::Result<()> {
+        let ((cols, rows), (w, h)) = (self.size, size);
+        self.log.log(format!("resize {cols}x{rows} -> {w}x{h}"));
+        self.size = size;
+        self.needs_clear = true;
+        self.fx = None;
+        self.emit(&Event::Resize { cols: w, rows: h })
     }
 }
 
@@ -726,7 +762,20 @@ fn knobs<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::Cell;
     use vtabs_protocol::Mods;
+
+    thread_local! {
+        static PROBE: Cell<Option<(u16, u16)>> = const { Cell::new(None) };
+    }
+
+    fn test_probe() -> Option<(u16, u16)> {
+        PROBE.with(Cell::get)
+    }
+
+    fn probe_returns(size: (u16, u16)) {
+        PROBE.with(|p| p.set(Some(size)));
+    }
 
     fn app() -> App<Vec<u8>> {
         App {
@@ -734,6 +783,8 @@ mod tests {
             log: Logger::from_env(),
             var: "vtabs".into(),
             size: (28, 24),
+            probe: test_probe,
+            needs_clear: false,
             fx: None,
             last_rows: None,
             seq: 0,
@@ -1243,5 +1294,70 @@ mod tests {
             a.out,
             set_user_var("vtabs", r#"{"t":"key","key":"x","raw":"eA==","n":1}"#).as_bytes()
         );
+    }
+
+    const SYNC_BEGIN: &str = "\x1b[?2026h";
+    const SYNC_END: &str = "\x1b[?2026l";
+
+    #[test]
+    fn a_frame_is_bracketed_in_synchronized_output() {
+        let mut a = app();
+        dress(&mut a);
+        a.out.clear();
+        a.repaint().unwrap();
+        let out = painted(&a);
+        assert!(out.starts_with(SYNC_BEGIN), "{out:?}");
+        assert!(out.ends_with(SYNC_END), "{out:?}");
+    }
+
+    #[test]
+    fn a_size_change_seen_at_paint_time_is_announced_and_clears() {
+        let mut a = app();
+        dress(&mut a);
+        a.out.clear();
+        probe_returns((30, 24));
+        model(&mut a, MODEL);
+        assert!(saw(&a, r#""t":"resize","cols":30,"rows":24"#));
+        let out = painted(&a);
+        let announced = out.find("SetUserVar").expect("the resize event");
+        let cleared = out.find(CLEAR_SCREEN).expect("a wipe");
+        let framed = out.find(SYNC_BEGIN).expect("the frame");
+        assert!(announced < cleared && cleared < framed, "{out:?}");
+        assert_eq!(a.size, (30, 24));
+    }
+
+    #[test]
+    fn a_resize_mid_fade_cancels_the_fade() {
+        let mut a = app();
+        dress(&mut a);
+        send(
+            &mut a,
+            Command::Fx(v2::FxMsg {
+                phase: "expand_in".into(),
+                ms: Some(200),
+                fps: Some(30),
+            }),
+        );
+        let at = a.next_fx().expect("the fade is running");
+        probe_returns((30, 24));
+        a.out.clear();
+        a.tick_fx(at).unwrap();
+        assert!(a.fx.is_none(), "the fade is dropped");
+        assert_eq!(a.size, (30, 24));
+        assert!(saw(&a, r#""t":"resize","cols":30"#));
+        assert!(painted(&a).contains(CLEAR_SCREEN), "the pane is wiped");
+    }
+
+    #[test]
+    fn an_unchanged_probe_writes_nothing_extra() {
+        let mut a = app();
+        dress(&mut a);
+        a.out.clear();
+        a.repaint().unwrap();
+        let unprobed = painted(&a);
+        probe_returns((28, 24));
+        a.out.clear();
+        a.repaint().unwrap();
+        assert_eq!(painted(&a), unprobed);
     }
 }

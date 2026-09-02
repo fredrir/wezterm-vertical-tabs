@@ -16,7 +16,7 @@ plugin owns mux facts, config and dispatch:
 1. Enter raw mode, alternate screen, hide cursor.
 2. Fill the alternate screen with `VTABS_BG` (skipped when unset), before anything else is drawn.
 3. Enable mouse reporting: `?1000h ?1002h ?1003h ?1006h`, focus reporting
-   `?1004h`, bracketed paste `?2004h`.
+   `?1004h`, bracketed paste `?2004h`; auto-wrap off `?7l`.
 4. Emit user var `vtabs_role` = `sidebar` | `settings` (plain, base64 of the literal string).
 5. Set the pane title marker `wez-vtabs:<nonce>` / `wez-vtabs-settings:<nonce>` (OSC 0 and OSC 2).
    The nonce is a per-process random id, never the auth token: window titles are readable by the
@@ -26,8 +26,11 @@ plugin owns mux facts, config and dispatch:
 
 `paints:true` is unconditional: both roles paint their own pane from the moment they start.
 Nothing is drawn or hit-tested until `config`, `theme` and `model` have each landed at least once.
+The size is re-read before every frame; a change is announced by `resize` and clears the pane
+before the frame. Every frame is written inside DEC 2026 synchronized-update brackets
+`?2026h`…`?2026l`.
 
-On exit, restore everything (mouse off, cursor shown, main screen, cooked mode).
+On exit, restore everything (mouse off, auto-wrap on, cursor shown, main screen, cooked mode).
 
 ## Commands (Lua → backend)
 
@@ -332,7 +335,8 @@ before they reach `resolve` — only the last one is acted on.
 | --- | --- |
 | `VTABS_USERVAR` | user var name for events \| `vtabs` |
 | `VTABS_BG` | `#rrggbb` painted before the first paint \| unset (no fill) |
-| `VTABS_LOG` | debug log file, appended; 0600, symlinks refused, key names redacted \| unset (no logging, never stderr) |
+| `VTABS_LOG` | debug log file, set by the plugin from `backend.env`; appended, 0600, symlinks refused, key names redacted \| unset (no logging, never stderr) |
+| `VTABS_PANIC_ON_READY` | `1` panics right after `ready`; debug builds only, to prove the panic hook lands in the log \| unset |
 
 ## Roles
 
@@ -353,3 +357,4 @@ authenticated exactly like a sidebar pane: its `ready` branch calls `sidebar.aut
 | -------- | ------ | -------- |
 | unix     | `SIGWINCH`, checked every 100 ms | full size poll every 2 s |
 | other    | size poll every 250 ms | — |
+| any      | re-read before every frame and fade tick | — |
