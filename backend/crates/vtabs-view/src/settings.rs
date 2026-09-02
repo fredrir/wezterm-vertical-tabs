@@ -519,41 +519,6 @@ fn paint_field(cells: &mut [Cell], row: &SettingsField, focused: bool, g: &Grid,
     }
 }
 
-/// The two golden serializations, so the parity test compares what the runtime encodes.
-pub fn golden_dumps(v: &SettingsView) -> (String, String) {
-    let (painted, fades) = cells(v);
-    frame::dumps(&painted, &fades, v.theme.bg, v.cols)
-}
-
-/// A committed `settings-*` scene: the model body plus the pane facts the wire never carries.
-/// `rev` is stamped at send time, so the fixture stores the body without it.
-#[derive(serde::Deserialize)]
-pub struct Scene {
-    pub cols: i64,
-    pub rows: i64,
-    pub theme: Theme,
-    pub glyphs: BTreeMap<String, String>,
-    #[serde(default)]
-    pub ui: SettingsUi,
-    pub model: serde_json::Map<String, serde_json::Value>,
-}
-
-/// Renders a scene the way the runtime would, for the parity gate and `dump-frames` alike.
-pub fn scene_dumps(scene: &Scene) -> Result<(String, String), serde_json::Error> {
-    let mut body = scene.model.clone();
-    body.insert("rev".into(), serde_json::json!(1));
-    let model: ModelMsg = serde_json::from_value(serde_json::Value::Object(body))?;
-    let view = SettingsView {
-        cols: scene.cols,
-        rows: scene.rows,
-        model: &model,
-        ui: &scene.ui,
-        theme: scene.theme.clone(),
-        glyphs: scene.glyphs.clone(),
-    };
-    Ok(golden_dumps(&view))
-}
-
 #[cfg(test)]
 #[path = "../tests/unit/settings.rs"]
 mod tests;

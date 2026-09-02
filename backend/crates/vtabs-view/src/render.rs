@@ -653,10 +653,3 @@ fn cells(view: &RenderInput) -> (Vec<Option<Vec<Cell>>>, Vec<Option<f64>>, layou
     }
     (painted, fades, plan)
 }
-
-/// Renders a scene and serializes it in the two golden formats:
-/// (`<scene>.txt` content with its 2-row column ruler, `<scene>.styled.txt` content).
-pub fn golden_dumps(input: &RenderInput) -> (String, String) {
-    let (painted, fades, _) = cells(input);
-    frame::dumps(&painted, &fades, input.theme.bg, input.cols)
-}

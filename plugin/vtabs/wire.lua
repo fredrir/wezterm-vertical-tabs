@@ -95,7 +95,7 @@ local function normalized_overrides(user)
   return out
 end
 
----The renderer-facing config surface, normalised exactly as the scene fixtures are.
+---The renderer-facing config surface, normalised before it crosses the wire.
 function M.render_section(cfg)
   return {
     meta = cfg.meta ~= false,

@@ -1,17 +1,10 @@
-//! The regions port against the same expectations plugin/tests/run_layout.lua pins for `hits`.
+//! Integration coverage for the regions produced by sidebar layout.
 
-use std::path::PathBuf;
+#[path = "../../../tests/support/scene.rs"]
+mod test_scene;
 
 use vtabs_view::layout::{Part, RegionKind, on_inner_edge, plan};
-use vtabs_view::scene::RenderInput;
-
-fn scene(name: &str) -> RenderInput {
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../../plugin/tests/golden/scenes")
-        .join(format!("{name}.json"));
-    let raw = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
-    serde_json::from_str(&raw).unwrap_or_else(|e| panic!("{name}.json: {e}"))
-}
+use vtabs_view::scene::FooterEntry;
 
 fn first_title_row(p: &vtabs_view::layout::Plan, rows: i64) -> i64 {
     (1..=rows)
@@ -24,7 +17,8 @@ fn first_title_row(p: &vtabs_view::layout::Plan, rows: i64) -> i64 {
 
 #[test]
 fn a_card_owns_every_row_of_its_slot() {
-    let view = scene("tall");
+    let mut view = test_scene::sidebar();
+    view.cfg.tab_height = "tall".into();
     let p = plan(&view);
     // run_layout addendum 6: tall makes a five-row card, pad/pad/title/pad/pad, all one slot
     let title = (1..=view.rows)
@@ -50,8 +44,9 @@ fn a_card_owns_every_row_of_its_slot() {
 
 #[test]
 fn the_card_grid_gives_up_a_column_to_the_frame() {
-    let framed = scene("frame");
-    let plain = scene("tabs");
+    let mut framed = test_scene::sidebar();
+    framed.cfg.frame = true;
+    let plain = test_scene::sidebar();
     let (fp, pp) = (plan(&framed), plan(&plain));
     let f = fp.at(first_title_row(&fp, framed.rows));
     let p = pp.at(first_title_row(&pp, plain.rows));
@@ -62,7 +57,8 @@ fn the_card_grid_gives_up_a_column_to_the_frame() {
 
 #[test]
 fn the_whole_rail_is_the_card_and_it_has_no_close_span() {
-    let view = scene("rail-9");
+    let mut view = test_scene::sidebar();
+    test_scene::rail(&mut view, 9);
     let p = plan(&view);
     let title = first_title_row(&p, view.rows);
     let at = p.at(title);
@@ -79,7 +75,8 @@ fn the_whole_rail_is_the_card_and_it_has_no_close_span() {
 
 #[test]
 fn hover_over_the_close_span_names_it() {
-    let view = scene("hover-close");
+    let mut view = test_scene::sidebar();
+    test_scene::hover_close(&mut view);
     let p = plan(&view);
     let hover = view.hover.expect("the scene hovers a close button");
     let at = p.at(hover.y);
@@ -97,7 +94,7 @@ fn hover_over_the_close_span_names_it() {
 
 #[test]
 fn the_strip_row_carries_one_span_per_button() {
-    let view = scene("tabs");
+    let view = test_scene::sidebar();
     let p = plan(&view);
     let strip = (1..=view.rows)
         .find(|&y| p.at(y).kind == RegionKind::Action)
@@ -113,25 +110,31 @@ fn the_strip_row_carries_one_span_per_button() {
 
 #[test]
 fn the_ghost_and_the_footer_name_themselves() {
-    let view = scene("new-tab-hover");
+    let view = test_scene::sidebar();
     let p = plan(&view);
     assert!(
         (1..=view.rows).any(|y| p.at(y).kind == RegionKind::NewTab),
         "the ghost card answers as new_tab"
     );
-    let with_footer = scene("collapsed");
-    if !with_footer.footer.is_empty() {
-        let fp = plan(&with_footer);
-        let row = (1..=with_footer.rows)
-            .find(|&y| fp.at(y).kind == RegionKind::Footer)
-            .expect("a footer row");
-        assert_eq!(fp.at(row).index, Some(1), "addressed by model index");
-    }
+    let mut with_footer = test_scene::sidebar();
+    with_footer.footer.push(FooterEntry {
+        text: "branch".into(),
+        icon: None,
+        id: Some("branch".into()),
+        fg: None,
+        bg: None,
+        icon_fg: None,
+    });
+    let fp = plan(&with_footer);
+    let row = (1..=with_footer.rows)
+        .find(|&y| fp.at(y).kind == RegionKind::Footer)
+        .expect("a footer row");
+    assert_eq!(fp.at(row).index, Some(1), "addressed by model index");
 }
 
 #[test]
 fn drop_slot_walks_to_the_next_card_and_past_the_last() {
-    let view = scene("tabs");
+    let view = test_scene::sidebar();
     let p = plan(&view);
     let title = first_title_row(&p, view.rows);
     let slot = p.at(title).slot.expect("a slot");
@@ -149,7 +152,7 @@ fn drop_slot_walks_to_the_next_card_and_past_the_last() {
 
 #[test]
 fn a_row_off_the_end_is_inert_space() {
-    let view = scene("tabs");
+    let view = test_scene::sidebar();
     let p = plan(&view);
     let off = p.at(view.rows + 50);
     assert_eq!(off.kind, RegionKind::Space);
@@ -173,7 +176,8 @@ fn switcher_row(p: &vtabs_view::layout::Plan, rows: i64) -> i64 {
 
 #[test]
 fn the_switcher_is_the_outermost_row_and_carries_one_span_per_space() {
-    let view = scene("spaces");
+    let mut view = test_scene::sidebar();
+    test_scene::spaces(&mut view);
     let p = plan(&view);
     let row = switcher_row(&p, view.rows);
     assert_eq!(row, view.rows, "below the footer, above nothing");
@@ -196,7 +200,9 @@ fn the_switcher_is_the_outermost_row_and_carries_one_span_per_space() {
 
 #[test]
 fn a_narrow_rail_shows_the_active_space_and_its_click_cycles() {
-    let mut view = scene("spaces-rail");
+    let mut view = test_scene::sidebar();
+    test_scene::spaces(&mut view);
+    test_scene::rail(&mut view, 9);
     view.cols = 5;
     let p = plan(&view);
     let at = p.at(switcher_row(&p, view.rows));
@@ -208,7 +214,7 @@ fn a_narrow_rail_shows_the_active_space_and_its_click_cycles() {
 
 #[test]
 fn without_spaces_no_row_is_a_switcher() {
-    let view = scene("tabs");
+    let view = test_scene::sidebar();
     let p = plan(&view);
     assert!((1..=view.rows).all(|y| p.at(y).kind != RegionKind::Spaces));
 }

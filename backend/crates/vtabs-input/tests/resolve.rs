@@ -1,16 +1,11 @@
+#[path = "../../../tests/support/scene.rs"]
+mod test_scene;
+
 use vtabs_core::ui::{ArmKind, UiState};
 use vtabs_input::resolve::{Knobs, MirroredDrag, key, mouse};
 use vtabs_protocol::types::{Button, Mods, Mouse, MouseKind};
 use vtabs_protocol::{DoArgs, DoId, Event};
 use vtabs_view::layout::{Part, Plan, RegionKind, plan};
-use vtabs_view::scene::RenderInput;
-
-fn scene(name: &str) -> RenderInput {
-    let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../../plugin/tests/golden/scenes")
-        .join(format!("{name}.json"));
-    serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
-}
 
 fn knobs<'a>(cols: i64) -> Knobs<'a> {
     Knobs {
@@ -88,7 +83,7 @@ fn close_row(p: &Plan, rows: i64, x: i64) -> i64 {
 
 #[test]
 fn a_press_on_the_card_body_activates_and_arms_the_drag() {
-    let view = scene("tabs");
+    let view = test_scene::sidebar();
     let p = plan(&view);
     let y = title_row(&p, view.rows);
     let r = mouse(
@@ -105,7 +100,8 @@ fn a_press_on_the_card_body_activates_and_arms_the_drag() {
 
 #[test]
 fn the_close_button_acts_on_the_release_and_only_on_the_same_target() {
-    let view = scene("hover-close");
+    let mut view = test_scene::sidebar();
+    test_scene::hover_close(&mut view);
     let p = plan(&view);
     let x = view.hover.unwrap().x;
     let y = close_row(&p, view.rows, x);
@@ -141,7 +137,8 @@ fn the_close_button_acts_on_the_release_and_only_on_the_same_target() {
 
 #[test]
 fn motion_cancels_an_armed_close() {
-    let view = scene("hover-close");
+    let mut view = test_scene::sidebar();
+    test_scene::hover_close(&mut view);
     let p = plan(&view);
     let x = view.hover.unwrap().x;
     let y = close_row(&p, view.rows, x);
@@ -173,7 +170,7 @@ fn motion_cancels_an_armed_close() {
 
 #[test]
 fn a_drag_needs_both_the_threshold_and_the_dwell() {
-    let view = scene("tabs");
+    let view = test_scene::sidebar();
     let p = plan(&view);
     let y = title_row(&p, view.rows);
     let k = knobs(view.cols);
@@ -220,7 +217,7 @@ fn a_drag_needs_both_the_threshold_and_the_dwell() {
 
 #[test]
 fn a_drag_armed_in_another_process_still_moves_here() {
-    let view = scene("tabs");
+    let view = test_scene::sidebar();
     let p = plan(&view);
     let y = title_row(&p, view.rows);
     let mut k = knobs(view.cols);
@@ -245,7 +242,7 @@ fn a_drag_armed_in_another_process_still_moves_here() {
 
 #[test]
 fn travel_to_the_inner_edge_tears_off() {
-    let view = scene("tabs");
+    let view = test_scene::sidebar();
     let p = plan(&view);
     let y = title_row(&p, view.rows);
     let mut k = knobs(view.cols);
@@ -281,7 +278,7 @@ fn travel_to_the_inner_edge_tears_off() {
 
 #[test]
 fn the_wheel_scrolls_or_switches_by_config() {
-    let view = scene("overflow");
+    let view = test_scene::sidebar();
     let p = plan(&view);
     let k = knobs(view.cols);
     let r = mouse(&p, &k, &UiState::default(), &wheel(1), 0);
@@ -305,7 +302,7 @@ fn the_wheel_scrolls_or_switches_by_config() {
 
 #[test]
 fn a_double_click_off_the_cards_opens_a_tab() {
-    let view = scene("tabs");
+    let view = test_scene::sidebar();
     let p = plan(&view);
     let empty = (1..=view.rows)
         .find(|&y| p.at(y).kind == RegionKind::Space)
@@ -331,7 +328,7 @@ fn a_double_click_off_the_cards_opens_a_tab() {
 
 #[test]
 fn a_right_press_and_release_on_a_card_opens_the_menu() {
-    let view = scene("tabs");
+    let view = test_scene::sidebar();
     let p = plan(&view);
     let y = title_row(&p, view.rows);
     let k = knobs(view.cols);
@@ -356,7 +353,7 @@ fn a_right_press_and_release_on_a_card_opens_the_menu() {
 
 #[test]
 fn a_middle_click_closes_the_card_it_landed_on() {
-    let view = scene("tabs");
+    let view = test_scene::sidebar();
     let p = plan(&view);
     let y = title_row(&p, view.rows);
     let k = knobs(view.cols);
@@ -379,7 +376,7 @@ fn a_middle_click_closes_the_card_it_landed_on() {
 
 #[test]
 fn a_strip_button_press_names_the_button() {
-    let view = scene("tabs");
+    let view = test_scene::sidebar();
     let p = plan(&view);
     let (y, span) = (1..=view.rows)
         .find_map(|y| {
@@ -471,7 +468,8 @@ fn switched_to(events: &[Event]) -> Option<String> {
 
 #[test]
 fn a_press_on_a_space_icon_switches_to_it_and_a_second_tap_opens_no_tab() {
-    let view = scene("spaces");
+    let mut view = test_scene::sidebar();
+    test_scene::spaces(&mut view);
     let p = plan(&view);
     let y = switcher_row(&p, view.rows) as u16;
     let k = knobs(view.cols);
@@ -524,7 +522,8 @@ fn a_press_on_a_space_icon_switches_to_it_and_a_second_tap_opens_no_tab() {
 
 #[test]
 fn the_wheel_over_the_switcher_steps_between_spaces_and_stops_at_the_ends() {
-    let view = scene("spaces");
+    let mut view = test_scene::sidebar();
+    test_scene::spaces(&mut view);
     let p = plan(&view);
     let y = switcher_row(&p, view.rows) as u16;
     let ids = ["home", "claude", "pi"];

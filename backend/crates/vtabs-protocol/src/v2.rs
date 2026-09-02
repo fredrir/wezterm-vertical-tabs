@@ -76,7 +76,7 @@ fn yes() -> bool {
     true
 }
 
-/// The renderer-facing config surface, normalised by Lua exactly as the scene fixtures are.
+/// The renderer-facing config surface, normalised by Lua before it crosses the wire.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct RenderSection {
     /// False when the meta line is off; the mode string ConfigMsg.meta carries what it shows.

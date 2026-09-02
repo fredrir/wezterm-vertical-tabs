@@ -12,7 +12,7 @@
 | `vtabs-input`     | `parser` (stdin byte demux) + `resolve` (regions/event/`UiState` → `Event`s), pure                                          |
 | `vtabs-runtime`   | event loop (`app`), terminal guard, uservar emission, logger, signal handling, paint — the sole stdout writer               |
 | `vtabs-zen`       | `png` + `frame`, the `wez-vtabs frame` subcommand; zero external dependencies                                               |
-| `wez-vtabs` (bin) | subcommand dispatch: `frame` \| `dump-frames` \| the runtime                                                                |
+| `wez-vtabs` (bin) | `frame` subcommand dispatch and the runtime entrypoint                                                                      |
 
 ```sh
 cd backend
@@ -79,14 +79,9 @@ cargo run -q -p vtabs-protocol --bin gen-lua -- --check
 
 ## `just check`
 
-
 ```sh
-cd backend && cargo test -p vtabs-view   
 just check
 ```
-
-Re-pin only after a reviewed, intentional visual change: `dump-frames` into `plugin/tests/golden/frames`,
-then `git diff` and commit.
 
 ## Lints
 

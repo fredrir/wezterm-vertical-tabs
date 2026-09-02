@@ -30,10 +30,6 @@ function M.report()
   return passed, failed
 end
 
-function M.strip(s)
-  return (s:gsub("\27%[[%d;?]*[A-Za-z]", ""))
-end
-
 function M.eq(a, b, msg)
   if a ~= b then
     error((msg or "") .. string.format(" expected %s got %s", tostring(b), tostring(a)), 2)

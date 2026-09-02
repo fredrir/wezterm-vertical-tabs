@@ -310,10 +310,8 @@ version = "0.1.9"
 name = "wez-vtabs"
 version = "0.1.9"
 dependencies = [
- "serde_json",
  "vtabs-protocol",
  "vtabs-runtime",
- "vtabs-view",
  "vtabs-zen",
 ]
 
