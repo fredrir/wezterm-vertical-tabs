@@ -10,14 +10,15 @@ deploy *args: # --from-dev (default) / --from-prd / --from-release
 doctor:
     @sh scripts/doctor.sh
 
-# Tear down every WezTerm GUI and mux pane, restart the launchd mux, then open a fresh GUI.
-restart:
-    @sh scripts/restart.sh
+# Safely restart the GUI; use --pane ID for one bad pane or --mux only as a last resort.
+restart *args:
+    @sh scripts/restart.sh {{args}}
 
 # Everything CI runs
 check: test lint
 
 test:
+    sh tests/test_restart.sh
     cd backend && cargo test --locked
     cd plugin && lua tests/run.lua
     @just test-tui

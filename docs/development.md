@@ -248,8 +248,16 @@ just
 just dev          
 just dev --live
 just doctor    
-just restart   
+just restart                 # restart the GUI; localmux panes survive
+just restart --list          # find a troublesome pane id
+just restart --pane 17       # kill only pane 17, then restart the GUI
+just restart --mux           # last resort: replace localmux and lose every pane
 ```
+
+`restart` uses the `localmux` client list, so it does not stop unrelated WezTerm processes such as
+the `just dev` sandbox. The pane and mux variants show their exact blast radius and require a
+confirmation that defaults to no. `just restart --dry-run`, optionally with `--pane` or `--mux`,
+prints the selected recovery without changing anything.
 
 
 ## Handlers are coroutines
