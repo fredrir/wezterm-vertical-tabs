@@ -8,11 +8,11 @@ if ! git diff --quiet || ! git diff --cached --quiet; then
 fi
 
 echo "Updating dev..."
-git checkout dev
+git switch dev
 git pull origin dev
 
 echo "Updating main..."
-git checkout main
+git switch main
 git pull origin main
 
 echo "Merging dev into main..."
@@ -38,5 +38,8 @@ git tag -a "$new_tag" -m "Release $new_tag"
 
 echo "Pushing $new_tag..."
 git push origin "$new_tag"
+
+echo "Switching to dev"
+git switch dev
 
 echo "Released $new_tag"
