@@ -83,10 +83,10 @@ else
   say "${dim}live: hot-swapping sidebars in your running WezTerm${off}"
 fi
 
-watchexec -q --postpone -w "$root/backend/src" -e rs --debounce 200ms -n -- sh "$0" --once --"$profile" &
+watchexec -q --postpone -w "$root/backend/crates" -e rs --debounce 200ms -n -- sh "$0" --once --"$profile" &
 pids="$pids $!"
 watchexec -q --postpone -w "$root/plugin" -e lua --debounce 200ms -n -- sh "$0" --check &
 pids="$pids $!"
 
-ok "watching backend/src (rebuild+swap) and plugin (tests) — ^C to stop"
+ok "watching backend/crates (rebuild+swap) and plugin (tests) — ^C to stop"
 wait

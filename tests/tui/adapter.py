@@ -6,6 +6,7 @@ import asyncio
 import json
 import os
 import re
+import secrets
 import shlex
 from collections.abc import Callable, Mapping
 from dataclasses import asdict
@@ -73,6 +74,7 @@ class Terminal:
         self.rows = rows
         self.role = role
         self.post_exit_sentinel = post_exit_sentinel
+        self._token = secrets.token_hex(16)
         self._client = TuiTest.ephemeral(
             "wez-vtabs",
             profile=_PROFILE,
@@ -108,6 +110,10 @@ class Terminal:
             profile=_PROFILE,
         )
         await self.wait_event("ready")
+        await self.send({"t": "auth", "token": self._token, "caps": []})
+        echoed = await self.wait_user_var("vtabs_token")
+        if echoed != self._token:
+            raise AssertionError("backend did not authenticate the test control session")
         return self
 
     async def close(self) -> None:
@@ -115,7 +121,11 @@ class Terminal:
 
     async def send(self, *commands: Mapping[str, Any]) -> None:
         wire = "".join(
-            json.dumps(command, separators=(",", ":"), ensure_ascii=False) + "\n"
+            "\x1eVTABS "
+            + self._token
+            + " "
+            + json.dumps(command, separators=(",", ":"), ensure_ascii=False)
+            + "\n"
             for command in commands
         )
         await self._client.write(wire)

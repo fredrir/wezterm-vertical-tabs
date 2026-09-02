@@ -38,14 +38,22 @@ test-wezterm-e2e *pytest_args:
 lint:
     cd backend && cargo fmt --check && cargo clippy --all-targets --locked -- -D warnings
     cd backend && cargo run -q -p vtabs-protocol --bin gen-lua -- --check
+    cd backend && cargo run -q -p vtabs-engine --bin gen-config -- --check
     cd plugin && luacheck init.lua vtabs tests && stylua --check init.lua vtabs tests
     lua scripts/gen-docs.lua --check
+
+# Regenerate all Rust-owned Lua mirrors and their derived documentation
+generate: gen-protocol gen-config docs
 
 # Regenerate plugin/vtabs/gen/protocol.lua from vtabs-protocol/src/limits.rs
 gen-protocol:
     cd backend && cargo run -q -p vtabs-protocol --bin gen-lua
 
-# Regenerate the options table in docs/configuration.md from plugin/vtabs/schema.lua
+# Regenerate plugin/vtabs/gen/schema.lua from vtabs-engine's typed descriptors
+gen-config:
+    cd backend && cargo run -q -p vtabs-engine --bin gen-config
+
+# Regenerate the options table in docs/configuration.md from the generated schema
 docs:
     lua scripts/gen-docs.lua
 

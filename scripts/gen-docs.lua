@@ -1,4 +1,4 @@
--- Regenerates the options table in docs/configuration.md from plugin/vtabs/schema.lua.
+-- Regenerates the options table in docs/configuration.md from Rust's generated descriptor mirror.
 -- `lua scripts/gen-docs.lua` rewrites the file; `--check` exits 1 when it is out of date.
 local here = arg[0]:match "^(.*)[/\\]" or "."
 package.path = here .. "/../plugin/?.lua;" .. package.path
@@ -72,16 +72,16 @@ local function table_lines()
       rows[#rows + 1] = { "`" .. option.key .. "`", default_of(option), values_of(option) }
     end
   end
-  local w1, w2 = width "option", width "default"
+  local w1, w2, w3 = width "option", width "default", width "values"
   for _, row in ipairs(rows) do
-    w1, w2 = math.max(w1, width(row[1])), math.max(w2, width(row[2]))
+    w1, w2, w3 = math.max(w1, width(row[1])), math.max(w2, width(row[2])), math.max(w3, width(row[3]))
   end
   local out = {
-    string.format("| %s | %s | values |", pad("option", w1), pad("default", w2)),
-    string.format("| %s | %s | ------ |", string.rep("-", w1), string.rep("-", w2)),
+    string.format("| %s | %s | %s |", pad("option", w1), pad("default", w2), pad("values", w3)),
+    string.format("| %s | %s | %s |", string.rep("-", w1), string.rep("-", w2), string.rep("-", w3)),
   }
   for _, row in ipairs(rows) do
-    out[#out + 1] = string.format("| %s | %s | %s |", pad(row[1], w1), pad(row[2], w2), row[3])
+    out[#out + 1] = string.format("| %s | %s | %s |", pad(row[1], w1), pad(row[2], w2), pad(row[3], w3))
   end
   return table.concat(out, "\n")
 end

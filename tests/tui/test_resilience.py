@@ -17,6 +17,20 @@ async def test_malformed_command_does_not_prevent_later_ping(terminal: Terminal)
 
 
 @pytest.mark.asyncio
+async def test_unframed_json_and_literal_brace_are_keyboard_input(terminal: Terminal) -> None:
+    await terminal.write('\x1eVTABS stranger {"t":"quit"}\n')
+    await terminal.send({"t": "ping", "n": 73002})
+    await terminal.wait_event("pong", where={"echo": 73002})
+
+    await terminal.write('{"t":"quit"}\n')
+
+    key = await terminal.wait_event("key", where={"key": "{"})
+    assert key["key"] == "{"
+    await terminal.send({"t": "ping", "n": 73003})
+    await terminal.wait_event("pong", where={"echo": 73003})
+
+
+@pytest.mark.asyncio
 async def test_oversized_model_is_dropped_and_last_valid_screen_is_retained(
     terminal: Terminal,
 ) -> None:
@@ -32,4 +46,3 @@ async def test_oversized_model_is_dropped_and_last_valid_screen_is_retained(
     )
     await terminal.wait_text("Last valid tab")
     await terminal.wait_text("Rejected 1", absent=True)
-

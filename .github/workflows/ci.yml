@@ -46,7 +46,8 @@ jobs:
         working-directory: .
       - name: protocol mirror matches limits.rs
         run: cargo run -q --locked -p vtabs-protocol --bin gen-lua -- --check
-        working-directory: .
+      - name: config mirror matches the Rust schema
+        run: cargo run -q --locked -p vtabs-engine --bin gen-config -- --check
   plugin:
     runs-on: ubuntu-latest
     defaults:
