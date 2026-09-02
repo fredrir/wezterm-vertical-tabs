@@ -54,6 +54,17 @@
   when the server refuses it); nothing read from the mirror meanwhile is chased
   or adopted, and a divider is read as the user's only once it has sat still
   for 250 ms. On a local domain a drag is adopted the moment it moves.
+- A frame sent to a pane on a mux domain crosses the link on the GUI thread:
+  `send_text` on a client pane blocks until the server answers
+  (`wezterm-client/src/pane/clientpane.rs PaneWriter::write`). While the client
+  is rebuilding its mirror from a storm of `TabResized`, that round trip has
+  deadlocked the GUI: the main thread parked in `send_text`, the mux client
+  thread parked, the server idle (two macOS hang reports, each right after
+  hundreds of server-side pane resizes in a second). A `resize` report from a
+  mux pane is that storm's visible edge: it marks its domain busy, nothing is
+  published and no adjust is sent while any domain is busy, and the frames that
+  must go all the same (auth, pings, menus) are held in order and flushed once
+  the domain has been quiet for 300 ms.
 - A `resize` report from the sidebar corrects the width and publishes nothing:
   the pane has repainted itself at the new size, and the backend measures its
   own cells and pixels, so the host sends it only the window's dpi.

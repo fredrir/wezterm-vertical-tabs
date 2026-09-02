@@ -234,6 +234,7 @@ local MODULES = {
   "host_config",
   "input",
   "keys",
+  "link",
   "model",
   "mux",
   "page",

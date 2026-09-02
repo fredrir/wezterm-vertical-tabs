@@ -859,3 +859,74 @@ test("a tab a held key is passing through gets no sidebar split into it until th
   assert(sidebar.find(win.tab_list[2]), "served once the switching has stopped")
   clock.restore()
 end)
+
+test("frames for a mux domain are held while its link is busy, and flushed in order once quiet", function()
+  local link = require "vtabs.link"
+  local win, gui = H.window(1)
+  sidebar.ensure(gui)
+  local tab = win.tab_list[1]
+  local sb = H.mark_ready(tab)
+  sb.domain, sidebar.content_pane(tab).domain = "e2emux", "e2emux"
+  local clock = H.clock()
+  wezterm.timers = {}
+  local before = #sb.sent
+  link.activity(sb)
+  eq(link.busy "e2emux", true, "a server-side resize marks the domain busy")
+  eq(link.busy "local", false, "the local domain never is")
+  assert(sidebar.send(sb, { t = "ping", n = 1 }), "accepted")
+  assert(sidebar.send(sb, { t = "ping", n = 2 }))
+  eq(#sb.sent, before, "nothing crossed the link")
+  eq(#wezterm.timers, 1, "one flush armed")
+  clock.advance(100)
+  link.activity(sb)
+  wezterm.fire_timers()
+  eq(#sb.sent, before, "still busy: nothing sent")
+  eq(#wezterm.timers, 1, "and the flush re-armed")
+  clock.advance(link.QUIET_MS)
+  wezterm.fire_timers()
+  eq(#sb.sent, before + 1, "flushed in one write")
+  local flushed = sb.sent[#sb.sent]
+  assert(flushed:find('"n":1', 1, true) < flushed:find('"n":2', 1, true), "in order")
+  eq(#wezterm.timers, 0)
+  assert(sidebar.send(sb, { t = "ping", n = 3 }))
+  eq(#sb.sent, before + 2, "quiet: sent at once")
+  link.reset()
+  clock.restore()
+end)
+
+test("a resize report from a mux pane marks its link busy; one from a local pane marks nothing", function()
+  local link = require "vtabs.link"
+  local input = require "vtabs.input"
+  local win, gui = H.window(2)
+  sidebar.ensure(gui)
+  local local_sb = H.mark_ready(win.tab_list[1])
+  store.proto[local_sb:pane_id()] = protocol.VERSION
+  input.handle(gui, local_sb, "vtabs", '{"t":"resize","cols":28,"rows":24,"n":2}')
+  eq(link.busy_any(), false)
+  actions.activate_tab(gui, win.tab_list[2]:tab_id())
+  local remote_sb = H.mark_ready(win.tab_list[2])
+  remote_sb.domain, sidebar.content_pane(win.tab_list[2]).domain = "e2emux", "e2emux"
+  store.proto[remote_sb:pane_id()] = protocol.VERSION
+  input.handle(gui, remote_sb, "vtabs", '{"t":"resize","cols":28,"rows":24,"n":2}')
+  eq(link.busy "e2emux", true)
+  eq(link.busy_any(), true)
+  link.reset()
+end)
+
+test("no publish crosses a busy mux link; the next poll after it goes quiet publishes", function()
+  local link = require "vtabs.link"
+  local view = require "vtabs.view"
+  local win, gui = H.window(1)
+  sidebar.ensure(gui)
+  local sb = H.mark_ready(win.tab_list[1])
+  sb.domain, sidebar.content_pane(win.tab_list[1]).domain = "e2emux", "e2emux"
+  local clock = H.clock()
+  link.activity(sb)
+  local before = #sb.sent
+  eq(view.sync(gui), false, "skipped")
+  eq(#sb.sent, before, "and nothing held either: a publish is remade from a fresh snapshot later")
+  clock.advance(link.QUIET_MS)
+  assert(view.sync(gui) ~= false, "published once quiet")
+  link.reset()
+  clock.restore()
+end)

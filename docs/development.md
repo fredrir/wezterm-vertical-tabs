@@ -298,6 +298,11 @@ HOME=$(mktemp -d) WEZTERM_LOG=info wezterm --config-file scripts/probe-coroutine
 | `set_inner_size`                | `sidebar_attach.lua` `fit_to_window`                                |
 | `cli split-pane --move-pane-id` | `sidebar_rescue.lua` `rescue_splits`                                |
 | `cli adjust-pane-size`          | `vtabs-runtime` `cli.rs` `adjust`, asked by `geometry.lua` `correct` |
+| `send_text` to a mux pane       | `sidebar_identity.lua` `send_raw`, held by `link.lua` while busy    |
+
+A GUI that stops responding rather than crashing leaves a macOS hang report in
+`/Library/Logs/DiagnosticReports/wezterm-gui_*.hang`, a stackshot of every process: the GUI's main
+thread, the mux client thread, the mux server and each backend. `just doctor` names the newest.
 
 ## Applying a build
 

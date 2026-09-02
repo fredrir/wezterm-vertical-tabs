@@ -74,6 +74,8 @@ if [ -d "$reports" ]; then
   latest=$(ls -1t "$reports"/wezterm-gui-*.ips 2>/dev/null | head -1 | sed "s|$HOME|~|")
   row "crash report" "${latest:-none}"
 fi
+hang=$(ls -1t /Library/Logs/DiagnosticReports/wezterm-gui_*.hang 2>/dev/null | head -1)
+row "hang report" "${hang:-none}"
 
 say ""
 say "${dim}running backends${off}"

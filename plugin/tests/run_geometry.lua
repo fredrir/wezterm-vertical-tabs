@@ -925,6 +925,29 @@ test("on a mux domain the frames of a resize are left to the server, and one adj
   clock.restore()
 end)
 
+test("a remote correction waits for the link to go quiet, then adjusts from a fresh reading", function()
+  local link = require "vtabs.link"
+  local win, gui, tab, sb = settled_tab()
+  local content = sidebar.content_pane(tab)
+  sb.domain, content.domain = "e2emux", "e2emux"
+  local clock = H.clock()
+  wezterm.timers = {}
+  local sent = #sb.sent
+  win:resize(10)
+  link.activity(sb)
+  eq(geometry.correct(gui), false, "the link is busy: nothing crosses it")
+  eq(adjusts_sent(sb, sent), 0)
+  eq(#wezterm.timers, 1, "a follow-up is armed")
+  -- the storm moves the divider once more before it ends
+  win:resize(4)
+  clock.advance(link.QUIET_MS + 20)
+  wezterm.fire_timers()
+  eq(adjusts_sent(sb, sent), 1, "one adjust, from the width read after the storm")
+  eq(sb.cols, 28)
+  link.reset()
+  clock.restore()
+end)
+
 test("on a mux domain a moved divider is the user's only once it has sat still across a round trip", function()
   local win, gui, tab, sb = settled_tab()
   local content = sidebar.content_pane(tab)

@@ -2,6 +2,7 @@ local wezterm = require "wezterm" ---@type Wezterm
 local state = require "vtabs.state"
 local store = require "vtabs.store"
 local mux = require "vtabs.mux"
+local link = require "vtabs.link"
 local util = require "vtabs.util"
 
 ---Which pane is what: the roles this backend claims by title, the token that proves one, the rank
@@ -321,8 +322,12 @@ function M.send_raw(pane, line, frame_token)
   if #framed == 0 then
     return false
   end
+  local text = table.concat(framed, "\n") .. "\n"
+  if link.defer(pane, text) then
+    return true
+  end
   return pcall(function()
-    pane:send_text(table.concat(framed, "\n") .. "\n")
+    pane:send_text(text)
   end)
 end
 

@@ -7,6 +7,7 @@ local model = require "vtabs.model"
 local geometry = require "vtabs.geometry"
 local platform = require "vtabs.platform"
 local mux = require "vtabs.mux"
+local link = require "vtabs.link"
 local snapshot = require "vtabs.snapshot"
 local theme_bridge = require "vtabs.theme_bridge"
 local util = require "vtabs.util"
@@ -277,7 +278,9 @@ function M.sync(gui_window)
   -- Every frame of a window resize changes the sidebar's metrics, and a publish per frame is a
   -- generation (with its spaces and theme round trips) per frame. The sidebar repaints itself from
   -- its own size meanwhile; the settle timer publishes once the frames have stopped.
-  if geometry.in_burst(gui_window:window_id()) then
+  -- Nor while a mux link is busy rebuilding its mirror: every frame of a publish would cross it
+  -- on this thread, blocking, and that has deadlocked the GUI (link.lua).
+  if geometry.in_burst(gui_window:window_id()) or link.busy_any() then
     return false
   end
   if cfg.debug then

@@ -6,6 +6,7 @@ local state = require "vtabs.state"
 local store = require "vtabs.store"
 local sidebar = require "vtabs.sidebar"
 local mux = require "vtabs.mux"
+local link = require "vtabs.link"
 local util = require "vtabs.util"
 
 ---Holds the sidebar at its width against everything WezTerm does to a split. A window resize deals
@@ -500,6 +501,11 @@ local function correct(gui_window, snapshot)
     -- resizes the split on the server: one change there, one rebuild, no echo. Once per settle,
     -- not per frame -- during a burst the frames alone already cost a rebuild per pane.
     if not quiet then
+      return false
+    end
+    if link.busy(mux.domain(sb)) then
+      -- the mirror rebuilds are still crossing the link; asked from a fresh reading once it is quiet
+      follow_up(gui_window, wid, "link", link.QUIET_MS + 20)
       return false
     end
     if cfg.debug then

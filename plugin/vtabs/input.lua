@@ -9,6 +9,7 @@ local actions = require "vtabs.actions"
 local popover = require "vtabs.popover"
 local protocol = require "vtabs.gen.protocol"
 local mux = require "vtabs.mux"
+local link = require "vtabs.link"
 local theme_bridge = require "vtabs.theme_bridge"
 local util = require "vtabs.util"
 
@@ -603,6 +604,9 @@ function M.handle(gui_window, pane, name, value)
     -- a mux domain the proof that the server applied the adjust in flight; the width itself is
     -- read from the tab's split tree. Nothing is published for it: the pane has already repainted
     -- itself at the new size, and a publish per report is a generation per frame across every tab.
+    -- From a mux pane it is a server-side resize, the visible edge of the mirror rebuild storm
+    -- nothing may cross the link into.
+    link.activity(pane)
     geometry.landed(gui_window:window_id(), pane:pane_id(), tonumber(ev.cols))
     geometry.correct(gui_window)
   elseif ev.t == "theme_hook_request" then
