@@ -69,3 +69,9 @@ test("a bare RESIZE on macOS gets the window buttons back; plain and a right sid
   platform.is_mac = was
   config.setup { backend = { path = "/bin/wez-vtabs" } }
 end)
+
+test("hover_highlight off makes a hover-only close button permanent, as press mode does", function()
+  local cfg = config.setup { hover_highlight = false, close_button = "hover", backend = { path = "/bin/wez-vtabs" } }
+  eq(cfg.close_button, "always")
+  eq(config.setup({ close_button = "hover", backend = { path = "/bin/wez-vtabs" } }).close_button, "hover")
+end)

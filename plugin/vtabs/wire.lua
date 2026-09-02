@@ -136,6 +136,7 @@ local function config_body(cfg, ctx)
     wheel = cfg.wheel,
     context = cfg.context,
     hover_timeout_ms = cfg.hover_timeout_ms,
+    hover_highlight = cfg.hover_highlight ~= false,
     ellipsis = cfg.ellipsis,
     popover = {
       width = cfg.popover.width,
@@ -246,6 +247,40 @@ local function model_body(cfg, ctx, wid)
   }
 end
 
+local memo = scope.window()
+
+---Config and theme are built from a handful of tables that only change on a reload, a toggle or a
+---space switch; while every one of them is the same table as last poll, so is the encoded body.
+local function settled(wid, kind, ctx, build)
+  local per = memo[wid]
+  if not per then
+    per = {}
+    memo[wid] = per
+  end
+  local seen = per[kind]
+  local same = seen ~= nil
+    and seen.cfg == ctx.cfg
+    and seen.effective == ctx.effective
+    and seen.chrome == ctx.chrome
+    and seen.theme_base == ctx.theme_base
+    and seen.theme_override == ctx.theme_override
+    and seen.full_screen == ((ctx.window_dims or {}).is_full_screen == true)
+  if same then
+    return seen.body
+  end
+  local body = encode(build(ctx.cfg, ctx))
+  per[kind] = {
+    cfg = ctx.cfg,
+    effective = ctx.effective,
+    chrome = ctx.chrome,
+    theme_base = ctx.theme_base,
+    theme_override = ctx.theme_override,
+    full_screen = (ctx.window_dims or {}).is_full_screen == true,
+    body = body,
+  }
+  return body
+end
+
 ---Bumps the per-window rev only when the body changed; the encoded string is the change detector.
 ---`tag` is the wire's `t` when it differs from the dedupe kind: two models share one tag.
 local function versioned(wid, kind, body, tag)
@@ -270,10 +305,10 @@ end
 function M.sync(gui_window, ctx)
   local wid = gui_window:window_id()
   local cfg = ctx.cfg
-  local menu = require("vtabs.popover").wire_body(gui_window)
+  local menu = require("vtabs.popover").wire_body(gui_window, ctx.survey)
   local lines = {
-    config = versioned(wid, "config", encode(config_body(cfg, ctx))),
-    theme = versioned(wid, "theme", encode(theme_body(cfg, ctx))),
+    config = versioned(wid, "config", settled(wid, "config", ctx, config_body)),
+    theme = versioned(wid, "theme", settled(wid, "theme", ctx, theme_body)),
     model = versioned(wid, "model", encode(model_body(cfg, ctx, wid))),
     menu = versioned(wid, "menu", encode(menu or { open = false })),
   }

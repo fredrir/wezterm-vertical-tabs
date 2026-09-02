@@ -416,3 +416,24 @@ test("the model goes to the shown sidebar; a background one catches up when its 
   eq(models(hidden), 2, "and catches up once shown")
   eq(models(shown), 2)
 end)
+
+test("a wheel tick the backend already applied waits for the poll instead of a sync of its own", function()
+  local _, gui, _, sb = H.key_window(1)
+  local view = require "vtabs.view"
+  local input = require "vtabs.input"
+  store.proto[sb:pane_id()] = 2
+  view.sync(gui)
+  local function models()
+    local n = 0
+    for _, line in ipairs(sb.sent) do
+      n = n + (line:find('"t":"model"', 1, true) and 1 or 0)
+    end
+    return n
+  end
+  local before = models()
+  input.handle(gui, sb, "vtabs", '{"t":"do","a":"set_scroll","args":{"top":3,"user":true}}')
+  eq(store.scroll[gui:window_id()], 3, "the scroll is recorded")
+  eq(models(), before, "and nothing is sent until the poll")
+  view.sync(gui)
+  eq(models(), before + 1, "which carries it")
+end)

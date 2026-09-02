@@ -57,6 +57,7 @@ return config
 | `adopt`                   | `"auto"`                                                                     | `"auto"` \| `true` \| `false` |
 | `window_title`            | `true`                                                                       | `true` \| `false` |
 | `hover`                   | `"follow"`                                                                   | `"follow"` \| `"press"` |
+| `hover_highlight`         | `true`                                                                       | `true` \| `false` |
 | `hover_timeout_ms`        | `6000`                                                                       | number >= `0` |
 | `tooltip`                 | `"auto"`                                                                     | `"auto"` \| `true` \| `false` |
 | `tooltip_delay_ms`        | `600`                                                                        | number >= `0` |

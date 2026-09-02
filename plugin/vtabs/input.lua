@@ -181,6 +181,11 @@ end
 
 M.DO = DO
 
+---Verbs the backend has already applied to its own frame: the wheel scrolls and the drag ghost
+---moves before the round trip. The next poll echoes them in the model; a sync per wheel tick or per
+---pointer move would survey the window for nothing the pane does not already show.
+local QUIET_DO = { set_scroll = true, drag_to = true }
+
 ---Verbs that operate on the open menu; every other gesture dismisses it first, as a v1 click does.
 local MENU_DO = {
   menu_pick = true,
@@ -216,7 +221,9 @@ local function on_do(gui_window, pane, ev)
     popover.close(gui_window)
   end
   handler(gui_window, pane, ev.id, ev.args or {})
-  view.sync(gui_window)
+  if not QUIET_DO[ev.a] then
+    view.sync(gui_window)
+  end
 end
 
 local MOVE = { down = 1, j = 1, tab = 1, up = -1, k = -1 }

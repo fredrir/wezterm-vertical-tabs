@@ -63,7 +63,7 @@ Unknown commands are ignored. Malformed JSON lines are ignored.
  "icons":true,"icon_map":{"nvim":"󰉯"},"meta":"cwd","meta_sep":" · ","unseen":true,
  "glyphs":{"custom_block":true,"east_asian_wide":false},
  "animate":true,"double_click_ms":300,"tear_off":true,
- "wheel":"scroll","context":"popover","hover_timeout_ms":1200,"ellipsis":"…",
+ "wheel":"scroll","context":"popover","hover_timeout_ms":1200,"hover_highlight":true,"ellipsis":"…",
  "popover":{"width":null,"follow_pointer":true,"overflow":null},
  "render":{"meta":true,"padding":{"left":1,"right":1,"top":0,"bottom":0},"frame":false,
    "row_gap":0,"new_tab_button":true},
@@ -74,7 +74,8 @@ Unknown commands are ignored. Malformed JSON lines are ignored.
 real width — Rust always lays out against its own terminal size (`cols`/`rows` from `ready`/`resize`).
 `wheel == "switch"` switches tabs instead of scrolling; a right-press only arms the menu when
 `context == "popover"`; `hover_timeout_ms` expires a stale hover on the runtime's own clock, no
-round trip.
+round trip. `hover_highlight == false` turns any-motion tracking off (`?1003l`) and lights no row:
+the pointer costs nothing until a button goes down.
 
 ### theme
 
@@ -182,7 +183,7 @@ Columns/rows are 1-based cell coordinates.
 | `do` | `{"t":"do","a":"press_card","id":7,"args":{"x":5,"y":6,"part":"title"},"n":9}` — the gesture/verb vocabulary, see below |
 | `key` | `{"t":"key","key":"c","mods":["ctrl"],"raw":"Aw==","n":10}` — unconsumed keys only, forwarded as-is |
 | `paste` | `{"t":"paste","data":"<base64>","n":11}`, or `{"t":"paste","dropped":"size","n":11}` past 64 KiB |
-| `focus` | `{"t":"focus","in":true,"n":12}` |
+| `focus` | not sent: focus out clears the hover in the backend, focus in does nothing |
 | `pong` | `{"t":"pong","n":13,"echo":7}` — `n` is the normal monotonic counter, `echo` is the ping's own `n` |
 | `note` | `{"t":"note","k":"menu_refused","why":"rows","id":7,"a":"confirm","n":14}` |
 | `dropped` | `{"t":"dropped","what":"model"\|"menu","reason":"bounds","n":15}` — the command was refused whole, previous state kept |

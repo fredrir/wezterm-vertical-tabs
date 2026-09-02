@@ -22,6 +22,9 @@ use crate::paint::{changed_rows_bytes, rows_bytes};
 use crate::uservar::{TOKEN_VAR, set_user_var};
 
 const CLEAR_SCREEN: &str = "\x1b[2J\x1b[H";
+/// Any-motion mouse tracking; the terminal guard turns it on, `config.hover_highlight` may turn it off.
+const MOTION_ON: &str = "\x1b[?1003h";
+const MOTION_OFF: &str = "\x1b[?1003l";
 
 /// Sole stdout writer, so user-var OSCs never interleave with frame bytes.
 pub struct App<W: Write> {
@@ -141,6 +144,11 @@ impl<W: Write> App<W> {
         self.started.elapsed().as_millis() as u64
     }
 
+    /// On until a config says otherwise, which is also the terminal's state at startup.
+    fn hover_highlight(&self) -> bool {
+        self.v2.config.as_ref().is_none_or(|c| c.hover_highlight)
+    }
+
     /// Nothing can be drawn or hit-tested until all three commands have landed at least once.
     fn dressed(&self) -> bool {
         self.v2.config.is_some() && self.v2.theme.is_some() && self.v2.model.is_some()
@@ -155,7 +163,15 @@ impl<W: Write> App<W> {
                     self.gesture(&m)?;
                 }
             }
-            Input::Focus(focused) => self.emit(&Event::Focus { focused })?,
+            // Focus is the pane's own business: the pointer left with it, so the lit row goes out
+            // here, at once, instead of a round trip to Lua and a wait for the hover timeout.
+            Input::Focus(false) => {
+                if self.ui.hover.take().is_some() {
+                    self.arm_hover();
+                    self.repaint()?;
+                }
+            }
+            Input::Focus(true) => {}
             Input::Dropped { what, reason } => self.emit(&Event::Dropped { what, reason })?,
             Input::Key { name, mods, raw } => {
                 if self.dressed() {
@@ -186,6 +202,9 @@ impl<W: Write> App<W> {
             (r.ui, r.events, r.repaint)
         };
         self.ui = ui;
+        if !self.hover_highlight() {
+            self.ui.hover = None;
+        }
         self.arm_hover();
         for event in &events {
             self.emit(event)?;
@@ -577,7 +596,21 @@ impl<W: Write> App<W> {
                     self.emit(&Event::ready(self.size.0, self.size.1))?;
                 }
             }
-            Command::Config(msg) => self.v2.config = Some(*msg),
+            Command::Config(msg) => {
+                // Motion reports are the one input the pane can decline: every pointer move over
+                // it is otherwise written through the mux to this pty.
+                if msg.hover_highlight != self.hover_highlight() {
+                    self.write(
+                        if msg.hover_highlight {
+                            MOTION_ON
+                        } else {
+                            MOTION_OFF
+                        }
+                        .as_bytes(),
+                    )?;
+                }
+                self.v2.config = Some(*msg)
+            }
             Command::Theme(msg) => self.v2.theme = Some(*msg),
             Command::Model(msg) => {
                 if msg.tabs.len() > MODEL_MAX_TABS
@@ -1163,6 +1196,79 @@ mod tests {
         a.tick_hover(Instant::now()).unwrap();
         assert!(a.ui.hover.is_none(), "stale hover is dropped");
         assert!(a.next_hover().is_none());
+    }
+
+    fn hover_at(a: &mut App<Vec<u8>>, x: u16, y: u16) {
+        a.handle(Input::Mouse(vtabs_protocol::Mouse {
+            kind: vtabs_protocol::MouseKind::Move,
+            button: vtabs_protocol::Button::None,
+            x,
+            y,
+            dy: 0,
+            mods: Mods::default(),
+        }))
+        .unwrap();
+    }
+
+    #[test]
+    fn focus_leaving_the_pane_clears_the_hover_locally_and_sends_nothing() {
+        let mut a = app();
+        dress(&mut a);
+        // the first row whose hover changes the frame: the active card lights nothing new
+        for y in 2..=10 {
+            a.out.clear();
+            hover_at(&mut a, 6, y);
+            if !a.out.is_empty() {
+                break;
+            }
+        }
+        assert!(a.ui.hover.is_some() && !a.out.is_empty(), "a row lit up");
+        a.out.clear();
+        a.handle(Input::Focus(false)).unwrap();
+        assert!(a.ui.hover.is_none(), "the pointer left with the focus");
+        let out = painted(&a);
+        assert!(
+            !out.contains("SetUserVar"),
+            "nothing crossed to Lua: {out:?}"
+        );
+        assert!(cups(&out) >= 1, "the lit row is painted back: {out:?}");
+        a.out.clear();
+        a.handle(Input::Focus(true)).unwrap();
+        assert!(a.out.is_empty(), "focus coming back changes nothing");
+    }
+
+    #[test]
+    fn hover_highlight_off_drops_motion_tracking_and_lights_no_row() {
+        let mut a = app();
+        dress(&mut a);
+        a.out.clear();
+        let off = CONFIG.replace(
+            r#""hover_timeout_ms":1500,"#,
+            r#""hover_timeout_ms":1500,"hover_highlight":false,"#,
+        );
+        send(
+            &mut a,
+            Command::Config(Box::new(serde_json::from_str(&off).unwrap())),
+        );
+        assert!(
+            painted(&a).contains(MOTION_OFF),
+            "any-motion reporting is switched off"
+        );
+        a.handle(click(vtabs_protocol::MouseKind::Press, 6, 3))
+            .unwrap();
+        assert!(a.ui.hover.is_none(), "a press lights no row");
+        a.out.clear();
+        send(
+            &mut a,
+            Command::Config(Box::new(serde_json::from_str(CONFIG).unwrap())),
+        );
+        assert!(painted(&a).contains(MOTION_ON), "and back on");
+        a.out.clear();
+        send(
+            &mut a,
+            Command::Config(Box::new(serde_json::from_str(CONFIG).unwrap())),
+        );
+        assert!(!painted(&a).contains(MOTION_ON), "unchanged: not re-sent");
     }
 
     const MENU: &str = r#"{"rev":1,"open":true,"level":"root","anchor":{"row":3,"col":2},

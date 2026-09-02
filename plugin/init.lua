@@ -98,8 +98,10 @@ local function register_events(cfg)
   registered = true
 
   local events = store.scope "events"
-  local last_poll, shown_tab = events.window(), events.window()
+  local last_poll, shown_tab, unfocused = events.window(), events.window(), events.window()
   local min_gap = math.max(50, math.floor(cfg.poll_ms / 4))
+  -- A window nobody is typing in still shows its sidebar, so it keeps polling, at half the rate.
+  local idle_gap = cfg.poll_ms * 2
 
   wezterm.on(
     "update-status",
@@ -111,7 +113,8 @@ local function register_events(cfg)
       local tab = util.active_tab(window)
       local tab_id = tab and tab:tab_id() or nil
       local switched = shown_tab[wid] ~= tab_id
-      if not switched and last_poll[wid] and now - last_poll[wid] < min_gap then
+      local gap = unfocused[wid] and idle_gap or min_gap
+      if not switched and last_poll[wid] and now - last_poll[wid] < gap then
         return
       end
       shown_tab[wid] = tab_id
@@ -153,6 +156,7 @@ local function register_events(cfg)
   wezterm.on(
     "window-focus-changed",
     guarded("window-focus-changed", function(window)
+      unfocused[window:window_id()] = mux.call(window, "is_focused") == false or nil
       view.sync(window)
     end)
   )

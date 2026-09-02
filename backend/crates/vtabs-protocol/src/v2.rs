@@ -39,6 +39,9 @@ pub struct ConfigMsg {
     pub context: Option<String>,
     #[serde(default)]
     pub hover_timeout_ms: u64,
+    /// Off: no row lights under the pointer, and the runtime stops asking for motion reports.
+    #[serde(default = "yes")]
+    pub hover_highlight: bool,
     /// `cfg.ellipsis`: the menu's own truncation marker, which is not the `ellipsis` glyph.
     #[serde(default)]
     pub ellipsis: Option<String>,

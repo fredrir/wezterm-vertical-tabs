@@ -165,8 +165,9 @@ function M.normalise(cfg)
     cfg.popover.width = "auto"
   end
 
-  -- press mode never hovers a background row, so a hover-only close button would never appear.
-  if cfg.hover == "press" and cfg.close_button == "hover" then
+  -- press mode never hovers a background row, and without the highlight no row hovers at all, so a
+  -- hover-only close button would never appear.
+  if (cfg.hover == "press" or cfg.hover_highlight == false) and cfg.close_button == "hover" then
     cfg.close_button = "always"
   end
   if cfg.tear_off == "outside" then

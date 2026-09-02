@@ -236,13 +236,14 @@ end
 
 ---Applies one key to the rename buffer; returns "commit", "cancel" or nil when it was consumed.
 ---The v2 menu message for this window's popover, one level at a time; nil when nothing is open.
-function M.wire_body(gui_window)
+---`survey` is the poll's own when the caller has one, so the menu costs no second walk.
+function M.wire_body(gui_window, survey)
   local pop = store.popover[gui_window:window_id()]
   if not pop then
     return nil
   end
   -- the whole window, not the visible list: a tab that just left the space still heads its menu
-  local survey = model.survey(gui_window)
+  survey = survey or model.survey(gui_window)
   local item = model.find(survey.all, pop.tab_id)
   local body = {
     open = true,

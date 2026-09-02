@@ -419,6 +419,14 @@ M.options = {
     help = "when the sidebar holds focus",
   },
   {
+    key = "hover_highlight",
+    type = "boolean",
+    default = true,
+    label = "Hover highlight",
+    group = "behaviour",
+    help = "light the row under the pointer; `false` also stops mouse-motion reports and the menu following the pointer",
+  },
+  {
     key = "hover_timeout_ms",
     type = "number",
     default = 6000,

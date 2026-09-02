@@ -351,6 +351,7 @@ function M.sync(gui_window)
     theme_override = theme_override_for(gui_window, cfg, theme_base, survey.space),
     space = survey.space,
     spaces = survey.spaces,
+    survey = survey,
     window_dims = window,
   })
 end
