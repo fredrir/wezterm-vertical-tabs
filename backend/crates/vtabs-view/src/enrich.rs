@@ -165,10 +165,7 @@ fn palette_of(msg: &ThemeMsg) -> vtabs_theme::Palette {
 /// Lua pre-resolves every override to hex, so an unknown key is a user typo, not a shape we must
 /// guess at: it is ignored rather than failing the frame.
 fn user_theme(msg: &ThemeMsg) -> vtabs_theme::UserTheme {
-    let mut t = vtabs_theme::UserTheme {
-        elevation: msg.elevation,
-        ..Default::default()
-    };
+    let mut t = vtabs_theme::UserTheme::default();
     for (key, value) in &msg.overrides {
         let hex = value.as_str().map(str::to_string);
         let number = value.as_f64();

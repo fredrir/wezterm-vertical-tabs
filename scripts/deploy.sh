@@ -76,13 +76,22 @@ prd)
 release)
   if [ "$triple" = unknown ]; then die "unsupported host: $(uname -sm)"; fi
   command -v curl >/dev/null 2>&1 || die "curl not found"
-  base="$url/releases/download/v$version"
   tmp=$(mktemp -d /tmp/vtabs-rel.XXXXXX)
   trap 'rm -rf "$tmp"' EXIT
 
+  # Resolve GitHub's latest *published* release. The checked-out branch may be
+  # ahead of or behind it, so plugin/vtabs/version.lua is not authoritative here.
+  latest="$url/releases/latest/download/SHA256SUMS"
+  resolved=$(curl -fsSI "$latest" | sed -n 's/^[Ll]ocation:[[:space:]]*//p' | tr -d '\r' | head -1)
+  tag=$(printf '%s\n' "$resolved" | sed -n 's|.*/releases/download/\(v[^/]*\)/SHA256SUMS.*|\1|p')
+  printf '%s\n' "$tag" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$' \
+    || die "could not resolve a semantic release tag from $resolved"
+  version=${tag#v}
+  base="$url/releases/download/$tag"
+
   say "${dim}fetching $base/$name-$triple${off}"
+  curl -fsSL -o "$tmp/SHA256SUMS" "$resolved" || die "SHA256SUMS download failed"
   curl -fsSL -o "$tmp/$name-$triple" "$base/$name-$triple" || die "download failed (is v$version published?)"
-  curl -fsSL -o "$tmp/SHA256SUMS" "$base/SHA256SUMS" || die "SHA256SUMS download failed"
   expected=$(grep " $name-$triple\$" "$tmp/SHA256SUMS" | cut -d' ' -f1)
   actual=$(shasum -a 256 "$tmp/$name-$triple" | cut -d' ' -f1)
   [ -n "$expected" ] && [ "$expected" = "$actual" ] || die "checksum mismatch"

@@ -154,13 +154,13 @@ fn pong_echoes_the_ping_in_echo_and_carries_its_own_n() {
     assert_eq!(payloads(&a)[1], r#"{"t":"pong","echo":7,"n":2}"#);
 }
 
-const CONFIG: &str = r#"{"rev":1,"desired_width":28,"position":"left","icons":true,
+const CONFIG: &str = r#"{"rev":1,"position":"left","icons":true,
         "meta":"auto","meta_sep":" ","double_click_ms":300,"tear_off":true,"wheel":"scroll",
         "context":"popover","hover_timeout_ms":1500,
         "render":{"meta":true,"padding":{"left":1,"right":1,"top":0,"bottom":0},
         "tab_height":"card","separator":"gap","pinned_style":"compact","close_button":"hover",
         "scroll_indicator":"auto","new_tab_button":true,"new_tab_label":"New tab","hover":"follow"}}"#;
-const THEME: &str = r#"{"rev":1,"scheme":{"ansi":[],"brights":[]},"overrides":{}}"#;
+const THEME: &str = r#"{"rev":1,"scheme":{"ansi":[]},"overrides":{}}"#;
 const MODEL: &str = r#"{"rev":1,"screen":"sidebar","active":1,
         "strip":{"buttons":[{"id":"toggle"},{"id":"new_tab"}]},
         "tabs":[{"id":1,"index":1,"title":"one"},{"id":2,"index":2,"title":"two"}]}"#;

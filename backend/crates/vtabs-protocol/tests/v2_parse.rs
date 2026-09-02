@@ -8,9 +8,9 @@ fn parse(line: &str) -> Command {
 
 #[test]
 fn v2_lines_parse() {
-    let config = r##"{"t":"config","rev":3,"desired_width":28,"rail_width":5,"position":"left",
-        "collapsed":"rail","icons":true,"icon_map":{"nvim":"N"},"meta":"cwd",
-        "glyphs":{"custom_block":true,"east_asian_wide":false},"animate":true,
+    let config = r##"{"t":"config","rev":3,"rail_width":5,"position":"left",
+        "icons":true,"icon_map":{"nvim":"N"},"meta":"cwd",
+        "glyphs":{"custom_block":true,"east_asian_wide":false},
         "double_click_ms":300,"tear_off":true,"wheel":"scroll","context":"popover",
         "hover_timeout_ms":1200,
         "render":{"padding":{"left":1,"right":1,"top":0,"bottom":0},"frame":false,
@@ -26,8 +26,8 @@ fn v2_lines_parse() {
     assert_eq!(c.render.unwrap().padding.left, 1);
 
     let theme = r##"{"t":"theme","rev":7,"scheme":{"background":"#1e1e2e","foreground":"#cdd6f4",
-        "cursor_bg":"#f5e0dc","ansi":["#45475a","#f38ba8"],"brights":[]},
-        "overrides":{"accent":"#89b4fa","elevation":0.12},"elevation":0.12}"##;
+        "cursor_bg":"#f5e0dc","ansi":["#45475a","#f38ba8"]},
+        "overrides":{"accent":"#89b4fa","elevation":0.12}}"##;
     let Command::Theme(t) = parse(theme) else {
         panic!("not theme")
     };
@@ -43,7 +43,7 @@ fn v2_lines_parse() {
         "spaces":[{"id":"home","name":"Home","icon":"H"},{"id":"work","unseen":true}],
         "tabs":[{"id":7,"index":1,"title":"nvim","pane_title":"nvim - x","override":null,
             "proc":"nvim","cwd":"~/p/x","host":null,"user":null,"domain":"local",
-            "pinned":false,"private":false,"unseen":false}],"private":false}"##;
+            "pinned":false,"unseen":false}],"private":false}"##;
     let Command::Model(m) = parse(model) else {
         panic!("not model")
     };

@@ -244,7 +244,7 @@ checksum = "b4ac048d71ede7ee76d585517add45da530660ef4390e49b098733c6e897f254"
 
 [[package]]
 name = "vtabs-core"
-version = "0.1.0"
+version = "0.1.8"
 dependencies = [
  "serde",
  "vtabs-protocol",
@@ -252,7 +252,7 @@ dependencies = [
 
 [[package]]
 name = "vtabs-input"
-version = "0.1.0"
+version = "0.1.8"
 dependencies = [
  "serde_json",
  "vtabs-core",
@@ -263,7 +263,7 @@ dependencies = [
 
 [[package]]
 name = "vtabs-protocol"
-version = "0.1.0"
+version = "0.1.8"
 dependencies = [
  "base64",
  "serde",
@@ -272,7 +272,7 @@ dependencies = [
 
 [[package]]
 name = "vtabs-runtime"
-version = "0.1.0"
+version = "0.1.8"
 dependencies = [
  "base64",
  "crossterm",
@@ -285,14 +285,14 @@ dependencies = [
 
 [[package]]
 name = "vtabs-theme"
-version = "0.1.0"
+version = "0.1.8"
 dependencies = [
  "serde",
 ]
 
 [[package]]
 name = "vtabs-view"
-version = "0.1.0"
+version = "0.1.8"
 dependencies = [
  "serde",
  "serde_json",
@@ -304,11 +304,11 @@ dependencies = [
 
 [[package]]
 name = "vtabs-zen"
-version = "0.1.0"
+version = "0.1.8"
 
 [[package]]
 name = "wez-vtabs"
-version = "0.1.0"
+version = "0.1.8"
 dependencies = [
  "serde_json",
  "vtabs-protocol",

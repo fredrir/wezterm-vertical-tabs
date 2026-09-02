@@ -24,7 +24,7 @@ fn a_space_shows_its_icon_else_its_initial_else_a_dot() {
 
 #[test]
 fn the_active_space_is_the_one_the_model_names() {
-    let cfg: ConfigMsg = serde_json::from_str(r#"{"rev":1,"desired_width":28}"#).unwrap();
+    let cfg: ConfigMsg = serde_json::from_str(r#"{"rev":1}"#).unwrap();
     let theme: ThemeMsg = serde_json::from_str(r#"{"rev":1}"#).unwrap();
     let model: ModelMsg = serde_json::from_str(
         r#"{"rev":1,"space":"pi","spaces":[{"id":"home","name":"Home"},{"id":"pi","icon":"@","unseen":true}]}"#,
@@ -54,12 +54,9 @@ fn tab(proc: Option<&str>, cwd: Option<&str>) -> TabRecord {
         host: None,
         user: None,
         domain: None,
-        panes: 0,
         pinned: false,
-        private: false,
         unseen: false,
         settings: false,
-        zoomed: false,
     }
 }
 

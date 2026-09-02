@@ -5,13 +5,10 @@ use serde::Deserialize;
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct ConfigMsg {
     pub rev: u64,
-    pub desired_width: u32,
     #[serde(default)]
     pub rail_width: u32,
     #[serde(default)]
     pub position: Option<String>,
-    #[serde(default)]
-    pub collapsed: Option<String>,
     #[serde(default)]
     pub icons: bool,
     #[serde(default)]
@@ -22,11 +19,7 @@ pub struct ConfigMsg {
     #[serde(default)]
     pub meta_sep: Option<String>,
     #[serde(default)]
-    pub unseen: bool,
-    #[serde(default)]
     pub glyphs: GlyphFlags,
-    #[serde(default)]
-    pub animate: bool,
     #[serde(default)]
     pub double_click_ms: u64,
     #[serde(default)]
@@ -154,8 +147,6 @@ pub struct ThemeMsg {
     /// `hooks.theme` output, pre-resolved by Lua to hex.
     #[serde(default)]
     pub overrides: BTreeMap<String, serde_json::Value>,
-    #[serde(default)]
-    pub elevation: Option<f64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Default, Deserialize)]
@@ -167,13 +158,9 @@ pub struct Scheme {
     #[serde(default)]
     pub cursor_bg: Option<String>,
     #[serde(default)]
-    pub selection_bg: Option<String>,
-    #[serde(default)]
     pub active_tab_bg: Option<String>,
     #[serde(default)]
     pub ansi: Vec<String>,
-    #[serde(default)]
-    pub brights: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -363,15 +350,9 @@ pub struct TabRecord {
     #[serde(default)]
     pub domain: Option<String>,
     #[serde(default)]
-    pub panes: i64,
-    #[serde(default)]
     pub pinned: bool,
     #[serde(default)]
-    pub private: bool,
-    #[serde(default)]
     pub unseen: bool,
-    #[serde(default)]
-    pub zoomed: bool,
     #[serde(default)]
     pub settings: bool,
 }

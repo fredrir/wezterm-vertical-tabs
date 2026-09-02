@@ -9,10 +9,13 @@ stamp() { [ -e "$1" ] && printf '%s  %s' "$(wc -c <"$1" | tr -d ' ')B" "$(date -
 
 say "${dim}source${off}"
 row "root" "$root"
-row "branch" "$(git -C "$root" rev-parse --abbrev-ref HEAD) $(git -C "$root" diff --quiet 2>/dev/null && echo clean || echo dirty)"
+state=clean
+git -C "$root" diff --quiet 2>/dev/null && git -C "$root" diff --cached --quiet 2>/dev/null || state=dirty
+row "branch" "$(git -C "$root" rev-parse --abbrev-ref HEAD) $state"
 row "version.lua" "$version"
 row "Cargo.toml" "$(sed -n 's/^version *= *"\(.*\)"$/\1/p' "$root/backend/Cargo.toml" | head -1)"
-row "latest tag" "$(git -C "$root" describe --tags --abbrev=0 2>/dev/null || echo none)"
+latest_tag=$(git -C "$root" tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -1)
+row "latest tag" "${latest_tag:-none}"
 
 say ""
 say "${dim}builds${off}"

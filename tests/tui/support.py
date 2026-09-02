@@ -11,15 +11,11 @@ from .adapter import Terminal
 CONFIG: dict[str, Any] = {
     "t": "config",
     "rev": 1,
-    "desired_width": 28,
     "rail_width": 5,
     "position": "left",
-    "collapsed": "rail",
     "icons": False,
     "meta": "cwd",
     "meta_sep": " · ",
-    "unseen": True,
-    "animate": False,
     "double_click_ms": 300,
     "tear_off": True,
     "wheel": "scroll",
@@ -43,7 +39,6 @@ THEME: dict[str, Any] = {
         "background": "#1e1e2e",
         "foreground": "#cdd6f4",
         "cursor_bg": "#f5e0dc",
-        "selection_bg": "#585b70",
         "active_tab_bg": "#313244",
         "ansi": [
             "#45475a",
@@ -55,19 +50,8 @@ THEME: dict[str, Any] = {
             "#94e2d5",
             "#bac2de",
         ],
-        "brights": [
-            "#585b70",
-            "#f38ba8",
-            "#a6e3a1",
-            "#f9e2af",
-            "#89b4fa",
-            "#f5c2e7",
-            "#94e2d5",
-            "#a6adc8",
-        ],
     },
-    "overrides": {"accent": "#89b4fa"},
-    "elevation": 0.06,
+    "overrides": {"accent": "#89b4fa", "elevation": 0.06},
 }
 
 
@@ -80,11 +64,8 @@ def tab(tab_id: int, title: str, *, index: int | None = None) -> dict[str, Any]:
         "proc": "zsh",
         "cwd": f"~/work/{title.lower().replace(' ', '-')}",
         "domain": "local",
-        "panes": 1,
         "pinned": False,
-        "private": False,
         "unseen": False,
-        "zoomed": False,
     }
 
 
@@ -114,4 +95,3 @@ async def dress_sidebar(terminal: Terminal, model: dict[str, Any]) -> None:
     """Send a complete public state; incomplete state intentionally does not draw."""
 
     await terminal.send(CONFIG, THEME, model)
-

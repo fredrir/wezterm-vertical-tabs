@@ -157,8 +157,11 @@ HOME=$(mktemp -d) WEZTERM_LOG=info wezterm --config-file scripts/probe-coroutine
 ```sh
 just deploy                  
 just deploy --from-prd
-just deploy --from-release
+just deploy --from-release    # newest published GitHub release
 ```
+
+`just tag` merges `dev` into `main`, creates the next patch release, then fast-forwards and pushes
+`dev` to the same release commit. This keeps both branches' version metadata in sync.
 
 ## Local development config
 
