@@ -608,3 +608,29 @@ test("the rail's narrow width is never adopted as the user's desired width", fun
   eq(sb.cols, 28)
   eq(geometry.desired(wid), 28, "the rail width was not adopted as a divider drag")
 end)
+
+test("the width the sidebar reports outranks a mirror that has not caught up", function()
+  local win, gui = window(1)
+  sidebar.ensure(gui)
+  local tab = win.tab_list[1]
+  local sb = mark_ready(tab)
+  local wid = gui:window_id()
+  eq(geometry.correct(gui), false, "baseline recorded")
+  local issued = {}
+  gui.perform_action = function(_, action)
+    if action.action == "AdjustPaneSize" then
+      issued[#issued + 1] = action.arg
+    end
+  end
+  win:resize(4)
+  assert(geometry.correct(gui), "the window growth is corrected")
+  eq(issued[1][2], 2)
+  -- The mux applied half and the backend says so; the mirror still reads 30.
+  geometry.landed(wid)
+  assert(geometry.correct(gui, nil, { pane_id = sb:pane_id(), cols = 29 }))
+  eq(issued[2][1], "Left")
+  eq(issued[2][2], 1, "one column from the reported 29, not two from the mirror's 30")
+  eq(sb.cols, 30, "the mirror was never trusted")
+  gui.perform_action = nil
+  config.setup { backend = { path = "/bin/wez-vtabs" } }
+end)

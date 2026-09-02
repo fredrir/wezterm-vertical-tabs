@@ -263,7 +263,10 @@ local function versioned(wid, kind, body, tag)
   return entry.line
 end
 
----Sends the v2 state to every ready v2 sidebar in the window, skipping unchanged sends per pane.
+---Sends the v2 state to the sidebar the window shows, skipping unchanged sends per pane. A sidebar
+---in a background tab is left as it is and catches up the poll its tab comes to the front: nothing
+---it paints meanwhile can be seen, and every frame it did paint would cross the mux and be rendered
+---all the same. A pane that has never been dressed is the exception, so it paints at all.
 function M.sync(gui_window, ctx)
   local wid = gui_window:window_id()
   local cfg = ctx.cfg
@@ -288,17 +291,23 @@ function M.sync(gui_window, ctx)
       end
     end
   end
+  local function shown_or_bare(pane, tab)
+    return sent[pane:pane_id()] == nil or (ctx.active_tab_id ~= nil and tab:tab_id() == ctx.active_tab_id)
+  end
+  local function speaks_v2(pane)
+    return sidebar.is_ready(pane) and (store.proto[pane:pane_id()] or 1) >= 2
+  end
   local mux_win = gui_window:mux_window()
   for _, info in ipairs(mux_win:tabs_with_info()) do
     local sb = sidebar.find(info.tab)
-    if sb and not sidebar.is_settings(sb) and sidebar.is_ready(sb) and (store.proto[sb:pane_id()] or 1) >= 2 then
+    if sb and shown_or_bare(sb, info.tab) and not sidebar.is_settings(sb) and speaks_v2(sb) then
       push(sb, { "config", "theme", "model", "menu" })
     end
   end
   -- The settings pane shares config and theme but has a screen of its own: one model, its own kind.
   local settings = require "vtabs.settings"
-  local _, page_pane = settings.find(mux_win)
-  if page_pane and sidebar.is_ready(page_pane) and (store.proto[page_pane:pane_id()] or 1) >= 2 then
+  local page_tab, page_pane = settings.find(mux_win)
+  if page_pane and shown_or_bare(page_pane, page_tab) and speaks_v2(page_pane) then
     local st = settings.page_state(wid)
     local body = require("vtabs.settings_model").body(cfg, st)
     lines.settings = versioned(wid, "settings", encode(body), "model")

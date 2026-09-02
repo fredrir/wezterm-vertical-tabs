@@ -353,3 +353,66 @@ test("a pane on a mux domain is never driven through the cli", function()
   eq(#wezterm.spawned, spawned, "no cli process for a mux-domain pane")
   eq(#win.tab_list[1]:panes(), 2)
 end)
+
+test("a backend is restarted after three unanswered pings, never for idle time alone", function()
+  local win, gui = H.window(1, { attach = true, ready = true })
+  local tab = win.tab_list[1]
+  local sb = sidebar.find(tab)
+  local pid = sb:pane_id()
+  local clock = H.clock()
+  local function pings()
+    local n = 0
+    for _, line in ipairs(sb.sent) do
+      n = n + (line:find('"ping"', 1, true) and 1 or 0)
+    end
+    return n
+  end
+  local logged = #wezterm.log
+  store.seen[pid] = clock.advance(0)
+  -- the GUI polled nothing for a minute: the first poll back only asks
+  eq(rescue.check_liveness(gui, tab, sb, clock.advance(60000)), true)
+  eq(pings(), 1, "one ping, no restart")
+  eq(#tab:panes(), 2)
+  -- the pong lands: a fresh cycle, quiet until the idle threshold again
+  store.seen[pid] = clock.advance(10)
+  eq(rescue.check_liveness(gui, tab, sb, clock.advance(5000)), true)
+  eq(pings(), 1)
+  rescue.check_liveness(gui, tab, sb, clock.advance(4000))
+  eq(pings(), 2, "idle again: pinged")
+  -- silence: one more ping per poll two seconds apart; the gap after the third unanswered restarts
+  rescue.check_liveness(gui, tab, sb, clock.advance(500))
+  eq(pings(), 2, "never re-pinged inside the gap")
+  eq(rescue.check_liveness(gui, tab, sb, clock.advance(2000)), true)
+  eq(pings(), 3)
+  eq(rescue.check_liveness(gui, tab, sb, clock.advance(2000)), true)
+  eq(pings(), 4)
+  eq(rescue.check_liveness(gui, tab, sb, clock.advance(2000)), false)
+  eq(#tab:panes(), 1, "the sidebar is closed")
+  eq(warnings(logged, "unresponsive"), 1)
+  clock.restore()
+end)
+
+test("the model goes to the shown sidebar; a background one catches up when its tab comes forward", function()
+  local win, gui = H.window(2, { attach = true, ready = true })
+  local view = require "vtabs.view"
+  local shown, hidden = sidebar.find(win.tab_list[1]), sidebar.find(win.tab_list[2])
+  store.proto[shown:pane_id()], store.proto[hidden:pane_id()] = 2, 2
+  local function models(sb)
+    local n = 0
+    for _, line in ipairs(sb.sent) do
+      n = n + (line:find('"t":"model"', 1, true) and 1 or 0)
+    end
+    return n
+  end
+  view.sync(gui)
+  eq(models(shown), 1)
+  eq(models(hidden), 1, "a sidebar never written to is dressed once")
+  win.tab_list[2]:set_title "renamed"
+  view.sync(gui)
+  eq(models(shown), 2, "the shown sidebar gets the change")
+  eq(models(hidden), 1, "the background one is left as it is")
+  win.active_tab_ref = win.tab_list[2]
+  view.sync(gui)
+  eq(models(hidden), 2, "and catches up once shown")
+  eq(models(shown), 2)
+end)

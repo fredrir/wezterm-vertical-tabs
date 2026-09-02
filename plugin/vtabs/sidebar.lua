@@ -9,6 +9,7 @@ local M = {}
 
 M.is_overlay = identity.is_overlay
 M.marker = identity.marker
+M.title = identity.title
 M.has_marker = identity.has_marker
 M.is_settings = identity.is_settings
 M.is_ready = identity.is_ready

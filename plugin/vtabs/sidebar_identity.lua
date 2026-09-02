@@ -28,9 +28,22 @@ function M.is_overlay(pane)
   return type(domain) ~= "string" or domain:find "TermWiz" ~= nil
 end
 
+local tick = 0
+
+---One title read per pane per poll: every role check starts from the title, and half a dozen
+---callers ask per poll, while a title only ever changes between polls.
 local function pane_title(pane)
-  return mux.title(pane)
+  local pid = pane:pane_id()
+  local seen = store.title[pid]
+  if seen and seen.tick == tick then
+    return seen.value
+  end
+  local value = mux.title(pane)
+  store.title[pid] = { tick = tick, value = value }
+  return value
 end
+
+M.title = pane_title
 
 ---Role a backend title claims, from one read: "sidebar", "settings", or nil.
 local function title_role(title)
@@ -107,7 +120,6 @@ end
 
 local RANK = { none = 0, marker = 1, mapped = 2, ready = 3 }
 
-local tick = 0
 ---Declared through `store`, so a forgotten tab or window takes them with it.
 local scope = store.scope "sidebar"
 local classified = scope.tab()

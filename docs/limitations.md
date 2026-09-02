@@ -27,10 +27,11 @@
   `wezterm cli split-pane --move-pane-id`; where that CLI is unusable (the GUI
   is not on its own socket) the plugin warns once and leaves the pane alone.
 - Width correction is one `AdjustPaneSize` on the active tab, issued only once a
-  window resize has settled (no frame for 150 ms); during a drag or an animated
-  fill the sidebar keeps whatever WezTerm dealt it. The adjust resizes around
-  the tab's active pane, so focus moves to the sidebar only while content panes
-  sit side by side.
+  window resize has settled (no frame for 100 ms); during a drag or an animated
+  fill the sidebar keeps whatever WezTerm dealt it. The sidebar's own `resize`
+  report drives the follow-up, so a mux mirror that lags never overshoots. The
+  adjust resizes around the tab's active pane, so focus moves to the sidebar
+  only while content panes sit side by side.
 - `wezterm cli` (`kill-pane`, `split-pane --move-pane-id`) is used only for
   panes in the GUI's own `local` domain; a pane on a mux domain is closed by
   activation instead, since a CLI request for it stalls in the GUI's mux server.
@@ -65,7 +66,9 @@
   before rendering.
 - Every sidebar backend, including one on a remote mux host, receives every
   tab's title and cwd in model updates.
-- A sidebar whose backend stops answering pings for 20 s is restarted.
+- A sidebar is pinged after 8 s of silence, then every 2 s; three unanswered
+  pings in a row restart it. Idle time alone never does: polls stop while the
+  GUI is hidden or mid-resize.
 - Spaces are per GUI window. A tab WezTerm itself closes (not the plugin) hands
   focus to the physical neighbour, which may sit in another space; the sidebar
   then follows it. Assignments are keyed by tab id and gated like pins. A

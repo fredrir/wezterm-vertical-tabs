@@ -22,7 +22,7 @@ local ADJUST_WAIT_MS = 1000
 local ADOPT_FLOOR_MS = 250
 -- `window-resized` fires once per frame of a drag or an animated fill; an adjust issued mid-burst
 -- fights the next frame and lands off by one. Nothing adjusts until the frames have stopped.
-local RESIZE_QUIET_MS = 150
+local RESIZE_QUIET_MS = 100
 M.RESIZE_QUIET_MS = RESIZE_QUIET_MS
 M.SETTLE_MS = RESIZE_QUIET_MS + 20
 
@@ -149,7 +149,9 @@ local function same_attempt(a, b)
 end
 
 ---Re-asserts the sidebar width on the active tab; background tabs are corrected once they activate.
-local function correct(gui_window)
+---`known` is a width the sidebar itself just reported, `{ pane_id, cols }`: a mux mirror can lag
+---the pane it mirrors, and a delta taken from a stale width overshoots and is corrected back again.
+local function correct(gui_window, known)
   local cfg = config.get()
   local wid = gui_window:window_id()
   local tab = util.active_tab(gui_window)
@@ -164,6 +166,9 @@ local function correct(gui_window)
   local cols, dpi, cell = pane_metrics(sb)
   if not cols then
     return false
+  end
+  if known and known.pane_id == sb:pane_id() and (known.cols or 0) >= 1 then
+    cols = known.cols
   end
   local tab_cols, zoomed, bands = tab_metrics(tab, sb:pane_id())
   if zoomed then
@@ -270,13 +275,13 @@ local function correct(gui_window)
 end
 
 ---`wait` takes the window's gate; without it a correction that meets a mutation in flight is
----skipped, and the next poll corrects anyway.
-function M.correct(gui_window, wait)
+---skipped, and the next poll corrects anyway. `known` is the width the sidebar just reported.
+function M.correct(gui_window, wait, known)
   local wid = gui_window:window_id()
   if wait then
-    return gate.run(wid, "correct", correct, gui_window)
+    return gate.run(wid, "correct", correct, gui_window, known)
   end
-  return gate.try(wid, "correct", correct, gui_window) == true
+  return gate.try(wid, "correct", correct, gui_window, known) == true
 end
 
 ---Per-poll entry point: corrects at once when the active tab changed, otherwise at most every 400 ms.

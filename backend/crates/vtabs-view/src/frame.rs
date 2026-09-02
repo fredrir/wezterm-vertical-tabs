@@ -6,7 +6,7 @@ use crate::text;
 pub type Rgb = [u8; 3];
 
 /// One column. `ch == None` is Lua's `""` continuation cell: it owns no text and never breaks a run.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Cell {
     pub ch: Option<char>,
     pub fg: Rgb,

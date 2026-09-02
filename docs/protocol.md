@@ -28,7 +28,8 @@ plugin owns mux facts, config and dispatch:
 Nothing is drawn or hit-tested until `config`, `theme` and `model` have each landed at least once.
 The size is re-read before every frame; a change is announced by `resize` and clears the pane
 before the frame. Every frame is written inside DEC 2026 synchronized-update brackets
-`?2026h`…`?2026l`.
+`?2026h`…`?2026l`. A frame over one already shown writes only the rows that differ; a wipe, a
+resize or a fade writes every row.
 
 On exit, restore everything (mouse off, auto-wrap on, cursor shown, main screen, cooked mode).
 
@@ -37,7 +38,8 @@ On exit, restore everything (mouse off, auto-wrap on, cursor shown, main screen,
 Five messages are idempotent and full *within their domain*: `config`, `theme`, `model` and `menu`
 replace the previous one whole; `fx` is a fire-and-forget hint addressed to one pane. Lua encodes
 each once per window per message kind and skips a pane whose last-sent string for that kind is
-unchanged (`plugin/vtabs/wire.lua`).
+unchanged (`plugin/vtabs/wire.lua`). Only the active tab's sidebar is written to; a background
+sidebar catches up the poll its tab is shown, and a pane never written to is dressed at once.
 
 | command | shape | effect |
 | --- | --- | --- |
@@ -355,6 +357,6 @@ authenticated exactly like a sidebar pane: its `ready` branch calls `sidebar.aut
 
 | Platform | Source | Fallback |
 | -------- | ------ | -------- |
-| unix     | `SIGWINCH`, checked every 100 ms | full size poll every 2 s |
+| unix     | `SIGWINCH`, wakes the loop at once | full size poll every 2 s |
 | other    | size poll every 250 ms | — |
 | any      | re-read before every frame and fade tick | — |

@@ -17,6 +17,20 @@ local scope = store.scope "view"
 local theme_hooks = scope.window()
 local chrome = scope.window()
 local banding, banding_saved = scope.window(), scope.window()
+local effective = scope.window()
+local last_strip = scope.window()
+
+---`effective_config` hands over the whole config as a Lua table, every colour scheme included, on
+---each call. Nothing read from it moves without a reload, and a reload drops this.
+function M.effective_config(gui_window)
+  local wid = gui_window:window_id()
+  local cached = effective[wid]
+  if cached == nil then
+    cached = mux.effective_config(gui_window)
+    effective[wid] = cached
+  end
+  return cached
+end
 
 ---WezTerm titles the window after its active pane; under `hover = "follow"` that is the sidebar.
 function M.window_title(tab, pane, tabs, panes)
@@ -95,9 +109,10 @@ function M.invalidate_theme(window_id)
   if window_id then
     theme_hooks[window_id] = nil
     chrome[window_id] = nil
+    effective[window_id] = nil
     return
   end
-  for _, cache in ipairs { theme_hooks, chrome } do
+  for _, cache in ipairs { theme_hooks, chrome, effective } do
     for id in pairs(cache) do
       cache[id] = nil
     end
@@ -108,16 +123,16 @@ end
 local function chrome_for(gui_window, cfg)
   local wid = gui_window:window_id()
   if not chrome[wid] then
-    local effective = mux.effective_config(gui_window) or {}
-    local decorations = tostring(effective.window_decorations or "")
+    local config_now = M.effective_config(gui_window) or {}
+    local decorations = tostring(config_now.window_decorations or "")
     -- `titlebar = "macos"` is the preview knob: it claims the reserve on a machine that has none.
     local preview = cfg.titlebar == "macos"
     local asked = preview
       or cfg.titlebar == "integrate"
       or (cfg.titlebar == "auto" and decorations:find("INTEGRATED_BUTTONS", 1, true) ~= nil)
     local native = preview
-      or effective.integrated_title_button_style == nil
-      or effective.integrated_title_button_style == "MacOsNative"
+      or config_now.integrated_title_button_style == nil
+      or config_now.integrated_title_button_style == "MacOsNative"
     if platform.is_mac and asked and not native then
       util.warn_once("button-style", "integrated_title_button_style must be MacOsNative to reserve cells")
     end
@@ -184,10 +199,10 @@ end
 
 ---A rail has no room beside the lights, so its toggle centres below them; without telling
 ---`strip_geometry` which mode it is in, the toggle lands off the end of the rail.
-local function strip_for(gui_window, cfg, dims, rail)
+local function strip_for(gui_window, cfg, dims, rail, window)
   local facts = chrome_for(gui_window, cfg)
   local wid = gui_window:window_id()
-  local window = mux.dims(gui_window) or {}
+  window = window or {}
   local g = platform.strip_geometry(dims, {
     is_mac = platform.is_mac or facts.preview,
     preview = facts.preview and not platform.is_mac or nil,
@@ -223,8 +238,8 @@ local function theme_override_for(gui_window, cfg, base, space)
   if per[key] == nil then
     local custom = false
     if cfg.hooks.theme then
-      local effective = mux.effective_config(gui_window)
-      local palette = effective and effective.resolved_palette or {}
+      local config_now = M.effective_config(gui_window)
+      local palette = config_now and config_now.resolved_palette or {}
       local resolved = require("vtabs.theme").resolve(base, palette, { private = state.is_private(wid) })
       local ok, answer = pcall(cfg.hooks.theme, gui_window, resolved)
       if not ok then
@@ -296,6 +311,7 @@ function M.sync(gui_window)
   -- After the width settles, so the card is drawn at the pane rect the correction leaves behind.
   require("vtabs.frame").sync(gui_window)
 
+  local window = mux.dims(gui_window)
   local wire_strip = nil
   for _, info in ipairs(mux_win:tabs_with_info()) do
     local sb = sidebar.find(info.tab)
@@ -305,7 +321,7 @@ function M.sync(gui_window)
       local dims = dims_of(sb)
       if dims then
         local rail = state.is_collapsed(wid) and cfg.collapsed == "rail" or nil
-        local strip = strip_for(gui_window, cfg, dims, rail)
+        local strip = strip_for(gui_window, cfg, dims, rail, window)
         if is_active or wire_strip == nil then
           wire_strip = strip
         end
@@ -314,21 +330,28 @@ function M.sync(gui_window)
       end
     end
   end
-  local effective = mux.effective_config(gui_window)
-  local theme_base = spaces.theme_for(cfg, wid, effective and effective.resolved_palette or nil)
+  -- A poll that finds no sidebar able to report a size keeps the strip it had: dropping it for one
+  -- frame would move every row below it, and the mux catches up a moment later anyway.
+  if wire_strip then
+    last_strip[wid] = wire_strip
+  else
+    wire_strip = last_strip[wid]
+  end
+  local config_now = M.effective_config(gui_window)
+  local theme_base = spaces.theme_for(cfg, wid, config_now and config_now.resolved_palette or nil)
   require("vtabs.wire").sync(gui_window, {
     cfg = cfg,
     items = items,
     footer = footer,
     active_tab_id = active_tab_id,
-    effective = effective,
+    effective = config_now,
     chrome = chrome_for(gui_window, cfg),
     strip = wire_strip,
     theme_base = theme_base,
     theme_override = theme_override_for(gui_window, cfg, theme_base, survey.space),
     space = survey.space,
     spaces = survey.spaces,
-    window_dims = mux.dims(gui_window),
+    window_dims = window,
   })
 end
 

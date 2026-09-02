@@ -25,7 +25,7 @@ local function title_parts(tab, pane, cfg)
   if title == "" or sidebar.marker(title) then
     title = nil
   end
-  local pane_title = mux.title(pane)
+  local pane_title = sidebar.title(pane)
   if not pane_title or pane_title == "" or sidebar.marker(pane_title) then
     pane_title = nil
   end

@@ -152,7 +152,7 @@ end
 ---Frame tint, card colour and border, from the same palette the sidebar paints itself from, with
 ---the active space's theme laid over it; `border = "accent"` takes that space's accent.
 function M.colours(gui_window, cfg)
-  local effective = mux.effective_config(gui_window) or {}
+  local effective = require("vtabs.view").effective_config(gui_window) or {}
   local palette = effective.resolved_palette or {}
   local wid = gui_window:window_id()
   local resolved = theme.resolve(spaces.theme_for(cfg, wid, palette), palette, { private = state.is_private(wid) })
@@ -205,7 +205,7 @@ end
 ---A background of the user's own is a deliberate choice, and transparency composites *through* the
 ---frame rather than over it. Either one declines the frame with one warning, never a silent change.
 function M.refuses(gui_window)
-  local effective = mux.effective_config(gui_window) or {}
+  local effective = require("vtabs.view").effective_config(gui_window) or {}
   -- `background` is a Vec in wezterm's config, so an unset one arrives as an empty table, not nil.
   -- The only layer the frame tolerates is the exact file it wrote itself.
   local theirs = effective.background

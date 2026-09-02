@@ -1,6 +1,10 @@
 //! Encodes a laid-out frame the way render.lua's `emit`/`paint` do, byte for byte: one CUP per
 //! painted row, SGR only where a run changes, and the cursor hidden for the whole frame, all
 //! inside one DEC 2026 synchronized update so a resize never shows half a frame.
+//!
+//! A repaint over a frame the pane already shows writes only the rows that differ: every byte a
+//! sidebar emits is parsed by the terminal, shipped through any mux in between and re-rendered by
+//! the GUI, so a hover that moves one row costs two rows, not the whole pane.
 
 use vtabs_view::frame::{Cell, Rgb, faded};
 use vtabs_view::render::Frame;
@@ -67,20 +71,94 @@ fn row_bytes(cells: &[Cell], page_bg: Rgb, fade: Option<f64>) -> String {
     out
 }
 
+/// One synchronized update around the rows written.
+fn framed(body: &str) -> String {
+    format!("{SYNC_BEGIN}{HIDE_CURSOR}{body}{RESET}{SYNC_END}")
+}
+
 /// The whole frame as one write: an unpainted row is skipped, keeping whatever the pane had there.
 pub fn rows_bytes(rows: &[Option<Vec<Cell>>], fades: &[Option<f64>], page_bg: Rgb) -> String {
-    let mut out = String::from(SYNC_BEGIN);
-    out.push_str(HIDE_CURSOR);
+    let mut body = String::new();
     for (i, cells) in rows.iter().enumerate() {
         let Some(cells) = cells else { continue };
-        cup(&mut out, i + 1);
-        out.push_str(&row_bytes(cells, page_bg, fades.get(i).copied().flatten()));
+        cup(&mut body, i + 1);
+        body.push_str(&row_bytes(cells, page_bg, fades.get(i).copied().flatten()));
     }
-    out.push_str(RESET);
-    out.push_str(SYNC_END);
-    out
+    framed(&body)
+}
+
+/// Only the rows that differ from the frame on screen, or `None` when nothing does. Both frames
+/// must share `page_bg`: it is mixed into every scrimmed cell, so a different page is a different
+/// row even where the cells agree. A row no longer painted is left as it was, as `rows_bytes` leaves it.
+pub fn changed_rows_bytes(
+    rows: &[Option<Vec<Cell>>],
+    fades: &[Option<f64>],
+    page_bg: Rgb,
+    shown_rows: &[Option<Vec<Cell>>],
+    shown_fades: &[Option<f64>],
+) -> Option<String> {
+    let mut body = String::new();
+    for (i, cells) in rows.iter().enumerate() {
+        let Some(cells) = cells else { continue };
+        let fade = fades.get(i).copied().flatten();
+        let same_cells = shown_rows
+            .get(i)
+            .is_some_and(|shown| shown.as_deref() == Some(cells.as_slice()));
+        if same_cells && shown_fades.get(i).copied().flatten() == fade {
+            continue;
+        }
+        cup(&mut body, i + 1);
+        body.push_str(&row_bytes(cells, page_bg, fade));
+    }
+    if body.is_empty() {
+        return None;
+    }
+    Some(framed(&body))
 }
 
 pub fn frame_bytes(frame: &Frame, page_bg: Rgb) -> String {
     rows_bytes(&frame.cells, &frame.fades, page_bg)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn row(text: &str) -> Option<Vec<Cell>> {
+        Some(
+            text.chars()
+                .map(|c| Cell::new(Some(c), [200, 200, 200], [30, 30, 46]))
+                .collect(),
+        )
+    }
+
+    #[test]
+    fn only_the_rows_that_differ_are_written() {
+        let bg = [30, 30, 46];
+        let shown = vec![row("one"), row("two"), None];
+        let next = vec![row("one"), row("deux"), row("new")];
+        let fades = vec![None, None, None];
+        let out = changed_rows_bytes(&next, &fades, bg, &shown, &fades).expect("two rows moved");
+        assert!(
+            !out.contains("\x1b[1;1H"),
+            "the unchanged row is skipped: {out:?}"
+        );
+        assert!(out.contains("\x1b[2;1H") && out.contains("deux"));
+        assert!(
+            out.contains("\x1b[3;1H") && out.contains("new"),
+            "a row newly painted counts"
+        );
+        assert!(out.starts_with(SYNC_BEGIN) && out.ends_with(SYNC_END));
+    }
+
+    #[test]
+    fn an_identical_frame_writes_nothing_and_a_fade_change_writes_its_row() {
+        let bg = [30, 30, 46];
+        let rows = vec![row("one"), row("two")];
+        let fades = vec![None, None];
+        assert!(changed_rows_bytes(&rows, &fades, bg, &rows, &fades).is_none());
+        let faded = vec![None, Some(0.5)];
+        let out = changed_rows_bytes(&rows, &faded, bg, &rows, &fades).expect("one row faded");
+        assert!(!out.contains("\x1b[1;1H") && out.contains("\x1b[2;1H"));
+    }
 }

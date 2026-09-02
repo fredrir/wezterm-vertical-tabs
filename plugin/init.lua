@@ -97,7 +97,8 @@ local function register_events(cfg)
   end
   registered = true
 
-  local last_poll = store.scope("events").window()
+  local events = store.scope "events"
+  local last_poll, shown_tab = events.window(), events.window()
   local min_gap = math.max(50, math.floor(cfg.poll_ms / 4))
 
   wezterm.on(
@@ -105,9 +106,15 @@ local function register_events(cfg)
     guarded("update-status", function(window)
       local wid = window:window_id()
       local now = util.now_ms()
-      if last_poll[wid] and now - last_poll[wid] < min_gap then
+      -- WezTerm fires this on a tab switch too, native key bindings included. That poll is never
+      -- rate-gated: the new tab's sidebar attaches, corrects and highlights with the switch.
+      local tab = util.active_tab(window)
+      local tab_id = tab and tab:tab_id() or nil
+      local switched = shown_tab[wid] ~= tab_id
+      if not switched and last_poll[wid] and now - last_poll[wid] < min_gap then
         return
       end
+      shown_tab[wid] = tab_id
       last_poll[wid] = now
       sidebar.ensure(window)
       input.tick(window)

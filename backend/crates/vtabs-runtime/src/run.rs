@@ -1,5 +1,5 @@
 use std::io::{self, Read};
-use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
+use std::sync::mpsc::{self, RecvTimeoutError, Sender};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -13,28 +13,36 @@ use crate::terminal::{self, TerminalGuard};
 use crate::uservar::{DEFAULT_VAR, ROLE_VAR, Role, nonce, set_user_var, title_marker};
 
 const SIZE_POLL: Duration = Duration::from_millis(250);
-const WINCH_CHECK: Duration = Duration::from_millis(100);
 const SIZE_FALLBACK: Duration = Duration::from_secs(2);
 const ESC_TIMEOUT: Duration = Duration::from_millis(30);
 const READ_BUF: usize = 16 * 1024;
-fn spawn_stdin_reader() -> Receiver<Vec<u8>> {
-    let (tx, rx) = mpsc::channel();
+
+/// Everything that wakes the loop, on one channel: stdin bytes, the pty's end, and a SIGWINCH.
+enum Wake {
+    Stdin(Vec<u8>),
+    Eof,
+    Resized,
+}
+
+fn spawn_stdin_reader(tx: Sender<Wake>) {
     thread::spawn(move || {
         let mut stdin = io::stdin().lock();
         let mut buf = vec![0u8; READ_BUF];
         loop {
             match stdin.read(&mut buf) {
                 Err(err) if err.kind() == io::ErrorKind::Interrupted => continue,
-                Ok(0) | Err(_) => break,
+                Ok(0) | Err(_) => {
+                    let _ = tx.send(Wake::Eof);
+                    break;
+                }
                 Ok(n) => {
-                    if tx.send(buf[..n].to_vec()).is_err() {
+                    if tx.send(Wake::Stdin(buf[..n].to_vec())).is_err() {
                         break;
                     }
                 }
             }
         }
     });
-    rx
 }
 
 /// `--role sidebar|settings`; anything else keeps the default and says so in the log.
@@ -99,6 +107,7 @@ pub fn run() -> io::Result<()> {
         needs_clear: false,
         fx: None,
         last_rows: None,
+        shown_is_final: false,
         seq: 0,
         v2: crate::app::V2State::default(),
         ui: Default::default(),
@@ -120,14 +129,15 @@ pub fn run() -> io::Result<()> {
         panic!("VTABS_PANIC_ON_READY");
     }
 
-    let rx = spawn_stdin_reader();
+    let (tx, rx) = mpsc::channel();
+    spawn_stdin_reader(tx.clone());
+    let winch = signal::watch_resize(Box::new(move || tx.send(Wake::Resized).is_ok()));
     let mut parser = Parser::new();
-    let winch = signal::watch_resize();
-    let tick = if winch { WINCH_CHECK } else { SIZE_POLL };
-    let mut next_tick = Instant::now() + tick;
+    // Without SIGWINCH the size is polled; with it, only the slow fallback sweep remains.
+    let mut next_poll = (!winch).then(|| Instant::now() + SIZE_POLL);
     let mut next_full = Instant::now() + SIZE_FALLBACK;
     loop {
-        let mut deadline = next_tick.min(next_full);
+        let mut deadline = next_poll.map_or(next_full, |at| at.min(next_full));
         if let Some(at) = app.next_fx() {
             deadline = deadline.min(at);
         }
@@ -141,9 +151,13 @@ pub fn run() -> io::Result<()> {
             until_tick
         };
         let inputs = match rx.recv_timeout(timeout) {
-            Ok(chunk) => parser.feed(&chunk),
+            Ok(Wake::Stdin(chunk)) => parser.feed(&chunk),
+            Ok(Wake::Resized) => {
+                app.poll_size()?;
+                Vec::new()
+            }
             Err(RecvTimeoutError::Timeout) => parser.flush(),
-            Err(RecvTimeoutError::Disconnected) => break,
+            Ok(Wake::Eof) | Err(RecvTimeoutError::Disconnected) => break,
         };
         for input in inputs {
             if !app.handle(input)? {
@@ -153,11 +167,9 @@ pub fn run() -> io::Result<()> {
         let now = Instant::now();
         app.tick_fx(now)?;
         app.tick_hover(now)?;
-        if now >= next_tick {
-            next_tick = now + tick;
-            if !winch || signal::resized() {
-                app.poll_size()?;
-            }
+        if next_poll.is_some_and(|at| now >= at) {
+            next_poll = Some(now + SIZE_POLL);
+            app.poll_size()?;
         }
         if now >= next_full {
             next_full = now + SIZE_FALLBACK;

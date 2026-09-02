@@ -13,7 +13,10 @@ local identity = require "vtabs.sidebar_identity"
 local M = {}
 
 local PING_AFTER_MS = 8000
-local DEAD_AFTER_MS = 20000
+-- Polls stop while the GUI is hidden, mid-resize or busy, so idle time alone condemns nothing: a
+-- backend is dead once it has left this many pings in a row unanswered, a poll and this gap apart.
+local PING_GAP_MS = 2000
+local UNANSWERED_MAX = 3
 local PRUNE_MS = 30000
 local PIN_GRACE_MS = 3000
 
@@ -156,22 +159,36 @@ function M.rescue_splits(gui_window, tab)
   return gate.run(gui_window:window_id(), "rescue_splits", rescue_splits, gui_window, tab)
 end
 
----Pings idle sidebars; replaces one whose backend stopped answering.
+local function ping(sb, pid, now)
+  store.pinged[pid] = now
+  identity.send(sb, { t = "ping", n = now })
+end
+
+---Pings idle sidebars; replaces one whose backend leaves three pings in a row unanswered. Any
+---event from the pane answers, not only the pong: a backend that is talking is alive.
 function M.check_liveness(gui_window, tab, sb, now)
   local pid = sb:pane_id()
   local seen = store.seen[pid] or now
   store.seen[pid] = seen
-  local idle = now - seen
-  if idle > DEAD_AFTER_MS then
+  if (store.pinged[pid] or 0) <= seen then
+    store.unanswered[pid] = nil
+    if now - seen > PING_AFTER_MS then
+      ping(sb, pid, now)
+    end
+    return true
+  end
+  if now - store.pinged[pid] < PING_GAP_MS then
+    return true
+  end
+  local misses = (store.unanswered[pid] or 0) + 1
+  if misses >= UNANSWERED_MAX then
     util.warn("sidebar %d unresponsive, restarting", pid)
     -- required here: the poll that calls this lives in attach, so a load-time require would cycle
     require("vtabs.sidebar_attach").detach(gui_window, tab)
     return false
   end
-  if idle > PING_AFTER_MS and (store.pinged[pid] or 0) < seen then
-    store.pinged[pid] = now
-    identity.send(sb, { t = "ping", n = now })
-  end
+  store.unanswered[pid] = misses
+  ping(sb, pid, now)
   return true
 end
 

@@ -18,7 +18,7 @@ use vtabs_view::render::frame_of;
 use vtabs_view::settings::{self, SettingsView};
 
 use crate::log::Logger;
-use crate::paint::{frame_bytes, rows_bytes};
+use crate::paint::{changed_rows_bytes, rows_bytes};
 use crate::uservar::{TOKEN_VAR, set_user_var};
 
 const CLEAR_SCREEN: &str = "\x1b[2J\x1b[H";
@@ -34,8 +34,11 @@ pub struct App<W: Write> {
     /// A size change wipes the pane before the next frame.
     pub needs_clear: bool,
     pub fx: Option<FxRun>,
-    /// What the pane shows right now: the final frame any fade lands on.
+    /// The last full frame laid out: the final frame any fade lands on.
     pub last_rows: Option<PaintedRows>,
+    /// True while the pane shows exactly `last_rows`, so the next repaint may write only the rows
+    /// that differ; a fade tick, a wipe or a resize leaves the screen elsewhere and clears it.
+    pub shown_is_final: bool,
     pub seq: u64,
     pub v2: V2State,
     pub ui: UiState,
@@ -414,28 +417,28 @@ impl<W: Write> App<W> {
         }
         self.sync_size()?;
         self.fx = None;
-        if std::mem::take(&mut self.needs_clear) {
+        let cleared = std::mem::take(&mut self.needs_clear);
+        if cleared {
             self.out.write_all(CLEAR_SCREEN.as_bytes())?;
         }
-        if let Some((bytes, painted)) = self.settings_view().map(|view| {
+        // The frame on screen, when there is one to diff against; a wipe leaves nothing there.
+        let shown = if cleared || !self.shown_is_final {
+            None
+        } else {
+            self.last_rows.take()
+        };
+        if let Some(painted) = self.settings_view().map(|view| {
             let (cells, fades) = settings::cells(&view);
-            let bytes = rows_bytes(&cells, &fades, view.theme.bg);
-            (
-                bytes,
-                PaintedRows {
-                    rows: cells,
-                    fades,
-                    page_bg: view.theme.bg,
-                    menu_rows: None,
-                },
-            )
+            PaintedRows {
+                rows: cells,
+                fades,
+                page_bg: view.theme.bg,
+                menu_rows: None,
+            }
         }) {
-            self.last_rows = Some(painted);
-            self.write(bytes.as_bytes())?;
-            self.log_paint();
-            return Ok(());
+            return self.paint(painted, shown.as_ref());
         }
-        let (bytes, popover, outcome, selected, painted) = {
+        let (painted, popover, outcome, selected) = {
             let (e, outcome) = self.scene();
             let selected = match &outcome {
                 Outcome::Open(placed) => Some(placed.selected),
@@ -447,27 +450,40 @@ impl<W: Write> App<W> {
             };
             let frame = frame_of(&e.view);
             let painted = PaintedRows {
-                rows: frame.cells.clone(),
-                fades: frame.fades.clone(),
+                rows: frame.cells,
+                fades: frame.fades,
                 page_bg: e.view.theme.bg,
                 menu_rows,
             };
-            (
-                frame_bytes(&frame, e.view.theme.bg),
-                e.popover,
-                outcome,
-                selected,
-                painted,
-            )
+            (painted, e.popover, outcome, selected)
         };
-        self.last_rows = Some(painted);
         self.popover = popover;
         if let Some(selected) = selected {
             self.menu_ui.selected = selected;
         }
         self.refuse(&outcome)?;
-        self.write(bytes.as_bytes())?;
-        self.log_paint();
+        self.paint(painted, shown.as_ref())
+    }
+
+    /// Writes `painted` over `shown`: only the rows that differ when the two share a page colour,
+    /// every row otherwise. A frame identical to the one on screen writes nothing at all.
+    fn paint(&mut self, painted: PaintedRows, shown: Option<&PaintedRows>) -> io::Result<()> {
+        let bytes = match shown {
+            Some(prev) if prev.page_bg == painted.page_bg => changed_rows_bytes(
+                &painted.rows,
+                &painted.fades,
+                painted.page_bg,
+                &prev.rows,
+                &prev.fades,
+            ),
+            _ => Some(rows_bytes(&painted.rows, &painted.fades, painted.page_bg)),
+        };
+        self.last_rows = Some(painted);
+        self.shown_is_final = true;
+        if let Some(bytes) = bytes {
+            self.write(bytes.as_bytes())?;
+            self.log_paint();
+        }
         Ok(())
     }
 
@@ -547,8 +563,7 @@ impl<W: Write> App<W> {
     fn apply(&mut self, cmd: Command) -> io::Result<bool> {
         match cmd {
             Command::Clear => {
-                self.write(CLEAR_SCREEN.as_bytes())?;
-                self.needs_clear = false;
+                self.needs_clear = true;
                 self.repaint()?
             }
             Command::Ping { n } => self.emit(&Event::Pong { echo: n })?,
@@ -647,6 +662,7 @@ impl<W: Write> App<W> {
         };
         let first = run.tick(now);
         self.write(first.as_bytes())?;
+        self.shown_is_final = false;
         self.fx = Some(run);
         Ok(())
     }
@@ -666,6 +682,7 @@ impl<W: Write> App<W> {
         let bytes = run.tick(now);
         let done = run.finished(now);
         self.write(bytes.as_bytes())?;
+        self.shown_is_final = false;
         if done {
             self.fx = None;
         }
@@ -701,6 +718,7 @@ impl<W: Write> App<W> {
         self.log.log(format!("resize {cols}x{rows} -> {w}x{h}"));
         self.size = size;
         self.needs_clear = true;
+        self.shown_is_final = false;
         self.fx = None;
         self.emit(&Event::Resize { cols: w, rows: h })
     }
@@ -787,6 +805,7 @@ mod tests {
             needs_clear: false,
             fx: None,
             last_rows: None,
+            shown_is_final: false,
             seq: 0,
             v2: V2State::default(),
             ui: Default::default(),
@@ -1167,8 +1186,7 @@ mod tests {
     fn a_fade_runs_on_the_frame_shown_and_a_repaint_lands_it_on_the_final_frame() {
         let mut a = app();
         dress(&mut a);
-        a.out.clear();
-        a.repaint().unwrap();
+        // the first frame is whole; a repaint after the fade must write the same whole frame back
         let final_frame = painted(&a);
         a.out.clear();
         send(
@@ -1303,11 +1321,46 @@ mod tests {
     fn a_frame_is_bracketed_in_synchronized_output() {
         let mut a = app();
         dress(&mut a);
-        a.out.clear();
-        a.repaint().unwrap();
         let out = painted(&a);
         assert!(out.starts_with(SYNC_BEGIN), "{out:?}");
         assert!(out.ends_with(SYNC_END), "{out:?}");
+    }
+
+    fn cups(out: &str) -> usize {
+        out.matches(";1H").count()
+    }
+
+    #[test]
+    fn a_repaint_writes_only_the_rows_that_changed() {
+        let mut a = app();
+        dress(&mut a);
+        let whole = cups(&painted(&a));
+        assert!(whole > 2, "the first frame paints every row: {whole}");
+        a.out.clear();
+        model(
+            &mut a,
+            r#"{"rev":2,"screen":"sidebar","active":1,
+                "strip":{"buttons":[{"id":"toggle"},{"id":"new_tab"}]},
+                "tabs":[{"id":1,"index":1,"title":"one"},{"id":2,"index":2,"title":"deux"}]}"#,
+        );
+        let out = painted(&a);
+        assert!(out.contains("deux"), "the new title is drawn: {out:?}");
+        assert!(
+            cups(&out) >= 1 && cups(&out) < whole / 2,
+            "a title change rewrites its own rows, not the pane: {} of {whole}",
+            cups(&out)
+        );
+        assert!(out.starts_with(SYNC_BEGIN) && out.ends_with(SYNC_END));
+    }
+
+    #[test]
+    fn a_repaint_of_the_frame_already_shown_writes_nothing() {
+        let mut a = app();
+        dress(&mut a);
+        probe_returns((28, 24));
+        a.out.clear();
+        a.repaint().unwrap();
+        assert!(a.out.is_empty(), "{:?}", painted(&a));
     }
 
     #[test]
@@ -1346,18 +1399,5 @@ mod tests {
         assert_eq!(a.size, (30, 24));
         assert!(saw(&a, r#""t":"resize","cols":30"#));
         assert!(painted(&a).contains(CLEAR_SCREEN), "the pane is wiped");
-    }
-
-    #[test]
-    fn an_unchanged_probe_writes_nothing_extra() {
-        let mut a = app();
-        dress(&mut a);
-        a.out.clear();
-        a.repaint().unwrap();
-        let unprobed = painted(&a);
-        probe_returns((28, 24));
-        a.out.clear();
-        a.repaint().unwrap();
-        assert_eq!(painted(&a), unprobed);
     }
 }

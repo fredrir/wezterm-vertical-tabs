@@ -496,9 +496,9 @@ function M.handle(gui_window, pane, name, value)
     view.sync(gui_window)
   elseif ev.t == "resize" then
     -- The sidebar reporting its own new size is the one signal that is never a poll behind the mux,
-    -- so it is also the proof that the adjust in flight has landed.
+    -- so it is also the proof that the adjust in flight has landed, and the width to correct from.
     geometry.landed(gui_window:window_id())
-    geometry.correct(gui_window)
+    geometry.correct(gui_window, nil, { pane_id = pane:pane_id(), cols = tonumber(ev.cols) })
     view.sync(gui_window)
   elseif ev.t == "do" then
     on_do(gui_window, pane, ev)
