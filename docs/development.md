@@ -101,6 +101,7 @@ just              # list recipes
 just dev          # sandbox WezTerm, rebuild + hot-swap on change
 just dev --live   # hot-swap the sidebars in your running WezTerm instead
 just doctor       # which backend is running, and whether the installs agree
+just restart      # after confirmation, kill all GUIs/panes and restart the launchd mux + GUI
 ```
 
 | Path | Holds |

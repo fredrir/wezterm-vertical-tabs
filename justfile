@@ -10,6 +10,10 @@ deploy *args: # --from-dev (default) / --from-prd / --from-release
 doctor:
     @sh scripts/doctor.sh
 
+# Tear down every WezTerm GUI and mux pane, restart the launchd mux, then open a fresh GUI.
+restart:
+    @sh scripts/restart.sh
+
 # Everything CI runs
 check: test lint
 
