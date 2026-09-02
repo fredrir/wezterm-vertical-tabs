@@ -368,32 +368,11 @@ local probes = {
   private_window = function(window)
     require("vtabs.actions").new_window(window, true)
   end,
-  -- The traffic-light reserve the active sidebar's own dimensions imply, next to the pane it got.
+  -- The traffic-light reserve Rust derived from the pane facts Lua published.
   probe_reserve = function(window)
-    local platform = require "vtabs.platform"
-    local sidebar = require "vtabs.sidebar"
-    local cfg = require("vtabs.config").get()
-    local sb = sidebar.find(window:mux_window():active_tab())
-    local d = sb and sb:get_dimensions()
-    local g = d
-      and platform.strip_geometry(d, {
-        is_mac = true,
-        integrated_buttons = true,
-        native_button_style = true,
-        preview = os.getenv "VTABS_E2E_MACOS" ~= nil,
-        position = cfg.position,
-        padding_top = cfg.padding.top,
-        toggle_button = cfg.toggle_button,
-        card_x1 = cfg.padding.left + 1,
-      })
-    wezterm.log_info(
-      string.format(
-        "e2e: reserve %s toggle_x %s pane %s",
-        tostring(g and g.cols),
-        tostring(g and g.toggle_x),
-        tostring(d and d.cols)
-      )
-    )
+    local geometry = require "vtabs.geometry"
+    local reserve = geometry.rail_reserve(window:window_id())
+    wezterm.log_info(string.format("e2e: reserve %s", tostring(reserve)))
   end,
   -- The hit map is the only source for the columns a click has to land on; labels move, spans do not.
   probe_hits = function(window)

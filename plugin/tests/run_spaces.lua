@@ -2,418 +2,308 @@ local H = require "support.helpers"
 local wezterm = require "wezterm"
 local actions = require "vtabs.actions"
 local config = require "vtabs.config"
-local fake = require "fake_mux"
-local frame = require "vtabs.frame"
 local input = require "vtabs.input"
 local keys = require "vtabs.keys"
 local model = require "vtabs.model"
 local platform = require "vtabs.platform"
-local popover = require "vtabs.popover"
 local sidebar = require "vtabs.sidebar"
 local spaces = require "vtabs.spaces"
 local state = require "vtabs.state"
-local store = require "vtabs.store"
-local theme = require "vtabs.theme"
-local util = require "vtabs.util"
+local theme_bridge = require "vtabs.theme_bridge"
 local view = require "vtabs.view"
+local wire = require "vtabs.wire"
 
 local test, eq = H.test, H.eq
-
 local BACKEND = { path = "/bin/wez-vtabs" }
-local SPACES = {
+local DEFINITIONS = {
   { id = "home", icon = "H" },
   { id = "claude", name = "Claude", icon = "C", theme = { accent = "#f5c2e7" }, match = { proc = "claude" } },
   { id = "$host", icon = "R", match = { remote = true }, theme = "auto" },
 }
 
--- Facts are cached for one poll, so every poll here runs on a clock that has moved on.
-local real_now = util.now_ms
-local clock = nil
-local function tick()
-  clock = (clock or real_now()) + 1000
-  util.now_ms = function()
-    return clock
-  end
-end
-
-local function poll(gui)
-  tick()
-  return model.survey(gui)
+local function array()
+  return wire.array()
 end
 
 local function setup(opts)
   opts = opts or {}
-  config.setup {
-    spaces = opts.spaces or SPACES,
+  return config.setup {
+    spaces = opts.spaces or DEFINITIONS,
+    title = opts.title,
     hooks = opts.hooks,
-    frame = opts.frame,
     meta = "auto",
     backend = BACKEND,
   }
 end
 
----A window of `n` shells with spaces configured; nothing polled yet.
-local function spaced(n, opts)
-  local win, gui = H.window(n, opts)
-  setup(opts)
-  return win, gui
+local function ready_with_spaces(gui, tab)
+  local pane = sidebar.find(tab)
+  input.handle(
+    gui,
+    pane,
+    "vtabs",
+    '{"t":"ready","v":3,"cols":28,"rows":24,"paints":true,"caps":["atomic_sync","spaces_policy"],"n":1}'
+  )
+  return pane
 end
 
-local function set_process(tab, name)
-  tab.pane_list[1].process = "/usr/bin/" .. name
-end
-
-local function set_remote(tab, host)
-  tab.pane_list[1].cwd = "file://" .. host .. "/home/f"
-end
-
----A sidebar the wire will talk to: ready, and a v2 painter, which only the `ready` event declares.
-local function painter(gui, tab)
-  local sb = sidebar.find(tab)
-  input.handle(gui, sb, "vtabs", '{"t":"ready","v":2,"cols":28,"rows":24,"paints":true,"n":1}')
-  return sb
-end
-
-local function last_line(pane, kind)
-  local found = nil
-  for _, line in ipairs(pane.sent) do
-    if line:find('"t":"' .. kind .. '"', 1, true) then
-      found = line
+local function messages(pane, tag)
+  local out = {}
+  for _, payload in ipairs(pane.sent) do
+    for line in payload:gmatch "[^\n]+" do
+      if line:find('"t":"' .. tag .. '"', 1, true) then
+        out[#out + 1] = wezterm.json_parse(H.control_payload(line))
+      end
     end
   end
-  return found and wezterm.json_parse(found) or nil
+  return out
 end
 
-local function logged(needle)
-  local n = 0
-  for _, line in ipairs(wezterm.log) do
-    if line:find(needle, 1, true) then
-      n = n + 1
+local function resolution(wid, generation, tabs, opts)
+  opts = opts or {}
+  local assignments, ids = {}, {}
+  for _, entry in ipairs(tabs) do
+    assignments[#assignments + 1] = {
+      tab_id = entry.id,
+      space = entry.space,
+      manual = entry.manual == true,
+      fingerprint = entry.fingerprint,
+    }
+    if entry.visible ~= false then
+      ids[#ids + 1] = entry.id
     end
   end
-  return n
-end
-
-local function read_state()
-  local f = assert(io.open(state.file, "r"))
-  local body = f:read "a"
-  f:close()
-  return body
-end
-
----A fresh Lua VM against the same mux: the file is all that is left, and no cache survives.
-local function restart_vm(win, body)
-  local f = assert(io.open(state.file, "w"))
-  f:write(body)
-  f:close()
-  wezterm.GLOBAL.vtabs = nil
-  for _, tbl in pairs(state.session) do
-    for k in pairs(tbl) do
-      tbl[k] = nil
-    end
-  end
-  store.forget_window(win:window_id())
-  for _, tab in ipairs(win.tab_list) do
-    store.forget_tab(tab.id)
-  end
-  state.reload()
-end
-
-test("rules: globs are anchored, lists are any-of, a bare cwd is a prefix, every field must match", function()
-  local m = spaces.matches
-  eq(m({ proc = "cla*" }, { proc = "claude" }), true)
-  eq(m({ proc = "cla*" }, { proc = "xclaude" }), false, "anchored at the start")
-  eq(m({ proc = "claude" }, { proc = "claude2" }), false, "anchored at the end")
-  eq(m({ proc = "a.b" }, { proc = "axb" }), false, "a dot is literal")
-  eq(m({ domain = { "tls:*", "ssh:*" } }, { domain = "ssh:pi" }), true, "a list is any-of")
-  eq(m({ cwd = "~/work" }, { cwd = "~/work/x" }), true, "a bare cwd is a prefix")
-  eq(m({ cwd = "~/work" }, { cwd = "~/workshop" }), false, "of whole segments")
-  eq(m({ cwd = "~/work/*" }, { cwd = "~/work" }), false, "a glob is only a glob")
-  eq(m({ proc = "claude", host = "pi" }, { proc = "claude" }), false, "a missing fact never matches")
-  eq(m({ remote = true }, { remote = false }), false)
-  eq(m(nil, { proc = "zsh" }), false, "an entry without match is not a rule")
-  local cfg = config.setup { spaces = SPACES, backend = BACKEND }
-  eq(spaces.route(cfg, { proc = "claude" }), "claude")
-  eq(spaces.route(cfg, { proc = "zsh" }), nil, "the default entry routes nothing")
-  eq(spaces.route(cfg, { remote = true, host = "pi" }), "pi", "$host expands")
-  eq(spaces.route(cfg, { remote = true }), nil, "a template missing its fact is skipped")
-  eq(spaces.expand("$host", { host = string.rep("x", 60) }), string.rep("x", 48), "capped")
-end)
-
-test("validate: entries without an id, duplicates and bad fields are dropped with one warning each", function()
-  local cfg = config.setup {
-    spaces = { { name = "no id" }, { id = "a" }, { id = "a" }, { id = "b", theme = 3 }, { id = "c", match = "zsh" } },
-    backend = BACKEND,
+  return {
+    t = "spaces_resolved",
+    generation = generation,
+    window_id = wid,
+    active = opts.active or "home",
+    assignments = assignments,
+    dynamics = opts.dynamics or {},
+    follow = opts.follow,
+    last_tabs = opts.last_tabs or {},
+    summary = opts.summary or { { id = "home", name = "Home", count = #ids, unseen = false } },
+    visible_tab_ids = ids,
+    theme_overrides = opts.theme_overrides or {},
+    warnings = opts.warnings or {},
   }
-  eq(#cfg.spaces, 3)
-  eq(cfg.spaces[1].id, "a")
-  eq(cfg.spaces[2].theme, nil, "a bad theme is dropped, the entry kept")
-  eq(cfg.spaces[3].match, nil, "so is a bad match")
-  eq(logged "spaces: an entry without an id", 1)
-  eq(logged "duplicate id", 1)
-  eq(config.setup({ spaces = "home", backend = BACKEND }).spaces[1], nil, "a non-list resets without raising")
-  eq(logged "spaces must be a list of table entries", 1)
-end)
+end
 
-test("without spaces nothing changes: every tab is visible and the wire carries no spaces", function()
-  local win, gui = H.ready_window(3)
+test("Lua sends raw space facts and preserves the final title-hook value", function()
+  local win, gui = H.window(1)
+  local cfg = setup {
+    spaces = {
+      { name = "malformed stays raw" },
+      { id = "work", match = { title = "pretty*", cwd = {} }, theme = { accent = "#010203" } },
+    },
+    title = function()
+      return "pretty title"
+    end,
+  }
   local survey = model.survey(gui)
-  eq(#survey.visible, 3)
-  eq(survey.spaces, nil)
-  eq(state.space_of(win.tab_list[1].id), nil)
-  local sb = painter(gui, win.tab_list[1])
-  view.sync(gui)
-  local sent = last_line(sb, "model")
-  eq(sent.spaces, nil)
-  eq(sent.space, nil)
-  eq(popover.items(gui, win.tab_list[1].id)[4].disabled, true, "Move to space is greyed out")
+  local body = spaces.body(cfg, gui:window_id(), survey.all, array)
+  eq(body.tabs[1]["override"], "pretty title", "Rust receives the final title-hook source")
+  eq(body.definitions[1].name, "malformed stays raw", "Lua does not run policy validation")
+  eq(body.definitions[2].theme.accent, "#010203", "only host colour values are serialized")
+  assert(wire.encode(body):find('"cwd":[]', 1, true), "an empty match list stays a JSON array")
+  eq(body.window_id, win:window_id())
 end)
 
-test("first sight: a rule places a tab, the rest land in the window's space, the sidebar follows", function()
-  local win, gui = spaced(3)
-  set_process(win.tab_list[2], "claude")
-  win.active_tab_ref = win.tab_list[1]
-  local survey = poll(gui)
-  eq(state.space_of(win.tab_list[1].id), "home")
-  eq(state.space_of(win.tab_list[2].id), "claude")
-  eq(state.space_of(win.tab_list[3].id), "home")
-  eq(survey.space, "home")
-  eq(#survey.visible, 2)
-  eq(survey.spaces[1].id, "home")
-  eq(survey.spaces[1].count, 2)
-  eq(survey.spaces[2].id, "claude")
-  eq(survey.spaces[2].count, 1)
-  eq(#survey.spaces, 2, "a template with no tab is not listed")
-  win.tab_list[2]:activate()
-  survey = poll(gui)
-  eq(survey.space, "claude", "follows the active tab")
-  eq(#survey.visible, 1)
+test("malformed raw match values remain valid JSON for Rust to reject field-by-field", function()
+  local win, gui = H.window(1)
+  local cycle = {}
+  cycle.self = cycle
+  local cfg = setup {
+    spaces = {
+      { id = "nan", match = { remote = 0 / 0 } },
+      { id = "mixed", match = { proc = { "zsh", named = true } } },
+      { id = "cycle", match = { cwd = cycle } },
+    },
+  }
+  local encoded = wire.encode(spaces.body(cfg, gui:window_id(), model.survey(gui).all, array))
+  assert(encoded:find('"remote":null', 1, true), "non-finite numbers lower to JSON null")
+  assert(encoded:find('"proc":null', 1, true), "mixed tables lower to JSON null")
+  assert(encoded:find('"cwd":{"self":null}', 1, true), "cycles terminate at JSON null")
+  assert(wezterm.json_parse(encoded), "one bad raw field cannot poison the spaces message")
+  eq(win:window_id(), gui:window_id())
 end)
 
-test("sticky: a tab moves into a space that wants it and stays put when it stops matching", function()
-  local win, gui = spaced(2)
-  poll(gui)
-  local tab = win.tab_list[2]
-  eq(state.space_of(tab.id), "home")
-  set_process(tab, "claude")
-  poll(gui)
-  eq(state.space_of(tab.id), "claude", "moved in")
-  set_process(tab, "zsh")
-  poll(gui)
-  eq(state.space_of(tab.id), "claude", "no rule wants it back")
-  set_process(tab, "ssh")
-  set_remote(tab, "pi")
-  local survey = poll(gui)
-  eq(state.space_of(tab.id), "pi", "a later match moves it again")
-  eq(survey.spaces[3].id, "pi")
-  eq(survey.spaces[3].icon, "R", "a dynamic space wears its template's icon")
-  eq(survey.spaces[3].count, 1)
+test("without spaces_policy the projection is one unpartitioned tab list", function()
+  local win, gui = H.window(2)
+  local cfg = setup()
+  local items = model.survey(gui).all
+  state.set_space(win.tab_list[1].id, "claude", false)
+  local projected = spaces.project(cfg, gui:window_id(), items, false)
+  eq(#projected.visible, 2)
+  eq(projected.space, nil)
+  eq(projected.spaces, nil)
 end)
 
-test("a hand move pins the tab until the Auto row hands it back to the rules", function()
-  local win, gui = spaced(2)
-  poll(gui)
-  local tab = win.tab_list[2]
-  eq(actions.move_to_space(gui, tab.id, "claude", true), true)
-  eq(state.space_of(tab.id), "claude")
-  eq(state.space_manual(tab.id), true)
-  set_process(tab, "ssh")
-  set_remote(tab, "pi")
-  poll(gui)
-  eq(state.space_of(tab.id), "claude", "never re-routed while pinned")
-  actions.move_to_space(gui, tab.id, nil, false)
-  poll(gui)
-  eq(state.space_of(tab.id), "pi", "Auto asks the rules again")
-  eq(state.space_manual(tab.id), false)
+test("a current Rust result atomically supplies assignment, visibility, summary and dynamics", function()
+  local win, gui = H.window(2)
+  local cfg, wid = setup(), gui:window_id()
+  local one, two = win.tab_list[1].id, win.tab_list[2].id
+  assert(spaces.accept(
+    resolution(wid, 4, {
+      { id = one, space = "home", fingerprint = "a" },
+      { id = two, space = "scratch", fingerprint = "b", visible = false },
+    }, {
+      dynamics = { { id = "scratch", name = "Scratch", seq = 1 } },
+      last_tabs = { { space_id = "scratch", tab_id = two } },
+      summary = {
+        { id = "home", name = "Home", count = 1, unseen = false },
+        { id = "scratch", name = "Scratch", count = 1, unseen = false },
+      },
+    }),
+    wid,
+    4
+  ))
+  eq(state.space_of(one), "home")
+  eq(state.space_of(two), "scratch")
+  eq(spaces.last_tab_in(wid, "scratch"), two)
+  local projected = spaces.project(cfg, wid, model.survey(gui).all, true)
+  eq(#projected.visible, 1)
+  eq(projected.visible[1].tab_id, one)
+  eq(projected.spaces[2].name, "Scratch")
+
+  assert(not spaces.accept(resolution(wid, 4, { { id = one, space = "wrong" } }), wid, 4), "duplicate generation")
+  assert(not spaces.accept(resolution(wid + 1, 5, { { id = one, space = "wrong" } }), wid, 5), "wrong window")
+  assert(not spaces.accept(resolution(wid, 6, { { id = one, space = "wrong" } }), wid, 5), "future result")
+  eq(state.space_of(one), "home")
+
+  assert(spaces.accept(
+    resolution(wid, 5, {
+      { id = one, space = "home", fingerprint = "c" },
+      { id = two, space = "home", fingerprint = "d" },
+    }),
+    wid,
+    5
+  ))
+  eq(#spaces.body(cfg, wid, model.survey(gui).all, array).dynamics, 0, "empty dynamics are authoritative")
 end)
 
-test("moving the active tab hands the view to its neighbour; the last tab of a space takes the view along", function()
-  local win, gui = spaced(3)
-  win.active_tab_ref = win.tab_list[1]
-  poll(gui)
-  actions.move_to_space(gui, win.tab_list[1].id, "claude", true)
-  eq(win.active_tab_ref, win.tab_list[2], "the next tab in home took over")
-  eq(poll(gui).space, "home")
-  actions.switch_space(gui, "claude")
-  eq(win.active_tab_ref, win.tab_list[1])
-  eq(poll(gui).space, "claude")
-  actions.move_to_space(gui, win.tab_list[1].id, "home", true)
-  eq(poll(gui).space, "home", "nothing left in claude, so the sidebar followed the tab")
+test("one route-hook batch is evaluated once per window generation and reused for every pane", function()
+  local win, gui = H.window(2, { attach = true })
+  local calls = 0
+  setup {
+    hooks = {
+      route = function(facts)
+        calls = calls + 1
+        eq(facts.title, "final title")
+        return facts.tab_id == win.tab_list[2].id and "scratch" or nil
+      end,
+    },
+  }
+  local original_generation = wire.generation
+  wire.generation = function()
+    return 9
+  end
+  local event = {
+    generation = 9,
+    window_id = gui:window_id(),
+    tabs = {
+      { tab_id = win.tab_list[1].id, title = "final title" },
+      { tab_id = win.tab_list[2].id, title = "final title" },
+    },
+  }
+  local first, second = sidebar.find(win.tab_list[1]), sidebar.find(win.tab_list[2])
+  assert(spaces.answer_hook(gui, first, event))
+  assert(spaces.answer_hook(gui, second, event))
+  wire.generation = original_generation
+  eq(calls, 2, "one call per requested tab, not per backend pane")
+  local a, b = messages(first, "space_route_hook_result"), messages(second, "space_route_hook_result")
+  eq(#a, 1)
+  eq(#b, 1)
+  eq(a[1].routes["2"].space, "scratch")
+  eq(b[1].routes["2"].space, "scratch")
 end)
 
-test("switching to an empty space keeps the current tab on screen and never spawns; a new tab lands there", function()
-  local win, gui = spaced(2, { spaces = { { id = "home" }, { id = "scratch" } } })
-  poll(gui)
-  eq(actions.switch_space(gui, "scratch"), true)
-  local survey = poll(gui)
-  eq(survey.space, "scratch")
-  eq(#survey.visible, 0)
-  eq(#win.tab_list, 2, "nothing spawned")
-  eq(win.active_tab_ref, win.tab_list[1], "the tab on screen did not change")
-  local tab = actions.new_tab(gui)
-  survey = poll(gui)
-  eq(state.space_of(tab:tab_id()), "scratch")
-  eq(#survey.visible, 1)
-  eq(actions.switch_space(gui, "nowhere"), false)
-  eq(actions.switch_space(gui, "scratch"), false, "already there")
-end)
-
-test("cycling wraps through the switcher's order, from a binding and from the sidebar's keyboard mode", function()
-  local win, gui = spaced(3)
-  set_process(win.tab_list[3], "claude")
-  win.active_tab_ref = win.tab_list[1]
-  poll(gui)
-  actions.cycle_space(gui, 1)
-  eq(poll(gui).space, "claude")
-  actions.cycle_space(gui, 1)
-  eq(poll(gui).space, "home", "wraps")
-  actions.cycle_space(gui, -1)
-  eq(poll(gui).space, "claude")
-
-  local win2, gui2 = H.ready_window(2)
+test("atomic wire sends full-window spaces facts to a capable sidebar", function()
+  local win, gui = H.window(2, { attach = true, ready = true })
   setup()
-  set_process(win2.tab_list[2], "claude")
-  win2.active_tab_ref = win2.tab_list[1]
-  poll(gui2)
-  state.set_focus(gui2:window_id(), true)
-  tick()
-  input.key(gui2, sidebar.find(win2.tab_list[1]), { key = "]", mods = {} })
-  eq(poll(gui2).space, "claude", "] in keyboard mode")
-end)
-
-test("closing the active tab activates its neighbour in the same space, not the physical one", function()
-  local win, gui = spaced(3)
-  set_process(win.tab_list[1], "claude")
-  win.active_tab_ref = win.tab_list[3]
-  poll(gui)
-  eq(poll(gui).space, "home")
-  actions.close_tab(gui, win.tab_list[3].id)
-  eq(win.active_tab_ref, win.tab_list[2], "home's other tab, not the physical first")
-  eq(poll(gui).space, "home")
-end)
-
-test("next/prev tab, close others and the popover count stay inside the space", function()
-  local win, gui = spaced(4)
-  set_process(win.tab_list[2], "claude")
-  set_process(win.tab_list[4], "claude")
-  win.active_tab_ref = win.tab_list[1]
-  poll(gui)
-  actions.activate_relative(gui, 1)
-  eq(win.active_tab_ref, win.tab_list[3], "skips claude's tab")
-  actions.activate_relative(gui, 1)
-  eq(win.active_tab_ref, win.tab_list[1], "wraps inside home")
-  eq(#actions.others(gui, win.tab_list[1].id), 1, "close others sees only home")
-end)
-
-test("a closed tab remembers its space and a reopened one returns to it", function()
-  local win, gui = spaced(2)
-  set_process(win.tab_list[2], "claude")
-  win.active_tab_ref = win.tab_list[1]
-  poll(gui)
-  -- the poll that learns which tabs exist, so the next one can tell which left
-  sidebar.ensure(gui)
-  local gone = win.tab_list[2]
-  actions.close_tab(gui, gone.id)
-  tick()
-  sidebar.ensure(gui)
-  actions.reopen_closed(gui)
-  local reopened = win.tab_list[#win.tab_list]
-  assert(reopened ~= gone, "a new tab")
-  eq(state.space_of(reopened.id), "claude")
-end)
-
-test("assignments persist with the pins and come back only once the mux is proven alive", function()
-  local win, gui = spaced(2)
-  set_process(win.tab_list[2], "claude")
-  poll(gui)
-  local t1, t2 = win.tab_list[1], win.tab_list[2]
-  actions.move_to_space(gui, t1.id, "claude", true)
-  local body = read_state()
-  assert(body:find('"space_of"', 1, true), "assignments on disk")
-  assert(body:find('"space_manual"', 1, true), "and the manual flags")
-  assert(not body:find("active_space", 1, true), "the active space is per GUI process")
-  restart_vm(win, body)
-  eq(state.pins_pending(), true)
-  eq(state.space_of(t2.id), nil, "held back")
-  local ghost = fake.pane(t1, { title = "wez-vtabs:abcd" })
-  table.insert(t1.pane_list, 1, ghost)
-  tick()
-  sidebar.ensure(gui)
-  eq(state.space_of(t2.id), "claude")
-  eq(state.space_of(t1.id), "claude")
-  eq(state.space_manual(t1.id), true)
-  eq(state.pins_pending(), false)
-  state.forget_windows_except {}
-  eq(state.active_space(gui:window_id()), nil, "forgotten with the window")
-end)
-
-test("the active space's theme reaches the wire and the frame; a switch bumps the theme rev", function()
-  local win, gui = H.ready_window(2)
-  setup { frame = { zen = true, border = "accent" } }
-  set_process(win.tab_list[2], "claude")
-  win.active_tab_ref = win.tab_list[1]
-  local sb = painter(gui, win.tab_list[1])
-  tick()
+  local pane = ready_with_spaces(gui, win.tab_list[1])
   view.sync(gui)
-  local home = last_line(sb, "theme")
-  eq(home.overrides.accent, nil, "home inherits the user's theme")
-  local sent = last_line(sb, "model")
-  eq(sent.space, "home")
-  eq(#sent.spaces, 2)
-  eq(sent.spaces[2].icon, "C")
-  eq(sent.spaces[2].active, nil, "the wire carries only the active id")
-  actions.switch_space(gui, "claude")
-  tick()
+  local sent = messages(pane, "spaces")
+  eq(#sent, 1)
+  eq(sent[1].window_id, gui:window_id())
+  eq(#sent[1].tabs, 2)
+  eq(#messages(pane, "begin"), 1)
+  eq(#messages(pane, "commit"), 1)
+end)
+
+test("space convergence advances once and the matching follow-up theme reaches host state", function()
+  local win, gui = H.window(2, { attach = true, ready = true })
+  setup()
+  local pane = ready_with_spaces(gui, win.tab_list[1])
   view.sync(gui)
-  local claude = last_line(sb, "theme")
-  eq(claude.overrides.accent, "#f5c2e7")
-  assert(claude.rev > home.rev, "a new rev, so every pane repaints")
-  local palette = gui:effective_config().resolved_palette
-  local want = theme.resolve(util.merge(config.get().theme, { accent = "#f5c2e7" }), palette).accent
-  eq(frame.colours(gui, config.get()).border, string.format("#%02x%02x%02x", want[1], want[2], want[3]))
-  eq(spaces.accent_of(config.get(), "pi", palette), spaces.accent_of(config.get(), "pi", palette), "auto is stable")
-  assert(spaces.accent_of(config.get(), "pi", palette):match "^#%x%x%x%x%x%x$", "and a hex colour")
+  local wid = gui:window_id()
+  local first_generation = assert(wire.generation(wid))
+  local one, two = win.tab_list[1].id, win.tab_list[2].id
+  theme_bridge.clear(wid)
+
+  local resolved_json = string.format(
+    '{"t":"spaces_resolved","generation":%%d,"window_id":%d,"active":"claude",'
+      .. '"assignments":[{"tab_id":%d,"space":"home","manual":false,"fingerprint":"a"},'
+      .. '{"tab_id":%d,"space":"claude","manual":false,"fingerprint":"b"}],'
+      .. '"dynamics":[],"last_tabs":[],"summary":[{"id":"home","name":"Home","count":1,"unseen":false},'
+      .. '{"id":"claude","name":"Claude","count":1,"unseen":false}],'
+      .. '"visible_tab_ids":[%d],"theme_overrides":{},"warnings":[]}',
+    wid,
+    one,
+    two,
+    two
+  )
+  input.handle(gui, pane, "vtabs", string.format(resolved_json, first_generation))
+  local follow_up = assert(wire.generation(wid))
+  assert(follow_up > first_generation, "the newly applied assignment produces one converging sync")
+
+  input.handle(
+    gui,
+    pane,
+    "vtabs",
+    string.format('{"t":"theme_resolved","generation":%d,"theme":{"bg":[1,2,3]}}', first_generation)
+  )
+  eq(theme_bridge.get(wid), nil, "the superseded generation cannot project host colour")
+
+  input.handle(gui, pane, "vtabs", string.format(resolved_json, follow_up))
+  eq(wire.generation(wid), follow_up, "the converged answer does not start a third generation")
+  input.handle(
+    gui,
+    pane,
+    "vtabs",
+    string.format('{"t":"theme_resolved","generation":%d,"theme":{"bg":[4,5,6]}}', follow_up)
+  )
+  eq(theme_bridge.get(wid).bg[1], 4)
+  eq(wire.generation(wid), follow_up, "host projection does not loop semantic sync")
 end)
 
-test("the route hook runs first; an unknown id is a dynamic space that lives while it holds a tab", function()
-  local win, gui = spaced(2, {
-    hooks = {
-      route = function(meta)
-        if meta.title == "t2" then
-          return "scratch"
-        end
-        return nil
-      end,
-    },
-  })
-  win.active_tab_ref = win.tab_list[1]
-  local survey = poll(gui)
-  eq(state.space_of(win.tab_list[2].id), "scratch")
-  eq(survey.spaces[3].id, "scratch")
-  eq(survey.spaces[3].name, "scratch")
-  eq(survey.spaces[3].count, 1)
-  actions.switch_space(gui, "scratch")
-  eq(poll(gui).space, "scratch")
-  actions.close_tab(gui, win.tab_list[2].id)
-  tick()
-  sidebar.ensure(gui)
-  survey = poll(gui)
-  eq(#survey.spaces, 2, "gone with its last tab")
-  eq(survey.space, "home", "and the view fell back to the default")
-
-  local win2, gui2 = spaced(1, {
-    hooks = {
-      route = function()
-        error "boom"
-      end,
-    },
-  })
-  poll(gui2)
-  eq(state.space_of(win2.tab_list[1].id), "home")
-  eq(logged "route hook failed", 1)
+test("space mux actions remain host-side while policy decisions do not", function()
+  local win, gui = H.window(2, { attach = true, ready = true })
+  setup()
+  ready_with_spaces(gui, win.tab_list[1])
+  local wid, one, two = gui:window_id(), win.tab_list[1].id, win.tab_list[2].id
+  spaces.accept(
+    resolution(wid, 1, {
+      { id = one, space = "home" },
+      { id = two, space = "claude", visible = false },
+    }, {
+      last_tabs = { { space_id = "claude", tab_id = two } },
+      summary = {
+        { id = "home", name = "Home", count = 1, unseen = false },
+        { id = "claude", name = "Claude", count = 1, unseen = false },
+      },
+    }),
+    wid,
+    1
+  )
+  eq(actions.switch_space(gui, "claude"), true)
+  eq(win.active_tab_ref.id, two)
+  eq(actions.move_to_space(gui, two, "home", true), true)
+  eq(state.space_of(two), "home")
+  eq(state.space_manual(two), true)
 end)
 
-test("next_space and prev_space ride on e; the action factories exist", function()
+test("next_space and prev_space keep their public bindings", function()
   local bound = {}
   for _, binding in ipairs(keys.build {}) do
     bound[binding.vtabs] = binding
@@ -422,55 +312,6 @@ test("next_space and prev_space ride on e; the action factories exist", function
   eq(bound.next_space.mods, platform.SUPER)
   eq(bound.prev_space.mods, platform.SUPER2)
   assert(actions.action.next_space and actions.action.prev_space)
-  assert(actions.action.switch_space "claude")
-  assert(actions.action.move_to_space "claude")
 end)
 
-test("Move to space opens a level listing the spaces; picking one moves the tab and closes the menu", function()
-  local win, gui, _, pop = H.open_popover(2)
-  setup()
-  tick()
-  view.sync(gui)
-  eq(popover.run(gui, "space"), true)
-  eq(pop.level, "spaces")
-  local body = popover.wire_body(gui)
-  eq(body.header.title, "Move to space")
-  eq(body.items[1].id, "space:home")
-  eq(body.items[1].disabled, true, "the space it is in")
-  eq(body.items[2].id, "space:claude")
-  eq(body.items[2].label, "C Claude")
-  eq(body.items[#body.items].id, "space_auto")
-  eq(body.items[#body.items].disabled, true, "nothing to hand back yet")
-  eq(popover.run(gui, "space:claude"), true)
-  eq(popover.get(gui:window_id()), nil, "closed")
-  eq(state.space_of(win.tab_list[2].id), "claude")
-  eq(state.space_manual(win.tab_list[2].id), true)
-
-  local _, gui2, _, pop2 = H.open_popover(1)
-  setup()
-  popover.run(gui2, "space")
-  eq(popover.back(gui2), true)
-  eq(pop2.level, "root", "Esc steps back to the root level")
-end)
-
-test("more spaces than the wire allows are refused one at a time, never the whole model", function()
-  local n = 0
-  local win, gui = spaced(1, {
-    spaces = { { id = "home" } },
-    hooks = {
-      route = function()
-        n = n + 1
-        return "s" .. n
-      end,
-    },
-  })
-  for i = 1, spaces.MAX + 3 do
-    win:add_tab { title = "x" .. i }
-  end
-  local survey = poll(gui)
-  eq(#survey.spaces, spaces.MAX)
-  eq(logged "is the most a window can show", 1)
-end)
-
-util.now_ms = real_now
 config.setup { backend = BACKEND }

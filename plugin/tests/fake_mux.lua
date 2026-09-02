@@ -1,6 +1,7 @@
 -- Minimal in-memory stand-ins for WezTerm's mux objects, enough to drive sidebar/actions.
 -- luacheck: ignore 212
 local async = require "support.async"
+local protocol = require "vtabs.gen.protocol"
 
 local M = {}
 
@@ -74,7 +75,13 @@ function Pane:has_unseen_output()
 end
 function Pane:get_dimensions()
   local cell = self.cell_width or 10
-  return { cols = self.cols, viewport_rows = 24, pixel_width = self.cols * cell, dpi = self.dpi or 96 }
+  return {
+    cols = self.cols,
+    viewport_rows = 24,
+    pixel_width = self.cols * cell,
+    pixel_height = 24 * 20,
+    dpi = self.dpi or 96,
+  }
 end
 ---Panes of `tab` inside the sidebar band, the way the backend's `rescue_plan` sees them.
 local function intruders_in(tab, own, band)
@@ -87,18 +94,28 @@ local function intruders_in(tab, own, band)
   return out
 end
 
----What the real backend does with a command line; a `hung` pane hears nothing, like a dead one.
----`quit` exits, and an exited pane closes; `kill` and `rescue` run the server's cli.
-local function obey(pane, text)
-  local verb = text:match '^{"t":"(%w+)"' or text:match '"t":"(%w+)"'
-  if pane.hung or not verb then
+---What the real backend does with one authenticated framed payload; a `hung` pane hears nothing,
+---like a dead one. `quit` exits, and an exited pane closes; `kill` and `rescue` run the CLI.
+local function obey_payload(pane, frame_token, payload)
+  local verb = payload:match '"t":"(%w+)"'
+  if not verb then
     return
   end
-  if verb == "quit" then
+  local active = pane.control_token or pane.vars.vtabs_token
+  if verb == "auth" then
+    local claimed = payload:match '"token":"([^"]+)"'
+    if claimed and ((active == nil and claimed == frame_token) or active == frame_token) then
+      -- The real echo arrives asynchronously through a user var; keep transport state separate so
+      -- lifecycle tests do not accidentally gain trust merely because `send_text` returned.
+      pane.control_token = claimed
+    end
+  elseif active ~= frame_token then
+    return
+  elseif verb == "quit" then
     M.kill_pane(pane)
   elseif verb == "kill" then
     -- the server lists every pane it holds: here, every pane of this window's tabs
-    local title = text:match '"title":"([^"]*)"'
+    local title = payload:match '"title":"([^"]*)"'
     for _, tab in ipairs(pane._tab._window.tab_list) do
       for _, p in ipairs { table.unpack(tab.pane_list) } do
         if p.title == title then
@@ -108,7 +125,7 @@ local function obey(pane, text)
       end
     end
   elseif verb == "rescue" then
-    local band = tonumber(text:match '"band":(%d+)') or 0
+    local band = tonumber(payload:match '"band":(%d+)') or 0
     local tab = pane._tab
     for _, moved in ipairs(intruders_in(tab, pane, band)) do
       local host = nil
@@ -136,7 +153,27 @@ local function obey(pane, text)
   end
 end
 
+local function obey(pane, text)
+  if pane.hung then
+    return
+  end
+  for line in text:gmatch "[^\n]+" do
+    if line:sub(1, #protocol.CONTROL_PREFIX) == protocol.CONTROL_PREFIX then
+      local separator = line:find(" ", #protocol.CONTROL_PREFIX + 1, true)
+      local token = separator and line:sub(#protocol.CONTROL_PREFIX + 1, separator - 1) or nil
+      if token and token ~= "" then
+        obey_payload(pane, token, line:sub(separator + 1))
+      end
+    end
+  end
+end
+
 function Pane:send_text(text)
+  self.send_attempts = (self.send_attempts or 0) + 1
+  self.last_send_attempt = text
+  if self.fail_send then
+    error "injected send failure"
+  end
   self.sent[#self.sent + 1] = text
   local title = text:match "\27%]0;(.-)\7" or text:match "\27%]2;(.-)\7"
   if title then
@@ -449,6 +486,7 @@ function Window:window_id()
   return self.id
 end
 function Window:tabs_with_info()
+  self.tab_enumerations = (self.tab_enumerations or 0) + 1
   local out = {}
   for i, tab in ipairs(self.tab_list) do
     out[i] = { index = i - 1, is_active = tab == self.active_tab_ref, tab = tab }

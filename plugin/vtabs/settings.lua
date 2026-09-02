@@ -3,16 +3,18 @@ local backend = require "vtabs.backend"
 local config = require "vtabs.config"
 local gate = require "vtabs.gate"
 local mux = require "vtabs.mux"
+local platform = require "vtabs.platform"
 local sidebar = require "vtabs.sidebar"
 local state = require "vtabs.state"
 local util = require "vtabs.util"
 
-local page = require "vtabs.page"
 local schema = require "vtabs.schema"
+local protocol = require "vtabs.gen.protocol"
 
 local M = {}
 
 local VERSION = 1
+local READ_MAX = protocol.SETTINGS_BODY_MAX_BYTES
 
 local function opt(cfg, key, fallback)
   local box = cfg and cfg.settings
@@ -25,10 +27,20 @@ end
 ---An absolute path with no `..` segment. `find("..", 1, true)` rejected `~/my..notes/` too, which
 ---is a perfectly ordinary directory; only a whole segment is a traversal.
 local function safe_path(path)
-  if type(path) ~= "string" or path == "" or path:sub(1, 1) ~= "/" then
+  if type(path) ~= "string" or path == "" then
     return false
   end
-  for segment in path:gmatch "[^/]+" do
+  local absolute
+  if platform.is_windows then
+    absolute = path:match "^%a:[/\\]" ~= nil or path:match "^[/\\][/\\][^/\\]+[/\\][^/\\]+" ~= nil
+  else
+    absolute = path:sub(1, 1) == "/"
+  end
+  if not absolute then
+    return false
+  end
+  local separator = platform.is_windows and "[^/\\]+" or "[^/]+"
+  for segment in path:gmatch(separator) do
     if segment == ".." then
       return false
     end
@@ -66,8 +78,8 @@ function M.persists(cfg)
   return cfg ~= nil and cfg.settings ~= false and opt(cfg, "persist", true) ~= false
 end
 
----Keeps the keys the schema knows, plus anything under an `open` container, whose children it
----deliberately does not enumerate. Everything else is dropped, with one warning for the lot.
+---Boot-time shape guard driven by Rust's generated descriptor mirror: keeps known keys and
+---anything under an `open` container. Rust still canonicalizes and validates the effective values.
 local function keep_known(stored, prefix, out, dropped)
   out = out or {}
   for key, value in pairs(stored) do
@@ -75,6 +87,10 @@ local function keep_known(stored, prefix, out, dropped)
       local path = prefix and (prefix .. "." .. key) or key
       local option = schema.by_key[path]
       if option and option.open then
+        out[key] = value
+      elseif option and option.type == "list" then
+        -- List entries are values, not descriptor paths. Recursing would discard every numeric
+        -- index and turn an intentional list into an empty map before Rust ever sees it.
         out[key] = value
       elseif option then
         if type(value) == "table" then
@@ -92,9 +108,8 @@ local function keep_known(stored, prefix, out, dropped)
   return out
 end
 
----Reads the file into a table of stored options, or nil. Never throws: a settings file the user
----broke by hand must not stop the sidebar from painting.
-function M.load(cfg)
+---Reads a bounded, non-symlink settings body. Rust consumes this form without Lua parsing it.
+function M.read_body(cfg)
   local path = M.path(cfg)
   if util.is_symlink(path) then
     util.warn_once("settings-symlink", "settings file is a symlink, ignored")
@@ -104,8 +119,26 @@ function M.load(cfg)
   if not f then
     return nil
   end
-  local body = f:read "a"
-  f:close()
+  local body = f:read(READ_MAX + 1) or ""
+  local closed = f:close()
+  if not closed then
+    util.warn_once("settings-read", "settings file unreadable, starting from the defaults")
+    return nil
+  end
+  if #body > READ_MAX then
+    util.warn_once("settings-size", "settings file is too large, ignored")
+    return nil
+  end
+  return body
+end
+
+---Reads the file into a table of stored options, or nil. Never throws: a settings file the user
+---broke by hand must not stop the sidebar from painting.
+function M.load(cfg)
+  local body = M.read_body(cfg)
+  if body == nil then
+    return nil
+  end
   local parsed = util.try(wezterm.json_parse, body)
   if type(parsed) ~= "table" then
     util.warn_once("settings-corrupt", "settings file unreadable, starting from the defaults")
@@ -127,20 +160,15 @@ function M.load(cfg)
   return kept
 end
 
----Only what differs from the schema default, so a future change to a default reaches this user.
----The page already walks the descriptors for exactly this set; one walk, one answer.
-function M.changed(cfg)
-  return page.changed(cfg)
-end
-
----Writes the non-default keys, versioned, atomically, 0600. Called by an edit, never by a timer.
-function M.save(cfg)
+---Writes Rust's final versioned JSON body atomically, 0600. Lua owns the host filesystem path and
+---the pre-backend boot guard; it does not own changed-set calculation, aliases, or serialization.
+function M.save_body(cfg, body, permission_cfg)
   cfg = cfg or config.get()
-  if not M.persists(cfg) then
+  if not M.persists(permission_cfg or cfg) or type(body) ~= "string" then
     return false
   end
-  local body = util.try(wezterm.json_encode, { version = VERSION, options = M.changed(cfg) })
-  if type(body) ~= "string" then
+  if #body > READ_MAX then
+    util.warn_once("settings-size", "settings state is too large to persist")
     return false
   end
   return util.write_private(M.path(cfg), body, M.dir, "settings")
@@ -148,9 +176,11 @@ end
 
 ---The settings tab of this mux window and the pane running the page, or nil.
 ---One page per window: `open` looks here before it spawns anything.
-function M.find(mux_window)
-  for _, info in ipairs(mux.tabs_with_info(mux_window) or {}) do
-    for _, pane in ipairs(mux.panes(info.tab) or {}) do
+function M.find(mux_window, snapshot)
+  local tabs = snapshot and snapshot.tabs or mux.tabs_with_info(mux_window) or {}
+  for _, observed in ipairs(tabs) do
+    local info = observed.info or observed
+    for _, pane in ipairs(observed.panes or mux.panes(info.tab) or {}) do
       if sidebar.is_settings(pane) then
         return info.tab, pane
       end
@@ -224,19 +254,6 @@ function M.close(gui_window)
   sidebar.retire(gui_window, tab, pane)
   return true
 end
-
----Per-window page state: which group, which field, the scroll, the filter, what is being edited.
----`page` is pure - state in, frame out - so the registry lives here, with the rest of the host.
-local pages = {}
-
-function M.page_state(wid)
-  pages[wid] = pages[wid] or { group = 1, focus = 1, scroll = 0, filter = "" }
-  return pages[wid]
-end
-
-table.insert(state.forget_hooks, function(wid)
-  pages[wid] = nil
-end)
 
 ---True when the event carries no modifier. The wire sends `mods` as a JSON array, so comparing it
 ---as a string silently treats every chord as bare.

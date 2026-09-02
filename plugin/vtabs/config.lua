@@ -1,6 +1,5 @@
 local util = require "vtabs.util"
 local schema = require "vtabs.schema"
-local spaces = require "vtabs.spaces"
 
 local M = {}
 
@@ -24,7 +23,19 @@ local function list_ok(option, value)
   if type(value) ~= "table" then
     return false
   end
-  for _, entry in ipairs(value) do
+  local count, last = 0, 0
+  for key in pairs(value) do
+    if type(key) ~= "number" or key < 1 or key % 1 ~= 0 then
+      return false
+    end
+    count = count + 1
+    last = math.max(last, key)
+  end
+  if count ~= last then
+    return false
+  end
+  for i = 1, count do
+    local entry = value[i]
     if type(entry) == "table" then
       if option.of ~= "table" and type(entry.id) ~= "string" then
         return false
@@ -51,6 +62,9 @@ local function type_ok(option, value)
 end
 
 local function range_ok(option, value)
+  if value ~= value or value == math.huge or value == -math.huge then
+    return false
+  end
   if option.integer and value ~= math.floor(value) then
     return false
   end
@@ -115,20 +129,39 @@ end
 
 ---Every dotted key the user named in `opts`. The page renders these LOCKED: config-as-code wins,
 ---and `merge` loses the distinction the moment it runs.
-local function explicit_keys(opts, prefix, out)
+local function explicit_keys(opts, prefix, parts, out, paths, seen)
   out = out or {}
+  parts = parts or {}
+  paths = paths or {}
+  seen = seen or {}
+  if seen[opts] then
+    return out, paths
+  end
+  seen[opts] = true
   for key, value in pairs(opts) do
     if type(key) == "string" then
       local path = prefix and (prefix .. "." .. key) or key
+      local segments = {}
+      for i, part in ipairs(parts) do
+        segments[i] = part
+      end
+      segments[#segments + 1] = key
       out[path] = true
+      paths[#paths + 1] = segments
       -- open containers recurse too: the schema cannot validate their children, but the user still
       -- named them, and naming them is the whole question the page asks
       if type(value) == "table" then
-        explicit_keys(value, path, out)
+        explicit_keys(value, path, segments, out, paths, seen)
       end
     end
   end
-  return out
+  seen[opts] = nil
+  return out, paths
+end
+
+---The exact segmented paths authored in wezterm.lua, before a merge loses their ownership.
+function M.explicit_keys(opts)
+  return explicit_keys(opts or {})
 end
 
 ---`defaults <- stored <- opts`: the settings file may move a default, but never something the
@@ -136,7 +169,7 @@ end
 function M.setup(opts, stored)
   opts = opts or {}
   check_unknown(opts)
-  M.explicit = explicit_keys(opts)
+  M.explicit, M.explicit_paths = M.explicit_keys(opts)
   local cfg = util.merge(M.defaults, stored or {})
   cfg = util.merge(cfg, opts)
   validate(cfg)
@@ -149,9 +182,16 @@ function M.setup(opts, stored)
   return cfg
 end
 
----Cross-key rules every resolved config obeys, whoever built it: `setup` on boot and `replace`
----when the settings page swaps one in. Keeping them here is what stops a page edit of `hover`
----leaving `close_button` on a value the sidebar can never show.
+---Accepts a Rust-normalized serializable config while retaining Lua's config-as-code ownership.
+---Opaque values have already been restored by the caller; policy validation stays in Rust.
+function M.adopt_normalized(opts, cfg)
+  M.explicit, M.explicit_paths = M.explicit_keys(opts)
+  current = cfg
+  return cfg
+end
+
+---Bootstrap/fallback mirror of Rust's cross-key policy. The current-capability live settings path
+---arrives already canonical and uses `replace_canonical`; this remains for a missing/older binary.
 function M.normalise(cfg)
   if cfg.popover.width ~= "auto" and type(cfg.popover.width) ~= "number" then
     util.warn 'popover.width must be "auto" or a number, using auto'
@@ -167,7 +207,6 @@ function M.normalise(cfg)
     util.warn 'tear_off="outside" is not supported, using edge'
     cfg.tear_off = true
   end
-  spaces.validate(cfg)
   return cfg
 end
 
@@ -175,10 +214,9 @@ function M.get()
   return current or M.setup {}
 end
 
----Swaps the whole resolved config, as the settings page does after an edit.
-function M.replace(tbl)
-  validate(tbl)
-  M.normalise(tbl)
+---Swaps values already canonicalized by the Rust settings document. Current-capability settings
+---commits must not run a second Lua policy pass that can drift from persistence.
+function M.replace_canonical(tbl)
   current = tbl
   return current
 end
@@ -186,6 +224,7 @@ end
 ---What the host set on the WezTerm config before this plugin ran; the page shows these read-only.
 M.host_config = {}
 M.explicit = {}
+M.explicit_paths = {}
 
 ---A framed sidebar keeps its last column for the content edge.
 function M.framed(cfg)

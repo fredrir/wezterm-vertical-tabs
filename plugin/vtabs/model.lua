@@ -10,7 +10,7 @@ local util = require "vtabs.util"
 local M = {}
 
 ---The three title sources, separately: v2 sends them raw so Rust can own the fallback.
-local function title_parts(tab, pane, cfg)
+local function title_parts(tab, pane, cfg, observed, pane_facts)
   local override = nil
   if cfg.title then
     local ok, custom = pcall(cfg.title, tab, pane)
@@ -20,33 +20,29 @@ local function title_parts(tab, pane, cfg)
       override = custom
     end
   end
-  local title = tab:get_title()
+  local title = observed and observed.title or nil
+  if not observed then
+    title = mux.tab_title(tab)
+  end
   if title == "" or sidebar.marker(title) then
     title = nil
   end
-  local pane_title = sidebar.title(pane)
+  local pane_title = pane_facts and pane_facts.title or nil
+  if not pane_facts then
+    pane_title = sidebar.title(pane)
+  end
   if not pane_title or pane_title == "" or sidebar.marker(pane_title) then
     pane_title = nil
   end
   return override, title, pane_title
 end
 
-local SHELLS = {
-  bash = true,
-  fish = true,
-  nu = true,
-  sh = true,
-  zsh = true,
-  ["cmd.exe"] = true,
-  ["pwsh.exe"] = true,
-  ["powershell.exe"] = true,
-}
-local REMOTE = { ssh = true, mosh = true, ["mosh-client"] = true, ["ssh.exe"] = true }
+local ICON_PATTERN_MAGIC = { "^", "$", "*", "+", "?", "[" }
 
-local META_TTL_MS = 60000
+local FACTS_TTL_MS = 60000
 ---Declared through `store`, so forgetting a tab clears it without a hook to register.
 local scope = store.scope "model"
-local meta_cache = scope.tab()
+local facts_cache = scope.tab()
 
 ---`file_path` prefixes a Windows drive with a slash (url-funcs/src/lib.rs:60-76); drop it.
 local function local_path(path)
@@ -61,8 +57,11 @@ local function some(s)
 end
 
 ---Path, host and user of a pane's OSC 7 cwd; the user is the URL's, never the local `$USER`.
-local function cwd_of(pane)
-  local cwd = mux.cwd(pane)
+local function cwd_of(pane, observed)
+  local cwd = observed and observed.cwd or nil
+  if not observed then
+    cwd = mux.cwd(pane)
+  end
   if not cwd then
     return nil, nil, nil
   end
@@ -93,62 +92,61 @@ local function tilde(path)
   return path
 end
 
-local function join(prefix, tail)
-  if prefix and tail then
-    return prefix .. config.get().meta_sep .. tail
-  end
-  return prefix or tail
-end
-
----One probe of the pane's mux-visible facts; v2 sends these raw, meta composes from them.
-local function facts_for(pane)
-  local path, host, remote_user = cwd_of(pane)
+---One probe of the pane's mux-visible facts; Rust composes the displayed title and meta line.
+local function facts_for(pane, observed)
+  local path, host, remote_user = cwd_of(pane, observed)
   return {
     cwd = tilde(path),
     host = host,
     user = remote_user,
-    proc = util.basename(mux.foreground(pane)),
-    domain = mux.domain(pane),
+    proc = util.basename(observed and observed.foreground or (not observed and mux.foreground(pane) or nil)),
+    domain = observed and observed.domain or (not observed and mux.domain(pane) or nil),
   }
 end
 
----Second card line: cwd for shells, `user@host` for ssh, `proc dir` otherwise, domain when remote.
-local function meta_from(f, cfg)
-  if cfg.meta == false then
-    return nil
-  end
-  local dir, process = f.cwd, f.proc
-  if cfg.meta == "cwd" then
-    return dir
-  end
-  if cfg.meta == "process" then
-    return process
-  end
-  if not process then
-    -- A mux pane reports no process (mux/src/pane.rs:331), so name where it is instead.
-    return join(f.domain ~= "local" and f.domain or nil, dir)
-  end
-  if REMOTE[process] then
-    if not f.host then
-      return process
+local function is_icon_pattern(key)
+  for _, magic in ipairs(ICON_PATTERN_MAGIC) do
+    if key:find(magic, 1, true) then
+      return true
     end
-    return f.user and f.user .. "@" .. f.host or f.host
   end
-  if SHELLS[process] then
-    return dir
-  end
-  return join(process, dir and util.basename(dir))
+  return false
 end
 
-local function cached_facts(tab_id, pane, cfg, now)
-  local seen = meta_cache[tab_id]
-  if seen and now - seen.at < cfg.poll_ms then
-    return seen.facts, seen.value
+---User mappings are Lua values, so Lua is the only honest place to interpret their pattern keys.
+---Exact names win; patterned keys keep the old deterministic sorted-key precedence.
+local function custom_icon(process, icon_map)
+  if not process or type(icon_map) ~= "table" then
+    return nil
   end
-  local facts = facts_for(pane)
-  local value = util.sanitize(meta_from(facts, cfg) or "")
-  meta_cache[tab_id] = { facts = facts, value = value ~= "" and value or nil, at = now }
-  return facts, meta_cache[tab_id].value
+  if type(icon_map[process]) == "string" then
+    return icon_map[process]
+  end
+  local patterns = {}
+  for key, icon in pairs(icon_map) do
+    if type(key) == "string" and type(icon) == "string" and is_icon_pattern(key) then
+      patterns[#patterns + 1] = key
+    end
+  end
+  table.sort(patterns)
+  for _, pattern in ipairs(patterns) do
+    local ok, matched = pcall(string.match, process, pattern)
+    if ok and matched then
+      return icon_map[pattern]
+    end
+  end
+  return type(icon_map.default) == "string" and icon_map.default or nil
+end
+
+local function cached_facts(tab_id, pane, cfg, now, observed)
+  local seen = facts_cache[tab_id]
+  if seen and seen.icon_map == cfg.icon_map and now - seen.at < cfg.poll_ms then
+    return seen.facts
+  end
+  local facts = facts_for(pane, observed)
+  facts.icon = custom_icon(facts.proc, cfg.icon_map)
+  facts_cache[tab_id] = { facts = facts, at = now, icon_map = cfg.icon_map }
+  return facts
 end
 
 M.forget_tab = scope.forget_tab
@@ -156,14 +154,14 @@ M.forget_tab = scope.forget_tab
 local pruned_at = 0
 
 ---Sweeping every build is pointless work on the hot path; entries only expire once per TTL.
-local function prune_meta(now)
-  if now - pruned_at < META_TTL_MS then
+local function prune_facts(now)
+  if now - pruned_at < FACTS_TTL_MS then
     return
   end
   pruned_at = now
-  for tab_id, entry in pairs(meta_cache) do
-    if now - entry.at > META_TTL_MS then
-      meta_cache[tab_id] = nil
+  for tab_id, entry in pairs(facts_cache) do
+    if now - entry.at > FACTS_TTL_MS then
+      facts_cache[tab_id] = nil
     end
   end
 end
@@ -183,22 +181,26 @@ end
 ---Walks every tab of the window once: what each is, which space holds it, which space the window
 ---shows and what the switcher lists. `build` is the visible half of the same walk.
 ---@return { all: table, visible: table, space: string|nil, spaces: table|nil }
-function M.survey(gui_window)
-  local cfg = config.get()
-  local mux_win = gui_window:mux_window()
-  local wid = gui_window:window_id()
-  local now = util.now_ms()
-  prune_meta(now)
+function M.survey(gui_window, snapshot)
+  local cfg = snapshot and snapshot.cfg or config.get()
+  local mux_win = snapshot and snapshot.mux_window or gui_window:mux_window()
+  local wid = snapshot and snapshot.window_id or gui_window:window_id()
+  local now = snapshot and snapshot.now or util.now_ms()
+  prune_facts(now)
   local items = {}
-  for _, info in ipairs(mux_win:tabs_with_info()) do
+  local observed_tabs = snapshot and snapshot.tabs or mux.tabs_with_info(mux_win) or {}
+  for _, observed in ipairs(observed_tabs) do
     -- a tab that dies mid-poll drops out of the list instead of failing the whole window
     local ok, item = pcall(function()
+      local info = observed.info or observed
       local tab = info.tab
-      local pane = included(cfg, tab, mux_win) and sidebar.content_pane(tab) or nil
+      local pane = included(cfg, tab, mux_win)
+          and (observed.content_pane or sidebar.content_pane(tab, observed.panes, observed.active_pane))
+        or nil
       if not pane then
         return nil
       end
-      local tab_id = tab:tab_id()
+      local tab_id = observed.tab_id or tab:tab_id()
       if sidebar.is_settings(pane) then
         return {
           tab_id = tab_id,
@@ -210,21 +212,21 @@ function M.survey(gui_window)
           is_settings = true,
         }
       end
-      local override, tab_title, pane_title = title_parts(tab, pane, cfg)
-      local facts, meta = cached_facts(tab_id, pane, cfg, now)
+      local pane_facts = snapshot and snapshot.panes[pane:pane_id()] or nil
+      local override, tab_title, pane_title = title_parts(tab, pane, cfg, observed.info and observed or nil, pane_facts)
+      local facts = cached_facts(tab_id, pane, cfg, now, pane_facts)
       return {
         tab_id = tab_id,
         index = info.index + 1,
         is_active = info.is_active,
         is_pinned = state.is_pinned(tab_id),
-        title = util.sanitize(override or tab_title or pane_title or ("tab " .. tostring(tab_id))),
-        has_unseen = mux.unseen(pane) == true,
-        meta = meta,
+        has_unseen = pane_facts and pane_facts.unseen == true or (not pane_facts and mux.unseen(pane) == true),
         raw = {
           override = override and util.sanitize(override) or nil,
           title = tab_title and util.sanitize(tab_title) or nil,
           pane_title = pane_title and util.sanitize(pane_title) or nil,
           proc = facts.proc,
+          icon = facts.icon,
           cwd = facts.cwd,
           host = facts.host,
           user = facts.user,
@@ -241,40 +243,15 @@ function M.survey(gui_window)
   if not spaces.enabled(cfg) then
     return { all = items, visible = items }
   end
-  local present, active_item = {}, nil
-  for _, entry in ipairs(spaces.statics(cfg)) do
-    if not spaces.is_template(entry.id) then
-      present[entry.id] = true
-    end
-  end
-  for _, item in ipairs(items) do
-    -- the settings page has no space: it shows in every one and never pulls the sidebar anywhere
-    if not item.is_settings then
-      item.space = spaces.assign(cfg, wid, item, present)
-      if item.space then
-        present[item.space] = true
-      end
-    end
-    if item.is_active then
-      active_item = item
-    end
-  end
-  if active_item then
-    spaces.reconcile(wid, active_item.tab_id, active_item.space)
-  end
-  local active = spaces.active(cfg, wid, present)
-  local visible = {}
-  for _, item in ipairs(items) do
-    if item.space == nil or item.space == active then
-      visible[#visible + 1] = item
-    end
-  end
-  return { all = items, visible = visible, space = active, spaces = spaces.summary(cfg, wid, items) }
+  local active = snapshot and snapshot.active or nil
+  local active_sidebar = active and active.sidebar or sidebar.find(util.active_tab(gui_window))
+  local capable = active_sidebar and sidebar.supports(active_sidebar, "spaces_policy") or false
+  return spaces.project(cfg, wid, items, capable)
 end
 
 ---The sidebar's list for a window: the active space's tabs, in physical order.
-function M.build(gui_window)
-  return M.survey(gui_window).visible
+function M.build(gui_window, snapshot)
+  return M.survey(gui_window, snapshot).visible
 end
 
 ---Rendered order: pinned first, then the rest, both in physical order.

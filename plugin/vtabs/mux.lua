@@ -37,6 +37,10 @@ function M.tab_id(tab)
   return get(tab, "tab_id")
 end
 
+function M.tab_title(tab)
+  return get(tab, "get_title")
+end
+
 function M.panes(tab)
   return get(tab, "panes")
 end

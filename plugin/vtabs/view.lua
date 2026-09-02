@@ -7,18 +7,18 @@ local model = require "vtabs.model"
 local geometry = require "vtabs.geometry"
 local platform = require "vtabs.platform"
 local mux = require "vtabs.mux"
-local spaces = require "vtabs.spaces"
+local snapshot = require "vtabs.snapshot"
+local theme_bridge = require "vtabs.theme_bridge"
 local util = require "vtabs.util"
 
 local M = {}
 
 ---Declared through `store`, so forgetting a window clears them without a list to keep in step.
 local scope = store.scope "view"
-local theme_hooks = scope.window()
 local chrome = scope.window()
 local banding, banding_saved = scope.window(), scope.window()
 local effective = scope.window()
-local last_strip = scope.window()
+local last_strip_metrics = scope.window()
 
 ---`effective_config` hands over the whole config as a Lua table, every colour scheme included, on
 ---each call. Nothing read from it moves without a reload, and a reload drops this.
@@ -105,14 +105,16 @@ function M.animate_popover(gui_window)
 end
 
 ---Without a window id, every window's: a config reload invalidates them all at once.
-function M.invalidate_theme(window_id)
+function M.invalidate_theme(window_id, preserve_resolved)
+  if not preserve_resolved then
+    theme_bridge.clear(window_id)
+  end
   if window_id then
-    theme_hooks[window_id] = nil
     chrome[window_id] = nil
     effective[window_id] = nil
     return
   end
-  for _, cache in ipairs { theme_hooks, chrome, effective } do
+  for _, cache in ipairs { chrome, effective } do
     for id in pairs(cache) do
       cache[id] = nil
     end
@@ -120,10 +122,10 @@ function M.invalidate_theme(window_id)
 end
 
 ---macOS shows its buttons only for `INTEGRATED_BUTTONS` with a native style; both gate the reserve.
-local function chrome_for(gui_window, cfg)
+local function chrome_for(gui_window, cfg, observed)
   local wid = gui_window:window_id()
   if not chrome[wid] then
-    local config_now = M.effective_config(gui_window) or {}
+    local config_now = observed and observed.effective or M.effective_config(gui_window) or {}
     local decorations = tostring(config_now.window_decorations or "")
     -- `titlebar = "macos"` is the preview knob: it claims the reserve on a machine that has none.
     local preview = cfg.titlebar == "macos"
@@ -197,65 +199,44 @@ function M.apply_titlebar_band(gui_window)
   return true
 end
 
----A rail has no room beside the lights, so its toggle centres below them; without telling
----`strip_geometry` which mode it is in, the toggle lands off the end of the rail.
-local function strip_for(gui_window, cfg, dims, rail, window)
-  local facts = chrome_for(gui_window, cfg)
-  local wid = gui_window:window_id()
-  window = window or {}
-  local g = platform.strip_geometry(dims, {
-    is_mac = platform.is_mac or facts.preview,
-    preview = facts.preview and not platform.is_mac or nil,
-    integrated_buttons = facts.integrated_buttons,
-    native_button_style = facts.native_button_style,
-    is_full_screen = window.is_full_screen == true,
-    position = cfg.position,
-    padding_top = cfg.padding.top,
-    toggle_button = cfg.toggle_button,
-    card_x1 = cfg.padding.left + 1,
-    rail = rail or nil,
-    rail_width = rail and cfg.rail_width or nil,
-  })
-  -- `desired` has no cell size of its own, so the reserve a frame measured is handed to geometry.
-  geometry.set_rail_cols(wid, g.cols)
-  local toggle = nil
-  if cfg.toggle_button and g.rows > 0 then
-    toggle = { row = g.toggle_row, x = g.toggle_x, x1 = math.max(1, g.toggle_x - 1), x2 = g.toggle_x + 2 }
+local function raw_metrics(dims)
+  if not dims then
+    return nil
   end
-  return { rows = g.rows, cols = g.cols, cell_w = g.cell_w, toggle = toggle, toggle_row = g.toggle_row }
+  return {
+    cols = dims.cols,
+    viewport_rows = dims.viewport_rows,
+    pixel_width = dims.pixel_width,
+    pixel_height = dims.pixel_height,
+    dpi = dims.dpi,
+  }
 end
 
----What `hooks.theme` answers for this window, cached per space until a reload; nil when it has
----nothing to say. `base` is the theme the hook is shown: the user's with the space's laid over it.
-local function theme_override_for(gui_window, cfg, base, space)
-  local wid = gui_window:window_id()
-  local per = theme_hooks[wid]
-  if not per then
-    per = {}
-    theme_hooks[wid] = per
-  end
-  local key = space or ""
-  if per[key] == nil then
-    local custom = false
-    if cfg.hooks.theme then
-      local config_now = M.effective_config(gui_window)
-      local palette = config_now and config_now.resolved_palette or {}
-      local resolved = require("vtabs.theme").resolve(base, palette, { private = state.is_private(wid) })
-      local ok, answer = pcall(cfg.hooks.theme, gui_window, resolved)
-      if not ok then
-        util.warn_once("hook-theme", "theme hook failed: %s", tostring(answer))
-      elseif type(answer) == "table" then
-        custom = answer
-      end
-    end
-    per[key] = custom
-  end
-  return per[key] or nil
+---Fresh chrome plus active-pane metrics for Rust's sole strip-geometry calculation.
+local function strip_facts(gui_window, cfg, metrics, window, observed)
+  local facts = chrome_for(gui_window, cfg, observed)
+  window = window or {}
+  return {
+    metrics = metrics,
+    chrome = {
+      is_mac = platform.is_mac,
+      integrated_buttons = facts.integrated_buttons,
+      native_button_style = facts.native_button_style,
+      preview = facts.preview,
+      is_full_screen = window.is_full_screen == true,
+    },
+  }
 end
 
 ---Nil when the pane cannot report a size; the frame is then skipped rather than painted at a guess.
-local function dims_of(pane)
-  local d = mux.dims(pane)
+local function dims_of(pane, observed)
+  local d
+  if observed then
+    local facts = observed.panes[pane:pane_id()]
+    d = facts and facts.dimensions or nil
+  else
+    d = mux.dims(pane)
+  end
   if d and d.cols and d.viewport_rows then
     return d
   end
@@ -299,61 +280,77 @@ function M.sync(gui_window)
   if cfg.debug then
     util.log("sync: window %d", gui_window:window_id())
   end
-  local mux_win = gui_window:mux_window()
-  local wid = gui_window:window_id()
-  local survey = model.survey(gui_window)
+  local observed = snapshot.capture(gui_window, { cfg = cfg, effective = M.effective_config(gui_window) })
+  if cfg.debug then
+    util.log(
+      "snapshot: window=%d mux_collections=%d pane_collections=%d tabs=%d",
+      observed.window_id,
+      observed.stats.mux_collections,
+      observed.stats.pane_collections,
+      #observed.tabs
+    )
+  end
+  local mux_win = observed.mux_window
+  local wid = observed.window_id
+  local survey = model.survey(gui_window, observed)
   local items = survey.visible
   local footer = footer_for(cfg, mux_win)
-  local active_tab = mux_win:active_tab()
-  local active_tab_id = active_tab and active_tab:tab_id() or nil
-  local now = util.now_ms()
-  geometry.sync(gui_window, active_tab_id)
+  local active_tab_id = observed.active_tab_id
+  local now = observed.now
+  -- A correction changes the layout this observation describes. Publish nothing from it; the next
+  -- poll takes a fresh tree after the mux has applied the adjustment.
+  if geometry.sync(gui_window, active_tab_id, observed) then
+    return false
+  end
   -- After the width settles, so the card is drawn at the pane rect the correction leaves behind.
-  require("vtabs.frame").sync(gui_window)
+  require("vtabs.frame").sync(gui_window, observed)
 
-  local window = mux.dims(gui_window)
-  local wire_strip = nil
-  for _, info in ipairs(mux_win:tabs_with_info()) do
-    local sb = sidebar.find(info.tab)
-    if sb and sidebar.is_ready(sb) then
+  local window = observed.window_dims
+  for _, tab in ipairs(observed.tabs) do
+    local sb = tab.sidebar
+    if sb and tab.sidebar_ready then
       local pid = sb:pane_id()
-      local is_active = info.tab:tab_id() == active_tab_id
-      local dims = dims_of(sb)
+      local dims = dims_of(sb, observed)
       if dims then
-        local rail = state.is_collapsed(wid) and cfg.collapsed == "rail" or nil
-        local strip = strip_for(gui_window, cfg, dims, rail, window)
-        if is_active or wire_strip == nil then
-          wire_strip = strip
-        end
         store.dims[pid] = { cols = dims.cols, rows = dims.viewport_rows }
         store.sent_at[pid] = now
       end
     end
   end
-  -- A poll that finds no sidebar able to report a size keeps the strip it had: dropping it for one
-  -- frame would move every row below it, and the mux catches up a moment later anyway.
-  if wire_strip then
-    last_strip[wid] = wire_strip
+
+  -- Only the active tab's current sidebar can describe the shared model. A missing observation may
+  -- reuse that exact pane's last metrics, never a background or replaced pane's measurements.
+  local active = observed.active
+  local active_sb = active and active.sidebar or nil
+  local active_pid = active_sb and active_sb:pane_id() or nil
+  local metrics = active_sb and raw_metrics(dims_of(active_sb, observed)) or nil
+  if metrics then
+    last_strip_metrics[wid] = { tab_id = active_tab_id, pane_id = active_pid, value = metrics }
   else
-    wire_strip = last_strip[wid]
+    local cached = last_strip_metrics[wid]
+    if cached and cached.tab_id == active_tab_id and cached.pane_id == active_pid then
+      metrics = cached.value
+    end
   end
-  local config_now = M.effective_config(gui_window)
-  local theme_base = spaces.theme_for(cfg, wid, config_now and config_now.resolved_palette or nil)
+  -- Chrome and fullscreen are deliberately rebuilt even when pane metrics came from the cache.
+  local wire_strip = strip_facts(gui_window, cfg, metrics, window, observed)
+  local config_now = observed.effective
   require("vtabs.wire").sync(gui_window, {
     cfg = cfg,
     items = items,
     footer = footer,
     active_tab_id = active_tab_id,
     effective = config_now,
-    chrome = chrome_for(gui_window, cfg),
     strip = wire_strip,
-    theme_base = theme_base,
-    theme_override = theme_override_for(gui_window, cfg, theme_base, survey.space),
+    theme_base = cfg.theme,
+    private = state.is_private(wid),
     space = survey.space,
     spaces = survey.spaces,
     survey = survey,
+    snapshot = observed,
     window_dims = window,
   })
+  return true
 end
 
 return M

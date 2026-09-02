@@ -4,7 +4,6 @@
 local config = require "vtabs.config"
 local fake = require "fake_mux"
 local input = require "vtabs.input"
-local platform = require "vtabs.platform"
 local popover = require "vtabs.popover"
 local sidebar = require "vtabs.sidebar"
 local state = require "vtabs.state"
@@ -34,6 +33,16 @@ function M.eq(a, b, msg)
   if a ~= b then
     error((msg or "") .. string.format(" expected %s got %s", tostring(b), tostring(a)), 2)
   end
+end
+
+function M.control_payload(framed)
+  local prefix = require("vtabs.gen.protocol").CONTROL_PREFIX
+  local line = type(framed) == "string" and framed:match "[^\n]+" or nil
+  if not line or line:sub(1, #prefix) ~= prefix then
+    return nil
+  end
+  local separator = line:find(" ", #prefix + 1, true)
+  return separator and line:sub(separator + 1) or nil
 end
 
 function M.usub(s, i, j)
@@ -194,26 +203,6 @@ function M.open_popover(index)
   input.handle(gui, sb, "vtabs", '{"t":"do","a":"open_menu","id":' .. tab.id .. ',"args":{"row":3,"col":5}}')
   require("vtabs.view").sync(gui)
   return win, gui, sb, popover.get(gui:window_id())
-end
-
--- 8.4 pt cells across, 19 pt down, so 70/8.4 -> 9 cols and 28/19 -> 2 rows. No `dpi`, so 1x.
-M.RETINA = { cols = 28, viewport_rows = 30, pixel_width = 235, pixel_height = 570 }
-
-function M.strip_geom(dims, over)
-  local opts = {
-    is_mac = true,
-    integrated_buttons = true,
-    native_button_style = true,
-    is_full_screen = false,
-    position = "left",
-    padding_top = 1,
-    toggle_button = true,
-    card_x1 = 2,
-  }
-  for k, v in pairs(over or {}) do
-    opts[k] = v
-  end
-  return platform.strip_geometry(dims, opts)
 end
 
 return M

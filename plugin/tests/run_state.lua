@@ -119,9 +119,26 @@ test("a backend pane that outlived the GUI is adopted, not duplicated", function
   local token = state.token_for(sb:pane_id())
   assert(token, "fresh token minted")
   assert(sb.sent[#sb.sent]:find(token, 1, true), "re-authed with it")
+  local auth = wezterm.json_parse(H.control_payload(sb.sent[#sb.sent]))
+  eq(auth.caps[1] or auth.caps["1"], "typed_intents", "auth advertises the typed intent client contract")
+  eq(auth.caps[2] or auth.caps["2"], "theme_hooks", "auth advertises the theme hook client contract")
+  eq(auth.caps[3] or auth.caps["3"], "settings_document", "auth advertises Rust-owned settings")
   sb.vars.vtabs_token = token
   eq(sidebar.is_ready(sb), true)
   eq(sidebars_in(tab), 1)
+end)
+
+test("control records use the echoed session as proof while auth rotates to the current token", function()
+  local win = window(1)
+  local pane = win.tab_list[1].pane_list[1]
+  state.set_token(pane:pane_id(), "new-session")
+  pane.vars.vtabs_token = "old-session"
+  sidebar.auth(pane)
+  local framed = pane.sent[#pane.sent]
+  local prefix = require("vtabs.gen.protocol").CONTROL_PREFIX
+  assert(framed:sub(1, #prefix + #"old-session ") == prefix .. "old-session ")
+  local auth = require("wezterm").json_parse(H.control_payload(framed))
+  eq(auth.token, "new-session")
 end)
 
 test("a pane faking the title marker is never trusted and closes nothing", function()
@@ -229,7 +246,11 @@ test("a marker title never reaches the rendered tab list", function()
   local tab = win.tab_list[1]
   tab:set_title "wez-vtabs:abcd"
   local built = model.build(gui)
-  eq(built[1].title:find "wez%-vtabs", nil)
+  eq(built[1].raw.title, nil)
+  assert(
+    not built[1].raw.pane_title or not built[1].raw.pane_title:find "wez%-vtabs",
+    "backend markers never leak into raw tab facts"
+  )
 end)
 
 test("a content pane faking the marker cannot empty its own tab", function()

@@ -3,13 +3,13 @@ local config = require "vtabs.config"
 local state = require "vtabs.state"
 local store = require "vtabs.store"
 local sidebar = require "vtabs.sidebar"
-local model = require "vtabs.model"
 local view = require "vtabs.view"
 local geometry = require "vtabs.geometry"
 local actions = require "vtabs.actions"
 local popover = require "vtabs.popover"
-local settings = require "vtabs.settings"
+local protocol = require "vtabs.gen.protocol"
 local mux = require "vtabs.mux"
+local theme_bridge = require "vtabs.theme_bridge"
 local util = require "vtabs.util"
 
 local M = {}
@@ -50,18 +50,18 @@ local function blur(gui_window)
   actions.blur_sidebar(gui_window)
 end
 
-local DO = {}
+local INTENT = {}
 
-function DO.press_card(gui_window, pane, id, args)
+function INTENT.press_card(gui_window, pane, ev)
   local wid = gui_window:window_id()
   local now = util.now_ms()
   store.drag[wid] = nil
   state.set_focus(wid, false)
-  local focused = actions.activate_tab(gui_window, id, "sidebar")
+  local focused = actions.activate_tab(gui_window, ev.tab_id, "sidebar")
   store.drag[wid] = {
-    tab_id = id,
-    origin_x = args.x,
-    origin_y = args.y,
+    tab_id = ev.tab_id,
+    origin_x = ev.x,
+    origin_y = ev.y,
     pane_id = focused and focused:pane_id() or pane:pane_id(),
     active = false,
     began = now,
@@ -69,118 +69,136 @@ function DO.press_card(gui_window, pane, id, args)
   }
 end
 
-function DO.drag_to(gui_window, _, _, args)
+function INTENT.drag_to(gui_window, _, ev)
   local drag = store.drag[gui_window:window_id()]
   if not drag then
     return
   end
   drag.at = util.now_ms()
   drag.active = true
-  drag.over_index = args.slot
-  drag.outside = args.outside == true
+  drag.over_index = ev.slot
+  drag.outside = ev.outside == true
 end
 
-function DO.drag_end(gui_window, _, _, args)
+function INTENT.drag_end(gui_window, _, ev)
   local wid = gui_window:window_id()
   local drag = store.drag[wid]
   store.drag[wid] = nil
   if not drag then
     return
   end
-  if args.outside or drag.outside then
+  if ev.outside or drag.outside then
     actions.tear_off(gui_window, drag.tab_id)
-  elseif args.slot or drag.over_index then
-    actions.move_tab_to_slot(gui_window, drag.tab_id, args.slot or drag.over_index)
+  elseif ev.slot or drag.over_index then
+    actions.move_tab_to_slot(gui_window, drag.tab_id, ev.slot or drag.over_index)
   end
 end
 
-function DO.request_close(gui_window, _, id, args)
-  actions.request_close(gui_window, id, args.row, args.col, args.from_key == true)
+function INTENT.request_close(gui_window, _, ev)
+  actions.request_close(gui_window, ev.tab_id, ev.row, ev.col, ev.from_key == true)
 end
 
-function DO.toggle_pin(gui_window, _, id)
-  actions.toggle_pin(gui_window, id)
+function INTENT.toggle_pin(gui_window, _, ev)
+  actions.toggle_pin(gui_window, ev.tab_id)
 end
 
-function DO.open_menu(gui_window, _, id, args)
-  popover.open(gui_window, id, args.row, args.col)
+function INTENT.open_menu(gui_window, _, ev)
+  popover.open(gui_window, ev.tab_id, ev.row, ev.col)
 end
 
-function DO.new_tab(gui_window)
+function INTENT.new_tab(gui_window)
   actions.new_tab(gui_window)
 end
 
-function DO.strip(gui_window, _, id)
-  strip_action(gui_window, id)
+function INTENT.strip(gui_window, _, ev)
+  strip_action(gui_window, ev.button_id)
 end
 
-function DO.set_scroll(gui_window, _, _, args)
+function INTENT.set_scroll(gui_window, _, ev)
   local wid = gui_window:window_id()
-  store.scroll[wid] = args.top or 0
-  store.user_scrolled[wid] = args.user == true or nil
+  store.scroll[wid] = ev.top or 0
+  store.user_scrolled[wid] = ev.user == true or nil
 end
 
-function DO.wheel_tab(gui_window, _, _, args)
-  actions.activate_relative(gui_window, args.dy or 1)
+function INTENT.wheel_tab(gui_window, _, ev)
+  actions.activate_relative(gui_window, ev.dy or 1)
 end
 
-function DO.set_focus_index(gui_window, _, _, args)
-  store.focus_index[gui_window:window_id()] = args.index
+function INTENT.set_focus_index(gui_window, _, ev)
+  store.focus_index[gui_window:window_id()] = ev.index
 end
 
-function DO.activate_tab_by_id(gui_window, _, id)
-  actions.activate_tab(gui_window, id)
+function INTENT.activate_tab(gui_window, _, ev)
+  actions.activate_tab(gui_window, ev.tab_id)
   blur(gui_window)
 end
 
-function DO.blur_sidebar(gui_window)
+function INTENT.blur_sidebar(gui_window)
   blur(gui_window)
 end
 
-function DO.menu_pick(gui_window, _, _, args)
-  popover.run(gui_window, args.id)
+function INTENT.menu_pick(gui_window, _, ev)
+  popover.run(gui_window, ev.item_id)
 end
 
-function DO.switch_space(gui_window, _, id)
-  if type(id) == "string" then
-    actions.switch_space(gui_window, id)
+function INTENT.switch_space(gui_window, _, ev)
+  if type(ev.space_id) == "string" then
+    actions.switch_space(gui_window, ev.space_id)
   end
 end
 
-function DO.menu_back(gui_window)
+function INTENT.menu_back(gui_window)
   popover.back(gui_window)
 end
 
-function DO.menu_closed(gui_window)
+function INTENT.menu_closed(gui_window)
   popover.close(gui_window)
 end
 
-function DO.rename_commit(gui_window, _, _, args)
+function INTENT.rename_commit(gui_window, _, ev)
   local pop = popover.get(gui_window:window_id())
   if pop and pop.level == "rename" then
-    pop.buffer = tostring(args.text or "")
+    pop.buffer = tostring(ev.text or "")
     popover.commit_rename(gui_window)
   end
 end
 
 ---Footer entries can be id-less closures, so the wire addresses them by index in the sent model.
-function DO.footer(gui_window, _, _, args)
+function INTENT.footer(gui_window, _, ev)
   local hook = (config.get().hooks or {}).footer
   if type(hook) ~= "function" then
     return
   end
   local ok, rows = pcall(hook, gui_window:mux_window())
-  local entry = ok and type(rows) == "table" and rows[args.index] or nil
+  local entry = ok and type(rows) == "table" and rows[ev.index] or nil
   if type(entry) == "table" and type(entry.on_click) == "function" then
     pcall(entry.on_click, gui_window, entry)
   end
 end
 
-M.DO = DO
+function INTENT.rename_tab(gui_window, _, ev)
+  actions.rename_tab(gui_window, ev.tab_id)
+end
 
-local QUIET_DO = { set_scroll = true, drag_to = true }
+function INTENT.move_tab(gui_window, _, ev)
+  actions.move_tab_to_slot(gui_window, ev.tab_id, ev.slot)
+  store.focus_index[gui_window:window_id()] = ev.focus_index
+end
 
-local MENU_DO = {
+function INTENT.set_rail_reserve(gui_window, pane, ev)
+  local active = util.active_tab(gui_window)
+  local current = active and sidebar.find(active) or nil
+  if not current or current:pane_id() ~= pane:pane_id() then
+    return
+  end
+  geometry.apply_rail_reserve(gui_window, ev.cols)
+end
+
+M.INTENT = INTENT
+
+local QUIET_INTENT = { set_scroll = true, drag_to = true }
+
+local MENU_INTENT = {
   menu_pick = true,
   menu_back = true,
   menu_closed = true,
@@ -224,77 +242,134 @@ local function on_cli(gui_window, pane, ev)
   end
 end
 
----`do` events from a painting backend; the popover-open guard mirrors v1's click-through dismiss.
-local function on_do(gui_window, pane, ev)
-  local handler = DO[ev.a]
-  if not handler then
-    return
-  end
-  local wid = gui_window:window_id()
-  if popover.get(wid) and not MENU_DO[ev.a] then
-    popover.close(gui_window)
-  end
-  handler(gui_window, pane, ev.id, ev.args or {})
-  if not QUIET_DO[ev.a] then
+local function on_theme_resolved(gui_window, ev)
+  local generation = require("vtabs.wire").generation(gui_window:window_id())
+  if theme_bridge.accept(gui_window, ev, generation) then
     view.sync(gui_window)
   end
 end
 
-local MOVE = { down = 1, j = 1, tab = 1, up = -1, k = -1 }
-
-local function with_focused(fn)
-  return function(gui_window, items, index)
-    local item = items[index]
-    if item then
-      fn(gui_window, item.tab_id, index)
-    end
+---Typed backend intent; the popover-open guard mirrors v1's click-through dismiss.
+local function on_intent(gui_window, pane, ev)
+  if protocol.INTENT_NAMES[ev.a] ~= true then
+    return
+  end
+  local handler = INTENT[ev.a]
+  if not handler then
+    return
+  end
+  local wid = gui_window:window_id()
+  if popover.get(wid) and not MENU_INTENT[ev.a] then
+    popover.close(gui_window)
+  end
+  handler(gui_window, pane, ev)
+  if not QUIET_INTENT[ev.a] then
+    view.sync(gui_window)
   end
 end
 
-local KEYS = {
-  enter = with_focused(function(gui_window, id)
-    actions.activate_tab(gui_window, id)
-    blur(gui_window)
-  end),
-  x = with_focused(function(gui_window, id, index)
-    actions.request_close(gui_window, id, index, nil, true)
-  end),
-  p = with_focused(function(gui_window, id)
-    actions.toggle_pin(gui_window, id)
-  end),
-  r = with_focused(function(gui_window, id)
-    actions.rename_tab(gui_window, id)
-  end),
-  m = with_focused(function(gui_window, id, index)
-    popover.open(gui_window, id, index)
-  end),
-  J = with_focused(function(gui_window, id, index)
-    actions.move_tab_to_slot(gui_window, id, index + 1)
-    store.focus_index[gui_window:window_id()] = index + 1
-  end),
-  K = with_focused(function(gui_window, id, index)
-    actions.move_tab_to_slot(gui_window, id, index - 1)
-    store.focus_index[gui_window:window_id()] = math.max(index - 1, 1)
-  end),
-  n = function(gui_window)
-    actions.new_tab(gui_window)
-    blur(gui_window)
+---The one compatibility boundary for legacy backends. Internal handlers only see typed fields.
+local LEGACY = {
+  press_card = function(id, a)
+    return { a = "press_card", tab_id = id, x = a.x, y = a.y, part = a.part }
   end,
-  ["]"] = function(gui_window)
-    actions.cycle_space(gui_window, 1)
+  drag_to = function(_, a)
+    return { a = "drag_to", x = a.x, y = a.y, slot = a.slot, outside = a.outside }
   end,
-  ["["] = function(gui_window)
-    actions.cycle_space(gui_window, -1)
+  drag_end = function(_, a)
+    return { a = "drag_end", slot = a.slot, outside = a.outside }
+  end,
+  request_close = function(id, a)
+    return { a = "request_close", tab_id = id, row = a.row, col = a.col, from_key = a.from_key }
+  end,
+  toggle_pin = function(id)
+    return { a = "toggle_pin", tab_id = id }
+  end,
+  open_menu = function(id, a)
+    return { a = "open_menu", tab_id = id, row = a.row, col = a.col }
+  end,
+  new_tab = function()
+    return { a = "new_tab" }
+  end,
+  strip = function(id)
+    return { a = "strip", button_id = id }
+  end,
+  footer = function(_, a)
+    return { a = "footer", index = a.index }
+  end,
+  switch_space = function(id)
+    return { a = "switch_space", space_id = id }
+  end,
+  wheel_tab = function(_, a)
+    return { a = "wheel_tab", dy = a.dy }
+  end,
+  set_scroll = function(_, a)
+    return { a = "set_scroll", top = a.top, user = a.user }
+  end,
+  set_focus_index = function(_, a)
+    return { a = "set_focus_index", index = a.index }
+  end,
+  activate_tab_by_id = function(id)
+    return { a = "activate_tab", tab_id = id }
+  end,
+  blur_sidebar = function()
+    return { a = "blur_sidebar" }
+  end,
+  menu_pick = function(_, a)
+    return { a = "menu_pick", item_id = a.id }
+  end,
+  menu_back = function()
+    return { a = "menu_back" }
+  end,
+  menu_closed = function()
+    return { a = "menu_closed" }
+  end,
+  rename_commit = function(_, a)
+    return { a = "rename_commit", text = a.text }
+  end,
+  rename_tab = function(id)
+    return { a = "rename_tab", tab_id = id }
+  end,
+  move_tab = function(id, a)
+    return { a = "move_tab", tab_id = id, slot = a.slot, focus_index = a.focus_index }
+  end,
+  set_rail_reserve = function(_, a)
+    return { a = "set_rail_reserve", cols = a.cols }
+  end,
+  nudge_option = function(_, a)
+    return { a = "nudge_option", key = a.key, delta = a.delta }
+  end,
+  activate_option = function(_, a)
+    return { a = "activate_option", key = a.key }
+  end,
+  reset_option = function(_, a)
+    return { a = "reset_option", key = a.key }
+  end,
+  settings_copy = function()
+    return { a = "settings_copy" }
+  end,
+  edit_key = function(_, a)
+    return { a = "edit_key", key = a.key }
+  end,
+  record_chord = function(_, a)
+    return { a = "record_chord", key = a.key, mods = a.mods }
+  end,
+  close_settings = function()
+    return { a = "close_settings" }
   end,
 }
-KEYS.space, KEYS.d, KEYS.delete = KEYS.enter, KEYS.x, KEYS.x
 
-local FORWARD_MAX_RAW = 64
-local FORWARD_MAX_BYTES = 16
+local function legacy_intent(ev)
+  local adapt = LEGACY[ev.a]
+  return adapt and adapt(ev.id, type(ev.args) == "table" and ev.args or {}) or nil
+end
+
+local FORWARD_MAX_RAW = protocol.FORWARDED_KEY_MAX_ENCODED_BYTES
+local FORWARD_MAX_BYTES = protocol.FORWARDED_KEY_MAX_BYTES
 local FORWARD_BURST = 20
 local FORWARD_PER_SEC = 60
-local PASTE_MAX_RAW = 96 * 1024
-local PASTE_MAX_BYTES = 64 * 1024
+local PASTE_MAX_RAW = protocol.PASTE_MAX_ENCODED_BYTES
+local PASTE_MAX_BYTES = protocol.PASTE_MAX_BYTES
 local BUDGET_TTL_MS = 60000
 local budget = scope.pane()
 
@@ -430,41 +505,11 @@ end
 
 function M.key(gui_window, pane, ev)
   local wid = gui_window:window_id()
-  if not state.has_focus(wid) then
-    forward_key(gui_window, pane, ev, config.get())
-    view.sync(gui_window)
+  if state.has_focus(wid) then
     return
   end
-  local items = model.ordered(model.build(gui_window))
-  local count = math.max(#items, 1)
-  local index = math.max(1, math.min(store.focus_index[wid] or 1, count))
-  local key = ev.key
-  local shift = util.contains(ev.mods, "shift")
-  local ctrl = util.contains(ev.mods, "ctrl")
-
-  if key == "escape" or key == "q" or (ctrl and key == "c") then
-    blur(gui_window)
-  elseif key == "tab" and shift then
-    store.focus_index[wid] = math.max(index - 1, 1)
-  elseif MOVE[key] then
-    store.focus_index[wid] = math.max(1, math.min(index + MOVE[key], count))
-  elseif key == "home" or key == "g" then
-    store.focus_index[wid] = 1
-  elseif key == "end" or key == "G" then
-    store.focus_index[wid] = count
-  elseif key:match "^[1-9]$" then
-    local item = items[tonumber(key)]
-    if item then
-      actions.activate_tab(gui_window, item.tab_id)
-      blur(gui_window)
-    end
-  elseif KEYS[key] then
-    KEYS[key](gui_window, items, index)
-  end
+  forward_key(gui_window, pane, ev, config.get())
   view.sync(gui_window)
-  if popover.get(wid) then
-    view.animate_popover(gui_window)
-  end
 end
 
 ---Entry point for the `user-var-changed` event; only registered sidebar panes are trusted.
@@ -485,34 +530,69 @@ function M.handle(gui_window, pane, name, value)
     util.log("handle: %s from pane %d", tostring(ev.t), pane:pane_id())
   end
 
+  local function accept_ready()
+    local v = tonumber(ev.v) or 1
+    if v ~= protocol.VERSION or ev.paints ~= true then
+      sidebar.refuse_v1(pane, v)
+      return false
+    end
+    local pid = pane:pane_id()
+    store.proto[pid] = v
+    store.paints[pid] = true
+    sidebar.set_capabilities(pane, ev.caps or ev.capabilities)
+    require("vtabs.wire").reset_pane(pid)
+    sidebar.auth(pane)
+    return true
+  end
+
   if sidebar.is_settings(pane) then
+    -- A retired or duplicate settings process may deliver buffered user vars after a replacement
+    -- has authenticated. Only the pane currently present in this window's settings tab may mutate
+    -- configuration, run a theme hook, or update the host theme projection.
+    local _, current = require("vtabs.settings").find(gui_window:mux_window())
+    if not current or current:pane_id() ~= pane:pane_id() then
+      return
+    end
     if ev.t == "ready" then
-      local v = tonumber(ev.v) or 1
-      if v < 2 or ev.paints ~= true then
-        sidebar.refuse_v1(pane, v)
+      if not accept_ready() then
         return
       end
-      store.proto[pane:pane_id()] = v
-      store.paints[pane:pane_id()] = true
-      sidebar.auth(pane)
       view.sync(gui_window)
-    elseif ev.t == "do" then
-      local st = settings.page_state(gui_window:window_id())
-      if require("vtabs.settings_model").act(gui_window, st, ev.a, ev.args) then
+    elseif
+      ev.t == "settings_commit"
+      and tonumber(ev.settings_rev) ~= require("vtabs.wire").revision(gui_window:window_id(), "settings")
+    then
+      util.warn_once(
+        "settings-stale-" .. pane:pane_id(),
+        "ignored a settings commit from an obsolete document revision"
+      )
+    elseif require("vtabs.settings_model").effect(gui_window, ev) then
+      view.sync(gui_window)
+    elseif ev.t == "theme_hook_request" then
+      theme_bridge.answer_hook(gui_window, pane, ev)
+    elseif ev.t == "space_route_hook_request" then
+      require("vtabs.spaces").answer_hook(gui_window, pane, ev)
+    elseif ev.t == "spaces_resolved" then
+      local wid = gui_window:window_id()
+      if require("vtabs.spaces").accept(ev, wid, require("vtabs.wire").generation(wid)) then
         view.sync(gui_window)
       end
+    elseif ev.t == "theme_resolved" then
+      on_theme_resolved(gui_window, ev)
+    elseif ev.t == "dropped" then
+      util.warn_once(
+        string.format("backend-drop-%d-%s-%s", pane:pane_id(), tostring(ev.what), tostring(ev.reason)),
+        "backend dropped %s: %s",
+        tostring(ev.what),
+        tostring(ev.reason)
+      )
     end
     return
   end
   if ev.t == "ready" then
-    local v = tonumber(ev.v) or 1
-    if v < 2 or ev.paints ~= true then
-      sidebar.refuse_v1(pane, v)
+    if not accept_ready() then
       return
     end
-    store.proto[pane:pane_id()] = v
-    store.paints[pane:pane_id()] = true
-    sidebar.auth(pane)
     sidebar.ensure(gui_window)
     view.sync(gui_window)
   elseif ev.t == "resize" then
@@ -521,8 +601,31 @@ function M.handle(gui_window, pane, name, value)
     geometry.landed(gui_window:window_id())
     geometry.correct(gui_window, nil, { pane_id = pane:pane_id(), cols = tonumber(ev.cols) })
     view.sync(gui_window)
+  elseif ev.t == "theme_hook_request" then
+    theme_bridge.answer_hook(gui_window, pane, ev)
+  elseif ev.t == "space_route_hook_request" then
+    require("vtabs.spaces").answer_hook(gui_window, pane, ev)
+  elseif ev.t == "spaces_resolved" then
+    local wid = gui_window:window_id()
+    if require("vtabs.spaces").accept(ev, wid, require("vtabs.wire").generation(wid)) then
+      view.sync(gui_window)
+    end
+  elseif ev.t == "theme_resolved" then
+    on_theme_resolved(gui_window, ev)
+  elseif ev.t == "dropped" then
+    util.warn_once(
+      string.format("backend-drop-%d-%s-%s", pane:pane_id(), tostring(ev.what), tostring(ev.reason)),
+      "backend dropped %s: %s",
+      tostring(ev.what),
+      tostring(ev.reason)
+    )
+  elseif ev.t == "intent" then
+    on_intent(gui_window, pane, ev)
   elseif ev.t == "do" then
-    on_do(gui_window, pane, ev)
+    local intent = legacy_intent(ev)
+    if intent then
+      on_intent(gui_window, pane, intent)
+    end
   elseif ev.t == "cli" then
     on_cli(gui_window, pane, ev)
   elseif ev.t == "note" then

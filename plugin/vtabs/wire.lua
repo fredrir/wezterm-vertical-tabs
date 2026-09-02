@@ -1,8 +1,10 @@
-local wezterm = require "wezterm" ---@type Wezterm
 local config = require "vtabs.config"
+local protocol = require "vtabs.gen.protocol"
 local sidebar = require "vtabs.sidebar"
 local state = require "vtabs.state"
 local store = require "vtabs.store"
+local theme_bridge = require "vtabs.theme_bridge"
+local util = require "vtabs.util"
 
 local M = {}
 
@@ -10,6 +12,36 @@ local M = {}
 local scope = store.scope "wire"
 local sent = scope.pane()
 local revs = scope.window()
+local generations = scope.window()
+local debug_metrics = scope.window()
+
+local function note_delivery(wid, cfg, mode, changed, bytes, committed)
+  local metrics = debug_metrics[wid] or { deliveries = 0, sections = 0, bytes = 0, commits = 0 }
+  debug_metrics[wid] = metrics
+  metrics.deliveries = metrics.deliveries + 1
+  metrics.sections = metrics.sections + #changed
+  metrics.bytes = metrics.bytes + bytes
+  metrics.commits = metrics.commits + (committed and 1 or 0)
+  if cfg.debug then
+    util.log(
+      "wire: window=%d mode=%s changed=%s bytes=%d totals={deliveries=%d,sections=%d,bytes=%d,commits=%d}",
+      wid,
+      mode,
+      table.concat(changed, ","),
+      bytes,
+      metrics.deliveries,
+      metrics.sections,
+      metrics.bytes,
+      metrics.commits
+    )
+  end
+end
+
+---A ready event means the process in this pane has an empty model even when the pane id survived.
+---Forget only delivery state; authentication and lifecycle state still belong to the pane.
+function M.reset_pane(pane_id)
+  sent[pane_id] = nil
+end
 
 local ARRAY = {}
 
@@ -36,11 +68,14 @@ end
 
 ---Deterministic encoder: the dedupe below compares encoded strings, so key order must be stable,
 ---which `wezterm.json_encode` does not promise.
-local function encode(v)
+local function encode_value(v, seen, depth)
   local t = type(v)
   if t == "string" then
     return '"' .. esc(v) .. '"'
   elseif t == "number" then
+    if v ~= v or v == math.huge or v == -math.huge then
+      return "null"
+    end
     if v == math.floor(v) and math.abs(v) < 2 ^ 53 then
       return string.format("%d", v)
     end
@@ -48,48 +83,62 @@ local function encode(v)
   elseif t == "boolean" then
     return tostring(v)
   elseif t == "table" then
-    if getmetatable(v) == ARRAY or v[1] ~= nil then
+    if seen[v] or depth >= 64 then
+      return "null"
+    end
+    seen[v] = true
+    local tagged = getmetatable(v) == ARRAY
+    local array_like = tagged or v[1] ~= nil
+    if array_like then
+      local count, last = 0, 0
+      for key in pairs(v) do
+        if type(key) ~= "number" or key < 1 or key % 1 ~= 0 then
+          seen[v] = nil
+          return "null"
+        end
+        count = count + 1
+        last = math.max(last, key)
+      end
+      if count ~= last then
+        seen[v] = nil
+        return "null"
+      end
       local parts = {}
       for i = 1, #v do
-        parts[i] = encode(v[i])
+        parts[i] = encode_value(v[i], seen, depth + 1)
       end
+      seen[v] = nil
       return "[" .. table.concat(parts, ",") .. "]"
     end
     local keys = {}
     for k in pairs(v) do
+      if type(k) ~= "string" then
+        seen[v] = nil
+        return "null"
+      end
       keys[#keys + 1] = k
     end
     table.sort(keys)
     local parts = {}
     for _, k in ipairs(keys) do
-      parts[#parts + 1] = '"' .. esc(tostring(k)) .. '":' .. encode(v[k])
+      parts[#parts + 1] = '"' .. esc(k) .. '":' .. encode_value(v[k], seen, depth + 1)
     end
+    seen[v] = nil
     return "{" .. table.concat(parts, ",") .. "}"
   end
   return "null"
 end
+local function encode(v)
+  return encode_value(v, {}, 0)
+end
 M.encode = encode
 
----Any user-written colour becomes hex before it crosses the wire; Rust parses hex only.
-local function hexc(c)
-  if type(c) ~= "string" then
-    return c
-  end
-  local ok, parsed = pcall(wezterm.color.parse, c)
-  if not ok or parsed == nil then
-    return nil
-  end
-  local r, g, b = parsed:srgba_u8()
-  return string.format("#%02x%02x%02x", r, g, b)
-end
-
-local function normalized_overrides(user)
-  local out = {}
-  for k, v in pairs(user or {}) do
-    if type(v) == "string" then
-      out[k] = hexc(v)
-    elseif type(v) == "number" or type(v) == "boolean" then
-      out[k] = v
+local function palette_list(values)
+  local out = M.array()
+  for _, value in ipairs(type(values) == "table" and values or {}) do
+    local colour = theme_bridge.colour(value)
+    if colour then
+      out[#out + 1] = colour
     end
   end
   return out
@@ -116,7 +165,6 @@ end
 
 local function config_body(cfg, ctx)
   local effective = ctx.effective or {}
-  local window = ctx.window_dims or {}
   return {
     rail_width = cfg.rail_width,
     position = cfg.position,
@@ -141,28 +189,25 @@ local function config_body(cfg, ctx)
       overflow = cfg.popover.overflow,
     },
     render = M.render_section(cfg),
-    mac = {
-      integrated_buttons = ctx.chrome and ctx.chrome.integrated_buttons or false,
-      native_button_style = ctx.chrome and ctx.chrome.native_button_style or false,
-      preview = ctx.chrome and ctx.chrome.preview or false,
-      is_full_screen = window.is_full_screen == true,
-    },
   }
 end
 
 local function theme_body(cfg, ctx)
   local palette = (ctx.effective or {}).resolved_palette or {}
   local tab_bar = palette.tab_bar or {}
-  local user = ctx.theme_override or ctx.theme_base or cfg.theme or {}
+  local user = ctx.theme_base or cfg.theme or {}
   return {
     scheme = {
-      background = hexc(palette.background),
-      foreground = hexc(palette.foreground),
-      cursor_bg = hexc(palette.cursor_bg),
-      active_tab_bg = hexc((tab_bar.active_tab or {}).bg_color),
-      ansi = M.array(palette.ansi or {}),
+      background = theme_bridge.colour(palette.background),
+      foreground = theme_bridge.colour(palette.foreground),
+      cursor_bg = theme_bridge.colour(palette.cursor_bg),
+      active_tab_bg = theme_bridge.colour((tab_bar.active_tab or {}).bg_color),
+      ansi = palette_list(palette.ansi),
+      brights = palette_list(palette.brights),
     },
-    overrides = normalized_overrides(user),
+    overrides = theme_bridge.overrides(user),
+    hook = type((cfg.hooks or {}).theme) == "function" or nil,
+    private = ctx.private == true or nil,
   }
 end
 
@@ -175,6 +220,7 @@ local function tab_record(item)
     title = raw and raw.title or (not raw and item.title) or nil,
     pane_title = raw and raw.pane_title or nil,
     proc = raw and raw.proc or nil,
+    icon = raw and raw.icon or nil,
     cwd = raw and raw.cwd or nil,
     host = raw and raw.host or nil,
     user = raw and raw.user or nil,
@@ -226,10 +272,8 @@ local function model_body(cfg, ctx, wid)
       origin = { x = drag.origin_x, y = drag.origin_y, at = drag.began },
     } or nil,
     strip = ctx.strip and {
-      rows = ctx.strip.rows,
-      cols = ctx.strip.cols,
-      toggle_row = ctx.strip.toggle_row,
-      cell_w = ctx.strip.cell_w,
+      metrics = ctx.strip.metrics,
+      chrome = ctx.strip.chrome,
       buttons = buttons,
     } or { buttons = buttons },
     footer = footer,
@@ -254,10 +298,8 @@ local function settled(wid, kind, ctx, build)
   local same = seen ~= nil
     and seen.cfg == ctx.cfg
     and seen.effective == ctx.effective
-    and seen.chrome == ctx.chrome
     and seen.theme_base == ctx.theme_base
-    and seen.theme_override == ctx.theme_override
-    and seen.full_screen == ((ctx.window_dims or {}).is_full_screen == true)
+    and seen.private == ctx.private
   if same then
     return seen.body
   end
@@ -265,10 +307,8 @@ local function settled(wid, kind, ctx, build)
   per[kind] = {
     cfg = ctx.cfg,
     effective = ctx.effective,
-    chrome = ctx.chrome,
     theme_base = ctx.theme_base,
-    theme_override = ctx.theme_override,
-    full_screen = (ctx.window_dims or {}).is_full_screen == true,
+    private = ctx.private,
     body = body,
   }
   return body
@@ -291,6 +331,61 @@ local function versioned(wid, kind, body, tag)
   return entry.line
 end
 
+local SEMANTIC = { "config", "theme", "spaces", "model", "settings", "menu" }
+
+---One window generation covers all of the semantic sections. Per-section revisions remain in their
+---v2 messages for compatibility; atomic backends use the generation to stage them as one state.
+local function generation_for(wid, lines)
+  local current = generations[wid]
+  if not current then
+    current = { value = 0, lines = {} }
+    generations[wid] = current
+  end
+  local changed = false
+  for _, kind in ipairs(SEMANTIC) do
+    if current.lines[kind] ~= lines[kind] then
+      changed = true
+    end
+  end
+  if changed then
+    current.value = current.value + 1
+    for _, kind in ipairs(SEMANTIC) do
+      current.lines[kind] = lines[kind]
+    end
+  end
+  return current.value
+end
+
+function M.generation(window_id)
+  local current = generations[window_id]
+  return current and current.value or nil
+end
+
+function M.revision(window_id, kind)
+  local per = revs[window_id]
+  local entry = per and per[kind]
+  return entry and entry.rev or nil
+end
+
+local function sendable(wid, kinds, lines)
+  for _, kind in ipairs(kinds) do
+    local line = lines[kind]
+    if line and #line > protocol.LINE_MAX then
+      util.warn_once(
+        string.format("wire-size-%d-%s", wid, kind),
+        "backend %s section is too large (%d > %d bytes); keeping the last committed view",
+        kind,
+        #line,
+        protocol.LINE_MAX
+      )
+      return false
+    end
+  end
+  return true
+end
+
+M.sendable = sendable
+
 ---Sends the v2 state to the sidebar the window shows, skipping unchanged sends per pane. A sidebar
 ---in a background tab is left as it is and catches up the poll its tab comes to the front: nothing
 ---it paints meanwhile can be seen, and every frame it did paint would cross the mux and be rendered
@@ -302,44 +397,113 @@ function M.sync(gui_window, ctx)
   local lines = {
     config = versioned(wid, "config", settled(wid, "config", ctx, config_body)),
     theme = versioned(wid, "theme", settled(wid, "theme", ctx, theme_body)),
+    spaces = versioned(wid, "spaces", encode(require("vtabs.spaces").body(cfg, wid, ctx.survey.all, M.array))),
     model = versioned(wid, "model", encode(model_body(cfg, ctx, wid))),
     menu = versioned(wid, "menu", encode(menu or { open = false })),
   }
-  local function push(pane, kinds)
-    local pid = pane:pane_id()
-    local seen = sent[pid]
-    if not seen then
-      seen = {}
-      sent[pid] = seen
+  local mux_win = gui_window:mux_window()
+  local settings = require "vtabs.settings"
+  local page_tab, page_pane = settings.find(mux_win, ctx.snapshot)
+  if page_pane then
+    local body = require("vtabs.settings_model").body(cfg, M.array)
+    lines.settings = versioned(wid, "settings", encode(body))
+  end
+  local generation = generation_for(wid, lines)
+
+  local function push_legacy(pane, kinds)
+    if not sendable(wid, kinds, lines) then
+      return false
     end
+    local pid = pane:pane_id()
+    local seen = sent[pid] or {}
     for _, kind in ipairs(kinds) do
       local line = lines[kind]
       if seen[kind] ~= line and sidebar.send_raw(pane, line) then
+        sent[pid] = seen
         seen[kind] = line
+        note_delivery(wid, cfg, "legacy", { kind }, #line, false)
       end
     end
   end
-  local function shown_or_bare(pane, tab)
-    return sent[pane:pane_id()] == nil or (ctx.active_tab_id ~= nil and tab:tab_id() == ctx.active_tab_id)
+
+  local function push_atomic(pane, kinds)
+    if not sendable(wid, kinds, lines) then
+      return false
+    end
+    local pid = pane:pane_id()
+    local seen = sent[pid] or {}
+    local changed, batch = {}, { string.format('{"t":"begin","generation":%d}', generation) }
+    for _, kind in ipairs(kinds) do
+      local line = lines[kind]
+      if line ~= nil and seen[kind] ~= line then
+        changed[#changed + 1] = kind
+        batch[#batch + 1] = line
+      end
+    end
+    if #changed == 0 then
+      return true
+    end
+    batch[#batch + 1] = string.format('{"t":"commit","generation":%d}', generation)
+    local payload = table.concat(batch, "\n")
+    if not sidebar.send_raw(pane, payload) then
+      return false
+    end
+    -- Delivery is all-or-nothing from Lua's point of view: a failed write advances no section.
+    sent[pid] = seen
+    for _, kind in ipairs(changed) do
+      seen[kind] = lines[kind]
+    end
+    seen.generation = generation
+    note_delivery(wid, cfg, "atomic", changed, #payload, true)
+    return true
   end
-  local function speaks_v2(pane)
-    return sidebar.is_ready(pane) and (store.proto[pane:pane_id()] or 1) >= 2
+
+  local function push(pane, kinds)
+    if sidebar.supports(pane, "atomic_sync") then
+      return push_atomic(pane, kinds)
+    end
+    return push_legacy(pane, kinds)
   end
-  local mux_win = gui_window:mux_window()
-  for _, info in ipairs(mux_win:tabs_with_info()) do
-    local sb = sidebar.find(info.tab)
-    if sb and shown_or_bare(sb, info.tab) and not sidebar.is_settings(sb) and speaks_v2(sb) then
-      push(sb, { "config", "theme", "model", "menu" })
+  local function shown_or_bare(pane, tab_id)
+    return sent[pane:pane_id()] == nil or (ctx.active_tab_id ~= nil and tab_id == ctx.active_tab_id)
+  end
+  local function speaks_v2(pane, panes)
+    return sidebar.is_ready(pane, panes) and (store.proto[pane:pane_id()] or 1) >= 2
+  end
+  local observed_tabs = ctx.snapshot and ctx.snapshot.tabs or mux_win:tabs_with_info()
+  for _, observed in ipairs(observed_tabs) do
+    local info = observed.info or observed
+    local tab_id = observed.tab_id or info.tab:tab_id()
+    local sb
+    if ctx.snapshot then
+      sb = observed.sidebar
+    else
+      sb = sidebar.find(info.tab)
+    end
+    if sb and shown_or_bare(sb, tab_id) and not sidebar.is_settings(sb) and speaks_v2(sb, observed.panes) then
+      if sidebar.supports(sb, "spaces_policy") then
+        push(sb, { "config", "theme", "spaces", "model", "menu" })
+      else
+        push(sb, { "config", "theme", "model", "menu" })
+      end
     end
   end
-  -- The settings pane shares config and theme but has a screen of its own: one model, its own kind.
-  local settings = require "vtabs.settings"
-  local page_tab, page_pane = settings.find(mux_win)
-  if page_pane and shown_or_bare(page_pane, page_tab) and speaks_v2(page_pane) then
-    local st = settings.page_state(wid)
-    local body = require("vtabs.settings_model").body(cfg, st)
-    lines.settings = versioned(wid, "settings", encode(body), "model")
-    push(page_pane, { "config", "theme", "settings" })
+  -- The settings pane shares config and theme; its raw host projection becomes a Rust-owned model.
+  local page_id = page_tab and page_tab:tab_id() or nil
+  local settings_panes = ctx.snapshot and ctx.snapshot.settings and ctx.snapshot.settings.entry.panes or nil
+  if page_pane and shown_or_bare(page_pane, page_id) and speaks_v2(page_pane, settings_panes) then
+    if sidebar.supports(page_pane, "settings_document") then
+      if sidebar.supports(page_pane, "spaces_policy") then
+        push(page_pane, { "config", "theme", "spaces", "settings" })
+      else
+        push(page_pane, { "config", "theme", "settings" })
+      end
+    else
+      util.warn_once(
+        "settings-document-" .. page_pane:pane_id(),
+        "settings backend lacks settings_document; update the bundled backend"
+      )
+    end
   end
 end
 

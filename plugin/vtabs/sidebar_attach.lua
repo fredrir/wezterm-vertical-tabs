@@ -5,8 +5,7 @@ local gate = require "vtabs.gate"
 local state = require "vtabs.state"
 local store = require "vtabs.store"
 local backend = require "vtabs.backend"
-local spaces = require "vtabs.spaces"
-local theme = require "vtabs.theme"
+local theme_bridge = require "vtabs.theme_bridge"
 local mux = require "vtabs.mux"
 local util = require "vtabs.util"
 local identity = require "vtabs.sidebar_identity"
@@ -53,13 +52,11 @@ end
 local function theme_bg(tab)
   local gui = mux.call(mux.call(tab, "window"), "gui_window")
   local palette = (mux.effective_config(gui) or {}).resolved_palette or {}
-  local base = spaces.theme_for(config.get(), mux.window_id(gui), palette)
-  local resolved = util.try(theme.resolve, base, palette)
-  local rgb = resolved and resolved.bg
-  if type(rgb) ~= "table" then
-    return nil
-  end
-  return string.format("#%02x%02x%02x", rgb[1], rgb[2], rgb[3])
+  local resolved = theme_bridge.get(mux.window_id(gui))
+  local base = config.get().theme
+  return theme_bridge.colour(type(resolved) == "table" and resolved.bg or nil)
+    or theme_bridge.colour(type(base) == "table" and base.bg or nil)
+    or theme_bridge.colour(palette.background)
 end
 
 ---Domain the sidebar would be spawned in for this tab.
@@ -322,8 +319,9 @@ function retire(gui_window, tab, pane, hung)
   local now = util.now_ms()
   local job = store.quitting[pid]
   if not job then
+    local token = state.token_for(pid)
     state.forget_pane(pid)
-    job = { at = now, rung = hung and 1 or 0 }
+    job = { at = now, rung = hung and 1 or 0, token = token }
     store.quitting[pid] = job
     identity.forget_split(tab:tab_id())
   elseif now - job.at < QUIT_GRACE_MS then
@@ -332,7 +330,12 @@ function retire(gui_window, tab, pane, hung)
   job.at = now
   job.rung = job.rung + 1
   if job.rung == 1 then
-    identity.send(pane, { t = "quit" })
+    -- `forget_pane` deliberately removed the normal lookup above. Keep the retiring session proof
+    -- on its job; a split that never reached ready is authenticated before its privileged quit.
+    if job.token and (mux.user_vars(pane) or {}).vtabs_token ~= job.token then
+      identity.send(pane, { t = "auth", token = job.token, caps = {} }, job.token)
+    end
+    identity.send(pane, { t = "quit" }, job.token)
     return "quit"
   end
   if job.rung == 2 then

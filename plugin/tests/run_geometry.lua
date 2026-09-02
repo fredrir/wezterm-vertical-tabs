@@ -609,6 +609,33 @@ test("the rail's narrow width is never adopted as the user's desired width", fun
   eq(geometry.desired(wid), 28, "the rail width was not adopted as a divider drag")
 end)
 
+test("typed Rust rail reserve effects are stored and applied only by geometry", function()
+  config.setup {
+    collapsed = "rail",
+    rail_width = 5,
+    rail_titlebar = "widen",
+    backend = { path = "/bin/wez-vtabs" },
+  }
+  local win, gui = H.ready_window(2)
+  local first = sidebar.find(win.tab_list[1])
+  local second = sidebar.find(win.tab_list[2])
+  local wid = gui:window_id()
+  state.set_collapsed(wid, true)
+  local input = require "vtabs.input"
+  input.handle(gui, second, "vtabs", '{"t":"intent","a":"set_rail_reserve","cols":12}')
+  eq(geometry.rail_reserve(wid), nil, "a delayed background effect is ignored")
+  input.handle(gui, first, "vtabs", '{"t":"intent","a":"set_rail_reserve","cols":9}')
+  eq(geometry.rail_reserve(wid), 9, "Rust's computed reserve is retained")
+  eq(geometry.desired(wid), 9, "widen uses the returned reserve")
+  win.active_tab_ref = win.tab_list[2]
+  input.handle(gui, first, "vtabs", '{"t":"intent","a":"set_rail_reserve","cols":0}')
+  eq(geometry.rail_reserve(wid), 9, "the former active pane cannot clear the new tab's reserve")
+  input.handle(gui, second, "vtabs", '{"t":"do","a":"set_rail_reserve","args":{"cols":7}}')
+  eq(geometry.rail_reserve(wid), 7, "the legacy envelope reaches the same guarded effect")
+  eq(geometry.desired(wid), 7)
+  config.setup { backend = { path = "/bin/wez-vtabs" } }
+end)
+
 test("the width the sidebar reports outranks a mirror that has not caught up", function()
   local win, gui = window(1)
   sidebar.ensure(gui)

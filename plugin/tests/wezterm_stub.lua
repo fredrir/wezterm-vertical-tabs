@@ -30,10 +30,43 @@ M.symlinks = {}
 -- Every argv run, oldest first; `M.cli` answers `wezterm cli` argvs, nil means the CLI is unusable.
 M.spawned = {}
 M.cli = nil
+M.normalizer = nil
+M.chmod_ok = true
 function M.run_child_process(args)
   M.spawned[#M.spawned + 1] = args
   if type(args) == "table" and args[1] == "test" then
+    if args[2] == "-x" then
+      local file = io.open(args[3], "rb")
+      if file then
+        file:close()
+        return true, "", ""
+      end
+      return false, "", ""
+    end
     return M.symlinks[args[3]] == true, "", ""
+  end
+  if type(args) == "table" and args[1] == "mkdir" then
+    local recursive = args[4] == "-p"
+    local path = recursive and args[5] or args[4]
+    local ok = os.execute(string.format("mkdir -m %q %s %q", args[3], recursive and "-p" or "", path))
+    return ok == true or ok == 0, "", ""
+  end
+  if type(args) == "table" and args[1] == "chmod" then
+    if not M.chmod_ok then
+      return false, "", "refused"
+    end
+    local ok = os.execute(string.format("chmod %q %q", args[2], args[3]))
+    return ok == true or ok == 0, "", ""
+  end
+  if type(args) == "table" and args[1] == "rmdir" then
+    local ok = os.execute(string.format("rmdir %q", args[2]))
+    return ok == true or ok == 0, "", ""
+  end
+  if type(args) == "table" and args[2] == "settings" and args[3] == "normalize" then
+    if M.normalizer then
+      return M.normalizer(args)
+    end
+    return false, "", "not installed"
   end
   require("support.async").yield "child"
   if type(args) == "table" and args[2] == "cli" then
@@ -121,6 +154,16 @@ M.log_warn = M.log_info
 M.log_error = M.log_info
 
 M.handlers = {}
+M.reloads = 0
+M.reload_watch = {}
+function M.reload_configuration()
+  M.reloads = M.reloads + 1
+end
+
+function M.add_to_config_reload_watch_list(path)
+  M.reload_watch[#M.reload_watch + 1] = path
+end
+
 function M.on(name, fn)
   M.handlers[name] = M.handlers[name] or {}
   table.insert(M.handlers[name], fn)

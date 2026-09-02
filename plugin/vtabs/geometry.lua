@@ -53,10 +53,23 @@ function M.desired(window_id)
   return adopted[window_id] or cfg.width
 end
 
----The macOS light reserve the last frame measured; the rail is widened to it so the lights land on
----the sidebar rather than on the shell. `view` writes it, because only a render has a cell size.
-function M.set_rail_cols(window_id, cols)
-  rail_reserve[window_id] = (cols or 0) > 0 and cols or nil
+---Stores Rust's computed macOS light reserve and applies it when a collapsed rail is widened.
+function M.apply_rail_reserve(gui_window, cols)
+  local wid = gui_window:window_id()
+  local next_reserve = type(cols) == "number" and cols > 0 and math.floor(cols) or nil
+  if rail_reserve[wid] == next_reserve then
+    return false
+  end
+  rail_reserve[wid] = next_reserve
+  local cfg = config.get()
+  if cfg.rail_titlebar == "widen" and cfg.collapsed == "rail" and state.is_collapsed(wid) then
+    return M.correct(gui_window)
+  end
+  return false
+end
+
+function M.rail_reserve(window_id)
+  return rail_reserve[window_id]
 end
 
 M.forget_window = scope.forget_window
@@ -89,22 +102,23 @@ function M.reset(window_id)
 end
 
 ---Columns, dpi and cell width of a pane; the last two tell a divider drag from a font or DPI change.
-local function pane_metrics(pane)
-  local d = mux.dims(pane)
+local function pane_metrics(pane, snapshot)
+  local facts = snapshot and snapshot.panes[pane:pane_id()] or nil
+  local d = facts and facts.dimensions or mux.dims(pane)
   if type(d) ~= "table" or not d.cols or d.cols < 1 then
     return nil
   end
   return d.cols, d.dpi, d.pixel_width and d.pixel_width // d.cols or nil
 end
 
-local function window_px(gui_window)
-  local d = mux.dims(gui_window)
+local function window_px(gui_window, snapshot)
+  local d = snapshot and snapshot.window_dims or mux.dims(gui_window)
   return d and d.pixel_width or nil
 end
 
 ---Tab width in cells and whether any pane is zoomed; `panes_with_info` reports the unzoomed layout.
-local function tab_metrics(tab, sb_id)
-  local infos = mux.panes_with_info(tab)
+local function tab_metrics(tab, sb_id, tab_snapshot)
+  local infos = tab_snapshot and tab_snapshot.pane_infos or mux.panes_with_info(tab)
   if type(infos) ~= "table" or #infos == 0 then
     return nil, false, 1
   end
@@ -151,31 +165,38 @@ end
 ---Re-asserts the sidebar width on the active tab; background tabs are corrected once they activate.
 ---`known` is a width the sidebar itself just reported, `{ pane_id, cols }`: a mux mirror can lag
 ---the pane it mirrors, and a delta taken from a stale width overshoots and is corrected back again.
-local function correct(gui_window, known)
-  local cfg = config.get()
-  local wid = gui_window:window_id()
-  local tab = util.active_tab(gui_window)
+local function correct(gui_window, known, snapshot)
+  local cfg = snapshot and snapshot.cfg or config.get()
+  local wid = snapshot and snapshot.window_id or gui_window:window_id()
+  local observed_tab = snapshot and snapshot.active or nil
+  local tab = observed_tab and observed_tab.tab or util.active_tab(gui_window)
   checked[wid] = { tab_id = tab and tab:tab_id() or nil, at = util.now_ms() }
   if store.drag[wid] then
     return false
   end
-  local sb = tab and sidebar.find(tab)
-  if not sb or not sidebar.is_ready(sb) then
+  local sb, ready
+  if observed_tab then
+    sb, ready = observed_tab.sidebar, observed_tab.sidebar_ready
+  else
+    sb = tab and sidebar.find(tab)
+    ready = sb and sidebar.is_ready(sb)
+  end
+  if not sb or not ready then
     return false
   end
-  local cols, dpi, cell = pane_metrics(sb)
+  local cols, dpi, cell = pane_metrics(sb, snapshot)
   if not cols then
     return false
   end
   if known and known.pane_id == sb:pane_id() and (known.cols or 0) >= 1 then
     cols = known.cols
   end
-  local tab_cols, zoomed, bands = tab_metrics(tab, sb:pane_id())
+  local tab_cols, zoomed, bands = tab_metrics(tab, sb:pane_id(), observed_tab)
   if zoomed then
     return false
   end
   local tab_id = tab:tab_id()
-  local px = window_px(gui_window)
+  local px = window_px(gui_window, snapshot)
   local now = util.now_ms()
   if now - (resized_at[wid] or 0) < RESIZE_QUIET_MS then
     return false
@@ -258,7 +279,7 @@ local function correct(gui_window, known)
   end
   -- The adjust resizes around the tab's active leaf; only side-by-side content puts an inner
   -- horizontal split between that leaf and the sidebar's divider, so only then is focus moved.
-  local active = mux.active_pane(tab)
+  local active = observed_tab and observed_tab.active_pane or mux.active_pane(tab)
   local dance = bands > 1 and active ~= nil and active:pane_id() ~= sb:pane_id()
   if dance then
     sb:activate()
@@ -276,21 +297,21 @@ end
 
 ---`wait` takes the window's gate; without it a correction that meets a mutation in flight is
 ---skipped, and the next poll corrects anyway. `known` is the width the sidebar just reported.
-function M.correct(gui_window, wait, known)
+function M.correct(gui_window, wait, known, snapshot)
   local wid = gui_window:window_id()
   if wait then
-    return gate.run(wid, "correct", correct, gui_window, known)
+    return gate.run(wid, "correct", correct, gui_window, known, snapshot)
   end
-  return gate.try(wid, "correct", correct, gui_window, known) == true
+  return gate.try(wid, "correct", correct, gui_window, known, snapshot) == true
 end
 
 ---Per-poll entry point: corrects at once when the active tab changed, otherwise at most every 400 ms.
-function M.sync(gui_window, active_tab_id)
+function M.sync(gui_window, active_tab_id, snapshot)
   local last = checked[gui_window:window_id()]
   if last and last.tab_id == active_tab_id and util.now_ms() - last.at < OBSERVE_MS then
     return false
   end
-  return M.correct(gui_window)
+  return M.correct(gui_window, nil, nil, snapshot)
 end
 
 return M

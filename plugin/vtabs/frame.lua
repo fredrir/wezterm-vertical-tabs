@@ -4,8 +4,7 @@ local state = require "vtabs.state"
 local store = require "vtabs.store"
 local backend = require "vtabs.backend"
 local sidebar = require "vtabs.sidebar"
-local spaces = require "vtabs.spaces"
-local theme = require "vtabs.theme"
+local theme_bridge = require "vtabs.theme_bridge"
 local platform = require "vtabs.platform"
 local mux = require "vtabs.mux"
 local protocol = require "vtabs.gen.protocol"
@@ -71,9 +70,10 @@ end
 
 ---Cells across the whole tab. A cell *count* from the mux is safe -- it is pixel rectangles that
 ---must never size a local allocation -- and it is only ever used as a divisor here.
-local function tab_cols(gui_window)
-  local tab = util.active_tab(gui_window)
-  local infos = tab and mux.panes_with_info(tab)
+local function tab_cols(gui_window, snapshot)
+  local active = snapshot and snapshot.active or nil
+  local tab = active and active.tab or util.active_tab(gui_window)
+  local infos = active and active.pane_infos or (tab and mux.panes_with_info(tab))
   if type(infos) ~= "table" or #infos == 0 then
     return nil
   end
@@ -96,8 +96,8 @@ end
 ---Everything with a pixel in it comes from the GUI's own measurement of its own window, and the
 ---sidebar's share comes from our own width invariant. The mux contributes one cell count, as a
 ---divisor. A pane's pixel rect is mux-reported and never sizes anything here.
-function M.rect(gui_window, cfg)
-  local dims = mux.dims(gui_window)
+function M.rect(gui_window, cfg, snapshot)
+  local dims = snapshot and snapshot.window_dims or mux.dims(gui_window)
   if type(dims) ~= "table" then
     return nil
   end
@@ -105,7 +105,7 @@ function M.rect(gui_window, cfg)
   if not w or not h or w < 1 or h < 1 or w > MAX_SIDE or h > MAX_SIDE or w * h > MAX_PIXELS then
     return nil
   end
-  local cols = tab_cols(gui_window)
+  local cols = tab_cols(gui_window, snapshot)
   if not cols then
     return nil
   end
@@ -118,8 +118,15 @@ function M.rect(gui_window, cfg)
   end
   local cell_w = grid / cols
   local sidebar_cols = require("vtabs.geometry").desired(gui_window:window_id())
-  local tab = util.active_tab(gui_window)
-  if not tab or not sidebar.find(tab) then
+  local observed = snapshot and snapshot.active or nil
+  local tab = observed and observed.tab or util.active_tab(gui_window)
+  local painting
+  if observed then
+    painting = observed.sidebar
+  else
+    painting = tab and sidebar.find(tab)
+  end
+  if not tab or not painting then
     sidebar_cols = 0
   end
   -- One column of divider between the two panes, which the frame tint then covers.
@@ -152,10 +159,11 @@ end
 ---Frame tint, card colour and border, from the same palette the sidebar paints itself from, with
 ---the active space's theme laid over it; `border = "accent"` takes that space's accent.
 function M.colours(gui_window, cfg)
-  local effective = require("vtabs.view").effective_config(gui_window) or {}
-  local palette = effective.resolved_palette or {}
   local wid = gui_window:window_id()
-  local resolved = theme.resolve(spaces.theme_for(cfg, wid, palette), palette, { private = state.is_private(wid) })
+  local resolved = theme_bridge.get(wid)
+  if type(resolved) ~= "table" then
+    return nil
+  end
   local want = options(cfg).border
   local border = nil
   if want == "accent" then
@@ -204,8 +212,8 @@ end
 
 ---A background of the user's own is a deliberate choice, and transparency composites *through* the
 ---frame rather than over it. Either one declines the frame with one warning, never a silent change.
-function M.refuses(gui_window)
-  local effective = require("vtabs.view").effective_config(gui_window) or {}
+function M.refuses(gui_window, snapshot)
+  local effective = snapshot and snapshot.effective or require("vtabs.view").effective_config(gui_window) or {}
   -- `background` is a Vec in wezterm's config, so an unset one arrives as an empty table, not nil.
   -- The only layer the frame tolerates is the exact file it wrote itself.
   local theirs = effective.background
@@ -237,6 +245,9 @@ function M.render(gui_window, cfg, rect, paint)
     return nil
   end
   paint = paint or M.colours(gui_window, cfg)
+  if not paint then
+    return nil
+  end
   local path = M.path_for(gui_window:window_id(), rect, paint)
   local args = {
     exe,
@@ -288,6 +299,10 @@ end
 ---write from here would reset the band's `top` on the next resize and put the traffic lights back
 ---on the user's shell.
 function M.install(gui_window, path, cfg, paint)
+  paint = paint or M.colours(gui_window, cfg)
+  if not paint then
+    return false
+  end
   local overrides = mux.overrides(gui_window) or {}
   local merged = {}
   for key, value in pairs(overrides) do
@@ -310,7 +325,7 @@ function M.install(gui_window, path, cfg, paint)
   end
   -- `split` is window-global, so it also draws inside the content pane: the card colour makes the
   -- user's own splits vanish into the card, and the frame margin already hides the sidebar seam.
-  colors.split = (paint or M.colours(gui_window, cfg)).card
+  colors.split = paint.card
   merged.colors = colors
   store.applying[gui_window:window_id()] = util.now_ms()
   mux.call(gui_window, "set_config_overrides", merged)
@@ -329,23 +344,26 @@ table.insert(state.forget_hooks, forget)
 
 ---Regenerates the frame when the card has moved; cheap and idempotent when it has not.
 ---@return boolean true when a new image was installed
-function M.sync(gui_window)
-  local cfg = config.get()
+function M.sync(gui_window, snapshot)
+  local cfg = snapshot and snapshot.cfg or config.get()
   if not M.enabled(cfg) then
     return false
   end
-  local clash = M.refuses(gui_window)
+  local clash = M.refuses(gui_window, snapshot)
   if clash then
     util.warn_once("frame-clash", 'frame = "zen" declines: you set %s', clash)
     return false
   end
-  local rect = M.rect(gui_window, cfg)
+  local rect = M.rect(gui_window, cfg, snapshot)
   if not rect then
     return false
   end
   local wid = gui_window:window_id()
   -- Resolved once and handed down, so a poll costs one `effective_config` read rather than three.
-  local paint = M.colours(gui_window, cfg)
+  local paint = M.colours(gui_window, cfg, snapshot)
+  if not paint then
+    return false
+  end
   local path = M.path_for(wid, rect, paint)
   if current[wid] == path then
     return false

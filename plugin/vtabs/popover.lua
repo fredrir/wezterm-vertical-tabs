@@ -56,8 +56,8 @@ local function hints()
   return out
 end
 
-function M.items(gui_window, tab_id)
-  local tabs = model.build(gui_window)
+function M.items(gui_window, tab_id, survey)
+  local tabs = survey and survey.visible or model.build(gui_window)
   local out, hint = {}, hints()
   for _, spec in ipairs(ITEMS) do
     local entry = {
@@ -82,27 +82,20 @@ function M.items(gui_window, tab_id)
 end
 
 ---The tabs the confirm level would actually take; `close_others` keeps the one it is anchored on.
-local function victims(gui_window, pop)
+local function victims(gui_window, pop, survey)
   if pop.confirm == "close_others" then
+    if survey then
+      local out = {}
+      for _, item in ipairs(model.ordered(survey.visible or {})) do
+        if item.tab_id ~= pop.tab_id and not item.is_pinned then
+          out[#out + 1] = item.tab_id
+        end
+      end
+      return out
+    end
     return actions.others(gui_window, pop.tab_id)
   end
   return { pop.tab_id }
-end
-
----What the confirm level asks: `Close <title>?`, then `and N others` when more than one would go.
----The title names the first tab that would close, never the one `close_others` keeps.
-local function question(gui_window, pop)
-  if pop.level ~= "confirm" then
-    return nil
-  end
-  local ids = victims(gui_window, pop)
-  local first = ids[1] and model.find(model.build(gui_window), ids[1])
-  local title = first and first.title or ""
-  local lines = { string.format("Close %s?", title ~= "" and title or "tab") }
-  if #ids > 1 then
-    lines[2] = string.format("and %d other%s", #ids - 1, #ids == 2 and "" or "s")
-  end
-  return lines
 end
 
 function M.open(gui_window, tab_id, anchor_row, anchor_col)
@@ -244,17 +237,16 @@ function M.wire_body(gui_window, survey)
   end
   -- the whole window, not the visible list: a tab that just left the space still heads its menu
   survey = survey or model.survey(gui_window)
-  local item = model.find(survey.all, pop.tab_id)
   local body = {
     open = true,
     level = pop.level,
     anchor = { row = pop.anchor_row or 0, col = pop.anchor_col },
     target = pop.tab_id,
+    subject = pop.tab_id,
     selected = pop.index,
   }
   if pop.level == "spaces" then
     local current = state.space_of(pop.tab_id)
-    body.header = { title = "Move to space", meta = item and item.title or nil }
     local items = {}
     for _, space in ipairs(survey.spaces or {}) do
       local icon = space.icon and space.icon ~= "" and (space.icon .. " ") or ""
@@ -272,21 +264,20 @@ function M.wire_body(gui_window, survey)
     }
     body.items = items
   elseif pop.level == "confirm" then
-    local lines = question(gui_window, pop) or {}
-    body.header = { title = lines[1] or "Close?", meta = lines[2] }
+    local ids = victims(gui_window, pop, survey)
+    body.subject = ids[1]
+    body.victims = #ids
     local items = {}
     for _, entry in ipairs(CONFIRM_ITEMS) do
       items[#items + 1] = { id = entry.id, label = entry.label, danger = entry.id == "confirm_close" or nil }
     end
     body.items = items
   elseif pop.level == "rename" then
-    body.header = { title = "Rename tab" }
     body.items = { { id = "rename_field", mode = "edit", label = "", value = pop.buffer or "" } }
     body.selected = 1
   else
-    body.header = item and { title = item.title, meta = item.meta } or nil
     local items = {}
-    for _, entry in ipairs(M.items(gui_window, pop.tab_id)) do
+    for _, entry in ipairs(M.items(gui_window, pop.tab_id, survey)) do
       items[#items + 1] = {
         id = entry.id,
         label = entry.label,

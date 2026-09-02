@@ -31,7 +31,6 @@ local function empty()
     closed = {},
     space_of = {},
     space_manual = {},
-    dynamic_spaces = {},
     active_space = {},
     collapsed = {},
     focus = {},
@@ -320,20 +319,6 @@ function M.set_active_space(window_id, space_id)
     return
   end
   data.active_space[key(window_id)] = space_id
-  save(false)
-end
-
----Spaces no entry declares under their id: the ones a template or the route hook produced.
-function M.dynamic_space(space_id)
-  return data.dynamic_spaces[space_id]
-end
-
-function M.dynamic_spaces()
-  return data.dynamic_spaces
-end
-
-function M.set_dynamic_space(space_id, meta)
-  data.dynamic_spaces[space_id] = meta
   save(false)
 end
 

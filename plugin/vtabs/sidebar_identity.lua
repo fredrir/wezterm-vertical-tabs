@@ -79,7 +79,7 @@ local function claims_sidebar(pane)
 end
 
 ---Re-points the map when the mux renumbers panes; only this process knows the token it minted.
-local function claim_echoed_token(pane, pid)
+local function claim_echoed_token(pane, pid, panes)
   -- the settings page carries a token of its own; claiming it would hand the tab's sidebar slot away
   if M.is_settings(pane) then
     return false
@@ -89,8 +89,8 @@ local function claim_echoed_token(pane, pid)
   if owner == nil or owner == pid then
     return false
   end
-  local tab = pane:tab()
-  for _, p in ipairs(tab:panes()) do
+  local tab = mux.tab_of(pane)
+  for _, p in ipairs(panes or mux.panes(tab) or {}) do
     if p:pane_id() == owner then
       return false
     end
@@ -101,7 +101,7 @@ end
 
 ---True once the backend in `pane` echoed a token this process minted for it: the only trusted state.
 ---Role-blind: the settings page authenticates over the same bridge, for its own role.
-function M.is_ready(pane)
+function M.is_ready(pane, panes)
   if not pane or tab_id_of(pane) == nil then
     return false
   end
@@ -110,12 +110,32 @@ function M.is_ready(pane)
     return true
   end
   local token = state.token_for(pid)
-  if (token and user_vars(pane).vtabs_token == token) or claim_echoed_token(pane, pid) then
+  if (token and user_vars(pane).vtabs_token == token) or claim_echoed_token(pane, pid, panes) then
     store.ready[pid] = true
     store.seen[pid] = util.now_ms()
     return true
   end
   return false
+end
+
+---Normalises ready capabilities into a set. Arrays are the wire form; accepting a boolean map too
+---keeps tests and future adapters from having to manufacture an array merely to ask a question.
+function M.set_capabilities(pane, capabilities)
+  local out = {}
+  for key, value in pairs(type(capabilities) == "table" and capabilities or {}) do
+    if type(key) == "number" and type(value) == "string" then
+      out[value] = true
+    elseif type(key) == "string" and value == true then
+      out[key] = true
+    end
+  end
+  store.capabilities[pane:pane_id()] = out
+  return out
+end
+
+function M.supports(pane, capability)
+  local available = pane and store.capabilities[pane:pane_id()] or nil
+  return available ~= nil and available[capability] == true
 end
 
 local RANK = { none = 0, marker = 1, mapped = 2, ready = 3 }
@@ -145,10 +165,10 @@ end
 
 ---How strong a pane's claim to the sidebar role is. The role gates the claim ahead of readiness:
 ---the settings page authenticates on the same bridge, and a ready one is still its tab's content.
-local function sidebar_rank(pane, pure)
+local function sidebar_rank(pane, pure, panes)
   local pid = pane:pane_id()
   -- asked ahead of the gate: this is the read that promotes a pane the mux renumbered
-  local ready = store.ready[pid] or (not pure and M.is_ready(pane))
+  local ready = store.ready[pid] or (not pure and M.is_ready(pane, panes))
   local tab_id = tab_id_of(pane)
   if tab_id == nil then
     return RANK.none
@@ -180,16 +200,16 @@ function M.is_backend(pane)
 end
 
 ---Splits a tab into { content = Pane[], sidebar = Pane|nil }; only the best claim holds the role.
-function M.classify(tab)
+function M.classify(tab, panes)
   local tab_id = tab:tab_id()
-  local panes = tab:panes()
+  panes = panes or mux.panes(tab) or {}
   local seen = classified[tab_id]
   if seen and seen.tick == tick and seen.n == #panes then
     return seen.content, seen.sb
   end
   local sb, best = nil, RANK.none
   for _, p in ipairs(panes) do
-    local rank = sidebar_rank(p)
+    local rank = sidebar_rank(p, nil, panes)
     if rank > best then
       sb, best = p, rank
     end
@@ -210,10 +230,10 @@ function M.find(tab)
   return sb
 end
 
-function M.content_pane(tab)
-  local content, sb = M.classify(tab)
+function M.content_pane(tab, panes, active)
+  local content, sb = M.classify(tab, panes)
   local sb_id = sb and sb:pane_id()
-  local active = tab:active_pane()
+  active = active or mux.active_pane(tab)
   if active and active:pane_id() ~= sb_id then
     return active
   end
@@ -282,16 +302,27 @@ function M.tab_meta(tab, pane)
   }
 end
 
-function M.send(pane, message)
-  return pcall(function()
-    pane:send_text(wezterm.json_encode(message) .. "\n")
-  end)
+function M.send(pane, message, frame_token)
+  return M.send_raw(pane, wezterm.json_encode(message), frame_token)
 end
 
----For pre-encoded lines: v2 encodes once per window, not once per pane.
-function M.send_raw(pane, line)
+---For pre-encoded lines: wire encodes once per window, then this boundary frames every record with
+---the pane's current authentication token. A literal JSON line typed at the pane is never control.
+function M.send_raw(pane, line, frame_token)
+  local token = frame_token or state.token_for(pane:pane_id())
+  local protocol = require "vtabs.gen.protocol"
+  if type(token) ~= "string" or token == "" or #token > protocol.CONTROL_TOKEN_MAX_BYTES or token:find "[%s%c]" then
+    return false
+  end
+  local framed = {}
+  for record in line:gmatch "[^\n]+" do
+    framed[#framed + 1] = protocol.CONTROL_PREFIX .. token .. " " .. record
+  end
+  if #framed == 0 then
+    return false
+  end
   return pcall(function()
-    pane:send_text(line .. "\n")
+    pane:send_text(table.concat(framed, "\n") .. "\n")
   end)
 end
 
@@ -299,7 +330,11 @@ function M.auth(pane)
   local token = state.token_for(pane:pane_id())
   if token then
     store.authed_at[pane:pane_id()] = util.now_ms()
-    M.send(pane, { t = "auth", token = token })
+    M.send(pane, {
+      t = "auth",
+      token = token,
+      caps = { "typed_intents", "theme_hooks", "settings_document", "spaces_policy" },
+    }, user_vars(pane).vtabs_token or token)
   end
 end
 

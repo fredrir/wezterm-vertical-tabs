@@ -261,29 +261,106 @@ function M.is_symlink(path)
   return M.try(wezterm.run_child_process, { "test", "-L", path }) == true
 end
 
----Writes `body` to `path` atomically and readable only by its owner: a temp file beside it,
----chmod 600, then rename. `dir` is created 0700 if the first open fails. Returns true on success.
+---A narrow file-open seam used by failure-path tests for the private writer.
+M.private_open = io.open
+
+local function checked_write(path, body)
+  local f = M.private_open(path, "w")
+  if not f then
+    return false
+  end
+  local ok = pcall(function()
+    assert(f:write(body))
+    assert(f:flush())
+  end)
+  local closed = pcall(function()
+    assert(f:close())
+  end)
+  if not ok then
+    pcall(f.close, f)
+  end
+  return ok and closed
+end
+
+local function parent_dir(path)
+  local parent = path:match "^(.*)/[^/]+$"
+  return parent == "" and "/" or parent or "."
+end
+
+local function remove_guard(tmp, guard)
+  if tmp then
+    os.remove(tmp)
+  end
+  if guard then
+    M.try(wezterm.run_child_process, { "rmdir", guard })
+  end
+end
+
+---Writes `body` atomically without following a destination symlink. Unix creates an unpredictable
+---0700 guard directory beside the destination first, restricts its file to 0600 before writing,
+---then performs a same-filesystem rename. Windows uses Lua's narrow random sibling-file fallback.
 function M.write_private(path, body, dir, tag)
   tag = tag or "file"
-  local tmp = path .. "." .. M.random_token():sub(1, 8) .. ".tmp"
-  local f = io.open(tmp, "w")
-  if not f and dir then
-    M.try(wezterm.run_child_process, { "mkdir", "-m", "700", "-p", dir })
-    f = io.open(tmp, "w")
+  if type(path) ~= "string" or path == "" or type(body) ~= "string" then
+    M.warn_once(tag .. "-file", "cannot write %s", tostring(path))
+    return false
   end
-  if not f then
+
+  if platform.is_windows then
+    local tmp = path .. "." .. M.random_token():sub(1, 24) .. ".tmp"
+    if checked_write(tmp, body) and os.rename(tmp, path) then
+      return true
+    end
+    os.remove(tmp)
+    M.warn_once(tag .. "-replace", "cannot replace %s", path)
+    return false
+  end
+
+  local parent = parent_dir(path)
+  local function create_guard()
+    for _ = 1, 4 do
+      local candidate = parent .. "/.wez-vtabs-write-" .. M.random_token():sub(1, 24)
+      if M.try(wezterm.run_child_process, { "mkdir", "-m", "700", candidate }) == true then
+        return candidate
+      end
+    end
+    return nil
+  end
+  local guard = create_guard()
+  if not guard and dir then
+    M.try(wezterm.run_child_process, { "mkdir", "-m", "700", "-p", dir })
+    guard = create_guard()
+  end
+  if not guard then
     M.warn_once(tag .. "-file", "cannot write %s", path)
     return false
   end
-  if not platform.is_windows and M.try(wezterm.run_child_process, { "chmod", "600", tmp }) ~= true then
-    M.warn_once(tag .. "-chmod", "cannot restrict %s to 0600", path)
+
+  local tmp = guard .. "/value"
+  local empty = M.private_open(tmp, "w")
+  if not empty then
+    remove_guard(tmp, guard)
+    M.warn_once(tag .. "-file", "cannot write %s", path)
+    return false
   end
-  f:write(body)
-  f:close()
+  local closed = pcall(function()
+    assert(empty:close())
+  end)
+  if
+    not closed
+    or M.try(wezterm.run_child_process, { "chmod", "600", tmp }) ~= true
+    or not checked_write(tmp, body)
+  then
+    pcall(empty.close, empty)
+    remove_guard(tmp, guard)
+    M.warn_once(tag .. "-private", "cannot write %s privately", path)
+    return false
+  end
   if os.rename(tmp, path) then
+    remove_guard(nil, guard)
     return true
   end
-  os.remove(tmp)
+  remove_guard(tmp, guard)
   M.warn_once(tag .. "-rename", "cannot replace %s", path)
   return false
 end
