@@ -56,7 +56,28 @@ fn role_from_args(log: &mut Logger) -> Role {
     Role::default()
 }
 
+/// Logs the panic and its backtrace before the default hook prints them to the pane.
+fn install_panic_hook() {
+    let default = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let mut log = Logger::from_env();
+        let at = info
+            .location()
+            .map_or(String::from("?"), ToString::to_string);
+        let msg = info.payload_as_str().unwrap_or("non-string payload");
+        log.log(format!("panic at {at}: {msg}"));
+        for line in std::backtrace::Backtrace::force_capture()
+            .to_string()
+            .lines()
+        {
+            log.log(line);
+        }
+        default(info);
+    }));
+}
+
 pub fn run() -> io::Result<()> {
+    install_panic_hook();
     let mut log = Logger::from_env();
     let role = role_from_args(&mut log);
     let var = std::env::var("VTABS_USERVAR").unwrap_or_else(|_| DEFAULT_VAR.to_string());
@@ -92,6 +113,10 @@ pub fn run() -> io::Result<()> {
     app.write(title_marker(role, &nonce()).as_bytes())?;
     // `paints` is the capability flip Lua reads to refuse a backend that cannot draw for itself.
     app.emit(&Event::ready(size.0, size.1))?;
+    if cfg!(debug_assertions) && std::env::var_os("VTABS_PANIC_ON_READY").is_some_and(|v| v == "1")
+    {
+        panic!("VTABS_PANIC_ON_READY");
+    }
 
     let rx = spawn_stdin_reader();
     let mut parser = Parser::new();

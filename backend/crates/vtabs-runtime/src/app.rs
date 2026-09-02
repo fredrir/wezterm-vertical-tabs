@@ -424,7 +424,9 @@ impl<W: Write> App<W> {
             )
         }) {
             self.last_rows = Some(painted);
-            return self.write(bytes.as_bytes());
+            self.write(bytes.as_bytes())?;
+            self.log_paint();
+            return Ok(());
         }
         let (bytes, popover, outcome, selected, painted) = {
             let (e, outcome) = self.scene();
@@ -457,7 +459,15 @@ impl<W: Write> App<W> {
             self.menu_ui.selected = selected;
         }
         self.refuse(&outcome)?;
-        self.write(bytes.as_bytes())
+        self.write(bytes.as_bytes())?;
+        self.log_paint();
+        Ok(())
+    }
+
+    fn log_paint(&mut self) {
+        let rev = self.v2.model.as_ref().map_or(0, |m| m.rev);
+        let (cols, rows) = self.size;
+        self.log.log(format!("paint {cols}x{rows} rev {rev}"));
     }
 
     /// An open level that cannot be placed is Lua's to unwind; the note is sent once per message.
@@ -659,6 +669,8 @@ impl<W: Write> App<W> {
 
     fn resize(&mut self, size: (u16, u16)) -> io::Result<()> {
         if size != self.size {
+            let ((cols, rows), (w, h)) = (self.size, size);
+            self.log.log(format!("resize {cols}x{rows} -> {w}x{h}"));
             self.size = size;
             self.emit(&Event::Resize {
                 cols: size.0,

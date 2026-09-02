@@ -332,7 +332,8 @@ before they reach `resolve` — only the last one is acted on.
 | --- | --- |
 | `VTABS_USERVAR` | user var name for events \| `vtabs` |
 | `VTABS_BG` | `#rrggbb` painted before the first paint \| unset (no fill) |
-| `VTABS_LOG` | debug log file, appended; 0600, symlinks refused, key names redacted \| unset (no logging, never stderr) |
+| `VTABS_LOG` | debug log file, set by the plugin from `backend.env`; appended, 0600, symlinks refused, key names redacted \| unset (no logging, never stderr) |
+| `VTABS_PANIC_ON_READY` | `1` panics right after `ready`; debug builds only, to prove the panic hook lands in the log \| unset |
 
 ## Roles
 
