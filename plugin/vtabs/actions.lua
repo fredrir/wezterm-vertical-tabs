@@ -418,6 +418,11 @@ function M.tear_off(gui_window, tab_id)
   if title ~= "" then
     new_tab:set_title(title)
   end
+  -- the new window gets its pass now; the old one records and closes the orphaned sidebar tab
+  local new_gui = mux.call(new_win, "gui_window")
+  if new_gui then
+    sidebar.ensure(new_gui)
+  end
   sidebar.ensure(gui_window)
   return true
 end

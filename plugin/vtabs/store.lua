@@ -97,6 +97,8 @@ local SESSION = {
   marker = "pane",
   pane_domain = "pane",
   given_up = "pane",
+  spawned = "pane",
+  killed = "pane",
 
   failed_domains = "process",
   spawned_domains = "process",

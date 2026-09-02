@@ -17,6 +17,7 @@ local rescue = require "vtabs.sidebar_rescue"
 local M = {}
 
 local ATTACH_RETRY_MS = 5000
+local KILL_WAIT_MS = 2000
 local READY_TIMEOUT_MS = 12000
 local ADOPT_RETRY_MS = 2000
 local ADOPT_TRIES = 5
@@ -188,6 +189,7 @@ local function attach(tab)
   end
   state.set_sidebar(tab_id, pid, util.random_token())
   identity.forget_split(tab_id)
+  store.spawned[pid] = true
   store.seen[pid] = now
   store.pane_domain[pid] = place
   store.spawned_domains[place] = true
@@ -356,6 +358,31 @@ function M.refuse_v1(pane, version)
   end
 end
 
+---A second sidebar this process split is closed, one per pass; only a winner that is ours or
+---authenticated may decide that, and a marker pane nobody here spawned is never touched.
+local function repair_duplicates(gui_window, tab, sb, now)
+  local tab_id, sb_id = tab:tab_id(), sb:pane_id()
+  local trusted = identity.is_ready(sb) or (store.spawned[sb_id] and state.sidebar_pane_id(tab_id) == sb_id)
+  if not trusted then
+    return false
+  end
+  for _, p in ipairs(tab:panes()) do
+    local pid = p:pane_id()
+    local waited = now - (store.killed[pid] or 0) > KILL_WAIT_MS
+    if pid ~= sb_id and store.spawned[pid] and identity.has_marker(p) and waited then
+      -- a mux applies the kill a poll late, so the pane's caches stay until it is gone
+      store.killed[pid] = now
+      util.warn_once("dup-" .. pid, "duplicate sidebar %d in tab %d closed", pid, tab_id)
+      if not rescue.cli_kill(pid) and backend.is_local(mux.domain(p), identity.cwd_host(p)) then
+        close_pane_by_activation(gui_window, tab, p)
+      end
+      identity.forget_split(tab_id)
+      return true
+    end
+  end
+  return false
+end
+
 ---Makes every tab match the collapsed/expanded state and closes tabs left with only a sidebar.
 local function ensure_window(gui_window)
   local mux_win = gui_window:mux_window()
@@ -399,6 +426,7 @@ local function ensure_window(gui_window)
           M.detach(gui_window, tab)
         end
       elseif sb then
+        repair_duplicates(gui_window, tab, sb, now)
         if identity.is_ready(sb) then
           rescue.rescue_splits(gui_window, tab)
           rescue.check_liveness(gui_window, tab, sb, now)

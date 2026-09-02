@@ -164,19 +164,48 @@ function M.check_liveness(gui_window, tab, sb, now)
   return true
 end
 
+---The window now holding a tab this window lost, or nil when it really closed.
+local function window_holding(tab_id, wid)
+  for _, w in ipairs(mux.all_windows() or {}) do
+    local id = mux.window_id(w)
+    if id ~= nil and id ~= wid then
+      for _, info in ipairs(mux.tabs_with_info(w) or {}) do
+        if mux.tab_id(info.tab) == tab_id then
+          return id
+        end
+      end
+    end
+  end
+  return nil
+end
+
+local function forget_closed(tab_id, private)
+  local meta = store.tab_meta[tab_id]
+  if meta and not store.moving[tab_id] and not private then
+    state.push_closed(meta)
+  end
+  local pid = state.sidebar_pane_id(tab_id)
+  if pid then
+    state.forget_pane(pid)
+  end
+  state.forget_tab(tab_id)
+end
+
+---A tab that left for another window keeps its sidebar mapping, pin and space; only a tab no
+---window holds any more is recorded as closed and forgotten.
 function M.record_closed_tabs(wid, seen, private)
   local previous = store.known_tabs[wid] or {}
   for tab_id in pairs(previous) do
     if not seen[tab_id] then
-      local meta = store.tab_meta[tab_id]
-      if meta and not store.moving[tab_id] and not private then
-        state.push_closed(meta)
+      local dest = window_holding(tab_id, wid)
+      if dest then
+        store.known_tabs[dest] = store.known_tabs[dest] or {}
+        store.known_tabs[dest][tab_id] = true
+        store.moving[tab_id] = nil
+        identity.forget_split(tab_id)
+      else
+        forget_closed(tab_id, private)
       end
-      local pid = state.sidebar_pane_id(tab_id)
-      if pid then
-        state.forget_pane(pid)
-      end
-      state.forget_tab(tab_id)
     end
   end
   store.known_tabs[wid] = seen

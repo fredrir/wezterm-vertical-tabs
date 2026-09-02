@@ -8,6 +8,7 @@ local gate = require "vtabs.gate"
 local rescue = require "vtabs.sidebar_rescue"
 local sidebar = require "vtabs.sidebar"
 local state = require "vtabs.state"
+local store = require "vtabs.store"
 local util = require "vtabs.util"
 local test, eq = H.test, H.eq
 
@@ -200,4 +201,74 @@ test("ensure while another coroutine holds the gate returns without running", fu
   async.run()
   sidebar.ensure(gui)
   eq(#tab:panes(), 2)
+end)
+
+test("a tab moved to another window keeps its sidebar and is not recorded as closed", function()
+  local win, gui = H.window(2, { attach = true, ready = true })
+  local tab = win.tab_list[2]
+  local sb = sidebar.find(tab)
+  local token = state.token_for(sb:pane_id())
+  local dest = fake.window()
+  fake.move_tab(win, tab, dest)
+  while state.pop_closed() do
+  end
+  sidebar.ensure(gui)
+  eq(state.sidebar_pane_id(tab:tab_id()), sb:pane_id(), "mapping kept")
+  eq(state.token_for(sb:pane_id()), token, "token kept")
+  eq(state.pop_closed(), nil, "nothing recorded as closed")
+  dest.active_tab_ref = tab
+  sidebar.ensure(dest.gui)
+  eq(#tab:panes(), 2, "no second split")
+  eq(sidebar.find(tab), sb)
+  eq(sidebar.is_ready(sb), true)
+  fake.close_window(dest)
+end)
+
+test("tear_off gives the new window its sidebar at once and closes the orphan behind it", function()
+  local win, gui = H.window(1, { attach = true, ready = true })
+  local tab = win.tab_list[1]
+  local windows = #wezterm.windows
+  eq(actions.tear_off(gui, tab:tab_id()), true)
+  eq(#wezterm.windows, windows + 1)
+  local new_win = wezterm.windows[#wezterm.windows]
+  eq(#new_win.tab_list, 1)
+  eq(#new_win.tab_list[1]:panes(), 2)
+  eq(H.sidebars_in(new_win.tab_list[1]), 1)
+  eq(#win.tab_list, 0, "the source tab held only a sidebar and is gone")
+  fake.close_window(new_win)
+end)
+
+test("a duplicate sidebar this process split is closed on the next pass; a stranger's marker is not", function()
+  local win, gui = H.window(1, { attach = true, ready = true })
+  local tab = win.tab_list[1]
+  local sb = sidebar.find(tab)
+  local dup = fake.pane(tab, { title = "wez-vtabs:beef" })
+  tab.pane_list[#tab.pane_list + 1] = dup
+  store.spawned[dup:pane_id()] = true
+  local before, actions_before = #wezterm.log, #win.actions
+  H.with_cli(function()
+    sidebar.ensure(gui)
+  end)
+  eq(#tab:panes(), 2, "the duplicate is gone")
+  eq(sidebar.find(tab), sb)
+  eq(warnings(before, "duplicate sidebar"), 1)
+  eq(#win.actions, actions_before, "closed through the cli, not by activation")
+  H.with_cli(function()
+    sidebar.ensure(gui)
+  end)
+  eq(warnings(before, "duplicate sidebar"), 1, "said once")
+
+  local stranger = fake.pane(tab, { title = "wez-vtabs:cafe" })
+  tab.pane_list[#tab.pane_list + 1] = stranger
+  local kills = 0
+  H.with_cli(function()
+    sidebar.ensure(gui)
+  end)
+  for _, argv in ipairs(wezterm.spawned) do
+    if argv[4] == "kill-pane" and argv[6] == tostring(stranger:pane_id()) then
+      kills = kills + 1
+    end
+  end
+  eq(kills, 0)
+  eq(#tab:panes(), 3, "a marker nobody here spawned stays")
 end)
