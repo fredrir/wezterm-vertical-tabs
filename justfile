@@ -39,3 +39,6 @@ docs:
 
 build profile="release":
     cd backend && cargo build --locked {{ if profile == "release" { "--release" } else { "" } }}
+
+tag:
+    @sh scripts/tag.sh
