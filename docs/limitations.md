@@ -26,13 +26,19 @@
   columns anyway is moved to the content side on the next poll, using
   `wezterm cli split-pane --move-pane-id`; where that CLI is unusable (the GUI
   is not on its own socket) the plugin warns once and leaves the pane alone.
-- Width correction and sidebar close go through `wezterm cli` too
-  (`adjust-pane-size`, `kill-pane`); without the GUI's own socket they fall
-  back to key actions. The adjust resizes around the tab's active pane, so
-  focus is moved to the sidebar only while content panes sit side by side.
+- Width correction is one `AdjustPaneSize` on the active tab, issued only once a
+  window resize has settled (no frame for 150 ms); during a drag or an animated
+  fill the sidebar keeps whatever WezTerm dealt it. The adjust resizes around
+  the tab's active pane, so focus moves to the sidebar only while content panes
+  sit side by side.
+- `wezterm cli` (`kill-pane`, `split-pane --move-pane-id`) is used only for
+  panes in the GUI's own `local` domain; a pane on a mux domain is closed by
+  activation instead, since a CLI request for it stalls in the GUI's mux server.
 - Every split, close, adjust and move of a window's panes runs under that
-  window's gate, one at a time; a poll that meets one in flight skips its turn.
-  A handler silent for 5 s is evicted with a warning.
+  window's gate, one at a time; a poll that meets one in flight skips its turn,
+  and a tab switch still waiting is superseded by the next one, so a held key
+  queues one switch rather than one per repeat. A handler silent for 5 s is
+  evicted with a warning.
 - A second sidebar this process split into a tab is closed on the next poll.
   Two marker panes left behind by a GUI restart, neither spawned here, are not:
   adoption picks one and the other stays content.

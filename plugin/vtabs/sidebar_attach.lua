@@ -182,7 +182,7 @@ local function attach(tab)
   if winner and winner:pane_id() ~= pid then
     util.warn("sidebar %d lost tab %d to %d; closed", pid, tab_id, winner:pane_id())
     local gui = mux.call(mux.call(tab, "window"), "gui_window")
-    if not rescue.cli_kill(pid) and gui then
+    if not rescue.cli_kill(sb) and gui then
       close_pane_by_activation(gui, tab, sb)
     end
     return winner
@@ -290,7 +290,7 @@ local function detach(gui_window, tab)
   end
   if sb then
     state.forget_pane(sb:pane_id())
-    if not rescue.cli_kill(sb:pane_id()) then
+    if not rescue.cli_kill(sb) then
       close_pane_by_activation(gui_window, tab, sb)
     end
     identity.forget_split(tab:tab_id())
@@ -305,7 +305,7 @@ end
 ---Closes a tab that only holds a sidebar without disturbing the active tab.
 local function close_orphan(gui_window, tab, sb)
   state.forget_pane(sb:pane_id())
-  if rescue.cli_kill(sb:pane_id()) then
+  if rescue.cli_kill(sb) then
     return
   end
   local previous = gui_window:mux_window():active_tab()
@@ -373,7 +373,7 @@ local function repair_duplicates(gui_window, tab, sb, now)
       -- a mux applies the kill a poll late, so the pane's caches stay until it is gone
       store.killed[pid] = now
       util.warn_once("dup-" .. pid, "duplicate sidebar %d in tab %d closed", pid, tab_id)
-      if not rescue.cli_kill(pid) and backend.is_local(mux.domain(p), identity.cwd_host(p)) then
+      if not rescue.cli_kill(p) and backend.is_local(mux.domain(p), identity.cwd_host(p)) then
         close_pane_by_activation(gui_window, tab, p)
       end
       identity.forget_split(tab_id)

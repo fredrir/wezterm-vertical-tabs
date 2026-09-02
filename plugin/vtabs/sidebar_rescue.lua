@@ -46,21 +46,32 @@ local function cli(args, key, unavailable)
   return false
 end
 
-function M.cli_kill(pane_id)
-  local args = { "kill-pane", "--pane-id", tostring(pane_id) }
-  return cli(args, "cli-kill", "wezterm cli kill-pane unavailable; closing sidebars by activation")
+---Only a pane of the GUI's own `local` domain is driven through the CLI: a request for a pane on a
+---mux link stalls in the GUI's mux server, and holds the window's gate for as long as it does.
+local function cli_on(pane, args, key, unavailable)
+  local domain = mux.domain(pane)
+  if domain ~= "local" then
+    util.warn_once(key .. "-" .. tostring(domain), "%s", unavailable)
+    return false
+  end
+  return cli(args, key, unavailable)
 end
 
----Resizes around the tab's active leaf, exactly as `AdjustPaneSize` does, but pinned to the tab.
-function M.cli_adjust(pane_id, dir, n)
-  local args = { "adjust-pane-size", "--pane-id", tostring(pane_id), "--amount", tostring(n), dir }
-  return cli(args, "cli-adjust", "wezterm cli adjust-pane-size unavailable; adjusting by activation")
+function M.cli_kill(pane)
+  local args = { "kill-pane", "--pane-id", tostring(pane:pane_id()) }
+  return cli_on(pane, args, "cli-kill", "wezterm cli kill-pane unavailable; closing sidebars by activation")
 end
 
 ---Moves a pane under `target`, splitting it downwards. `--move-pane-id` relocates an existing pane.
-local function cli_move(pane_id, target_id)
-  local args = { "split-pane", "--move-pane-id", tostring(pane_id), "--pane-id", tostring(target_id), "--bottom" }
-  return cli(args, "cli-move", "wezterm cli split-pane --move-pane-id unavailable; a split sidebar is left as is")
+local function cli_move(pane, target)
+  local args =
+    { "split-pane", "--move-pane-id", tostring(pane:pane_id()), "--pane-id", tostring(target:pane_id()), "--bottom" }
+  return cli_on(
+    pane,
+    args,
+    "cli-move",
+    "wezterm cli split-pane --move-pane-id unavailable; a split sidebar is left as is"
+  )
 end
 
 ---Panes in the sidebar's column band. The band is the width the sidebar is *meant* to have, never
@@ -132,7 +143,7 @@ local function rescue_splits(gui_window, tab)
   end
   local moved = false
   for _, pane in ipairs(stuck) do
-    moved = cli_move(pane:pane_id(), host:pane_id()) or moved
+    moved = cli_move(pane, host) or moved
   end
   if moved then
     identity.forget_split(tab:tab_id())

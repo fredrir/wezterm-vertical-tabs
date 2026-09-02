@@ -648,18 +648,20 @@ function M.move_to_space(gui_window, tab_id, id, manual)
 end
 
 ---Every verb that touches the pane tree takes the window's gate; the rest reach these and run inline.
-local function gated(name, fn)
+local function gated(name, fn, take)
   return function(gui_window, ...)
     local wid = mux.window_id(gui_window)
     if wid == nil then
       return nil
     end
-    return gate.run(wid, name, fn, gui_window, ...)
+    return take(wid, name, fn, gui_window, ...)
   end
 end
 
+-- a held key repeats faster than a switch lands, so only the newest waiting switch survives
+M.activate_tab = gated("activate_tab", M.activate_tab, gate.latest)
+
 for _, name in ipairs {
-  "activate_tab",
   "move_tab_to_index",
   "reorder",
   "close_tab",
@@ -676,7 +678,7 @@ for _, name in ipairs {
   "split",
   "activate_pane_direction",
 } do
-  M[name] = gated(name, M[name])
+  M[name] = gated(name, M[name], gate.run)
 end
 
 local function current_tab_id(gui_window)

@@ -124,15 +124,28 @@ test("an adjust the mux has not applied yet is issued once, and its landing is n
   config.setup { backend = { path = "/bin/wez-vtabs" } }
 end)
 
-test("a window drag corrects on the first frame of the burst and leaves the rest to the poll", function()
+test("a window resize never adjusts mid-burst; the last frame's timer corrects once it settles", function()
   local win, gui = window(1)
-  local wid = gui:window_id()
-  geometry.forget_window(wid)
-  assert(geometry.on_resize(wid), "the first frame is corrected")
-  for _ = 1, 10 do
-    eq(geometry.on_resize(wid), false, "every frame after it costs nothing")
+  sidebar.ensure(gui)
+  local tab = win.tab_list[1]
+  local sb = mark_ready(tab)
+  local view = require "vtabs.view"
+  local clock = H.clock()
+  wezterm.timers = {}
+  local actions = #win.actions
+  for _ = 1, 8 do
+    win:resize(2)
+    view.on_resize(gui)
+    eq(geometry.correct(gui), false, "no adjust while frames arrive")
   end
-  eq(#win.actions, 0, "so a drag issues no adjust per frame at all")
+  eq(sb.cols, 36, "the frames dealt the sidebar half of every column")
+  eq(#wezterm.timers, 8, "one settle timer per frame")
+  clock.advance(geometry.SETTLE_MS)
+  wezterm.fire_timers()
+  eq(#win.actions, actions + 1, "the last frame's timer adjusted, the others did nothing")
+  eq(last_action(win).action, "AdjustPaneSize")
+  eq(sb.cols, 28)
+  clock.restore()
 end)
 
 local function spy_activate(pane)
@@ -181,7 +194,7 @@ test("side-by-side content is two bands: the sidebar takes focus for the adjust 
   eq(sb.cols, 28)
 end)
 
-test("the CLI adjust pins the tab and never activates anything", function()
+test("the adjust stays in-process even where the cli is usable", function()
   local win, gui = window(1)
   sidebar.ensure(gui)
   local tab = win.tab_list[1]
@@ -190,23 +203,17 @@ test("the CLI adjust pins the tab and never activates anything", function()
   content:activate()
   win:resize(40)
   eq(sb.cols, 48)
-  local actions = #win.actions
+  local spawned = #wezterm.spawned
   H.with_cli(function()
     assert(geometry.correct(gui), "correction ran")
   end)
-  eq(#win.actions, actions, "nothing went through perform_action")
+  eq(#wezterm.spawned, spawned, "no wezterm cli process for a width")
+  eq(last_action(win).action, "AdjustPaneSize")
   eq(tab.active, content)
   eq(sb.cols, 28)
-  local argv = wezterm.spawned[#wezterm.spawned]
-  local want = { "/usr/local/bin/wezterm", "cli", "--no-auto-start", "adjust-pane-size", "--pane-id" }
-  want[#want + 1] = tostring(sb:pane_id())
-  for _, arg in ipairs { "--amount", "20", "Left" } do
-    want[#want + 1] = arg
-  end
-  eq(table.concat(argv, " "), table.concat(want, " "))
 end)
 
-test("without the GUI's own socket the adjust falls back to perform_action", function()
+test("a one-band tab is adjusted from the content leaf, nothing activated", function()
   local win, gui = window(1)
   sidebar.ensure(gui)
   local tab = win.tab_list[1]
@@ -514,7 +521,10 @@ test("a width the bands clamped us to is never adopted, however long it sits the
   -- band. That deferral is a separate wart; what this test pins is what happens to the clamp after.
   later(1600, function()
     geometry.on_resize(wid)
-    assert(geometry.correct(gui), "the clamp is driven, not merely computed")
+    eq(geometry.correct(gui), false, "nothing adjusts on the frame itself")
+  end)
+  later(1600 + geometry.SETTLE_MS, function()
+    assert(geometry.correct(gui), "the clamp is driven once the resize settled, not merely computed")
   end)
   eq(sb.cols, 20, "the sidebar is where the bands leave room for it")
   -- The width we clamped it to now sits still, with nothing outstanding: this is the state the

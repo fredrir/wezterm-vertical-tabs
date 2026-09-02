@@ -51,10 +51,10 @@ test("the fake cli answers only on the GUI's own socket", function()
   local win = H.window(1, { attach = true, ready = true })
   local tab = win.tab_list[1]
   local sb = sidebar.find(tab)
-  eq(rescue.cli_kill(sb:pane_id()), false)
+  eq(rescue.cli_kill(sb), false)
   eq(#tab:panes(), 2)
   H.with_cli(function()
-    eq(rescue.cli_kill(sb:pane_id()), true)
+    eq(rescue.cli_kill(sb), true)
   end)
   eq(#tab:panes(), 1)
   local last = wezterm.spawned[#wezterm.spawned]
@@ -278,43 +278,78 @@ test("a resize burst leaves one sidebar per tab at the desired width", function(
   local wid = gui:window_id()
   local clock = H.clock()
   local geometry = require "vtabs.geometry"
+  local view = require "vtabs.view"
   local function adjusts()
     local n = 0
-    for _, argv in ipairs(wezterm.spawned) do
-      if argv[4] == "adjust-pane-size" then
+    for _, entry in ipairs(win.actions) do
+      if entry.action.action == "AdjustPaneSize" then
         n = n + 1
       end
     end
     return n
   end
   local before = adjusts()
-  H.with_cli(function()
-    for _, d in ipairs { 5, -6, 7, -5, 6, -7, 5, 6 } do
-      win:resize_mux(d)
-      async.spawn(function()
-        if geometry.on_resize(wid) then
-          geometry.correct(gui)
-        end
-      end)
-    end
-    win:settle_mux()
-    async.run()
-    for _ = 1, 3 do
-      clock.advance(500)
-      sidebar.ensure(gui)
-      geometry.landed(wid)
-      geometry.correct(gui)
-    end
-  end)
+  wezterm.timers = {}
+  for _, d in ipairs { 5, -6, 7, -5, 6, -7, 5, 6 } do
+    win:resize_mux(d)
+    async.spawn(function()
+      view.on_resize(gui)
+    end)
+  end
+  eq(adjusts(), before, "nothing adjusted while frames arrived")
+  win:settle_mux()
+  async.run()
+  clock.advance(geometry.SETTLE_MS)
+  wezterm.fire_timers()
+  for _ = 1, 3 do
+    clock.advance(500)
+    sidebar.ensure(gui)
+    geometry.landed(wid)
+    geometry.correct(gui)
+  end
   for _, tab in ipairs(win.tab_list) do
     eq(#tab:panes(), 2)
     eq(H.sidebars_in(tab), 1)
   end
   eq(sidebar.find(win.tab_list[1]).cols, 28)
   assert(adjusts() - before <= 2, "at most two adjusts for one burst, got " .. (adjusts() - before))
-  H.with_cli(function()
-    actions.activate_tab(gui, win.tab_list[2]:tab_id())
-  end)
+  actions.activate_tab(gui, win.tab_list[2]:tab_id())
   eq(sidebar.find(win.tab_list[2]).cols, 28, "the other tab is corrected as it activates")
   clock.restore()
+end)
+
+test("a tab switch still waiting is superseded by the next one", function()
+  local win, gui = H.window(3, { attach = true, ready = true })
+  local wid = gui:window_id()
+  local holder = async.spawn(function()
+    gate.run(wid, "hold", function()
+      async.yield "hold"
+    end)
+  end)
+  holder.parked = true
+  local first = async.spawn(function()
+    return actions.activate_tab(gui, win.tab_list[2]:tab_id())
+  end)
+  local second = async.spawn(function()
+    return actions.activate_tab(gui, win.tab_list[3]:tab_id())
+  end)
+  eq(first.tag, "sleep")
+  eq(second.tag, "sleep")
+  holder.parked = false
+  async.run()
+  eq(first.results[2], "superseded")
+  eq(second.results[1], sidebar.content_pane(win.tab_list[3]))
+  eq(win.active_tab_ref, win.tab_list[3])
+end)
+
+test("a pane on a mux domain is never driven through the cli", function()
+  local win = H.window(1, { attach = true, ready = true })
+  local sb = sidebar.find(win.tab_list[1])
+  sb.domain = "localmux"
+  local spawned = #wezterm.spawned
+  H.with_cli(function()
+    eq(rescue.cli_kill(sb), false)
+  end)
+  eq(#wezterm.spawned, spawned, "no cli process for a mux-domain pane")
+  eq(#win.tab_list[1]:panes(), 2)
 end)

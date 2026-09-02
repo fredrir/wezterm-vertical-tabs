@@ -5,7 +5,6 @@ local gate = require "vtabs.gate"
 local state = require "vtabs.state"
 local store = require "vtabs.store"
 local sidebar = require "vtabs.sidebar"
-local rescue = require "vtabs.sidebar_rescue"
 local mux = require "vtabs.mux"
 local util = require "vtabs.util"
 
@@ -21,9 +20,11 @@ local ADJUST_WAIT_MS = 1000
 -- No width is read as a drag until it has sat still this long, and never this soon after an adjust
 -- of ours: a mux can apply one in pieces, and each piece looks exactly like a hand on the divider.
 local ADOPT_FLOOR_MS = 250
--- `window-resized` fires once per frame of a drag; correcting per frame costs an adjust and a
--- repaint each. The leading edge is corrected, the rest waits for the poll after the drag stops.
+-- `window-resized` fires once per frame of a drag or an animated fill; an adjust issued mid-burst
+-- fights the next frame and lands off by one. Nothing adjusts until the frames have stopped.
 local RESIZE_QUIET_MS = 150
+M.RESIZE_QUIET_MS = RESIZE_QUIET_MS
+M.SETTLE_MS = RESIZE_QUIET_MS + 20
 
 ---Declared through `store`, so forgetting a window clears them without a list to keep in step.
 local scope = store.scope "geometry"
@@ -36,6 +37,7 @@ local attempted = scope.window()
 local in_flight = scope.window()
 local driven = scope.window()
 local resized_at = scope.window()
+local resize_gen = scope.window()
 local rail_reserve = scope.window()
 local last_target = scope.window()
 
@@ -65,13 +67,16 @@ function M.landed(window_id)
   in_flight[window_id] = nil
 end
 
----True on the first resize event of a burst. A drag is one burst, so it corrects once at the start
----and once from the poll after it stops, rather than once per frame in between.
+---Records one frame of a resize and returns the burst's generation: the settle timer armed by the
+---last frame is the one that corrects, and `correct` itself declines while frames still arrive.
 function M.on_resize(window_id)
-  local now = util.now_ms()
-  local last = resized_at[window_id]
-  resized_at[window_id] = now
-  return last == nil or now - last >= RESIZE_QUIET_MS
+  resized_at[window_id] = util.now_ms()
+  resize_gen[window_id] = (resize_gen[window_id] or 0) + 1
+  return resize_gen[window_id]
+end
+
+function M.resize_gen(window_id)
+  return resize_gen[window_id] or 0
 end
 
 ---A config reload only invalidates a dragged width when `width` itself changed: every edit to
@@ -167,6 +172,9 @@ local function correct(gui_window)
   local tab_id = tab:tab_id()
   local px = window_px(gui_window)
   local now = util.now_ms()
+  if now - (resized_at[wid] or 0) < RESIZE_QUIET_MS then
+    return false
+  end
   local collapsed = state.is_collapsed(wid)
   -- Comparable = the same sidebar in the same tab, with the window, font and tab width all
   -- unchanged, so the only thing that can have moved this width is the divider or us.
@@ -251,9 +259,7 @@ local function correct(gui_window)
     sb:activate()
   end
   local dir, n = direction_for(cfg.position, target - cols), math.abs(target - cols)
-  if not rescue.cli_adjust(sb:pane_id(), dir, n) then
-    mux.call(gui_window, "perform_action", act.AdjustPaneSize { dir, n }, sb)
-  end
+  mux.call(gui_window, "perform_action", act.AdjustPaneSize { dir, n }, sb)
   if dance then
     active:activate()
   end

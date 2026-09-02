@@ -1,3 +1,4 @@
+local wezterm = require "wezterm" ---@type Wezterm
 local config = require "vtabs.config"
 local state = require "vtabs.state"
 local store = require "vtabs.store"
@@ -256,6 +257,25 @@ local function footer_for(cfg, mux_win)
     return nil
   end
   return type(rows) == "table" and rows or nil
+end
+
+---One frame of a window resize. Nothing adjusts while frames arrive; the timer armed by the last
+---frame corrects once, then publishes.
+function M.on_resize(gui_window)
+  local wid = gui_window:window_id()
+  local gen = geometry.on_resize(wid)
+  wezterm.time.call_after(geometry.SETTLE_MS / 1000, function()
+    if geometry.resize_gen(wid) ~= gen then
+      return
+    end
+    local ok, err = pcall(function()
+      geometry.correct(gui_window)
+      M.sync(gui_window)
+    end)
+    if not ok and not util.window_gone(err) then
+      util.warn("window-resized: %s", tostring(err))
+    end
+  end)
 end
 
 ---Publishes this window's state: the wire sends whatever changed to every painting pane.

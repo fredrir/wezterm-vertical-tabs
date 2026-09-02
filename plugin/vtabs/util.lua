@@ -29,6 +29,19 @@ function M.getenv(name)
   return os.getenv(name)
 end
 
+-- WezTerm reports a window, tab or pane that left mid-call with these texts; nothing structured.
+local GONE = { "not found in mux", "is not valid" }
+
+function M.window_gone(err)
+  local text = tostring(err)
+  for _, needle in ipairs(GONE) do
+    if text:find(needle, 1, true) then
+      return true
+    end
+  end
+  return false
+end
+
 function M.try(fn, ...)
   local ok, value = pcall(fn, ...)
   if ok then

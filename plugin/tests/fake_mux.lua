@@ -307,10 +307,7 @@ function M.cli(args)
   end
   local sub = args[4]
   local pane = panes[tonumber(flags["--pane-id"] or "")]
-  if sub == "adjust-pane-size" and pane then
-    pane._tab:adjust_from_active(args[#args], tonumber(flags["--amount"]) or 1)
-    return true
-  elseif sub == "kill-pane" and pane then
+  if sub == "kill-pane" and pane then
     M.kill_pane(pane)
     return true
   elseif sub == "split-pane" and pane then

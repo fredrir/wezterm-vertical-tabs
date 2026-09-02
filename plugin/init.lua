@@ -55,18 +55,7 @@ local function alive(window)
   end)
 end
 
--- WezTerm reports a window, tab or pane that left mid-call with these texts; nothing structured.
-local GONE = { "not found in mux", "is not valid" }
-
-local function window_gone(err)
-  local text = tostring(err)
-  for _, needle in ipairs(GONE) do
-    if text:find(needle, 1, true) then
-      return true
-    end
-  end
-  return false
-end
+local window_gone = util.window_gone
 
 local function reported(name, fn)
   return function(window, ...)
@@ -133,15 +122,11 @@ local function register_events(cfg)
     end)
   )
 
-  -- Fires once per frame of a window drag; the poll picks up the last one, so only the first frame
-  -- of a burst pays for a correction and a repaint.
+  -- Fires once per frame of a window drag or an animated fill; nothing adjusts until the frames stop.
   wezterm.on(
     "window-resized",
     guarded("window-resized", function(window)
-      if geometry.on_resize(window:window_id()) then
-        geometry.correct(window)
-        view.sync(window)
-      end
+      view.on_resize(window)
     end)
   )
 

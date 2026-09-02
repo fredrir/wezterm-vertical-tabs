@@ -9,9 +9,11 @@ local M = {}
 
 M.STALE_MS = 5000
 M.POLL_MS = 10
+M.POLL_MAX_MS = 80
 
 local scope = store.scope "gate"
 local holder = scope.window()
+local newest = scope.window()
 
 local function mine(wid)
   local held = holder[wid]
@@ -22,9 +24,14 @@ local function stale(held, now)
   return now - held.at > M.STALE_MS
 end
 
----Waits its turn; a holder silent past STALE_MS is evicted with a warning, never waited on forever.
-local function acquire(wid, name)
+---Waits its turn, polling with backoff; a holder silent past STALE_MS is evicted with a warning,
+---never waited on forever. A `ticket` waiter gives up as soon as a newer ticket of its name exists.
+local function acquire(wid, name, ticket)
+  local wait = M.POLL_MS
   while true do
+    if ticket and newest[wid][name] ~= ticket then
+      return nil
+    end
     local held = holder[wid]
     if held == nil then
       break
@@ -38,7 +45,8 @@ local function acquire(wid, name)
       util.warn_once("gate-main", "gate: %s ran unguarded on the main thread", name)
       break
     end
-    wezterm.sleep_ms(M.POLL_MS)
+    wezterm.sleep_ms(wait)
+    wait = math.min(wait * 2, M.POLL_MAX_MS)
   end
   local hold = { co = coroutine.running(), at = util.now_ms(), name = name }
   holder[wid] = hold
@@ -52,18 +60,34 @@ local function release(wid, hold)
   end
 end
 
----Runs `fn` under the window's gate and returns its results; re-entrant for the holder's coroutine.
-function M.run(wid, name, fn, ...)
+local function run(wid, name, fn, ticket, ...)
   if mine(wid) then
     return fn(...)
   end
-  local hold = acquire(wid, name)
+  local hold = acquire(wid, name, ticket)
+  if hold == nil then
+    return nil, "superseded"
+  end
   local res = table.pack(pcall(fn, ...))
   release(wid, hold)
   if not res[1] then
     error(res[2], 0)
   end
   return table.unpack(res, 2, res.n)
+end
+
+---Runs `fn` under the window's gate and returns its results; re-entrant for the holder's coroutine.
+function M.run(wid, name, fn, ...)
+  return run(wid, name, fn, nil, ...)
+end
+
+---Like `run`, but only the newest waiting call of `name` survives: a key held down queues one
+---switch, not one per repeat. A call that lost returns `nil, "superseded"`.
+function M.latest(wid, name, fn, ...)
+  local ticket = {}
+  newest[wid] = newest[wid] or {}
+  newest[wid][name] = ticket
+  return run(wid, name, fn, ticket, ...)
 end
 
 ---Runs `fn` when the gate is free or already this coroutine's; otherwise `nil, "busy"` at once.

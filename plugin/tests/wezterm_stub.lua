@@ -126,6 +126,7 @@ function M.on(name, fn)
   table.insert(M.handlers[name], fn)
 end
 
+M.timers = {}
 M.time = {
   now = function()
     return {
@@ -134,7 +135,19 @@ M.time = {
       end,
     }
   end,
+  call_after = function(secs, fn)
+    M.timers[#M.timers + 1] = { secs = secs, fn = fn }
+  end,
 }
+
+---Runs every scheduled callback in order, as the executor would once their delays had elapsed.
+function M.fire_timers()
+  local due = M.timers
+  M.timers = {}
+  for _, timer in ipairs(due) do
+    timer.fn()
+  end
+end
 
 M.panes = {}
 M.windows = {}
