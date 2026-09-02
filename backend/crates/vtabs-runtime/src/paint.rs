@@ -1,11 +1,14 @@
 //! Encodes a laid-out frame the way render.lua's `emit`/`paint` do, byte for byte: one CUP per
-//! painted row, SGR only where a run changes, and the cursor hidden for the whole frame.
+//! painted row, SGR only where a run changes, and the cursor hidden for the whole frame, all
+//! inside one DEC 2026 synchronized update so a resize never shows half a frame.
 
 use vtabs_view::frame::{Cell, Rgb, faded};
 use vtabs_view::render::Frame;
 
 const ESC: char = '\x1b';
 const HIDE_CURSOR: &str = "\x1b[?25l";
+const SYNC_BEGIN: &str = "\x1b[?2026h";
+const SYNC_END: &str = "\x1b[?2026l";
 const RESET: &str = "\x1b[0m";
 
 fn cup(out: &mut String, row: usize) {
@@ -66,13 +69,15 @@ fn row_bytes(cells: &[Cell], page_bg: Rgb, fade: Option<f64>) -> String {
 
 /// The whole frame as one write: an unpainted row is skipped, keeping whatever the pane had there.
 pub fn rows_bytes(rows: &[Option<Vec<Cell>>], fades: &[Option<f64>], page_bg: Rgb) -> String {
-    let mut out = String::from(HIDE_CURSOR);
+    let mut out = String::from(SYNC_BEGIN);
+    out.push_str(HIDE_CURSOR);
     for (i, cells) in rows.iter().enumerate() {
         let Some(cells) = cells else { continue };
         cup(&mut out, i + 1);
         out.push_str(&row_bytes(cells, page_bg, fades.get(i).copied().flatten()));
     }
     out.push_str(RESET);
+    out.push_str(SYNC_END);
     out
 }
 

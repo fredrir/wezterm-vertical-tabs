@@ -95,6 +95,8 @@ pub fn run() -> io::Result<()> {
         log,
         var,
         size,
+        probe: terminal::size,
+        needs_clear: false,
         fx: None,
         last_rows: None,
         seq: 0,
