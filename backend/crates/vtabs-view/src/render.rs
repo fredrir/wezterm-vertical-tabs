@@ -249,7 +249,6 @@ fn card_row(
         );
     }
 
-    // inverted from P1: the active card is square, so the chamfer is what marks a hover
     let chamfered = (st.hovered || st.focused) && !item.item.is_active && !st.dragging;
     if chamfered && rows_in_card >= 2 && glyph(glyphs, "corners") == Some("chamfer") {
         let ch = if row_in_card == 1 {

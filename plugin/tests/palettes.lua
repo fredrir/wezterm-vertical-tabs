@@ -1,4 +1,3 @@
--- The ten schemes P1-spec §6.1 derives its gate table from.
 return {
   {
     name = "Catppuccin Mocha",

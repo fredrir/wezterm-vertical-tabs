@@ -1,5 +1,4 @@
-//! Colour-only fades over the frame the pane already shows (08-p7-spec.md): the phase table from
-//! anim.lua, and the interpolation anim.rs used to do by rewriting SGR bytes.
+//! Colour-only fades over the frame the pane already shows (
 
 use crate::frame::Cell;
 

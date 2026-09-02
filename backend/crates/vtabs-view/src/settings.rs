@@ -1,8 +1,3 @@
-//! Port of page.lua's rendering and navigation half: `grid`, `body_rows`, `matches`, `plan`,
-//! `paint`/`paint_field`, `hints` and the click spans. Lua keeps the schema glue (`fields`,
-//! `lock_for`, `commit`, the pending ledger) and sends one `screen:"settings"` model; every value
-//! column here arrives pre-rendered, so no widget is re-implemented (§4.3 #3).
-
 use std::collections::BTreeMap;
 
 use vtabs_core::ui::SettingsUi;
@@ -12,12 +7,10 @@ use vtabs_theme::Theme;
 use crate::frame::{self, Cell, Style};
 use crate::text;
 
-/// Below this the page says so and draws nothing else; from WIDE_COLS the header and the hints
 /// spell themselves out.
 pub const MIN_COLS: i64 = 48;
 pub const WIDE_COLS: i64 = 90;
 
-/// Shorter wording for a value column too narrow to name the source in full.
 fn short_source(locked: &str) -> &str {
     match locked {
         "wezterm.lua" => "wezterm.lua",
@@ -27,7 +20,6 @@ fn short_source(locked: &str) -> &str {
     }
 }
 
-/// Column landmarks: a 14-column nav, a divider, and the form filling the rest of the pane.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Grid {
     pub cols: i64,
@@ -48,7 +40,6 @@ pub fn grid(cols: i64) -> Option<Grid> {
     }
     let nav_x2 = 1 + 14;
     let divider = nav_x2 + 1;
-    // §2's column table: caret one clear of the divider, label two clear of the caret
     let caret_x = divider + 1;
     let label_x = caret_x + 2;
     let form_x2 = cols - 2;
@@ -473,7 +464,6 @@ pub fn cells(v: &SettingsView) -> (Vec<Option<Vec<Cell>>>, Vec<Option<f64>>) {
     (painted, vec![None; n])
 }
 
-/// One form row: caret, label, right-aligned value, and the badge that says why it is not editable.
 fn paint_field(cells: &mut [Cell], row: &SettingsField, focused: bool, g: &Grid, v: &SettingsView) {
     let theme = &v.theme;
     let dim = theme.meta_fg;
@@ -488,9 +478,6 @@ fn paint_field(cells: &mut [Cell], row: &SettingsField, focused: bool, g: &Grid,
 
     let text = &row.value_text;
     if let Some(lock) = &row.locked {
-        // §4 wants the reason named, but the value column is 18 cells at 100 and 14 at 60 and
-        // "LOCKED wezterm.lua (host)" is 25. Only the focused row can be about one key at a time,
-        // so that is where the reason goes; every other row says LOCKED and shows its value.
         let room = (g.value_x2 - g.label_x2 - 1).max(1);
         if focused {
             let short = short_source(&lock.text);

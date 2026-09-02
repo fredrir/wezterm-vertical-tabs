@@ -771,7 +771,6 @@ mod tests {
             feed(b"{\"t\":\"bogus\"}\n{\"t\":\"clear\"}\n"),
             vec![Input::Command(Command::Clear)]
         );
-        // the retired v1 tags are now unknown tags: ignored whole, never typed at the shell
         assert!(feed(b"{\"t\":\"frame\",\"data\":\"\\u001b[H\"}\n").is_empty());
         assert!(feed(b"{\"t\":\"anim\",\"id\":1,\"data\":\"x\"}\n").is_empty());
     }

@@ -78,7 +78,6 @@ impl BitWriter {
         }
     }
 
-    /// Huffman codes are written most-significant bit first, unlike everything else in deflate.
     fn push_code(&mut self, code: u32, bits: u32) {
         for i in (0..bits).rev() {
             self.push((code >> i) & 1, 1);
@@ -93,7 +92,6 @@ impl BitWriter {
     }
 }
 
-/// RFC 1951 §3.2.6: the fixed literal/length alphabet.
 fn fixed_literal(sym: u32) -> (u32, u32) {
     match sym {
         0..=143 => (0x30 + sym, 8),
@@ -103,7 +101,6 @@ fn fixed_literal(sym: u32) -> (u32, u32) {
     }
 }
 
-/// RFC 1951 §3.2.5: length 3..=258 as a code, plus its extra bits.
 fn length_code(len: u32) -> (u32, u32, u32) {
     const BASE: [u32; 29] = [
         3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 15, 17, 19, 23, 27, 31, 35, 43, 51, 59, 67, 83, 99, 115,
@@ -119,7 +116,6 @@ fn length_code(len: u32) -> (u32, u32, u32) {
     (257 + i as u32, len - BASE[i], EXTRA[i])
 }
 
-/// RFC 1951 §3.2.5: distance 1..=32768 as a code, plus its extra bits.
 fn distance_code(dist: u32) -> (u32, u32, u32) {
     const BASE: [u32; 30] = [
         1, 2, 3, 4, 5, 7, 9, 13, 17, 25, 33, 49, 65, 97, 129, 193, 257, 385, 513, 769, 1025, 1537,

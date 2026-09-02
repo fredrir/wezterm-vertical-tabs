@@ -1,6 +1,3 @@
-//! The renderer's input: the v1 view shape, with Lua-owned resolution (buttons, hooks, theme)
-//! already applied. Scene fixtures under plugin/tests/golden/scenes/ deserialize into this.
-
 use std::collections::BTreeMap;
 
 use serde::Deserialize;

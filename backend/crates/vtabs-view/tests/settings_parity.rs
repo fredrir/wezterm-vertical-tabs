@@ -1,8 +1,3 @@
-//! Every committed settings scene must render byte-identically to its golden dumps — the gate
-//! 07-p6-spec.md puts in front of retiring page.lua's paint path.
-//! Scenes: plugin/tests/golden/scenes/settings-*.json (exported by the Lua harness).
-//! Goldens: plugin/tests/golden/frames/settings-*.txt + .styled.txt.
-
 use std::path::PathBuf;
 
 use vtabs_view::settings::{Scene, scene_dumps};

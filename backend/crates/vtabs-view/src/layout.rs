@@ -1,11 +1,7 @@
-//! Port of plugin/vtabs/layout.lua: everything about a frame that does not depend on colour,
-//! including the `hits` map that names what each row and column answers for.
-
 use vtabs_core::geom::BUTTON_PITCH_PT;
 
 use crate::scene::{FooterEntry, Item, RenderCfg, RenderInput, SpaceEntry, Strip, StripButton};
 
-/// Column grid of §1.1; every landmark derives from `cols` and `padding`.
 #[derive(Debug, Clone, Copy)]
 pub struct Grid {
     pub card_x1: i64,
@@ -500,8 +496,6 @@ pub struct Span {
     pub x2: i64,
 }
 
-/// One row of the v1 `hits` map. `index` is the footer entry's place in the model's own list,
-/// which is how the wire addresses id-less footer closures.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Region {
     pub kind: RegionKind,

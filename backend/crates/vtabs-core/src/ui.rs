@@ -34,8 +34,7 @@ pub struct LastClick {
     pub at: Ms,
 }
 
-/// The press this process is holding. The drag it arms may be carried by another backend
-/// process once the pointer leaves this pane, which is why the model mirrors it back (§1.4).
+/// The press this process is holding
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PressDrag {
     pub tab_id: i64,
@@ -94,8 +93,7 @@ impl UiState {
     }
 }
 
-/// The settings screen's local state: what `settings.page_state(wid)` kept in Lua, minus the edit
-/// buffer and the armed key — those stay Lua's (§4.3 #1/#5). Nav and filter never cross the wire.
+/// The settings screen's local state
 #[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
 #[serde(default)]
 pub struct SettingsUi {
@@ -121,8 +119,6 @@ impl Default for SettingsUi {
 }
 
 impl SettingsUi {
-    /// page.lua's `type_into` on the filter slot. Backspace drops one **byte**, not one character:
-    /// the v1 defect 07-p6-spec.md says to carry rather than silently fix.
     pub fn type_filter(&mut self, key: &str) {
         match key {
             "escape" => {
@@ -135,7 +131,6 @@ impl SettingsUi {
                 bytes.pop();
                 self.filter = String::from_utf8_lossy(&bytes).into_owned();
             }
-            // v1 appends only a key that arrived as one character, so "space" never reaches it
             _ if key.chars().count() == 1 => self.filter.push_str(key),
             _ => {}
         }

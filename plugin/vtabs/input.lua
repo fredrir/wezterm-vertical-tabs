@@ -50,8 +50,6 @@ local function blur(gui_window)
   actions.blur_sidebar(gui_window)
 end
 
----The v2 gesture vocabulary (05-p4b-spec.md). Every handler is internal: nothing here mints a
----public `vtabs.action.*`, which is what rule 4 protects.
 local DO = {}
 
 function DO.press_card(gui_window, pane, id, args)
@@ -157,7 +155,6 @@ function DO.menu_closed(gui_window)
   popover.close(gui_window)
 end
 
----Rust owns the edit buffer; the commit lands it in the v1 state before the shared path applies it.
 function DO.rename_commit(gui_window, _, _, args)
   local pop = popover.get(gui_window:window_id())
   if pop and pop.level == "rename" then
@@ -181,12 +178,8 @@ end
 
 M.DO = DO
 
----Verbs the backend has already applied to its own frame: the wheel scrolls and the drag ghost
----moves before the round trip. The next poll echoes them in the model; a sync per wheel tick or per
----pointer move would survey the window for nothing the pane does not already show.
 local QUIET_DO = { set_scroll = true, drag_to = true }
 
----Verbs that operate on the open menu; every other gesture dismisses it first, as a v1 click does.
 local MENU_DO = {
   menu_pick = true,
   menu_back = true,
@@ -491,7 +484,7 @@ function M.handle(gui_window, pane, name, value)
   if cfg.debug then
     util.log("handle: %s from pane %d", tostring(ev.t), pane:pane_id())
   end
-  -- the settings page shares the bridge but none of the sidebar's hit map; it answers for itself
+
   if sidebar.is_settings(pane) then
     if ev.t == "ready" then
       local v = tonumber(ev.v) or 1

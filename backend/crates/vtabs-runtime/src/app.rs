@@ -51,7 +51,6 @@ pub struct App<W: Write> {
     pub popover: Option<PopoverHits>,
     /// The menu's own state: the selection Lua no longer drives and the rename buffer Rust owns.
     pub menu_ui: MenuState,
-    /// The settings screen's nav, focus and filter; local by design, nothing persists (§4.3 #9).
     pub settings_ui: SettingsUi,
     /// The menu rev a `menu_refused` was already sent for, so a resize does not repeat it.
     pub noted_menu: Option<u64>,
@@ -218,8 +217,6 @@ impl<W: Write> App<W> {
         Ok(())
     }
 
-    /// The open menu answers the pointer itself; `false` hands the gesture back to the list, which
-    /// is v1's `on_popover_down` returning true after it dismissed the menu.
     fn menu_gesture(&mut self, m: &vtabs_protocol::Mouse) -> io::Result<bool> {
         let now = self.now_ms();
         let resolved = match (self.menu_outcome(), self.v2.menu.as_ref()) {
@@ -391,8 +388,6 @@ impl<W: Write> App<W> {
         menu::plan(msg, &self.menu_ui, &self.menu_cfg(), &theme, self.dims())
     }
 
-    /// The frame's input, with the menu overlaid: an open menu wins over the P4b bridge, and a
-    /// menu that is closed or unplaceable takes the bridge's rect with it.
     fn scene(&self) -> (Enriched, Outcome) {
         let (cfg, theme, model) = self.state();
         let mut e = enrich(cfg, theme, model, self.dims(), &self.ui);
@@ -1211,7 +1206,7 @@ mod tests {
         let sent = &payloads(&a)[before..];
         assert!(
             !sent.iter().any(|p| p.contains(r#""t":"mouse""#)),
-            "v1 mouse is gone: {sent:?}"
+            "mouse is gone: {sent:?}"
         );
         assert!(
             sent.iter().any(|p| p.contains(r#""t":"do""#)),
@@ -1326,7 +1321,6 @@ mod tests {
         "target":1,"selected":1,"header":{"title":"one"},
         "items":[{"id":"activate","label":"Switch to tab"},
                  {"id":"close","label":"Close tab","danger":true}]}"#;
-    /// The P4b bridge rect, with text no widget of ours would ever draw.
     fn send(a: &mut App<Vec<u8>>, cmd: Command) {
         a.handle(Input::Command(cmd)).unwrap();
     }

@@ -393,8 +393,6 @@ function M.give_up(_, _, sb)
   util.warn("sidebar backend did not start in %s; fix backend.path and close that pane", place)
 end
 
----A backend that announced less than v2 or does not paint cannot be driven: its place is not
----retried for a while and the pane is left for the user, as a backend that never answered is.
 function M.refuse_v1(pane, version)
   local pid = pane:pane_id()
   local place = store.pane_domain[pid] or "local@"

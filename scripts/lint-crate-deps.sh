@@ -1,5 +1,4 @@
 #!/bin/sh
-# §1.1 crate dependency rules: a forbidden dependency is a build failure, not a review comment.
 set -eu
 cd "$(dirname "$0")/../backend"
 
@@ -25,5 +24,9 @@ done
 
 # vtabs-zen: no dependency at all
 deps=$(cargo tree -p vtabs-zen -e normal --prefix none | grep -cv '^vtabs-zen ' || true)
-[ "$deps" -eq 0 ] || { echo "FORBIDDEN: vtabs-zen has dependencies"; cargo tree -p vtabs-zen -e normal; exit 1; }
+[ "$deps" -eq 0 ] || {
+  echo "FORBIDDEN: vtabs-zen has dependencies"
+  cargo tree -p vtabs-zen -e normal
+  exit 1
+}
 echo "crate deps ok"

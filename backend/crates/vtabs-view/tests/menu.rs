@@ -1,6 +1,3 @@
-//! The rendering half of 06-p5-spec.md's invariants: what the menu draws, where it draws it, and
-//! what it does when it cannot.
-
 use vtabs_protocol::v2::MenuMsg;
 use vtabs_theme::{Palette, Theme, UserTheme};
 use vtabs_view::menu::{self, Level, MenuCfg, MenuState, Outcome};
