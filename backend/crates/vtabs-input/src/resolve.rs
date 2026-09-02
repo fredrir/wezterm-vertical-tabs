@@ -17,9 +17,6 @@ pub const DRAG_START_COLS: i64 = 2;
 pub const DRAG_DWELL_MS: u64 = 120;
 pub const TEAR_OFF_TRAVEL: i64 = 3;
 
-/// The mirrored `model.drag`: the press may have landed in another backend process (§1.4).
-/// It carries no comparable `began` — `origin.at` is Lua's clock, not this process's — so a drag
-/// this process did not start is gated on travel alone; its dwell was served where it began.
 #[derive(Debug, Clone, Copy)]
 pub struct MirroredDrag {
     pub id: i64,
@@ -59,7 +56,6 @@ pub struct Resolution {
     pub menu: Option<MenuState>,
     /// The settings screen's local nav/filter state, likewise.
     pub settings: Option<SettingsUi>,
-    /// v1's `on_popover_down` returning true: the menu is gone and the click is the list's.
     pub fall_through: bool,
 }
 
@@ -637,8 +633,6 @@ pub fn settings_key(s: &SettingsScreen, ui: &SettingsUi, name: &str, mods: Mods)
             st.filter.clear();
             st.focus = 1;
         }
-        // §4.3 #8, the one deliberate fix: v1's settings.key ate these before the page saw them,
-        // so `q` closed the page mid-edit. Here the modal branches above have already returned.
         "escape" => out.events.push(Event::do_("close_settings")),
         "q" if bare(mods) => out.events.push(Event::do_("close_settings")),
         _ => out.repaint = false,
@@ -646,8 +640,6 @@ pub fn settings_key(s: &SettingsScreen, ui: &SettingsUi, name: &str, mods: Mods)
     out
 }
 
-/// `page.click`, routed by the column the hit record says it landed in. v1 answers the left press
-/// and nothing else — there is no wheel scrolling on this screen, and none is added here.
 pub fn settings_mouse(s: &SettingsScreen, ui: &SettingsUi, m: &Mouse) -> Resolution {
     let mut out = settings_out(ui);
     out.repaint = false;

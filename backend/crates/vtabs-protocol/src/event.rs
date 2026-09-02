@@ -12,7 +12,6 @@ pub enum Event {
         v: u8,
         cols: u16,
         rows: u16,
-        /// Always true since P8; Lua refuses a backend that announces anything else.
         paints: bool,
     },
     Resize {

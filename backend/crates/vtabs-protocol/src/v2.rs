@@ -1,5 +1,3 @@
-//! v2 command payloads (§2.3): idempotent, full within their domain, JSON lines on the pty.
-
 use std::collections::BTreeMap;
 
 use serde::Deserialize;
@@ -285,7 +283,6 @@ pub struct DragState {
     pub slot: Option<i64>,
     #[serde(default)]
     pub outside: bool,
-    /// The press point; the press may have happened in another backend process (§1.4).
     pub origin: DragOrigin,
 }
 

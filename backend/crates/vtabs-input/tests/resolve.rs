@@ -1,5 +1,3 @@
-//! The gesture table of 05-p4b-spec.md, against the committed scenes' real layouts.
-
 use vtabs_core::ui::{ArmKind, UiState};
 use vtabs_input::resolve::{Knobs, MirroredDrag, key, mouse};
 use vtabs_protocol::types::{Button, Mods, Mouse, MouseKind};
@@ -234,7 +232,6 @@ fn a_drag_armed_in_another_process_still_moves_here() {
 
         outside: false,
     });
-    // no local press: the origin can only come from the model (§1.4)
     let r = mouse(
         &p,
         &k,

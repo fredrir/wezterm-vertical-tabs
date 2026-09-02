@@ -1,6 +1,3 @@
-//! Port of plugin/vtabs/theme.lua; resolve() must stay value-identical to the Lua original
-//! until P8 retires it (pinned by tests/resolve_parity.rs against a Lua-exported fixture).
-
 pub type Rgb = [u8; 3];
 
 const ACCENT_MIN: f64 = 3.0;
@@ -11,7 +8,6 @@ const DEFAULT_ELEVATION: f64 = 0.06;
 const WHITE: Rgb = [255, 255, 255];
 const BLACK: Rgb = [0, 0, 0];
 
-/// `#rgb` or `#rrggbb`; every colour is normalised to hex by Lua before it crosses the wire.
 pub fn parse(color: &str) -> Option<Rgb> {
     let hex = color.strip_prefix('#')?;
     let channel = |a: usize, b: usize| u8::from_str_radix(&hex[a..b], 16).ok();

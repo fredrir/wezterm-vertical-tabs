@@ -383,8 +383,6 @@ local function hexc(colour)
   return colour
 end
 
----A declared accent, else for `"auto"`, a template or a hook-made space a stable slot in the
----scheme's own hues: the same id is the same colour in every window and after every restart.
 function M.accent_of(cfg, id, palette)
   local entry = M.entry_for(cfg, id)
   local theme = entry and entry.theme
@@ -426,8 +424,6 @@ function M.theme_for(cfg, wid, palette)
   return cfg.theme
 end
 
----A hand move pins the tab; `id == nil` is the menu's Auto row, which unpins it and asks the rules
----again on the next poll.
 function M.move(tab_id, id, manual)
   state.set_space(tab_id, id or state.space_of(tab_id), id ~= nil and manual == true)
   route_key[tab_id] = nil

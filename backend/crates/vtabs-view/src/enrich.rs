@@ -25,8 +25,6 @@ const SHELLS: &[&str] = &[
 ];
 const REMOTE: &[&str] = &["mosh", "mosh-client", "ssh", "ssh.exe"];
 
-/// Where each popover row sits, so the bridge can name what the pointer landed on without
-/// interpreting it; P5 deletes this with the menu widget.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PopoverHits {
     pub x: i64,

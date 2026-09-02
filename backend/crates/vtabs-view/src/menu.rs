@@ -1,7 +1,3 @@
-//! Port of popover.lua's rendering half: wrap, width_for, layout (placement, slide-back §6.4,
-//! header drop priorities, scroll), item_row/text_row/frame_row and rename_rows. Lua keeps the
-//! level state machine and sends one `menu` message per level; this draws it.
-
 use vtabs_core::sanitize;
 use vtabs_protocol::v2::{MenuItem, MenuMsg};
 use vtabs_theme::Theme;
@@ -24,12 +20,9 @@ pub const HINT_PAD: i64 = 6;
 pub const TEXT_REL: i64 = 4;
 pub const MIN_ROWS: i64 = FRAME_ROWS + MIN_ITEM_ROWS;
 
-/// The label's own truncation never took the config's ellipsis in v1, and still does not.
 const LABEL_ELLIPSIS: &str = "…";
 const RENAME_ROWS: i64 = 5;
 
-/// Header lines are dropped smallest-priority first. The per-level message carries one meta line
-/// where v1 read two (cwd, then domain/process), so `CWD` has no source and is not modelled.
 mod drop {
     pub const META: i64 = 1;
     pub const TITLE_EXTRA: i64 = 3;
@@ -89,19 +82,14 @@ impl Default for MenuCfg {
     }
 }
 
-/// What the menu keeps between messages: the selection Lua no longer drives, the rename buffer
-/// Rust owns, and the press a destructive item is holding.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct MenuState {
     pub selected: i64,
     pub buffer: String,
-    /// 1-based, like Lua's `pop.cursor`: it may sit one past the last character.
     pub cursor: usize,
     pub armed: Option<String>,
-    /// Told Lua to close and waiting for the message that says so; the menu is already gone here.
     dismissed: bool,
     sig: Option<(String, Vec<MenuItem>)>,
-    /// The width the root level asked for; v1's rename box inherits it so the box never jumps.
     root_width: Option<i64>,
 }
 
@@ -156,7 +144,6 @@ pub struct Placed {
 pub enum Outcome {
     /// No menu message, or one that says closed: nothing is drawn and nothing is consumed.
     Closed,
-    /// `rect()` returned nil. v1 renders nothing and swallows nothing.
     Refused {
         why: &'static str,
         level: Level,
@@ -248,8 +235,6 @@ fn natural_width(items: &[MenuItem], head: &[String]) -> i64 {
     natural
 }
 
-/// §6.3: as wide as its widest row wants, clamped to the columns the sidebar can spare.
-/// `floor` is what the level it came from already asked for, so rename keeps the root's width.
 pub fn width_for(cfg: &MenuCfg, cols: i64, items: &[MenuItem], head: &[String], floor: i64) -> i64 {
     let avail = cols - cfg.padding_left - cfg.padding_right;
     let natural = natural_width(items, head).max(floor);
@@ -370,7 +355,6 @@ struct Layout {
     scroll: i64,
 }
 
-/// Where the popover sits and how much header it can afford (§1.9's five rules, in order).
 fn layout(full: &[HeadLine], count: i64, index: i64, anchor_row: i64, rows: i64) -> Layout {
     let anchor = anchor_row.clamp(0, rows);
     for keep in (0..=full.len()).rev() {
@@ -472,8 +456,6 @@ fn item_row(entry: &MenuItem, w: i64, selected: bool, theme: &Theme) -> PopRow {
     }
 }
 
-/// The rename field with a block cursor; the buffer scrolls horizontally inside the interior.
-/// v1's composite drops a span's own `bg`, so the cursor is ink-only there and here too.
 fn rename_rows(state: &MenuState, w: i64, theme: &Theme, ellipsis: &str) -> Vec<PopRow> {
     let budget = w - 4;
     let chars: Vec<char> = sanitize(state.buffer.as_bytes()).chars().collect();
@@ -536,8 +518,6 @@ pub fn plan(
         _ => MIN_W,
     };
     let w = width_for(cfg, cols_n, &msg.items, &head, floor);
-    // A width that cannot hold two borders and a cell has nothing to draw. Anything above that
-    // does render, however cramped: a level that is open but unpainted swallows every click.
     if w < MIN_RENDER_W {
         return Outcome::Refused {
             why: "width",
@@ -549,7 +529,6 @@ pub fn plan(
     }
 
     let first_col = cfg.padding_left + 1;
-    // §6.4: the menu opens at the column that asked for it and slides back inside the sidebar's.
     let anchor = msg.anchor.unwrap_or_default();
     let anchor_col = anchor.col.unwrap_or(first_col);
     let x = anchor_col
@@ -659,9 +638,6 @@ pub fn jump(items: &[MenuItem], from: i64, ch: char) -> Option<i64> {
     None
 }
 
-/// §6.6: the pointer selects the row it is over, but only inside the menu — a pointer that
-/// wandered onto the scrim must not erase a keyboard selection. Cancel stays selected at the
-/// confirm level: a pointer resting over Close must not arm an answer the user never chose.
 pub fn point_at(
     items: &[MenuItem],
     level: Level,
@@ -725,8 +701,6 @@ pub fn edit(state: &mut MenuState, key: &str, ctrl: bool) -> Edit {
         "home" => state.cursor = 1,
         "end" => state.cursor = end,
         _ => {
-            // v1's shape: one printable character, and only when it arrived as itself. A named
-            // key ("space", "backspace") is five characters, so it never reaches the buffer.
             let one = (!ctrl && key.chars().count() == 1)
                 .then(|| key.chars().next().unwrap_or(' '))
                 .filter(|c| *c >= ' ' && chars.len() < 256);

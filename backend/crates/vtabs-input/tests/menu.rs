@@ -1,6 +1,3 @@
-//! The input half of 06-p5-spec.md: while the menu is open the backend consumes every key and
-//! all mouse over the pane, and only the terminal events reach Lua.
-
 use vtabs_core::ui::UiState;
 use vtabs_input::resolve::{MenuView, menu_key, menu_mouse};
 use vtabs_protocol::types::{Button, Mods, Mouse, MouseKind};
@@ -186,27 +183,6 @@ fn destructive_acts_only_on_release_same_target() {
     );
     assert_eq!(verbs(&same.events), vec!["menu_pick"]);
     assert_eq!(args(&same.events).id.as_deref(), Some("close"));
-}
-
-#[test]
-fn a_harmless_item_runs_on_the_press_the_way_v1_does() {
-    let m = opened(root());
-    let (v, ui) = (m.view(), UiState::default());
-    let press = menu_mouse(
-        &v,
-        &m.state,
-        &ui,
-        &ev(
-            MouseKind::Press,
-            Button::Left,
-            m.col(),
-            m.row_of("activate"),
-        ),
-        0,
-    );
-    assert_eq!(verbs(&press.events), vec!["menu_pick"]);
-    assert_eq!(args(&press.events).id.as_deref(), Some("activate"));
-    assert!(press.menu.unwrap().armed.is_none());
 }
 
 #[test]

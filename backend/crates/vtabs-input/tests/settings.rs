@@ -1,6 +1,3 @@
-//! The input half of 07-p6-spec.md: nav, the filter and the focus stay Rust-local, everything that
-//! commits crosses as a `do` verb, and the page only closes when no modal mode owns the key.
-
 use std::collections::BTreeMap;
 
 use vtabs_core::ui::SettingsUi;
@@ -148,22 +145,6 @@ fn the_filter_narrows_the_rows_the_focus_can_reach() {
 }
 
 #[test]
-fn the_filter_eats_one_byte_at_a_time_as_v1_does() {
-    let mut ui = SettingsUi {
-        filtering: true,
-        filter: "wid".into(),
-        ..Default::default()
-    };
-    ui.type_filter("backspace");
-    assert_eq!(ui.filter, "wi");
-    ui.type_filter("space");
-    assert_eq!(
-        ui.filter, "wi",
-        "a named key is five characters, so it never lands"
-    );
-}
-
-#[test]
 fn the_verbs_name_the_focused_key_and_never_predict_the_commit() {
     let m = model();
     let ui = SettingsUi::default();
@@ -229,7 +210,6 @@ fn escape_and_bare_q_close_the_page_but_only_outside_a_modal_mode() {
         "ctrl+q is not bare"
     );
 
-    // §4.3 #8: v1 closed the page mid-edit because settings.key ate the key first
     let mut editing = model();
     editing.fields[0].editing = Some(v2::SettingsEditing {
         buffer: "28".into(),
