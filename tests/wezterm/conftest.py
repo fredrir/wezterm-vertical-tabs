@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import os
 import shutil
@@ -184,6 +185,31 @@ class WezTermInstance:
 
     def spawn_tab(self, pane_id: int) -> None:
         self._cli("spawn", "--pane-id", str(pane_id), "/bin/sh")
+
+    def probe(self, pane_id: int, name: str) -> None:
+        """Runs one of the e2e config's named probes by having the pane print its user var."""
+        encoded = base64.b64encode(name.encode()).decode()
+        command = f"printf '\\033]1337;SetUserVar=vtabs_test={encoded}\\007'\n"
+        self._cli("send-text", "--pane-id", str(pane_id), "--no-paste", command)
+
+    def adjust_pane_size(self, pane_id: int, direction: str, amount: int) -> None:
+        """The host's own resize of the split above the pane, as a divider drag lands it."""
+        self._cli(
+            "adjust-pane-size",
+            "--pane-id",
+            str(pane_id),
+            "--amount",
+            str(amount),
+            direction,
+        )
+
+    def log_has(self, needle: str) -> bool:
+        if self._log_handle is not None:
+            self._log_handle.flush()
+        try:
+            return needle in self.gui_log.read_text(errors="replace")
+        except OSError:
+            return False
 
     def wait_for(
         self,

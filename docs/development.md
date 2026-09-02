@@ -273,7 +273,7 @@ HOME=$(mktemp -d) WEZTERM_LOG=info wezterm --config-file scripts/probe-coroutine
 | ------------------------------- | ------------------------------------------------------------------- |
 | `top_level = true` split        | `sidebar_attach.lua` `attach`                                       |
 | close by activation             | `sidebar_attach.lua` `close_pane_by_activation`, `close_orphan`     |
-| `AdjustPaneSize` by activation  | `geometry.lua` `correct`                                            |
+| `AdjustPaneSize`, `Multiple`    | `geometry.lua` `correct`                                            |
 | `set_config_overrides`          | `view.lua` `apply_titlebar_band`, `frame.lua` `install`, `page.lua` |
 | `move_to_new_window`            | `actions.lua` `tear_off`                                            |
 | `set_inner_size`                | `sidebar_attach.lua` `fit_to_window`                                |

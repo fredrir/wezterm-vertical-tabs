@@ -255,11 +255,13 @@ local function footer_for(cfg, mux_win)
   return type(rows) == "table" and rows or nil
 end
 
----One frame of a window resize. Nothing adjusts while frames arrive; the timer armed by the last
----frame corrects once, then publishes.
+---One frame of a window resize. WezTerm has already dealt the sidebar its share of the new columns
+---by the time this fires, so the frame is corrected here and now; the timer armed by the last frame
+---corrects whatever a tab had to wait for, then publishes.
 function M.on_resize(gui_window)
   local wid = gui_window:window_id()
   local gen = geometry.on_resize(wid)
+  geometry.correct(gui_window)
   wezterm.time.call_after(geometry.SETTLE_MS / 1000, function()
     if geometry.resize_gen(wid) ~= gen then
       return
@@ -297,9 +299,9 @@ function M.sync(gui_window)
   local footer = footer_for(cfg, mux_win)
   local active_tab_id = observed.active_tab_id
   local now = observed.now
-  -- A correction changes the layout this observation describes. Publish nothing from it; the next
-  -- poll takes a fresh tree after the mux has applied the adjustment.
-  if geometry.sync(gui_window, active_tab_id, observed) then
+  -- A correction changes the layout this observation describes. Publish nothing from it; the
+  -- sidebar reports its new size at once, and that report publishes a fresh observation.
+  if geometry.sync(gui_window, observed) then
     return false
   end
   -- After the width settles, so the card is drawn at the pane rect the correction leaves behind.

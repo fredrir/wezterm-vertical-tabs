@@ -287,7 +287,7 @@ function M.apply_to_config(config, opts)
   if cfg.hide_native_tab_bar then
     config.enable_tab_bar = false
   end
-  config.status_update_interval = math.min(config.status_update_interval or 1000, cfg.poll_ms)
+  config.status_update_interval = math.floor(math.min(config.status_update_interval or 1000, cfg.poll_ms))
   host_config.apply_boot(config, cfg, config_mod.host_config)
   apply_decorations(config, cfg)
   if cfg.skip_close_confirmation then

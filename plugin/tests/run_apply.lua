@@ -138,6 +138,25 @@ test("plugin reload watches include both generated Rust mirrors", function()
   assert(watched:find("/vtabs/gen/schema.lua", 1, true), "schema mirror is watched")
 end)
 
+test("a Rust-normalized poll interval remains an integer at the WezTerm boundary", function()
+  local boot_normalize = require "vtabs.boot_normalize"
+  local init = require "init"
+  local real_try = boot_normalize.try
+  boot_normalize.try = function()
+    local cfg = config.setup { settings = false, backend = { path = "/bin/wez-vtabs" } }
+    cfg.poll_ms = 500.0
+    return cfg
+  end
+  local host = {}
+  local ok, err = pcall(init.apply_to_config, host, {})
+  boot_normalize.try = real_try
+  if not ok then
+    error(err, 0)
+  end
+  eq(host.status_update_interval, 500)
+  eq(math.type(host.status_update_interval), "integer")
+end)
+
 test("hover_highlight off makes a hover-only close button permanent, as press mode does", function()
   local cfg = config.setup { hover_highlight = false, close_button = "hover", backend = { path = "/bin/wez-vtabs" } }
   eq(cfg.close_button, "always")

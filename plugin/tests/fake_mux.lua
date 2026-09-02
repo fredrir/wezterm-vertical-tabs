@@ -290,20 +290,15 @@ function Tab:set_split(first_cols)
 end
 
 ---True when the root split is the nearest horizontal node above the active leaf, which is what
----`adjust_pane_size` walks up to: leaf 1, a two-leaf tab, or content stacked in one column band.
+---`adjust_pane_size` walks up to (mux/src/tab.rs): leaf 1, or a content leaf as wide as the whole
+---content column, since only a horizontal split on the way up would have made it narrower.
 function Tab:root_split_holds_active()
-  if #self.pane_list <= 2 or self.active == self.pane_list[1] then
+  local first = self.pane_list[1]
+  if #self.pane_list <= 2 or self.active == first then
     return true
   end
-  local band = nil
-  for i = 2, #self.pane_list do
-    local left = self.pane_list[i].left or (self.pane_list[1].cols + 1)
-    if band ~= nil and left ~= band then
-      return false
-    end
-    band = left
-  end
-  return true
+  local active = self.active
+  return (active.width or active.cols) == self:width() - first.cols - 1
 end
 
 ---What `AdjustPaneSize` and `wezterm cli adjust-pane-size` both do: resize around the active leaf.
@@ -314,20 +309,23 @@ function Tab:adjust_from_active(dir, amount)
   end
 end
 
----Pane rectangles and zoom state, left to right across the one modelled horizontal split.
+---Pane rectangles and zoom state, left to right across the one modelled horizontal split. The
+---numbers arrive as floats, the way WezTerm's dynamic-to-Lua conversion hands them over.
 function Tab:panes_with_info()
   local out = {}
   local first = self.pane_list[1]
   for i, p in ipairs(self.pane_list) do
+    local width = p.width or p.cols
     out[i] = {
-      index = i - 1,
+      index = (i - 1) + 0.0,
       is_active = p == self.active,
       is_zoomed = p.zoomed == true,
       -- `left`/`width` are overridable per pane, so a test can place one inside another's columns.
-      left = p.left or (i == 1 and 0 or first.cols + 1),
-      top = p.top or 0,
-      width = p.width or p.cols,
-      height = 24,
+      left = (p.left or (i == 1 and 0 or first.cols + 1)) + 0.0,
+      top = (p.top or 0) + 0.0,
+      width = width + 0.0,
+      height = (p.height or 24) + 0.0,
+      pixel_width = width * (p.cell_width or 10) + 0.0,
       pane = p,
     }
   end
@@ -563,10 +561,28 @@ function Gui:get_dimensions()
 end
 function Gui:set_inner_size() end
 function Gui:toast_notification() end
+local apply_action
+
+---Records the assignment as the plugin issued it; a `Multiple` is one entry, its steps are not.
 function Gui:perform_action(action, pane)
   self._mux.actions[#self._mux.actions + 1] = { action = action, pane = pane }
+  apply_action(self, action)
+end
+
+apply_action = function(self, action)
   local name = action.action
-  if name == "CloseCurrentTab" then
+  if name == "Multiple" then
+    -- Mirrors WezTerm: the steps run back to back inside one assignment, nothing lands between them.
+    for _, step in ipairs(action.arg) do
+      apply_action(self, step)
+    end
+  elseif name == "ActivatePaneByIndex" then
+    local tab = self._mux.active_tab_ref
+    local target = tab.pane_list[action.arg + 1]
+    if target then
+      tab.active = target
+    end
+  elseif name == "CloseCurrentTab" then
     self._mux:remove_tab(self._mux.active_tab_ref)
   elseif name == "CloseCurrentPane" then
     -- Mirrors WezTerm: the pane argument is ignored, the active pane of the active tab closes.

@@ -180,34 +180,16 @@ local probes = {
   -- What `correct` would aim for right now: `fits` clamps the adopted width so every content band
   -- keeps MIN_CONTENT, so a split tab legitimately holds less than `desired`.
   probe_target = function(window)
-    local geometry = require "vtabs.geometry"
-    local sidebar = require "vtabs.sidebar"
-    local fits, tab_metrics
-    for i = 1, 60 do
-      local name, value = debug.getupvalue(geometry.correct, i)
-      if not name then
-        break
-      end
-      if name == "fits" then
-        fits = value
-      elseif name == "tab_metrics" then
-        tab_metrics = value
-      end
-    end
-    local tab = window:mux_window():active_tab()
-    local sb = sidebar.find(tab)
-    local cols, _, bands = nil, nil, nil
-    if tab_metrics then
-      cols, _, bands = tab_metrics(tab, sb and sb:pane_id())
-    end
-    local want = geometry.desired(window:window_id())
+    local plan = require("vtabs.geometry").plan(window) or {}
     wezterm.log_info(
       string.format(
-        "e2e: target %s want %s tab_cols %s bands %s",
-        tostring(fits and cols and fits(want, cols, nil, bands)),
-        tostring(want),
-        tostring(cols),
-        tostring(bands)
+        "e2e: target %s want %s tab_cols %s bands %s cols %s dance %s",
+        tostring(plan.target),
+        tostring(plan.want),
+        tostring(plan.tab_cols),
+        tostring(plan.bands),
+        tostring(plan.cols),
+        tostring(plan.dance)
       )
     )
   end,
@@ -393,32 +375,26 @@ local probes = {
   hidden_mode = function()
     require("vtabs.config").get().collapsed = "hidden"
   end,
-  -- geometry's caches are module-locals; upvalues are the only way to trace them from outside.
   probe_geom = function(window)
     local geometry = require "vtabs.geometry"
     local wid = window:window_id()
+    local seen = geometry.inspect(wid)
     local out = {}
-    for i = 1, 40 do
-      local name, value = debug.getupvalue(geometry.correct, i)
-      if not name then
-        break
-      end
-      if type(value) == "table" and value[wid] ~= nil then
-        local v = value[wid]
-        if type(v) == "table" then
-          local parts = {}
-          for _, k in ipairs { "tab_id", "cols", "tab_cols", "target", "stuck", "collapsed", "px" } do
-            if v[k] ~= nil then
-              parts[#parts + 1] = k .. "=" .. tostring(v[k])
-            end
+    for _, name in ipairs { "adopted", "settled", "unreachable", "resized_at" } do
+      local v = seen[name]
+      if type(v) == "table" then
+        local parts = {}
+        for _, k in ipairs { "tab_id", "cols", "tab_cols", "target", "panes", "moved", "at" } do
+          if v[k] ~= nil then
+            parts[#parts + 1] = k .. "=" .. tostring(v[k])
           end
-          out[#out + 1] = name .. "{" .. table.concat(parts, ",") .. "}"
-        else
-          out[#out + 1] = name .. "=" .. tostring(v)
         end
+        out[#out + 1] = name .. "{" .. table.concat(parts, ",") .. "}"
+      elseif v ~= nil then
+        out[#out + 1] = name .. "=" .. tostring(v)
       end
     end
-    wezterm.log_info("e2e: geom " .. tostring(geometry.desired(wid)) .. " | " .. table.concat(out, " "))
+    wezterm.log_info("e2e: geom " .. tostring(seen.desired) .. " | " .. table.concat(out, " "))
   end,
   -- One line per tab: the sidebar panes the plugin itself sees, so a duplicate is visible plugin-side.
   probe_panes = function(window)

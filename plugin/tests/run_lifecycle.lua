@@ -288,9 +288,8 @@ test("a duplicate sidebar this process split is closed on the next pass; a stran
   eq(#tab:panes(), 3, "a marker nobody here spawned stays")
 end)
 
-test("a resize burst leaves one sidebar per tab at the desired width", function()
+test("a resize burst is corrected frame by frame and leaves one sidebar per tab at the desired width", function()
   local win, gui = H.window(2, { attach = true, ready = true })
-  local wid = gui:window_id()
   local clock = H.clock()
   local geometry = require "vtabs.geometry"
   local view = require "vtabs.view"
@@ -305,21 +304,20 @@ test("a resize burst leaves one sidebar per tab at the desired width", function(
   end
   local before = adjusts()
   wezterm.timers = {}
-  for _, d in ipairs { 5, -6, 7, -5, 6, -7, 5, 6 } do
-    win:resize_mux(d)
+  local frames = { 5, -6, 7, -5, 6, -7, 5, 6 }
+  for _, d in ipairs(frames) do
+    win:resize(d)
     async.spawn(function()
       view.on_resize(gui)
     end)
+    async.run()
+    eq(sidebar.find(win.tab_list[1]).cols, 28, "the frame is corrected before the next one lands")
   end
-  eq(adjusts(), before, "nothing adjusted while frames arrived")
-  win:settle_mux()
-  async.run()
   clock.advance(geometry.SETTLE_MS)
   wezterm.fire_timers()
   for _ = 1, 3 do
     clock.advance(500)
     sidebar.ensure(gui)
-    geometry.landed(wid)
     geometry.correct(gui)
   end
   for _, tab in ipairs(win.tab_list) do
@@ -327,7 +325,8 @@ test("a resize burst leaves one sidebar per tab at the desired width", function(
     eq(H.sidebars_in(tab), 1)
   end
   eq(sidebar.find(win.tab_list[1]).cols, 28)
-  assert(adjusts() - before <= 2, "at most two adjusts for one burst, got " .. (adjusts() - before))
+  eq(adjusts() - before, #frames, "one adjust per frame, none from the settle timer or the polls")
+  eq(sidebar.find(win.tab_list[2]).cols, 28 + 6, "the background tab keeps what the frames dealt it")
   actions.activate_tab(gui, win.tab_list[2]:tab_id())
   eq(sidebar.find(win.tab_list[2]).cols, 28, "the other tab is corrected as it activates")
   clock.restore()

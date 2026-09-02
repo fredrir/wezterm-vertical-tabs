@@ -27,12 +27,20 @@
   columns anyway is moved to the content side on the next poll: through the
   GUI's `wezterm cli` for a local pane, and by the tab's own backend through the
   server's `wezterm cli` on a mux domain.
-- Width correction is one `AdjustPaneSize` on the active tab, issued only once a
-  window resize has settled (no frame for 100 ms); during a drag or an animated
-  fill the sidebar keeps whatever WezTerm dealt it. The sidebar's own `resize`
-  report drives the follow-up, so a mux mirror that lags never overshoots. The
-  adjust resizes around the tab's active pane, so focus moves to the sidebar
-  only while content panes sit side by side.
+- WezTerm deals the sidebar half of every column a window resize adds or removes
+  (`mux/src/tab.rs adjust_x_size`), on every frame of a drag or an animated
+  fill. Each frame is corrected on the spot with one `AdjustPaneSize` on the
+  active tab, read from and verified against the tab's split tree
+  (`panes_with_info`), which WezTerm updates synchronously in every domain.
+  Background tabs are corrected as they activate. A divider drag is adopted the
+  moment it moves and followed wherever the hand goes; a tab whose shape changed
+  under the width (a split, a close, a resize frame, a font change) is never read
+  as a drag. The adjust walks up from the tab's active pane, so a content pane
+  narrower than the content column (one with a horizontal split above it) needs
+  the sidebar made active around the adjust; that runs as one `Multiple`
+  assignment so pointer motion cannot land between its steps, and only once the
+  resize frames have stopped, since every activation sends focus events to the
+  shells involved.
 - A backend pane closes by being told to quit; its pane goes with the process.
   One that outlives its process is killed by another backend on the same server
   through that server's `wezterm cli`, by title. Only a pane no backend can

@@ -596,10 +596,9 @@ function M.handle(gui_window, pane, name, value)
     sidebar.ensure(gui_window)
     view.sync(gui_window)
   elseif ev.t == "resize" then
-    -- The sidebar reporting its own new size is the one signal that is never a poll behind the mux,
-    -- so it is also the proof that the adjust in flight has landed, and the width to correct from.
-    geometry.landed(gui_window:window_id())
-    geometry.correct(gui_window, nil, { pane_id = pane:pane_id(), cols = tonumber(ev.cols) })
+    -- The sidebar reporting its own size is the one per-frame signal a divider drag gives; the
+    -- width itself is read from the tab's split tree, which is never behind.
+    geometry.correct(gui_window)
     view.sync(gui_window)
   elseif ev.t == "theme_hook_request" then
     theme_bridge.answer_hook(gui_window, pane, ev)
