@@ -77,12 +77,12 @@
 
 ## Sidebar identity
 
-| Rank | Evidence | Grants |
-| --- | --- | --- |
-| 3 | pane echoed a token this process minted for it | model updates, events, width, close |
-| 2 | plugin split the pane in this process | kept out of `content` |
-| 1 | pane title `wez-vtabs:<hex>` | kept out of `content`, 5 `auth` attempts, then content again |
-| 0 | anything else | content |
+| Rank | Evidence                                       | Grants                                                       |
+| ---- | ---------------------------------------------- | ------------------------------------------------------------ |
+| 3    | pane echoed a token this process minted for it | model updates, events, width, close                          |
+| 2    | plugin split the pane in this process          | kept out of `content`                                        |
+| 1    | pane title `wez-vtabs:<hex>`                   | kept out of `content`, 5 `auth` attempts, then content again |
+| 0    | anything else                                  | content                                                      |
 
 One pane per tab holds the role: highest rank wins, every other pane is content.
 A faked title can neither empty a tab nor displace a live sidebar.
@@ -94,28 +94,28 @@ tab's title and cwd, local tabs included) and its events drive tab management,
 including `close_tab` without a prompt. A remote host can only do this in tabs of
 its own domain, within 30 s and 5 attempts per pane.
 
-| Config | Adopts in |
-| --- | --- |
+| Config                     | Adopts in                                                                                               |
+| -------------------------- | ------------------------------------------------------------------------------------------------------- |
 | `adopt = "auto"` (default) | local/unix domains, domains this process already spawned a backend in, domains listed in `backend.path` |
-| `adopt = true` | any domain, still only the tab's own domain |
-| `adopt = false` | nowhere; a marker pane is content, a surviving sidebar is replaced instead |
+| `adopt = true`             | any domain, still only the tab's own domain                                                             |
+| `adopt = false`            | nowhere; a marker pane is content, a surviving sidebar is replaced instead                              |
 
 Two GUI processes attached to one mux both manage the same tabs and fight over
 the sidebars. Unsupported.
 
 ## Key and paste forwarding
 
-| Sent to the content pane | Behaviour |
-| --- | --- |
-| keys, and pastes into an app with `?2004h` | bracketed, so escapes stay data |
-| pastes into an app without `?2004h` | arrives raw, exactly as a clipboard paste would: `send_paste` strips `ESC[201~` and turns `\r` into `\n`, other escapes pass through |
+| Sent to the content pane                   | Behaviour                                                                                                                            |
+| ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------ |
+| keys, and pastes into an app with `?2004h` | bracketed, so escapes stay data                                                                                                      |
+| pastes into an app without `?2004h`        | arrives raw, exactly as a clipboard paste would: `send_paste` strips `ESC[201~` and turns `\r` into `\n`, other escapes pass through |
 
 ## Remote text in model updates
 
-| Source | Reaches |
-| --- | --- |
+| Source                               | Reaches                                                          |
+| ------------------------------------ | ---------------------------------------------------------------- |
 | OSC 7 cwd, including its `user@host` | every sidebar in the window, on the meta line of that tab's card |
-| pane and tab titles | every sidebar in the window |
+| pane and tab titles                  | every sidebar in the window                                      |
 
 A remote shell controls those strings. They are stripped to valid UTF-8 with no control
 characters before rendering, so they cannot inject escapes or crash a frame, but their
