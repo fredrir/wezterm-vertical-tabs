@@ -1,6 +1,7 @@
 local wezterm = require "wezterm" ---@type Wezterm
 local act = wezterm.action
 local config = require "vtabs.config"
+local gate = require "vtabs.gate"
 local state = require "vtabs.state"
 local store = require "vtabs.store"
 local backend = require "vtabs.backend"
@@ -25,6 +26,7 @@ local FAILED_DOMAIN_MS = 60000
 ---Declared through `store`, so a forgotten window takes them with it.
 local scope = store.scope "sidebar_attach"
 local fitted = scope.window()
+local close_pane_by_activation
 
 ---Mux-domain splits can grow the tab past the window; re-sending the window size makes the mux refit it.
 local function fit_to_window(tab)
@@ -104,11 +106,9 @@ local function domain_failed(place, now)
   return true
 end
 
----Splits off the sidebar pane; guarded because splits are async on mux domains.
----`new_tab`, `new_window` and `tear_off` call this directly, and a poll landing inside their await
----can attach first and clear the pending guard, so the tab is asked again here. A second split
----would stick: the loser keeps its marker but `classify` demotes it to content for good.
-function M.attach(tab)
+---Splits off the sidebar pane under the window's gate, since the split awaits. A split that lands
+---after another sidebar took the slot is closed again, so no second sidebar ever sticks.
+local function attach(tab)
   local cfg = config.get()
   local tab_id = tab:tab_id()
   local now = util.now_ms()
@@ -171,7 +171,23 @@ function M.attach(tab)
   end
   store.attaching[tab_id] = nil
   local pid = sb:pane_id()
+  -- the split awaited: the tab may be gone, or another sidebar may hold the slot by now
+  if mux.tab_id(tab) == nil then
+    util.warn("sidebar %d split into a tab that is gone", pid)
+    return nil
+  end
+  identity.forget_split(tab_id)
+  local winner = identity.find(tab)
+  if winner and winner:pane_id() ~= pid then
+    util.warn("sidebar %d lost tab %d to %d; closed", pid, tab_id, winner:pane_id())
+    local gui = mux.call(mux.call(tab, "window"), "gui_window")
+    if not rescue.cli_kill(pid) and gui then
+      close_pane_by_activation(gui, tab, sb)
+    end
+    return winner
+  end
   state.set_sidebar(tab_id, pid, util.random_token())
+  identity.forget_split(tab_id)
   store.seen[pid] = now
   store.pane_domain[pid] = place
   store.spawned_domains[place] = true
@@ -181,6 +197,14 @@ function M.attach(tab)
     fit_to_window(tab)
   end
   return sb
+end
+
+function M.attach(tab)
+  local wid = mux.window_id(mux.call(tab, "window"))
+  if wid == nil then
+    return attach(tab)
+  end
+  return gate.run(wid, "attach", attach, tab)
 end
 
 ---Takes over a backend pane the mux kept across a GUI restart: fresh token, then wait for its echo.
@@ -239,7 +263,7 @@ local function still_active(gui_window, tab, pane)
   return active_pane ~= nil and active_pane:pane_id() == pane:pane_id()
 end
 
-local function close_pane_by_activation(gui_window, tab, sb)
+function close_pane_by_activation(gui_window, tab, sb)
   local content = identity.content_pane(tab)
   local previous = gui_window:mux_window():active_tab()
   sb:activate()
@@ -256,7 +280,7 @@ local function close_pane_by_activation(gui_window, tab, sb)
   end
 end
 
-function M.detach(gui_window, tab)
+local function detach(gui_window, tab)
   local sb = identity.find(tab)
   if sb and not identity.is_ready(sb) then
     util.warn_once("detach-" .. sb:pane_id(), "sidebar %d never authenticated; left open", sb:pane_id())
@@ -267,12 +291,17 @@ function M.detach(gui_window, tab)
     if not rescue.cli_kill(sb:pane_id()) then
       close_pane_by_activation(gui_window, tab, sb)
     end
+    identity.forget_split(tab:tab_id())
   end
   state.set_sidebar(tab:tab_id(), nil)
 end
 
+function M.detach(gui_window, tab)
+  return gate.run(gui_window:window_id(), "detach", detach, gui_window, tab)
+end
+
 ---Closes a tab that only holds a sidebar without disturbing the active tab.
-function M.close_orphan(gui_window, tab, sb)
+local function close_orphan(gui_window, tab, sb)
   state.forget_pane(sb:pane_id())
   if rescue.cli_kill(sb:pane_id()) then
     return
@@ -290,6 +319,10 @@ function M.close_orphan(gui_window, tab, sb)
   if switching then
     previous:activate()
   end
+end
+
+function M.close_orphan(gui_window, tab, sb)
+  return gate.run(gui_window:window_id(), "close_orphan", close_orphan, gui_window, tab, sb)
 end
 
 ---A backend that never answers usually died at spawn; closing such panes over a mux link can wedge
@@ -383,18 +416,24 @@ end
 
 local ensuring = scope.window()
 
----Splits and closes await, so several event handlers can be inside `ensure` for one window at once.
-function M.ensure(gui_window)
-  local wid = gui_window:window_id()
-  if ensuring[wid] then
-    return
-  end
+local function ensure_once(gui_window, wid)
   ensuring[wid] = true
   local ok, err = pcall(ensure_window, gui_window)
   ensuring[wid] = nil
   if not ok then
     error(err, 0)
   end
+  return true
+end
+
+---One pass per window at a time: a nested call is the same pass, and a pass that meets another
+---handler's mutation answers `nil, "busy"` and leaves it to the next poll.
+function M.ensure(gui_window)
+  local wid = gui_window:window_id()
+  if ensuring[wid] then
+    return
+  end
+  return gate.try(wid, "ensure", ensure_once, gui_window, wid)
 end
 
 function M.set_collapsed(gui_window, collapsed)

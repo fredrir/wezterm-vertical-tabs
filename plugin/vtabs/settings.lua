@@ -1,6 +1,7 @@
 local wezterm = require "wezterm" ---@type Wezterm
 local backend = require "vtabs.backend"
 local config = require "vtabs.config"
+local gate = require "vtabs.gate"
 local mux = require "vtabs.mux"
 local sidebar = require "vtabs.sidebar"
 local state = require "vtabs.state"
@@ -173,7 +174,7 @@ end
 
 ---Opens the settings page, or activates the one this window already has.
 ---The single owner: the strip button, the key binding and the popover item all come through here.
-function M.open(gui_window)
+local function open(gui_window)
   local mux_win = gui_window:mux_window()
   local existing, pane = M.find(mux_win)
   if existing then
@@ -210,9 +211,13 @@ function M.open(gui_window)
   return tab
 end
 
+function M.open(gui_window)
+  return gate.run(gui_window:window_id(), "settings_open", open, gui_window)
+end
+
 ---Closes the settings tab by id. `CloseCurrentTab` ignores the pane it is handed, so the tab has to
 ---be the active one first or the wrong tab dies.
-function M.close(gui_window)
+local function close(gui_window)
   local tab, pane = M.find(gui_window:mux_window())
   if not tab then
     return false
@@ -227,6 +232,10 @@ function M.close(gui_window)
   -- every edit commits as it is made, so there is nothing to lose to a confirmation prompt
   mux.call(gui_window, "perform_action", act.CloseCurrentTab { confirm = false }, pane)
   return true
+end
+
+function M.close(gui_window)
+  return gate.run(gui_window:window_id(), "settings_close", close, gui_window)
 end
 
 ---Per-window page state: which group, which field, the scroll, the filter, what is being edited.

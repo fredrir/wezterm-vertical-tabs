@@ -3,10 +3,33 @@ local H = require "support.helpers"
 local async = require "support.async"
 local fake = require "fake_mux"
 local wezterm = require "wezterm"
+local actions = require "vtabs.actions"
+local gate = require "vtabs.gate"
 local rescue = require "vtabs.sidebar_rescue"
 local sidebar = require "vtabs.sidebar"
+local state = require "vtabs.state"
 local util = require "vtabs.util"
 local test, eq = H.test, H.eq
+
+---Runs `fn` with a mux that answers late, and never leaves the fake that way for the next test.
+local function deferred(fn)
+  fake.deferred = true
+  local ok, err = pcall(fn)
+  fake.deferred = false
+  if not ok then
+    error(err, 0)
+  end
+end
+
+local function warnings(from, needle)
+  local n = 0
+  for i = from + 1, #wezterm.log do
+    if wezterm.log[i]:find(needle, 1, true) then
+      n = n + 1
+    end
+  end
+  return n
+end
 
 test("a deferred split leaves the tree alone until the task resumes", function()
   local win = H.window(1)
@@ -62,4 +85,119 @@ test("a moved tab lives in the other window and both windows are listed", functi
   end
   eq(listed, 2)
   fake.close_window(dest)
+end)
+
+test("the gate: a verb waits for a split another handler is inside", function()
+  local win, gui = H.window(1)
+  local wid = gui:window_id()
+  local tab = win.tab_list[1]
+  deferred(function()
+    local first = async.spawn(function()
+      sidebar.ensure(gui)
+    end)
+    eq(first.tag, "split")
+    eq(gate.held(wid), true)
+    local seen
+    local second = async.spawn(function()
+      gate.run(wid, "probe", function()
+        seen = #tab:panes()
+      end)
+    end)
+    eq(second.tag, "sleep")
+    eq(seen, nil)
+    async.run()
+    eq(seen, 2)
+  end)
+  eq(gate.held(wid), false)
+end)
+
+test("the gate: ensure and activate_tab racing across a deferred split make one sidebar", function()
+  local win, gui = H.window(1)
+  local tab = win.tab_list[1]
+  local activate
+  deferred(function()
+    async.spawn(function()
+      sidebar.ensure(gui)
+    end)
+    activate = async.spawn(function()
+      return actions.activate_tab(gui, tab:tab_id())
+    end)
+    async.run()
+  end)
+  eq(#tab:panes(), 2)
+  eq(H.sidebars_in(tab), 1)
+  eq(state.sidebar_pane_id(tab:tab_id()), sidebar.find(tab):pane_id())
+  eq(activate.results[1], sidebar.content_pane(tab))
+
+  -- the other order: activate_tab is inside the split, and ensure answers busy at once
+  local win2, gui2 = H.window(1)
+  local tab2 = win2.tab_list[1]
+  deferred(function()
+    local first = async.spawn(function()
+      return actions.activate_tab(gui2, tab2:tab_id())
+    end)
+    eq(first.tag, "split")
+    local _, why = sidebar.ensure(gui2)
+    eq(why, "busy")
+    async.run()
+  end)
+  eq(#tab2:panes(), 2)
+  eq(H.sidebars_in(tab2), 1)
+end)
+
+test("the gate: a stale holder is evicted once, with one warning", function()
+  local _, gui = H.window(1)
+  local wid = gui:window_id()
+  local clock = H.clock()
+  local stuck = async.spawn(function()
+    gate.run(wid, "stuck", function()
+      async.yield "stuck"
+    end)
+  end)
+  stuck.parked = true
+  eq(gate.held(wid), true)
+  clock.advance(gate.STALE_MS + 1000)
+  local ran = false
+  local before = #wezterm.log
+  gate.run(wid, "late", function()
+    ran = true
+  end)
+  eq(ran, true)
+  eq(gate.held(wid), false)
+  eq(warnings(before, "gate: stuck held window"), 1)
+
+  -- a new holder, then the evicted one finishing: it must not clear its successor
+  local successor = async.spawn(function()
+    gate.run(wid, "next", function()
+      async.yield "hold"
+    end)
+  end)
+  successor.parked = true
+  eq(gate.held(wid), true)
+  stuck.parked = false
+  async.run()
+  eq(gate.held(wid), true)
+  successor.parked = false
+  async.run()
+  eq(gate.held(wid), false)
+  clock.restore()
+end)
+
+test("ensure while another coroutine holds the gate returns without running", function()
+  local win, gui = H.window(1)
+  local wid = gui:window_id()
+  local tab = win.tab_list[1]
+  local holder = async.spawn(function()
+    gate.run(wid, "hold", function()
+      async.yield "hold"
+    end)
+  end)
+  holder.parked = true
+  local _, why = sidebar.ensure(gui)
+  eq(why, "busy")
+  eq(#tab:panes(), 1)
+  holder.parked = false
+  async.run()
+  sidebar.ensure(gui)
+  eq(#tab:panes(), 2)
 end)

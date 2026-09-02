@@ -1,4 +1,5 @@
 local config = require "vtabs.config"
+local gate = require "vtabs.gate"
 local state = require "vtabs.state"
 local store = require "vtabs.store"
 local sidebar = require "vtabs.sidebar"
@@ -121,14 +122,17 @@ end
 
 ---A popover opened from a key binding has to hold the pane too, or Esc and Enter reach the shell.
 function M.grab_focus(gui_window)
-  local pop = store.popover[gui_window:window_id()]
-  local sb = M.sidebar_of(gui_window)
-  if not pop or not sb then
-    return false
-  end
-  pop.took_pane = true
-  sb:activate()
-  return true
+  local wid = gui_window:window_id()
+  return gate.run(wid, "grab_focus", function()
+    local pop = store.popover[wid]
+    local sb = M.sidebar_of(gui_window)
+    if not pop or not sb then
+      return false
+    end
+    pop.took_pane = true
+    sb:activate()
+    return true
+  end)
 end
 
 function M.close(gui_window)

@@ -1,6 +1,7 @@
 local wezterm = require "wezterm" ---@type Wezterm
 local act = wezterm.action
 local config = require "vtabs.config"
+local gate = require "vtabs.gate"
 local state = require "vtabs.state"
 local store = require "vtabs.store"
 local sidebar = require "vtabs.sidebar"
@@ -217,10 +218,11 @@ local function close_now(gui_window, tab_id, defer, overlay)
     tab:activate()
   end
   gui_window:perform_action(act.CloseCurrentTab { confirm = overlay == true }, content[1])
+  -- the close awaited: both handles are looked up again rather than trusted
   if switching and not overlay and not defer then
-    previous:activate()
+    restore_tab(gui_window, previous:tab_id())
   elseif heir then
-    heir:activate()
+    restore_tab(gui_window, heir:tab_id())
   end
   return true
 end
@@ -638,6 +640,38 @@ function M.move_to_space(gui_window, tab_id, id, manual)
     spaces.set_active(gui_window:window_id(), id)
   end
   return true
+end
+
+---Every verb that touches the pane tree takes the window's gate; the rest reach these and run inline.
+local function gated(name, fn)
+  return function(gui_window, ...)
+    local wid = mux.window_id(gui_window)
+    if wid == nil then
+      return nil
+    end
+    return gate.run(wid, name, fn, gui_window, ...)
+  end
+end
+
+for _, name in ipairs {
+  "activate_tab",
+  "move_tab_to_index",
+  "reorder",
+  "close_tab",
+  "close_with_overlay",
+  "close_others",
+  "request_close",
+  "new_tab",
+  "new_window",
+  "tear_off",
+  "toggle_sidebar",
+  "show_sidebar",
+  "focus_sidebar",
+  "blur_sidebar",
+  "split",
+  "activate_pane_direction",
+} do
+  M[name] = gated(name, M[name])
 end
 
 local function current_tab_id(gui_window)

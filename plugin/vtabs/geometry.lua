@@ -1,6 +1,7 @@
 local wezterm = require "wezterm" ---@type Wezterm
 local act = wezterm.action
 local config = require "vtabs.config"
+local gate = require "vtabs.gate"
 local state = require "vtabs.state"
 local store = require "vtabs.store"
 local sidebar = require "vtabs.sidebar"
@@ -142,7 +143,7 @@ local function same_attempt(a, b)
 end
 
 ---Re-asserts the sidebar width on the active tab; background tabs are corrected once they activate.
-function M.correct(gui_window)
+local function correct(gui_window)
   local cfg = config.get()
   local wid = gui_window:window_id()
   local tab = util.active_tab(gui_window)
@@ -257,6 +258,16 @@ function M.correct(gui_window)
   in_flight[wid] = { at = now, attempt = attempt }
   driven[wid] = now
   return true
+end
+
+---`wait` takes the window's gate; without it a correction that meets a mutation in flight is
+---skipped, and the next poll corrects anyway.
+function M.correct(gui_window, wait)
+  local wid = gui_window:window_id()
+  if wait then
+    return gate.run(wid, "correct", correct, gui_window)
+  end
+  return gate.try(wid, "correct", correct, gui_window) == true
 end
 
 ---Per-poll entry point: corrects at once when the active tab changed, otherwise at most every 400 ms.

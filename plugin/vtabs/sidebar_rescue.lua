@@ -1,5 +1,6 @@
 local wezterm = require "wezterm" ---@type Wezterm
 local config = require "vtabs.config"
+local gate = require "vtabs.gate"
 local state = require "vtabs.state"
 local store = require "vtabs.store"
 local platform = require "vtabs.platform"
@@ -98,7 +99,7 @@ end
 
 ---WezTerm splits whichever pane is active, and under `hover = "follow"` that is often the sidebar,
 ---which leaves a shell in a column too narrow to use. Move it to the content side instead.
-function M.rescue_splits(gui_window, tab)
+local function rescue_splits(gui_window, tab)
   local content, sb = identity.classify(tab)
   -- A pane that only claims the role by its title must never decide that another one moves.
   if not sb or not identity.is_ready(sb) or #content < 2 then
@@ -129,9 +130,13 @@ function M.rescue_splits(gui_window, tab)
   end
   if moved then
     identity.forget_split(tab:tab_id())
-    util.try(geometry.correct, gui_window)
+    util.try(geometry.correct, gui_window, true)
   end
   return moved
+end
+
+function M.rescue_splits(gui_window, tab)
+  return gate.run(gui_window:window_id(), "rescue_splits", rescue_splits, gui_window, tab)
 end
 
 ---Pings idle sidebars; replaces one whose backend stopped answering.
