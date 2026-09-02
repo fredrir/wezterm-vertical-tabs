@@ -39,10 +39,10 @@ build() {
   start=$(date +%s)
   status=0
   if [ "$profile" = release ]; then
-    cargo build --release --locked --manifest-path "$root/backend/Cargo.toml" \
+    cargo build --quiet --release --locked --manifest-path "$root/backend/Cargo.toml" \
       >/dev/null 2>"$root/.dev-build.log" || status=$?
   else
-    cargo build --locked --manifest-path "$root/backend/Cargo.toml" \
+    cargo build --quiet --locked --manifest-path "$root/backend/Cargo.toml" \
       >/dev/null 2>"$root/.dev-build.log" || status=$?
   fi
   elapsed=$(( $(date +%s) - start ))
@@ -51,7 +51,10 @@ build() {
     tail -20 "$root/.dev-build.log"
     return 1
   fi
-  printf '%sbuild ok%s %s(%ss, %s)%s\n' "$grn" "$off" "$dim" "$elapsed" "$profile" "$off"
+  # With --quiet, a successful Cargo build writes only actionable compiler diagnostics.
+  [ ! -s "$root/.dev-build.log" ] || cat "$root/.dev-build.log" >&2
+  [ "${VTABS_QUIET_SUCCESS:-0}" = 1 ] || \
+    printf '%sbuild ok%s %s(%ss, %s)%s\n' "$grn" "$off" "$dim" "$elapsed" "$profile" "$off"
 }
 
 bin_for() {
@@ -64,8 +67,10 @@ restart_sidebars() {
   n=$(pgrep -xf "$1" 2>/dev/null | wc -l | tr -d ' ')
   if [ "$n" -gt 0 ]; then
     pkill -xf "$1" 2>/dev/null || true
-    printf '%s  swapped %s sidebar(s)%s\n' "$dim" "$n" "$off"
+    [ "${VTABS_QUIET_SUCCESS:-0}" = 1 ] || \
+      printf '%s  swapped %s sidebar(s)%s\n' "$dim" "$n" "$off"
   else
-    printf '%s  no running sidebars%s\n' "$dim" "$off"
+    [ "${VTABS_QUIET_SUCCESS:-0}" = 1 ] || \
+      printf '%s  no running sidebars%s\n' "$dim" "$off"
   fi
 }

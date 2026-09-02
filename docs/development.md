@@ -3,13 +3,13 @@
 ## Workspace layout
 
 
-| Crate             | Responsibility                                                                                                           |
-| ----------------- | ------------------------------------------------------------------------------------------------------------------------ |
-| `vtabs-protocol`  | wire DTOs (`Command`, `Event`, typed `Intent`), `VERSION`, bounds, and the generated Lua protocol mirror                 |
-| `vtabs-engine`    | pure state, theme/spaces policy, interaction, strip geometry, layout/rendering, and the canonical settings/config schema |
+| Crate             | Responsibility                                                                                                            |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| `vtabs-protocol`  | wire DTOs (`Command`, `Event`, typed `Intent`), `VERSION`, bounds, and the generated Lua protocol mirror                  |
+| `vtabs-engine`    | pure state, theme/spaces policy, interaction, strip geometry, layout/rendering, and the canonical settings/config schema  |
 | `vtabs-runtime`   | stdin parser, atomic generation state machine, terminal guard, event emission, signals and paint — the sole stdout writer |
-| `vtabs-zen`       | rounded-frame rendering and PNG encoding for the `wez-vtabs frame` subcommand                                           |
-| `wez-vtabs` (bin) | `frame`/`settings normalize` subcommand dispatch and the runtime entrypoint                                              |
+| `vtabs-zen`       | rounded-frame rendering and PNG encoding for the `wez-vtabs frame` subcommand                                             |
+| `wez-vtabs` (bin) | `frame`/`settings normalize` subcommand dispatch and the runtime entrypoint                                               |
 
 The former `vtabs-core`, `vtabs-input`, `vtabs-theme`, and `vtabs-view` crates are now modules of
 `vtabs-engine`. That keeps wire compatibility separate without forcing internal domain and scene
@@ -70,11 +70,11 @@ The optional PNG and command-line parser dependencies were measured on 2026-09-0
 arm64 with Rust 1.97.1. Each candidate was built in a separate `mktemp -d` copy of the same source
 snapshot, excluding `.git` and `backend/target`. Release builds use the workspace's size profile.
 
-| Candidate | Release binary | Representative output | 30-run frame time | Decision |
-| --- | ---: | ---: | ---: | --- |
-| Custom PNG encoder | 771,696 B | 138,768 B | 127.1 ms ± 1.4 ms | Baseline |
-| `png` 0.18.1, `Fast` + `Sub` | 838,048 B | 150,608 B | 67.1 ms ± 3.9 ms | Adopted |
-| `lexopt` 0.3.2 | 788,304 B | unchanged | not render-path relevant | Rejected |
+| Candidate                    | Release binary | Representative output |        30-run frame time | Decision |
+| ---------------------------- | -------------: | --------------------: | -----------------------: | -------- |
+| Custom PNG encoder           |      771,696 B |             138,768 B |        127.1 ms ± 1.4 ms | Baseline |
+| `png` 0.18.1, `Fast` + `Sub` |      838,048 B |             150,608 B |         67.1 ms ± 3.9 ms | Adopted  |
+| `lexopt` 0.3.2               |      788,304 B |             unchanged | not render-path relevant | Rejected |
 
 The `png` candidate adds 66,352 bytes and remains below the 1.25 MiB (1,310,720-byte) release
 cap. The output was identified by `file` as non-interlaced 2880×1800 RGBA8, decoded by `sips`
@@ -239,8 +239,8 @@ lua scripts/gen-docs.lua --check  # fail when it is stale (run by `just lint`)
 | `shown`                | overrides the rendered default cell, backticks included                                        |
 | `label` `group` `help` | settings UI and docs text                                                                      |
 | `host_key`             | WezTerm configuration key affected by this option; generated for Lua host projection           |
-| `policy_paths`         | exact open-table child paths that share the descriptor's host/apply policy                      |
-| `apply_mode`           | live settings policy: `instant`, `override`, or `reload`                                        |
+| `policy_paths`         | exact open-table child paths that share the descriptor's host/apply policy                     |
+| `apply_mode`           | live settings policy: `instant`, `override`, or `reload`                                       |
 
 ## Dev loop
 
@@ -249,6 +249,7 @@ Needs [`just`](https://github.com/casey/just) and [`watchexec`](https://github.c
 ```sh
 just    
 just dev          
+just dev --verbose                 # include successful checks and informational plugin logs
 just dev --live
 just doctor    
 just restart                 # restart the GUI and every wez-vtabs pane; content panes survive
@@ -257,13 +258,14 @@ just restart --pane 17       # kill only pane 17, then restart the GUI
 just restart --mux           # last resort: replace localmux and lose every pane
 ```
 
-`restart` uses the `localmux` client list, so it does not stop unrelated WezTerm processes such as
-the `just dev` sandbox. By default it removes only panes carrying a `wez-vtabs:<nonce>` or
-`wez-vtabs-settings:<nonce>` marker; sidebar panes are recreated when the new GUI opens, settings
-can be reopened on demand, and content panes keep running. The explicit pane and mux variants show
-their exact blast radius and require a confirmation that defaults to no. `just restart --dry-run`,
-optionally with `--pane` or `--mux`, prints the selected recovery without changing anything.
-
+Bare `just dev` is quiet while healthy. It prints compiler/test diagnostics, WezTerm and plugin
+warnings or errors, unexpected sandbox-process exits, and warnings for unusually high aggregate
+RAM, CPU, process count, or sandbox disk use. The default warning thresholds are 1024 MiB RAM, 40%
+CPU after a three-second startup grace period, 64 processes, and 256 MiB on disk. CPU usage is
+sampled every second and 100% means one fully used core. Override the thresholds with
+`VTABS_DEV_MEMORY_WARN_MB`, `VTABS_DEV_CPU_WARN_PERCENT`, `VTABS_DEV_PROCESS_WARN`, and
+`VTABS_DEV_DISK_WARN_MB`; setting an individual threshold to `0` disables that check. The grace
+period can be changed with `VTABS_DEV_CPU_GRACE_SECONDS`.
 
 ## Handlers are coroutines
 

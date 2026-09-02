@@ -2,8 +2,8 @@ _default:
     @just --list --unsorted
 
 # Add --mux to run the sandbox GUI against an owned standalone mux domain.
-dev *args:
-    @sh scripts/dev.sh {{args}}
+dev verbose="" *args:
+    @sh scripts/dev.sh {{verbose}} {{args}}
 
 deploy *args: # --from-dev (default) / --from-prd / --from-release
     @sh scripts/deploy.sh {{args}}
@@ -19,6 +19,7 @@ restart *args:
 check: test lint
 
 test:
+    sh tests/test_dev_monitor.sh
     sh tests/test_restart.sh
     cd backend && cargo test --locked
     cd plugin && lua tests/run.lua

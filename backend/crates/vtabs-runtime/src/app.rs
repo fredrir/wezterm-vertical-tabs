@@ -1703,7 +1703,11 @@ impl<W: Write> App<W> {
                 return Ok(Applied::Repaint);
             }
             Command::Fx(msg) => self.start_fx(&msg)?,
-            Command::Notice(msg) => self.log.log(format!("notice {}", msg.text)),
+            Command::Notice(msg) => self.log.log(format!(
+                "notice {} {}",
+                msg.level.as_deref().unwrap_or("info"),
+                msg.text
+            )),
             Command::Kill { title } => {
                 let done = self
                     .cli
