@@ -26,6 +26,18 @@
   columns anyway is moved to the content side on the next poll, using
   `wezterm cli split-pane --move-pane-id`; where that CLI is unusable (the GUI
   is not on its own socket) the plugin warns once and leaves the pane alone.
+- Width correction and sidebar close go through `wezterm cli` too
+  (`adjust-pane-size`, `kill-pane`); without the GUI's own socket they fall
+  back to key actions. The adjust resizes around the tab's active pane, so
+  focus is moved to the sidebar only while content panes sit side by side.
+- Every split, close, adjust and move of a window's panes runs under that
+  window's gate, one at a time; a poll that meets one in flight skips its turn.
+  A handler silent for 5 s is evicted with a warning.
+- A second sidebar this process split into a tab is closed on the next poll.
+  Two marker panes left behind by a GUI restart, neither spawned here, are not:
+  adoption picks one and the other stays content.
+- A tab moved to another window, by hand or by `tear_off`, keeps its sidebar,
+  pin and space; nothing is recorded as closed.
 - "Move to new window" (drag to the inner edge, menu, or `tear_off`) only works
   for tabs with a single content pane; multi-pane tabs show a notification.
 - The action menu is composited into the sidebar pane's own cells. A plugin has

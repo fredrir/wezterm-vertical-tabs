@@ -112,6 +112,22 @@ just doctor       # which backend is running, and whether the installs agree
 
 `just doctor` prints the newest run's `panic at` lines and the newest macOS crash report.
 
+## Handlers are coroutines
+
+`vtabs/gate.lua` serialises a window's pane mutations on these facts; `scripts/probe-coroutines.lua`
+re-checks them against a WezTerm build in a few seconds.
+
+| Fact | Probe line |
+| --- | --- |
+| every `wezterm.on` emission, `call_after` and `action_callback` is its own Lua thread, `main=false`, yieldable | distinct `thread:` per `status`, `A#n`, `B#n`, `callback` |
+| `wezterm.sleep_ms` yields to other handlers | `B#3`..`B#7` land between `sleep start` and `sleep end` |
+| a thread keeps its identity across its own awaits | `split before`/`split after`, `sleep start`/`sleep end` share one `thread:` |
+| finished threads are recycled | a `thread:` value reappears on a later, unrelated emission |
+
+```sh
+HOME=$(mktemp -d) WEZTERM_LOG=info wezterm --config-file scripts/probe-coroutines.lua start --always-new-process 2>&1 | grep probe
+```
+
 ## Crash bisect
 
 A WezTerm abort is a panic on its main-thread spawn queue: something the plugin asked for. Match the
