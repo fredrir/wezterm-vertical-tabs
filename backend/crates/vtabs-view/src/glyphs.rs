@@ -1,6 +1,3 @@
-//! Port of glyphs.lua: chrome glyphs, ASCII fallbacks and the width backstop.
-//! Parity pinned by tests/glyphs_parity.rs against a Lua-exported fixture.
-
 use std::collections::BTreeMap;
 
 use crate::text::width;

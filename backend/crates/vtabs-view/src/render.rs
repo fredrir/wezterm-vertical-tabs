@@ -1,5 +1,3 @@
-//! Port of layout.lua + render.lua behind one entry point; the golden parity test is the gate.
-
 use std::collections::BTreeMap;
 
 use vtabs_core::sanitize;
