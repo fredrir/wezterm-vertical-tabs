@@ -5,6 +5,7 @@ local gate = require "vtabs.gate"
 local state = require "vtabs.state"
 local store = require "vtabs.store"
 local sidebar = require "vtabs.sidebar"
+local rescue = require "vtabs.sidebar_rescue"
 local mux = require "vtabs.mux"
 local util = require "vtabs.util"
 
@@ -242,17 +243,19 @@ local function correct(gui_window)
     attempted[wid] = nil
     return false
   end
-  -- `AdjustPaneSize` ignores its pane argument and moves whichever pane is active, so the sidebar
-  -- has to be the active one when it runs -- in a single-content tab as much as any other.
+  -- The adjust resizes around the tab's active leaf; only side-by-side content puts an inner
+  -- horizontal split between that leaf and the sidebar's divider, so only then is focus moved.
   local active = mux.active_pane(tab)
-  local restore = active and active:pane_id() ~= sb:pane_id() and active or nil
-  if restore then
+  local dance = bands > 1 and active ~= nil and active:pane_id() ~= sb:pane_id()
+  if dance then
     sb:activate()
   end
-  local adjust = act.AdjustPaneSize { direction_for(cfg.position, target - cols), math.abs(target - cols) }
-  mux.call(gui_window, "perform_action", adjust, sb)
-  if restore then
-    restore:activate()
+  local dir, n = direction_for(cfg.position, target - cols), math.abs(target - cols)
+  if not rescue.cli_adjust(sb:pane_id(), dir, n) then
+    mux.call(gui_window, "perform_action", act.AdjustPaneSize { dir, n }, sb)
+  end
+  if dance then
+    active:activate()
   end
   attempted[wid] = attempt
   in_flight[wid] = { at = now, attempt = attempt }

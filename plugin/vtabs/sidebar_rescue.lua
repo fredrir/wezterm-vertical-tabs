@@ -51,6 +51,12 @@ function M.cli_kill(pane_id)
   return cli(args, "cli-kill", "wezterm cli kill-pane unavailable; closing sidebars by activation")
 end
 
+---Resizes around the tab's active leaf, exactly as `AdjustPaneSize` does, but pinned to the tab.
+function M.cli_adjust(pane_id, dir, n)
+  local args = { "adjust-pane-size", "--pane-id", tostring(pane_id), "--amount", tostring(n), dir }
+  return cli(args, "cli-adjust", "wezterm cli adjust-pane-size unavailable; adjusting by activation")
+end
+
 ---Moves a pane under `target`, splitting it downwards. `--move-pane-id` relocates an existing pane.
 local function cli_move(pane_id, target_id)
   local args = { "split-pane", "--move-pane-id", tostring(pane_id), "--pane-id", tostring(target_id), "--bottom" }

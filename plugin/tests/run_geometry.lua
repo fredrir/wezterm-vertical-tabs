@@ -135,18 +135,88 @@ test("a window drag corrects on the first frame of the burst and leaves the rest
   eq(#win.actions, 0, "so a drag issues no adjust per frame at all")
 end)
 
-test("correction with several content panes activates the sidebar and restores focus", function()
+local function spy_activate(pane)
+  local calls = 0
+  pane.activate = function(self)
+    calls = calls + 1
+    return getmetatable(self).activate(self)
+  end
+  return function()
+    pane.activate = nil
+    return calls
+  end
+end
+
+test("stacked content panes are one band: corrected without activating the sidebar", function()
   local win, gui = window(1)
   sidebar.ensure(gui)
   local tab = win.tab_list[1]
-  mark_ready(tab)
+  local sb = mark_ready(tab)
   local extra = fake.pane(tab, { cols = sidebar.content_pane(tab).cols })
   tab.pane_list[#tab.pane_list + 1] = extra
   extra:activate()
+  local activations = spy_activate(sb)
   win:resize(10)
   assert(geometry.correct(gui), "correction ran")
+  eq(activations(), 0, "the adjust reaches the divider from the content leaf")
+  eq(tab.active, extra, "focus never moved")
+  eq(sb.cols, 28)
+end)
+
+test("side-by-side content is two bands: the sidebar takes focus for the adjust and hands it back", function()
+  local win, gui = window(1)
+  sidebar.ensure(gui)
+  local tab = win.tab_list[1]
+  local sb = mark_ready(tab)
+  local content = sidebar.content_pane(tab)
+  local extra = fake.pane(tab, { cols = 30 })
+  extra.left = content.cols + 1 + 30
+  tab.pane_list[#tab.pane_list + 1] = extra
+  extra:activate()
+  local activations = spy_activate(sb)
+  win:resize(10)
+  assert(geometry.correct(gui), "correction ran")
+  eq(activations(), 1, "the inner split is in the way, so the sidebar is made active")
   eq(tab.active, extra, "focus restored")
-  eq(sidebar.find(tab).cols, 28)
+  eq(sb.cols, 28)
+end)
+
+test("the CLI adjust pins the tab and never activates anything", function()
+  local win, gui = window(1)
+  sidebar.ensure(gui)
+  local tab = win.tab_list[1]
+  local sb = mark_ready(tab)
+  local content = sidebar.content_pane(tab)
+  content:activate()
+  win:resize(40)
+  eq(sb.cols, 48)
+  local actions = #win.actions
+  H.with_cli(function()
+    assert(geometry.correct(gui), "correction ran")
+  end)
+  eq(#win.actions, actions, "nothing went through perform_action")
+  eq(tab.active, content)
+  eq(sb.cols, 28)
+  local argv = wezterm.spawned[#wezterm.spawned]
+  local want = { "/usr/local/bin/wezterm", "cli", "--no-auto-start", "adjust-pane-size", "--pane-id" }
+  want[#want + 1] = tostring(sb:pane_id())
+  for _, arg in ipairs { "--amount", "20", "Left" } do
+    want[#want + 1] = arg
+  end
+  eq(table.concat(argv, " "), table.concat(want, " "))
+end)
+
+test("without the GUI's own socket the adjust falls back to perform_action", function()
+  local win, gui = window(1)
+  sidebar.ensure(gui)
+  local tab = win.tab_list[1]
+  local sb = mark_ready(tab)
+  local activations = spy_activate(sb)
+  win:resize(10)
+  assert(geometry.correct(gui), "correction ran")
+  eq(last_action(win).action, "AdjustPaneSize")
+  eq(activations(), 0)
+  eq(sb.cols, 28)
 end)
 
 test("a sidebar that only carries the title marker is never resized", function()
@@ -314,13 +384,13 @@ test("an adjust the mux applies in pieces is never adopted, however long the pie
   config.setup { backend = { path = "/bin/wez-vtabs" } }
 end)
 
-test("the sidebar is activated before an adjust even in a tab with one content pane", function()
+test("a single-content tab adjusts from the content leaf, with nothing activated", function()
   local win, gui = window(1)
   sidebar.ensure(gui)
   local tab = win.tab_list[1]
   local sb = mark_ready(tab)
   local content = sidebar.content_pane(tab)
-  eq(#sidebar.classify(tab), 1, "one content pane, which used to skip the activation")
+  eq(#sidebar.classify(tab), 1, "one content pane: the root split is its nearest horizontal node")
   content:activate()
   geometry.reset(gui:window_id())
   tab:set_split(18)
@@ -333,8 +403,9 @@ test("the sidebar is activated before an adjust even in a tab with one content p
     return real(self, action, pane)
   end
   assert(geometry.correct(gui), "the width is corrected")
-  eq(seen, sb, "with the sidebar active, so AdjustPaneSize moves the right child")
-  eq(tab.active, content, "and focus handed straight back")
+  eq(seen, content, "from the content leaf, which the divider sits right above")
+  eq(tab.active, content, "and focus never moved")
+  eq(sb.cols, 28)
   gui.perform_action = nil
 end)
 
