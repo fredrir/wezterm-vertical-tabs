@@ -272,3 +272,49 @@ test("a duplicate sidebar this process split is closed on the next pass; a stran
   eq(kills, 0)
   eq(#tab:panes(), 3, "a marker nobody here spawned stays")
 end)
+
+test("a resize burst leaves one sidebar per tab at the desired width", function()
+  local win, gui = H.window(2, { attach = true, ready = true })
+  local wid = gui:window_id()
+  local clock = H.clock()
+  local geometry = require "vtabs.geometry"
+  local function adjusts()
+    local n = 0
+    for _, argv in ipairs(wezterm.spawned) do
+      if argv[4] == "adjust-pane-size" then
+        n = n + 1
+      end
+    end
+    return n
+  end
+  local before = adjusts()
+  H.with_cli(function()
+    for _, d in ipairs { 5, -6, 7, -5, 6, -7, 5, 6 } do
+      win:resize_mux(d)
+      async.spawn(function()
+        if geometry.on_resize(wid) then
+          geometry.correct(gui)
+        end
+      end)
+    end
+    win:settle_mux()
+    async.run()
+    for _ = 1, 3 do
+      clock.advance(500)
+      sidebar.ensure(gui)
+      geometry.landed(wid)
+      geometry.correct(gui)
+    end
+  end)
+  for _, tab in ipairs(win.tab_list) do
+    eq(#tab:panes(), 2)
+    eq(H.sidebars_in(tab), 1)
+  end
+  eq(sidebar.find(win.tab_list[1]).cols, 28)
+  assert(adjusts() - before <= 2, "at most two adjusts for one burst, got " .. (adjusts() - before))
+  H.with_cli(function()
+    actions.activate_tab(gui, win.tab_list[2]:tab_id())
+  end)
+  eq(sidebar.find(win.tab_list[2]).cols, 28, "the other tab is corrected as it activates")
+  clock.restore()
+end)
