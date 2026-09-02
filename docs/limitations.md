@@ -70,6 +70,10 @@
   before rendering.
 - Every sidebar backend, including one on a remote mux host, receives every
   tab's title and cwd in model updates.
+- A custom `settings.path` should live in a directory owned by the user. Lua can reject a
+  symlink it sees before reading at boot but has no portable no-follow `io.open`, so an attacker
+  who can replace entries in that parent directory can race the fallback read. Rust's normalizer
+  request and the live private writer use stronger no-follow/atomic boundaries.
 - A sidebar is pinged after 8 s of silence, then every 2 s; three unanswered
   pings in a row restart it. Idle time alone never does: polls stop while the
   GUI is hidden or mid-resize.

@@ -19,4 +19,4 @@ return config
 
 ## Configuration
 
-See [configuration.md](docs/configuration) for configuration options
+See [configuration.md](docs/configuration.md) for configuration options.
