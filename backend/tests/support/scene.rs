@@ -1,6 +1,9 @@
 use std::collections::BTreeMap;
 
-use vtabs_view::scene::{
+use vtabs_engine::config::{
+    CloseButton, HoverMode, PinnedStyle, Position, ScrollIndicator, Separator, TabHeight,
+};
+use vtabs_engine::scene::{
     Hover, Item, Padding, RenderCfg, RenderInput, SpaceEntry, Strip, StripButton, Toggle,
 };
 
@@ -45,7 +48,7 @@ pub fn sidebar() -> RenderInput {
                 has_unseen: true,
             },
         ],
-        theme: vtabs_theme::resolve(&Default::default(), &Default::default(), false),
+        theme: vtabs_engine::theme::resolve(&Default::default(), &Default::default(), false),
         cfg: RenderCfg {
             padding: Padding {
                 left: 1,
@@ -54,20 +57,20 @@ pub fn sidebar() -> RenderInput {
                 bottom: 0,
             },
             frame: false,
-            position: "left".into(),
+            position: Position::Left,
             new_tab_button: true,
             new_tab_label: "New tab".into(),
             row_gap: 0,
-            separator: "gap".into(),
-            tab_height: "card".into(),
+            separator: Separator::Gap,
+            tab_height: TabHeight::Card,
             meta: false,
             meta_sep: None,
             show_index: false,
             icons: true,
-            close_button: "hover".into(),
-            hover: "follow".into(),
-            pinned_style: "dense".into(),
-            scroll_indicator: "auto".into(),
+            close_button: CloseButton::Hover,
+            hover: HoverMode::Follow,
+            pinned_style: PinnedStyle::Dense,
+            scroll_indicator: ScrollIndicator::Auto,
         },
         glyphs: BTreeMap::new(),
         strip: Some(Strip {

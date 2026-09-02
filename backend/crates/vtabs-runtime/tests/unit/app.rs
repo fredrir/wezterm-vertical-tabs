@@ -35,7 +35,13 @@ fn app() -> App<Vec<u8>> {
         noted_menu: None,
         hover_deadline: None,
         token: None,
+        client_typed_intents: false,
+        client_theme_hooks: false,
+        client_spaces_policy: false,
+        last_reported_theme: None,
+        last_rail_reserve: None,
         cli: None,
+        metrics: Default::default(),
     }
 }
 
@@ -82,6 +88,7 @@ fn auth_echoes_token_as_user_var() {
     let mut a = app();
     a.handle(Input::Command(Command::Auth {
         token: "abc".into(),
+        caps: Vec::new(),
     }))
     .unwrap();
     // the token never goes in the title: window titles are readable by the whole desktop
@@ -89,6 +96,93 @@ fn auth_echoes_token_as_user_var() {
     assert!(out.starts_with(&set_user_var("vtabs_token", "abc")));
     // and it lands before the ready that follows it, so `is_ready` passes when that arrives
     assert!(saw(&a, r#""t":"ready""#));
+}
+
+#[test]
+fn control_commands_are_bound_to_the_initial_authenticated_session() {
+    let mut a = app();
+    let input = |token: &str, command| Input::Control {
+        token: token.into(),
+        command,
+    };
+
+    a.handle(input("stranger", Command::Ping { n: Some(1) }))
+        .unwrap();
+    assert!(
+        a.out.is_empty(),
+        "a non-auth command cannot establish a session"
+    );
+    a.handle(input(
+        "header",
+        Command::Auth {
+            token: "payload".into(),
+            caps: Vec::new(),
+        },
+    ))
+    .unwrap();
+    assert!(
+        a.out.is_empty(),
+        "the initial auth must match its frame token"
+    );
+
+    a.handle(input(
+        "session1",
+        Command::Auth {
+            token: "session1".into(),
+            caps: Vec::new(),
+        },
+    ))
+    .unwrap();
+    assert_eq!(a.token.as_deref(), Some("session1"));
+    a.out.clear();
+
+    a.handle(input("stranger", Command::Ping { n: Some(2) }))
+        .unwrap();
+    for privileged in [
+        Command::Quit,
+        Command::Kill {
+            title: "wez-vtabs:forged".into(),
+        },
+        Command::Rescue {
+            band: 28,
+            position: Some("left".into()),
+        },
+    ] {
+        assert!(
+            a.handle(input("stranger", privileged)).unwrap(),
+            "a foreign session cannot quit the backend"
+        );
+    }
+    a.handle(input(
+        "session2",
+        Command::Auth {
+            token: "session2".into(),
+            caps: Vec::new(),
+        },
+    ))
+    .unwrap();
+    assert!(
+        a.out.is_empty(),
+        "foreign ordinary and privileged commands, and an unproved rotation, are inert"
+    );
+    assert_eq!(a.token.as_deref(), Some("session1"));
+
+    a.handle(input(
+        "session1",
+        Command::Auth {
+            token: "session2".into(),
+            caps: Vec::new(),
+        },
+    ))
+    .unwrap();
+    assert_eq!(a.token.as_deref(), Some("session2"));
+    a.out.clear();
+    a.handle(input("session1", Command::Ping { n: Some(3) }))
+        .unwrap();
+    assert!(a.out.is_empty(), "the old token is stale after rotation");
+    a.handle(input("session2", Command::Ping { n: Some(4) }))
+        .unwrap();
+    assert!(saw(&a, r#""t":"pong","echo":4"#));
 }
 
 fn payloads(a: &App<Vec<u8>>) -> Vec<String> {
@@ -180,6 +274,43 @@ fn dress(a: &mut App<Vec<u8>>) {
     .unwrap();
 }
 
+#[test]
+fn rust_reports_changed_raw_fact_geometry_as_a_typed_host_effect_once() {
+    let mut a = app();
+    a.client_typed_intents = true;
+    a.handle(Input::Command(Command::Config(Box::new(
+        serde_json::from_str(CONFIG).unwrap(),
+    ))))
+    .unwrap();
+    a.handle(Input::Command(Command::Theme(Box::new(
+        serde_json::from_str(THEME).unwrap(),
+    ))))
+    .unwrap();
+    model(
+        &mut a,
+        r#"{"rev":1,"screen":"sidebar","strip":{
+            "metrics":{"cols":28,"viewport_rows":30,"pixel_width":235,"pixel_height":570},
+            "chrome":{"is_mac":true,"integrated_buttons":true,"native_button_style":true},
+            "buttons":[{"id":"toggle"}]},"tabs":[]}"#,
+    );
+    assert!(saw(&a, r#""t":"intent","a":"set_rail_reserve","cols":9"#));
+
+    a.out.clear();
+    a.repaint().unwrap();
+    assert!(
+        !saw(&a, "set_rail_reserve"),
+        "an unchanged reserve is quiet"
+    );
+
+    model(
+        &mut a,
+        r#"{"rev":2,"screen":"sidebar","strip":{
+            "chrome":{"is_mac":true,"integrated_buttons":true,"native_button_style":true,
+                "is_full_screen":true},"buttons":[{"id":"toggle"}]},"tabs":[]}"#,
+    );
+    assert!(saw(&a, r#""t":"intent","a":"set_rail_reserve","cols":0"#));
+}
+
 fn click(kind: vtabs_protocol::MouseKind, x: u16, y: u16) -> Input {
     Input::Mouse(vtabs_protocol::Mouse {
         kind,
@@ -260,6 +391,7 @@ fn a_new_token_re_announces_ready_but_the_same_one_does_not() {
     let auth = |a: &mut App<Vec<u8>>, token: &str| {
         a.handle(Input::Command(Command::Auth {
             token: token.into(),
+            caps: Vec::new(),
         }))
         .unwrap();
     };
@@ -279,7 +411,62 @@ fn a_new_token_re_announces_ready_but_the_same_one_does_not() {
         .find(|p| p.contains(r#""t":"ready""#))
         .expect("a new token re-announces");
     assert!(ready.contains(r#""paints":true"#));
-    assert!(ready.contains(r#""v":2"#));
+    assert!(ready.contains(r#""v":3"#));
+}
+
+#[test]
+fn auth_negotiates_theme_hooks_per_client_without_reannouncing() {
+    let mut a = app();
+    send(
+        &mut a,
+        Command::Auth {
+            token: "client".into(),
+            caps: vec!["theme_hooks".into()],
+        },
+    );
+    assert!(a.client_theme_hooks);
+    let ready_count = payloads(&a).len();
+
+    send(
+        &mut a,
+        Command::Auth {
+            token: "client".into(),
+            caps: Vec::new(),
+        },
+    );
+    assert!(!a.client_theme_hooks);
+    assert_eq!(payloads(&a).len(), ready_count);
+}
+
+#[test]
+fn auth_negotiates_spaces_policy_and_rejects_the_section_without_it() {
+    let mut a = app();
+    send(
+        &mut a,
+        Command::Auth {
+            token: "client".into(),
+            caps: vec!["spaces_policy".into()],
+        },
+    );
+    assert!(a.client_spaces_policy);
+    let ready_count = payloads(&a).len();
+    send(
+        &mut a,
+        Command::Auth {
+            token: "client".into(),
+            caps: Vec::new(),
+        },
+    );
+    assert!(!a.client_spaces_policy);
+    assert_eq!(payloads(&a).len(), ready_count);
+
+    a.out.clear();
+    send(&mut a, spaces_cmd(SPACES));
+    assert!(saw(
+        &a,
+        r#""t":"dropped","what":"spaces","reason":"unsupported""#
+    ));
+    assert!(a.v2.spaces.is_none());
 }
 
 #[test]
@@ -320,6 +507,15 @@ const SETTINGS_MODEL: &str = r#"{"rev":2,"screen":"settings","version":"9.9.9",
           {"key":"width","label":"width","group":"layout","widget":"stepper","value_text":"< 28 >"},
           {"key":"position","label":"position","group":"layout","widget":"picker","value_text":"< left >"}]}"#;
 
+const SETTINGS: &str = r#"{"rev":3,"values":{"width":28,"hover":"follow","close_button":"hover","frame":{},"strip_actions":["search"],
+        "spaces":[],"backend":{"env":{"A.B":"one"}}},
+        "explicit":[],"host_values":[],"opaque":[],"key_defaults":{},
+        "is_macos":false,"version":"9.9.9"}"#;
+
+fn settings_cmd(json: &str) -> Command {
+    Command::Settings(Box::new(serde_json::from_str(json).unwrap()))
+}
+
 #[test]
 fn a_settings_model_paints_the_page_and_answers_for_its_own_keys() {
     let mut a = app();
@@ -330,6 +526,8 @@ fn a_settings_model_paints_the_page_and_answers_for_its_own_keys() {
         serde_json::from_str(SETTINGS_MODEL).unwrap(),
     ))))
     .unwrap();
+    assert!(a.v2.model.is_none(), "the legacy DTO is not retained");
+    assert!(a.v2.settings.is_some());
     let painted = String::from_utf8_lossy(&a.out).to_string();
     assert!(painted.contains("Settings"), "the header names the screen");
     assert!(
@@ -358,6 +556,241 @@ fn a_settings_model_paints_the_page_and_answers_for_its_own_keys() {
 }
 
 #[test]
+fn a_settings_document_paints_and_emits_canonical_commit_and_copy_effects() {
+    let mut a = app();
+    a.size = (100, 21);
+    send(&mut a, config_cmd(CONFIG));
+    send(&mut a, theme_cmd(THEME));
+    send(&mut a, settings_cmd(SETTINGS));
+    assert!(a.v2.settings_document.is_some());
+    assert!(painted(&a).contains("Settings"));
+
+    a.out.clear();
+    a.handle(Input::Key {
+        name: "right".into(),
+        mods: Mods::default(),
+        raw: Vec::new(),
+    })
+    .unwrap();
+    let sent = payloads(&a);
+    let commit = sent
+        .iter()
+        .find(|payload| payload.contains(r#""t":"settings_commit""#))
+        .expect("a settings commit effect");
+    let commit: serde_json::Value = serde_json::from_str(commit).unwrap();
+    assert_eq!(commit["settings_rev"], 3);
+    assert_eq!(commit["path"], serde_json::json!(["width"]));
+    assert_eq!(
+        commit["change"],
+        serde_json::json!({"op":"set","value":29.0})
+    );
+    assert_eq!(commit["mode"], "instant");
+    assert!(
+        commit["persistence_json"]
+            .as_str()
+            .unwrap()
+            .contains(r#""width":29.0"#)
+    );
+    assert_eq!(
+        a.v2.settings.as_ref().unwrap().fields[0].value_text,
+        "‹ 29 ›"
+    );
+
+    a.out.clear();
+    a.handle(Input::Key {
+        name: "c".into(),
+        mods: Mods::default(),
+        raw: Vec::new(),
+    })
+    .unwrap();
+    let copy = payloads(&a)
+        .into_iter()
+        .find(|payload| payload.contains(r#""t":"settings_copy""#))
+        .expect("a settings copy effect");
+    assert!(copy.contains("vtabs.apply_to_config"));
+    assert!(copy.contains(r#"[\"width\"] = 29"#));
+
+    a.out.clear();
+    a.apply_document_intent(&Intent::NudgeOption {
+        key: "hover".into(),
+        delta: 1,
+    })
+    .unwrap();
+    let commit = payloads(&a)
+        .into_iter()
+        .find(|payload| payload.contains(r#""t":"settings_commit""#))
+        .expect("hover commit");
+    let commit: serde_json::Value = serde_json::from_str(&commit).unwrap();
+    assert_eq!(commit["path"], serde_json::json!(["hover"]));
+    assert_eq!(
+        commit["derived"],
+        serde_json::json!([{"path":["close_button"],"op":"set","value":"always"}])
+    );
+    assert!(
+        commit["persistence_json"]
+            .as_str()
+            .unwrap()
+            .contains(r#""close_button":"always""#)
+    );
+}
+
+fn app_with_persistence_body_size(target: usize) -> App<Vec<u8>> {
+    fn document(filler: usize) -> (SettingsPresentation, SettingsDocument) {
+        let mut values = serde_json::Map::new();
+        values.insert("width".into(), serde_json::json!(28));
+        values.insert(
+            "icon_map".into(),
+            serde_json::json!({"oversize": "x".repeat(filler)}),
+        );
+        let (_, presentation, document) = settings_input(v2::SettingsMsg {
+            rev: 7,
+            values: serde_json::Value::Object(values),
+            explicit: Vec::new(),
+            host_values: Vec::new(),
+            opaque: Vec::new(),
+            key_defaults: Default::default(),
+            is_macos: false,
+            version: None,
+        })
+        .expect("valid settings document");
+        (presentation, document)
+    }
+
+    let (_, mut empty) = document(0);
+    let overhead = match empty
+        .apply(DocumentAction::Step {
+            path: SettingPath::from_dotted("width"),
+            delta: 1,
+        })
+        .unwrap()
+    {
+        DocumentEffect::Commit(effect) => effect.persistence_json.len(),
+        effect => panic!("expected sizing commit, got {effect:?}"),
+    };
+    assert!(target >= overhead);
+    let (presentation, document) = document(target - overhead);
+    let mut changed = document.clone();
+    let changed_size = match changed
+        .apply(DocumentAction::Step {
+            path: SettingPath::from_dotted("width"),
+            delta: 1,
+        })
+        .unwrap()
+    {
+        DocumentEffect::Commit(effect) => effect.persistence_json.len(),
+        effect => panic!("expected sizing commit, got {effect:?}"),
+    };
+    assert_eq!(changed_size, target);
+    let mut a = app();
+    a.v2.settings = Some(presentation);
+    a.v2.settings_rev = Some(7);
+    a.v2.settings_document = Some(document);
+    a
+}
+
+#[test]
+fn settings_commit_and_save_share_the_same_inclusive_body_limit() {
+    let mut at_limit = app_with_persistence_body_size(SETTINGS_BODY_MAX_BYTES);
+    assert!(
+        at_limit
+            .apply_document_intent(&Intent::NudgeOption {
+                key: "width".into(),
+                delta: 1,
+            })
+            .unwrap()
+    );
+    assert!(
+        saw(&at_limit, r#""t":"settings_commit""#),
+        "{:?}",
+        payloads(&at_limit)
+    );
+    assert!(!saw(&at_limit, r#""t":"dropped""#));
+
+    let mut over = app_with_persistence_body_size(SETTINGS_BODY_MAX_BYTES + 1);
+    assert!(
+        over.apply_document_intent(&Intent::NudgeOption {
+            key: "width".into(),
+            delta: 1,
+        })
+        .unwrap()
+    );
+    assert!(saw(
+        &over,
+        r#""t":"dropped","what":"settings","reason":"size""#
+    ));
+    assert!(!saw(&over, r#""t":"settings_commit""#));
+    assert_eq!(
+        over.v2.settings.as_ref().unwrap().fields[0].value_text,
+        "‹ 28 ›",
+        "the rejected edit rolls back the Rust document"
+    );
+}
+
+#[test]
+fn invalid_settings_invalidate_the_atomic_batch_and_legacy_model_clears_ownership() {
+    let mut a = app();
+    send(&mut a, Command::Begin { generation: 1 });
+    send(
+        &mut a,
+        settings_cmd(r#"{"rev":1,"values":"not-an-object"}"#),
+    );
+    assert!(!a.v2.pending.as_ref().unwrap().valid);
+    assert!(saw(
+        &a,
+        r#""t":"dropped","what":"settings","reason":"invalid""#
+    ));
+
+    let mut typed = app();
+    send(&mut typed, Command::Begin { generation: 2 });
+    send(
+        &mut typed,
+        settings_cmd(r#"{"rev":2,"values":{"width":"wide"}}"#),
+    );
+    assert!(!typed.v2.pending.as_ref().unwrap().valid);
+    assert!(saw(
+        &typed,
+        r#""t":"dropped","what":"settings","reason":"invalid""#
+    ));
+
+    let mut legacy = app();
+    send(&mut legacy, config_cmd(CONFIG));
+    send(&mut legacy, theme_cmd(THEME));
+    send(&mut legacy, settings_cmd(SETTINGS));
+    assert!(legacy.v2.settings_document.is_some());
+    send(&mut legacy, model_cmd(SETTINGS_MODEL));
+    assert!(legacy.v2.settings_document.is_none());
+    assert!(legacy.v2.model.is_none());
+    assert!(legacy.v2.settings.is_some());
+}
+
+#[test]
+fn generated_settings_fields_obey_the_model_bound() {
+    let mut a = app();
+    send(&mut a, Command::Begin { generation: 1 });
+    let key_defaults = (0..MODEL_MAX_FIELDS)
+        .map(|index| (format!("binding_{index}"), serde_json::json!({"key":"x"})))
+        .collect();
+    send(
+        &mut a,
+        Command::Settings(Box::new(v2::SettingsMsg {
+            rev: 1,
+            values: serde_json::json!({"keys": {}}),
+            explicit: Vec::new(),
+            host_values: Vec::new(),
+            opaque: Vec::new(),
+            key_defaults,
+            is_macos: false,
+            version: None,
+        })),
+    );
+    assert!(!a.v2.pending.as_ref().unwrap().valid);
+    assert!(saw(
+        &a,
+        r#""t":"dropped","what":"settings","reason":"bounds""#
+    ));
+}
+
+#[test]
 fn a_painting_backend_speaks_do_and_never_mouse() {
     let mut a = app();
     dress(&mut a);
@@ -373,6 +806,28 @@ fn a_painting_backend_speaks_do_and_never_mouse() {
         sent.iter().any(|p| p.contains(r#""t":"do""#)),
         "a gesture was reported: {sent:?}"
     );
+}
+
+#[test]
+fn a_typed_intents_client_receives_the_flat_intent_contract() {
+    let mut a = app();
+    send(
+        &mut a,
+        Command::Auth {
+            token: "typed".into(),
+            caps: vec!["typed_intents".into()],
+        },
+    );
+    dress(&mut a);
+    a.out.clear();
+    a.handle(click(vtabs_protocol::MouseKind::Press, 6, 3))
+        .unwrap();
+
+    let sent = payloads(&a);
+    assert!(sent.iter().any(|payload| {
+        payload.contains(r#""t":"intent","a":"press_card""#) && payload.contains(r#""tab_id":1"#)
+    }));
+    assert!(!sent.iter().any(|payload| payload.contains(r#""t":"do""#)));
 }
 
 #[test]
@@ -494,12 +949,856 @@ fn painted(a: &App<Vec<u8>>) -> String {
     String::from_utf8_lossy(&a.out).to_string()
 }
 
+fn config_cmd(json: &str) -> Command {
+    Command::Config(Box::new(serde_json::from_str(json).unwrap()))
+}
+
+fn theme_cmd(json: &str) -> Command {
+    Command::Theme(Box::new(serde_json::from_str(json).unwrap()))
+}
+
+fn model_cmd(json: &str) -> Command {
+    Command::Model(Box::new(serde_json::from_str(json).unwrap()))
+}
+
+fn spaces_cmd(json: &str) -> Command {
+    Command::Spaces(Box::new(serde_json::from_str(json).unwrap()))
+}
+
+const SPACES: &str = r##"{"rev":1,"window_id":42,"enabled":true,
+    "definitions":[{"id":"home","name":"Home"},{"id":"claude","name":"Claude","theme":{"accent":"#f5c2e7"},"match":{"proc":"claude"}}],
+    "tabs":[{"id":1,"index":1,"title":"one","proc":"zsh"},{"id":2,"index":2,"title":"two","proc":"claude"}],
+    "active_tab":2,"active_space":"home","dynamics":[],"last_tabs":[]}"##;
+
+const SPACES_HOOKED: &str = r##"{"rev":2,"window_id":42,"enabled":true,"hook":true,
+    "definitions":[{"id":"home","name":"Home"},{"id":"claude","name":"Claude","theme":{"accent":"#f5c2e7"},"match":{"proc":"claude"}}],
+    "tabs":[{"id":1,"index":1,"title":"one","proc":"zsh"},{"id":2,"index":2,"title":"two","proc":"claude"}],
+    "active_tab":2,"active_space":"home","dynamics":[],"last_tabs":[]}"##;
+
+const HOOKED_PALETTE_THEME: &str = r##"{"rev":2,"hook":true,
+    "scheme":{"background":"#1e1e2e","foreground":"#cdd6f4",
+    "ansi":["#000000","#110000","#220000","#330000","#440000","#550000","#660000","#770000"],
+    "brights":["#880000","#990000","#aa0000","#bb0000","#cc0000","#dd0000","#ee0000","#ff0000"]},
+    "overrides":{}}"##;
+
+fn stage_spaced(a: &mut App<Vec<u8>>, generation: u64, model: &str, theme: &str, spaces: &str) {
+    send(a, Command::Begin { generation });
+    send(a, config_cmd(CONFIG));
+    send(a, theme_cmd(theme));
+    send(a, spaces_cmd(spaces));
+    send(a, model_cmd(model));
+}
+
+fn stage_complete(a: &mut App<Vec<u8>>, generation: u64, model: &str) {
+    send(a, Command::Begin { generation });
+    send(a, config_cmd(CONFIG));
+    send(a, theme_cmd(THEME));
+    send(a, model_cmd(model));
+    send(a, menu(r#"{"rev":1,"open":false}"#));
+}
+
+fn stage_hooked(a: &mut App<Vec<u8>>, generation: u64, model: &str) {
+    send(a, Command::Begin { generation });
+    send(a, config_cmd(CONFIG));
+    send(
+        a,
+        theme_cmd(
+            r##"{"rev":2,"hook":true,"scheme":{"background":"#1e1e2e","foreground":"#cdd6f4"},"overrides":{"accent":"#89b4fa"}}"##,
+        ),
+    );
+    send(a, model_cmd(model));
+}
+
+#[test]
+fn an_atomic_generation_paints_once_after_all_four_sections() {
+    let mut a = app();
+    stage_complete(&mut a, 1, MODEL);
+    assert!(a.out.is_empty(), "staged sections are not visible");
+
+    send(&mut a, Command::Commit { generation: 1 });
+    let out = painted(&a);
+    assert_eq!(out.matches(SYNC_BEGIN).count(), 1, "one committed paint");
+    assert!(out.contains("one") && out.contains("two"));
+    assert_eq!(a.v2.committed_generation, Some(1));
+    assert!(a.v2.pending.is_none());
+    assert_eq!(a.metrics.committed_generations, 1);
+    assert_eq!(a.metrics.terminal_paints, 1);
+    assert!(a.metrics.paint_bytes > 0);
+    assert!(
+        a.paint_log_line()
+            .contains("totals={commits=1,paints=1,bytes=")
+    );
+}
+
+#[test]
+fn a_model_only_delta_commits_over_the_cloned_atomic_state() {
+    let mut a = app();
+    stage_complete(&mut a, 1, MODEL);
+    send(&mut a, Command::Commit { generation: 1 });
+    a.out.clear();
+
+    send(&mut a, Command::Begin { generation: 2 });
+    send(
+        &mut a,
+        model_cmd(r#"{"rev":2,"screen":"sidebar","tabs":[{"id":1,"index":1,"title":"delta"}]}"#),
+    );
+    assert!(a.out.is_empty(), "the delta remains staged");
+    send(&mut a, Command::Commit { generation: 2 });
+
+    let out = painted(&a);
+    assert_eq!(out.matches(SYNC_BEGIN).count(), 1);
+    assert!(out.contains("delta"));
+    assert!(
+        saw(&a, r#""t":"theme_resolved","generation":2"#),
+        "every committed generation carries its own projection answer"
+    );
+    assert_eq!(a.v2.committed_generation, Some(2));
+    assert_eq!(a.v2.model.as_ref().unwrap().rev, 2);
+}
+
+#[test]
+fn a_hooked_generation_waits_then_publishes_and_paints_exactly_once() {
+    let mut a = app();
+    a.client_theme_hooks = true;
+    stage_hooked(&mut a, 1, MODEL);
+
+    send(&mut a, Command::Commit { generation: 1 });
+    assert!(saw(&a, r#""t":"theme_hook_request","generation":1"#));
+    assert_eq!(painted(&a).matches(SYNC_BEGIN).count(), 0);
+    assert!(a.v2.committed_generation.is_none());
+    assert!(a.v2.pending.as_ref().unwrap().hook_requested);
+    assert_eq!(a.metrics.committed_generations, 0);
+    assert_eq!(a.metrics.terminal_paints, 0);
+    let requests = payloads(&a).len();
+    send(&mut a, Command::Commit { generation: 1 });
+    assert_eq!(payloads(&a).len(), requests, "the request is not repeated");
+
+    a.out.clear();
+    send(
+        &mut a,
+        Command::ThemeHookResult {
+            generation: 1,
+            overrides: Box::new(v2::ThemeOverrides {
+                bg: Some("#123456".into()),
+                ..Default::default()
+            }),
+        },
+    );
+    let out = painted(&a);
+    assert_eq!(out.matches(SYNC_BEGIN).count(), 1, "one completed paint");
+    assert!(saw(&a, r#""t":"theme_resolved","generation":1"#));
+    assert_eq!(a.v2.committed_generation, Some(1));
+    assert!(a.v2.pending.is_none());
+    assert_eq!(a.metrics.committed_generations, 1);
+    assert_eq!(a.metrics.terminal_paints, 1);
+    assert_eq!(a.v2.resolved_theme.as_ref().unwrap().bg, [0x12, 0x34, 0x56]);
+    assert!(
+        a.v2.theme.as_ref().unwrap().overrides.bg.is_none(),
+        "the hook overlays the raw base without replacing it"
+    );
+
+    a.out.clear();
+    send(
+        &mut a,
+        Command::ThemeHookResult {
+            generation: 1,
+            overrides: Box::default(),
+        },
+    );
+    assert!(a.out.is_empty(), "a duplicate result is inert");
+}
+
+#[test]
+fn a_space_route_hook_then_theme_hook_publishes_and_paints_once() {
+    let mut a = app();
+    a.client_spaces_policy = true;
+    a.client_theme_hooks = true;
+    stage_spaced(&mut a, 11, MODEL, HOOKED_PALETTE_THEME, SPACES_HOOKED);
+
+    send(&mut a, Command::Commit { generation: 11 });
+    assert!(saw(
+        &a,
+        r#""t":"space_route_hook_request","generation":11,"window_id":42"#
+    ));
+    assert!(!saw(&a, r#""t":"theme_hook_request""#));
+    assert_eq!(painted(&a).matches(SYNC_BEGIN).count(), 0);
+    assert_eq!(a.metrics.committed_generations, 0);
+
+    a.out.clear();
+    send(
+        &mut a,
+        Command::SpaceRouteHookResult {
+            generation: 11,
+            routes: vec![
+                v2::SpaceRouteHookAnswer {
+                    tab_id: 1,
+                    space: None,
+                },
+                v2::SpaceRouteHookAnswer {
+                    tab_id: 2,
+                    space: Some("claude".into()),
+                },
+            ],
+        },
+    );
+    assert!(saw(&a, r#""t":"theme_hook_request","generation":11"#));
+    assert!(
+        saw(&a, r#""accent":[245,194,231]"#),
+        "the selected space layer is part of the base passed to the theme hook"
+    );
+    assert_eq!(painted(&a).matches(SYNC_BEGIN).count(), 0);
+
+    a.out.clear();
+    send(
+        &mut a,
+        Command::ThemeHookResult {
+            generation: 11,
+            overrides: Box::new(v2::ThemeOverrides {
+                bg: Some("#123456".into()),
+                ..Default::default()
+            }),
+        },
+    );
+    assert_eq!(painted(&a).matches(SYNC_BEGIN).count(), 1);
+    assert!(saw(
+        &a,
+        r#""t":"spaces_resolved","generation":11,"window_id":42,"active":"claude""#
+    ));
+    assert!(saw(&a, r#""t":"theme_resolved","generation":11"#));
+    assert_eq!(a.metrics.committed_generations, 1);
+    assert_eq!(a.metrics.terminal_paints, 1);
+    assert_eq!(a.v2.committed_generation, Some(11));
+    assert_eq!(a.v2.resolved_theme.as_ref().unwrap().bg, [0x12, 0x34, 0x56]);
+    let sidebar = a.v2.model.as_ref().unwrap().sidebar().unwrap();
+    assert_eq!(sidebar.space.as_deref(), Some("claude"));
+    assert_eq!(
+        sidebar.tabs.iter().map(|tab| tab.id).collect::<Vec<_>>(),
+        [2]
+    );
+}
+
+#[test]
+fn route_hook_answers_must_be_exact_and_stale_results_are_inert() {
+    assert!(App::<Vec<u8>>::valid_space_answer(
+        &[1, 2],
+        &[
+            v2::SpaceRouteHookAnswer {
+                tab_id: 2,
+                space: None,
+            },
+            v2::SpaceRouteHookAnswer {
+                tab_id: 1,
+                space: None,
+            },
+        ]
+    ));
+    for invalid in [
+        vec![v2::SpaceRouteHookAnswer {
+            tab_id: 1,
+            space: None,
+        }],
+        vec![
+            v2::SpaceRouteHookAnswer {
+                tab_id: 1,
+                space: None,
+            },
+            v2::SpaceRouteHookAnswer {
+                tab_id: 1,
+                space: None,
+            },
+        ],
+        vec![
+            v2::SpaceRouteHookAnswer {
+                tab_id: 1,
+                space: None,
+            },
+            v2::SpaceRouteHookAnswer {
+                tab_id: 9,
+                space: None,
+            },
+        ],
+    ] {
+        assert!(!App::<Vec<u8>>::valid_space_answer(&[1, 2], &invalid));
+    }
+
+    let mut a = app();
+    a.client_spaces_policy = true;
+    stage_spaced(&mut a, 12, MODEL, THEME, SPACES_HOOKED);
+    send(&mut a, Command::Commit { generation: 12 });
+    a.out.clear();
+    send(
+        &mut a,
+        Command::SpaceRouteHookResult {
+            generation: 11,
+            routes: Vec::new(),
+        },
+    );
+    assert!(a.out.is_empty(), "a stale generation changes nothing");
+
+    send(
+        &mut a,
+        Command::SpaceRouteHookResult {
+            generation: 12,
+            routes: vec![v2::SpaceRouteHookAnswer {
+                tab_id: 1,
+                space: None,
+            }],
+        },
+    );
+    assert!(saw(
+        &a,
+        r#""t":"dropped","what":"space_route_hook_result","reason":"invalid""#
+    ));
+    assert_eq!(a.v2.committed_generation, Some(12));
+    assert!(a.v2.pending.is_none());
+    assert_eq!(painted(&a).matches(SYNC_BEGIN).count(), 1);
+}
+
+#[test]
+fn sidebar_and_settings_use_the_same_rust_selected_space_theme() {
+    let resolve_for = |model: &str| {
+        let mut a = app();
+        a.size = (100, 21);
+        a.client_spaces_policy = true;
+        stage_spaced(&mut a, 13, model, THEME, SPACES);
+        send(&mut a, Command::Commit { generation: 13 });
+        assert!(saw(
+            &a,
+            r#""t":"spaces_resolved","generation":13,"window_id":42,"active":"claude""#
+        ));
+        assert_eq!(a.metrics.terminal_paints, 1);
+        a.v2.resolved_theme.clone().unwrap()
+    };
+    let sidebar = resolve_for(MODEL);
+    let settings = resolve_for(SETTINGS_MODEL);
+    assert_eq!(sidebar, settings);
+    assert_eq!(sidebar.accent, [0xf5, 0xc2, 0xe7]);
+}
+
+#[test]
+fn an_invalid_spaces_delta_retains_the_committed_generation() {
+    let mut a = app();
+    a.client_spaces_policy = true;
+    stage_spaced(&mut a, 1, MODEL, THEME, SPACES);
+    send(&mut a, Command::Commit { generation: 1 });
+    let committed = a.v2.space_resolution.clone().unwrap();
+    a.out.clear();
+
+    let mut oversized: v2::SpacesMsg = serde_json::from_str(SPACES).unwrap();
+    oversized.dynamics = (0..=MODEL_MAX_SPACES)
+        .map(|seq| v2::DynamicSpace {
+            id: format!("s{seq}"),
+            name: format!("S {seq}"),
+            template: None,
+            seq: seq as u64,
+        })
+        .collect();
+    send(&mut a, Command::Begin { generation: 2 });
+    send(&mut a, Command::Spaces(Box::new(oversized)));
+    send(&mut a, Command::Commit { generation: 2 });
+
+    assert_eq!(a.v2.committed_generation, Some(1));
+    assert_eq!(a.v2.space_resolution.as_ref(), Some(&committed));
+    assert_eq!(a.metrics.terminal_paints, 1);
+    assert!(saw(
+        &a,
+        r#""t":"dropped","what":"spaces","reason":"bounds""#
+    ));
+}
+
+#[test]
+fn a_generation_is_frozen_once_its_hook_base_has_left_the_process() {
+    let mut a = app();
+    a.client_theme_hooks = true;
+    stage_hooked(&mut a, 1, MODEL);
+    send(&mut a, Command::Commit { generation: 1 });
+    a.out.clear();
+
+    // These untagged sections cannot be allowed to change the meaning of the outstanding request.
+    send(&mut a, config_cmd(r#"{"rev":9,"rail_width":1}"#));
+    send(
+        &mut a,
+        theme_cmd(r##"{"rev":9,"hook":true,"overrides":{"bg":"#ffffff"}}"##),
+    );
+    send(
+        &mut a,
+        model_cmd(r#"{"rev":9,"screen":"sidebar","private":true,"tabs":[]}"#),
+    );
+    assert!(
+        a.out.is_empty(),
+        "frozen sections are ignored without validation"
+    );
+
+    send(
+        &mut a,
+        Command::ThemeHookResult {
+            generation: 1,
+            overrides: Box::default(),
+        },
+    );
+    assert_eq!(a.v2.theme.as_ref().unwrap().rev, 2);
+    assert_eq!(a.v2.model.as_ref().unwrap().rev, 1);
+    assert_eq!(a.v2.resolved_theme.as_ref().unwrap().bg, [0x17, 0x17, 0x23]);
+    assert_eq!(a.v2.committed_generation, Some(1));
+}
+
+#[test]
+fn hook_results_are_generation_bound_and_a_newer_begin_replaces_the_wait() {
+    let mut a = app();
+    a.client_theme_hooks = true;
+    stage_hooked(&mut a, 2, MODEL);
+    send(&mut a, Command::Commit { generation: 2 });
+    a.out.clear();
+
+    send(&mut a, Command::Begin { generation: 3 });
+    send(&mut a, config_cmd(CONFIG));
+    send(
+        &mut a,
+        theme_cmd(r##"{"rev":3,"hook":true,"overrides":{"bg":"#222222"}}"##),
+    );
+    send(&mut a, model_cmd(MODEL));
+    send(&mut a, Command::Commit { generation: 3 });
+    assert!(saw(&a, r#""t":"theme_hook_request","generation":3"#));
+    a.out.clear();
+
+    send(
+        &mut a,
+        Command::ThemeHookResult {
+            generation: 2,
+            overrides: Box::new(v2::ThemeOverrides {
+                bg: Some("#ffffff".into()),
+                ..Default::default()
+            }),
+        },
+    );
+    assert!(a.out.is_empty(), "the replaced generation cannot publish");
+    assert_eq!(a.v2.pending.as_ref().unwrap().generation, 3);
+
+    send(
+        &mut a,
+        Command::ThemeHookResult {
+            generation: 3,
+            overrides: Box::default(),
+        },
+    );
+    assert_eq!(a.v2.committed_generation, Some(3));
+    assert_eq!(a.v2.resolved_theme.as_ref().unwrap().bg, [0x22, 0x22, 0x22]);
+}
+
+#[test]
+fn a_rejected_begin_quarantines_its_untagged_sections_until_its_commit() {
+    let mut a = app();
+    stage_complete(&mut a, 5, MODEL);
+    send(&mut a, Command::Begin { generation: 4 });
+    assert_eq!(a.v2.discarding_generation, Some(4));
+
+    send(
+        &mut a,
+        theme_cmd(r##"{"rev":4,"overrides":{"bg":"#ffffff"}}"##),
+    );
+    send(
+        &mut a,
+        model_cmd(r#"{"rev":4,"screen":"sidebar","tabs":[{"id":4,"index":1,"title":"stale"}]}"#),
+    );
+    send(&mut a, Command::Commit { generation: 4 });
+    assert_eq!(a.v2.discarding_generation, None);
+    assert_eq!(a.v2.pending.as_ref().unwrap().generation, 5);
+
+    send(&mut a, Command::Commit { generation: 5 });
+    assert_eq!(a.v2.committed_generation, Some(5));
+    assert_eq!(a.v2.theme.as_ref().unwrap().rev, 1);
+    assert_eq!(a.v2.model.as_ref().unwrap().rev, 1);
+    assert!(painted(&a).contains("one"));
+    assert!(!painted(&a).contains("stale"));
+}
+
+#[test]
+fn an_equal_generation_replay_restarts_a_partially_delivered_build() {
+    let mut a = app();
+    send(&mut a, Command::Begin { generation: 7 });
+    send(&mut a, config_cmd(CONFIG));
+    assert_eq!(a.v2.pending.as_ref().unwrap().seen, SEEN_CONFIG);
+
+    // The writer did not advance its sent ledger after a failed write, so it retries the same full
+    // generation. The old prefix is discarded and the replay is accepted.
+    send(&mut a, Command::Begin { generation: 7 });
+    assert_eq!(a.v2.pending.as_ref().unwrap().seen, 0);
+    send(&mut a, config_cmd(CONFIG));
+    send(&mut a, theme_cmd(THEME));
+    send(&mut a, model_cmd(MODEL));
+    send(&mut a, Command::Commit { generation: 7 });
+
+    assert_eq!(a.v2.committed_generation, Some(7));
+    assert!(a.v2.pending.is_none());
+    assert_eq!(painted(&a).matches(SYNC_BEGIN).count(), 1);
+}
+
+#[test]
+fn an_invalid_theme_hook_result_commits_the_deterministic_base() {
+    let mut a = app();
+    a.client_theme_hooks = true;
+    stage_hooked(&mut a, 4, MODEL);
+    send(&mut a, Command::Commit { generation: 4 });
+    a.out.clear();
+
+    send(
+        &mut a,
+        Command::ThemeHookResult {
+            generation: 4,
+            overrides: Box::new(v2::ThemeOverrides {
+                accent: Some("not-a-colour".into()),
+                ..Default::default()
+            }),
+        },
+    );
+    assert!(saw(
+        &a,
+        r#""t":"dropped","what":"theme_hook_result","reason":"invalid""#
+    ));
+    assert_eq!(a.v2.committed_generation, Some(4));
+    assert!(a.v2.pending.is_none());
+    assert_eq!(painted(&a).matches(SYNC_BEGIN).count(), 1);
+    assert_eq!(a.v2.resolved_theme.as_ref().unwrap().bg, [0x17, 0x17, 0x23]);
+
+    a.out.clear();
+    send(&mut a, Command::Commit { generation: 4 });
+    assert!(a.out.is_empty());
+    assert!(a.v2.pending.is_none());
+}
+
+#[test]
+fn a_theme_hook_retries_once_then_falls_back_and_late_results_are_inert() {
+    let mut a = app();
+    a.client_theme_hooks = true;
+    stage_hooked(&mut a, 21, MODEL);
+    send(&mut a, Command::Commit { generation: 21 });
+    let first = payloads(&a)
+        .into_iter()
+        .find(|payload| payload.contains(r#""t":"theme_hook_request""#))
+        .expect("initial hook request");
+    a.out.clear();
+
+    let retry_at = Instant::now();
+    a.v2.pending.as_mut().unwrap().hook_deadline = Some(retry_at);
+    a.tick_hooks(retry_at).unwrap();
+    let retry = payloads(&a)
+        .into_iter()
+        .find(|payload| payload.contains(r#""t":"theme_hook_request""#))
+        .expect("one retry");
+    assert_eq!(
+        first.split(r#","n":"#).next(),
+        retry.split(r#","n":"#).next(),
+        "the retry preserves the exact hook request"
+    );
+    assert_eq!(a.metrics.terminal_paints, 0);
+    a.out.clear();
+
+    let fallback_at = Instant::now();
+    a.v2.pending.as_mut().unwrap().hook_deadline = Some(fallback_at);
+    a.tick_hooks(fallback_at).unwrap();
+    assert!(saw(
+        &a,
+        r#""t":"dropped","what":"theme_hook","reason":"timeout""#
+    ));
+    assert_eq!(a.v2.committed_generation, Some(21));
+    assert!(a.v2.pending.is_none());
+    assert_eq!(a.metrics.committed_generations, 1);
+    assert_eq!(a.metrics.terminal_paints, 1);
+
+    a.out.clear();
+    send(
+        &mut a,
+        Command::ThemeHookResult {
+            generation: 21,
+            overrides: Box::new(v2::ThemeOverrides {
+                bg: Some("#ffffff".into()),
+                ..Default::default()
+            }),
+        },
+    );
+    assert!(
+        a.out.is_empty(),
+        "a late answer cannot repaint the fallback"
+    );
+    assert_eq!(a.v2.resolved_theme.as_ref().unwrap().bg, [0x17, 0x17, 0x23]);
+}
+
+#[test]
+fn route_hook_timeout_falls_through_rules_before_requesting_the_theme_hook() {
+    let mut a = app();
+    a.client_spaces_policy = true;
+    a.client_theme_hooks = true;
+    stage_spaced(&mut a, 22, MODEL, HOOKED_PALETTE_THEME, SPACES_HOOKED);
+    send(&mut a, Command::Commit { generation: 22 });
+    a.out.clear();
+
+    for _ in 0..=HOOK_RETRIES {
+        let now = Instant::now();
+        a.v2.pending.as_mut().unwrap().hook_deadline = Some(now);
+        a.tick_hooks(now).unwrap();
+    }
+    assert!(saw(
+        &a,
+        r#""t":"dropped","what":"space_route_hook","reason":"timeout""#
+    ));
+    assert!(saw(&a, r#""t":"theme_hook_request","generation":22"#));
+    let pending = a.v2.pending.as_ref().unwrap();
+    assert!(pending.space_hook_requested.is_none());
+    assert!(pending.hook_requested);
+    assert_eq!(a.metrics.terminal_paints, 0);
+}
+
+#[test]
+fn hook_true_without_the_client_capability_commits_the_rust_base() {
+    let mut a = app();
+    stage_hooked(&mut a, 5, MODEL);
+    send(&mut a, Command::Commit { generation: 5 });
+
+    assert!(!saw(&a, r#""t":"theme_hook_request""#));
+    assert!(saw(&a, r#""t":"theme_resolved","generation":5"#));
+    assert_eq!(painted(&a).matches(SYNC_BEGIN).count(), 1);
+    assert_eq!(a.v2.committed_generation, Some(5));
+}
+
+#[test]
+fn a_settings_generation_can_complete_the_same_three_section_hook_round_trip() {
+    let mut a = app();
+    a.size = (100, 21);
+    a.client_theme_hooks = true;
+    stage_hooked(&mut a, 6, SETTINGS_MODEL);
+    send(&mut a, Command::Commit { generation: 6 });
+    assert!(saw(&a, r#""t":"theme_hook_request","generation":6"#));
+    assert_eq!(painted(&a).matches(SYNC_BEGIN).count(), 0);
+
+    a.out.clear();
+    send(
+        &mut a,
+        Command::ThemeHookResult {
+            generation: 6,
+            overrides: Box::default(),
+        },
+    );
+    assert!(painted(&a).contains("Settings"));
+    assert_eq!(painted(&a).matches(SYNC_BEGIN).count(), 1);
+    assert_eq!(a.v2.committed_generation, Some(6));
+}
+
+#[test]
+fn private_theme_input_is_window_global_for_sidebar_and_settings_models() {
+    let resolve_for = |model: &str| {
+        let mut a = app();
+        send(&mut a, Command::Begin { generation: 1 });
+        send(&mut a, config_cmd(CONFIG));
+        send(
+            &mut a,
+            theme_cmd(r#"{"rev":1,"private":true,"overrides":{}}"#),
+        );
+        send(&mut a, model_cmd(model));
+        send(&mut a, Command::Commit { generation: 1 });
+        a.v2.resolved_theme.clone().unwrap()
+    };
+    let sidebar = resolve_for(MODEL);
+    let settings = resolve_for(SETTINGS_MODEL);
+    assert_eq!(sidebar, settings);
+    assert_eq!(sidebar.accent, sidebar.private_accent);
+}
+
+#[test]
+fn a_private_model_delta_recomputes_and_reports_the_effective_theme() {
+    let mut a = app();
+    stage_complete(&mut a, 1, MODEL);
+    send(&mut a, Command::Commit { generation: 1 });
+    let public_accent = a.v2.resolved_theme.as_ref().unwrap().accent;
+    a.out.clear();
+
+    send(&mut a, Command::Begin { generation: 2 });
+    send(
+        &mut a,
+        model_cmd(
+            r#"{"rev":2,"screen":"sidebar","private":true,"tabs":[{"id":1,"index":1,"title":"private"}]}"#,
+        ),
+    );
+    send(&mut a, Command::Commit { generation: 2 });
+
+    let private = a.v2.resolved_theme.as_ref().unwrap();
+    assert_ne!(private.accent, public_accent);
+    assert_eq!(private.accent, private.private_accent);
+    assert!(saw(&a, r#""t":"theme_resolved","generation":2"#));
+    assert_eq!(painted(&a).matches(SYNC_BEGIN).count(), 1);
+}
+
+#[test]
+fn a_partial_or_mismatched_commit_changes_nothing() {
+    let mut a = app();
+    send(&mut a, Command::Begin { generation: 2 });
+    send(
+        &mut a,
+        model_cmd(r#"{"rev":2,"screen":"sidebar","tabs":[{"id":9,"index":1,"title":"staged"}]}"#),
+    );
+
+    send(&mut a, Command::Commit { generation: 3 });
+    assert!(a.v2.pending.is_some(), "a mismatched commit is ignored");
+    send(&mut a, Command::Commit { generation: 2 });
+
+    assert!(a.out.is_empty(), "neither commit paints");
+    assert!(a.v2.model.is_none());
+    assert!(a.v2.committed_generation.is_none());
+    assert!(a.v2.pending.is_none(), "a partial matching commit is spent");
+}
+
+#[test]
+fn an_initial_settings_generation_needs_no_menu_section() {
+    let mut a = app();
+    a.size = (100, 21);
+    send(&mut a, Command::Begin { generation: 1 });
+    send(&mut a, config_cmd(CONFIG));
+    send(&mut a, theme_cmd(THEME));
+    send(&mut a, model_cmd(SETTINGS_MODEL));
+    assert!(a.out.is_empty());
+
+    send(&mut a, Command::Commit { generation: 1 });
+
+    let out = painted(&a);
+    assert_eq!(out.matches(SYNC_BEGIN).count(), 1);
+    assert!(out.contains("Settings") && out.contains("Layout"));
+    assert_eq!(a.v2.committed_generation, Some(1));
+    assert!(a.v2.menu.is_none());
+}
+
+#[test]
+fn stale_generations_cannot_replace_committed_state() {
+    let mut a = app();
+    stage_complete(&mut a, 5, MODEL);
+    send(&mut a, Command::Commit { generation: 5 });
+    a.out.clear();
+
+    send(&mut a, Command::Begin { generation: 4 });
+    send(
+        &mut a,
+        model_cmd(r#"{"rev":4,"screen":"sidebar","tabs":[{"id":4,"index":1,"title":"stale"}]}"#),
+    );
+    send(&mut a, Command::Commit { generation: 4 });
+
+    assert!(a.out.is_empty());
+    assert_eq!(a.v2.committed_generation, Some(5));
+    assert_eq!(a.v2.model.as_ref().unwrap().rev, 1);
+    assert!(a.v2.pending.is_none());
+}
+
+#[test]
+fn a_bounds_failure_invalidates_the_whole_generation() {
+    let mut a = app();
+    dress(&mut a);
+    a.out.clear();
+    send(&mut a, Command::Begin { generation: 2 });
+    send(&mut a, config_cmd(CONFIG));
+    send(&mut a, theme_cmd(THEME));
+    send(&mut a, menu(r#"{"rev":2,"open":false}"#));
+    let spaces: Vec<String> = (0..=MODEL_MAX_SPACES)
+        .map(|i| format!(r#"{{"id":"s{i}"}}"#))
+        .collect();
+    send(
+        &mut a,
+        model_cmd(&format!(
+            r#"{{"rev":2,"screen":"sidebar","spaces":[{}],"tabs":[]}}"#,
+            spaces.join(",")
+        )),
+    );
+    send(&mut a, Command::Commit { generation: 2 });
+
+    assert!(saw(&a, r#""t":"dropped","what":"model","reason":"bounds""#));
+    assert_eq!(painted(&a).matches(SYNC_BEGIN).count(), 0);
+    assert_eq!(a.v2.model.as_ref().unwrap().rev, 1);
+    assert!(a.v2.committed_generation.is_none());
+    assert!(a.v2.pending.is_none());
+}
+
+#[test]
+fn a_parser_drop_invalidates_the_pending_generation() {
+    let mut a = app();
+    a.token = Some("session".into());
+    stage_complete(&mut a, 1, MODEL);
+    a.handle(Input::Dropped {
+        token: Some("stranger".into()),
+        what: "line",
+        reason: "size",
+    })
+    .unwrap();
+    assert!(a.v2.pending.as_ref().unwrap().valid);
+    assert!(!saw(&a, r#""t":"dropped","what":"line""#));
+    a.handle(Input::Dropped {
+        token: Some("session".into()),
+        what: "line",
+        reason: "size",
+    })
+    .unwrap();
+    send(&mut a, Command::Commit { generation: 1 });
+
+    assert!(saw(&a, r#""t":"dropped","what":"line","reason":"size""#));
+    assert_eq!(painted(&a).matches(SYNC_BEGIN).count(), 0);
+    assert!(a.v2.model.is_none());
+    assert!(a.v2.pending.is_none());
+}
+
+#[test]
+fn a_new_auth_resets_committed_pending_and_local_ui_before_ready() {
+    let mut a = app();
+    a.client_theme_hooks = true;
+    stage_complete(&mut a, 7, MODEL);
+    send(&mut a, Command::Commit { generation: 7 });
+    send(&mut a, Command::Begin { generation: 8 });
+    a.ui.set_hover(3, 4, 5);
+    a.ui.scroll = Some(2);
+    a.menu_ui.buffer = "rename".into();
+    a.settings_ui.filter = "needle".into();
+    a.popover = a.scene().0.popover;
+    a.out.clear();
+
+    send(
+        &mut a,
+        Command::Auth {
+            token: "replacement".into(),
+            caps: Vec::new(),
+        },
+    );
+
+    assert!(
+        a.v2.config.is_none()
+            && a.v2.theme.is_none()
+            && a.v2.spaces.is_none()
+            && a.v2.space_resolution.is_none()
+            && a.v2.model.is_none()
+    );
+    assert!(a.v2.menu.is_none());
+    assert!(a.v2.pending.is_none() && a.v2.committed_generation.is_none());
+    assert!(!a.v2.atomic);
+    assert!(!a.client_theme_hooks && !a.client_spaces_policy && a.last_reported_theme.is_none());
+    assert_eq!(a.ui, UiState::default());
+    assert_eq!(a.menu_ui, MenuState::default());
+    assert_eq!(a.settings_ui, SettingsUi::default());
+    assert!(a.popover.is_none() && a.last_rows.is_none());
+
+    let out = painted(&a);
+    let cleared = out.find(CLEAR_SCREEN).expect("auth clears the old pane");
+    let ready = out
+        .find("\x1b]1337;SetUserVar=vtabs=")
+        .expect("auth announces ready");
+    assert!(cleared < ready, "clear precedes Ready: {out:?}");
+    assert!(payloads(&a).iter().any(|payload| {
+        payload.contains(r#""t":"ready""#)
+            && payload.contains(
+                r#""caps":["atomic_sync","typed_intents","theme_hooks","settings_document","spaces_policy"]"#,
+            )
+    }));
+}
+
 #[test]
 fn a_fade_runs_on_the_frame_shown_and_a_repaint_lands_it_on_the_final_frame() {
     let mut a = app();
     dress(&mut a);
     // the first frame is whole; a repaint after the fade must write the same whole frame back
-    let final_frame = painted(&a);
+    let output = painted(&a);
+    let final_frame = output[output.find(SYNC_BEGIN).expect("the initial frame")..].to_string();
     a.out.clear();
     send(
         &mut a,
@@ -634,8 +1933,9 @@ fn a_frame_is_bracketed_in_synchronized_output() {
     let mut a = app();
     dress(&mut a);
     let out = painted(&a);
-    assert!(out.starts_with(SYNC_BEGIN), "{out:?}");
-    assert!(out.ends_with(SYNC_END), "{out:?}");
+    let frame = &out[out.find(SYNC_BEGIN).expect("a synchronized frame")..];
+    assert!(frame.starts_with(SYNC_BEGIN), "{out:?}");
+    assert!(frame.ends_with(SYNC_END), "{out:?}");
 }
 
 fn cups(out: &str) -> usize {
@@ -671,8 +1971,10 @@ fn a_repaint_of_the_frame_already_shown_writes_nothing() {
     dress(&mut a);
     probe_returns((28, 24));
     a.out.clear();
+    let metrics = a.metrics;
     a.repaint().unwrap();
     assert!(a.out.is_empty(), "{:?}", painted(&a));
+    assert_eq!(a.metrics, metrics, "a no-op repaint is not counted");
 }
 
 #[test]

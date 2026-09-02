@@ -1,4 +1,7 @@
-//! Typed forms of wire event payloads; decoding from bytes lives in vtabs-input.
+//! Typed forms of wire event payloads; decoding from bytes lives in `vtabs-runtime::input`.
+
+/// An sRGB colour carried as red, green and blue bytes.
+pub type Color = [u8; 3];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Mods {

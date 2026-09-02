@@ -1,5 +1,6 @@
 pub mod app;
 pub mod cli;
+pub mod input;
 pub mod log;
 pub mod paint;
 mod run;

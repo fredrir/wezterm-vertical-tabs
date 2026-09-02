@@ -1,54 +1,22 @@
+use std::io::Cursor;
+
 use super::*;
 
-fn decode_chunks(png: &[u8]) -> Vec<(String, Vec<u8>)> {
-    assert_eq!(&png[..8], &SIGNATURE);
-    let mut at = 8;
-    let mut out = vec![];
-    while at + 8 <= png.len() {
-        let len = u32::from_be_bytes(png[at..at + 4].try_into().unwrap()) as usize;
-        let kind = String::from_utf8(png[at + 4..at + 8].to_vec()).unwrap();
-        let body = png[at + 8..at + 8 + len].to_vec();
-        let want = u32::from_be_bytes(png[at + 8 + len..at + 12 + len].try_into().unwrap());
-        assert_eq!(crc32(&png[at + 4..at + 8 + len]), want, "crc for {kind}");
-        out.push((kind, body));
-        at += 12 + len;
-    }
-    out
-}
-
 #[test]
-fn png_has_a_signature_header_and_terminator_with_valid_crcs() {
-    let png = Canvas::new(4, 3, [1, 2, 3, 255]).to_png();
-    let chunks = decode_chunks(&png);
-    let kinds: Vec<&str> = chunks.iter().map(|(k, _)| k.as_str()).collect();
-    assert_eq!(kinds, vec!["IHDR", "IDAT", "IEND"]);
-    assert_eq!(&chunks[0].1[..8], &[0, 0, 0, 4, 0, 0, 0, 3]);
-    assert_eq!(&chunks[0].1[8..], &[8, 6, 0, 0, 0]);
+fn png_round_trips_as_rgba8() {
+    let pixel = [1, 2, 3, 255];
+    let png = Canvas::new(4, 3, pixel).to_png();
+    let mut reader = png::Decoder::new(Cursor::new(png)).read_info().unwrap();
+    let mut decoded = vec![0; reader.output_buffer_size().unwrap()];
+    let info = reader.next_frame(&mut decoded).unwrap();
+    assert_eq!((info.width, info.height), (4, 3));
+    assert_eq!(info.color_type, png::ColorType::Rgba);
+    assert_eq!(info.bit_depth, png::BitDepth::Eight);
+    assert_eq!(&decoded[..info.buffer_size()], pixel.repeat(12));
 }
 
-/// Nothing here decodes deflate, so the pin is that the stream is self-consistent and that the
-/// bytes survive a round trip through the matcher -- `just check` runs a real inflate in the
-/// Lua suite, and the e2e opens the file with wezterm itself.
-#[test]
-fn the_deflate_stream_has_a_zlib_header_and_the_adler32_of_the_raw_bytes() {
-    let canvas = Canvas::new(3, 2, [9, 8, 7, 255]);
-    let png = canvas.to_png();
-    let idat = decode_chunks(&png)
-        .into_iter()
-        .find(|(k, _)| k == "IDAT")
-        .unwrap()
-        .1;
-    assert_eq!(&idat[..2], &[0x78, 0x01], "zlib header");
-    let mut raw = vec![];
-    for _ in 0..2usize {
-        raw.extend_from_slice(&[0, 9, 8, 7, 255, 9, 8, 7, 255, 9, 8, 7, 255]);
-    }
-    let tail = u32::from_be_bytes(idat[idat.len() - 4..].try_into().unwrap());
-    assert_eq!(tail, adler32(&raw), "adler32 of the scanlines");
-}
-
-/// A flat fill is what this image mostly is, so the matcher has to turn it into matches rather
-/// than literals -- otherwise a retina frame is tens of megabytes written on every resize.
+/// A flat fill is what this image mostly is, so the encoder must compress it rather than writing
+/// literal pixels -- otherwise a retina frame is tens of megabytes on every resize.
 #[test]
 fn a_flat_fill_compresses_by_orders_of_magnitude() {
     let png = Canvas::new(800, 600, [0x1e, 0x1e, 0x2e, 255]).to_png();
@@ -61,30 +29,6 @@ fn a_flat_fill_compresses_by_orders_of_magnitude() {
 }
 
 #[test]
-fn the_length_and_distance_tables_bracket_every_legal_value() {
-    for len in 3..=258u32 {
-        let (code, extra, bits) = length_code(len);
-        assert!((257..=285).contains(&code), "length {len} -> {code}");
-        assert!(
-            extra < (1 << bits) || bits == 0,
-            "length {len} extra out of range"
-        );
-    }
-    for dist in [1u32, 2, 3, 4, 5, 1024, 32768] {
-        let (code, extra, bits) = distance_code(dist);
-        assert!(code < 30, "distance {dist} -> {code}");
-        assert!(extra < (1 << bits) || bits == 0);
-    }
-}
-
-#[test]
-fn crc32_and_adler32_match_their_published_vectors() {
-    assert_eq!(crc32(b"123456789"), 0xcbf4_3926);
-    assert_eq!(adler32(b"Wikipedia"), 0x11e6_0398);
-    assert_eq!(adler32(b""), 1);
-}
-
-#[test]
 fn colours_parse_in_every_length_and_nothing_else_does() {
     assert_eq!(parse_colour("#1e1e2e"), Some([0x1e, 0x1e, 0x2e, 255]));
     assert_eq!(parse_colour("1e1e2e"), Some([0x1e, 0x1e, 0x2e, 255]));
@@ -92,6 +36,16 @@ fn colours_parse_in_every_length_and_nothing_else_does() {
     assert_eq!(parse_colour("#11223344"), Some([0x11, 0x22, 0x33, 0x44]));
     assert_eq!(parse_colour("#12345"), None);
     assert_eq!(parse_colour("#zzzzzz"), None);
+    assert_eq!(
+        parse_colour("a……"),
+        None,
+        "six UTF-8 bytes never become slice offsets"
+    );
+    assert_eq!(
+        parse_colour("éééé"),
+        None,
+        "eight UTF-8 bytes are still not hex"
+    );
     assert_eq!(parse_colour(""), None);
 }
 

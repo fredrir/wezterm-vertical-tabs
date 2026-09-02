@@ -3,17 +3,109 @@
 //! GUI's mux client cannot reach. Every call passes `--no-auto-start`: a cli that finds no server
 //! must never spawn one over the socket path.
 
+use std::io::{self, Read};
 use std::path::PathBuf;
-use std::process::{Command, Stdio};
+use std::process::{Command, Output, Stdio};
+use std::sync::mpsc::{self, Receiver};
 use std::time::{Duration, Instant};
 
 use serde_json::Value;
 
 const TIMEOUT: Duration = Duration::from_secs(5);
+const OUTPUT_MAX: usize = 1024 * 1024;
+const PIPE_CLOSE_GRACE: Duration = Duration::from_millis(250);
 #[cfg(windows)]
 const BIN: &str = "wezterm.exe";
 #[cfg(not(windows))]
 const BIN: &str = "wezterm";
+
+struct Captured {
+    bytes: Vec<u8>,
+    truncated: bool,
+}
+
+fn drain<R: Read + Send + 'static>(mut pipe: R) -> Receiver<io::Result<Captured>> {
+    let (sender, receiver) = mpsc::channel();
+    std::thread::spawn(move || {
+        let result = (|| {
+            let mut bytes = Vec::new();
+            let mut buffer = [0; 8192];
+            let mut truncated = false;
+            loop {
+                let read = pipe.read(&mut buffer)?;
+                if read == 0 {
+                    break;
+                }
+                let retained = read.min(OUTPUT_MAX.saturating_sub(bytes.len()));
+                bytes.extend_from_slice(&buffer[..retained]);
+                truncated |= retained < read;
+            }
+            Ok(Captured { bytes, truncated })
+        })();
+        let _ = sender.send(result);
+    });
+    receiver
+}
+
+fn drained(reader: Receiver<io::Result<Captured>>, deadline: Instant) -> Result<Captured, String> {
+    reader
+        .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+        .map_err(|err| match err {
+            mpsc::RecvTimeoutError::Timeout => "cli output pipe did not close".to_string(),
+            mpsc::RecvTimeoutError::Disconnected => "cli output reader stopped".to_string(),
+        })?
+        .map_err(|e| e.to_string())
+}
+
+/// Reads both pipes while the child runs. Waiting before reading can deadlock once either pipe
+/// fills. Capture is bounded while excess bytes are still drained. On timeout the direct child is
+/// killed and reaped, but the call never waits indefinitely for pipe handles inherited by a
+/// descendant.
+fn run_command(command: &mut Command, timeout: Duration, label: &str) -> Result<Output, String> {
+    let mut child = command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("{label}: {e}"))?;
+    let stdout = drain(child.stdout.take().expect("stdout was piped"));
+    let stderr = drain(child.stderr.take().expect("stderr was piped"));
+    let started = Instant::now();
+    let mut timed_out = false;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break Ok(status),
+            Ok(None) if started.elapsed() < timeout => {
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            Ok(None) => {
+                timed_out = true;
+                let _ = child.kill();
+                break child.wait().map_err(|e| e.to_string());
+            }
+            Err(e) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                break Err(e.to_string());
+            }
+        }
+    };
+    let status = status?;
+    if timed_out {
+        return Err(format!("{label} timed out"));
+    }
+    let pipe_deadline = Instant::now() + PIPE_CLOSE_GRACE;
+    let stdout = drained(stdout, pipe_deadline)?;
+    let stderr = drained(stderr, pipe_deadline)?;
+    if stdout.truncated || stderr.truncated {
+        return Err(format!("{label}: output exceeded {OUTPUT_MAX} bytes"));
+    }
+    Ok(Output {
+        status,
+        stdout: stdout.bytes,
+        stderr: stderr.bytes,
+    })
+}
 
 /// The fields of `wezterm cli list --format json` the two verbs read.
 #[derive(Debug, Clone, PartialEq)]
@@ -25,19 +117,25 @@ pub struct PaneInfo {
     pub cols: i64,
 }
 
-/// `cli list --format json`, one entry per pane; an entry missing an id is skipped.
+/// `cli list --format json`, one entry per pane; malformed entries are skipped.
 pub fn panes_from_json(json: &str) -> Result<Vec<PaneInfo>, String> {
     let list: Vec<Value> = serde_json::from_str(json).map_err(|e| format!("cli list: {e}"))?;
     let int = |v: &Value, key: &str| v.get(key).and_then(Value::as_i64);
+    let uint = |v: &Value, key: &str| v.get(key).and_then(Value::as_u64);
     Ok(list
         .iter()
         .filter_map(|v| {
+            let left_col = int(v, "left_col")?;
+            let cols = v.get("size").and_then(|size| int(size, "cols"))?;
+            if left_col < 0 || cols <= 0 || left_col.checked_add(cols).is_none() {
+                return None;
+            }
             Some(PaneInfo {
-                pane_id: int(v, "pane_id")? as u64,
-                tab_id: int(v, "tab_id")? as u64,
+                pane_id: uint(v, "pane_id")?,
+                tab_id: uint(v, "tab_id")?,
                 title: v.get("title")?.as_str()?.to_string(),
-                left_col: int(v, "left_col").unwrap_or(0),
-                cols: v.get("size").and_then(|s| int(s, "cols")).unwrap_or(0),
+                left_col,
+                cols,
             })
         })
         .collect())
@@ -121,30 +219,9 @@ impl Cli {
 
     /// Stdout of `wezterm cli --no-auto-start <args>`, or the first line of what went wrong.
     fn run(&self, args: &[&str]) -> Result<String, String> {
-        let mut child = Command::new(&self.exe)
-            .arg("cli")
-            .arg("--no-auto-start")
-            .args(args)
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .map_err(|e| format!("{}: {e}", self.exe.display()))?;
-        let started = Instant::now();
-        loop {
-            match child.try_wait() {
-                Ok(Some(_)) => break,
-                Ok(None) if started.elapsed() < TIMEOUT => {
-                    std::thread::sleep(Duration::from_millis(20));
-                }
-                Ok(None) => {
-                    let _ = child.kill();
-                    return Err(format!("wezterm cli {} timed out", args[0]));
-                }
-                Err(e) => return Err(e.to_string()),
-            }
-        }
-        let out = child.wait_with_output().map_err(|e| e.to_string())?;
+        let mut command = Command::new(&self.exe);
+        command.arg("cli").arg("--no-auto-start").args(args);
+        let out = run_command(&mut command, TIMEOUT, &format!("wezterm cli {}", args[0]))?;
         if out.status.success() {
             return Ok(String::from_utf8_lossy(&out.stdout).into_owned());
         }
@@ -181,5 +258,88 @@ impl Cli {
             ])?;
         }
         Ok(intruders.len())
+    }
+}
+
+#[cfg(test)]
+mod parser_tests {
+    use super::*;
+
+    #[test]
+    fn negative_pane_and_tab_ids_are_skipped_before_conversion() {
+        let json = r#"[
+            {"pane_id": 3, "tab_id": 7, "title": "valid", "left_col": 0, "size": {"cols": 80}},
+            {"pane_id": -1, "tab_id": 7, "title": "pane", "left_col": 0, "size": {"cols": 80}},
+            {"pane_id": 4, "tab_id": -1, "title": "tab", "left_col": 0, "size": {"cols": 80}}
+        ]"#;
+        assert_eq!(
+            panes_from_json(json).unwrap(),
+            vec![PaneInfo {
+                pane_id: 3,
+                tab_id: 7,
+                title: "valid".into(),
+                left_col: 0,
+                cols: 80,
+            }]
+        );
+    }
+
+    #[test]
+    fn invalid_geometry_is_skipped() {
+        let json = format!(
+            r#"[
+                {{"pane_id": 1, "tab_id": 7, "title": "negative position", "left_col": -1, "size": {{"cols": 80}}}},
+                {{"pane_id": 2, "tab_id": 7, "title": "negative size", "left_col": 0, "size": {{"cols": -1}}}},
+                {{"pane_id": 3, "tab_id": 7, "title": "zero size", "left_col": 0, "size": {{"cols": 0}}}},
+                {{"pane_id": 4, "tab_id": 7, "title": "overflow", "left_col": {}, "size": {{"cols": 1}}}},
+                {{"pane_id": 5, "tab_id": 7, "title": "wrong type", "left_col": "0", "size": {{"cols": 80}}}}
+            ]"#,
+            i64::MAX
+        );
+        assert!(panes_from_json(&json).unwrap().is_empty());
+    }
+}
+
+#[cfg(all(test, unix))]
+mod command_tests {
+    use super::*;
+
+    #[test]
+    fn command_output_is_drained_before_the_child_exits() {
+        let mut command = Command::new("sh");
+        command.args([
+            "-c",
+            "dd if=/dev/zero bs=65536 count=4 2>/dev/null; dd if=/dev/zero bs=65536 count=4 1>&2 2>/dev/null",
+        ]);
+        let out = run_command(&mut command, Duration::from_secs(3), "bulk output").unwrap();
+        assert!(out.status.success());
+        assert_eq!(out.stdout.len(), 4 * 65_536, "larger than a pipe buffer");
+        assert_eq!(out.stderr.len(), 4 * 65_536, "both pipes are drained");
+    }
+
+    #[test]
+    fn command_output_capture_is_bounded_while_both_pipes_are_drained() {
+        let mut command = Command::new("sh");
+        command.args([
+            "-c",
+            "dd if=/dev/zero bs=65536 count=17 2>/dev/null; dd if=/dev/zero bs=65536 count=17 1>&2 2>/dev/null",
+        ]);
+        assert_eq!(
+            run_command(&mut command, Duration::from_secs(3), "excess output").unwrap_err(),
+            format!("excess output: output exceeded {OUTPUT_MAX} bytes")
+        );
+    }
+
+    #[test]
+    fn a_timed_out_command_is_killed_and_reaped() {
+        let mut command = Command::new("sh");
+        // The one-second descendant inherits both pipes after the five-second direct child dies.
+        command.args(["-c", "sleep 1 & exec sleep 5"]);
+        let started = Instant::now();
+        assert_eq!(
+            run_command(&mut command, Duration::from_millis(30), "slow command").unwrap_err(),
+            "slow command timed out"
+        );
+        assert!(started.elapsed() < Duration::from_millis(750));
     }
 }

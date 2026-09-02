@@ -1,5 +1,5 @@
+use vtabs_engine::frame::Cell;
 use vtabs_runtime::paint::changed_rows_bytes;
-use vtabs_view::frame::Cell;
 
 const SYNC_BEGIN: &str = "\x1b[?2026h";
 const SYNC_END: &str = "\x1b[?2026l";

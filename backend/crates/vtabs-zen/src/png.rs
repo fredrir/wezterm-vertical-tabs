@@ -1,192 +1,4 @@
-//! A PNG writer with no dependencies: RGBA8, one IDAT of stored (uncompressed) deflate blocks.
-//! Stored blocks keep the file large and the code small, which is the right trade for an image
-//! that is regenerated on resize and read back once.
-
-const SIGNATURE: [u8; 8] = [0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a];
-
-fn crc_table() -> [u32; 256] {
-    let mut table = [0u32; 256];
-    let mut n = 0;
-    while n < 256 {
-        let mut c = n as u32;
-        let mut k = 0;
-        while k < 8 {
-            c = if c & 1 != 0 {
-                0xedb8_8320 ^ (c >> 1)
-            } else {
-                c >> 1
-            };
-            k += 1;
-        }
-        table[n] = c;
-        n += 1;
-    }
-    table
-}
-
-fn crc32(bytes: &[u8]) -> u32 {
-    let table = crc_table();
-    let mut c = 0xffff_ffffu32;
-    for b in bytes {
-        c = table[((c ^ *b as u32) & 0xff) as usize] ^ (c >> 8);
-    }
-    c ^ 0xffff_ffff
-}
-
-fn adler32(bytes: &[u8]) -> u32 {
-    let (mut a, mut b) = (1u32, 0u32);
-    for byte in bytes {
-        a = (a + *byte as u32) % 65521;
-        b = (b + a) % 65521;
-    }
-    (b << 16) | a
-}
-
-fn chunk(out: &mut Vec<u8>, kind: &[u8; 4], body: &[u8]) {
-    out.extend_from_slice(&(body.len() as u32).to_be_bytes());
-    let mut crc_input = Vec::with_capacity(4 + body.len());
-    crc_input.extend_from_slice(kind);
-    crc_input.extend_from_slice(body);
-    out.extend_from_slice(kind);
-    out.extend_from_slice(body);
-    out.extend_from_slice(&crc32(&crc_input).to_be_bytes());
-}
-
-/// LSB-first bit sink, which is the order deflate packs its codes in.
-struct BitWriter {
-    out: Vec<u8>,
-    bit: u32,
-    n: u32,
-}
-
-impl BitWriter {
-    fn new() -> Self {
-        Self {
-            out: vec![],
-            bit: 0,
-            n: 0,
-        }
-    }
-
-    fn push(&mut self, value: u32, bits: u32) {
-        self.bit |= value << self.n;
-        self.n += bits;
-        while self.n >= 8 {
-            self.out.push((self.bit & 0xff) as u8);
-            self.bit >>= 8;
-            self.n -= 8;
-        }
-    }
-
-    fn push_code(&mut self, code: u32, bits: u32) {
-        for i in (0..bits).rev() {
-            self.push((code >> i) & 1, 1);
-        }
-    }
-
-    fn finish(mut self) -> Vec<u8> {
-        if self.n > 0 {
-            self.out.push((self.bit & 0xff) as u8);
-        }
-        self.out
-    }
-}
-
-fn fixed_literal(sym: u32) -> (u32, u32) {
-    match sym {
-        0..=143 => (0x30 + sym, 8),
-        144..=255 => (0x190 + sym - 144, 9),
-        256..=279 => (sym - 256, 7),
-        _ => (0xc0 + sym - 280, 8),
-    }
-}
-
-fn length_code(len: u32) -> (u32, u32, u32) {
-    const BASE: [u32; 29] = [
-        3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 15, 17, 19, 23, 27, 31, 35, 43, 51, 59, 67, 83, 99, 115,
-        131, 163, 195, 227, 258,
-    ];
-    const EXTRA: [u32; 29] = [
-        0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4, 5, 5, 5, 5, 0,
-    ];
-    let mut i = 28;
-    while BASE[i] > len {
-        i -= 1;
-    }
-    (257 + i as u32, len - BASE[i], EXTRA[i])
-}
-
-fn distance_code(dist: u32) -> (u32, u32, u32) {
-    const BASE: [u32; 30] = [
-        1, 2, 3, 4, 5, 7, 9, 13, 17, 25, 33, 49, 65, 97, 129, 193, 257, 385, 513, 769, 1025, 1537,
-        2049, 3073, 4097, 6145, 8193, 12289, 16385, 24577,
-    ];
-    const EXTRA: [u32; 30] = [
-        0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 9, 9, 10, 10, 11, 11, 12, 12,
-        13, 13,
-    ];
-    let mut i = 29;
-    while BASE[i] > dist {
-        i -= 1;
-    }
-    (i as u32, dist - BASE[i], EXTRA[i])
-}
-
-fn match_len(raw: &[u8], at: usize, dist: usize) -> usize {
-    let mut len = 0;
-    while at + len < raw.len() && len < 258 && raw[at + len] == raw[at + len - dist] {
-        len += 1;
-    }
-    len
-}
-
-/// zlib stream over one fixed-Huffman block. The only distances tried are the ones this image
-/// actually repeats at -- one pixel, one scanline, one byte -- which turns a flat fill into a
-/// handful of matches without a hash chain or a window search.
-fn zlib_deflate(raw: &[u8], stride: usize) -> Vec<u8> {
-    let mut w = BitWriter::new();
-    w.push(1, 1); // final block
-    w.push(1, 2); // fixed Huffman
-    let candidates = [4usize, stride, 1];
-    let mut at = 0usize;
-    while at < raw.len() {
-        let (mut best_len, mut best_dist) = (0usize, 0usize);
-        for dist in candidates {
-            if dist == 0 || dist > at || dist > 32768 {
-                continue;
-            }
-            let len = match_len(raw, at, dist);
-            if len > best_len {
-                best_len = len;
-                best_dist = dist;
-            }
-        }
-        if best_len >= 3 {
-            let (code, extra, bits) = length_code(best_len as u32);
-            let (lit, n) = fixed_literal(code);
-            w.push_code(lit, n);
-            if bits > 0 {
-                w.push(extra, bits);
-            }
-            let (dcode, dextra, dbits) = distance_code(best_dist as u32);
-            w.push_code(dcode, 5);
-            if dbits > 0 {
-                w.push(dextra, dbits);
-            }
-            at += best_len;
-        } else {
-            let (lit, n) = fixed_literal(raw[at] as u32);
-            w.push_code(lit, n);
-            at += 1;
-        }
-    }
-    let (eob, n) = fixed_literal(256);
-    w.push_code(eob, n);
-    let mut out = vec![0x78, 0x01];
-    out.extend_from_slice(&w.finish());
-    out.extend_from_slice(&adler32(raw).to_be_bytes());
-    out
-}
+//! RGBA8 canvas and rounded-card renderer, encoded with the `png` crate.
 
 /// An RGBA8 canvas that knows how to write itself out as a PNG.
 pub struct Canvas {
@@ -345,25 +157,18 @@ impl Canvas {
     }
 
     pub fn to_png(&self) -> Vec<u8> {
-        let mut raw = Vec::with_capacity(self.pixels.len() + self.height as usize);
-        for y in 0..self.height as usize {
-            // Filter type 0 (None): the encoder trades size for having no filter to undo.
-            raw.push(0);
-            let row = y * self.width as usize * 4;
-            raw.extend_from_slice(&self.pixels[row..row + self.width as usize * 4]);
+        let mut out = Vec::new();
+        {
+            let mut encoder = png::Encoder::new(&mut out, self.width, self.height);
+            encoder.set_color(png::ColorType::Rgba);
+            encoder.set_depth(png::BitDepth::Eight);
+            encoder.set_compression(png::Compression::Fast);
+            encoder.set_filter(png::Filter::Sub);
+            let mut writer = encoder.write_header().expect("valid PNG header");
+            writer
+                .write_image_data(&self.pixels)
+                .expect("valid RGBA8 pixel buffer");
         }
-        let mut out = Vec::from(SIGNATURE);
-        let mut ihdr = Vec::with_capacity(13);
-        ihdr.extend_from_slice(&self.width.to_be_bytes());
-        ihdr.extend_from_slice(&self.height.to_be_bytes());
-        ihdr.extend_from_slice(&[8, 6, 0, 0, 0]); // 8-bit, RGBA, deflate, no filter, no interlace
-        chunk(&mut out, b"IHDR", &ihdr);
-        chunk(
-            &mut out,
-            b"IDAT",
-            &zlib_deflate(&raw, self.width as usize * 4 + 1),
-        );
-        chunk(&mut out, b"IEND", &[]);
         out
     }
 }
@@ -415,18 +220,25 @@ impl RoundRect {
 /// `#rgb`, `#rrggbb` or `#rrggbbaa`; alpha defaults to opaque.
 pub fn parse_colour(spec: &str) -> Option<[u8; 4]> {
     let hex = spec.strip_prefix('#').unwrap_or(spec);
-    let byte = |at: usize| u8::from_str_radix(&hex[at..at + 2], 16).ok();
-    match hex.len() {
-        3 => {
+    let hex = hex.as_bytes();
+    let nibble = |byte: u8| match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
+    };
+    let byte = |at: usize| Some(nibble(*hex.get(at)?)? * 16 + nibble(*hex.get(at + 1)?)?);
+    match hex {
+        [r, g, b] => {
             let mut out = [0u8, 0, 0, 255];
-            for (i, c) in hex.chars().enumerate() {
-                let v = c.to_digit(16)? as u8;
+            for (i, c) in [r, g, b].into_iter().enumerate() {
+                let v = nibble(*c)?;
                 out[i] = v * 17;
             }
             Some(out)
         }
-        6 => Some([byte(0)?, byte(2)?, byte(4)?, 255]),
-        8 => Some([byte(0)?, byte(2)?, byte(4)?, byte(6)?]),
+        [_, _, _, _, _, _] => Some([byte(0)?, byte(2)?, byte(4)?, 255]),
+        [_, _, _, _, _, _, _, _] => Some([byte(0)?, byte(2)?, byte(4)?, byte(6)?]),
         _ => None,
     }
 }

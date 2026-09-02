@@ -5,13 +5,12 @@
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
+use vtabs_protocol::limits::{FRAME_MAX_AREA, FRAME_MAX_SIDE};
+
 use crate::png::{Canvas, RoundRect, parse_colour};
 
 /// The caller is a GUI sizing an allocation from a window it measured, so the bound is on the area
 /// as well as each side: 60000x1 clears any per-side cap and still asks for a 240 MB buffer.
-pub const MAX_SIDE: u32 = 16384;
-pub const MAX_AREA: u64 = 8192 * 8192;
-
 pub struct Args {
     pub width: u32,
     pub height: u32,
@@ -70,8 +69,11 @@ impl Args {
         // not have, and quietly drawing a different frame would hide that.
         let width = want(width, "--w is required")?;
         let height = want(height, "--h is required")?;
-        let bad = width < 1 || height < 1 || width > MAX_SIDE as i64 || height > MAX_SIDE as i64;
-        if bad || (width as u64) * (height as u64) > MAX_AREA {
+        let bad = width < 1
+            || height < 1
+            || width > FRAME_MAX_SIDE as i64
+            || height > FRAME_MAX_SIDE as i64;
+        if bad || (width as u64) * (height as u64) > FRAME_MAX_AREA {
             let msg = format!("frame: refusing {width}x{height}");
             return Err(io::Error::new(io::ErrorKind::InvalidInput, msg));
         }

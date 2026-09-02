@@ -4,8 +4,13 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
+serde_json.workspace = true
+vtabs-engine.workspace = true
 vtabs-runtime.workspace = true
 vtabs-zen.workspace = true
 
-[dev-dependencies]
-vtabs-protocol.workspace = true
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows-sys.workspace = true

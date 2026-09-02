@@ -4,3 +4,5 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
+png.workspace = true
+vtabs-protocol.workspace = true

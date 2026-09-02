@@ -6,8 +6,11 @@
 //! sidebar emits is parsed by the terminal, shipped through any mux in between and re-rendered by
 //! the GUI, so a hover that moves one row costs two rows, not the whole pane.
 
-use vtabs_view::frame::{Cell, Rgb, faded};
-use vtabs_view::render::Frame;
+use vtabs_engine::render::Frame;
+use vtabs_engine::{
+    color::Color,
+    frame::{Cell, faded},
+};
 
 const ESC: char = '\x1b';
 const HIDE_CURSOR: &str = "\x1b[?25l";
@@ -20,12 +23,12 @@ fn cup(out: &mut String, row: usize) {
     out.push_str(&format!("[{row};1H"));
 }
 
-fn sgr_fg(out: &mut String, c: Rgb) {
+fn sgr_fg(out: &mut String, c: Color) {
     out.push(ESC);
     out.push_str(&format!("[38;2;{};{};{}m", c[0], c[1], c[2]));
 }
 
-fn sgr_bg(out: &mut String, c: Rgb) {
+fn sgr_bg(out: &mut String, c: Color) {
     out.push(ESC);
     out.push_str(&format!("[48;2;{};{};{}m", c[0], c[1], c[2]));
 }
@@ -36,7 +39,7 @@ fn same(a: &Cell, b: &Cell) -> bool {
 
 /// One row's escapes. An all-blank run omits the fg code, exactly as `emit()` does, so the row
 /// inherits the fg it last set rather than paying for one it cannot show.
-fn row_bytes(cells: &[Cell], page_bg: Rgb, fade: Option<f64>) -> String {
+fn row_bytes(cells: &[Cell], page_bg: Color, fade: Option<f64>) -> String {
     let mut out = String::new();
     let mut run: Option<Cell> = None;
     let mut body = String::new();
@@ -77,7 +80,7 @@ fn framed(body: &str) -> String {
 }
 
 /// The whole frame as one write: an unpainted row is skipped, keeping whatever the pane had there.
-pub fn rows_bytes(rows: &[Option<Vec<Cell>>], fades: &[Option<f64>], page_bg: Rgb) -> String {
+pub fn rows_bytes(rows: &[Option<Vec<Cell>>], fades: &[Option<f64>], page_bg: Color) -> String {
     let mut body = String::new();
     for (i, cells) in rows.iter().enumerate() {
         let Some(cells) = cells else { continue };
@@ -93,7 +96,7 @@ pub fn rows_bytes(rows: &[Option<Vec<Cell>>], fades: &[Option<f64>], page_bg: Rg
 pub fn changed_rows_bytes(
     rows: &[Option<Vec<Cell>>],
     fades: &[Option<f64>],
-    page_bg: Rgb,
+    page_bg: Color,
     shown_rows: &[Option<Vec<Cell>>],
     shown_fades: &[Option<f64>],
 ) -> Option<String> {
@@ -116,6 +119,6 @@ pub fn changed_rows_bytes(
     Some(framed(&body))
 }
 
-pub fn frame_bytes(frame: &Frame, page_bg: Rgb) -> String {
+pub fn frame_bytes(frame: &Frame, page_bg: Color) -> String {
     rows_bytes(&frame.cells, &frame.fades, page_bg)
 }

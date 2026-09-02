@@ -5,8 +5,11 @@ pub mod types;
 pub mod v2;
 
 pub use command::Command;
-pub use event::{DoArgs, DoId, Event};
-pub use types::{Button, Mods, Mouse, MouseKind};
+pub use event::{
+    CardPart, DoArgs, DoId, Event, Intent, Modifier, SettingsApplyMode, SettingsChange,
+    SettingsPatch,
+};
+pub use types::{Button, Color, Mods, Mouse, MouseKind};
 
 use base64::Engine as _;
 

@@ -1,8 +1,0 @@
-[package]
-name = "vtabs-core"
-version.workspace = true
-edition.workspace = true
-
-[dependencies]
-vtabs-protocol.workspace = true
-serde.workspace = true

@@ -1,7 +1,0 @@
-[package]
-name = "vtabs-theme"
-version.workspace = true
-edition.workspace = true
-
-[dependencies]
-serde.workspace = true

@@ -1,6 +1,8 @@
 use std::collections::BTreeMap;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
+
+use crate::Color;
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct ConfigMsg {
@@ -27,7 +29,7 @@ pub struct ConfigMsg {
     #[serde(default)]
     pub wheel: Option<String>,
     #[serde(default)]
-    pub context: Option<String>,
+    pub context: Option<ContextSpec>,
     #[serde(default)]
     pub hover_timeout_ms: u64,
     /// Off: no row lights under the pointer, and the runtime stops asking for motion reports.
@@ -40,15 +42,13 @@ pub struct ConfigMsg {
     pub popover: Option<PopoverSection>,
     #[serde(default)]
     pub render: Option<RenderSection>,
-    #[serde(default)]
-    pub mac: Option<MacFacts>,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct PopoverSection {
-    /// `"auto"` or a column count, which is why this stays untyped on the wire.
+    /// `"auto"` or a column count, represented as the exact wire union.
     #[serde(default)]
-    pub width: Option<serde_json::Value>,
+    pub width: Option<PopoverWidth>,
     #[serde(default = "yes")]
     pub follow_pointer: bool,
     #[serde(default)]
@@ -58,8 +58,25 @@ pub struct PopoverSection {
 impl PopoverSection {
     /// The width the user asked for, or None for `"auto"`.
     pub fn fixed_width(&self) -> Option<i64> {
-        self.width.as_ref().and_then(serde_json::Value::as_i64)
+        match self.width.as_ref() {
+            Some(PopoverWidth::Fixed(width)) => Some(*width),
+            Some(PopoverWidth::Auto(_)) | None => None,
+        }
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(untagged)]
+pub enum PopoverWidth {
+    Fixed(i64),
+    Auto(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(untagged)]
+pub enum ContextSpec {
+    Name(String),
+    Enabled(bool),
 }
 
 impl Default for PopoverSection {
@@ -120,18 +137,6 @@ pub struct PaddingSpec {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
-pub struct MacFacts {
-    #[serde(default)]
-    pub integrated_buttons: bool,
-    #[serde(default)]
-    pub native_button_style: bool,
-    #[serde(default)]
-    pub preview: bool,
-    #[serde(default)]
-    pub is_full_screen: bool,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
 pub struct GlyphFlags {
     #[serde(default)]
     pub custom_block: bool,
@@ -144,10 +149,95 @@ pub struct ThemeMsg {
     pub rev: u64,
     #[serde(default)]
     pub scheme: Scheme,
-    /// `hooks.theme` output, pre-resolved by Lua to hex.
+    /// Raw user/space overrides. Rust is the only place that resolves these against the scheme.
     #[serde(default)]
-    pub overrides: BTreeMap<String, serde_json::Value>,
+    pub overrides: ThemeOverrides,
+    /// Window-global private state, shared by sidebar and settings panes. Older clients omit it and
+    /// the runtime falls back to the sidebar model's historical `private` field.
+    #[serde(default)]
+    pub private: Option<bool>,
+    /// Ask a capable backend to round-trip its resolved base through `hooks.theme` before commit.
+    #[serde(default)]
+    pub hook: bool,
 }
+
+/// The theme keys accepted at the wire boundary. Unknown keys remain forward-compatible through
+/// serde's default behavior; known keys can no longer carry the wrong kind of value.
+#[derive(Debug, Clone, PartialEq, Default, Deserialize, Serialize)]
+pub struct ThemeOverrides {
+    pub fg: Option<String>,
+    pub bg: Option<String>,
+    pub elevation: Option<f64>,
+    pub accent: Option<String>,
+    pub private_accent: Option<String>,
+    pub hover_bg: Option<String>,
+    pub hover_fg: Option<String>,
+    pub active_bg: Option<String>,
+    pub active_fg: Option<String>,
+    pub focus_bg: Option<String>,
+    pub meta_fg: Option<String>,
+    pub dim: Option<String>,
+    pub title_idle: Option<String>,
+    pub title_active: Option<String>,
+    pub active_title_fg: Option<String>,
+    pub pinned_fg: Option<String>,
+    pub separator: Option<String>,
+    pub border: Option<String>,
+    pub border_idle: Option<String>,
+    pub ghost_border_hover: Option<String>,
+    pub new_tab_fg: Option<String>,
+    pub close_fg: Option<String>,
+    pub close_hover_fg: Option<String>,
+    pub unseen_fg: Option<String>,
+    pub drag_bg: Option<String>,
+    pub drag_fg: Option<String>,
+    pub scroll_fg: Option<String>,
+    pub scroll_idle_fg: Option<String>,
+    pub surface_raised: Option<String>,
+    pub scrim: Option<f64>,
+    pub disabled_fg: Option<String>,
+    pub popover_sel_bg: Option<String>,
+    pub popover_sel_fg: Option<String>,
+    pub popover_sel_hint: Option<String>,
+}
+
+/// Machine-readable theme field metadata shared with the Lua bridge. Serialization tests compare
+/// this manifest to the DTO so adding a field cannot silently skip validation or normalization.
+pub const THEME_COLOR_FIELDS: &[&str] = &[
+    "fg",
+    "bg",
+    "accent",
+    "private_accent",
+    "hover_bg",
+    "hover_fg",
+    "active_bg",
+    "active_fg",
+    "focus_bg",
+    "meta_fg",
+    "dim",
+    "title_idle",
+    "title_active",
+    "active_title_fg",
+    "pinned_fg",
+    "separator",
+    "border",
+    "border_idle",
+    "ghost_border_hover",
+    "new_tab_fg",
+    "close_fg",
+    "close_hover_fg",
+    "unseen_fg",
+    "drag_bg",
+    "drag_fg",
+    "scroll_fg",
+    "scroll_idle_fg",
+    "surface_raised",
+    "disabled_fg",
+    "popover_sel_bg",
+    "popover_sel_fg",
+    "popover_sel_hint",
+];
+pub const THEME_FRACTION_FIELDS: &[&str] = &["elevation", "scrim"];
 
 #[derive(Debug, Clone, PartialEq, Default, Deserialize)]
 pub struct Scheme {
@@ -161,46 +251,217 @@ pub struct Scheme {
     pub active_tab_bg: Option<String>,
     #[serde(default)]
     pub ansi: Vec<String>,
+    /// Bright ANSI colours are kept separate because automatic space accents preserve the host
+    /// palette's normal-then-bright slot order.
+    #[serde(default)]
+    pub brights: Vec<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+/// The complete effective theme produced by Rust. RGB values deliberately stay triples: the hook
+/// receives the same representation the renderer consumes, without a second colour parser.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct ResolvedTheme {
+    pub bg: Color,
+    pub fg: Color,
+    pub dim: Color,
+    pub accent: Color,
+    pub title_idle: Color,
+    pub meta_fg: Color,
+    pub active_bg: Color,
+    pub active_fg: Color,
+    pub hover_bg: Color,
+    pub hover_fg: Color,
+    pub focus_bg: Color,
+    pub pinned_fg: Color,
+    pub separator: Color,
+    pub border: Color,
+    pub border_idle: Color,
+    pub ghost_border_hover: Color,
+    pub new_tab_fg: Color,
+    pub close_fg: Color,
+    pub close_hover_fg: Color,
+    pub unseen_fg: Color,
+    pub private_accent: Color,
+    pub drag_bg: Color,
+    pub drag_fg: Color,
+    pub scroll_fg: Color,
+    pub scroll_idle_fg: Color,
+    pub title_active: Color,
+    pub active_title_fg: Color,
+    pub title_active_contrast: f64,
+    pub content_bg: Color,
+    pub surface_raised: Color,
+    pub scrim: f64,
+    pub disabled_fg: Color,
+    pub popover_sel_bg: Color,
+    pub popover_sel_fg: Color,
+    pub popover_sel_hint: Color,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct ModelMsg {
     pub rev: u64,
-    #[serde(default)]
-    pub screen: Option<String>,
+    pub screen: ModelScreen,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum ModelScreen {
+    Sidebar(SidebarModel),
+    Settings(SettingsModel),
+}
+
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct SidebarModel {
     /// The window's collapse mode is Lua state; the pane only knows its width.
-    #[serde(default)]
     pub rail: bool,
-    #[serde(default)]
     pub active: Option<i64>,
-    #[serde(default)]
     pub focus: Option<FocusState>,
-    #[serde(default)]
     pub scroll: Option<ScrollState>,
-    #[serde(default)]
     pub drag: Option<DragState>,
-    #[serde(default)]
     pub strip: Option<StripState>,
-    #[serde(default)]
     pub footer: Vec<FooterItem>,
-    #[serde(default)]
     pub tabs: Vec<TabRecord>,
-    #[serde(default)]
     pub private: bool,
     /// The active space's id, Lua's to decide; each entry's highlight is derived from it here.
-    #[serde(default)]
     pub space: Option<String>,
-    #[serde(default)]
     pub spaces: Vec<SpaceItem>,
-    /// `screen == "settings"` only: the form, in order, with everything a row shows pre-rendered.
-    #[serde(default)]
+}
+
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct SettingsModel {
     pub fields: Vec<SettingsField>,
-    #[serde(default)]
     pub groups: Vec<SettingsGroup>,
-    #[serde(default)]
     pub caveat: Option<Vec<String>>,
+    pub version: Option<String>,
+}
+
+/// The host facts Rust needs to own the live settings document. Values are deliberately JSON at
+/// this transport boundary; `vtabs-engine` converts them to its canonical typed value tree and is
+/// the sole owner of schema validation and mutation semantics.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct SettingsMsg {
+    pub rev: u64,
+    pub values: serde_json::Value,
+    #[serde(default)]
+    pub explicit: Vec<Vec<String>>,
+    #[serde(default)]
+    pub host_values: Vec<String>,
+    #[serde(default)]
+    pub opaque: Vec<Vec<String>>,
+    #[serde(default)]
+    pub key_defaults: BTreeMap<String, serde_json::Value>,
+    #[serde(default)]
+    pub is_macos: bool,
     #[serde(default)]
     pub version: Option<String>,
+}
+
+impl ModelMsg {
+    pub fn sidebar(&self) -> Option<&SidebarModel> {
+        match &self.screen {
+            ModelScreen::Sidebar(model) => Some(model),
+            ModelScreen::Settings(_) => None,
+        }
+    }
+
+    pub fn settings(&self) -> Option<&SettingsModel> {
+        match &self.screen {
+            ModelScreen::Sidebar(_) => None,
+            ModelScreen::Settings(model) => Some(model),
+        }
+    }
+
+    pub fn private(&self) -> bool {
+        self.sidebar().is_some_and(|model| model.private)
+    }
+
+    pub fn tab_count(&self) -> usize {
+        self.sidebar().map_or(0, |model| model.tabs.len())
+    }
+
+    pub fn field_count(&self) -> usize {
+        self.settings().map_or(0, |model| model.fields.len())
+    }
+
+    pub fn space_count(&self) -> usize {
+        self.sidebar().map_or(0, |model| model.spaces.len())
+    }
+}
+
+/// Transitional flat decoder: current messages are tagged by `screen`; older sidebar messages
+/// omitted that field, so absence remains the one legacy case and maps to Sidebar.
+#[derive(Deserialize)]
+struct FlatModel {
+    rev: u64,
+    #[serde(default)]
+    screen: Option<String>,
+    #[serde(default)]
+    rail: bool,
+    #[serde(default)]
+    active: Option<i64>,
+    #[serde(default)]
+    focus: Option<FocusState>,
+    #[serde(default)]
+    scroll: Option<ScrollState>,
+    #[serde(default)]
+    drag: Option<DragState>,
+    #[serde(default)]
+    strip: Option<StripState>,
+    #[serde(default)]
+    footer: Vec<FooterItem>,
+    #[serde(default)]
+    tabs: Vec<TabRecord>,
+    #[serde(default)]
+    private: bool,
+    #[serde(default)]
+    space: Option<String>,
+    #[serde(default)]
+    spaces: Vec<SpaceItem>,
+    #[serde(default)]
+    fields: Vec<SettingsField>,
+    #[serde(default)]
+    groups: Vec<SettingsGroup>,
+    #[serde(default)]
+    caveat: Option<Vec<String>>,
+    #[serde(default)]
+    version: Option<String>,
+}
+
+impl<'de> Deserialize<'de> for ModelMsg {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        use serde::de::Error as _;
+
+        let flat = FlatModel::deserialize(deserializer)?;
+        let screen = match flat.screen.as_deref() {
+            None | Some("sidebar") => ModelScreen::Sidebar(SidebarModel {
+                rail: flat.rail,
+                active: flat.active,
+                focus: flat.focus,
+                scroll: flat.scroll,
+                drag: flat.drag,
+                strip: flat.strip,
+                footer: flat.footer,
+                tabs: flat.tabs,
+                private: flat.private,
+                space: flat.space,
+                spaces: flat.spaces,
+            }),
+            Some("settings") => ModelScreen::Settings(SettingsModel {
+                fields: flat.fields,
+                groups: flat.groups,
+                caveat: flat.caveat,
+                version: flat.version,
+            }),
+            Some(_) => return Err(D::Error::custom("unknown model screen")),
+        };
+        Ok(Self {
+            rev: flat.rev,
+            screen,
+        })
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -283,15 +544,41 @@ pub struct DragOrigin {
 #[derive(Debug, Clone, PartialEq, Default, Deserialize)]
 pub struct StripState {
     #[serde(default)]
-    pub rows: i64,
+    pub metrics: Option<PaneMetrics>,
     #[serde(default)]
-    pub cols: i64,
-    #[serde(default)]
-    pub toggle_row: Option<i64>,
-    #[serde(default)]
-    pub cell_w: Option<f64>,
+    pub chrome: Option<ChromeFacts>,
     #[serde(default)]
     pub buttons: Vec<StripButton>,
+}
+
+/// Raw pane measurements from WezTerm. Geometry derived from them never crosses the wire.
+#[derive(Debug, Clone, Copy, PartialEq, Default, Deserialize)]
+pub struct PaneMetrics {
+    #[serde(default)]
+    pub cols: u32,
+    #[serde(default)]
+    pub viewport_rows: u32,
+    #[serde(default)]
+    pub pixel_width: f64,
+    #[serde(default)]
+    pub pixel_height: f64,
+    #[serde(default)]
+    pub dpi: Option<f64>,
+}
+
+/// Host chrome facts Rust combines with pane metrics and render configuration.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+pub struct ChromeFacts {
+    #[serde(default)]
+    pub is_mac: bool,
+    #[serde(default)]
+    pub integrated_buttons: bool,
+    #[serde(default)]
+    pub native_button_style: bool,
+    #[serde(default)]
+    pub preview: bool,
+    #[serde(default)]
+    pub is_full_screen: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -313,6 +600,154 @@ pub struct SpaceItem {
     pub unseen: bool,
 }
 
+/// One complete, immutable window census for Rust's stateless spaces planner. `definitions` stays
+/// raw at the protocol boundary so one malformed entry or field can be dropped with a precise
+/// warning while the other entries remain usable.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct SpacesMsg {
+    pub rev: u64,
+    pub window_id: i64,
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub hook: bool,
+    #[serde(default)]
+    pub definitions: Vec<serde_json::Value>,
+    #[serde(default)]
+    pub tabs: Vec<SpaceTabFact>,
+    #[serde(default)]
+    pub active_tab: Option<i64>,
+    #[serde(default)]
+    pub active_space: Option<String>,
+    /// The active `(tab, space)` pair observed on the previous poll. It makes following a trigger,
+    /// rather than an invariant, so a deliberately selected empty space remains selected.
+    #[serde(default)]
+    pub follow: Option<SpaceFollow>,
+    #[serde(default)]
+    pub last_tabs: Vec<SpaceLastTab>,
+    /// Dynamic ids and their first-sight order are explicit input, keeping the engine pure and the
+    /// eventual persistence/ownership choice outside this protocol.
+    #[serde(default)]
+    pub dynamics: Vec<DynamicSpace>,
+}
+
+/// Renderer data plus the routing state that the existing sidebar model deliberately omits.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct SpaceTabFact {
+    #[serde(flatten)]
+    pub tab: TabRecord,
+    #[serde(default)]
+    pub remote: bool,
+    #[serde(default)]
+    pub space: Option<String>,
+    #[serde(default)]
+    pub manual: bool,
+    /// Opaque planner-produced stamp accepted back on the next poll.
+    #[serde(default)]
+    pub fingerprint: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+pub struct SpaceFollow {
+    pub tab_id: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub space: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+pub struct SpaceLastTab {
+    pub space_id: String,
+    pub tab_id: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+pub struct DynamicSpace {
+    pub id: String,
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub template: Option<String>,
+    pub seq: u64,
+}
+
+/// The exact Lua hook argument, emitted only for tabs whose routing fingerprint changed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct SpaceRouteHookFact {
+    pub tab_id: i64,
+    pub window_id: i64,
+    pub title: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub proc: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub host: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub user: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub domain: Option<String>,
+    pub remote: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub space: Option<String>,
+    pub manual: bool,
+}
+
+/// An explicit row with no `space` is the hook's nil/no-op answer; omitting the row means the
+/// batch is incomplete and must not be published.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct SpaceRouteHookAnswer {
+    pub tab_id: i64,
+    #[serde(default)]
+    pub space: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct SpaceAssignment {
+    pub tab_id: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub space: Option<String>,
+    pub manual: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fingerprint: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct SpaceSummary {
+    pub id: String,
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>,
+    pub count: usize,
+    pub unseen: bool,
+}
+
+/// Stable machine-readable warning codes let Lua retain its warn-once presentation without
+/// parsing English emitted by the engine.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct SpaceWarning {
+    pub code: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub space_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub field: Option<String>,
+}
+
+/// A complete planner result. Lua applies its state fields and mux effects only after checking the
+/// event's generation; the same value directly supplies the renderer and active theme layer.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct SpaceResolution {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub active: Option<String>,
+    pub assignments: Vec<SpaceAssignment>,
+    pub dynamics: Vec<DynamicSpace>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub follow: Option<SpaceFollow>,
+    pub last_tabs: Vec<SpaceLastTab>,
+    pub summary: Vec<SpaceSummary>,
+    pub visible_tab_ids: Vec<i64>,
+    pub theme_overrides: ThemeOverrides,
+    pub warnings: Vec<SpaceWarning>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Default, Deserialize)]
 pub struct FooterItem {
     #[serde(default)]
@@ -322,11 +757,11 @@ pub struct FooterItem {
     #[serde(default)]
     pub icon: Option<String>,
     #[serde(default)]
-    pub fg: Option<[u8; 3]>,
+    pub fg: Option<Color>,
     #[serde(default)]
-    pub bg: Option<[u8; 3]>,
+    pub bg: Option<Color>,
     #[serde(default)]
-    pub icon_fg: Option<[u8; 3]>,
+    pub icon_fg: Option<Color>,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -341,6 +776,9 @@ pub struct TabRecord {
     pub override_title: Option<String>,
     #[serde(default)]
     pub proc: Option<String>,
+    /// A user `icon_map` match resolved by Lua, where the user's native pattern semantics live.
+    #[serde(default)]
+    pub icon: Option<String>,
     #[serde(default)]
     pub cwd: Option<String>,
     #[serde(default)]
@@ -370,6 +808,13 @@ pub struct MenuMsg {
     pub anchor: Option<MenuAnchor>,
     #[serde(default)]
     pub target: Option<i64>,
+    /// Tab whose Rust-resolved title/meta heads this level. Usually `target`; confirmation may
+    /// name the first tab that will actually close instead.
+    #[serde(default)]
+    pub subject: Option<i64>,
+    /// Tabs affected by a confirmation, including `subject`.
+    #[serde(default)]
+    pub victims: Option<usize>,
     #[serde(default)]
     pub header: Option<MenuHeader>,
     #[serde(default)]

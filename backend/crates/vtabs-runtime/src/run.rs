@@ -3,10 +3,10 @@ use std::sync::mpsc::{self, RecvTimeoutError, Sender};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use vtabs_input::Parser;
 use vtabs_protocol::Event;
 
 use crate::app::App;
+use crate::input::Parser;
 use crate::log::Logger;
 use crate::signal;
 use crate::terminal::{self, TerminalGuard};
@@ -118,7 +118,13 @@ pub fn run() -> io::Result<()> {
         noted_menu: None,
         hover_deadline: None,
         token: None,
+        client_typed_intents: false,
+        client_theme_hooks: false,
+        client_spaces_policy: false,
+        last_reported_theme: None,
+        last_rail_reserve: None,
         cli: crate::cli::Cli::from_env(),
+        metrics: Default::default(),
     };
     app.write(set_user_var(ROLE_VAR, role.name()).as_bytes())?;
     // Marker only: it lets the plugin find this pane again, it proves nothing and carries no token.
@@ -145,6 +151,9 @@ pub fn run() -> io::Result<()> {
         if let Some(at) = app.next_hover() {
             deadline = deadline.min(at);
         }
+        if let Some(at) = app.next_hook_deadline() {
+            deadline = deadline.min(at);
+        }
         let until_tick = deadline.saturating_duration_since(Instant::now());
         let timeout = if parser.has_pending() {
             until_tick.min(ESC_TIMEOUT)
@@ -168,6 +177,7 @@ pub fn run() -> io::Result<()> {
         let now = Instant::now();
         app.tick_fx(now)?;
         app.tick_hover(now)?;
+        app.tick_hooks(now)?;
         if next_poll.is_some_and(|at| now >= at) {
             next_poll = Some(now + SIZE_POLL);
             app.poll_size()?;
