@@ -689,6 +689,18 @@ class WezTermMuxInstance:
             f"{command}\n",
         )
 
+    def activate_tab_relative(self, pane_id: int, delta: int) -> None:
+        """A native tab switch in the attached GUI, as a bound key would perform it."""
+
+        self._cli(
+            "gui",
+            "activate-tab",
+            "--pane-id",
+            str(pane_id),
+            "--tab-relative",
+            str(delta),
+        )
+
     def adjust_pane_size(self, pane_id: int, direction: str, amount: int) -> None:
         self._cli(
             "mux",

@@ -227,3 +227,62 @@ def test_local_and_standalone_mux_tabs_stay_on_their_own_endpoints(
 
     assert mux_after.pane_ids == mux_ids
     assert len(local_tab.sidebars) == 1
+
+
+def test_rapid_native_tab_switching_leaves_every_tab_intact(
+    wezterm_mux: WezTermMuxInstance,
+) -> None:
+    """A held tab-switch key must neither pile up splits and adjusts nor destabilize the GUI."""
+
+    before = wezterm_mux.wait_ready_tabs(1)
+    gui_before = wezterm_mux.wait_ready_tabs(1, endpoint="gui")
+    gui_content_id = _only_tab(gui_before).content[0].pane_id
+    for count in range(2, 5):
+        wezterm_mux.spawn_tab(gui_content_id)
+        wezterm_mux.wait_ready_tabs(count)
+    settled = wezterm_mux.wait_ready_tabs(4, stable_for=0.5)
+    pane_ids = settled.pane_ids
+
+    # Three bursts of a held key, each let settle before the next: the plugin serves the tab the
+    # hand stops on and must have split nothing into the ones it passed through.
+    for _ in range(3):
+        for _ in range(12):
+            wezterm_mux.activate_tab_relative(gui_content_id, 1)
+        wezterm_mux.wait_topology(
+            "the burst to settle on four intact tabs",
+            lambda topology: topology.pane_ids == pane_ids and topology.shape == ((1, 1),) * 4,
+            stable_for=0.4,
+        )
+
+    after = wezterm_mux.wait_topology(
+        "every tab to still hold its own content and exactly one sidebar",
+        lambda topology: topology.pane_ids == pane_ids and topology.shape == ((1, 1),) * 4,
+        stable_for=1.0,
+    )
+    assert after.pane_ids == pane_ids, "nothing was split into or closed out of a passing tab"
+    assert wezterm_mux.clients(), "the GUI is still attached"
+    assert before.tabs[0].tab_id in {tab.tab_id for tab in after.tabs}
+
+
+def test_settings_page_closes_as_a_whole_tab(wezterm_mux: WezTermMuxInstance) -> None:
+    """Closing the settings page never leaves a tab holding only its sidebar."""
+
+    before = wezterm_mux.wait_ready_tabs(1)
+    content_id = _only_tab(before).content[0].pane_id
+    wezterm_mux.probe(content_id, "settings")
+    opened = wezterm_mux.wait_topology(
+        "the settings page to open beside its own sidebar",
+        lambda topology: len(topology.tabs) == 2 and topology.shape == ((1, 1), (1, 1)),
+        stable_for=0.5,
+    )
+    page_tab = next(tab for tab in opened.tabs if tab.tab_id != _only_tab(before).tab_id)
+    page_ids = frozenset(pane.pane_id for pane in page_tab.panes)
+
+    wezterm_mux.probe(content_id, "close_settings")
+    closed = wezterm_mux.wait_topology(
+        "the settings tab to be gone with both of its panes",
+        lambda topology: len(topology.tabs) == 1 and not (topology.pane_ids & page_ids),
+        stable_for=0.5,
+    )
+    assert closed.pane_ids == before.pane_ids
+    assert closed.shape == ((1, 1),)

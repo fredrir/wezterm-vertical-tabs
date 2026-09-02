@@ -689,3 +689,68 @@ test("settings persistence writes exactly the shared cap and refuses one byte ov
   file:close()
   os.remove(path)
 end)
+
+test("gui-attached serves every window that has a GUI, past one the mux holds without", function()
+  local wezterm = require "wezterm"
+  local fake = require "fake_mux"
+  local init = require "init"
+  init.apply_to_config({}, {
+    settings = { path = "/nonexistent/vtabs-test-settings.json" },
+    backend = { path = "/bin/wez-vtabs" },
+  })
+  local handlers = wezterm.handlers["gui-attached"]
+  assert(handlers and #handlers >= 1, "the handler is registered")
+  local win = fake.window()
+  win:add_tab { title = "g" }
+  -- a standalone mux server's window, listed first: `gui_window()` throws for it
+  local headless = {
+    gui_window = function()
+      error "mux window id 9 is not currently associated with a gui window"
+    end,
+  }
+  table.insert(wezterm.windows, 1, headless)
+  local ok, err = pcall(handlers[#handlers])
+  table.remove(wezterm.windows, 1)
+  assert(ok, "the handler survives it: " .. tostring(err))
+  eq(H.sidebars_in(win.tab_list[1]), 1, "and the window after it still gets its sidebar")
+  fake.close_window(win)
+  config.setup { backend = { path = "/bin/wez-vtabs" } }
+end)
+
+test("the poll counts a held key by switches to known tabs; a burst of new tabs is served at once", function()
+  local wezterm = require "wezterm"
+  local fake = require "fake_mux"
+  local sidebar = require "vtabs.sidebar"
+  local geometry = require "vtabs.geometry"
+  local init = require "init"
+  init.apply_to_config({}, {
+    settings = { path = "/nonexistent/vtabs-test-settings.json" },
+    backend = { path = "/bin/wez-vtabs" },
+  })
+  local handlers = wezterm.handlers["update-status"]
+  local poll = handlers[#handlers]
+  local win = fake.window()
+  local wid = win:window_id()
+  local first = win:add_tab { title = "a" }
+  poll(win.gui)
+  assert(sidebar.find(first), "the first tab is served")
+  -- three CMD+T in a row: each new tab is active for a moment and gets its sidebar all the same
+  local spawned = {}
+  for i = 1, 3 do
+    spawned[i] = win:add_tab { title = "new" .. i }
+    win.active_tab_ref = spawned[i]
+    poll(win.gui)
+  end
+  eq(geometry.switching(wid), false, "new tabs are not a held key")
+  for i = 1, 3 do
+    assert(sidebar.find(spawned[i]), "spawned tab " .. i .. " has its sidebar")
+  end
+  -- the same cadence through tabs the window already knows is a held key
+  win.active_tab_ref = first
+  poll(win.gui)
+  win.active_tab_ref = spawned[1]
+  poll(win.gui)
+  eq(geometry.switching(wid), true, "two switches to known tabs inside the dwell")
+  fake.close_window(win)
+  config.setup { backend = { path = "/bin/wez-vtabs" } }
+end)

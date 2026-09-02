@@ -6,6 +6,7 @@ local mux = require "vtabs.mux"
 local platform = require "vtabs.platform"
 local sidebar = require "vtabs.sidebar"
 local state = require "vtabs.state"
+local store = require "vtabs.store"
 local util = require "vtabs.util"
 
 local schema = require "vtabs.schema"
@@ -244,15 +245,19 @@ function M.open(gui_window)
   return gate.run(gui_window:window_id(), "settings_open", open, gui_window)
 end
 
----Closes the settings tab: the page is a backend pane, so it is retired like a sidebar and the tab
----goes with it. Every edit commits as it is made, so there is nothing to lose to a prompt.
+---Closes the settings tab whole. Retiring the page alone would leave its sidebar holding the tab at
+---full width until the next poll, and on a mux domain a tab left holding only a backend pane is
+---the shape the mux client has been seen to abort on when the local window goes first. Every edit
+---commits as it is made, so there is nothing to lose to a prompt, and the page is not a tab to
+---reopen from history.
 function M.close(gui_window)
   local tab, pane = M.find(gui_window:mux_window())
   if not tab or not sidebar.is_ready(pane) then
     return false
   end
-  sidebar.retire(gui_window, tab, pane)
-  return true
+  local tab_id = tab:tab_id()
+  store.discarded[tab_id] = true
+  return require("vtabs.actions").close_tab(gui_window, tab_id) ~= false
 end
 
 ---True when the event carries no modifier. The wire sends `mods` as a JSON array, so comparing it

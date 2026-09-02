@@ -228,7 +228,9 @@ end
 
 local function forget_closed(tab_id, private)
   local meta = store.tab_meta[tab_id]
-  if meta and not store.moving[tab_id] and not private then
+  -- a tab that moved to another window is not closed, and a discarded one (the settings page) is
+  -- nothing to reopen
+  if meta and not store.moving[tab_id] and not store.discarded[tab_id] and not private then
     state.push_closed(meta)
   end
   local pid = state.sidebar_pane_id(tab_id)

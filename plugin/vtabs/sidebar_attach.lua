@@ -51,7 +51,9 @@ end
 
 local function theme_bg(tab)
   local gui = mux.call(mux.call(tab, "window"), "gui_window")
-  local palette = (mux.effective_config(gui) or {}).resolved_palette or {}
+  -- `effective_config` converts the whole config on every call; the view keeps one per window.
+  local effective = gui and require("vtabs.view").effective_config(gui) or nil
+  local palette = (effective or {}).resolved_palette or {}
   local resolved = theme_bridge.get(mux.window_id(gui))
   local base = config.get().theme
   return theme_bridge.colour(type(resolved) == "table" and resolved.bg or nil)
@@ -154,11 +156,15 @@ local function attach(tab)
   end
   store.attaching[tab_id] = now
   local domain = cfg.domain == "CurrentPaneDomain" and "CurrentPaneDomain" or { DomainName = cfg.domain }
+  -- Split at the width the window wants -- adopted, rail or configured -- so the new pane never
+  -- appears at one width and jumps to another a poll later.
+  local wid = mux.window_id(mux.call(tab, "window"))
+  local width = wid and require("vtabs.geometry").attach_width(wid, tab) or cfg.width
   local ok, sb = pcall(function()
     return base:split {
       direction = cfg.position == "left" and "Left" or "Right",
       top_level = true,
-      size = cfg.width,
+      size = width,
       args = args,
       set_environment_variables = backend.env(cfg, pane_domain, host, theme_bg(tab)),
       domain = domain,
@@ -500,8 +506,9 @@ local function ensure_window(gui_window)
         else
           await_auth(gui_window, tab, sb, now)
         end
-      elseif tab_id == active_id then
-        -- background tabs attach when they are first activated: 20 splits at once cost ~460 ms
+      elseif tab_id == active_id and not require("vtabs.geometry").switching(wid) then
+        -- background tabs attach when they are first activated: 20 splits at once cost ~460 ms,
+        -- and a tab a held key is only passing through gets nothing split into it at all
         M.attach(tab)
       end
     end

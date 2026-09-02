@@ -43,6 +43,8 @@ To test another exact host/container build, provide both
 - hidden sidebars restore without replacing user content;
 - window resize and manual divider width preserve the user's sidebar geometry;
 - a split accidentally started from the sidebar is rescued into usable content;
+- a held tab-switch key leaves every tab's content and single sidebar intact and the GUI attached;
+- the settings page closes as a whole tab, never leaving a tab holding only its sidebar;
 - local and standalone-mux tabs remain on their own endpoints;
 - the scheduled Docker lane executes a tab and its sidebar through a real localhost SSH domain.
 

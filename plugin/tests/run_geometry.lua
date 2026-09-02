@@ -245,12 +245,11 @@ test("stacked content is one band and spans the content column: corrected with n
   eq(sb.cols, 28)
 end)
 
-test("side-by-side content waits for the frames to stop, then corrects in one atomic dance", function()
+test("side-by-side content corrects in one atomic dance once the frames have stopped", function()
   local win, gui = window(1)
   sidebar.ensure(gui)
   local tab = win.tab_list[1]
   local sb = mark_ready(tab)
-  local wid = gui:window_id()
   local content = sidebar.content_pane(tab)
   local extra = fake.pane(tab, { cols = 28 })
   tab.pane_list[#tab.pane_list + 1] = extra
@@ -260,13 +259,7 @@ test("side-by-side content waits for the frames to stop, then corrects in one at
   content.left, content.width = 34, 27
   extra.left, extra.width = 62, 28
   local activations = spy_activate(sb)
-  local before = #win.actions
-  geometry.on_resize(wid)
-  eq(geometry.correct(gui), false, "mid-burst the dance would flood the shells with focus events")
-  eq(#win.actions, before, "so nothing is issued on the frame")
-  later(200, function()
-    assert(geometry.correct(gui), "corrected once the frames have stopped")
-  end)
+  assert(geometry.correct(gui), "corrected")
   local action = last_action(win)
   eq(action.action, "Multiple", "one assignment: nothing can land between its steps")
   eq(action.arg[1].action, "ActivatePaneByIndex")
@@ -280,6 +273,75 @@ test("side-by-side content waits for the frames to stop, then corrects in one at
   eq(activations(), 0, "no pane:activate() of its own, which the pointer could undo")
   eq(tab.active, extra, "focus restored")
   eq(sb.cols, 28)
+end)
+
+test(
+  "through a resize burst, side-by-side content parks its focus on the sidebar and gets it back at settle",
+  function()
+    local win, gui = window(1)
+    sidebar.ensure(gui)
+    local tab = win.tab_list[1]
+    local sb = mark_ready(tab)
+    local wid = gui:window_id()
+    local content = sidebar.content_pane(tab)
+    local extra = fake.pane(tab, { cols = 28 })
+    tab.pane_list[#tab.pane_list + 1] = extra
+    extra:activate()
+    win:resize(10)
+    eq(sb.cols, 33)
+    content.left, content.width = 34, 27
+    extra.left, extra.width = 62, 28
+    local activations = spy_activate(sb)
+    geometry.on_resize(wid)
+    assert(geometry.correct(gui), "the frame is corrected at once")
+    local action = last_action(win)
+    eq(action.action, "Multiple")
+    eq(action.arg[1].action, "ActivatePaneByIndex")
+    eq(action.arg[1].arg, 0)
+    eq(action.arg[2].action, "AdjustPaneSize")
+    eq(#action.arg, 2, "focus stays parked on the sidebar while the frames keep coming")
+    eq(tab.active, sb)
+    eq(sb.cols, 28)
+    -- the next frame is corrected from the sidebar, which already holds focus: no activation at all
+    win:resize(2)
+    geometry.on_resize(wid)
+    assert(geometry.correct(gui))
+    eq(last_action(win).action, "AdjustPaneSize", "bare: one focus event pair per burst, not per frame")
+    eq(sb.cols, 28)
+    later(200, function()
+      eq(geometry.correct(gui), false, "nothing left to correct once the frames stop")
+    end)
+    eq(last_action(win).action, "ActivatePaneByIndex", "and focus goes back")
+    eq(last_action(win).arg, 2)
+    eq(tab.active, extra, "to the pane that had it")
+    eq(activations(), 0, "no pane:activate() of its own, which the pointer could undo")
+  end
+)
+
+test("a parked focus is not handed back to a pane the user has meanwhile left or closed", function()
+  local win, gui = window(1)
+  sidebar.ensure(gui)
+  local tab = win.tab_list[1]
+  local sb = mark_ready(tab)
+  local wid = gui:window_id()
+  local content = sidebar.content_pane(tab)
+  local extra = fake.pane(tab, { cols = 28 })
+  tab.pane_list[#tab.pane_list + 1] = extra
+  extra:activate()
+  win:resize(10)
+  content.left, content.width = 34, 27
+  extra.left, extra.width = 62, 28
+  geometry.on_resize(wid)
+  assert(geometry.correct(gui))
+  eq(tab.active, sb, "parked")
+  -- the user clicks the other content pane before the frames stop
+  content:activate()
+  local before = #win.actions
+  later(200, function()
+    eq(geometry.correct(gui), false)
+  end)
+  eq(#win.actions, before, "the hand-back is not forced over the user's own choice")
+  eq(tab.active, content)
 end)
 
 test("a content pane as wide as the content column reaches the root split, beside narrower neighbours", function()
@@ -730,4 +792,176 @@ test("the backend's resize report corrects from the tree and publishes, with no 
   input.handle(gui, sb, "vtabs", '{"t":"resize","cols":31,"rows":24,"n":2}')
   eq(sb.cols, 28, "the report triggered a correction")
   eq(last_action(win).arg[2], 3)
+end)
+
+---A tab whose panes live on a mux domain, with the host's adjust queued the way a mux client
+---answers: at once, applied later.
+local function remote_tab()
+  local win, gui, tab, sb = settled_tab()
+  local content = sidebar.content_pane(tab)
+  sb.domain, content.domain = "e2emux", "e2emux"
+  local real = getmetatable(gui).perform_action
+  local queued = {}
+  gui.perform_action = function(_, action, pane)
+    win.actions[#win.actions + 1] = { action = action, pane = pane }
+    queued[#queued + 1] = action
+  end
+  local function apply()
+    local action = table.remove(queued, 1)
+    if action then
+      real(gui, action, sb)
+    end
+  end
+  return win, gui, tab, sb, apply
+end
+
+test("on a mux domain the sidebar's own size report releases the adjust in flight at once", function()
+  local win, gui, _, sb, apply = remote_tab()
+  local wid = gui:window_id()
+  win:resize(10)
+  assert(geometry.correct(gui), "sent")
+  eq(geometry.correct(gui), false, "and nothing more while it is in flight")
+  apply()
+  eq(sb.cols, 28, "the mux applied it")
+  geometry.landed(wid, sb:pane_id(), 28)
+  eq(geometry.correct(gui), false, "in order")
+  eq(geometry.inspect(wid).pending, nil, "released by the report; no stability window to wait out")
+  win:resize(4)
+  assert(geometry.correct(gui), "so the next frame's correction goes out at once")
+  gui.perform_action = nil
+end)
+
+test("a mux mirror rebuilt to a stale width around an adjust in flight is neither chased nor adopted", function()
+  local win, gui, tab, sb, apply = remote_tab()
+  local wid = gui:window_id()
+  local clock = H.clock()
+  win:resize(2)
+  eq(sb.cols, 29)
+  assert(geometry.correct(gui), "the frame is corrected")
+  -- the server applies it, but the mirror is rebuilt from a pane list answered just before that
+  apply()
+  eq(sb.cols, 28)
+  local sent = #win.actions
+  clock.advance(50)
+  tab:set_split(29)
+  eq(geometry.correct(gui), false, "an echo of the old width is not chased")
+  eq(#win.actions, sent, "no second adjust on top of the first")
+  -- the report arrives while the mirror still shows the echo
+  geometry.landed(wid, sb:pane_id(), 28)
+  clock.advance(50)
+  eq(geometry.correct(gui), false, "still not adopted: the report and the mirror disagree")
+  eq(geometry.desired(wid), 28)
+  -- the mirror catches up with the server
+  tab:set_split(28)
+  clock.advance(50)
+  eq(geometry.correct(gui), false)
+  eq(geometry.inspect(wid).pending, nil, "cleared once report and mirror agree")
+  eq(geometry.desired(wid), 28, "the width is still cfg.width")
+  gui.perform_action = nil
+  clock.restore()
+end)
+
+test("an unreported mux adjust stops blocking after its wait, and the width is asked for again", function()
+  local win, gui, _, sb, _ = remote_tab()
+  local clock = H.clock()
+  win:resize(10)
+  assert(geometry.correct(gui))
+  local sent = #win.actions
+  clock.advance(300)
+  eq(geometry.correct(gui), false, "the mux may still be applying it")
+  eq(#win.actions, sent)
+  clock.advance(400)
+  assert(geometry.correct(gui), "a server that lost it is not waited on forever")
+  eq(sb.cols, 33, "the fake never applied either")
+  gui.perform_action = nil
+  clock.restore()
+end)
+
+test("on a mux domain a moved divider is the user's only once it has sat still across a round trip", function()
+  local win, gui, tab, sb = settled_tab()
+  local content = sidebar.content_pane(tab)
+  sb.domain, content.domain = "e2emux", "e2emux"
+  local wid = gui:window_id()
+  local before = #win.actions
+  local clock = H.clock()
+  wezterm.timers = {}
+  tab:set_split(34)
+  eq(geometry.correct(gui), false, "seen moving: neither fought nor adopted yet")
+  eq(geometry.desired(wid), 28, "a mirror rebuilt from a stale pane list moves it the same way")
+  eq(#wezterm.timers, 1, "and a follow-up is armed: the wait must not depend on a poll arriving")
+  clock.advance(100)
+  eq(geometry.correct(gui), false)
+  eq(#wezterm.timers, 1, "one follow-up at a time")
+  eq(geometry.desired(wid), 28)
+  clock.advance(200)
+  wezterm.fire_timers()
+  eq(geometry.desired(wid), 34, "still there a round trip later: the hand's, by the follow-up alone")
+  eq(#win.actions, before, "and never fought")
+  eq(sb.cols, 34)
+  clock.restore()
+end)
+
+test("a held tab-switch key is waited out: nothing is adjusted into a tab the key is passing through", function()
+  local win, gui, _, sb = settled_tab()
+  local wid = gui:window_id()
+  local clock = H.clock()
+  geometry.on_switch(wid)
+  eq(geometry.switching(wid), false, "one switch is a switch")
+  clock.advance(50)
+  geometry.on_switch(wid)
+  win:resize(10)
+  clock.advance(10)
+  eq(geometry.switching(wid), true, "two inside the dwell are a held key")
+  eq(geometry.correct(gui), false, "the tab is left alone")
+  eq(sb.cols, 33)
+  clock.advance(240)
+  eq(geometry.switching(wid), false)
+  assert(geometry.correct(gui), "the tab the hand stopped on is served")
+  eq(sb.cols, 28)
+  clock.restore()
+end)
+
+test("a new sidebar is split at the width the window wants, so it never jumps a poll later", function()
+  local win, gui = window(3)
+  local wid = gui:window_id()
+  win.active_tab_ref = win.tab_list[1]
+  sidebar.ensure(gui)
+  mark_ready(win.tab_list[1])
+  eq(geometry.correct(gui), false)
+  win.tab_list[1]:set_split(34)
+  eq(geometry.correct(gui), false, "adopted")
+  eq(geometry.desired(wid), 34)
+  win.active_tab_ref = win.tab_list[2]
+  sidebar.ensure(gui)
+  local second = sidebar.find(win.tab_list[2])
+  eq(second.split_args.size, 34, "split at the adopted width, not cfg.width")
+  eq(second.cols, 34)
+  state.set_collapsed(wid, true)
+  win.active_tab_ref = win.tab_list[3]
+  sidebar.ensure(gui)
+  local third = sidebar.find(win.tab_list[3])
+  eq(third.split_args.size, config.get().rail_width, "a collapsed window splits a rail")
+  eq(math.type(third.split_args.size), "integer")
+  state.set_collapsed(wid, false)
+end)
+
+test("a mux mirror rebuilt mid-adjust to another tab width does not make a held divider start over", function()
+  local win, gui, tab, sb = settled_tab()
+  local content = sidebar.content_pane(tab)
+  sb.domain, content.domain = "e2emux", "e2emux"
+  local wid = gui:window_id()
+  local before = #win.actions
+  local clock = H.clock()
+  tab:set_split(34)
+  eq(geometry.correct(gui), false, "seen holding 34")
+  -- the server has resized the sidebar but not yet the content: the mirror reads 106 columns wide
+  clock.advance(100)
+  content.width = content.cols + 6
+  eq(geometry.correct(gui), false, "a one-poll glitch: neither fought nor started over")
+  content.width = nil
+  clock.advance(200)
+  eq(geometry.correct(gui), false)
+  eq(geometry.desired(wid), 34, "adopted on the round trip the hand had already waited")
+  eq(#win.actions, before, "and never fought")
+  clock.restore()
 end)

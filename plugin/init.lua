@@ -117,6 +117,11 @@ local function register_events(cfg)
       if not switched and last_poll[wid] and now - last_poll[wid] < gap then
         return
       end
+      -- A switch to a tab this window already had is what a held key repeats; a tab just spawned
+      -- is new here and is served at once however fast it arrived.
+      if switched and shown_tab[wid] ~= nil and (store.known_tabs[wid] or {})[tab_id] then
+        geometry.on_switch(wid)
+      end
       shown_tab[wid] = tab_id
       last_poll[wid] = now
       sidebar.ensure(window)
@@ -173,7 +178,9 @@ local function register_events(cfg)
 
   wezterm.on("gui-attached", function()
     for _, mux_win in ipairs(wezterm.mux.all_windows()) do
-      local gui = mux_win:gui_window()
+      -- A window the mux holds without a GUI (a standalone server's, or one still opening) throws
+      -- here; it must not take the windows after it in the list down with it.
+      local gui = mux.call(mux_win, "gui_window")
       if gui then
         local ok, err = pcall(function()
           sidebar.ensure(gui)

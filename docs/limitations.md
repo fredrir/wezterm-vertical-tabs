@@ -31,16 +31,31 @@
   (`mux/src/tab.rs adjust_x_size`), on every frame of a drag or an animated
   fill. Each frame is corrected on the spot with one `AdjustPaneSize` on the
   active tab, read from and verified against the tab's split tree
-  (`panes_with_info`), which WezTerm updates synchronously in every domain.
-  Background tabs are corrected as they activate. A divider drag is adopted the
-  moment it moves and followed wherever the hand goes; a tab whose shape changed
-  under the width (a split, a close, a resize frame, a font change) is never read
-  as a drag. The adjust walks up from the tab's active pane, so a content pane
-  narrower than the content column (one with a horizontal split above it) needs
-  the sidebar made active around the adjust; that runs as one `Multiple`
-  assignment so pointer motion cannot land between its steps, and only once the
-  resize frames have stopped, since every activation sends focus events to the
-  shells involved.
+  (`panes_with_info`). A new sidebar is split at the width the window wants
+  (adopted, rail or configured), and background tabs are corrected as they
+  activate. Nothing is published while frames arrive; the sidebar repaints from
+  its own size and one publish follows the last frame.
+- The adjust walks up from the tab's active pane, so a content pane narrower
+  than the content column (one with a horizontal split above it) needs the
+  sidebar made active for the adjust. That runs as one `Multiple` assignment so
+  pointer motion cannot land between its steps. Through a resize burst the focus
+  stays parked on the sidebar and goes back to the pane at settle, one focus
+  event pair per burst rather than per frame; a pane the user moved to meanwhile
+  is left in charge.
+- On a mux domain (`localmux`, ssh, tls) the split tree is a mirror: every pane
+  resize round-trips to the server, whose `TabResized` makes the client fetch
+  the pane list and rebuild the mirror, sometimes to an intermediate state
+  (`wezterm-client/src/domain.rs process_pane_list`). So there one adjust is in
+  flight at a time, released by the sidebar's own `resize` report (or after
+  600 ms without one), nothing read from the mirror meanwhile is chased or
+  adopted, and a divider is read as the user's only once it has sat still for
+  250 ms. On a local domain a drag is adopted the moment it moves.
+- Two switches inside 150 ms to tabs the window already had are a held key: no
+  sidebar is split into and no width adjusted in a tab the key is only passing
+  through, and the tab it stops on is served by the next poll. A tab just
+  spawned is new to the window and is served at once, however fast it arrived.
+- The settings page closes as a whole tab, so its sidebar is never left holding
+  the tab alone at full width, and the page is not recorded for reopening.
 - A backend pane closes by being told to quit; its pane goes with the process.
   One that outlives its process is killed by another backend on the same server
   through that server's `wezterm cli`, by title. Only a pane no backend can

@@ -596,8 +596,10 @@ function M.handle(gui_window, pane, name, value)
     sidebar.ensure(gui_window)
     view.sync(gui_window)
   elseif ev.t == "resize" then
-    -- The sidebar reporting its own size is the one per-frame signal a divider drag gives; the
-    -- width itself is read from the tab's split tree, which is never behind.
+    -- The sidebar reporting its own size is the one per-frame signal a divider drag gives, and on
+    -- a mux domain the proof that the server applied the adjust in flight; the width itself is
+    -- read from the tab's split tree.
+    geometry.landed(gui_window:window_id(), pane:pane_id(), tonumber(ev.cols))
     geometry.correct(gui_window)
     view.sync(gui_window)
   elseif ev.t == "theme_hook_request" then

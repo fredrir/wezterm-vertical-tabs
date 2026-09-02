@@ -219,6 +219,10 @@ local probes = {
   settings = function(window)
     require("vtabs.actions").open_settings(window)
   end,
+  -- What the page's own Escape does: the `close_settings` intent, closing the tab whole.
+  close_settings = function(window)
+    require("vtabs.settings").close(window)
+  end,
   -- What `correct` would aim for right now: `fits` clamps the adopted width so every content band
   -- keeps MIN_CONTENT, so a split tab legitimately holds less than `desired`.
   probe_target = function(window)

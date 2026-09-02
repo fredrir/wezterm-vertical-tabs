@@ -11,9 +11,14 @@ local util = require "vtabs.util"
 ---Holds the sidebar at its width against everything WezTerm does to a split. A window resize deals
 ---the sidebar half of every column it adds or removes (mux/src/tab.rs `adjust_x_size`), a divider
 ---drag moves it, a split or a close reshapes the tab around it. The tab's split tree, read through
----`panes_with_info`, is the one source of truth: WezTerm updates it synchronously for each of those,
----in every domain, so a correction reads it, acts, and reads it again. Nothing here waits on a timer
----to guess whether a mux has caught up.
+---`panes_with_info`, is the source of truth: WezTerm updates it synchronously for each of those.
+---
+---On a local domain that is the whole story: a correction reads the tree, acts, and reads it again.
+---On a mux domain the tree is a mirror. Every pane resize round-trips to the server, whose
+---`TabResized` makes the client fetch the pane list and rebuild the mirror, sometimes to an
+---intermediate state (wezterm-client/src/domain.rs `process_pane_list`). So on a mux domain one
+---adjust is in flight at a time, released by the sidebar's own size report, and a divider is read
+---as the user's hand only once it has sat still across a round trip.
 local M = {}
 
 local MIN_WIDTH = 8
@@ -25,10 +30,18 @@ M.RESIZE_QUIET_MS = RESIZE_QUIET_MS
 M.SETTLE_MS = RESIZE_QUIET_MS + 20
 -- An adjust the host declined (a WezTerm overlay owns the tab) is asked again this much later.
 local BLOCKED_MS = 2000
--- A remote `perform_action` returns before its mux applies the adjustment. Suppress duplicate
--- deltas until the first one is visible; otherwise several identical polls can overshoot.
+-- A mux mirror that reads the target is not proof the server has it until the sidebar says so;
+-- without that report the width has to hold this long. A divider seen moving on a mux domain is
+-- adopted only after sitting still this long, since a mirror rebuilt from a stale pane list moves it
+-- the same way a hand does.
 local REMOTE_APPLY_MS = 250
 M.REMOTE_APPLY_MS = REMOTE_APPLY_MS
+-- An unreported adjust stops blocking after this: a server that lost it is not waited on forever.
+local REMOTE_WAIT_MS = 600
+-- Two tab switches this close together are a held key: nothing is split or adjusted into a tab
+-- that is only passing by, and the tab the hand stops on is served by the next poll.
+local SWITCH_DWELL_MS = 150
+M.SWITCH_DWELL_MS = SWITCH_DWELL_MS
 
 ---Declared through `store`, so forgetting a window clears them without a list to keep in step.
 local scope = store.scope "geometry"
@@ -45,7 +58,16 @@ local settled = scope.window()
 local unreachable = scope.window()
 -- Tabs whose adjust once walked into a content split: from then on it is issued from the sidebar.
 local via_sidebar = scope.window()
+-- The one adjust a mux domain has in flight, until the sidebar reports the width or time runs out.
 local pending_adjust = scope.window()
+-- The content pane whose focus a resize burst parked on the sidebar, to be handed back at settle.
+local parked_focus = scope.window()
+-- A divider seen moving on a mux domain, and since when it has sat still.
+local moving = scope.window()
+local switched_at = scope.window()
+local rapid_until = scope.window()
+-- Follow-up corrections armed per window and reason, one of each at a time.
+local armed = scope.window()
 
 ---Target width: the rail when collapsed, else what the user last dragged it to, else `cfg.width`.
 function M.desired(window_id)
@@ -92,8 +114,37 @@ function M.resize_gen(window_id)
   return resize_gen[window_id] or 0
 end
 
+---True while frames of a window resize are still arriving.
+function M.in_burst(window_id)
+  return util.now_ms() - (resized_at[window_id] or 0) < RESIZE_QUIET_MS
+end
+
 function M.has_pending_adjust(window_id)
   return pending_adjust[window_id] ~= nil
+end
+
+---One tab switch. Two inside the dwell are a held key, and the window is left alone until it stops.
+function M.on_switch(window_id)
+  local now = util.now_ms()
+  local last = switched_at[window_id]
+  if last and now - last < SWITCH_DWELL_MS then
+    rapid_until[window_id] = now + SWITCH_DWELL_MS
+  end
+  switched_at[window_id] = now
+end
+
+---True while tabs are being switched through faster than the dwell.
+function M.switching(window_id)
+  return (rapid_until[window_id] or 0) > util.now_ms()
+end
+
+---The sidebar reporting its own size is the one word from the server side of a mux link: the
+---adjust in flight has been applied there, so the next one need not wait for the mirror's timer.
+function M.landed(window_id, pane_id, cols)
+  local pending = pending_adjust[window_id]
+  if pending and pending.pane_id == pane_id and cols == pending.target then
+    pending.reported = true
+  end
 end
 
 ---A config reload only invalidates a dragged width when `width` itself changed: every edit to
@@ -117,6 +168,22 @@ local function fits(cols, tab_cols, floor, bands)
   return math.min(out, math.max(floor, tab_cols - MIN_CONTENT * math.max(bands or 1, 1)))
 end
 
+---`panes_with_info` hands its numbers over as floats; `AdjustPaneSize` and `ActivatePaneByIndex`
+---take only integers back, so every reading is whole from the start.
+local function int(value)
+  return math.floor(tonumber(value) or 0)
+end
+
+---The width a new sidebar is split off at: the window's own width, so the pane needs no adjust the
+---moment it appears, clamped to what the tab can hold.
+function M.attach_width(window_id, tab)
+  local size = mux.call(tab, "get_size")
+  local tab_cols = type(size) == "table" and tonumber(size.cols) or nil
+  local want = int(M.desired(window_id))
+  local collapsed = state.is_collapsed(window_id)
+  return fits(want, tab_cols, collapsed and want or MIN_WIDTH, 1)
+end
+
 ---`AdjustPaneSize` shifts the split node's FIRST child: `Right` by `+n`, `Left` by `-n`.
 local function first_child_direction(delta)
   return delta > 0 and "Right" or "Left"
@@ -125,12 +192,6 @@ end
 ---A left sidebar is the root split's first child and grows with `Right`; a right one is its second.
 local function direction_for(position, delta)
   return first_child_direction(position == "left" and delta or -delta)
-end
-
----`panes_with_info` hands its numbers over as floats; `AdjustPaneSize` and `ActivatePaneByIndex`
----take only integers back, so every reading is whole from the start.
-local function int(value)
-  return math.floor(tonumber(value) or 0)
 end
 
 ---One reading of a tab's split tree. Every number comes from the same `panes_with_info` call, so
@@ -193,6 +254,15 @@ local function at_edge(layout, position)
   return sb.left == 0
 end
 
+local function content_rect(layout, id)
+  for _, rect in ipairs(layout.content) do
+    if rect.id == id then
+      return rect
+    end
+  end
+  return nil
+end
+
 local function record(tab_id, layout)
   return {
     tab_id = tab_id,
@@ -239,11 +309,84 @@ local function needs_dance(layout, sb_id, tab_id, wid)
   return active.id ~= sb_id and active.width ~= layout.content_width
 end
 
+---Arms one follow-up correction per window and reason. The waits on a mux domain must not depend
+---on a poll arriving: WezTerm re-arms `update-status` only after a title update, so a window with
+---nothing printing in it can go without one for as long as the hand is still.
+local function follow_up(gui_window, wid, key, ms)
+  local keys = armed[wid]
+  if not keys then
+    keys = {}
+    armed[wid] = keys
+  end
+  if keys[key] then
+    return
+  end
+  keys[key] = true
+  wezterm.time.call_after(ms / 1000, function()
+    local live = armed[wid]
+    if live then
+      live[key] = nil
+    end
+    local ok, err = pcall(M.correct, gui_window)
+    if not ok and not util.window_gone(err) then
+      util.warn("geometry: %s", tostring(err))
+    end
+  end)
+end
+
+---Whether the one adjust a mux domain has in flight still blocks the next; clears it when the
+---sidebar has reported the width and the mirror agrees, or when the mirror has held it long enough.
+local function still_pending(gui_window, wid, tab_id, cols, now)
+  local pending = pending_adjust[wid]
+  if not pending then
+    return false
+  end
+  if pending.tab_id ~= tab_id then
+    pending_adjust[wid] = nil
+    return false
+  end
+  if cols == pending.target then
+    if not pending.reported then
+      pending.reached_at = pending.reached_at or now
+      if now - pending.reached_at < REMOTE_APPLY_MS then
+        follow_up(gui_window, wid, "pending", REMOTE_APPLY_MS + 20)
+        return true
+      end
+    end
+    pending_adjust[wid] = nil
+    return false
+  end
+  if now - pending.at < REMOTE_WAIT_MS then
+    pending.reached_at = nil
+    follow_up(gui_window, wid, "pending", REMOTE_WAIT_MS - (now - pending.at) + 20)
+    return true
+  end
+  pending_adjust[wid] = nil
+  return false
+end
+
+---On a mux domain a divider that moved is adopted once it has sat still across a round trip; on a
+---local domain at once. True when the width is the user's to keep from here on.
+local function hand_has_settled(gui_window, wid, tab_id, cols, remote, now)
+  if not remote then
+    return true
+  end
+  local hand = moving[wid]
+  if hand and now - hand.at >= REMOTE_APPLY_MS then
+    return true
+  end
+  if not hand then
+    moving[wid] = { tab_id = tab_id, cols = cols, at = now }
+  end
+  follow_up(gui_window, wid, "hand", REMOTE_APPLY_MS + 20)
+  return false
+end
+
 ---Re-asserts the sidebar width on the active tab; background tabs are corrected once they activate.
 local function correct(gui_window, snapshot)
   local cfg = snapshot and snapshot.cfg or config.get()
   local wid = snapshot and snapshot.window_id or gui_window:window_id()
-  if store.drag[wid] then
+  if store.drag[wid] or M.switching(wid) then
     return false
   end
   local observed_tab = snapshot and snapshot.active or nil
@@ -275,34 +418,47 @@ local function correct(gui_window, snapshot)
   local now = util.now_ms()
   local quiet = now - (resized_at[wid] or 0) >= RESIZE_QUIET_MS
   local collapsed = state.is_collapsed(wid)
+  local remote = mux.domain(sb) ~= "local"
   local cols = layout.sidebar.width
-  local seen = settled[wid]
-  local pending = pending_adjust[wid]
+  if still_pending(gui_window, wid, tab_id, cols, now) then
+    return false
+  end
 
-  if pending then
-    if pending.tab_id ~= tab_id then
-      pending_adjust[wid] = nil
-    elseif cols == pending.target then
-      pending.reached_at = pending.reached_at or now
-      if now - pending.reached_at < REMOTE_APPLY_MS then
-        return false
-      end
-      pending_adjust[wid] = nil
-    elseif now - pending.at < REMOTE_APPLY_MS then
-      pending.reached_at = nil
-      return false
-    else
-      pending_adjust[wid] = nil
-    end
+  -- A burst parked the content pane's focus on the sidebar; once the frames stop it goes back,
+  -- unless the user has already moved it elsewhere or the pane has gone.
+  local parked = parked_focus[wid]
+  if parked and parked.tab_id ~= tab_id then
+    parked_focus[wid] = nil
+    parked = nil
+  end
+  local restore = nil
+  if parked and quiet then
+    parked_focus[wid] = nil
+    local rect = layout.active and layout.active.id == sb_id and content_rect(layout, parked.id) or nil
+    restore = rect and rect.index or nil
   end
 
   -- The divider moved, the tab did not, no frame of a window resize is landing and we asked for
-  -- nothing: that is the user's hand, and it is theirs at once. Nothing fights a drag in progress,
-  -- and wherever the hand comes off is the width from then on. A rail is never a preference.
-  if same_shape(seen, tab_id, layout) and quiet and not collapsed and seen.cols ~= cols then
+  -- nothing: that is the user's hand. Nothing fights a drag in progress, and wherever the hand
+  -- comes off is the width from then on. A rail is never a preference.
+  local seen = settled[wid]
+  local hand = moving[wid]
+  if hand and (hand.tab_id ~= tab_id or hand.cols ~= cols) then
+    -- moved on, or another tab: the wait starts over from whatever this reading says
+    moving[wid] = nil
+    hand = nil
+  end
+  -- A mux mirror rebuilt mid-way through a server-side adjust reads as a tab of another width for
+  -- one poll; a hand already seen holding this width is not made to start over by it.
+  local moved = hand ~= nil or (same_shape(seen, tab_id, layout) and seen.cols ~= cols)
+  if moved and quiet and not collapsed then
+    if not hand_has_settled(gui_window, wid, tab_id, cols, remote, now) then
+      return false
+    end
     adopted[wid] = fits(cols, layout.cols, nil, 1)
     adopted_for[wid] = cfg.width
     unreachable[wid] = nil
+    moving[wid] = nil
   end
 
   -- A rail is deliberately narrower than any sidebar, so the floor is the rail's own width.
@@ -311,6 +467,9 @@ local function correct(gui_window, snapshot)
   if target == cols then
     settled[wid] = record(tab_id, layout)
     unreachable[wid] = nil
+    if restore then
+      mux.call(gui_window, "perform_action", act.ActivatePaneByIndex(restore), sb)
+    end
     return false
   end
 
@@ -326,24 +485,30 @@ local function correct(gui_window, snapshot)
     return false
   end
 
-  -- Activating a pane sends focus in and out of the user's shells. Once per frame of a window
-  -- resize that would flood an editor with focus events, so a tab that needs the dance is
-  -- corrected when the frames have stopped; one that does not is corrected on every frame.
-  local dance = needs_dance(layout, sb_id, tab_id, wid)
-  if dance and not quiet then
-    return false
-  end
   local active = layout.active
+  local dance = needs_dance(layout, sb_id, tab_id, wid)
   local dir, n = direction_for(cfg.position, target - cols), int(math.abs(target - cols))
   local adjust = act.AdjustPaneSize { dir, n }
   local action = adjust
+  local steps = nil
   if dance then
-    -- One assignment: WezTerm runs the three steps back to back on its own thread, so no pointer
-    -- motion under `hover = "follow"` can move focus between them and send the adjust elsewhere.
-    local steps = { act.ActivatePaneByIndex(layout.sidebar.index), adjust }
-    if active then
-      steps[#steps + 1] = act.ActivatePaneByIndex(active.index)
+    -- One assignment: WezTerm runs the steps back to back on its own thread, so no pointer motion
+    -- under `hover = "follow"` can move focus between them and send the adjust elsewhere.
+    steps = { act.ActivatePaneByIndex(layout.sidebar.index), adjust }
+    if quiet then
+      if active then
+        steps[#steps + 1] = act.ActivatePaneByIndex(active.index)
+      end
+    elseif active then
+      -- Every activation sends focus events to the shells involved. Once per frame of a window
+      -- resize that would flood an editor, so the focus stays parked on the sidebar for the burst
+      -- and every further frame is corrected from there; the settle hands it back.
+      parked_focus[wid] = { tab_id = tab_id, id = active.id }
     end
+  elseif restore then
+    steps = { adjust, act.ActivatePaneByIndex(restore) }
+  end
+  if steps then
     action = act.Multiple(steps)
   end
   if cfg.debug then
@@ -358,9 +523,12 @@ local function correct(gui_window, snapshot)
   end
   mux.call(gui_window, "perform_action", action, sb)
 
-  if mux.domain(sb) ~= "local" then
-    pending_adjust[wid] = { tab_id = tab_id, target = target, at = now }
+  if remote then
+    -- The mirror will be rebuilt from the server's pane list, more than once, before this lands;
+    -- nothing read from it meanwhile is a drag, and no second adjust goes out on top of this one.
+    pending_adjust[wid] = { tab_id = tab_id, pane_id = sb_id, target = target, at = now }
     settled[wid] = nil
+    follow_up(gui_window, wid, "pending", REMOTE_WAIT_MS + 20)
     return true
   end
 
@@ -445,7 +613,11 @@ function M.inspect(window_id)
     adopted = adopted[window_id],
     settled = settled[window_id],
     unreachable = unreachable[window_id],
+    pending = pending_adjust[window_id],
+    parked = parked_focus[window_id],
+    moving = moving[window_id],
     resized_at = resized_at[window_id],
+    switching = M.switching(window_id),
   }
 end
 

@@ -267,6 +267,10 @@ end
 function Tab:width()
   return self._window.cols
 end
+---`tab:get_size()`: the tab's own TerminalSize, which `split` sizes a top-level pane against.
+function Tab:get_size()
+  return { cols = self:width() + 0.0, rows = 24.0, pixel_width = self:width() * 10.0, pixel_height = 480.0, dpi = 96.0 }
+end
 
 ---The fake models one top-level horizontal split: leaf 1 is `first`, every other leaf shares `second`.
 local function second_leaves(tab)

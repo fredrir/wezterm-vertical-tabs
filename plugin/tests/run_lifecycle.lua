@@ -799,3 +799,63 @@ test("split takes a spawn command for the new pane, or a function of the content
   eq(pane.split_args.args[2], "-l")
   eq(pane.split_args.set_environment_variables.A, "1")
 end)
+
+test("closing the settings page closes its tab whole and records nothing to reopen", function()
+  local win, gui = H.window(1, { attach = true, ready = true })
+  local settings = require "vtabs.settings"
+  assert(settings.open(gui), "opened")
+  local page_tab, page = settings.find(gui:mux_window())
+  page.vars.vtabs_token = state.token_for(page:pane_id())
+  eq(#win.tab_list, 2)
+  eq(H.sidebars_in(page_tab), 1, "the page has its own sidebar")
+  local pushes = 0
+  local real_push = state.push_closed
+  state.push_closed = function(...)
+    pushes = pushes + 1
+    return real_push(...)
+  end
+  assert(settings.close(gui), "closed")
+  state.push_closed = real_push
+  eq(#win.tab_list, 1, "the whole tab went, sidebar included: nothing is left holding it alone")
+  local closing = win.actions[#win.actions].action
+  eq(closing.action, "CloseCurrentTab", "one close for the tab, not a quit for the page first")
+  sidebar.ensure(gui)
+  eq(pushes, 0, "and the page is not in the closed-tab history")
+end)
+
+test("nothing is published while a resize burst is in flight; the settle publishes once it stops", function()
+  local win, gui = H.window(1, { attach = true, ready = true, sync = true })
+  local view = require "vtabs.view"
+  local geometry = require "vtabs.geometry"
+  local sb = sidebar.find(win.tab_list[1])
+  store.proto[sb:pane_id()] = protocol.VERSION
+  win:resize(2)
+  view.on_resize(gui)
+  eq(sb.cols, 28, "the frame was corrected")
+  local sent = #sb.sent
+  eq(view.sync(gui), false, "a frame publishes nothing: the sidebar repaints from its own size")
+  eq(#sb.sent, sent, "no section crossed the wire mid-burst")
+  H.later(geometry.SETTLE_MS, function()
+    eq(view.sync(gui), true, "publishable again once the frames have stopped")
+  end)
+end)
+
+test("a tab a held key is passing through gets no sidebar split into it until the key stops", function()
+  local win, gui = H.window(2, { attach = false })
+  local geometry = require "vtabs.geometry"
+  local wid = gui:window_id()
+  local clock = H.clock()
+  win.active_tab_ref = win.tab_list[1]
+  sidebar.ensure(gui)
+  assert(sidebar.find(win.tab_list[1]), "the first tab is served at once")
+  geometry.on_switch(wid)
+  clock.advance(50)
+  geometry.on_switch(wid)
+  win.active_tab_ref = win.tab_list[2]
+  sidebar.ensure(gui)
+  eq(sidebar.find(win.tab_list[2]), nil, "nothing split into a tab the key is passing through")
+  clock.advance(300)
+  sidebar.ensure(gui)
+  assert(sidebar.find(win.tab_list[2]), "served once the switching has stopped")
+  clock.restore()
+end)

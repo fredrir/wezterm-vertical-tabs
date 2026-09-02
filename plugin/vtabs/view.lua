@@ -286,6 +286,12 @@ end
 ---Publishes this window's state: the wire sends whatever changed to every painting pane.
 function M.sync(gui_window)
   local cfg = config.get()
+  -- Every frame of a window resize changes the sidebar's metrics, and a publish per frame is a
+  -- generation (with its spaces and theme round trips) per frame. The sidebar repaints itself from
+  -- its own size meanwhile; the settle timer publishes once the frames have stopped.
+  if geometry.in_burst(gui_window:window_id()) then
+    return false
+  end
   if cfg.debug then
     util.log("sync: window %d", gui_window:window_id())
   end

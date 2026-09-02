@@ -82,6 +82,7 @@ local SESSION = {
   content_pane = "tab",
   tab_meta = "tab",
   moving = "tab",
+  discarded = "tab",
   attaching = "tab",
   rescued = "tab",
 
