@@ -20,4 +20,15 @@ pub enum Command {
     Menu(Box<crate::v2::MenuMsg>),
     Fx(crate::v2::FxMsg),
     Notice(crate::v2::NoticeMsg),
+    /// Kill the one pane on this server titled `title`, through the server's own `wezterm cli`.
+    Kill {
+        title: String,
+    },
+    /// Move every other pane of this tab that sits inside the sidebar's `band` columns beside the
+    /// content; `position` is the sidebar's edge, `left` unless `right`.
+    Rescue {
+        band: u32,
+        #[serde(default)]
+        position: Option<String>,
+    },
 }

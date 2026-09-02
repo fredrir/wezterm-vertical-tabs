@@ -40,8 +40,11 @@ test("schema.defaults is a fresh deep copy each time, so setup cannot poison it"
   local a, b = schema.defaults(), schema.defaults()
   assert(a.padding ~= b.padding, "nested tables are not shared")
   a.padding.top = 99
-  eq(schema.defaults().padding.top, 0)
-  eq(config.defaults.padding.top, 0)
+  eq(schema.defaults().padding.top, 1)
+  eq(config.defaults.padding.top, 1)
+  eq(config.defaults.padding.left, 2)
+  eq(config.defaults.padding.right, 2)
+  eq(config.defaults.padding.bottom, 1)
 end)
 
 test("a key the schema does not know warns, including inside a closed container", function()
@@ -78,7 +81,7 @@ test("every enum rejects a value outside it and every range rejects the wrong si
   eq(config.setup({ row_gap = -1 }).row_gap, 0)
   eq(config.setup({ theme = { elevation = 2 } }).theme.elevation, 0.06, "above max")
   eq(config.setup({ toggle_button = "yes" }).toggle_button, true)
-  eq(config.setup({ padding = { top = -1 } }).padding.top, 0, "nested keys validate too")
+  eq(config.setup({ padding = { top = -1 } }).padding.top, 1, "nested keys validate too")
   eq(config.setup({ width = 40 }).width, 40, "a valid value survives")
   config.setup { backend = { path = "/bin/wez-vtabs" } }
 end)

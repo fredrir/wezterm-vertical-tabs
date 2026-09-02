@@ -40,7 +40,13 @@ plugin owns mux facts, config and dispatch:
 | `auth`   | `{"t":"auth","token":"<hex>"}`                     | echo user var `vtabs_token`; the title is not touched                  |
 | `ping`   | `{"t":"ping","n":N}`                               | reply with `pong` echoing `n`; vary it so the reply stays unambiguous  |
 | `clear`  | `{"t":"clear"}`                                    | repaint the pane from the last applied `config`/`theme`/`model`/`menu` |
-| `quit`   | `{"t":"quit"}`                                     | restore terminal and exit 0                                            |
+| `quit`   | `{"t":"quit"}`                                     | restore terminal and exit 0; the pane closes with the process |
+| `kill`   | `{"t":"kill","title":"wez-vtabs:1a2b"}`            | `wezterm cli kill-pane` on this server for the one pane with that marker title; answers `cli` |
+| `rescue` | `{"t":"rescue","band":28,"position":"left"}`       | `wezterm cli split-pane --move-pane-id` every other pane of this tab inside the band under the content beside it; answers `cli` |
+
+`kill` and `rescue` run the server's own `wezterm cli --no-auto-start`, found beside
+`WEZTERM_EXECUTABLE_DIR`, against `WEZTERM_UNIX_SOCKET`, acting for `WEZTERM_PANE`: the GUI's mux
+client cannot reach a mux-domain pane, and closing one by activation has aborted it.
 
 Unknown commands are ignored. Malformed JSON lines are ignored.
 
@@ -53,7 +59,7 @@ Unknown commands are ignored. Malformed JSON lines are ignored.
  "animate":true,"double_click_ms":300,"tear_off":true,
  "wheel":"scroll","context":"popover","hover_timeout_ms":1200,"hover_highlight":true,"ellipsis":"…",
  "popover":{"width":null,"follow_pointer":true,"overflow":null},
- "render":{"meta":true,"padding":{"left":1,"right":1,"top":0,"bottom":0},"frame":false,
+ "render":{"meta":true,"padding":{"left":2,"right":2,"top":1,"bottom":1},"frame":false,
    "row_gap":0,"new_tab_button":true},
  "mac":{"integrated_buttons":false,"native_button_style":false,"preview":false,"is_full_screen":false}}
 ```
@@ -148,6 +154,7 @@ Sidebar pane (`screen:"sidebar"`):
 | `pong`    | `{"t":"pong","n":13,"echo":7}` — `n` is the normal monotonic counter, `echo` is the ping's own `n`                      |
 | `note`    | `{"t":"note","k":"menu_refused","why":"rows","id":7,"a":"confirm","n":14}`                                              |
 | `dropped` | `{"t":"dropped","what":"model"\|"menu","reason":"bounds","n":15}` — the command was refused whole, previous state kept  |
+| `cli` | `{"t":"cli","op":"kill"\|"rescue","ok":true,"detail":"1","n":16}` — `detail` is the count moved, or the error when `ok` is false |
 
 
 

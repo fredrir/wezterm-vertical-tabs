@@ -155,11 +155,6 @@ end
 ---when the settings page swaps one in. Keeping them here is what stops a page edit of `hover`
 ---leaving `close_button` on a value the sidebar can never show.
 function M.normalise(cfg)
-  -- The wider gutter belongs on the side touching the window edge, so an untouched pair mirrors.
-  local pad, shipped = cfg.padding, M.defaults.padding
-  if cfg.position == "right" and pad.left == shipped.left and pad.right == shipped.right then
-    cfg.padding = { top = pad.top, bottom = pad.bottom, left = shipped.right, right = shipped.left }
-  end
   if cfg.popover.width ~= "auto" and type(cfg.popover.width) ~= "number" then
     util.warn 'popover.width must be "auto" or a number, using auto'
     cfg.popover.width = "auto"

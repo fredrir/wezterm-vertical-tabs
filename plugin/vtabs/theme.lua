@@ -8,6 +8,7 @@ local ACCENT_VS_FG_MIN = 1.2
 local QUIET_TITLE_MIN = 5.0
 -- Matches the shipped `theme.elevation`; a caller passing `{}` gets the page the plugin paints.
 local DEFAULT_ELEVATION = 0.06
+local WHITE, BLACK = { 255, 255, 255 }, { 0, 0, 0 }
 
 local function parse(color)
   if type(color) == "table" then
@@ -59,6 +60,14 @@ end
 
 local mix, luminance = M.mix, M.luminance
 
+---Recesses the sidebar below the terminal surface. A proportional step toward black is hard to see
+---on an already-dark palette, so dark schemes amplify the same public elevation control.
+local function recess(base, elevation)
+  local scale = luminance(base) < 0.5 and 4 or 1
+  local depth = math.min(math.max(elevation * scale, 0), 1)
+  return mix(base, BLACK, depth)
+end
+
 ---Pushes `fg` toward `target` until it clears `min` against `ref`; never mixes past `target`.
 local function ensure_contrast(fg, ref, target, min)
   min = math.min(min, M.contrast(target, ref))
@@ -94,8 +103,6 @@ local function scrim_for(bg, fg)
   return pct / 100
 end
 
-local WHITE, BLACK = { 255, 255, 255 }, { 0, 0, 0 }
-
 local function accent_candidate(color, bg, fg)
   local rgb = first(color)
   if rgb and M.contrast(rgb, bg) >= ACCENT_MIN and M.contrast(rgb, fg) >= ACCENT_VS_FG_MIN then
@@ -125,7 +132,7 @@ function M.resolve(user, palette, opts)
 
   local base_bg = first(palette.background, "#1e1e2e")
   local fg = first(user.fg, palette.foreground, "#cdd6f4")
-  local bg = first(user.bg) or mix(base_bg, fg, tonumber(user.elevation) or DEFAULT_ELEVATION)
+  local bg = first(user.bg) or recess(base_bg, tonumber(user.elevation) or DEFAULT_ELEVATION)
 
   -- A 6% darken on a light scheme reads far louder than a 6% lighten on near-black.
   local k = luminance(bg) < 0.5 and 1.0 or 0.6

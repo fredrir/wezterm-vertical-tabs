@@ -83,6 +83,7 @@ local SESSION = {
   tab_meta = "tab",
   moving = "tab",
   attaching = "tab",
+  rescued = "tab",
 
   dims = "pane",
   ready = "pane",
@@ -100,7 +101,7 @@ local SESSION = {
   pane_domain = "pane",
   given_up = "pane",
   spawned = "pane",
-  killed = "pane",
+  quitting = "pane",
 
   failed_domains = "process",
   spawned_domains = "process",

@@ -54,6 +54,13 @@ pub fn contrast(a: Rgb, b: Rgb) -> f64 {
     (la.max(lb) + 0.05) / (la.min(lb) + 0.05)
 }
 
+/// Recesses the sidebar below the terminal surface. A proportional step toward black is hard to see
+/// on an already-dark palette, so dark schemes amplify the same public elevation control.
+fn recess(base: Rgb, elevation: f64) -> Rgb {
+    let scale = if luminance(base) < 0.5 { 4.0 } else { 1.0 };
+    mix(base, BLACK, (elevation * scale).clamp(0.0, 1.0))
+}
+
 /// Pushes `fg` toward `target` until it clears `min` against `ref`; never mixes past `target`.
 fn ensure_contrast(fg: Rgb, reference: Rgb, target: Rgb, min: f64) -> Rgb {
     let min = min.min(contrast(target, reference));
@@ -196,7 +203,7 @@ pub fn resolve(user: &UserTheme, palette: &Palette, private: bool) -> Theme {
     let base_bg = first(&[s(&palette.background), Some("#1e1e2e")]).unwrap();
     let fg = first(&[s(&user.fg), s(&palette.foreground), Some("#cdd6f4")]).unwrap();
     let bg = first(&[s(&user.bg)])
-        .unwrap_or_else(|| mix(base_bg, fg, user.elevation.unwrap_or(DEFAULT_ELEVATION)));
+        .unwrap_or_else(|| recess(base_bg, user.elevation.unwrap_or(DEFAULT_ELEVATION)));
 
     // A 6% darken on a light scheme reads far louder than a 6% lighten on near-black.
     let k = if luminance(bg) < 0.5 { 1.0 } else { 0.6 };
@@ -295,5 +302,54 @@ pub fn resolve(user: &UserTheme, palette: &Palette, private: bool) -> Theme {
         popover_sel_fg: sel_fg,
         popover_sel_hint: first(&[s(&user.popover_sel_hint)])
             .unwrap_or_else(|| ensure_contrast(mix(sel_fg, sel_bg, 0.40), sel_bg, sel_fg, 3.0)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn palette(bg: &str, fg: &str) -> Palette {
+        Palette {
+            background: Some(bg.to_string()),
+            foreground: Some(fg.to_string()),
+            ..Palette::default()
+        }
+    }
+
+    #[test]
+    fn default_sidebar_is_darker_than_dark_and_light_content() {
+        for (palette, expected) in [
+            (palette("#1e1e2e", "#cdd6f4"), [0x17, 0x17, 0x23]),
+            (palette("#eff1f5", "#4c4f69"), [0xe1, 0xe3, 0xe6]),
+        ] {
+            let theme = resolve(&UserTheme::default(), &palette, false);
+            assert!(luminance(theme.bg) < luminance(theme.content_bg));
+            assert_eq!(theme.bg, expected);
+        }
+    }
+
+    #[test]
+    fn zero_elevation_is_seamless_and_an_explicit_background_wins() {
+        let palette = palette("#1e1e2e", "#cdd6f4");
+        let seamless = resolve(
+            &UserTheme {
+                elevation: Some(0.0),
+                ..UserTheme::default()
+            },
+            &palette,
+            false,
+        );
+        assert_eq!(seamless.bg, seamless.content_bg);
+
+        let explicit = resolve(
+            &UserTheme {
+                bg: Some("#123456".to_string()),
+                ..UserTheme::default()
+            },
+            &palette,
+            false,
+        );
+        assert_eq!(explicit.bg, [0x12, 0x34, 0x56]);
     }
 }

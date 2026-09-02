@@ -21,20 +21,24 @@
   process.
 - WezTerm's own `SplitPane` acts on whichever pane is active, and under
   `hover = "follow"` that is the sidebar whenever the pointer is over it, which
-  leaves a shell in a column too narrow to use. `vtabs.action.split(dir)` splits
-  the tab's content pane instead. A split that lands in the sidebar's own
-  columns anyway is moved to the content side on the next poll, using
-  `wezterm cli split-pane --move-pane-id`; where that CLI is unusable (the GUI
-  is not on its own socket) the plugin warns once and leaves the pane alone.
+  leaves a shell in a column too narrow to use. `vtabs.action.split(dir, spawn)`
+  splits the tab's content pane instead; `spawn` is a SpawnCommand or a function
+  of the content pane returning one. A split that lands in the sidebar's own
+  columns anyway is moved to the content side on the next poll: through the
+  GUI's `wezterm cli` for a local pane, and by the tab's own backend through the
+  server's `wezterm cli` on a mux domain.
 - Width correction is one `AdjustPaneSize` on the active tab, issued only once a
   window resize has settled (no frame for 100 ms); during a drag or an animated
   fill the sidebar keeps whatever WezTerm dealt it. The sidebar's own `resize`
   report drives the follow-up, so a mux mirror that lags never overshoots. The
   adjust resizes around the tab's active pane, so focus moves to the sidebar
   only while content panes sit side by side.
-- `wezterm cli` (`kill-pane`, `split-pane --move-pane-id`) is used only for
-  panes in the GUI's own `local` domain; a pane on a mux domain is closed by
-  activation instead, since a CLI request for it stalls in the GUI's mux server.
+- A backend pane closes by being told to quit; its pane goes with the process.
+  One that outlives its process is killed by another backend on the same server
+  through that server's `wezterm cli`, by title. Only a pane no backend can
+  reach is closed by activation, which is the one path the mux client has been
+  seen to abort on (`wezterm-client/src/domain.rs:624`). The GUI's own
+  `wezterm cli` is used only for panes in its `local` domain.
 - Every split, close, adjust and move of a window's panes runs under that
   window's gate, one at a time; a poll that meets one in flight skips its turn,
   and a tab switch still waiting is superseded by the next one, so a held key

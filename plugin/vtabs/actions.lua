@@ -516,7 +516,9 @@ local SPLIT = { Right = "Right", Left = "Left", Top = "Top", Bottom = "Bottom", 
 
 ---Splits the tab's content pane, never the sidebar. WezTerm's own `SplitPane` acts on whichever
 ---pane is active, which under `hover = "follow"` is the sidebar whenever the pointer is over it.
-function M.split(gui_window, direction)
+---`spawn` is what the new pane runs: a SpawnCommand table (`args`, `cwd`, `domain`,
+---`set_environment_variables`), or a function of the content pane that returns one.
+function M.split(gui_window, direction, spawn)
   local where = SPLIT[direction]
   if not where then
     util.warn("split direction must be Right, Left, Top/Up or Bottom/Down, got %s", tostring(direction))
@@ -526,8 +528,14 @@ function M.split(gui_window, direction)
   if not content then
     return nil
   end
+  local command = type(spawn) == "function" and util.try(spawn, content, gui_window) or spawn
+  local request = {}
+  for key, value in pairs(type(command) == "table" and command or {}) do
+    request[key] = value
+  end
+  request.direction = where
   local ok, pane = pcall(function()
-    return content:split { direction = where }
+    return content:split(request)
   end)
   if not ok or not pane then
     util.warn("split failed: %s", tostring(pane):match "^[^\n]*")
@@ -848,9 +856,9 @@ M.action.activate_pane_direction = function(direction)
     M.activate_pane_direction(window, direction)
   end)
 end
-M.action.split = function(direction)
+M.action.split = function(direction, spawn)
   return callback(function(window)
-    M.split(window, direction)
+    M.split(window, direction, spawn)
   end)
 end
 M.action.switch_space = function(id)

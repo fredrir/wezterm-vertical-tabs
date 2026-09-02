@@ -210,6 +210,27 @@ local function on_note(gui_window, ev)
   view.sync(gui_window)
 end
 
+---The outcome of a `kill` or `rescue` the backend ran on its server. A moved pane re-splits the
+---tab and the width is corrected around it; a failure is said once and the next poll goes on.
+local function on_cli(gui_window, pane, ev)
+  if ev.ok ~= true then
+    util.warn_once(
+      "cli-" .. tostring(ev.op) .. "-" .. pane:pane_id(),
+      "backend %s failed: %s",
+      tostring(ev.op),
+      tostring(ev.detail)
+    )
+    return
+  end
+  if ev.op == "rescue" then
+    local tab = mux.tab_of(pane)
+    if tab then
+      sidebar.forget_split(tab:tab_id())
+    end
+    util.try(geometry.correct, gui_window, true)
+  end
+end
+
 ---`do` events from a painting backend; the popover-open guard mirrors v1's click-through dismiss.
 local function on_do(gui_window, pane, ev)
   local handler = DO[ev.a]
@@ -509,6 +530,8 @@ function M.handle(gui_window, pane, name, value)
     view.sync(gui_window)
   elseif ev.t == "do" then
     on_do(gui_window, pane, ev)
+  elseif ev.t == "cli" then
+    on_cli(gui_window, pane, ev)
   elseif ev.t == "note" then
     on_note(gui_window, ev)
   elseif ev.t == "key" then
