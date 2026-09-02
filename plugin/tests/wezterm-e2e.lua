@@ -11,14 +11,50 @@ config.initial_cols = 100
 config.initial_rows = 30
 config.window_close_confirmation = "NeverPrompt"
 config.exit_behavior = "Close"
+if os.getenv "VTABS_E2E_SOFTWARE" then
+  config.front_end = "Software"
+end
 
 local mux_socket = os.getenv "VTABS_E2E_MUX"
 if mux_socket then
-  config.unix_domains = { { name = "e2emux", socket_path = mux_socket } }
+  config.unix_domains = {
+    {
+      name = "e2emux",
+      socket_path = mux_socket,
+      -- A missing fixture-owned server is a test failure, never a reason to leak a daemon.
+      no_serve_automatically = true,
+    },
+  }
   config.default_domain = "e2emux"
 end
 
 config.unix_domains = config.unix_domains or {}
+
+local ssh_address = os.getenv "VTABS_E2E_SSH_ADDRESS"
+if ssh_address then
+  config.ssh_domains = {
+    {
+      name = "e2essh",
+      remote_address = ssh_address,
+      username = os.getenv "VTABS_E2E_SSH_USER" or "vtabs",
+      no_agent_auth = true,
+      multiplexing = "WezTerm",
+      remote_wezterm_path = os.getenv "VTABS_E2E_REMOTE_WEZTERM" or "/usr/bin/wezterm",
+      ssh_option = {
+        identityfile = os.getenv "VTABS_E2E_SSH_IDENTITY",
+        stricthostkeychecking = "no",
+        userknownhostsfile = "/dev/null",
+      },
+    },
+  }
+end
+
+local function backend_path(domain)
+  if domain == "e2essh" then
+    return os.getenv "VTABS_E2E_REMOTE_BIN"
+  end
+  return os.getenv "VTABS_BIN"
+end
 
 local function sidebar_cols(window)
   local out = {}
@@ -55,7 +91,7 @@ vtabs.apply_to_config(config, {
   debug = true,
   confirm_close = false,
   domain = os.getenv "VTABS_E2E_DOMAIN" or "CurrentPaneDomain",
-  backend = { path = os.getenv "VTABS_BIN" },
+  backend = { path = backend_path },
   icons = false,
   collapsed = os.getenv "VTABS_E2E_COLLAPSED" or nil,
 })
@@ -73,8 +109,14 @@ geometry_mod.correct = function(window)
   return did
 end
 
+local size_before_grow = {}
+
 local probes = {
   toggle = function(window)
+    vtabs.toggle_sidebar(window)
+  end,
+  hide_sidebar = function(window)
+    require("vtabs.config").get().collapsed = "hidden"
     vtabs.toggle_sidebar(window)
   end,
   -- Which tab is active, sampled at 10 ms for two seconds: a switch that passes through a tab
@@ -235,11 +277,16 @@ local probes = {
   end,
   grow = function(window)
     local dims = window:get_dimensions()
+    size_before_grow[window:window_id()] = { pixel_width = dims.pixel_width, pixel_height = dims.pixel_height }
     window:set_inner_size(dims.pixel_width + 300, dims.pixel_height)
   end,
   shrink = function(window)
     local dims = window:get_dimensions()
-    window:set_inner_size(dims.pixel_width - 300, dims.pixel_height)
+    local original = size_before_grow[window:window_id()]
+    window:set_inner_size(
+      original and original.pixel_width or dims.pixel_width - 300,
+      original and original.pixel_height or dims.pixel_height
+    )
   end,
   -- A drag: ten resizes 100 ms apart, the way `window-resized` really arrives.
   drag_shrink = function(window)
@@ -412,6 +459,28 @@ local probes = {
       out[#out + 1] = string.format("%d:%d/%d/%s", info.tab:tab_id(), marked, total, tostring(sb and sb:pane_id()))
     end
     wezterm.log_info("e2e: panes " .. table.concat(out, " "))
+  end,
+  -- What one publish costs on this window, split into the snapshot's mux probes and the rest.
+  probe_sync_ms = function(window)
+    local util = require "vtabs.util"
+    local snapshot = require "vtabs.snapshot"
+    local view = require "vtabs.view"
+    local t0 = util.now_ms()
+    for _ = 1, 5 do
+      snapshot.capture(window, { effective = view.effective_config(window) })
+    end
+    local t1 = util.now_ms()
+    for _ = 1, 5 do
+      view.sync(window)
+    end
+    local t2 = util.now_ms()
+    local panes = 0
+    for _, info in ipairs(window:mux_window():tabs_with_info()) do
+      panes = panes + #info.tab:panes()
+    end
+    wezterm.log_info(
+      string.format("e2e: sync cost panes %d snapshot %.1f ms sync %.1f ms", panes, (t1 - t0) / 5, (t2 - t1) / 5)
+    )
   end,
   probe_desired = function(window)
     local geometry = require "vtabs.geometry"

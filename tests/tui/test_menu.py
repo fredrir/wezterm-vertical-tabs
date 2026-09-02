@@ -13,11 +13,7 @@ async def event_barrier(terminal: Terminal, echo: int) -> int:
 
 
 def menu_picks(events: list[dict[str, object]]) -> list[dict[str, object]]:
-    return [
-        event
-        for event in events
-        if event.get("t") == "do" and event.get("a") == "menu_pick"
-    ]
+    return [event for event in events if event.get("t") == "do" and event.get("a") == "menu_pick"]
 
 
 @pytest.mark.asyncio

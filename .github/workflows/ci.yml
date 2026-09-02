@@ -6,6 +6,7 @@ on:
   pull_request:
     branches:
       - main
+  workflow_dispatch:
 concurrency:
   group: ci-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
@@ -40,6 +41,9 @@ jobs:
           enable-cache: false
       - name: Install locked Python test dependencies
         run: uv sync --locked
+        working-directory: .
+      - name: Python test lint and format
+        run: uv run --frozen ruff check tests && uv run --frozen ruff format --check tests
         working-directory: .
       - name: Linux PTY suite
         run: WEZ_VTABS_BIN="$GITHUB_WORKSPACE/backend/target/debug/wez-vtabs" uv run --frozen pytest -q -m tui tests/tui

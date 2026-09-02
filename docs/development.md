@@ -143,20 +143,23 @@ network access, wall-clock assertions, or shared sessions. The full suite is par
 CI runs it on Linux in the existing Rust job and runs only the representative `smoke` subset on
 macOS to keep CPU and runner use modest.
 
-For the deliberately small, real-GUI smoke test, install WezTerm and run this from a macOS desktop
-session or a Linux graphical session (`DISPLAY` or `WAYLAND_DISPLAY` must be available):
+The real-GUI suite owns a standalone `wezterm-mux-server` and one reconnectable GUI per test. Run it
+from a macOS desktop session or a Linux graphical session (`DISPLAY` or `WAYLAND_DISPLAY` is
+required):
 
 ```sh
-just test-wezterm-e2e
+just test-wezterm-e2e          # full behavior suite, two isolated workers
+just test-wezterm-e2e-smoke    # pinned PR-gate subset
 ```
 
-That explicit command sets the suite's opt-in gate, builds the backend once, and starts an isolated
-WezTerm instance using `plugin/tests/wezterm-e2e.lua`. It is not a normal PR gate: hosted GUI setup
-would add a comparatively slow package download and display-server dependency to a fast PTY suite.
-See `tests/wezterm/README.md` for the isolation and assertion policy.
+The pinned smoke subset is a normal Linux/Xvfb pull-request gate. A weekly job runs the full suite
+against the newest WezTerm nightly, and the pinned scheduled lane also exercises a real localhost
+SSH mux server in Docker. Failures retain CLI history, endpoint topology, client state, and all owned
+process logs under `.pytest-artifacts/wezterm/`.
 
-There is intentionally no historical WezTerm-version matrix. The maintained test surface is the
-current Rust/Lua unit suite, focused PTY contracts, and the opt-in real-GUI smoke test above.
+There is intentionally no historical version matrix: one checksum-pinned release is the stable merge
+signal and the latest-nightly job is the compatibility canary. See `tests/wezterm/README.md` for the
+behavior inventory, isolation model, Docker command, and assertion policy.
 
 ## Generated Lua mirrors
 

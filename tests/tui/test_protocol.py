@@ -37,4 +37,3 @@ def test_rejects_non_asciicast_input_with_a_useful_error() -> None:
 
     with pytest.raises(ValueError, match="asciicast v2"):
         cast_output(recording)
-

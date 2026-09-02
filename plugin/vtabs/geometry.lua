@@ -25,6 +25,10 @@ M.RESIZE_QUIET_MS = RESIZE_QUIET_MS
 M.SETTLE_MS = RESIZE_QUIET_MS + 20
 -- An adjust the host declined (a WezTerm overlay owns the tab) is asked again this much later.
 local BLOCKED_MS = 2000
+-- A remote `perform_action` returns before its mux applies the adjustment. Suppress duplicate
+-- deltas until the first one is visible; otherwise several identical polls can overshoot.
+local REMOTE_APPLY_MS = 250
+M.REMOTE_APPLY_MS = REMOTE_APPLY_MS
 
 ---Declared through `store`, so forgetting a window clears them without a list to keep in step.
 local scope = store.scope "geometry"
@@ -41,6 +45,7 @@ local settled = scope.window()
 local unreachable = scope.window()
 -- Tabs whose adjust once walked into a content split: from then on it is issued from the sidebar.
 local via_sidebar = scope.window()
+local pending_adjust = scope.window()
 
 ---Target width: the rail when collapsed, else what the user last dragged it to, else `cfg.width`.
 function M.desired(window_id)
@@ -85,6 +90,10 @@ end
 
 function M.resize_gen(window_id)
   return resize_gen[window_id] or 0
+end
+
+function M.has_pending_adjust(window_id)
+  return pending_adjust[window_id] ~= nil
 end
 
 ---A config reload only invalidates a dragged width when `width` itself changed: every edit to
@@ -268,6 +277,24 @@ local function correct(gui_window, snapshot)
   local collapsed = state.is_collapsed(wid)
   local cols = layout.sidebar.width
   local seen = settled[wid]
+  local pending = pending_adjust[wid]
+
+  if pending then
+    if pending.tab_id ~= tab_id then
+      pending_adjust[wid] = nil
+    elseif cols == pending.target then
+      pending.reached_at = pending.reached_at or now
+      if now - pending.reached_at < REMOTE_APPLY_MS then
+        return false
+      end
+      pending_adjust[wid] = nil
+    elseif now - pending.at < REMOTE_APPLY_MS then
+      pending.reached_at = nil
+      return false
+    else
+      pending_adjust[wid] = nil
+    end
+  end
 
   -- The divider moved, the tab did not, no frame of a window resize is landing and we asked for
   -- nothing: that is the user's hand, and it is theirs at once. Nothing fights a drag in progress,
@@ -330,6 +357,12 @@ local function correct(gui_window, snapshot)
     )
   end
   mux.call(gui_window, "perform_action", action, sb)
+
+  if mux.domain(sb) ~= "local" then
+    pending_adjust[wid] = { tab_id = tab_id, target = target, at = now }
+    settled[wid] = nil
+    return true
+  end
 
   -- `perform_action` awaited the GUI, so the tree already shows what the adjust did.
   local after = read_layout(tab, sb_id, cfg.position)

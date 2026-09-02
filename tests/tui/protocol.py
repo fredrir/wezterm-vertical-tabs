@@ -10,7 +10,6 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from typing import Any
 
-
 # OSC may use its 7-bit or 8-bit introducer and BEL, ST, or 8-bit ST terminators.
 _OSC = re.compile(r"(?:\x1b\]|\x9d)(.*?)(?:\x07|\x1b\\|\x9c)", re.DOTALL)
 _SET_USER_VAR = "1337;SetUserVar="
@@ -85,7 +84,7 @@ def user_vars(recording: str) -> list[UserVar]:
         try:
             raw = base64.b64decode(padded, validate=True)
             value = raw.decode("utf-8")
-        except (binascii.Error, UnicodeDecodeError):
+        except binascii.Error, UnicodeDecodeError:
             continue
         decoded.append(UserVar(name=name, value=value))
     return decoded
@@ -100,7 +99,7 @@ def protocol_events(recording: str, variable: str = "vtabs") -> list[dict[str, A
             continue
         try:
             event = user_var.json()
-        except (json.JSONDecodeError, ValueError):
+        except json.JSONDecodeError, ValueError:
             continue
         events.append(event)
     return events
@@ -121,4 +120,3 @@ def asciicast(*chunks: str) -> str:
         json.dumps([index / 1000, "o", chunk]) for index, chunk in enumerate(chunks)
     )
     return "\n".join([json.dumps(header), *records]) + "\n"
-

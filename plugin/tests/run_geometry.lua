@@ -198,6 +198,34 @@ test("a frame that lands while an adjust is in flight is corrected by the next c
   eq(sb.cols, 28)
 end)
 
+test("a remote correction stays singular until the mux applies it", function()
+  local win, gui, tab, sb = settled_tab()
+  local clock = H.clock()
+  local content = sidebar.content_pane(tab)
+  sb.domain, content.domain = "e2emux", "e2emux"
+  local real = getmetatable(gui).perform_action
+  local queued = nil
+  gui.perform_action = function(_, action, pane)
+    win.actions[#win.actions + 1] = { action = action, pane = pane }
+    queued = { action = action, pane = pane }
+  end
+
+  win:resize(40)
+  assert(geometry.correct(gui), "the first remote correction is sent")
+  local after_first = #win.actions
+  eq(sb.cols, 48, "the fake remote mux has not applied it yet")
+  eq(geometry.correct(gui), false, "a poll cannot enqueue the same delta again")
+  eq(#win.actions, after_first, "only one remote adjustment is in flight")
+
+  real(gui, queued.action, queued.pane)
+  eq(sb.cols, 28, "the remote mux eventually applies the queued correction")
+  eq(geometry.correct(gui), false, "the observed target starts a stability window")
+  clock.advance(geometry.REMOTE_APPLY_MS)
+  eq(geometry.correct(gui), false, "the stable target clears the in-flight record")
+  gui.perform_action = nil
+  clock.restore()
+end)
+
 test("stacked content is one band and spans the content column: corrected with no dance at all", function()
   local win, gui = window(1)
   sidebar.ensure(gui)

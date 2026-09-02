@@ -262,10 +262,13 @@ function M.on_resize(gui_window)
   local wid = gui_window:window_id()
   local gen = geometry.on_resize(wid)
   geometry.correct(gui_window)
-  wezterm.time.call_after(geometry.SETTLE_MS / 1000, function()
+  local attempts = 0
+  local settle
+  settle = function()
     if geometry.resize_gen(wid) ~= gen then
       return
     end
+    attempts = attempts + 1
     local ok, err = pcall(function()
       geometry.correct(gui_window)
       M.sync(gui_window)
@@ -273,7 +276,11 @@ function M.on_resize(gui_window)
     if not ok and not util.window_gone(err) then
       util.warn("window-resized: %s", tostring(err))
     end
-  end)
+    if ok and attempts < 4 and geometry.has_pending_adjust(wid) then
+      wezterm.time.call_after(geometry.REMOTE_APPLY_MS / 1000, settle)
+    end
+  end
+  wezterm.time.call_after(geometry.SETTLE_MS / 1000, settle)
 end
 
 ---Publishes this window's state: the wire sends whatever changed to every painting pane.

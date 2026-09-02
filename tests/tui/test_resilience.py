@@ -41,8 +41,6 @@ async def test_oversized_model_is_dropped_and_last_valid_screen_is_retained(
 
     await terminal.send(sidebar_model(too_many_tabs, rev=2))
 
-    await terminal.wait_event(
-        "dropped", where={"what": "model", "reason": "bounds"}
-    )
+    await terminal.wait_event("dropped", where={"what": "model", "reason": "bounds"})
     await terminal.wait_text("Last valid tab")
     await terminal.wait_text("Rejected 1", absent=True)

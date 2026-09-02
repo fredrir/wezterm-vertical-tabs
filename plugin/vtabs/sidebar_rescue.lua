@@ -157,7 +157,11 @@ local function rescue_splits(gui_window, tab)
       return false
     end
     store.rescued[tab_id] = now
-    return identity.send(sb, { t = "rescue", band = band, position = cfg.position })
+    -- `panes_with_info` gives Lua floating-point geometry; the Rust wire contract is an integer.
+    local message = { t = "rescue", band = math.floor(band), position = cfg.position }
+    local sent = identity.send(sb, message)
+    util.log("rescue: delegated %d pane(s) in tab %d to backend, sent=%s", #stuck, tab_id, tostring(sent))
+    return sent
   end
   local moved = false
   for _, pane in ipairs(stuck) do

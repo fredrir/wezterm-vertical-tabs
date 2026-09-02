@@ -13,6 +13,18 @@ config.exit_behavior = "Close"
 config.window_decorations = "RESIZE"
 config.color_scheme = "Catppuccin Mocha"
 
+local mux_socket = os.getenv "VTABS_DEV_MUX"
+if mux_socket then
+  config.unix_domains = {
+    {
+      name = "devmux",
+      socket_path = mux_socket,
+      no_serve_automatically = true,
+    },
+  }
+  config.default_domain = "devmux"
+end
+
 vtabs.apply_to_config(config, {
   poll_ms = 200,
   debug = true,

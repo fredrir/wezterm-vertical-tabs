@@ -18,7 +18,6 @@ from tui_test import Colors, Profile, Timeouts, TuiTest, get_recording
 
 from .protocol import cast_output, protocol_events, user_vars
 
-
 COLS = 28
 ROWS = 20
 _WAIT_SECONDS = 3.0
@@ -95,9 +94,9 @@ class Terminal:
             args = (
                 "-c",
                 f'before=$(stty -g) || exit; printf "%s-before\\n" {sentinel}; '
-                f'{command}; status=$?; after=$(stty -g); '
+                f"{command}; status=$?; after=$(stty -g); "
                 'if [ "$before" = "$after" ]; then mode=tty-restored; '
-                'else mode=tty-changed; fi; '
+                "else mode=tty-changed; fi; "
                 f'printf "%s-after\\n%s-%s\\n" {sentinel} {sentinel} "$mode"; '
                 'exit "$status"',
             )
@@ -195,11 +194,7 @@ class Terminal:
         return protocol_events(await self.recording())
 
     async def last_event_sequence(self) -> int:
-        sequences = [
-            event["n"]
-            for event in await self.events()
-            if isinstance(event.get("n"), int)
-        ]
+        sequences = [event["n"] for event in await self.events() if isinstance(event.get("n"), int)]
         return max(sequences, default=0)
 
     async def events_after(self, sequence: int) -> list[dict[str, Any]]:

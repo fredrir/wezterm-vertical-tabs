@@ -7,7 +7,6 @@ from typing import Any
 
 from .adapter import Terminal
 
-
 CONFIG: dict[str, Any] = {
     "t": "config",
     "rev": 1,

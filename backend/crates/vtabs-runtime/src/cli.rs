@@ -3,8 +3,9 @@
 //! GUI's mux client cannot reach. Every call passes `--no-auto-start`: a cli that finds no server
 //! must never spawn one over the socket path.
 
+use std::ffi::OsStr;
 use std::io::{self, Read};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 use std::sync::mpsc::{self, Receiver};
 use std::time::{Duration, Instant};
@@ -18,6 +19,12 @@ const PIPE_CLOSE_GRACE: Duration = Duration::from_millis(250);
 const BIN: &str = "wezterm.exe";
 #[cfg(not(windows))]
 const BIN: &str = "wezterm";
+
+fn is_mux_socket(socket: Option<&OsStr>) -> bool {
+    socket
+        .and_then(|value| Path::new(value).file_name())
+        .is_some_and(|name| !name.to_string_lossy().starts_with("gui-sock-"))
+}
 
 struct Captured {
     bytes: Vec<u8>,
@@ -220,7 +227,13 @@ impl Cli {
     /// Stdout of `wezterm cli --no-auto-start <args>`, or the first line of what went wrong.
     fn run(&self, args: &[&str]) -> Result<String, String> {
         let mut command = Command::new(&self.exe);
-        command.arg("cli").arg("--no-auto-start").args(args);
+        command.arg("cli").arg("--no-auto-start");
+        // A pane hosted by a standalone or SSH mux inherits that server's socket.  Without this
+        // flag the CLI treats it as a GUI socket and waits on the wrong protocol endpoint.
+        if is_mux_socket(std::env::var_os("WEZTERM_UNIX_SOCKET").as_deref()) {
+            command.arg("--prefer-mux");
+        }
+        command.args(args);
         let out = run_command(&mut command, TIMEOUT, &format!("wezterm cli {}", args[0]))?;
         if out.status.success() {
             return Ok(String::from_utf8_lossy(&out.stdout).into_owned());
@@ -264,6 +277,22 @@ impl Cli {
 #[cfg(test)]
 mod parser_tests {
     use super::*;
+
+    #[test]
+    fn standalone_socket_prefers_the_mux_protocol() {
+        assert!(is_mux_socket(Some(OsStr::new("/tmp/e2e/mux.sock"))));
+        assert!(is_mux_socket(Some(OsStr::new(
+            "/run/user/1000/wezterm-mux"
+        ))));
+    }
+
+    #[test]
+    fn gui_socket_keeps_the_gui_protocol() {
+        assert!(!is_mux_socket(Some(OsStr::new(
+            "/run/user/1000/wezterm/gui-sock-42"
+        ))));
+        assert!(!is_mux_socket(None));
+    }
 
     #[test]
     fn negative_pane_and_tab_ids_are_skipped_before_conversion() {

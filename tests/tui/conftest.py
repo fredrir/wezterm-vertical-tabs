@@ -12,7 +12,6 @@ import pytest_asyncio
 
 from .adapter import COLS, ROWS, Terminal
 
-
 ROOT = Path(__file__).resolve().parents[2]
 BACKEND = ROOT / "backend"
 TUI_TESTS = Path(__file__).resolve().parent
