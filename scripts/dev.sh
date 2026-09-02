@@ -45,6 +45,15 @@ fi
 build "$profile" || die "initial build failed"
 
 pids=""
+# WezTerm's panic hook writes into its own log under the sandbox HOME; keep the last 10 runs.
+keep_logs() {
+  dest="$devlogs/$(date '+%Y%m%d-%H%M%S')"
+  mkdir -p "$dest"
+  cp "$sandbox_home"/.local/share/wezterm/wezterm-gui-log-*.txt "$sandbox_home"/wezterm.log \
+    "$sandbox_home"/wez-vtabs.log "$dest" 2>/dev/null
+  ls -1dt "$devlogs"/*/ 2>/dev/null | tail -n +11 | xargs rm -rf 2>/dev/null
+  printf '%slogs kept in %s%s\n' "$dim" "$dest" "$off"
+}
 cleanup() {
   set +e
   # shellcheck disable=SC2086  # word splitting is intended: pids is a list
@@ -52,6 +61,7 @@ cleanup() {
   pkill -f "class vtabs-dev" 2>/dev/null
   # The log tailer is a grandchild; kill it by the temp path it holds open.
   [ -n "${sandbox_home:-}" ] && pkill -f "$sandbox_home" 2>/dev/null
+  [ -n "${sandbox_home:-}" ] && keep_logs
   [ -n "${sandbox_home:-}" ] && rm -rf "$sandbox_home"
   printf '\n%sdev stopped%s\n' "$dim" "$off"
 }
@@ -62,11 +72,12 @@ if [ "$live" = 0 ]; then
   mkdir -p "$sandbox_home/.local/share/wezterm"
   say "${dim}sandbox HOME=$sandbox_home${off}"
   log="$sandbox_home/wezterm.log"
-  HOME="$sandbox_home" VTABS_ROOT="$root" VTABS_BIN="$bin" WEZTERM_LOG=info \
+  HOME="$sandbox_home" VTABS_ROOT="$root" VTABS_BIN="$bin" VTABS_LOG="$sandbox_home/wez-vtabs.log" \
+    RUST_BACKTRACE=1 WEZTERM_LOG=info \
     wezterm --config-file "$root/scripts/dev-config.lua" \
     start --always-new-process --class vtabs-dev >"$log" 2>&1 &
   pids="$pids $!"
-  ( tail -n +1 -f "$log" | grep --line-buffered -E 'vtabs:|WARN|ERROR' ) &
+  ( tail -n +1 -f "$log" | grep --line-buffered -E 'vtabs:|WARN|ERROR|panic' ) &
   pids="$pids $!"
 else
   say "${dim}live: hot-swapping sidebars in your running WezTerm${off}"

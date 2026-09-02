@@ -6,6 +6,7 @@ url=https://github.com/fredrir/wezterm-vertical-tabs
 data="${XDG_DATA_HOME:-$HOME/.local/share}"
 plugins="$data/wezterm/plugins"
 cache="$data/$name/bin"
+devlogs="${XDG_STATE_HOME:-$HOME/.local/state}/$name/dev-logs"
 
 # WezTerm mangles the repo URL into the plugin dir name: / -> sZs, : -> sCs, . -> sDs.
 component=$(printf '%s' "$url" | sed -e 's|/|sZs|g' -e 's|:|sCs|g' -e 's|\.|sDs|g')

@@ -204,6 +204,16 @@ test("the backend is told the sidebar background", function()
   assert(sb.split_args.set_environment_variables.VTABS_BG:match "^#%x%x%x%x%x%x$", "hex background passed")
 end)
 
+test("backend.env rides under the plugin's own keys", function()
+  local cfg = config.setup {
+    backend = { path = "/bin/wez-vtabs", env = { VTABS_LOG = "/tmp/vtabs.log", VTABS_USERVAR = "other", DEBUG = 1 } },
+  }
+  local env = backend.env(cfg, "local")
+  eq(env.VTABS_LOG, "/tmp/vtabs.log")
+  eq(env.VTABS_USERVAR, "vtabs")
+  eq(env.DEBUG, nil)
+end)
+
 test("the marker pattern matches the backend title and nothing else", function()
   for _, title in ipairs { "wez-vtabs:c7a00ec8", "wez-vtabs:00", "wez-vtabs:abcd" } do
     eq(sidebar.marker(title), true, title)

@@ -17,7 +17,7 @@ vtabs.apply_to_config(config, {
   poll_ms = 200,
   debug = true,
   confirm_close = false,
-  backend = { path = os.getenv "VTABS_BIN", build = false },
+  backend = { path = os.getenv "VTABS_BIN", build = false, env = { VTABS_LOG = os.getenv "VTABS_LOG" } },
 })
 
 return config

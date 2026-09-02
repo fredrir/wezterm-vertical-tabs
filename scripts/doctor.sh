@@ -48,6 +48,21 @@ else
 fi
 
 say ""
+say "${dim}crashes${off}"
+last=$(ls -1dt "$devlogs"/*/ 2>/dev/null | head -1)
+if [ -n "$last" ]; then
+  row "last dev logs" "$(printf '%s' "$last" | sed "s|$HOME|~|")"
+  grep -h 'panic at' "$last"* 2>/dev/null | head -3 | while IFS= read -r l; do printf '  %s\n' "$l"; done
+else
+  row "last dev logs" "none ${dim}(just dev)${off}"
+fi
+reports="$HOME/Library/Logs/DiagnosticReports"
+if [ -d "$reports" ]; then
+  latest=$(ls -1t "$reports"/wezterm-gui-*.ips 2>/dev/null | head -1 | sed "s|$HOME|~|")
+  row "crash report" "${latest:-none}"
+fi
+
+say ""
 say "${dim}running backends${off}"
 found=0
 for pid in $(pgrep -f "$name" 2>/dev/null || true); do

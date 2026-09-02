@@ -725,6 +725,16 @@ M.options = {
     group = "backend",
     help = "user var name used by the backend",
   },
+  {
+    key = "backend.env",
+    type = "table",
+    default = {},
+    open = true,
+    label = "Backend env",
+    group = "backend",
+    values = "table",
+    help = "env for the sidebar process; `VTABS_*` keys the plugin sets win",
+  },
 }
 
 M.by_key = {}

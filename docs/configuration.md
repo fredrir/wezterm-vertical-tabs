@@ -85,6 +85,7 @@ return config
 | `backend.version`         | plugin version                                                               | string |
 | `backend.build`           | `true`                                                                       | `true` \| `false` |
 | `backend.uservar`         | `"vtabs"`                                                                    | string |
+| `backend.env`             | `{}`                                                                         | table |
 <!-- options:end -->
 
 | option | note |

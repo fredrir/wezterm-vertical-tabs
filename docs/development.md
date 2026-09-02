@@ -103,6 +103,30 @@ just dev --live   # hot-swap the sidebars in your running WezTerm instead
 just doctor       # which backend is running, and whether the installs agree
 ```
 
+| Path | Holds |
+| --- | --- |
+| `~/.local/state/wez-vtabs/dev-logs/<ts>/` | the last 10 sandbox runs |
+| `  wezterm-gui-log-*.txt` | WezTerm's log; a GUI panic is `panic at <file:line:col> - <msg>` plus a backtrace |
+| `  wezterm.log` | sandbox stderr |
+| `  wez-vtabs.log` | backend log (`VTABS_LOG`): every `paint WxH`, `resize`, `panic at` |
+
+`just doctor` prints the newest run's `panic at` lines and the newest macOS crash report.
+
+## Crash bisect
+
+A WezTerm abort is a panic on its main-thread spawn queue: something the plugin asked for. Match the
+`panic at` line to a trigger and disable it in `scripts/dev-config.lua`.
+
+| Trigger | Where |
+| --- | --- |
+| `top_level = true` split | `sidebar_attach.lua` `attach` |
+| close by activation | `sidebar_attach.lua` `close_pane_by_activation`, `close_orphan` |
+| `AdjustPaneSize` by activation | `geometry.lua` `correct` |
+| `set_config_overrides` | `view.lua` `apply_titlebar_band`, `frame.lua` `install`, `page.lua` |
+| `move_to_new_window` | `actions.lua` `tear_off` |
+| `set_inner_size` | `sidebar_attach.lua` `fit_to_window` |
+| `cli split-pane --move-pane-id` | `sidebar_rescue.lua` `rescue_splits` |
+
 ## Applying a build
 
 ```sh

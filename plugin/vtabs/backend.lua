@@ -119,12 +119,16 @@ function M.spawn_args(cfg, domain, host, role)
 end
 
 function M.env(cfg, domain, host, bg)
-  local env = {
-    VTABS_USERVAR = cfg.backend.uservar,
-    VTABS_REPO = cfg.backend.repo,
-    VTABS_VERSION = cfg.backend.version or version,
-    VTABS_BG = type(bg) == "string" and bg:match "^#%x%x%x%x%x%x$" or nil,
-  }
+  local env = {}
+  for key, value in pairs(cfg.backend.env or {}) do
+    if type(key) == "string" and type(value) == "string" then
+      env[key] = value
+    end
+  end
+  env.VTABS_USERVAR = cfg.backend.uservar
+  env.VTABS_REPO = cfg.backend.repo
+  env.VTABS_VERSION = cfg.backend.version or version
+  env.VTABS_BG = type(bg) == "string" and bg:match "^#%x%x%x%x%x%x$" or nil
   if M.is_local(domain, host) then
     env.VTABS_TARGET = platform.triple
     env.VTABS_SRC = M.root .. "/../backend"
