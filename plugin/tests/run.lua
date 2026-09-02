@@ -12,7 +12,7 @@ backend.root = here .. "/.."
 state.file = os.tmpname()
 
 -- Suites share the fake mux and the warn-once ledger, so the order is part of the contract
-for _, suite in ipairs { "run_state", "run_geometry", "run_schema", "run_apply", "run_spaces" } do
+for _, suite in ipairs { "run_state", "run_geometry", "run_schema", "run_apply", "run_spaces", "run_lifecycle" } do
   require(suite)
 end
 

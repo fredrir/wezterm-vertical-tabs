@@ -27,12 +27,32 @@ function M.hostname()
 end
 -- Paths the fake `test -L` should report as symlinks, so the refusal can be pinned.
 M.symlinks = {}
+-- Every argv run, oldest first; `M.cli` answers `wezterm cli` argvs, nil means the CLI is unusable.
+M.spawned = {}
+M.cli = nil
 function M.run_child_process(args)
+  M.spawned[#M.spawned + 1] = args
   if type(args) == "table" and args[1] == "test" then
     return M.symlinks[args[3]] == true, "", ""
   end
+  require("support.async").yield "child"
+  if type(args) == "table" and args[2] == "cli" then
+    return M.cli ~= nil and M.cli(args) == true, "", ""
+  end
   return true, "", ""
 end
+
+function M.sleep_ms()
+  require("support.async").yield "sleep"
+end
+
+-- nil pid keeps `own_socket` false, so every suite stays on the activation fallbacks by default.
+M.pid = nil
+M.procinfo = {
+  pid = function()
+    return M.pid
+  end,
+}
 
 M.nerdfonts = {}
 M.home_dir = "/tmp"
@@ -117,10 +137,11 @@ M.time = {
 }
 
 M.panes = {}
+M.windows = {}
 
 M.mux = {
   all_windows = function()
-    return {}
+    return M.windows
   end,
   get_pane = function(pane_id)
     return M.panes[pane_id]

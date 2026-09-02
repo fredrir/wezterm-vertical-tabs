@@ -88,6 +88,42 @@ function M.later(ms, fn)
   end
 end
 
+---Runs `fn` as if the GUI sat on its own socket, so `wezterm cli` argvs reach `fake.cli`.
+function M.with_cli(fn)
+  local wezterm = require "wezterm"
+  local getenv = util.getenv
+  wezterm.pid, wezterm.cli = 4242, fake.cli
+  util.getenv = function(name)
+    if name == "WEZTERM_UNIX_SOCKET" then
+      return "/tmp/gui-sock-4242"
+    end
+    return getenv(name)
+  end
+  local ok, err = pcall(fn)
+  wezterm.pid, wezterm.cli, util.getenv = nil, nil, getenv
+  if not ok then
+    error(err, 0)
+  end
+end
+
+---A clock the test moves by hand; every poll after `advance` sees a later now.
+function M.clock()
+  local real = util.now_ms
+  local now = real()
+  util.now_ms = function()
+    return now
+  end
+  return {
+    advance = function(ms)
+      now = now + ms
+      return now
+    end,
+    restore = function()
+      util.now_ms = real
+    end,
+  }
+end
+
 function M.sidebars_in(tab)
   local n = 0
   for _, p in ipairs(tab:panes()) do

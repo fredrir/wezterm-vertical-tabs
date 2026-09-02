@@ -24,6 +24,11 @@ function M.merge(base, override)
 end
 
 ---Calls `fn(...)` and returns its result, or nil when it errors.
+---Read through a seam, because Lua cannot set the process environment a test needs to fake.
+function M.getenv(name)
+  return os.getenv(name)
+end
+
 function M.try(fn, ...)
   local ok, value = pcall(fn, ...)
   if ok then

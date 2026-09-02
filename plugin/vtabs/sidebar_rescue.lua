@@ -18,7 +18,7 @@ local PIN_GRACE_MS = 3000
 
 ---The GUI overwrites WEZTERM_UNIX_SOCKET with its own gui-sock-<pid> (wezterm-gui/src/main.rs:413-415).
 local function own_socket()
-  local socket = os.getenv "WEZTERM_UNIX_SOCKET"
+  local socket = util.getenv "WEZTERM_UNIX_SOCKET"
   local pid = util.try(function()
     return wezterm.procinfo.pid()
   end)

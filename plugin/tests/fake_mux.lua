@@ -1,6 +1,16 @@
 -- Minimal in-memory stand-ins for WezTerm's mux objects, enough to drive sidebar/actions.
 -- luacheck: ignore 212
+local async = require "support.async"
+
 local M = {}
+
+-- When true, split/spawn/move yield before touching the tree, where a real mux leaves it mid-await.
+M.deferred = false
+local function await(tag)
+  if M.deferred then
+    async.yield(tag)
+  end
+end
 
 local next_id = { pane = 0, tab = 0, window = 0 }
 local function alloc(kind)
@@ -81,6 +91,7 @@ function Pane:activate()
   self._tab._window.active_tab_ref = self._tab
 end
 function Pane:split(args)
+  await "split"
   local tab = self._tab
   local size = args.size or math.floor(tab:width() / 2)
   local sb = M.pane(tab, { process = args.args and args.args[1] or "sh", cols = size })
@@ -96,9 +107,33 @@ function Pane:split(args)
   return sb
 end
 function Pane:move_to_new_window()
-  local win = M.window()
+  await "move"
+  local cols = self._tab:width()
+  M.detach_pane(self)
+  local win = M.window(cols)
   local tab = win:add_tab { existing = self }
   return tab, win
+end
+
+---Takes a pane out of its tab; an emptied tab leaves its window, as the mux does.
+function M.detach_pane(pane)
+  local tab = pane._tab
+  for i, p in ipairs(tab.pane_list) do
+    if p == pane then
+      table.remove(tab.pane_list, i)
+      break
+    end
+  end
+  if #tab.pane_list == 0 then
+    tab._window:remove_tab(tab)
+  elseif tab.active == pane then
+    tab.active = tab.pane_list[1]
+  end
+end
+
+function M.kill_pane(pane)
+  M.detach_pane(pane)
+  require("wezterm").panes[pane.id] = nil
 end
 
 local Tab = {}
@@ -157,9 +192,28 @@ function Tab:set_split(first_cols)
 end
 
 ---True when the root split is the nearest horizontal node above the active leaf, which is what
----`adjust_pane_size` walks up to. Only leaf 1 and the two-leaf shape can prove that here.
+---`adjust_pane_size` walks up to: leaf 1, a two-leaf tab, or content stacked in one column band.
 function Tab:root_split_holds_active()
-  return #self.pane_list == 2 or self.active == self.pane_list[1]
+  if #self.pane_list <= 2 or self.active == self.pane_list[1] then
+    return true
+  end
+  local band = nil
+  for i = 2, #self.pane_list do
+    local left = self.pane_list[i].left or (self.pane_list[1].cols + 1)
+    if band ~= nil and left ~= band then
+      return false
+    end
+    band = left
+  end
+  return true
+end
+
+---What `AdjustPaneSize` and `wezterm cli adjust-pane-size` both do: resize around the active leaf.
+function Tab:adjust_from_active(dir, amount)
+  if (dir == "Left" or dir == "Right") and self:root_split_holds_active() then
+    local delta = dir == "Right" and amount or -amount
+    self:set_split(math.max(1, math.min(self.pane_list[1].cols + delta, self:width() - 2)))
+  end
 end
 
 ---Pane rectangles and zoom state, left to right across the one modelled horizontal split.
@@ -221,7 +275,61 @@ Window.__index = Window
 function M.window(cols)
   local w = setmetatable({ id = alloc "window", tab_list = {}, actions = {}, cols = cols or 80 }, Window)
   w.gui = M.gui(w)
+  local windows = require("wezterm").windows
+  windows[#windows + 1] = w
   return w
+end
+
+function M.close_window(win)
+  local windows = require("wezterm").windows
+  for i, w in ipairs(windows) do
+    if w == win then
+      table.remove(windows, i)
+      break
+    end
+  end
+end
+
+---A whole tab moved between windows, as a native tab drag does.
+function M.move_tab(src, tab, dest)
+  src:remove_tab(tab)
+  tab._window = dest
+  dest.tab_list[#dest.tab_list + 1] = tab
+  dest.active_tab_ref = dest.active_tab_ref or tab
+end
+
+---Answers `wezterm cli` argvs the way the GUI's own socket would; wired in by `H.with_cli`.
+function M.cli(args)
+  local panes = require("wezterm").panes
+  local flags = {}
+  for i = 5, #args, 2 do
+    flags[args[i]] = args[i + 1]
+  end
+  local sub = args[4]
+  local pane = panes[tonumber(flags["--pane-id"] or "")]
+  if sub == "adjust-pane-size" and pane then
+    pane._tab:adjust_from_active(args[#args], tonumber(flags["--amount"]) or 1)
+    return true
+  elseif sub == "kill-pane" and pane then
+    M.kill_pane(pane)
+    return true
+  elseif sub == "split-pane" and pane then
+    local moved = panes[tonumber(flags["--move-pane-id"] or "")]
+    if not moved then
+      return false
+    end
+    M.detach_pane(moved)
+    local tab = pane._tab
+    for i, p in ipairs(tab.pane_list) do
+      if p == pane then
+        table.insert(tab.pane_list, i + 1, moved)
+        break
+      end
+    end
+    moved._tab = tab
+    return true
+  end
+  return false
 end
 
 ---A mux client's view: the window reports its new size now, the panes catch up on `settle_mux`.
@@ -296,6 +404,7 @@ function Window:gui_window()
   return self.gui
 end
 function Window:spawn_tab(spawn)
+  await "spawn"
   local tab = self:add_tab { process = "/bin/zsh" }
   tab.spawn = spawn
   local pane = tab.pane_list[1]
@@ -377,13 +486,7 @@ function Gui:perform_action(action, pane)
       self._mux:remove_tab(tab)
     end
   elseif name == "AdjustPaneSize" then
-    local tab = self._mux.active_tab_ref
-    local dir, amount = action.arg[1], action.arg[2]
-    if (dir == "Left" or dir == "Right") and tab:root_split_holds_active() then
-      local delta = dir == "Right" and amount or -amount
-      local width = tab:width()
-      tab:set_split(math.max(1, math.min(tab.pane_list[1].cols + delta, width - 2)))
-    end
+    self._mux.active_tab_ref:adjust_from_active(action.arg[1], action.arg[2])
   elseif name == "MoveTab" then
     local tab = self._mux.active_tab_ref
     self._mux:remove_tab(tab)
