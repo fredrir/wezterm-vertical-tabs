@@ -10,7 +10,7 @@ deploy *args: # --from-dev (default) / --from-prd / --from-release
 doctor:
     @sh scripts/doctor.sh
 
-# Safely restart the GUI; use --pane ID for one bad pane or --mux only as a last resort.
+# Restart the GUI and disposable vtabs panes; use --mux only as a last resort.
 restart *args:
     @sh scripts/restart.sh {{args}}
 

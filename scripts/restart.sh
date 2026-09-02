@@ -1,5 +1,5 @@
 #!/bin/sh
-# Recover the WezTerm GUI without sacrificing the local mux unless explicitly requested.
+# Restart the WezTerm GUI and its disposable vtabs panes without sacrificing content panes.
 set -eu
 # shellcheck source=scripts/lib.sh
 # shellcheck disable=SC1091
@@ -15,7 +15,7 @@ usage() {
   cat <<EOF
 usage: just restart [--list | --pane PANE_ID | --mux] [--dry-run]
 
-  no arguments     restart only GUIs attached to $domain; every mux pane survives
+  no arguments     kill all wez-vtabs panes and restart GUIs attached to $domain
   --list           list the panes in $domain without changing anything
   --pane PANE_ID   kill only that pane, then restart the attached GUI
   --pane current   kill \$WEZTERM_PANE, then restart the attached GUI
@@ -111,6 +111,29 @@ pane_count() {
   printf '%s\n' "$panes" | awk 'NR > 1 && NF { count++ } END { print count + 0 }'
 }
 
+vtab_pane_rows() {
+  panes=$(list_panes 2>/dev/null) || return 1
+  printf '%s\n' "$panes" | awk '
+    NR > 1 && $3 ~ /^[0-9]+$/ &&
+      ($6 ~ /^wez-vtabs:[[:xdigit:]]+$/ || $6 ~ /^wez-vtabs-settings:[[:xdigit:]]+$/) { print }
+  '
+}
+
+kill_vtab_panes() {
+  rows=$1
+  pane_ids=$(printf '%s\n' "$rows" | awk 'NF { print $3 }')
+  if [ -z "$pane_ids" ]; then
+    say "  no wez-vtabs panes to remove"
+    return
+  fi
+
+  count=$(printf '%s\n' "$pane_ids" | awk 'NF { count++ } END { print count + 0 }')
+  say "  removing $count wez-vtabs pane(s)"
+  for pane in $pane_ids; do
+    mux_cli kill-pane --pane-id "$pane"
+  done
+}
+
 # The mux tells us which GUI clients are attached. Filtering both host and executable avoids
 # touching another WezTerm instance (notably `just dev`) or a client on another machine.
 attached_gui_pids() {
@@ -191,6 +214,18 @@ restart_gui() {
   ok "GUI restarted; mux panes preserved"
 }
 
+restart_vtabs() {
+  say "restarting WezTerm and its vtabs panes"
+  ensure_mux
+  rows=$(vtab_pane_rows) || die "could not list panes in mux domain $domain"
+  # Stop the GUI first so its poll loop cannot replace a sidebar while the old set is removed.
+  terminate_attached_guis
+  ensure_mux
+  kill_vtab_panes "$rows"
+  open_gui
+  ok "GUI restarted; wez-vtabs panes removed and content panes preserved"
+}
+
 restart_after_pane() {
   pane=$1
   say "recovering WezTerm after removing pane $pane"
@@ -252,7 +287,7 @@ run_mode() {
   run_mode_name=$1
   run_pane=${2:-}
   case "$run_mode_name" in
-    gui) say "recovering WezTerm without touching mux panes"; restart_gui ;;
+    vtabs) restart_vtabs ;;
     pane) restart_after_pane "$run_pane" ;;
     mux) restart_mux ;;
     *) die "invalid restart mode: $run_mode_name" ;;
@@ -274,24 +309,24 @@ if [ "${1:-}" = --coordinator ] && [ "${VTABS_RESTART_COORDINATOR:-}" = 1 ]; the
   exit 0
 fi
 
-mode=gui
+mode=vtabs
 pane_id=
 dry_run=0
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --list)
-      [ "$mode" = gui ] || die "choose only one of --list, --pane, and --mux"
+      [ "$mode" = vtabs ] || die "choose only one of --list, --pane, and --mux"
       mode=list
       ;;
     --pane)
-      [ "$mode" = gui ] || die "choose only one of --list, --pane, and --mux"
+      [ "$mode" = vtabs ] || die "choose only one of --list, --pane, and --mux"
       [ "$#" -ge 2 ] || die "--pane needs a pane id (use --list to find one)"
       mode=pane
       pane_id=$2
       shift
       ;;
     --mux)
-      [ "$mode" = gui ] || die "choose only one of --list, --pane, and --mux"
+      [ "$mode" = vtabs ] || die "choose only one of --list, --pane, and --mux"
       mode=mux
       ;;
     --dry-run) dry_run=1 ;;
@@ -350,7 +385,10 @@ if [ "$mode" = mux ]; then
 fi
 
 if [ "$dry_run" = 1 ]; then
-  say "would restart only GUI clients attached to $domain; every mux pane and process would survive"
+  rows=$(vtab_pane_rows) || die "could not list panes in mux domain $domain"
+  count=$(printf '%s\n' "$rows" | awk 'NF { count++ } END { print count + 0 }')
+  say "would kill all $count wez-vtabs pane(s), restart attached GUI clients, and preserve every content pane"
+  [ -z "$rows" ] || say "$rows"
   exit 0
 fi
-run_mode gui
+run_mode vtabs

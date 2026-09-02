@@ -51,7 +51,10 @@ case "$command_name" in
       *' list '*)
         [ "${VTABS_TEST_LIST_FAIL:-0}" = 0 ] || exit 1
         printf '%s\n' 'WINID TABID PANEID WORKSPACE SIZE TITLE CWD'
-        printf '%s\n' '    1     4      9 default   28x60 wez-vtabs:test file:///tmp/'
+        printf '%s\n' '    1     4      9 default   28x60 wez-vtabs:beef file:///tmp/'
+        printf '%s\n' '    1     5     10 default   80x60 shell file:///tmp/'
+        printf '%s\n' '    2     6     11 default   28x60 wez-vtabs-settings:cafe file:///tmp/'
+        printf '%s\n' '    2     7     12 default   28x60 wez-vtabs:not-hex file:///tmp/'
         ;;
       *) exit 2 ;;
     esac
@@ -94,14 +97,19 @@ assert_not_logged() {
   fi
 }
 
-# The default may replace its attached GUI client, but it never touches a pane or the mux service.
+# The default replaces its attached GUI client and every marked vtabs pane, but preserves content
+# panes and the mux service.
 sleep 30 &
 gui_pid=$!
 VTABS_TEST_CLIENT_PID=$gui_pid run_restart >/dev/null
 wait "$gui_pid" 2>/dev/null || true
 gui_pid=
 assert_logged 'open -na WezTerm'
-assert_not_logged 'kill-pane'
+[ "$(grep -c 'kill-pane --pane-id' "$actions")" -eq 2 ]
+assert_logged 'kill-pane --pane-id 9'
+assert_logged 'kill-pane --pane-id 11'
+assert_not_logged 'kill-pane --pane-id 10'
+assert_not_logged 'kill-pane --pane-id 12'
 assert_not_logged 'launchctl kill'
 
 # A client reported from another host is not ours to terminate.
@@ -114,7 +122,28 @@ kill "$gui_pid"
 wait "$gui_pid" 2>/dev/null || true
 gui_pid=
 assert_logged 'open -na WezTerm'
+assert_logged 'kill-pane --pane-id 9'
+assert_logged 'kill-pane --pane-id 11'
 assert_not_logged 'launchctl kill'
+
+# A dry run reports both disposable panes but changes nothing.
+reset_actions
+output=$(run_restart --dry-run)
+printf '%s\n' "$output" | grep -F 'would kill all 2 wez-vtabs pane(s)' >/dev/null
+printf '%s\n' "$output" | grep -F 'wez-vtabs:beef' >/dev/null
+printf '%s\n' "$output" | grep -F 'wez-vtabs-settings:cafe' >/dev/null
+assert_not_logged 'kill-pane'
+assert_not_logged 'open -na WezTerm'
+
+# If panes cannot be enumerated, the default fails before stopping or reopening the GUI.
+reset_actions
+if (VTABS_TEST_LIST_FAIL=1 run_restart >/dev/null 2>&1); then
+  printf '%s\n' 'restart unexpectedly succeeded without a pane list' >&2
+  exit 1
+fi
+assert_not_logged 'list-clients'
+assert_not_logged 'kill-pane'
+assert_not_logged 'open -na WezTerm'
 
 # Pane recovery defaults to no, then kills exactly the pane that was confirmed.
 reset_actions
