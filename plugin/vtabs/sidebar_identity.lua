@@ -3,6 +3,7 @@ local state = require "vtabs.state"
 local store = require "vtabs.store"
 local mux = require "vtabs.mux"
 local link = require "vtabs.link"
+local transport = require "vtabs.transport"
 local util = require "vtabs.util"
 
 ---Which pane is what: the roles this backend claims by title, the token that proves one, the rank
@@ -307,38 +308,88 @@ function M.send(pane, message, frame_token)
   return M.send_raw(pane, wezterm.json_encode(message), frame_token)
 end
 
----For pre-encoded lines: wire encodes once per window, then this boundary frames every record with
----the pane's current authentication token. A literal JSON line typed at the pane is never control.
-function M.send_raw(pane, line, frame_token)
+---Every record of `line` framed with the pane's current authentication token, or nil when there is
+---none. A literal JSON line typed at the pane is never control.
+function M.frame(pane, line, frame_token)
   local token = frame_token or state.token_for(pane:pane_id())
   local protocol = require "vtabs.gen.protocol"
   if type(token) ~= "string" or token == "" or #token > protocol.CONTROL_TOKEN_MAX_BYTES or token:find "[%s%c]" then
-    return false
+    return nil
   end
   local framed = {}
   for record in line:gmatch "[^\n]+" do
     framed[#framed + 1] = protocol.CONTROL_PREFIX .. token .. " " .. record
   end
   if #framed == 0 then
-    return false
+    return nil
   end
-  local text = table.concat(framed, "\n") .. "\n"
+  return table.concat(framed, "\n") .. "\n"
+end
+
+---Types `text` at the pane once its link is quiet: the one place a frame crosses into the mux.
+function M.type_text(pane, text)
   if link.defer(pane, text) then
     return true
   end
-  return pcall(function()
+  return (pcall(function()
     pane:send_text(text)
-  end)
+  end))
+end
+
+---For pre-encoded lines: wire encodes once per window, then this boundary frames every record and
+---routes the batch by the pane's transport: a file in its inbox, the queue while one is being
+---negotiated, else the pane's own stdin.
+function M.send_raw(pane, line, frame_token)
+  local text = M.frame(pane, line, frame_token)
+  if not text then
+    return false
+  end
+  local via = transport.state(pane)
+  if via == "active" then
+    return transport.write(pane, text)
+  elseif via == "negotiating" then
+    return transport.enqueue(pane, text)
+  end
+  return M.type_text(pane, text)
+end
+
+---Stdin whatever the transport: the frames that set a session up or tear one down.
+function M.send_stdin(pane, message, frame_token)
+  local text = M.frame(pane, wezterm.json_encode(message), frame_token)
+  return text ~= nil and M.type_text(pane, text)
+end
+
+---On stdin, always: the backend tears its inbox down on a new token, and a sidebar on a server of
+---this machine is asked to deliver forwarded keys there rather than through the link.
+---Keys typed at this sidebar are delivered on the server only where `input.forward_key` would hand
+---them over: never in `hover = "press"`, never from a settings page, never into one or an overlay.
+function M.keys_mode(pane)
+  if M.is_settings(pane) or not transport.eligible(pane) then
+    return nil
+  end
+  if require("vtabs.config").get().hover == "press" then
+    return nil
+  end
+  local tab = mux.tab_of(pane)
+  local content = tab and M.content_pane(tab) or nil
+  if not content or M.is_backend(content) or M.is_settings(content) or M.is_overlay(content) then
+    return nil
+  end
+  return "server"
 end
 
 function M.auth(pane)
-  local token = state.token_for(pane:pane_id())
+  local pid = pane:pane_id()
+  local token = state.token_for(pid)
   if token then
-    store.authed_at[pane:pane_id()] = util.now_ms()
-    M.send(pane, {
+    store.authed_at[pid] = util.now_ms()
+    local keys = M.keys_mode(pane)
+    store.keys_mode[pid] = keys or "host"
+    M.send_stdin(pane, {
       t = "auth",
       token = token,
       caps = { "typed_intents", "theme_hooks", "settings_document", "spaces_policy" },
+      keys = keys,
     }, user_vars(pane).vtabs_token or token)
   end
 end

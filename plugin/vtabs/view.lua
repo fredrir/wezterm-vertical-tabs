@@ -10,6 +10,7 @@ local mux = require "vtabs.mux"
 local link = require "vtabs.link"
 local snapshot = require "vtabs.snapshot"
 local theme_bridge = require "vtabs.theme_bridge"
+local transport = require "vtabs.transport"
 local util = require "vtabs.util"
 
 local M = {}
@@ -272,21 +273,52 @@ function M.on_resize(gui_window)
   wezterm.time.call_after(geometry.SETTLE_MS / 1000, settle)
 end
 
+---Whether this publish would type a frame into a pane on a busy mux link. Only such a pane holds a
+---publish back: one whose frames go through its inbox is written to at once, and a local pane
+---never blocks.
+local function held_by_link(observed)
+  local wire = require "vtabs.wire"
+  local function stalls(pane, tab_id)
+    if pane == nil then
+      return false
+    end
+    local pid = pane:pane_id()
+    -- the wire writes to the shown tab's pane and to one never dressed; nothing else is touched
+    if wire.dressed(pid) and tab_id ~= observed.active_tab_id then
+      return false
+    end
+    local facts = observed.panes[pid]
+    local domain = facts and facts.domain or mux.domain(pane)
+    return link.busy(domain) and transport.state(pane) ~= "active"
+  end
+  for _, tab in ipairs(observed.tabs) do
+    if tab.sidebar_ready and stalls(tab.sidebar, tab.tab_id) then
+      return true
+    end
+  end
+  local page = observed.settings
+  return page ~= nil and stalls(page.pane, page.tab_id)
+end
+
 ---Publishes this window's state: the wire sends whatever changed to every painting pane.
 function M.sync(gui_window)
   local cfg = config.get()
   -- Every frame of a window resize changes the sidebar's metrics, and a publish per frame is a
   -- generation (with its spaces and theme round trips) per frame. The sidebar repaints itself from
   -- its own size meanwhile; the settle timer publishes once the frames have stopped.
-  -- Nor while a mux link is busy rebuilding its mirror: every frame of a publish would cross it
-  -- on this thread, blocking, and that has deadlocked the GUI (link.lua).
-  if geometry.in_burst(gui_window:window_id()) or link.busy_any() then
+  if geometry.in_burst(gui_window:window_id()) then
     return false
   end
   if cfg.debug then
     util.log("sync: window %d", gui_window:window_id())
   end
   local observed = snapshot.capture(gui_window, { cfg = cfg, effective = M.effective_config(gui_window) })
+  -- Nor while a mux link is busy rebuilding its mirror and a frame of this publish would cross it
+  -- on this thread, blocking, which has deadlocked the GUI (link.lua). A pane on its inbox transport
+  -- is published to all the same: none of its frames crosses the link.
+  if link.busy_any() and held_by_link(observed) then
+    return false
+  end
   if cfg.debug then
     util.log(
       "snapshot: window=%d mux_collections=%d pane_collections=%d tabs=%d",

@@ -18,6 +18,13 @@ pub const LINE_MAX: usize = 1024 * 1024;
 /// Runaway input is abandoned at this bound even before a line terminator arrives.
 pub const PARSER_BUFFER_MAX: usize = LINE_MAX * 2;
 
+/// Inbox session ids are directory basenames: `inbox-<pid>-<nonce>`, word characters and dashes.
+pub const INBOX_SESSION_MAX_BYTES: usize = 64;
+/// Inbox message names are the zero-padded sequence number plus `.msg`.
+pub const INBOX_SEQ_DIGITS: usize = 8;
+/// One inbox file carries one `send_raw` batch: several records, each bounded by `LINE_MAX`.
+pub const INBOX_FILE_MAX_BYTES: usize = LINE_MAX * 6;
+
 /// Exact terminal bytes retained on a key event for safe forwarding to the content pane.
 pub const FORWARDED_KEY_MAX_BYTES: usize = 16;
 /// Padded base64 bytes needed to carry the largest forwarded key.

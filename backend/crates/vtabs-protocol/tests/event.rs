@@ -47,11 +47,65 @@ fn resolved_theme() -> v2::ResolvedTheme {
 fn ready_and_resize() {
     assert_eq!(
         Event::ready(30, 40).to_json(),
-        r#"{"t":"ready","v":3,"cols":30,"rows":40,"paints":true,"caps":["atomic_sync","typed_intents","theme_hooks","settings_document","spaces_policy"]}"#
+        r#"{"t":"ready","v":3,"cols":30,"rows":40,"paints":true,"caps":["atomic_sync","typed_intents","theme_hooks","settings_document","spaces_policy","inbox_transport"]}"#
     );
     assert_eq!(
         Event::Resize { cols: 31, rows: 40 }.to_json(),
         r#"{"t":"resize","cols":31,"rows":40}"#
+    );
+}
+
+#[test]
+fn ready_names_the_server_pane_and_the_inbox_it_offers() {
+    assert_eq!(
+        Event::ready_at(30, 40, Some(42), Some("inbox-42-9f3a1b2c".into())).to_json(),
+        r#"{"t":"ready","v":3,"cols":30,"rows":40,"paints":true,"caps":["atomic_sync","typed_intents","theme_hooks","settings_document","spaces_policy","inbox_transport"],"pane":42,"transport":{"inbox":"inbox-42-9f3a1b2c"}}"#
+    );
+    assert_eq!(
+        Event::ready_at(30, 40, Some(42), None).to_json(),
+        r#"{"t":"ready","v":3,"cols":30,"rows":40,"paints":true,"caps":["atomic_sync","typed_intents","theme_hooks","settings_document","spaces_policy","inbox_transport"],"pane":42}"#
+    );
+}
+
+#[test]
+fn transport_events_name_their_session_and_a_lost_message_its_seq() {
+    assert_eq!(
+        Event::TransportReady {
+            session: "inbox-42-9f3a1b2c".into()
+        }
+        .to_json(),
+        r#"{"t":"transport_ready","session":"inbox-42-9f3a1b2c"}"#
+    );
+    assert_eq!(
+        Event::TransportRefused {
+            session: "inbox-42-9f3a1b2c".into(),
+            why: "probe",
+        }
+        .to_json(),
+        r#"{"t":"transport_refused","session":"inbox-42-9f3a1b2c","why":"probe"}"#
+    );
+    assert_eq!(
+        Event::dropped_message(7).to_json(),
+        r#"{"t":"dropped","what":"message","reason":"gap","seq":7}"#
+    );
+    assert_eq!(
+        Event::dropped("model", "bounds").to_json(),
+        r#"{"t":"dropped","what":"model","reason":"bounds"}"#
+    );
+}
+
+#[test]
+fn a_delivered_key_says_so_and_an_ordinary_one_keeps_the_old_shape() {
+    let key = Event::key("x".into(), Mods::default(), b"x");
+    assert_eq!(key.to_json(), r#"{"t":"key","key":"x","raw":"eA=="}"#);
+    assert_eq!(
+        key.delivered().to_json(),
+        r#"{"t":"key","key":"x","raw":"eA==","delivered":true}"#
+    );
+    assert_eq!(
+        Event::Pong { echo: None }.delivered().to_json(),
+        r#"{"t":"pong"}"#,
+        "only a key can be delivered"
     );
 }
 
@@ -454,7 +508,8 @@ fn focus_and_pong() {
     assert_eq!(
         Event::Dropped {
             what: "model",
-            reason: "bounds"
+            reason: "bounds",
+            seq: None,
         }
         .to_json(),
         r#"{"t":"dropped","what":"model","reason":"bounds"}"#

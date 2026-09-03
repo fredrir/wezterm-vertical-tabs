@@ -87,6 +87,7 @@ return config
 | `backend.build`           | `true`                                                                       | `true` \| `false`                                                                   |
 | `backend.uservar`         | `"vtabs"`                                                                    | string                                                                              |
 | `backend.env`             | `{}`                                                                         | table                                                                               |
+| `backend.inbox`           | `true`                                                                       | `true` \| `false`                                                                   |
 <!-- options:end -->
 
 | option                   | note                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |

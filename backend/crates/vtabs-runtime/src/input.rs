@@ -297,6 +297,26 @@ fn utf8_len(lead: u8) -> usize {
     }
 }
 
+/// One inbox record: the control prefix, a session token and a JSON payload on a single
+/// terminated line. Nothing here ever falls back to a key, so an inbox can never type.
+pub fn decode_control_line(line: &[u8]) -> Option<Input> {
+    if !line.starts_with(CONTROL_PREFIX) || line.last() != Some(&b'\n') {
+        return None;
+    }
+    let wait = Wait {
+        timed_out: true,
+        stalled: true,
+    };
+    match parse_control_line(line, wait) {
+        Step::Token(input @ (Input::Control { .. } | Input::Dropped { .. }), n)
+            if n == line.len() =>
+        {
+            Some(input)
+        }
+        _ => None,
+    }
+}
+
 fn parse_control_line(bytes: &[u8], wait: Wait) -> Step {
     if bytes.len() < CONTROL_PREFIX.len() && CONTROL_PREFIX.starts_with(bytes) {
         return if wait.stalled {

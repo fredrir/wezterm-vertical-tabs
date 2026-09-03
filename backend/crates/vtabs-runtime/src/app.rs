@@ -31,7 +31,8 @@ use vtabs_protocol::{
 };
 
 use crate::cli::Cli;
-use crate::input::Input;
+use crate::inbox::{Batch, Inbox, Message, Offer};
+use crate::input::{Input, decode_control_line};
 use crate::log::Logger;
 use crate::paint::{changed_rows_bytes, rows_bytes};
 use crate::uservar::{TOKEN_VAR, set_user_var};
@@ -40,6 +41,8 @@ const CLEAR_SCREEN: &str = "\x1b[2J\x1b[H";
 /// Any-motion mouse tracking; the terminal guard turns it on, `config.hover_highlight` may turn it off.
 const MOTION_ON: &str = "\x1b[?1003h";
 const MOTION_OFF: &str = "\x1b[?1003l";
+/// A hole in the inbox sequence waits this long for the file before it counts as lost.
+const GAP_GRACE: Duration = Duration::from_millis(100);
 
 /// Sole stdout writer, so user-var OSCs never interleave with frame bytes.
 pub struct App<W: Write> {
@@ -89,7 +92,55 @@ pub struct App<W: Write> {
     pub last_rail_reserve: Option<i64>,
     /// The server's own `wezterm cli`, where this pane has one to act for.
     pub cli: Option<Cli>,
+    /// The inbox root Lua passed and the way a session wakes the loop; None keeps stdin only.
+    pub inbox: Option<Offer>,
+    pub transport: Transport,
+    /// `auth.keys == "server"`: forwarded keys are written into the content pane by the cli.
+    pub server_keys: bool,
     pub metrics: RuntimeMetrics,
+}
+
+/// Where this session's frames arrive: stdin only, an offered inbox waiting for its barrier, or
+/// the inbox itself, applied in sequence.
+#[derive(Default)]
+pub enum Transport {
+    #[default]
+    Off,
+    Negotiating {
+        inbox: Inbox,
+    },
+    Active {
+        inbox: Inbox,
+        last_seq: u32,
+        /// When the first hole in the sequence was seen; None while it reads contiguously.
+        gap_since: Option<Instant>,
+    },
+}
+
+impl Transport {
+    pub fn session(&self) -> Option<&str> {
+        match self {
+            Transport::Off => None,
+            Transport::Negotiating { inbox } | Transport::Active { inbox, .. } => {
+                Some(inbox.session())
+            }
+        }
+    }
+
+    pub fn name(&self) -> &'static str {
+        match self {
+            Transport::Off => "off",
+            Transport::Negotiating { .. } => "negotiating",
+            Transport::Active { .. } => "active",
+        }
+    }
+}
+
+/// What one scanned message means against the sequence so far.
+enum Step {
+    Duplicate,
+    Apply,
+    Hold,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -413,14 +464,14 @@ impl<W: Write> App<W> {
             } => {
                 if token.as_deref() == self.token.as_deref() && self.token.is_some() {
                     self.invalidate_pending();
-                    self.emit(&Event::Dropped { what, reason })?;
+                    self.emit(&Event::dropped(what, reason))?;
                 }
             }
             Input::Key { name, mods, raw } => {
                 if self.dressed() {
                     self.key(&name, mods, &raw)?;
                 } else {
-                    self.emit(&Event::key(name, mods, &raw))?;
+                    self.emit_key(Event::key(name, mods, &raw), &raw)?;
                 }
             }
             Input::Paste(data) => self.emit(&Event::paste(data))?,
@@ -612,10 +663,7 @@ impl<W: Write> App<W> {
             {
                 self.v2.settings_document = Some(previous_document);
                 self.refresh_settings_presentation();
-                self.emit(&Event::Dropped {
-                    what: "settings",
-                    reason: "size",
-                })?;
+                self.emit(&Event::dropped("settings", "size"))?;
             }
             DocumentEffect::Commit(effect) => {
                 self.refresh_settings_presentation();
@@ -682,10 +730,31 @@ impl<W: Write> App<W> {
             let k = knobs(cfg, model, &e.view, &ordered, &space_ids);
             interaction::key(&k, name, mods, raw).events
         };
-        for event in &events {
-            self.emit(event)?;
+        for event in events {
+            match event {
+                Event::Key { .. } => self.emit_key(event, raw)?,
+                other => self.emit(&other)?,
+            }
         }
         Ok(())
+    }
+
+    /// A key the sidebar hands to the content pane: written there through the cli when Lua asked
+    /// for server-side delivery and this pane has one, otherwise left to Lua as before.
+    fn emit_key(&mut self, event: Event, raw: &[u8]) -> io::Result<()> {
+        if self.server_keys
+            && !raw.is_empty()
+            && let Some(cli) = self.cli.as_ref()
+        {
+            match cli.forward_key(raw) {
+                Ok(pane) => {
+                    self.log.log(format!("key delivered to pane {pane}"));
+                    return self.emit(&event.delivered());
+                }
+                Err(err) => self.log.log(format!("key forward: {err}")),
+            }
+        }
+        self.emit(&event)
     }
 
     /// While the menu is open it consumes every key: navigation, first-letter jump, edit buffer.
@@ -1009,7 +1078,7 @@ impl<W: Write> App<W> {
         let Some(generation) = self.v2.pending.as_ref().map(|pending| pending.generation) else {
             return Ok(Applied::Continue);
         };
-        self.emit(&Event::Dropped { what, reason })?;
+        self.emit(&Event::dropped(what, reason))?;
         let requested = self
             .v2
             .pending
@@ -1486,6 +1555,8 @@ impl<W: Write> App<W> {
         self.client_spaces_policy = false;
         self.last_reported_theme = None;
         self.last_rail_reserve = None;
+        self.transport = Transport::Off;
+        self.server_keys = false;
         if !motion_was_on {
             self.write(MOTION_ON.as_bytes())?;
         }
@@ -1499,25 +1570,26 @@ impl<W: Write> App<W> {
                 return Ok(Applied::Repaint);
             }
             Command::Ping { n } => self.emit(&Event::Pong { echo: n })?,
-            Command::Auth { token, caps } => {
+            Command::Auth { token, caps, keys } => {
                 self.write(set_user_var(TOKEN_VAR, &token).as_bytes())?;
                 let typed_intents = caps.iter().any(|cap| cap == "typed_intents");
                 let theme_hooks = caps.iter().any(|cap| cap == "theme_hooks");
                 let spaces_policy = caps.iter().any(|cap| cap == "spaces_policy");
+                let server_keys = keys.as_deref() == Some("server");
                 // A new token is a new Lua process: the mux kept this backend but the plugin lost
                 // `store.proto`/`store.paints` with its old state, and only `ready` restores them.
                 // Re-announcing on the same token would ping-pong, since Lua re-auths on ready.
-                if self.token.as_deref() != Some(token.as_str()) {
+                let renewed = self.token.as_deref() != Some(token.as_str());
+                if renewed {
                     self.token = Some(token);
                     self.reset_for_auth()?;
-                    self.client_typed_intents = typed_intents;
-                    self.client_theme_hooks = theme_hooks;
-                    self.client_spaces_policy = spaces_policy;
-                    self.emit(&Event::ready(self.size.0, self.size.1))?;
-                } else {
-                    self.client_typed_intents = typed_intents;
-                    self.client_theme_hooks = theme_hooks;
-                    self.client_spaces_policy = spaces_policy;
+                }
+                self.client_typed_intents = typed_intents;
+                self.client_theme_hooks = theme_hooks;
+                self.client_spaces_policy = spaces_policy;
+                self.server_keys = server_keys;
+                if renewed {
+                    self.announce_ready()?;
                 }
             }
             Command::Begin { generation } => self.begin_sync(generation),
@@ -1535,10 +1607,7 @@ impl<W: Write> App<W> {
                 }
                 let Ok(msg) = EngineConfig::try_from(*msg) else {
                     self.invalidate_pending();
-                    self.emit(&Event::Dropped {
-                        what: "config",
-                        reason: "invalid",
-                    })?;
+                    self.emit(&Event::dropped("config", "invalid"))?;
                     return Ok(if self.v2.atomic {
                         Applied::Continue
                     } else {
@@ -1587,18 +1656,12 @@ impl<W: Write> App<W> {
                 }
                 if !self.v2.atomic || !self.client_spaces_policy {
                     self.invalidate_pending();
-                    self.emit(&Event::Dropped {
-                        what: "spaces",
-                        reason: "unsupported",
-                    })?;
+                    self.emit(&Event::dropped("spaces", "unsupported"))?;
                     return Ok(Applied::Continue);
                 }
                 if !Self::valid_spaces_input(&msg) {
                     self.invalidate_pending();
-                    self.emit(&Event::Dropped {
-                        what: "spaces",
-                        reason: "bounds",
-                    })?;
+                    self.emit(&Event::dropped("spaces", "bounds"))?;
                     return Ok(Applied::Continue);
                 }
                 self.stage(SEEN_SPACES, |sections| {
@@ -1616,10 +1679,7 @@ impl<W: Write> App<W> {
                     || msg.space_count() > MODEL_MAX_SPACES
                 {
                     self.invalidate_pending();
-                    self.emit(&Event::Dropped {
-                        what: "model",
-                        reason: "bounds",
-                    })?;
+                    self.emit(&Event::dropped("model", "bounds"))?;
                     return Ok(if self.v2.atomic {
                         Applied::Continue
                     } else {
@@ -1645,10 +1705,7 @@ impl<W: Write> App<W> {
                 }
                 let Some((rev, presentation, document)) = settings_input(*msg) else {
                     self.invalidate_pending();
-                    self.emit(&Event::Dropped {
-                        what: "settings",
-                        reason: "invalid",
-                    })?;
+                    self.emit(&Event::dropped("settings", "invalid"))?;
                     return Ok(if self.v2.atomic {
                         Applied::Continue
                     } else {
@@ -1657,10 +1714,7 @@ impl<W: Write> App<W> {
                 };
                 if presentation.fields.len() > MODEL_MAX_FIELDS {
                     self.invalidate_pending();
-                    self.emit(&Event::Dropped {
-                        what: "settings",
-                        reason: "bounds",
-                    })?;
+                    self.emit(&Event::dropped("settings", "bounds"))?;
                     return Ok(if self.v2.atomic {
                         Applied::Continue
                     } else {
@@ -1689,10 +1743,7 @@ impl<W: Write> App<W> {
                 }
                 if msg.items.len() > MENU_MAX_ITEMS {
                     self.invalidate_pending();
-                    self.emit(&Event::Dropped {
-                        what: "menu",
-                        reason: "bounds",
-                    })?;
+                    self.emit(&Event::dropped("menu", "bounds"))?;
                     return Ok(if self.v2.atomic {
                         Applied::Continue
                     } else {
@@ -1713,12 +1764,16 @@ impl<W: Write> App<W> {
                 msg.level.as_deref().unwrap_or("info"),
                 msg.text
             )),
-            Command::Kill { title } => {
+            Command::Kill { title, pane } => {
                 let done = self
                     .cli
                     .as_ref()
                     .ok_or_else(|| "no cli here".to_string())
-                    .and_then(|cli| cli.kill_by_title(&title));
+                    .and_then(|cli| match (pane, title) {
+                        (Some(pane), _) => cli.kill_pane(pane),
+                        (None, Some(title)) => cli.kill_by_title(&title),
+                        (None, None) => Err("kill: neither pane nor title".to_string()),
+                    });
                 self.report("kill", done.map(|()| String::new()))?;
             }
             Command::Rescue { band, position } => {
@@ -1747,9 +1802,210 @@ impl<W: Write> App<W> {
                 });
                 self.report("adjust", done)?;
             }
-            Command::Quit => return Ok(Applied::Quit),
+            Command::TransportProbe { .. } => {}
+            Command::TransportBarrier { session } => self.transport_barrier(session)?,
+            Command::TransportStop { session } => {
+                if !self.transport_stop(session)? {
+                    return Ok(Applied::Quit);
+                }
+            }
+            Command::Quit => {
+                self.transport = Transport::Off;
+                return Ok(Applied::Quit);
+            }
         }
         Ok(Applied::Continue)
+    }
+
+    /// `ready`, offering a fresh inbox session whenever a root was given and can be prepared.
+    pub fn announce_ready(&mut self) -> io::Result<()> {
+        self.transport = Transport::Off;
+        if let Some(offer) = self.inbox.as_ref() {
+            match Inbox::create(&offer.root) {
+                Ok(inbox) => {
+                    self.log.log(format!("inbox {} offered", inbox.session()));
+                    self.transport = Transport::Negotiating { inbox };
+                }
+                Err(err) => self.log.log(format!("inbox: {err}")),
+            }
+        }
+        let pane = self.cli.as_ref().map(Cli::own_pane);
+        let inbox = self.transport.session().map(str::to_owned);
+        self.emit(&Event::ready_at(self.size.0, self.size.1, pane, inbox))
+    }
+
+    /// The probe is the only record of message 1, framed with this session's token, naming it.
+    fn probe_ok(&self, messages: &[Message], session: &str) -> bool {
+        let Some((1, bytes)) = messages.first() else {
+            return false;
+        };
+        let mut lines = bytes.split_inclusive(|b| *b == b'\n');
+        let (Some(line), None) = (lines.next(), lines.next()) else {
+            return false;
+        };
+        matches!(
+            decode_control_line(line),
+            Some(Input::Control {
+                token,
+                command: Command::TransportProbe { session: named },
+            }) if Some(token.as_str()) == self.token.as_deref() && named == session
+        )
+    }
+
+    /// The last stdin frame of a negotiation: one scan decides whether the probe made it.
+    fn transport_barrier(&mut self, session: String) -> io::Result<()> {
+        let outcome = match &self.transport {
+            Transport::Off => Err("state"),
+            Transport::Negotiating { inbox } | Transport::Active { inbox, .. }
+                if inbox.session() != session =>
+            {
+                Err("session")
+            }
+            Transport::Active { .. } => Ok(false),
+            Transport::Negotiating { inbox } => {
+                if self.probe_ok(&inbox.scan(), &session) {
+                    Ok(true)
+                } else {
+                    Err("probe")
+                }
+            }
+        };
+        match outcome {
+            Ok(true) => {
+                let Transport::Negotiating { inbox } = std::mem::take(&mut self.transport) else {
+                    return Ok(());
+                };
+                inbox.remove(1);
+                if let Some(offer) = self.inbox.as_ref() {
+                    inbox.watch(offer.wake.clone(), true);
+                }
+                self.transport = Transport::Active {
+                    inbox,
+                    last_seq: 1,
+                    gap_since: None,
+                };
+                self.log.log(format!("inbox {session} active"));
+                self.emit(&Event::TransportReady { session })
+            }
+            Ok(false) => self.emit(&Event::TransportReady { session }),
+            Err(why) => {
+                if why == "probe" {
+                    self.transport = Transport::Off;
+                }
+                self.log.log(format!("inbox {session} refused: {why}"));
+                self.emit(&Event::TransportRefused { session, why })
+            }
+        }
+    }
+
+    /// Lua is back on stdin: whatever the inbox still holds is applied in order, then it goes.
+    fn transport_stop(&mut self, session: String) -> io::Result<bool> {
+        if self.transport.session() != Some(session.as_str()) {
+            return Ok(true);
+        }
+        let messages = match &self.transport {
+            Transport::Active { inbox, .. } => inbox.scan(),
+            _ => Vec::new(),
+        };
+        let alive = self.apply_messages(&session, messages, usize::MAX)?;
+        self.transport = Transport::Off;
+        self.log.log(format!("inbox {session} stopped"));
+        Ok(alive)
+    }
+
+    /// A batch the reader thread scanned; only the active session's count.
+    pub fn inbox_batch(&mut self, batch: Batch) -> io::Result<bool> {
+        if !matches!(&self.transport, Transport::Active { inbox, .. } if inbox.session() == batch.session)
+        {
+            return Ok(true);
+        }
+        self.apply_messages(&batch.session, batch.messages, 0)
+    }
+
+    /// Applies `messages` in sequence from where `session` left off. A hole holds everything
+    /// behind it, unless `skip` missing numbers may still be written off as lost, one `dropped`
+    /// each. False once a record asked the backend to quit.
+    fn apply_messages(
+        &mut self,
+        session: &str,
+        messages: Vec<Message>,
+        mut skip: usize,
+    ) -> io::Result<bool> {
+        for (seq, bytes) in messages {
+            let step = loop {
+                let Transport::Active {
+                    inbox,
+                    last_seq,
+                    gap_since,
+                } = &mut self.transport
+                else {
+                    return Ok(true);
+                };
+                if inbox.session() != session {
+                    return Ok(true);
+                }
+                if seq <= *last_seq {
+                    inbox.remove(seq);
+                    break Step::Duplicate;
+                }
+                if seq == *last_seq + 1 {
+                    // Consumed before it runs: a stop or auth inside must not replay this file.
+                    inbox.remove(seq);
+                    *last_seq = seq;
+                    *gap_since = None;
+                    break Step::Apply;
+                }
+                if skip == 0 {
+                    gap_since.get_or_insert(Instant::now());
+                    break Step::Hold;
+                }
+                skip -= 1;
+                *last_seq += 1;
+                *gap_since = None;
+                let lost = *last_seq;
+                self.emit(&Event::dropped_message(lost))?;
+            };
+            match step {
+                Step::Hold => return Ok(true),
+                Step::Duplicate => continue,
+                Step::Apply => {}
+            }
+            for line in bytes.split_inclusive(|b| *b == b'\n') {
+                if let Some(input) = decode_control_line(line)
+                    && !self.handle(input)?
+                {
+                    return Ok(false);
+                }
+            }
+        }
+        Ok(true)
+    }
+
+    pub fn next_transport(&self) -> Option<Instant> {
+        match &self.transport {
+            Transport::Active {
+                gap_since: Some(at),
+                ..
+            } => Some(*at + GAP_GRACE),
+            _ => None,
+        }
+    }
+
+    /// Once a hole outlived its grace, one scan decides: the file arrived, or that seq is lost.
+    pub fn tick_transport(&mut self, now: Instant) -> io::Result<bool> {
+        if !self.next_transport().is_some_and(|at| now >= at) {
+            return Ok(true);
+        }
+        let Transport::Active {
+            inbox, gap_since, ..
+        } = &mut self.transport
+        else {
+            return Ok(true);
+        };
+        *gap_since = None;
+        let session = inbox.session().to_owned();
+        let messages = inbox.scan();
+        self.apply_messages(&session, messages, 1)
     }
 
     /// One `cli` event per server-side verb: the count or an empty detail on success, the error otherwise.

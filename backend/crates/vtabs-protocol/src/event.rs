@@ -14,6 +14,12 @@ pub enum Event {
         rows: u16,
         paints: bool,
         caps: Vec<&'static str>,
+        /// The backend's own server pane id, so Lua can `kill` it by id through a sibling.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pane: Option<u64>,
+        /// The inbox session offered for this ready; absent where no transport root was given.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        transport: Option<Transport>,
     },
     Resize {
         cols: u16,
@@ -25,6 +31,9 @@ pub enum Event {
         mods: Vec<&'static str>,
         #[serde(skip_serializing_if = "Option::is_none")]
         raw: Option<String>,
+        /// True once the backend already wrote `raw` into the content pane server-side.
+        #[serde(skip_serializing_if = "std::ops::Not::not")]
+        delivered: bool,
     },
     Focus {
         #[serde(rename = "in")]
@@ -41,9 +50,19 @@ pub enum Event {
         #[serde(skip_serializing_if = "Option::is_none")]
         echo: Option<u64>,
     },
+    /// `seq` names the one inbox message a gap swallowed (`what: "message"`).
     Dropped {
         what: &'static str,
         reason: &'static str,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        seq: Option<u32>,
+    },
+    TransportReady {
+        session: String,
+    },
+    TransportRefused {
+        session: String,
+        why: &'static str,
     },
     Intent {
         #[serde(flatten)]
@@ -116,6 +135,12 @@ pub enum Event {
         #[serde(skip_serializing_if = "String::is_empty")]
         detail: String,
     },
+}
+
+/// The inbox session `ready` offers: a directory basename under the root Lua chose.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Transport {
+    pub inbox: String,
 }
 
 /// A renderer-produced action. Each variant carries only the fields that action can consume.
@@ -528,6 +553,11 @@ impl DoArgs {
 
 impl Event {
     pub fn ready(cols: u16, rows: u16) -> Self {
+        Self::ready_at(cols, rows, None, None)
+    }
+
+    /// `ready` from a pane that knows its server id and, with `inbox`, offers a session there.
+    pub fn ready_at(cols: u16, rows: u16, pane: Option<u64>, inbox: Option<String>) -> Self {
         Event::Ready {
             v: VERSION,
             cols,
@@ -539,7 +569,27 @@ impl Event {
                 "theme_hooks",
                 "settings_document",
                 "spaces_policy",
+                "inbox_transport",
             ],
+            pane,
+            transport: inbox.map(|inbox| Transport { inbox }),
+        }
+    }
+
+    pub fn dropped(what: &'static str, reason: &'static str) -> Self {
+        Event::Dropped {
+            what,
+            reason,
+            seq: None,
+        }
+    }
+
+    /// The one inbox message a gap cost, once its grace ran out.
+    pub fn dropped_message(seq: u32) -> Self {
+        Event::Dropped {
+            what: "message",
+            reason: "gap",
+            seq: Some(seq),
         }
     }
 
@@ -597,7 +647,16 @@ impl Event {
             key: name,
             mods: mods_list(mods),
             raw: (!raw.is_empty()).then(|| b64(raw)),
+            delivered: false,
         }
+    }
+
+    /// The same key, marked as already written into the content pane by the backend.
+    pub fn delivered(mut self) -> Self {
+        if let Event::Key { delivered, .. } = &mut self {
+            *delivered = true;
+        }
+        self
     }
 
     pub fn to_json(&self) -> String {

@@ -1,11 +1,12 @@
 use std::io::{self, Read};
+use std::path::PathBuf;
+use std::sync::Arc;
 use std::sync::mpsc::{self, RecvTimeoutError, Sender};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use vtabs_protocol::Event;
-
 use crate::app::App;
+use crate::inbox;
 use crate::input::Parser;
 use crate::log::Logger;
 use crate::signal;
@@ -17,11 +18,23 @@ const SIZE_FALLBACK: Duration = Duration::from_secs(2);
 const ESC_TIMEOUT: Duration = Duration::from_millis(30);
 const READ_BUF: usize = 16 * 1024;
 
-/// Everything that wakes the loop, on one channel: stdin bytes, the pty's end, and a SIGWINCH.
+/// Everything that wakes the loop, on one channel: stdin bytes, the pty's end, a SIGWINCH, and
+/// what the inbox reader scanned.
 enum Wake {
     Stdin(Vec<u8>),
     Eof,
     Resized,
+    Inbox(inbox::Batch),
+}
+
+/// `VTABS_INBOX_ROOT` is Lua's offer to take frames off the mux link; unset keeps stdin only.
+fn inbox_offer(tx: &Sender<Wake>) -> Option<inbox::Offer> {
+    let root = PathBuf::from(std::env::var_os("VTABS_INBOX_ROOT")?);
+    let tx = tx.clone();
+    Some(inbox::Offer {
+        root,
+        wake: Arc::new(move |batch| tx.send(Wake::Inbox(batch)).is_ok()),
+    })
 }
 
 fn spawn_stdin_reader(tx: Sender<Wake>) {
@@ -98,6 +111,7 @@ pub fn run() -> io::Result<()> {
         log.log("stdin is not a tty; raw mode skipped");
     }
     let size = terminal::size().unwrap_or((0, 0));
+    let (tx, rx) = mpsc::channel();
     let mut app = App {
         out,
         log,
@@ -126,19 +140,21 @@ pub fn run() -> io::Result<()> {
         last_reported_theme: None,
         last_rail_reserve: None,
         cli: crate::cli::Cli::from_env(),
+        inbox: inbox_offer(&tx),
+        transport: Default::default(),
+        server_keys: false,
         metrics: Default::default(),
     };
     app.write(set_user_var(ROLE_VAR, role.name()).as_bytes())?;
     // Marker only: it lets the plugin find this pane again, it proves nothing and carries no token.
     app.write(title_marker(role, &nonce()).as_bytes())?;
     // `paints` is the capability flip Lua reads to refuse a backend that cannot draw for itself.
-    app.emit(&Event::ready(size.0, size.1))?;
+    app.announce_ready()?;
     if cfg!(debug_assertions) && std::env::var_os("VTABS_PANIC_ON_READY").is_some_and(|v| v == "1")
     {
         panic!("VTABS_PANIC_ON_READY");
     }
 
-    let (tx, rx) = mpsc::channel();
     spawn_stdin_reader(tx.clone());
     let winch = signal::watch_resize(Box::new(move || tx.send(Wake::Resized).is_ok()));
     let mut parser = Parser::new();
@@ -156,6 +172,9 @@ pub fn run() -> io::Result<()> {
         if let Some(at) = app.next_hook_deadline() {
             deadline = deadline.min(at);
         }
+        if let Some(at) = app.next_transport() {
+            deadline = deadline.min(at);
+        }
         let until_tick = deadline.saturating_duration_since(Instant::now());
         let timeout = if parser.has_pending() {
             until_tick.min(ESC_TIMEOUT)
@@ -166,6 +185,12 @@ pub fn run() -> io::Result<()> {
             Ok(Wake::Stdin(chunk)) => parser.feed(&chunk),
             Ok(Wake::Resized) => {
                 app.poll_size()?;
+                Vec::new()
+            }
+            Ok(Wake::Inbox(batch)) => {
+                if !app.inbox_batch(batch)? {
+                    return Ok(());
+                }
                 Vec::new()
             }
             Err(RecvTimeoutError::Timeout) => parser.flush(),
@@ -180,6 +205,9 @@ pub fn run() -> io::Result<()> {
         app.tick_fx(now)?;
         app.tick_hover(now)?;
         app.tick_hooks(now)?;
+        if !app.tick_transport(now)? {
+            return Ok(());
+        }
         if next_poll.is_some_and(|at| now >= at) {
             next_poll = Some(now + SIZE_POLL);
             app.poll_size()?;

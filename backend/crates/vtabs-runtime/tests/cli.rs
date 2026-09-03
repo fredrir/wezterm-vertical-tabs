@@ -1,5 +1,5 @@
 use vtabs_runtime::cli::{
-    PaneInfo, adjust_plan, is_marker, kill_target, panes_from_json, rescue_plan,
+    PaneInfo, adjust_plan, content_pane, is_marker, kill_target, panes_from_json, rescue_plan,
 };
 
 fn pane(id: u64, tab: u64, title: &str, left: i64, cols: i64) -> PaneInfo {
@@ -119,4 +119,31 @@ fn the_adjust_walks_from_the_active_pane_and_only_a_narrow_content_pane_needs_th
         pane(2, 1, "zsh", 29, 71),
     ];
     assert!(adjust_plan(&panes, 1).is_err(), "a tab with no active pane");
+}
+
+#[test]
+fn the_content_pane_is_the_one_spanning_the_column_and_a_marker_never_qualifies() {
+    // one content pane fills the column beside a 28-wide sidebar: 100 - 28 - 1 = 71
+    let panes = vec![
+        pane(1, 7, "wez-vtabs:abcd", 0, 28),
+        pane(2, 7, "zsh", 29, 71),
+    ];
+    assert_eq!(content_pane(&panes, 1), Ok(2));
+
+    // a horizontal split stacks two panes across the whole column; the active one takes the key
+    let panes = vec![
+        pane(1, 7, "wez-vtabs:abcd", 0, 28),
+        pane(2, 7, "top", 29, 71),
+        active(pane(3, 7, "bottom", 29, 71)),
+    ];
+    assert_eq!(content_pane(&panes, 1), Ok(3));
+
+    // side by side, nothing spans the content column, and the sidebar itself is never a target
+    let panes = vec![
+        pane(1, 7, "wez-vtabs:abcd", 0, 28),
+        pane(2, 7, "left", 29, 35),
+        pane(3, 7, "right", 65, 35),
+    ];
+    assert!(content_pane(&panes, 1).is_err());
+    assert!(content_pane(&panes, 9).is_err(), "an unlisted own pane");
 }

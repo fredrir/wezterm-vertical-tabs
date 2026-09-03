@@ -11,6 +11,7 @@ local protocol = require "vtabs.gen.protocol"
 local mux = require "vtabs.mux"
 local link = require "vtabs.link"
 local theme_bridge = require "vtabs.theme_bridge"
+local transport = require "vtabs.transport"
 local util = require "vtabs.util"
 
 local M = {}
@@ -253,6 +254,27 @@ local function on_theme_resolved(gui_window, ev)
   end
 end
 
+---The backend's answer to the inbox handshake, for the session Lua is negotiating.
+local TRANSPORT = { transport_ready = transport.accept, transport_refused = transport.refuse }
+
+---An inbox message the backend never received is one publish lost: the wire resends every section
+---and the caller publishes. Any other drop is the backend refusing a bound, said once.
+local function on_dropped(pane, ev)
+  local pid = pane:pane_id()
+  if ev.what == "message" then
+    util.log("backend %d lost inbox message %s; resending", pid, tostring(ev.seq))
+    require("vtabs.wire").reset_pane(pid)
+    return true
+  end
+  util.warn_once(
+    string.format("backend-drop-%d-%s-%s", pid, tostring(ev.what), tostring(ev.reason)),
+    "backend dropped %s: %s",
+    tostring(ev.what),
+    tostring(ev.reason)
+  )
+  return false
+end
+
 ---Typed backend intent; the popover-open guard mirrors v1's click-through dismiss.
 local function on_intent(gui_window, pane, ev)
   if protocol.INTENT_NAMES[ev.a] ~= true then
@@ -468,9 +490,15 @@ local function hand_over(gui_window, content, deliver)
 end
 
 ---A key at a sidebar that is not in keyboard mode is the user typing at their shell: hand it over.
+---`delivered` means the backend already typed the bytes into the content pane through its own
+---server, so only the focus is left to move.
 local function forward_key(gui_window, pane, ev, cfg)
   local content = handover_target(gui_window, pane, cfg)
   if not content then
+    return
+  end
+  if ev.delivered == true then
+    hand_over(gui_window, content, nil)
     return
   end
   local text = M.safe_key_bytes(decoded_key(ev))
@@ -543,9 +571,13 @@ function M.handle(gui_window, pane, name, value)
     local pid = pane:pane_id()
     store.proto[pid] = v
     store.paints[pid] = true
+    -- the backend's own id on its server: what `kill` by id names through another backend there
+    local server = tonumber(ev.pane)
+    store.server_pane[pid] = server and server >= 0 and math.floor(server) or nil
     sidebar.set_capabilities(pane, ev.caps or ev.capabilities)
     require("vtabs.wire").reset_pane(pid)
     sidebar.auth(pane)
+    transport.offer(pane, ev)
     return true
   end
 
@@ -583,13 +615,12 @@ function M.handle(gui_window, pane, name, value)
       end
     elseif ev.t == "theme_resolved" then
       on_theme_resolved(gui_window, ev)
+    elseif TRANSPORT[ev.t] then
+      TRANSPORT[ev.t](pane, ev)
     elseif ev.t == "dropped" then
-      util.warn_once(
-        string.format("backend-drop-%d-%s-%s", pane:pane_id(), tostring(ev.what), tostring(ev.reason)),
-        "backend dropped %s: %s",
-        tostring(ev.what),
-        tostring(ev.reason)
-      )
+      if on_dropped(pane, ev) then
+        view.sync(gui_window)
+      end
     end
     return
   end
@@ -620,13 +651,12 @@ function M.handle(gui_window, pane, name, value)
     end
   elseif ev.t == "theme_resolved" then
     on_theme_resolved(gui_window, ev)
+  elseif TRANSPORT[ev.t] then
+    TRANSPORT[ev.t](pane, ev)
   elseif ev.t == "dropped" then
-    util.warn_once(
-      string.format("backend-drop-%d-%s-%s", pane:pane_id(), tostring(ev.what), tostring(ev.reason)),
-      "backend dropped %s: %s",
-      tostring(ev.what),
-      tostring(ev.reason)
-    )
+    if on_dropped(pane, ev) then
+      view.sync(gui_window)
+    end
   elseif ev.t == "intent" then
     on_intent(gui_window, pane, ev)
   elseif ev.t == "do" then
@@ -668,6 +698,17 @@ function M.tick(gui_window)
   if store.last_active[wid] ~= active_id then
     store.last_active[wid] = active_id
     store.user_scrolled[wid] = nil
+  end
+  -- `hover` or a tab's content can change under a backend delivering keys on the server; a
+  -- same-token auth moves the keys back to the plugin, or out to the server, without a reset.
+  for _, info in ipairs(mux.call(gui_window, "mux_window"):tabs_with_info() or {}) do
+    local sb = sidebar.find(info.tab)
+    local pid = sb and sb:pane_id() or nil
+    if pid and store.keys_mode[pid] and sidebar.is_ready(sb) then
+      if (sidebar.keys_mode(sb) or "host") ~= store.keys_mode[pid] then
+        sidebar.auth(sb)
+      end
+    end
   end
 end
 

@@ -368,6 +368,7 @@ version = "0.1.10"
 dependencies = [
  "base64",
  "crossterm",
+ "libc",
  "serde_json",
  "signal-hook",
  "vtabs-engine",

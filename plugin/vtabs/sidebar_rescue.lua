@@ -5,6 +5,7 @@ local state = require "vtabs.state"
 local store = require "vtabs.store"
 local platform = require "vtabs.platform"
 local mux = require "vtabs.mux"
+local transport = require "vtabs.transport"
 local util = require "vtabs.util"
 local identity = require "vtabs.sidebar_identity"
 
@@ -235,6 +236,7 @@ local function forget_closed(tab_id, private)
   end
   local pid = state.sidebar_pane_id(tab_id)
   if pid then
+    transport.forget(pid)
     state.forget_pane(pid)
   end
   state.forget_tab(tab_id)

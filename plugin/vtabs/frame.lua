@@ -179,13 +179,7 @@ local function key_of(rect)
 end
 
 local function dir_for()
-  for _, name in ipairs { "XDG_RUNTIME_DIR", "TMPDIR" } do
-    local value = os.getenv(name)
-    if type(value) == "string" and value ~= "" then
-      return value .. "/wez-vtabs"
-    end
-  end
-  return "/tmp/wez-vtabs"
+  return util.runtime_dir() or "/tmp/wez-vtabs"
 end
 
 local process_key = nil

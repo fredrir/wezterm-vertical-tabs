@@ -2,7 +2,7 @@ use vtabs_protocol::limits::{
     FORWARDED_KEY_MAX_BYTES, LINE_MAX, PARSER_BUFFER_MAX, PASTE_MAX_BYTES,
 };
 use vtabs_protocol::{Button, Command, Mods, Mouse, MouseKind};
-use vtabs_runtime::input::{Input, Parser};
+use vtabs_runtime::input::{Input, Parser, decode_control_line};
 
 const STALL_LIMIT: u32 = 10;
 const TOKEN: &str = "abc123";
@@ -597,4 +597,27 @@ fn an_oversized_paste_of_keys_is_not_a_command_line() {
     let big = vec![b'x'; PARSER_BUFFER_MAX + 2];
     assert!(p.feed(&big).is_empty());
     assert_eq!(feed_into(&mut p, b"y"), vec![plain("y")]);
+}
+
+#[test]
+fn the_control_decoder_takes_a_whole_framed_record_and_nothing_else() {
+    let line = frame(r#"{"t":"transport_probe","session":"inbox-42-abcd"}"#);
+    assert_eq!(
+        decode_control_line(&line),
+        Some(control(Command::TransportProbe {
+            session: "inbox-42-abcd".into(),
+        }))
+    );
+
+    // non-control bytes, a key sequence and an unterminated frame are all rejected outright
+    assert_eq!(decode_control_line(b"hello world\n"), None);
+    assert_eq!(decode_control_line(b"\x1b[A\n"), None);
+    let mut unterminated = line.clone();
+    unterminated.pop();
+    assert_eq!(decode_control_line(&unterminated), None);
+
+    // a second record after the newline is not one line, so the decoder refuses the pair
+    let mut two = frame(r#"{"t":"ping"}"#);
+    two.extend(frame(r#"{"t":"ping"}"#));
+    assert_eq!(decode_control_line(&two), None);
 }

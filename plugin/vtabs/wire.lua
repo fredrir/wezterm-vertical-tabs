@@ -43,6 +43,11 @@ function M.reset_pane(pane_id)
   sent[pane_id] = nil
 end
 
+---True once a section has reached the pane: a bare pane is written to whichever tab it is in.
+function M.dressed(pane_id)
+  return sent[pane_id] ~= nil
+end
+
 local ARRAY = {}
 
 ---Tags a list so an empty one still encodes as `[]`, which serde's Vec insists on.

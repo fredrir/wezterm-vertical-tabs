@@ -61,10 +61,21 @@
   deadlocked the GUI: the main thread parked in `send_text`, the mux client
   thread parked, the server idle (two macOS hang reports, each right after
   hundreds of server-side pane resizes in a second). A `resize` report from a
-  mux pane is that storm's visible edge: it marks its domain busy, nothing is
-  published and no adjust is sent while any domain is busy, and the frames that
-  must go all the same (auth, pings, menus) are held in order and flushed once
-  the domain has been quiet for 300 ms.
+  mux pane is that storm's visible edge: it marks its domain busy, nothing that
+  would cross the link is published or adjusted while the domain is busy, and
+  the frames that must go all the same (auth, pings, menus) are held in order
+  and flushed once the domain has been quiet for 300 ms.
+- On a unix domain of this machine frames do not cross the link at all: the
+  backend reads them from a per-session inbox directory (`docs/protocol.md`,
+  "Inbox transport"), and a forwarded key reaches the content pane through the
+  server's `wezterm cli send-text`. `send_text` remains only for remote hosts
+  and for the stdin barrier of the handshake. A config reload mints fresh
+  tokens, so every sidebar clears once per reload while its backend re-announces
+  itself and the inbox is negotiated again.
+- A sidebar or settings pane on a mux domain closes by its backend quitting, or
+  by `wezterm cli kill-pane` from another backend on that server; closing by
+  activation is used only when the server has no backend left, being the one
+  path the mux client has been seen to abort on.
 - A `resize` report from the sidebar corrects the width and publishes nothing:
   the pane has repainted itself at the new size, and the backend measures its
   own cells and pixels, so the host sends it only the window's dpi.

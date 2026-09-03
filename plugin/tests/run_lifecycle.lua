@@ -930,3 +930,497 @@ test("no publish crosses a busy mux link; the next poll after it goes quiet publ
   link.reset()
   clock.restore()
 end)
+
+-- The inbox transport: frames to a mux pane of this machine as files in its directory, and the
+-- closes, gates and key handovers that stop crossing the link with it (transport.lua).
+
+local transport = require "vtabs.transport"
+local view = require "vtabs.view"
+local input = require "vtabs.input"
+local wire = require "vtabs.wire"
+
+local function count(list, needle)
+  local n = 0
+  for _, text in ipairs(list) do
+    if text:find(needle, 1, true) then
+      n = n + 1
+    end
+  end
+  return n
+end
+
+local function last(list)
+  return list[#list]
+end
+
+test("a mux sidebar moves onto its inbox: probe as message 1, barrier on stdin, then every batch is a file", function()
+  H.with_inbox(function()
+    local win, gui = H.mux_window(1)
+    local sb = sidebar.find(win.tab_list[1])
+    local before = #sb.sent
+    local id = fake.ready(gui, sb)
+    assert(id:match "^inbox%-%d+%-%x+$", id)
+    eq(#sb.sent, before + 2, "auth, then the barrier: nothing else typed")
+    assert(sb.sent[before + 1]:find('"auth"', 1, true), "auth first")
+    assert(sb.sent[before + 1]:find('"keys":"server"', 1, true), "keys are delivered on the server")
+    assert(sb.sent[before + 2]:find('"transport_barrier"', 1, true), "the barrier last")
+    eq(sb.probed, id, "the probe was in the directory when the barrier arrived")
+    eq(transport.state(sb), "active")
+    assert(last(sb.events):find('"transport_ready"', 1, true))
+    eq(#sb.inbox_msgs, 1, "the publish the ready set off is one file in the inbox")
+    assert(last(sb.inbox_msgs):find('"t":"begin"', 1, true) and last(sb.inbox_msgs):find('"t":"commit"', 1, true))
+    eq(transport.inspect(sb).next_seq, 3, "the probe was message 1, the publish message 2")
+    local typed = #sb.sent
+    win.tab_list[1]:set_title "renamed"
+    assert(view.sync(gui) ~= false, "published")
+    eq(#sb.sent, typed, "nothing crossed the link")
+    eq(#sb.inbox_msgs, 2, "one file for the batch")
+    for n = 1, 3 do
+      assert(sidebar.send(sb, { t = "ping", n = n }))
+    end
+    eq(#sb.inbox_msgs, 5, "one file per send")
+    eq(#fake.listing(sb.inbox_dir), 0, "each read and deleted")
+    for n = 1, 3 do
+      assert(sb.inbox_msgs[2 + n]:find('"n":' .. n, 1, true), "in sequence")
+    end
+    eq(transport.inspect(sb).next_seq, 7)
+  end)
+end)
+
+test("frames sent while the inbox is negotiated wait in order and go into it on ready", function()
+  H.with_inbox(function()
+    local win, gui = H.mux_window(1)
+    local sb = sidebar.find(win.tab_list[1])
+    sb.hold_events = true
+    fake.ready(gui, sb)
+    eq(transport.state(sb), "negotiating")
+    local typed = #sb.sent
+    local queued = transport.inspect(sb).queued
+    eq(queued, 1, "the publish the ready set off waits")
+    assert(sidebar.send(sb, { t = "ping", n = 1 }), "accepted")
+    assert(sidebar.send(sb, { t = "ping", n = 2 }))
+    eq(#sb.sent, typed, "nothing typed")
+    eq(#fake.listing(sb.inbox_dir), 0, "nothing written before the ack")
+    eq(transport.inspect(sb).queued, 3)
+    fake.deliver(sb)
+    eq(transport.state(sb), "active")
+    eq(#sb.inbox_msgs, 3, "the queue went into the inbox")
+    assert(sb.inbox_msgs[1]:find('"t":"begin"', 1, true), "the publish first")
+    assert(sb.inbox_msgs[2]:find('"n":1', 1, true) and sb.inbox_msgs[3]:find('"n":2', 1, true), "in order")
+    eq(#sb.sent, typed, "and never crossed the link")
+  end)
+end)
+
+test("a refused negotiation types its queue on stdin, in order, and stays there", function()
+  H.with_inbox(function()
+    local win, gui = H.mux_window(1)
+    local sb = sidebar.find(win.tab_list[1])
+    fake.lose_probe = true
+    sb.hold_events = true
+    fake.ready(gui, sb)
+    assert(last(sb.events):find('"transport_refused"', 1, true), "the barrier found no probe")
+    assert(last(sb.events):find('"why":"probe"', 1, true))
+    eq(transport.state(sb), "negotiating", "the answer has not reached the plugin yet")
+    local typed = #sb.sent
+    assert(sidebar.send(sb, { t = "ping", n = 1 }))
+    assert(sidebar.send(sb, { t = "ping", n = 2 }))
+    fake.deliver(sb)
+    eq(transport.state(sb), "off")
+    eq(#sb.sent, typed + 1, "one write for the queue")
+    local flushed = last(sb.sent)
+    assert(flushed:find('"n":1', 1, true) < flushed:find('"n":2', 1, true), "in order")
+    eq(sb.stopped, nil, "a backend that refused is not told to stop")
+    assert(sidebar.send(sb, { t = "ping", n = 3 }))
+    eq(#sb.sent, typed + 2, "stdin from here")
+    eq(#sb.inbox_msgs, 0)
+  end)
+end)
+
+test("a negotiation nobody answers is given up after 2 s: queue on stdin, stop sent, late ack ignored", function()
+  H.with_inbox(function()
+    local win, gui = H.mux_window(1)
+    local sb = sidebar.find(win.tab_list[1])
+    local clock = H.clock()
+    wezterm.timers = {}
+    sb.hold_events = true
+    fake.ready(gui, sb)
+    eq(#wezterm.timers, 1, "the clock is armed")
+    local typed = #sb.sent
+    assert(sidebar.send(sb, { t = "ping", n = 1 }))
+    assert(sidebar.send(sb, { t = "ping", n = 2 }))
+    clock.advance(1000)
+    wezterm.fire_timers()
+    eq(transport.state(sb), "negotiating", "still inside the bound")
+    eq(#wezterm.timers, 1, "re-armed for the rest")
+    clock.advance(transport.NEGOTIATE_MS)
+    wezterm.fire_timers()
+    eq(transport.state(sb), "off")
+    eq(#sb.sent, typed + 2, "the queue in one write, then the stop")
+    local flushed = sb.sent[typed + 1]
+    assert(flushed:find('"n":1', 1, true) < flushed:find('"n":2', 1, true), "in order")
+    assert(last(sb.sent):find('"transport_stop"', 1, true))
+    eq(sb.stopped, 1, "the backend heard it")
+    fake.deliver(sb)
+    eq(transport.state(sb), "off", "the late ready changes nothing")
+    clock.restore()
+  end)
+end)
+
+test("a write that fails loses that batch alone: stop sent, no replay, stdin from there", function()
+  H.with_inbox(function()
+    local win, gui = H.mux_window(1)
+    local sb = sidebar.find(win.tab_list[1])
+    fake.ready(gui, sb)
+    view.sync(gui)
+    assert(wire.dressed(sb:pane_id()))
+    local typed, filed = #sb.sent, #sb.inbox_msgs
+    fake.fail.close = true
+    eq(sidebar.send(sb, { t = "ping", n = 1 }), false)
+    fake.fail.close = nil
+    eq(#fake.listing(sb.inbox_dir), 0, "no tmp left behind")
+    eq(transport.state(sb), "off")
+    assert(last(sb.sent):find('"transport_stop"', 1, true), "the backend drains and stops")
+    eq(sb.stopped, 1)
+    eq(wire.dressed(sb:pane_id()), false, "the wire forgets what it delivered")
+    assert(sidebar.send(sb, { t = "ping", n = 2 }))
+    eq(#sb.sent, typed + 2, "stop, then the next frame on stdin")
+    eq(count(sb.sent, '"n":1') + count(sb.inbox_msgs, '"n":1'), 0, "the lost frame is never replayed")
+    eq(#sb.inbox_msgs, filed)
+  end)
+end)
+
+test("an inbox name that is not one bare directory name, or is too long, is never written to", function()
+  H.with_inbox(function()
+    local win, gui = H.mux_window(1)
+    local sb = sidebar.find(win.tab_list[1])
+    for _, name in ipairs { "../evil", "inbox/1", "inbox 1", "inbox.1", string.rep("a", 65) } do
+      fake.ready(gui, sb, { inbox = name })
+      eq(transport.state(sb), "off", name)
+      eq(next(fake.files), nil, "nothing written: " .. name)
+    end
+    eq(count(sb.sent, '"transport_barrier"'), 0, "no barrier for any of them")
+    fake.ready(gui, sb, { inbox = string.rep("a", 64) })
+    eq(transport.state(sb), "active", "64 bytes of word characters is the longest name allowed")
+  end)
+end)
+
+test(
+  "only a mux pane of this machine is offered the inbox: never a local one, a remote one, or with the knob off",
+  function()
+    H.with_inbox(function()
+      local win, gui = H.window(1, { attach = true, ready = true })
+      local tab = win.tab_list[1]
+      local sb = sidebar.find(tab)
+      local function offered(opts)
+        local typed = #sb.sent
+        fake.ready(gui, sb, opts)
+        local barriers = count({ table.unpack(sb.sent, typed + 1) }, '"transport_barrier"')
+        return transport.state(sb) ~= "off", barriers, sb.sent[typed + 1]
+      end
+      local on, barriers, auth = offered()
+      eq(on, false, "local domain: the PTY is written directly")
+      eq(barriers, 0, "no barrier")
+      assert(auth:find('"auth"', 1, true) and not auth:find('"keys"', 1, true), "and keys stay with the plugin")
+      sb.domain, sidebar.content_pane(tab).domain = "e2essh", "e2essh"
+      eq(offered(), false, "a domain of another machine")
+      sb.domain, sidebar.content_pane(tab).domain = "localmux", "localmux"
+      store.pane_domain[sb:pane_id()] = "localmux@build.example"
+      eq(offered(), false, "a unix domain proxied to another host")
+      store.pane_domain[sb:pane_id()] = "localmux@"
+      config.get().backend.inbox = false
+      eq(offered(), false, "the knob")
+      config.get().backend.inbox = nil
+      local dir = util.runtime_dir
+      util.runtime_dir = function()
+        return nil
+      end
+      eq(offered { root = "/run/elsewhere" }, false, "no private directory of this user's to write in")
+      util.runtime_dir = dir
+      eq(offered(), true)
+    end)
+  end
+)
+
+test("a busy link holds back neither the publish nor the adjust of a sidebar on its inbox", function()
+  H.with_inbox(function()
+    local link = require "vtabs.link"
+    local geometry = require "vtabs.geometry"
+    local win, gui = H.mux_window(1)
+    local tab = win.tab_list[1]
+    local sb = sidebar.find(tab)
+    fake.ready(gui, sb)
+    view.sync(gui)
+    local filed, typed = #sb.inbox_msgs, #sb.sent
+    local clock = H.clock()
+    wezterm.timers = {}
+    link.activity(sb)
+    eq(link.busy "localmux", true)
+    tab:set_title "renamed"
+    assert(view.sync(gui) ~= false, "published while the link is busy")
+    eq(#sb.inbox_msgs, filed + 1, "into the inbox")
+    eq(#sb.sent, typed, "nothing typed")
+    win:resize(10)
+    clock.advance(100)
+    eq(link.busy "localmux", true)
+    assert(geometry.correct(gui), "adjusted at once")
+    eq(sb.adjusted, 1, "through the inbox")
+    eq(#sb.sent, typed)
+    eq(sb.cols, 28)
+    clock.restore()
+  end)
+end)
+
+test("link.lua holds the barrier while the domain is busy; the negotiation completes once it is quiet", function()
+  H.with_inbox(function()
+    local link = require "vtabs.link"
+    local win, gui = H.mux_window(1)
+    local sb = sidebar.find(win.tab_list[1])
+    local clock = H.clock()
+    wezterm.timers = {}
+    link.activity(sb)
+    local typed = #sb.sent
+    local id = fake.ready(gui, sb)
+    eq(#sb.sent, typed, "auth and barrier both held")
+    eq(transport.state(sb), "negotiating")
+    eq(fake.listing(sb.inbox_dir)[1], "00000001.msg", "the probe is already in place")
+    clock.advance(link.QUIET_MS)
+    wezterm.fire_timers()
+    eq(#sb.sent, typed + 1, "flushed in one write")
+    local flushed = last(sb.sent)
+    assert(flushed:find('"auth"', 1, true) < flushed:find('"transport_barrier"', 1, true), "auth before barrier")
+    eq(transport.state(sb), "active")
+    eq(sb.probed, id)
+    clock.restore()
+  end)
+end)
+
+test("no sidebar is split into a tab while its mux link is busy; the next quiet poll splits it", function()
+  H.with_inbox(function()
+    local link = require "vtabs.link"
+    local win, gui = H.window(1, { attach = true, ready = true })
+    local tab = win:add_tab { title = "mux", domain = "localmux" }
+    win.active_tab_ref = tab
+    local clock = H.clock()
+    link.activity(tab.pane_list[1])
+    sidebar.ensure(gui)
+    eq(#tab:panes(), 1, "nothing split while the link is busy")
+    clock.advance(link.QUIET_MS)
+    sidebar.ensure(gui)
+    eq(#tab:panes(), 2, "split once quiet")
+    eq(sidebar.find(tab).split_args.set_environment_variables.VTABS_INBOX_ROOT, "/run/vtabs-test")
+    clock.restore()
+  end)
+end)
+
+test(
+  "closing the settings page on a mux domain quits its backends; the tab goes with them, nothing by activation",
+  function()
+    local win, gui = H.window(1, { attach = true, ready = true })
+    local settings = require "vtabs.settings"
+    assert(settings.open(gui), "opened")
+    local page_tab, page = settings.find(gui:mux_window())
+    page.vars.vtabs_token = state.token_for(page:pane_id())
+    local page_sb = H.mark_ready(page_tab)
+    for _, p in ipairs(page_tab.pane_list) do
+      p.domain = "localmux"
+    end
+    local acted, tabs = #win.actions, #win.tab_list
+    local pushes = 0
+    local real_push = state.push_closed
+    state.push_closed = function(...)
+      pushes = pushes + 1
+      return real_push(...)
+    end
+    assert(settings.close(gui), "closed")
+    assert(last(page.sent):find('"quit"', 1, true), "the page was told to quit")
+    assert(last(page_sb.sent):find('"quit"', 1, true), "and so was its sidebar")
+    eq(#win.tab_list, tabs - 1, "the tab went with its last pane")
+    eq(#win.actions, acted, "no CloseCurrentTab, no CloseCurrentPane")
+    sidebar.ensure(gui)
+    state.push_closed = real_push
+    eq(pushes, 0, "and the page is not in the closed-tab history")
+  end
+)
+
+test(
+  "a mux sidebar that ignores quit is killed by its server id through another backend, never by activation while one is left",
+  function()
+    H.with_inbox(function()
+      local win, gui = H.mux_window(2)
+      local tab, helper_tab = win.tab_list[1], win.tab_list[2]
+      local sb, helper = sidebar.find(tab), sidebar.find(helper_tab)
+      fake.ready(gui, sb, { transport = false })
+      eq(store.server_pane[sb:pane_id()], sb.server_id, "the backend's id on its server is kept")
+      sb.hung = true
+      local clock = H.clock()
+      local acted = #win.actions
+      sidebar.detach(gui, tab)
+      eq(#tab:panes(), 2, "quit went unheard")
+      helper.hung = true
+      clock.advance(2100)
+      sidebar.ensure(gui)
+      assert(last(helper.sent):find('"kill"', 1, true), "the helper was asked")
+      assert(last(helper.sent):find('"pane":' .. sb.server_id, 1, true), "by server pane id")
+      eq(#tab:panes(), 2, "the helper did not hear either")
+      clock.advance(2100)
+      sidebar.ensure(gui)
+      eq(count(helper.sent, '"kill"'), 2, "asked again")
+      eq(#win.actions, acted, "and nothing closed by activation")
+      helper.hung = nil
+      clock.advance(2100)
+      sidebar.ensure(gui)
+      eq(helper.killed, 1)
+      eq(#tab:panes(), 1, "the server killed it")
+      eq(#win.actions, acted)
+      clock.restore()
+    end)
+  end
+)
+
+test("on a mux domain a backend no other backend can reach is the one closed by activation", function()
+  H.with_inbox(function()
+    local win, gui = H.mux_window(1)
+    local tab = win.tab_list[1]
+    local sb = sidebar.find(tab)
+    fake.ready(gui, sb, { transport = false })
+    sb.hung = true
+    local clock = H.clock()
+    local acted = #win.actions
+    win.active_tab_ref = tab
+    sidebar.detach(gui, tab)
+    clock.advance(2100)
+    sidebar.ensure(gui)
+    eq(#tab:panes(), 1, "closed by activation: the server has no backend left to ask")
+    eq(#win.actions, acted + 1)
+    clock.restore()
+  end)
+end)
+
+test("a key the backend delivered on its server only moves the focus; the plugin types nothing", function()
+  H.with_inbox(function()
+    local win, gui = H.mux_window(1)
+    local tab = win.tab_list[1]
+    local sb, content = sidebar.find(tab), sidebar.content_pane(tab)
+    fake.ready(gui, sb)
+    sb:activate()
+    state.set_focus(gui:window_id(), false)
+    local typed = #content.sent
+    fake.server_key(sb, "a")
+    eq(content.typed[1], "a", "the server typed it")
+    eq(#content.sent, typed, "the plugin did not")
+    eq(tab.active, content, "focus handed over")
+  end)
+end)
+
+test("a message the backend never received has the wire resend every section", function()
+  H.with_inbox(function()
+    local win, gui = H.mux_window(1)
+    local sb = sidebar.find(win.tab_list[1])
+    fake.ready(gui, sb)
+    view.sync(gui)
+    local filed = #sb.inbox_msgs
+    view.sync(gui)
+    eq(#sb.inbox_msgs, filed, "nothing changed: nothing sent")
+    input.handle(gui, sb, "vtabs", '{"t":"dropped","what":"message","seq":2,"n":9}')
+    eq(#sb.inbox_msgs, filed + 1, "resent at once")
+    local batch = last(sb.inbox_msgs)
+    for _, kind in ipairs { "config", "theme", "spaces", "model", "menu" } do
+      assert(batch:find('"t":"' .. kind .. '"', 1, true), kind .. " resent")
+    end
+    eq(transport.state(sb), "active", "the transport stays up")
+  end)
+end)
+
+test("a fresh ready drops what waited for the old session and negotiates the announced one", function()
+  H.with_inbox(function()
+    local win, gui = H.mux_window(1)
+    local sb = sidebar.find(win.tab_list[1])
+    sb.hold_events = true
+    local old = fake.ready(gui, sb)
+    local queued = transport.inspect(sb).queued
+    assert(sidebar.send(sb, { t = "ping", n = 1 }))
+    eq(transport.inspect(sb).queued, queued + 1)
+    sb.hold_events = nil
+    local new = fake.ready(gui, sb)
+    assert(new ~= old)
+    eq(transport.inspect(sb).session, new)
+    eq(transport.state(sb), "active")
+    eq(count(sb.inbox_msgs, '"n":1') + count(sb.sent, '"n":1'), 0, "the stale frame went nowhere")
+    eq(#sb.inbox_msgs, 1, "the wire republished after the ready, into the new inbox")
+    assert(last(sb.inbox_msgs):find('"t":"commit"', 1, true))
+  end)
+end)
+
+test("the 65th frame waiting on a negotiation gives it up: everything typed in order, then stop", function()
+  H.with_inbox(function()
+    local win, gui = H.mux_window(1)
+    local sb = sidebar.find(win.tab_list[1])
+    sb.hold_events = true
+    fake.ready(gui, sb)
+    local typed = #sb.sent
+    local pings = transport.QUEUE_MAX - transport.inspect(sb).queued
+    for n = 1, pings do
+      assert(sidebar.send(sb, { t = "ping", n = n }))
+    end
+    eq(#sb.sent, typed, "64 wait")
+    eq(transport.inspect(sb).queued, transport.QUEUE_MAX)
+    assert(sidebar.send(sb, { t = "ping", n = pings + 1 }), "still accepted")
+    eq(transport.state(sb), "off")
+    eq(#sb.sent, typed + 2, "one write for the queue, one for the stop")
+    local flushed = sb.sent[typed + 1]
+    local at = flushed:find('"t":"commit"', 1, true)
+    assert(at, "the publish first")
+    for n = 1, pings + 1 do
+      local here = flushed:find('"n":' .. n .. "}", 1, true) or flushed:find('"n":' .. n .. ",", 1, true)
+      assert(here and here > at, "in order: " .. n)
+      at = here
+    end
+    assert(last(sb.sent):find('"transport_stop"', 1, true))
+  end)
+end)
+
+test("the fake backend reads its inbox in sequence and waits at a gap", function()
+  H.with_inbox(function()
+    local win, gui = H.mux_window(1)
+    local sb = sidebar.find(win.tab_list[1])
+    fake.ready(gui, sb)
+    local dir = sb.inbox_dir
+    local function file(seq, body)
+      local tmp, msg = string.format("%s/%08d.tmp", dir, seq), string.format("%s/%08d.msg", dir, seq)
+      fake.files[tmp] = body
+      fake.fs.rename(tmp, msg)
+    end
+    local read, seq = #sb.inbox_msgs, sb.last_seq + 1
+    file(seq + 1, "later")
+    eq(#sb.inbox_msgs, read, "the next one is missing: nothing applied")
+    eq(#fake.listing(dir), 1, "and the file waits")
+    file(seq, "sooner")
+    eq(#sb.inbox_msgs, read + 2, "the gap closed: both, in order")
+    eq(sb.inbox_msgs[read + 1], "sooner")
+    eq(sb.inbox_msgs[read + 2], "later")
+    eq(#fake.listing(dir), 0)
+  end)
+end)
+
+test("keys go to the server only where the plugin would hand them over, and follow the hover mode", function()
+  H.with_inbox(function()
+    local win, gui = H.mux_window(1)
+    local sb = sidebar.find(win.tab_list[1])
+    fake.ready(gui, sb)
+    assert(last(sb.sent):find('"transport_barrier"', 1, true))
+    eq(store.keys_mode[sb:pane_id()], "server")
+    config.get().hover = "press"
+    local before = #sb.sent
+    input.tick(gui)
+    eq(#sb.sent, before + 1, "one same-token auth")
+    local auth = last(sb.sent)
+    assert(auth:find('"auth"', 1, true) and not auth:find('"keys"', 1, true), "keys back with the plugin")
+    eq(store.keys_mode[sb:pane_id()], "host")
+    input.tick(gui)
+    eq(#sb.sent, before + 1, "nothing more while the mode holds")
+    config.get().hover = "follow"
+    input.tick(gui)
+    assert(last(sb.sent):find('"keys":"server"', 1, true), "and out to the server again")
+    eq(transport.state(sb), "active", "the same token never reset the transport")
+  end)
+end)

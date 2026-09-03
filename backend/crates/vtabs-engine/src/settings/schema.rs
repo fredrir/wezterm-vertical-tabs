@@ -720,7 +720,11 @@ fn build_options() -> Vec<Descriptor> {
             .group("backend")
             .values("table")
             .help("env for the sidebar process; `VTABS_*` keys the plugin sets win"),
-
+        Descriptor::new("backend.inbox", Kind::Boolean)
+            .with_default(true)
+            .label("Backend inbox")
+            .group("backend")
+            .help("offer the inbox transport to same-machine mux sidebars; `false` keeps every pane on stdin"),
     ]
 }
 
@@ -876,7 +880,7 @@ mod tests {
     #[test]
     fn descriptors_are_self_consistent() {
         validate_schema().unwrap();
-        assert_eq!(options().len(), 80);
+        assert_eq!(options().len(), 81);
         assert_eq!(identity().len(), 16);
     }
 

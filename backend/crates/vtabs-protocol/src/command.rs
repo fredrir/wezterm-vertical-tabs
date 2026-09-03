@@ -11,10 +11,13 @@ pub enum Command {
         #[serde(default)]
         n: Option<u64>,
     },
+    /// `keys: "server"` asks the backend to deliver forwarded keys through the server's own cli.
     Auth {
         token: String,
         #[serde(default)]
         caps: Vec<String>,
+        #[serde(default)]
+        keys: Option<String>,
     },
     /// Start one atomic state publication. Sections that follow are staged until Commit.
     Begin {
@@ -47,9 +50,25 @@ pub enum Command {
     Menu(Box<crate::v2::MenuMsg>),
     Fx(crate::v2::FxMsg),
     Notice(crate::v2::NoticeMsg),
-    /// Kill the one pane on this server titled `title`, through the server's own `wezterm cli`.
+    /// Kill one pane on this server through its own `wezterm cli`: `pane` names it by server id,
+    /// `title` by the backend title marker exactly one pane carries.
     Kill {
-        title: String,
+        #[serde(default)]
+        title: Option<String>,
+        #[serde(default)]
+        pane: Option<u64>,
+    },
+    /// The first inbox message of a session; it proves Lua can write where `ready` pointed.
+    TransportProbe {
+        session: String,
+    },
+    /// The last stdin frame before Lua switches: the probe is either on disk by now or never.
+    TransportBarrier {
+        session: String,
+    },
+    /// Lua goes back to stdin; whatever the inbox still holds is applied first, in order.
+    TransportStop {
+        session: String,
     },
     /// Move every other pane of this tab that sits inside the sidebar's `band` columns beside the
     /// content; `position` is the sidebar's edge, `left` unless `right`.

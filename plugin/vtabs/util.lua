@@ -29,6 +29,18 @@ function M.getenv(name)
   return os.getenv(name)
 end
 
+---This user's own scratch directory, or nil: never a shared `/tmp`, where any user can plant a
+---path first. The frame renderer and the inbox transport share it.
+function M.runtime_dir()
+  for _, name in ipairs { "XDG_RUNTIME_DIR", "TMPDIR" } do
+    local value = M.getenv(name)
+    if type(value) == "string" and value ~= "" then
+      return value .. "/wez-vtabs"
+    end
+  end
+  return nil
+end
+
 -- WezTerm reports a window, tab or pane that left mid-call with these texts; nothing structured.
 local GONE = { "not found in mux", "is not valid" }
 

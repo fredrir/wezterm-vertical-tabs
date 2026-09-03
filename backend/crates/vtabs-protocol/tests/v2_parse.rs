@@ -26,12 +26,73 @@ fn theme_field_manifest_covers_every_wire_override() {
 }
 
 #[test]
+fn auth_keys_kill_and_transport_lines_parse_beside_their_old_shapes() {
+    assert_eq!(
+        parse(r#"{"t":"auth","token":"t","caps":["typed_intents"],"keys":"server"}"#),
+        Command::Auth {
+            token: "t".into(),
+            caps: vec!["typed_intents".into()],
+            keys: Some("server".into()),
+        }
+    );
+    assert_eq!(
+        parse(r#"{"t":"kill","title":"wez-vtabs:abcd"}"#),
+        Command::Kill {
+            title: Some("wez-vtabs:abcd".into()),
+            pane: None,
+        }
+    );
+    assert_eq!(
+        parse(r#"{"t":"kill","pane":7}"#),
+        Command::Kill {
+            title: None,
+            pane: Some(7),
+        }
+    );
+    assert_eq!(
+        parse(r#"{"t":"kill"}"#),
+        Command::Kill {
+            title: None,
+            pane: None,
+        },
+        "an empty kill parses; the backend reports it as nothing to do"
+    );
+    for (line, expected) in [
+        (
+            r#"{"t":"transport_probe","session":"inbox-42-9f3a1b2c"}"#,
+            Command::TransportProbe {
+                session: "inbox-42-9f3a1b2c".into(),
+            },
+        ),
+        (
+            r#"{"t":"transport_barrier","session":"inbox-42-9f3a1b2c"}"#,
+            Command::TransportBarrier {
+                session: "inbox-42-9f3a1b2c".into(),
+            },
+        ),
+        (
+            r#"{"t":"transport_stop","session":"inbox-42-9f3a1b2c"}"#,
+            Command::TransportStop {
+                session: "inbox-42-9f3a1b2c".into(),
+            },
+        ),
+    ] {
+        assert_eq!(parse(line), expected);
+    }
+    assert!(
+        serde_json::from_str::<Command>(r#"{"t":"transport_barrier"}"#).is_err(),
+        "a barrier always names its session"
+    );
+}
+
+#[test]
 fn v2_lines_parse() {
     assert_eq!(
         parse(r#"{"t":"auth","token":"legacy"}"#),
         Command::Auth {
             token: "legacy".into(),
             caps: Vec::new(),
+            keys: None,
         }
     );
     assert_eq!(
@@ -39,6 +100,7 @@ fn v2_lines_parse() {
         Command::Auth {
             token: "new".into(),
             caps: vec!["typed_intents".into()],
+            keys: None,
         }
     );
     assert_eq!(

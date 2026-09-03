@@ -4,7 +4,7 @@
 //! must never spawn one over the socket path.
 
 use std::ffi::OsStr;
-use std::io::{self, Read};
+use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 use std::sync::mpsc::{self, Receiver};
@@ -67,14 +67,30 @@ fn drained(reader: Receiver<io::Result<Captured>>, deadline: Instant) -> Result<
 /// Reads both pipes while the child runs. Waiting before reading can deadlock once either pipe
 /// fills. Capture is bounded while excess bytes are still drained. On timeout the direct child is
 /// killed and reaped, but the call never waits indefinitely for pipe handles inherited by a
-/// descendant.
-fn run_command(command: &mut Command, timeout: Duration, label: &str) -> Result<Output, String> {
+/// descendant. `input`, when given, is the child's whole stdin.
+fn run_command(
+    command: &mut Command,
+    timeout: Duration,
+    label: &str,
+    input: Option<&[u8]>,
+) -> Result<Output, String> {
+    let stdin = if input.is_some() {
+        Stdio::piped()
+    } else {
+        Stdio::null()
+    };
     let mut child = command
-        .stdin(Stdio::null())
+        .stdin(stdin)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .map_err(|e| format!("{label}: {e}"))?;
+    if let Some(input) = input
+        && let Some(mut stdin) = child.stdin.take()
+    {
+        // A few bytes fit the pipe whole; a child that exits first explains itself on stderr.
+        let _ = stdin.write_all(input);
+    }
     let stdout = drain(child.stdout.take().expect("stdout was piped"));
     let stderr = drain(child.stderr.take().expect("stderr was piped"));
     let started = Instant::now();
@@ -174,6 +190,29 @@ pub fn adjust_plan(panes: &[PaneInfo], own: u64) -> Result<Option<u64>, String> 
     Ok(Some(active.pane_id))
 }
 
+/// The pane a forwarded key belongs in: the one spanning the whole content column of `own`'s
+/// tab, read the way `adjust_plan` reads it; the active one when a vertical split stacks several.
+pub fn content_pane(panes: &[PaneInfo], own: u64) -> Result<u64, String> {
+    let me = panes
+        .iter()
+        .find(|p| p.pane_id == own)
+        .ok_or_else(|| format!("own pane {own} not listed"))?;
+    let tab: Vec<&PaneInfo> = panes.iter().filter(|p| p.tab_id == me.tab_id).collect();
+    let tab_cols = tab.iter().map(|p| p.left_col + p.cols).max().unwrap_or(0);
+    let content_width = tab_cols - me.cols - 1;
+    let spanning: Vec<&PaneInfo> = tab
+        .iter()
+        .copied()
+        .filter(|p| p.pane_id != own && p.cols == content_width && !is_marker(&p.title))
+        .collect();
+    let first = spanning.first().ok_or("no pane spans the content column")?;
+    Ok(spanning
+        .iter()
+        .find(|p| p.is_active)
+        .unwrap_or(first)
+        .pane_id)
+}
+
 pub struct Cli {
     exe: PathBuf,
     own_pane: u64,
@@ -238,6 +277,15 @@ pub fn rescue_plan(
 }
 
 impl Cli {
+    /// A cli for `own_pane` at `exe`; `from_env` is the production path.
+    pub fn at(exe: PathBuf, own_pane: u64) -> Self {
+        Cli { exe, own_pane }
+    }
+
+    pub fn own_pane(&self) -> u64 {
+        self.own_pane
+    }
+
     /// None where WezTerm set no pane id: nothing to act on behalf of.
     pub fn from_env() -> Option<Self> {
         let own_pane = std::env::var("WEZTERM_PANE").ok()?.trim().parse().ok()?;
@@ -252,6 +300,10 @@ impl Cli {
 
     /// Stdout of `wezterm cli --no-auto-start <args>`, or the first line of what went wrong.
     fn run(&self, args: &[&str]) -> Result<String, String> {
+        self.run_with(args, None)
+    }
+
+    fn run_with(&self, args: &[&str], input: Option<&[u8]>) -> Result<String, String> {
         let mut command = Command::new(&self.exe);
         command.arg("cli").arg("--no-auto-start");
         // A pane hosted by a standalone or SSH mux inherits that server's socket.  Without this
@@ -260,7 +312,12 @@ impl Cli {
             command.arg("--prefer-mux");
         }
         command.args(args);
-        let out = run_command(&mut command, TIMEOUT, &format!("wezterm cli {}", args[0]))?;
+        let out = run_command(
+            &mut command,
+            TIMEOUT,
+            &format!("wezterm cli {}", args[0]),
+            input,
+        )?;
         if out.status.success() {
             return Ok(String::from_utf8_lossy(&out.stdout).into_owned());
         }
@@ -278,8 +335,29 @@ impl Cli {
 
     pub fn kill_by_title(&self, title: &str) -> Result<(), String> {
         let id = kill_target(&self.list()?, title)?;
-        self.run(&["kill-pane", "--pane-id", &id.to_string()])
+        self.kill_pane(id)
+    }
+
+    pub fn kill_pane(&self, pane: u64) -> Result<(), String> {
+        self.run(&["kill-pane", "--pane-id", &pane.to_string()])
             .map(|_| ())
+    }
+
+    /// Writes `bytes` into `pane` as typed input, not a paste. They travel on stdin, so no byte
+    /// can be read as a flag.
+    pub fn send_text(&self, pane: u64, bytes: &[u8]) -> Result<(), String> {
+        self.run_with(
+            &["send-text", "--no-paste", "--pane-id", &pane.to_string()],
+            Some(bytes),
+        )
+        .map(|_| ())
+    }
+
+    /// Delivers a forwarded key to the pane spanning this tab's content column; that pane's id.
+    pub fn forward_key(&self, bytes: &[u8]) -> Result<u64, String> {
+        let pane = content_pane(&self.list()?, self.own_pane)?;
+        self.send_text(pane, bytes)?;
+        Ok(pane)
     }
 
     /// Resizes this pane's own split by `amount` cells in `direction`. A content pane that cannot
@@ -408,7 +486,7 @@ mod command_tests {
             "-c",
             "dd if=/dev/zero bs=65536 count=4 2>/dev/null; dd if=/dev/zero bs=65536 count=4 1>&2 2>/dev/null",
         ]);
-        let out = run_command(&mut command, Duration::from_secs(3), "bulk output").unwrap();
+        let out = run_command(&mut command, Duration::from_secs(3), "bulk output", None).unwrap();
         assert!(out.status.success());
         assert_eq!(out.stdout.len(), 4 * 65_536, "larger than a pipe buffer");
         assert_eq!(out.stderr.len(), 4 * 65_536, "both pipes are drained");
@@ -422,7 +500,7 @@ mod command_tests {
             "dd if=/dev/zero bs=65536 count=17 2>/dev/null; dd if=/dev/zero bs=65536 count=17 1>&2 2>/dev/null",
         ]);
         assert_eq!(
-            run_command(&mut command, Duration::from_secs(3), "excess output").unwrap_err(),
+            run_command(&mut command, Duration::from_secs(3), "excess output", None).unwrap_err(),
             format!("excess output: output exceeded {OUTPUT_MAX} bytes")
         );
     }
@@ -434,7 +512,13 @@ mod command_tests {
         command.args(["-c", "sleep 1 & exec sleep 5"]);
         let started = Instant::now();
         assert_eq!(
-            run_command(&mut command, Duration::from_millis(30), "slow command").unwrap_err(),
+            run_command(
+                &mut command,
+                Duration::from_millis(30),
+                "slow command",
+                None
+            )
+            .unwrap_err(),
             "slow command timed out"
         );
         assert!(started.elapsed() < Duration::from_millis(750));

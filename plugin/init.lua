@@ -252,6 +252,7 @@ local MODULES = {
   "state",
   "store",
   "theme_bridge",
+  "transport",
   "util",
   "version",
   "view",

@@ -7,7 +7,7 @@ pub mod v2;
 pub use command::Command;
 pub use event::{
     CardPart, DoArgs, DoId, Event, Intent, Modifier, SettingsApplyMode, SettingsChange,
-    SettingsPatch,
+    SettingsPatch, Transport,
 };
 pub use types::{Button, Color, Mods, Mouse, MouseKind};
 

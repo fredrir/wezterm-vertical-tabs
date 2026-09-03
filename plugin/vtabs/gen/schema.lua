@@ -828,6 +828,15 @@ local options = {
     values = "table",
     help = "env for the sidebar process; `VTABS_*` keys the plugin sets win",
   },
+  {
+    key = "backend.inbox",
+    type = "boolean",
+    apply_mode = "instant",
+    default = true,
+    label = "Backend inbox",
+    group = "backend",
+    help = "offer the inbox transport to same-machine mux sidebars; `false` keeps every pane on stdin",
+  },
 }
-options.schema_id = "c341d714c2c4c201"
+options.schema_id = "5b9519c9fd95b9df"
 return options

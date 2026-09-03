@@ -187,6 +187,10 @@ function M.env(cfg, domain, host, bg)
     env.VTABS_SRC = M.root .. "/../backend"
     env.VTABS_BUILD = cfg.backend.build and "1" or "0"
     env.VTABS_BIN = M.resolve_path(cfg, domain, host)
+    -- a mux pane of this machine may take its frames from a directory instead of the link
+    if type(domain) == "string" and domain ~= "local" and cfg.backend.inbox ~= false then
+      env.VTABS_INBOX_ROOT = util.runtime_dir()
+    end
   else
     env.VTABS_BUILD = "0"
   end

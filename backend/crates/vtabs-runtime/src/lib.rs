@@ -1,5 +1,6 @@
 pub mod app;
 pub mod cli;
+pub mod inbox;
 pub mod input;
 pub mod log;
 pub mod paint;

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import TYPE_CHECKING
 
 import pytest
@@ -286,3 +287,60 @@ def test_settings_page_closes_as_a_whole_tab(wezterm_mux: WezTermMuxInstance) ->
     )
     assert closed.pane_ids == before.pane_ids
     assert closed.shape == ((1, 1),)
+
+
+def _transport_states(
+    wezterm_mux: WezTermMuxInstance, pane_id: int
+) -> tuple[dict[int, str], int, int]:
+    """Every sidebar's transport state keyed by GUI pane id, the inbox writes one full publish
+    produced, and the frames an active pane still sent through the link. `pane_id` is a mux-side
+    content pane the probe is typed into."""
+
+    before = len(wezterm_mux.gui_log_text())
+    wezterm_mux.probe(pane_id, "transport")
+    match = wezterm_mux.wait_for(
+        "the transport probe to report",
+        lambda: next(
+            iter(
+                re.finditer(
+                    r"e2e: transport (\S*) writes (\d+) crossings (\d+)",
+                    wezterm_mux.gui_log_text()[before:],
+                )
+            ),
+            None,
+        ),
+    )
+    states = {
+        int(entry.split("=")[0]): entry.split("=")[1]
+        for entry in match.group(1).split(",")
+        if entry
+    }
+    return states, int(match.group(2)), int(match.group(3))
+
+
+def test_mux_sidebars_publish_through_the_inbox_not_the_link(
+    wezterm_mux: WezTermMuxInstance,
+) -> None:
+    """Every same-machine mux sidebar negotiates the inbox, and a publish writes to it."""
+
+    mux_content_id = _only_tab(wezterm_mux.wait_ready_tabs(1, stable_for=0.5)).content[0].pane_id
+    gui_first = wezterm_mux.wait_ready_tabs(1, endpoint="gui")
+    wezterm_mux.spawn_tab(_only_tab(gui_first).content[0].pane_id)
+    both = wezterm_mux.wait_ready_tabs(2, endpoint="gui", stable_for=0.5)
+    sidebar_ids = {tab.sidebars[0].pane_id for tab in both.tabs}
+
+    def every_sidebar_active() -> dict[int, str] | None:
+        states, _, _ = _transport_states(wezterm_mux, mux_content_id)
+        return states if all(states.get(pid) == "active" for pid in sidebar_ids) else None
+
+    states = wezterm_mux.wait_for(
+        "every mux sidebar to switch to the inbox transport",
+        every_sidebar_active,
+        timeout=15,
+        poll=0.5,
+    )
+    assert set(states) >= sidebar_ids
+
+    _, writes, crossings = _transport_states(wezterm_mux, mux_content_id)
+    assert writes >= len(sidebar_ids), "a full publish after the switch wrote no inbox message"
+    assert crossings == 0, f"{crossings} frames from active panes still crossed the link"

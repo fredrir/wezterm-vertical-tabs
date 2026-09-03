@@ -7,6 +7,8 @@ local store = require "vtabs.store"
 local backend = require "vtabs.backend"
 local theme_bridge = require "vtabs.theme_bridge"
 local mux = require "vtabs.mux"
+local link = require "vtabs.link"
+local transport = require "vtabs.transport"
 local util = require "vtabs.util"
 local identity = require "vtabs.sidebar_identity"
 local rescue = require "vtabs.sidebar_rescue"
@@ -79,20 +81,23 @@ local function may_adopt(cfg, domain, host, place)
     or backend.resolve_path(cfg, domain, host) ~= nil
 end
 
----A candidate must sit in the very domain this plugin would have spawned the sidebar in.
-local function adoptable(tab, sb)
-  local cfg = config.get()
+---The domain and host this plugin would spawn the tab's sidebar in, when `sb` sits in that domain.
+local function place_for(tab, sb)
   local base = identity.content_pane(tab) or tab:active_pane()
   if not base then
-    return false
+    return nil
   end
-  local domain = attach_domain(cfg, base)
-  local pane_domain = mux.domain(sb)
-  if domain == nil or domain ~= pane_domain then
-    return false
+  local domain = attach_domain(config.get(), base)
+  if domain == nil or domain ~= mux.domain(sb) then
+    return nil
   end
-  local host = identity.cwd_host(base)
-  return may_adopt(cfg, domain, host, domain .. "@" .. (host or ""))
+  return domain, identity.cwd_host(base)
+end
+
+---A candidate must sit in the very domain this plugin would have spawned the sidebar in.
+local function adoptable(tab, sb)
+  local domain, host = place_for(tab, sb)
+  return domain ~= nil and may_adopt(config.get(), domain, host, domain .. "@" .. (host or ""))
 end
 
 local function domain_failed(place, now)
@@ -134,6 +139,10 @@ local function attach(tab)
   local host = identity.cwd_host(base)
   local place = pane_domain .. "@" .. (host or "")
   if domain_failed(place, now) then
+    return nil
+  end
+  -- the split would await a server still rebuilding its mirror; the next poll asks again
+  if link.busy(pane_domain) then
     return nil
   end
   local args = backend.spawn_args(cfg, pane_domain, host)
@@ -211,14 +220,37 @@ function M.attach(tab)
   return gate.run(wid, "attach", attach, tab)
 end
 
----Takes over a backend pane the mux kept across a GUI restart: fresh token, then wait for its echo.
+---Takes over a backend pane the mux kept across a GUI restart, or one this plugin mapped before a
+---reload dropped its token: fresh token, then wait for its echo.
 local function adopt(tab, sb, now)
   local pid = sb:pane_id()
   state.set_sidebar(tab:tab_id(), pid, util.random_token())
+  local domain, host = place_for(tab, sb)
+  if domain then
+    store.pane_domain[pid] = domain .. "@" .. (host or "")
+  end
   store.adopted[pid] = now
   store.auth_tries[pid] = 1
   store.seen[pid] = now
   identity.auth(sb)
+end
+
+---The settings page after a reload: its pane and its marker came through, its token did not. One
+---fresh token per VM is offered here; `settings.open` offers another when the user returns to it.
+local function reclaim_settings(content, now)
+  for _, p in ipairs(content) do
+    local pid = p:pane_id()
+    if
+      identity.is_settings(p)
+      and state.token_for(pid) == nil
+      and store.authed_at[pid] == nil
+      and not store.quitting[pid]
+    then
+      state.set_token(pid, util.random_token())
+      store.seen[pid] = now
+      identity.auth(p)
+    end
+  end
 end
 
 ---A pane that never echoes its token is never trusted; an adopted one is retried a few times, then left.
@@ -238,6 +270,11 @@ local function await_auth(gui_window, tab, sb, now)
       -- not ours to take over: let it be content so the tab still gets a sidebar
       store.given_up[sb:pane_id()] = true
     end
+    return
+  end
+  if state.token_for(pid) == nil and not store.adopted[pid] and not store.given_up[pid] then
+    -- mapped by an earlier Lua VM: the mapping came through the reload, the token did not
+    adopt(tab, sb, now)
     return
   end
   if store.adopted[pid] then
@@ -301,15 +338,17 @@ local function close_by_activation(gui_window, tab, pane)
 end
 
 ---A ready backend on the same server as `pane`, other than `pane`: it can reach the pane through
----the server's own `wezterm cli`, which the GUI's client cannot.
+---the server's own `wezterm cli`, which the GUI's client cannot. A sidebar or the settings page.
 local function helper_for(gui_window, pane)
   local domain = mux.domain(pane)
   local pid = pane:pane_id()
   for _, info in ipairs(mux.tabs_with_info(mux.call(gui_window, "mux_window")) or {}) do
-    local sb = identity.find(info.tab)
-    if sb and sb:pane_id() ~= pid and not store.quitting[sb:pane_id()] and identity.is_ready(sb) then
-      if mux.domain(sb) == domain then
-        return sb
+    for _, p in ipairs(mux.panes(info.tab) or {}) do
+      local id = p:pane_id()
+      if id ~= pid and not store.quitting[id] and (identity.is_backend(p) or identity.is_settings(p)) then
+        if mux.domain(p) == domain and identity.is_ready(p) then
+          return p
+        end
       end
     end
   end
@@ -318,16 +357,21 @@ end
 
 ---Closes a backend pane the way that never trips the mux client: the backend is told to quit and
 ---its pane closes with it. One that outlives its process is killed by another backend on the same
----server, and only a pane no backend can reach is closed by activation. Each poll advances one
----rung once the grace has passed; `hung` starts past the quit, since a silent backend hears nothing.
+---server, by the id it reported for itself there, and only a pane no backend can reach is closed
+---by activation: on a mux domain that is the one path the client has been seen to abort on, so
+---there the kill is asked again each poll for as long as a backend is left to ask. Each poll
+---advances one rung once the grace has passed; `hung` starts past the quit, since a silent backend
+---hears nothing.
 function retire(gui_window, tab, pane, hung)
   local pid = pane:pane_id()
   local now = util.now_ms()
   local job = store.quitting[pid]
   if not job then
     local token = state.token_for(pid)
+    -- its frames go on stdin from here, `quit` included; the inbox goes with the process
+    transport.forget(pid)
+    job = { at = now, rung = hung and 1 or 0, token = token, server_pane = store.server_pane[pid] }
     state.forget_pane(pid)
-    job = { at = now, rung = hung and 1 or 0, token = token }
     store.quitting[pid] = job
     identity.forget_split(tab:tab_id())
   elseif now - job.at < QUIT_GRACE_MS then
@@ -344,17 +388,22 @@ function retire(gui_window, tab, pane, hung)
     identity.send(pane, { t = "quit" }, job.token)
     return "quit"
   end
-  if job.rung == 2 then
-    if rescue.cli_kill(pane) then
-      return "cli"
+  if job.rung == 2 and rescue.cli_kill(pane) then
+    return "cli"
+  end
+  local remote = mux.domain(pane) ~= "local"
+  local helper = (job.rung == 2 or remote) and helper_for(gui_window, pane) or nil
+  if helper then
+    if job.server_pane then
+      identity.send(helper, { t = "kill", pane = job.server_pane })
+      return "kill"
     end
-    local helper = helper_for(gui_window, pane)
+    -- a backend too old to report its id is still named by its title
     local title = identity.title(pane)
-    if helper and identity.marker(title) then
+    if identity.marker(title) then
       identity.send(helper, { t = "kill", title = title })
       return "kill"
     end
-    job.rung = 3
   end
   if gui_window then
     close_by_activation(gui_window, tab, pane)
@@ -490,6 +539,7 @@ local function ensure_window(gui_window)
         store.content_pane[tab_id] = active:pane_id()
       end
       store.tab_meta[tab_id] = identity.tab_meta(tab, identity.content_pane(tab))
+      reclaim_settings(content, now)
       -- a sidebar on its way out keeps the slot: a new one waits for it to go
       local going = sb ~= nil and store.quitting[sb:pane_id()] ~= nil
       if going then

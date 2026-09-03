@@ -22,6 +22,7 @@ M.find = identity.find
 M.content_pane = identity.content_pane
 M.tab_meta = identity.tab_meta
 M.send = identity.send
+M.keys_mode = identity.keys_mode
 M.send_raw = identity.send_raw
 M.auth = identity.auth
 

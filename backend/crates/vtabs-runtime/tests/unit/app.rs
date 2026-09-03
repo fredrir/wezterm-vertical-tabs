@@ -43,6 +43,9 @@ fn app() -> App<Vec<u8>> {
         last_reported_theme: None,
         last_rail_reserve: None,
         cli: None,
+        inbox: None,
+        transport: Default::default(),
+        server_keys: false,
         metrics: Default::default(),
     }
 }
@@ -51,7 +54,8 @@ fn app() -> App<Vec<u8>> {
 fn a_kill_or_rescue_with_no_cli_to_run_reports_the_failure() {
     let mut a = app();
     a.handle(Input::Command(Command::Kill {
-        title: "wez-vtabs:abcd".into(),
+        title: Some("wez-vtabs:abcd".into()),
+        pane: None,
     }))
     .unwrap();
     a.handle(Input::Command(Command::Rescue {
@@ -103,6 +107,7 @@ fn auth_echoes_token_as_user_var() {
     a.handle(Input::Command(Command::Auth {
         token: "abc".into(),
         caps: Vec::new(),
+        keys: None,
     }))
     .unwrap();
     // the token never goes in the title: window titles are readable by the whole desktop
@@ -131,6 +136,7 @@ fn control_commands_are_bound_to_the_initial_authenticated_session() {
         Command::Auth {
             token: "payload".into(),
             caps: Vec::new(),
+            keys: None,
         },
     ))
     .unwrap();
@@ -144,6 +150,7 @@ fn control_commands_are_bound_to_the_initial_authenticated_session() {
         Command::Auth {
             token: "session1".into(),
             caps: Vec::new(),
+            keys: None,
         },
     ))
     .unwrap();
@@ -155,7 +162,8 @@ fn control_commands_are_bound_to_the_initial_authenticated_session() {
     for privileged in [
         Command::Quit,
         Command::Kill {
-            title: "wez-vtabs:forged".into(),
+            title: Some("wez-vtabs:forged".into()),
+            pane: None,
         },
         Command::Rescue {
             band: 28,
@@ -172,6 +180,7 @@ fn control_commands_are_bound_to_the_initial_authenticated_session() {
         Command::Auth {
             token: "session2".into(),
             caps: Vec::new(),
+            keys: None,
         },
     ))
     .unwrap();
@@ -186,6 +195,7 @@ fn control_commands_are_bound_to_the_initial_authenticated_session() {
         Command::Auth {
             token: "session2".into(),
             caps: Vec::new(),
+            keys: None,
         },
     ))
     .unwrap();
@@ -406,6 +416,7 @@ fn a_new_token_re_announces_ready_but_the_same_one_does_not() {
         a.handle(Input::Command(Command::Auth {
             token: token.into(),
             caps: Vec::new(),
+            keys: None,
         }))
         .unwrap();
     };
@@ -436,6 +447,7 @@ fn auth_negotiates_theme_hooks_per_client_without_reannouncing() {
         Command::Auth {
             token: "client".into(),
             caps: vec!["theme_hooks".into()],
+            keys: None,
         },
     );
     assert!(a.client_theme_hooks);
@@ -446,6 +458,7 @@ fn auth_negotiates_theme_hooks_per_client_without_reannouncing() {
         Command::Auth {
             token: "client".into(),
             caps: Vec::new(),
+            keys: None,
         },
     );
     assert!(!a.client_theme_hooks);
@@ -460,6 +473,7 @@ fn auth_negotiates_spaces_policy_and_rejects_the_section_without_it() {
         Command::Auth {
             token: "client".into(),
             caps: vec!["spaces_policy".into()],
+            keys: None,
         },
     );
     assert!(a.client_spaces_policy);
@@ -469,6 +483,7 @@ fn auth_negotiates_spaces_policy_and_rejects_the_section_without_it() {
         Command::Auth {
             token: "client".into(),
             caps: Vec::new(),
+            keys: None,
         },
     );
     assert!(!a.client_spaces_policy);
@@ -830,6 +845,7 @@ fn a_typed_intents_client_receives_the_flat_intent_contract() {
         Command::Auth {
             token: "typed".into(),
             caps: vec!["typed_intents".into()],
+            keys: None,
         },
     );
     dress(&mut a);
@@ -1773,6 +1789,7 @@ fn a_new_auth_resets_committed_pending_and_local_ui_before_ready() {
         Command::Auth {
             token: "replacement".into(),
             caps: Vec::new(),
+            keys: None,
         },
     );
 
@@ -1801,7 +1818,7 @@ fn a_new_auth_resets_committed_pending_and_local_ui_before_ready() {
     assert!(payloads(&a).iter().any(|payload| {
         payload.contains(r#""t":"ready""#)
             && payload.contains(
-                r#""caps":["atomic_sync","typed_intents","theme_hooks","settings_document","spaces_policy"]"#,
+                r#""caps":["atomic_sync","typed_intents","theme_hooks","settings_document","spaces_policy","inbox_transport"]"#,
             )
     }));
 }
@@ -2027,4 +2044,306 @@ fn a_resize_mid_fade_cancels_the_fade() {
     assert_eq!(a.size, (30, 24));
     assert!(saw(&a, r#""t":"resize","cols":30"#));
     assert!(painted(&a).contains(CLEAR_SCREEN), "the pane is wiped");
+}
+
+// --- inbox transport ---------------------------------------------------------------------------
+
+const CONTROL: &str = "\x1eVTABS ";
+
+fn transport_root(tag: &str) -> std::path::PathBuf {
+    static COUNTER: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let path =
+        std::env::temp_dir().join(format!("vtabs-app-inbox-{tag}-{}-{n}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&path);
+    path
+}
+
+fn record(token: &str, json: &str) -> Vec<u8> {
+    format!("{CONTROL}{token} {json}\n").into_bytes()
+}
+
+fn write_msg(dir: &std::path::Path, seq: u32, bytes: &[u8]) {
+    std::fs::write(dir.join(format!("{seq:08}.msg")), bytes).unwrap();
+}
+
+fn negotiating(root: &std::path::Path) -> App<Vec<u8>> {
+    let mut a = app();
+    a.token = Some("t".into());
+    let inbox = Inbox::create(root).unwrap();
+    a.transport = Transport::Negotiating { inbox };
+    a
+}
+
+fn session_dir(a: &App<Vec<u8>>) -> (String, std::path::PathBuf) {
+    match &a.transport {
+        Transport::Negotiating { inbox } | Transport::Active { inbox, .. } => {
+            (inbox.session().to_owned(), inbox.dir().to_owned())
+        }
+        Transport::Off => panic!("no session"),
+    }
+}
+
+fn active_scan(a: &App<Vec<u8>>) -> Batch {
+    match &a.transport {
+        Transport::Active { inbox, .. } => Batch {
+            session: inbox.session().to_owned(),
+            messages: inbox.scan(),
+        },
+        _ => panic!("not active"),
+    }
+}
+
+#[test]
+fn ready_offers_an_inbox_only_when_a_root_was_given() {
+    let root = transport_root("offer");
+    let mut a = app();
+    a.inbox = Some(Offer {
+        root: root.clone(),
+        wake: std::sync::Arc::new(|_| true),
+    });
+    a.handle(Input::Command(Command::Auth {
+        token: "t".into(),
+        caps: Vec::new(),
+        keys: None,
+    }))
+    .unwrap();
+    let ready = payloads(&a)
+        .into_iter()
+        .find(|p| p.contains(r#""t":"ready""#))
+        .expect("ready");
+    assert!(ready.contains(r#""transport":{"inbox":"inbox-"#), "{ready}");
+    assert!(
+        !ready.contains(r#""pane""#),
+        "no cli means no server pane id"
+    );
+    assert!(matches!(a.transport, Transport::Negotiating { .. }));
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn the_barrier_acks_a_present_probe_and_refuses_a_missing_one() {
+    let root = transport_root("barrier-ok");
+    let mut a = negotiating(&root);
+    let (session, dir) = session_dir(&a);
+    write_msg(
+        &dir,
+        1,
+        &record(
+            "t",
+            &format!(r#"{{"t":"transport_probe","session":"{session}"}}"#),
+        ),
+    );
+    a.handle(Input::Command(Command::TransportBarrier {
+        session: session.clone(),
+    }))
+    .unwrap();
+    assert!(saw(
+        &a,
+        &format!(r#""t":"transport_ready","session":"{session}""#)
+    ));
+    assert!(matches!(a.transport, Transport::Active { last_seq: 1, .. }));
+    assert!(!dir.join("00000001.msg").exists(), "the probe is consumed");
+    let _ = std::fs::remove_dir_all(&root);
+
+    let root = transport_root("barrier-noprobe");
+    let mut a = negotiating(&root);
+    let (session, _) = session_dir(&a);
+    a.handle(Input::Command(Command::TransportBarrier {
+        session: session.clone(),
+    }))
+    .unwrap();
+    assert!(saw(
+        &a,
+        &format!(r#""t":"transport_refused","session":"{session}","why":"probe""#)
+    ));
+    assert!(matches!(a.transport, Transport::Off));
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn a_barrier_for_another_session_or_no_session_is_refused_without_dropping_this_one() {
+    let root = transport_root("barrier-wrong");
+    let mut a = negotiating(&root);
+    a.handle(Input::Command(Command::TransportBarrier {
+        session: "inbox-1-strange".into(),
+    }))
+    .unwrap();
+    assert!(saw(&a, r#""why":"session""#));
+    assert!(matches!(a.transport, Transport::Negotiating { .. }));
+
+    let mut off = app();
+    off.token = Some("t".into());
+    off.handle(Input::Command(Command::TransportBarrier {
+        session: "inbox-1-strange".into(),
+    }))
+    .unwrap();
+    assert!(saw(&off, r#""why":"state""#));
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+fn activate(root: &std::path::Path) -> App<Vec<u8>> {
+    let mut a = negotiating(root);
+    let (session, dir) = session_dir(&a);
+    write_msg(
+        &dir,
+        1,
+        &record(
+            "t",
+            &format!(r#"{{"t":"transport_probe","session":"{session}"}}"#),
+        ),
+    );
+    a.handle(Input::Command(Command::TransportBarrier { session }))
+        .unwrap();
+    a.out.clear();
+    a
+}
+
+#[test]
+fn an_active_inbox_applies_in_order_and_a_duplicate_is_removed_unprocessed() {
+    let root = transport_root("active-dup");
+    let mut a = activate(&root);
+    let (_, dir) = session_dir(&a);
+    write_msg(&dir, 1, &record("t", r#"{"t":"ping","n":9}"#));
+    write_msg(&dir, 2, &record("t", r#"{"t":"ping","n":7}"#));
+    let batch = active_scan(&a);
+    a.inbox_batch(batch).unwrap();
+    let pongs: Vec<_> = payloads(&a)
+        .into_iter()
+        .filter(|p| p.contains(r#""t":"pong""#))
+        .collect();
+    assert_eq!(pongs.len(), 1, "the duplicate seq 1 never ran: {pongs:?}");
+    assert!(pongs[0].contains(r#""echo":7"#));
+    assert!(matches!(a.transport, Transport::Active { last_seq: 2, .. }));
+    assert!(!dir.join("00000001.msg").exists() && !dir.join("00000002.msg").exists());
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn a_gap_holds_until_the_grace_expires_then_reports_the_missing_message() {
+    let root = transport_root("gap");
+    let mut a = activate(&root);
+    let (_, dir) = session_dir(&a);
+    write_msg(&dir, 3, &record("t", r#"{"t":"ping","n":5}"#));
+    let batch = active_scan(&a);
+    a.inbox_batch(batch).unwrap();
+    assert!(
+        !saw(&a, r#""t":"pong""#),
+        "seq 3 waits behind the hole at seq 2"
+    );
+    assert!(a.next_transport().is_some(), "the grace clock is running");
+
+    a.tick_transport(Instant::now() + Duration::from_millis(150))
+        .unwrap();
+    assert!(saw(
+        &a,
+        r#""t":"dropped","what":"message","reason":"gap","seq":2"#
+    ));
+    assert!(
+        saw(&a, r#""t":"pong","echo":5"#),
+        "seq 3 runs once 2 is lost"
+    );
+    assert!(matches!(a.transport, Transport::Active { last_seq: 3, .. }));
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn a_stop_drains_the_directory_in_order_then_returns_to_stdin_and_removes_it() {
+    let root = transport_root("stop");
+    let mut a = activate(&root);
+    let (session, dir) = session_dir(&a);
+    write_msg(&dir, 2, &record("t", r#"{"t":"ping","n":1}"#));
+    write_msg(&dir, 3, &record("t", r#"{"t":"ping","n":2}"#));
+    a.handle(Input::Command(Command::TransportStop {
+        session: session.clone(),
+    }))
+    .unwrap();
+    let echoes: Vec<_> = payloads(&a)
+        .into_iter()
+        .filter_map(|p| p.contains(r#""t":"pong""#).then(|| p.clone()))
+        .collect();
+    assert_eq!(
+        echoes.len(),
+        2,
+        "both remaining messages drained: {echoes:?}"
+    );
+    assert!(echoes[0].contains(r#""echo":1"#) && echoes[1].contains(r#""echo":2"#));
+    assert!(matches!(a.transport, Transport::Off));
+    assert!(!dir.exists(), "the session directory is removed on stop");
+
+    let mut a = activate(&root);
+    a.handle(Input::Command(Command::TransportStop {
+        session: "inbox-9-elsewhere".into(),
+    }))
+    .unwrap();
+    assert!(
+        matches!(a.transport, Transport::Active { .. }),
+        "a stop for another session is inert"
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn a_key_is_forwarded_server_side_only_when_a_cli_is_present() {
+    let mut a = app();
+    a.server_keys = true;
+    a.handle(Input::Key {
+        name: "x".into(),
+        mods: Mods::default(),
+        raw: b"x".to_vec(),
+    })
+    .unwrap();
+    let key = payloads(&a)
+        .into_iter()
+        .find(|p| p.contains(r#""t":"key""#))
+        .expect("a key event");
+    assert!(
+        !key.contains("delivered"),
+        "with no cli the key is left to Lua: {key}"
+    );
+
+    let mut plain = app();
+    plain
+        .handle(Input::Key {
+            name: "y".into(),
+            mods: Mods::default(),
+            raw: b"y".to_vec(),
+        })
+        .unwrap();
+    assert!(
+        !saw(&plain, "delivered"),
+        "server delivery is off by default"
+    );
+}
+
+#[test]
+fn kill_dispatches_by_pane_id_and_by_title() {
+    let mut a = app();
+    for kill in [
+        Command::Kill {
+            title: None,
+            pane: Some(7),
+        },
+        Command::Kill {
+            title: Some("wez-vtabs:abcd".into()),
+            pane: None,
+        },
+    ] {
+        a.handle(Input::Command(kill)).unwrap();
+    }
+    let kills: Vec<_> = payloads(&a)
+        .into_iter()
+        .filter(|p| p.contains(r#""op":"kill""#))
+        .collect();
+    assert_eq!(
+        kills.len(),
+        2,
+        "both kill forms reach the cli path: {kills:?}"
+    );
+    assert!(
+        kills
+            .iter()
+            .all(|p| p.contains(r#""ok":false,"detail":"no cli here""#)),
+        "{kills:?}"
+    );
 }

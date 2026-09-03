@@ -439,7 +439,11 @@ class WezTermMuxInstance:
         self.state = root / "state"
         self.runtime = root / "runtime"
         self.logs = root / "logs"
-        self.gui_socket_dir = self.home / ".local" / "share" / "wezterm"
+        # macOS keeps the GUI's command socket in the data dir; Linux under XDG_RUNTIME_DIR.
+        self.gui_socket_dirs = (
+            self.home / ".local" / "share" / "wezterm",
+            self.runtime / "wezterm",
+        )
         for directory in (
             self.home,
             self.config,
@@ -448,7 +452,7 @@ class WezTermMuxInstance:
             self.state,
             self.runtime,
             self.logs,
-            self.gui_socket_dir,
+            *self.gui_socket_dirs,
         ):
             directory.mkdir(parents=True)
         self.runtime.chmod(0o700)
@@ -524,7 +528,7 @@ class WezTermMuxInstance:
     def start_gui(self) -> None:
         if self.gui_process is not None:
             raise AssertionError("the GUI is already connected")
-        before = set(self.gui_socket_dir.glob("gui-sock-*"))
+        before = set(self._gui_sockets())
         self._gui_generation += 1
         log_path = self.logs / f"wezterm-gui-{self._gui_generation}.log"
         log_handle = log_path.open("wb")
@@ -556,8 +560,11 @@ class WezTermMuxInstance:
             timeout=15,
         )
 
+    def _gui_sockets(self) -> list[Path]:
+        return [path for directory in self.gui_socket_dirs for path in directory.glob("gui-sock-*")]
+
     def _new_gui_socket(self, before: set[Path]) -> Path | None:
-        candidates = [path for path in self.gui_socket_dir.glob("gui-sock-*") if path not in before]
+        candidates = [path for path in self._gui_sockets() if path not in before]
         if not candidates:
             return None
         process = self.gui_process
@@ -673,6 +680,26 @@ class WezTermMuxInstance:
             "/bin/sh",
         )
         return int(result.stdout.strip())
+
+    def gui_log_text(self) -> str:
+        return "".join(path.read_text(errors="replace") for path in self.gui_logs)
+
+    def wait_log(
+        self,
+        description: str,
+        pattern: str,
+        *,
+        timeout: float = 10,
+    ) -> re.Match[str]:
+        """The last GUI log line matching `pattern`, once one exists."""
+
+        compiled = re.compile(pattern)
+
+        def last_match() -> re.Match[str] | None:
+            matches = list(compiled.finditer(self.gui_log_text()))
+            return matches[-1] if matches else None
+
+        return self.wait_for(description, last_match, timeout=timeout)
 
     def probe(self, pane_id: int, name: str) -> None:
         encoded = base64.b64encode(name.encode()).decode()

@@ -22,6 +22,13 @@ M.file = state_dir() .. "/state.json"
 ---that minted them lived on.
 local PERSISTED = { "closed", "pinned", "space_of", "space_manual" }
 
+---What a config reload hands the next Lua VM through `wezterm.GLOBAL`: everything but the tokens.
+---Those live in one VM only, so a reload mints fresh ones and every backend is authenticated,
+---announced and negotiated again; the sidebar mapping survives, so it is re-authenticated, not
+---split beside.
+local SHARED =
+  { "pinned", "sidebars", "private", "closed", "space_of", "space_manual", "active_space", "collapsed", "focus" }
+
 local function empty()
   return {
     pinned = {},
@@ -121,8 +128,9 @@ local function load()
   data = empty()
   deferred = nil
   if type(saved) == "table" then
-    for k, v in pairs(saved) do
-      if type(v) == "table" and data[k] then
+    for _, k in ipairs(SHARED) do
+      local v = saved[k]
+      if type(v) == "table" then
         local copy = {}
         for kk, vv in pairs(v) do
           copy[kk] = vv
@@ -154,7 +162,11 @@ end
 
 local function save(persist)
   if wezterm.GLOBAL then
-    wezterm.GLOBAL.vtabs = data
+    local shared = {}
+    for _, key in ipairs(SHARED) do
+      shared[key] = data[key]
+    end
+    wezterm.GLOBAL.vtabs = shared
   end
   if persist then
     local subset = { version = VERSION }

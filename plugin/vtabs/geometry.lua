@@ -7,6 +7,7 @@ local store = require "vtabs.store"
 local sidebar = require "vtabs.sidebar"
 local mux = require "vtabs.mux"
 local link = require "vtabs.link"
+local transport = require "vtabs.transport"
 local util = require "vtabs.util"
 
 ---Holds the sidebar at its width against everything WezTerm does to a split. A window resize deals
@@ -503,8 +504,9 @@ local function correct(gui_window, snapshot)
     if not quiet then
       return false
     end
-    if link.busy(mux.domain(sb)) then
-      -- the mirror rebuilds are still crossing the link; asked from a fresh reading once it is quiet
+    if link.busy(mux.domain(sb)) and transport.state(sb) ~= "active" then
+      -- the mirror rebuilds are still crossing the link the adjust would take; asked from a fresh
+      -- reading once it is quiet. A sidebar on its inbox is asked at once: nothing crosses.
       follow_up(gui_window, wid, "link", link.QUIET_MS + 20)
       return false
     end

@@ -471,3 +471,128 @@ test("an orphan tab closes with its sidebar's process; the active tab is never t
   eq(win.active_tab_ref, other)
   eq(#win.actions, acted, "CloseCurrentTab never ran")
 end)
+
+-- What a reload and a spawn hand the inbox transport: the runtime directory, the env, and tokens
+-- that live in one Lua VM only (transport.lua, state.lua).
+
+local store = require "vtabs.store"
+local transport = require "vtabs.transport"
+
+local function last(list)
+  return list[#list]
+end
+
+test("the runtime directory is the user's own: XDG_RUNTIME_DIR, else TMPDIR, never /tmp", function()
+  local getenv = util.getenv
+  local env = {}
+  util.getenv = function(name)
+    return env[name]
+  end
+  eq(util.runtime_dir(), nil, "no private directory: no transport")
+  env.TMPDIR = "/var/folders/x"
+  eq(util.runtime_dir(), "/var/folders/x/wez-vtabs")
+  env.XDG_RUNTIME_DIR = "/run/user/1000"
+  eq(util.runtime_dir(), "/run/user/1000/wez-vtabs")
+  env.XDG_RUNTIME_DIR = ""
+  eq(util.runtime_dir(), "/var/folders/x/wez-vtabs", "an empty variable is unset")
+  util.getenv = getenv
+  local frame = require "vtabs.frame"
+  local rect = { w = 100, h = 100, x = 0, y = 0, cw = 50, ch = 50, radius = 0, border_width = 1 }
+  local dir = util.runtime_dir
+  util.runtime_dir = function()
+    return nil
+  end
+  assert(frame.path_for(1, rect, {}):find "^/tmp/wez%-vtabs/", "the frame keeps its /tmp fallback")
+  util.runtime_dir = dir
+end)
+
+test("the backend env names the inbox root only for a mux pane of this machine", function()
+  local cfg = config.setup { backend = { path = "/bin/wez-vtabs" } }
+  local dir = util.runtime_dir
+  util.runtime_dir = function()
+    return "/run/vtabs-test"
+  end
+  backend.register_local_domains { unix_domains = { { name = "localmux" } } }
+  eq(backend.env(cfg, "localmux", nil).VTABS_INBOX_ROOT, "/run/vtabs-test")
+  eq(backend.env(cfg, "local", nil).VTABS_INBOX_ROOT, nil, "a local pane is written to directly")
+  eq(backend.env(cfg, "localmux", "build.example").VTABS_INBOX_ROOT, nil, "a proxied domain is another machine")
+  eq(backend.env(cfg, "e2essh", nil).VTABS_INBOX_ROOT, nil)
+  cfg.backend.inbox = false
+  eq(backend.env(cfg, "localmux", nil).VTABS_INBOX_ROOT, nil, "the knob")
+  cfg.backend.inbox = nil
+  util.runtime_dir = function()
+    return nil
+  end
+  eq(backend.env(cfg, "localmux", nil).VTABS_INBOX_ROOT, nil, "no private directory, no transport")
+  util.runtime_dir = dir
+end)
+
+test("tokens never reach wezterm.GLOBAL; the sidebar mapping does", function()
+  local win, gui = window(1)
+  sidebar.ensure(gui)
+  local sb = mark_ready(win.tab_list[1])
+  local shared = wezterm.GLOBAL.vtabs
+  eq(shared.tokens, nil)
+  eq(shared.sidebars[tostring(win.tab_list[1].id)], sb:pane_id())
+end)
+
+test(
+  "a reload keeps the mapping but not the token: a fresh one is minted under the old proof and the inbox negotiated again",
+  function()
+    H.with_inbox(function()
+      local win, gui = H.mux_window(1)
+      local tab = win.tab_list[1]
+      local sb = sidebar.find(tab)
+      local old_session = fake.ready(gui, sb)
+      local old_token = state.token_for(sb:pane_id())
+      eq(sidebar.is_ready(sb), true)
+      -- the reload: a new Lua VM with what GLOBAL carried, and nothing of this one's caches
+      store.forget_pane(sb:pane_id())
+      sidebar.forget_split(tab:tab_id())
+      state.reload()
+      eq(state.sidebar_pane_id(tab:tab_id()), sb:pane_id(), "the mapping came through")
+      eq(state.token_for(sb:pane_id()), nil, "the token did not")
+      eq(transport.state(sb), "off")
+      sidebar.ensure(gui)
+      eq(#tab:panes(), 2, "no second sidebar")
+      local token = state.token_for(sb:pane_id())
+      assert(token and token ~= old_token, "a fresh token")
+      local auth = last(sb.sent)
+      assert(auth:find('"auth"', 1, true) and auth:find(token, 1, true), "offered")
+      assert(auth:find(old_token, 1, true), "framed with the proof the backend still holds")
+      eq(sidebar.is_ready(sb), false, "not trusted before the echo")
+      sb.vars.vtabs_token = token
+      eq(sidebar.is_ready(sb), true)
+      local session = fake.ready(gui, sb)
+      assert(session ~= old_session, "a fresh session")
+      eq(transport.state(sb), "active")
+      eq(sidebars_in(tab), 1)
+    end)
+  end
+)
+
+test("the settings page after a reload is offered a fresh token once, and trusted again on its echo", function()
+  local win, gui = window(1)
+  sidebar.ensure(gui)
+  mark_ready(win.tab_list[1])
+  local settings = require "vtabs.settings"
+  assert(settings.open(gui))
+  local page_tab, page = settings.find(gui:mux_window())
+  local old = state.token_for(page:pane_id())
+  page.vars.vtabs_token = old
+  mark_ready(page_tab)
+  eq(sidebar.is_ready(page), true)
+  store.forget_pane(page:pane_id())
+  state.reload()
+  eq(state.token_for(page:pane_id()), nil)
+  win.active_tab_ref = page_tab
+  sidebar.ensure(gui)
+  local token = state.token_for(page:pane_id())
+  assert(token and token ~= old, "a fresh token")
+  assert(last(page.sent):find(token, 1, true), "offered")
+  local sent = #page.sent
+  sidebar.ensure(gui)
+  eq(#page.sent, sent, "offered once per VM")
+  page.vars.vtabs_token = token
+  eq(sidebar.is_ready(page), true)
+end)

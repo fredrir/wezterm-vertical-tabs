@@ -21,7 +21,7 @@ plugin owns mux facts, config and dispatch:
 5. Set the pane title marker `wez-vtabs:<nonce>` / `wez-vtabs-settings:<nonce>` (OSC 0 and OSC 2).
    The nonce is a per-process random id, never the auth token: window titles are readable by the
    whole desktop.
-6. Emit event `{"t":"ready","v":3,"cols":N,"rows":M,"paints":true,"caps":["atomic_sync","typed_intents","theme_hooks","settings_document","spaces_policy"],"n":1}`.
+6. Emit event `{"t":"ready","v":3,"cols":N,"rows":M,"paints":true,"caps":["atomic_sync","typed_intents","theme_hooks","settings_document","spaces_policy","inbox_transport"],"pane":42,"transport":{"inbox":"inbox-42-9f3a1b2c"},"n":1}`.
 7. Loop until stdin EOF or `quit`.
 
 
@@ -42,7 +42,7 @@ commands carrying no proof of the active session are consumed without changing b
 
 | command             | shape                                                                 | effect                                                                      |
 | ------------------- | --------------------------------------------------------------------- | --------------------------------------------------------------------------- |
-| `auth`              | `{"t":"auth","token":"<hex>","caps":["typed_intents","theme_hooks","settings_document","spaces_policy"]}` | echo `vtabs_token` and negotiate client capabilities                        |
+| `auth`              | `{"t":"auth","token":"<hex>","caps":["typed_intents","theme_hooks","settings_document","spaces_policy"],"keys":"server"}` | echo `vtabs_token` and negotiate client capabilities; `keys:"server"` asks for forwarded keys to be delivered through the server's cli |
 | `begin`             | `{"t":"begin","generation":N}`                                   | start or replay one atomic publication                                      |
 | `commit`            | `{"t":"commit","generation":N}`                                  | publish the matching valid generation, or start its theme-hook round-trip   |
 | `theme_hook_result` | `{"t":"theme_hook_result","generation":N,"overrides":{...}}`    | finish the matching generation after Lua runs `hooks.theme`                 |
@@ -61,6 +61,10 @@ commands carrying no proof of the active session are consumed without changing b
 | `kill`              | `{"t":"kill","title":"wez-vtabs:1a2b"}`                          | kill the one pane with that backend marker; answer with `cli`                |
 | `rescue`            | `{"t":"rescue","band":28,"position":"left"}`                   | move other panes out of the sidebar band through the existing CLI bridge    |
 | `adjust`            | `{"t":"adjust","direction":"Left","amount":3,"park":false}`     | resize this pane's split on the server, from the tab's active pane; answer with `cli` |
+| `kill` by id        | `{"t":"kill","pane":17}`                                          | kill the server pane with that id; answer with `cli`                         |
+| `transport_probe`   | `{"t":"transport_probe","session":"inbox-4242-9f3a"}`           | inbox message 1: proves the directory is the one the backend reads          |
+| `transport_barrier` | `{"t":"transport_barrier","session":"inbox-4242-9f3a"}`         | last stdin frame; triggers one scan, then `transport_ready` or `transport_refused` |
+| `transport_stop`    | `{"t":"transport_stop","session":"inbox-4242-9f3a"}`            | drain the inbox in order, remove it, read stdin only                         |
 
 `kill`, `rescue` and `adjust` run the server's own `wezterm cli --no-auto-start`, found beside
 `WEZTERM_EXECUTABLE_DIR`, against `WEZTERM_UNIX_SOCKET`, acting for `WEZTERM_PANE`: the GUI's mux
@@ -297,7 +301,7 @@ hatch.
 
 | event                | shape                                                                                                                        |
 | -------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
-| `ready`              | `{"t":"ready","v":3,"cols":N,"rows":M,"paints":true,"caps":["atomic_sync","typed_intents","theme_hooks","settings_document","spaces_policy"],"n":1}` |
+| `ready`              | `{"t":"ready","v":3,"cols":N,"rows":M,"paints":true,"caps":["atomic_sync","typed_intents","theme_hooks","settings_document","spaces_policy","inbox_transport"],"pane":42,"transport":{"inbox":"inbox-42-9f3a1b2c"},"n":1}` |
 | `resize`             | `{"t":"resize","cols":N,"rows":M,"n":2}`                                                                             |
 | `theme_hook_request` | `{"t":"theme_hook_request","generation":N,"theme":{...},"n":3}` — resolved base; the generation remains unpublished  |
 | `theme_resolved`     | `{"t":"theme_resolved","generation":N,"theme":{...},"n":4}` — committed effective answer for host/Zen projection     |
@@ -307,12 +311,14 @@ hatch.
 | `settings_copy`      | `{"t":"settings_copy","lua":"vtabs.apply_to_config(config, {...})"}` — complete paste-ready snippet             |
 | `intent`             | `{"t":"intent","a":"press_card","tab_id":7,"x":5,"y":6,"part":"title","n":9}` — variant-specific fields       |
 | `do`                 | centralized compatibility downgrade, only for clients without `typed_intents`                                               |
-| `key`                | `{"t":"key","key":"c","mods":["ctrl"],"raw":"Aw==","n":10}` — host-forwarded keys only                          |
+| `key`                | `{"t":"key","key":"c","mods":["ctrl"],"raw":"Aw==","delivered":false,"n":10}` — host-forwarded keys; `delivered:true` means the bytes already reached the content pane through the server's cli and Lua only hands focus over |
+| `transport_ready`    | `{"t":"transport_ready","session":"inbox-4242-9f3a","n":11}` — probe and barrier both seen; Lua may write to the inbox |
+| `transport_refused`  | `{"t":"transport_refused","session":"inbox-4242-9f3a","why":"probe","n":11}` — `why` is `probe` (barrier without the probe; the offer is withdrawn), `session` (a session this backend is not negotiating; the current transport stays) or `state` (nothing offered) |
 | `paste`              | `{"t":"paste","data":"<base64>","n":11}`, or `{"t":"paste","dropped":"size","n":11}` past 64 KiB               |
 | `focus`              | not sent: focus out clears backend hover; focus in does nothing                                                              |
 | `pong`               | `{"t":"pong","n":13,"echo":7}` — `echo` is the ping's own `n`                                                          |
 | `note`               | `{"t":"note","k":"menu_refused","why":"rows","id":7,"a":"confirm","n":14}`                                   |
-| `dropped`            | `{"t":"dropped","what":"model","reason":"bounds","n":15}` — pending transaction is invalidated                     |
+| `dropped`            | `{"t":"dropped","what":"model","reason":"bounds","n":15}` — pending transaction is invalidated; `{"t":"dropped","what":"message","reason":"gap","seq":7}` — one inbox message never arrived, Lua republishes |
 | `cli`                | `{"t":"cli","op":"kill","ok":true,"detail":"1","n":16}` — `op` is `kill`, `rescue` or `adjust`; count or error detail |
 
 Every `intent` is tagged by `a` and carries only that variant's fields. In particular,
@@ -329,6 +335,23 @@ one follow-up generation containing the returned fingerprints and assignments. A
 the host theme without starting another semantic generation.
 
 
+
+## Inbox transport
+
+| Name | Value |
+| --- | --- |
+| Why | `pane:send_text` on a mux-domain pane blocks the GUI thread on a server round trip; frames to same-machine mux panes go through files instead |
+| Eligible | `mux.domain(pane) ~= "local"` and the domain is a unix domain of this machine; `backend.inbox = true` |
+| Root | `VTABS_INBOX_ROOT` from Lua: `$XDG_RUNTIME_DIR/wez-vtabs`, else `$TMPDIR/wez-vtabs`, else no transport |
+| Session dir | `<root>/inbox-<pid>-<nonce>`, mode 0700, announced as `ready.transport.inbox`; absent when no root was given or it failed validation |
+| `ready.pane` | the backend's own server pane id from `WEZTERM_PANE`; absent when unset |
+| `auth.keys` | `"server"` only where Lua would hand a typed key over: an eligible sidebar, `hover ~= "press"`, plain content beside it; a same-token `auth` flips it live |
+| Message | `<seq zero-padded 8>.msg`, written as `<seq>.tmp` then renamed; framed control records, one or more |
+| Order | Lua writes the probe (seq 1) before the stdin barrier; the backend applies no inbox message before the barrier and applies messages in sequence |
+| Limits | `LINE_MAX` per record, 6 × `LINE_MAX` per file; a gap older than 100 ms is one `dropped` message |
+| Lost | write, close or rename failure: the frame is dropped, never replayed; Lua sends `transport_stop` |
+| Wake | inotify / kqueue on the directory, scan every 1 s with a watcher, every 50 ms without |
+| Cleanup | processed messages deleted; the directory removed on `quit`, `transport_stop`, new `auth`; dead siblings swept at create |
 
 ## Gesture → event (sidebar)
 

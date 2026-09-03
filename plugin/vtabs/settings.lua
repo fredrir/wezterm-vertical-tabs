@@ -233,6 +233,7 @@ local function open(gui_window)
     util.warn("settings spawn failed: %s", tostring(tab):match "^[^\n]*")
     return nil
   end
+  store.pane_domain[opened:pane_id()] = pane_domain .. "@"
   register(opened)
   if not state.is_collapsed(gui_window:window_id()) then
     sidebar.attach(tab)
@@ -246,10 +247,10 @@ function M.open(gui_window)
 end
 
 ---Closes the settings tab whole. Retiring the page alone would leave its sidebar holding the tab at
----full width until the next poll, and on a mux domain a tab left holding only a backend pane is
----the shape the mux client has been seen to abort on when the local window goes first. Every edit
----commits as it is made, so there is nothing to lose to a prompt, and the page is not a tab to
----reopen from history.
+---full width until the next poll. Every edit commits as it is made, so there is nothing to lose to
+---a prompt, and the page is not a tab to reopen from history. On a mux domain every backend in the
+---tab is told to quit and the tab goes with its last pane: a close by activation is the one path
+---the mux client has been seen to abort on, so it is left to a server with no backend to kill by.
 function M.close(gui_window)
   local tab, pane = M.find(gui_window:mux_window())
   if not tab or not sidebar.is_ready(pane) then
@@ -257,6 +258,14 @@ function M.close(gui_window)
   end
   local tab_id = tab:tab_id()
   store.discarded[tab_id] = true
+  if mux.domain(pane) ~= "local" then
+    for _, p in ipairs { table.unpack(mux.panes(tab) or {}) } do
+      if sidebar.is_settings(p) or sidebar.is_backend(p) then
+        sidebar.retire(gui_window, tab, p)
+      end
+    end
+    return true
+  end
   return require("vtabs.actions").close_tab(gui_window, tab_id) ~= false
 end
 

@@ -2,8 +2,98 @@
 -- luacheck: ignore 212
 local async = require "support.async"
 local protocol = require "vtabs.gen.protocol"
+local util = require "vtabs.util"
 
 local M = {}
+
+---An in-memory filesystem for the inbox transport, and the backend's side of it: a pane watches
+---its session directory the way `inbox.rs` does, applying messages in sequence and answering the
+---barrier by whether the probe reached it. `fail` refuses one file operation; `lose_probe` loses
+---the probe's rename, so the barrier finds nothing.
+M.files = {}
+M.fail = {}
+M.lose_probe = false
+
+local function dirname(path)
+  return path:match "^(.*)/[^/]+$"
+end
+
+function M.remove_dir(dir)
+  for path in pairs(M.files) do
+    if dirname(path) == dir then
+      M.files[path] = nil
+    end
+  end
+end
+
+local drain
+
+M.fs = {
+  open = function(path)
+    if M.fail.open then
+      return nil, "open refused"
+    end
+    local parts = {}
+    return {
+      write = function(self, s)
+        if M.fail.write then
+          return nil, "write refused"
+        end
+        parts[#parts + 1] = s
+        return self
+      end,
+      flush = function()
+        if M.fail.flush then
+          return nil, "flush refused"
+        end
+        return true
+      end,
+      close = function()
+        if M.fail.close then
+          return nil, "close refused"
+        end
+        M.files[path] = table.concat(parts)
+        return true
+      end,
+    }
+  end,
+  rename = function(from, to)
+    if M.fail.rename or M.files[from] == nil then
+      return nil, "rename refused"
+    end
+    local body = M.files[from]
+    M.files[from] = nil
+    if M.lose_probe and to:find("/00000001.msg", 1, true) then
+      return true
+    end
+    M.files[to] = body
+    for _, pane in pairs(require("wezterm").panes) do
+      if pane.inbox_dir == dirname(to) and pane.transport == "active" then
+        drain(pane)
+      end
+    end
+    return true
+  end,
+  remove = function(path)
+    if M.files[path] == nil then
+      return nil, "no such file"
+    end
+    M.files[path] = nil
+    return true
+  end,
+}
+
+---Every file under `dir`, by name, the way a scan lists them.
+function M.listing(dir)
+  local names = {}
+  for path in pairs(M.files) do
+    if dirname(path) == dir then
+      names[#names + 1] = path:match "[^/]+$"
+    end
+  end
+  table.sort(names)
+  return names
+end
 
 -- When true, split/spawn/move yield before touching the tree, where a real mux leaves it mid-await.
 M.deferred = false
@@ -28,18 +118,98 @@ Pane.__index = Pane
 
 function M.pane(tab, opts)
   opts = opts or {}
+  local id = alloc "pane"
   local p = setmetatable({
-    id = alloc "pane",
+    id = id,
+    -- the id the pane has on its own server, which a `ready` reports and `kill` by id names
+    server_id = 1000 + id,
     _tab = tab,
     vars = opts.vars or {},
     process = opts.process or "/bin/zsh",
     domain = opts.domain or "local",
     sent = {},
     pasted = {},
+    events = {},
+    pending = {},
+    inbox_msgs = {},
+    transport = "off",
+    last_seq = 0,
     title = opts.title or "zsh",
     cols = opts.cols or 80,
   }, Pane)
   return p:register()
+end
+
+local function deliver(pane, json)
+  local gui = pane._tab and pane._tab._window and pane._tab._window.gui
+  if gui then
+    require("vtabs.input").handle(gui, pane, "vtabs", json)
+  end
+end
+
+---An event the backend in `pane` raised: through the plugin at once, or held for `deliver` when
+---a test wants the plugin's state in between.
+local function emit(pane, ev)
+  local json = require("wezterm").json_encode(ev)
+  pane.events[#pane.events + 1] = json
+  if pane.hold_events then
+    pane.pending[#pane.pending + 1] = json
+  else
+    deliver(pane, json)
+  end
+end
+
+function M.deliver(pane)
+  local pending = pane.pending
+  pane.pending = {}
+  for _, json in ipairs(pending) do
+    deliver(pane, json)
+  end
+end
+
+local inbox_nonce = 0
+
+---What the backend in `pane` announces on start and after a fresh token: a new inbox session each
+---time, the way the real one makes a directory per `ready`. `transport = false` announces none.
+function M.ready(gui, pane, opts)
+  opts = opts or {}
+  if pane.inbox_dir then
+    M.remove_dir(pane.inbox_dir)
+  end
+  pane.transport, pane.last_seq, pane.probed = "off", 0, nil
+  pane.inbox, pane.inbox_dir = nil, nil
+  local root = opts.root or util.runtime_dir()
+  local transport = ""
+  if opts.transport ~= false and root then
+    inbox_nonce = inbox_nonce + 1
+    pane.inbox = opts.inbox or string.format("inbox-%d-%04x", pane.server_id, inbox_nonce)
+    pane.inbox_dir = root .. "/" .. pane.inbox
+    transport = string.format(',"transport":{"inbox":"%s"}', pane.inbox)
+  end
+  local caps = opts.caps
+    or '"atomic_sync","typed_intents","theme_hooks","settings_document","spaces_policy","inbox_transport"'
+  local json = string.format(
+    '{"t":"ready","v":3,"cols":%d,"rows":24,"paints":true,"caps":[%s],"pane":%d%s,"n":1}',
+    pane.cols,
+    caps,
+    pane.server_id,
+    transport
+  )
+  require("vtabs.input").handle(gui, pane, "vtabs", json)
+  return pane.inbox
+end
+
+---The backend typing a forwarded key into its tab's content pane through the server's cli, then
+---telling the plugin so: only the focus is left to hand over.
+function M.server_key(pane, key)
+  for _, p in ipairs(pane._tab.pane_list) do
+    if p ~= pane and not tostring(p.title):find "^wez%-vtabs" then
+      p.typed = p.typed or {}
+      p.typed[#p.typed + 1] = key
+      break
+    end
+  end
+  emit(pane, { t = "key", key = key, delivered = true })
 end
 
 function Pane:pane_id()
@@ -97,10 +267,13 @@ local function intruders_in(tab, own, band)
   return out
 end
 
+local obey
+
 ---What the real backend does with one authenticated framed payload; a `hung` pane hears nothing,
----like a dead one. `quit` exits, and an exited pane closes; `kill` and `rescue` run the CLI.
+---like a dead one. `quit` exits, and an exited pane closes; `kill` and `rescue` run the CLI. The
+---barrier answers by whether the probe reached the directory; an active pane reads it in sequence.
 local function obey_payload(pane, frame_token, payload)
-  local verb = payload:match '"t":"(%w+)"'
+  local verb = payload:match '"t":"([%w_]+)"'
   if not verb then
     return
   end
@@ -115,13 +288,47 @@ local function obey_payload(pane, frame_token, payload)
   elseif active ~= frame_token then
     return
   elseif verb == "quit" then
+    if pane.inbox_dir then
+      M.remove_dir(pane.inbox_dir)
+    end
     M.kill_pane(pane)
+  elseif verb == "transport_probe" then
+    pane.probed = payload:match '"session":"([^"]+)"'
+  elseif verb == "transport_barrier" then
+    local session = payload:match '"session":"([^"]+)"'
+    if session ~= pane.inbox then
+      emit(pane, { t = "transport_refused", session = session, why = "session" })
+      return
+    end
+    local probe = pane.inbox_dir .. "/00000001.msg"
+    if M.files[probe] then
+      local text = M.files[probe]
+      M.files[probe] = nil
+      obey(pane, text)
+    end
+    if pane.probed == session then
+      pane.transport, pane.last_seq = "active", 1
+      emit(pane, { t = "transport_ready", session = session })
+      drain(pane)
+    else
+      emit(pane, { t = "transport_refused", session = session, why = "probe" })
+    end
+  elseif verb == "transport_stop" then
+    if payload:match '"session":"([^"]+)"' == pane.inbox then
+      if pane.transport == "active" then
+        drain(pane)
+      end
+      M.remove_dir(pane.inbox_dir)
+      pane.transport = "off"
+      pane.stopped = (pane.stopped or 0) + 1
+    end
   elseif verb == "kill" then
     -- the server lists every pane it holds: here, every pane of this window's tabs
     local title = payload:match '"title":"([^"]*)"'
+    local server = tonumber(payload:match '"pane":(%d+)')
     for _, tab in ipairs(pane._tab._window.tab_list) do
       for _, p in ipairs { table.unpack(tab.pane_list) } do
-        if p.title == title then
+        if (title ~= nil and p.title == title) or (server ~= nil and p.server_id == server) then
           M.kill_pane(p)
           pane.killed = (pane.killed or 0) + 1
         end
@@ -188,7 +395,7 @@ local function obey_payload(pane, frame_token, payload)
   end
 end
 
-local function obey(pane, text)
+obey = function(pane, text)
   if pane.hung then
     return
   end
@@ -200,6 +407,21 @@ local function obey(pane, text)
         obey_payload(pane, token, line:sub(separator + 1))
       end
     end
+  end
+end
+
+---The next messages in sequence, each applied and deleted; a gap stops the scan where it is.
+drain = function(pane)
+  while true do
+    local path = string.format("%s/%08d.msg", pane.inbox_dir, pane.last_seq + 1)
+    local text = M.files[path]
+    if text == nil then
+      return
+    end
+    M.files[path] = nil
+    pane.last_seq = pane.last_seq + 1
+    pane.inbox_msgs[#pane.inbox_msgs + 1] = text
+    obey(pane, text)
   end
 end
 

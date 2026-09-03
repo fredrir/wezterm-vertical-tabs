@@ -111,6 +111,37 @@ function M.with_cli(fn)
   end
 end
 
+---Runs `fn` with the inbox transport on the fake filesystem under a fixed runtime directory, and
+---`localmux` known as a unix domain of this machine.
+function M.with_inbox(fn)
+  local transport = require "vtabs.transport"
+  require("vtabs.backend").register_local_domains { unix_domains = { { name = "localmux" } } }
+  local runtime_dir, fs = util.runtime_dir, transport.fs
+  util.runtime_dir = function()
+    return "/run/vtabs-test"
+  end
+  transport.fs = fake.fs
+  fake.files, fake.fail, fake.lose_probe = {}, {}, false
+  local ok, err = pcall(fn)
+  util.runtime_dir, transport.fs = runtime_dir, fs
+  require("vtabs.link").reset()
+  if not ok then
+    error(err, 0)
+  end
+end
+
+---A ready window whose every pane sits on the `localmux` domain, as a mux client shows it.
+function M.mux_window(n)
+  local win, gui = M.window(n or 1, { attach = true, ready = true })
+  for _, tab in ipairs(win.tab_list) do
+    for _, p in ipairs(tab.pane_list) do
+      p.domain = "localmux"
+    end
+    require("vtabs.store").pane_domain[sidebar.find(tab):pane_id()] = "localmux@"
+  end
+  return win, gui
+end
+
 ---A clock the test moves by hand; every poll after `advance` sees a later now.
 function M.clock()
   local real = util.now_ms

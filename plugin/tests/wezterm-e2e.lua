@@ -91,7 +91,7 @@ vtabs.apply_to_config(config, {
   debug = true,
   confirm_close = false,
   domain = os.getenv "VTABS_E2E_DOMAIN" or "CurrentPaneDomain",
-  backend = { path = backend_path },
+  backend = { path = backend_path, inbox = os.getenv "VTABS_E2E_INBOX" ~= "0" },
   icons = false,
   collapsed = os.getenv "VTABS_E2E_COLLAPSED" or nil,
 })
@@ -110,6 +110,39 @@ geometry_mod.correct = function(window)
 end
 
 local size_before_grow = {}
+
+-- Inbox messages written since the last `transport` probe, so a test can see a publish take the
+-- file path rather than the link.
+local inbox_writes = 0
+-- Frames accepted for a pane whose transport is active that wrote no inbox message: each one
+-- crossed the link through `send_text`, which is what the transport exists to stop.
+local link_crossings = 0
+do
+  local ok, transport = pcall(require, "vtabs.transport")
+  if ok and type(transport.write) == "function" then
+    local real_write = transport.write
+    transport.write = function(pane, text)
+      local sent = real_write(pane, text)
+      if sent then
+        inbox_writes = inbox_writes + 1
+      end
+      return sent
+    end
+    local identity = require "vtabs.sidebar_identity"
+    local sidebar = require "vtabs.sidebar"
+    local real_send_raw = identity.send_raw
+    local function counted_send_raw(pane, line, frame_token)
+      local writes = inbox_writes
+      local sent = real_send_raw(pane, line, frame_token)
+      if sent and inbox_writes == writes and transport.state(pane) == "active" then
+        link_crossings = link_crossings + 1
+      end
+      return sent
+    end
+    identity.send_raw = counted_send_raw
+    sidebar.send_raw = counted_send_raw
+  end
+end
 
 local probes = {
   toggle = function(window)
@@ -497,6 +530,32 @@ local probes = {
     )
   end,
   -- A tab overlay (the tab menu) replaces the tab's panes, so this reports the overlay's pane id.
+  -- One publish, then every sidebar's transport state and how many inbox messages the publish
+  -- and everything since the last probe wrote: `e2e: transport 5=active,9=off writes 2`.
+  transport = function(window)
+    local sidebar = require "vtabs.sidebar"
+    local view = require "vtabs.view"
+    local wire = require "vtabs.wire"
+    local ok, transport = pcall(require, "vtabs.transport")
+    local sidebars = {}
+    for _, info in ipairs(window:mux_window():tabs_with_info()) do
+      local sb = sidebar.find(info.tab)
+      if sb then
+        sidebars[#sidebars + 1] = sb
+        wire.reset_pane(sb:pane_id())
+      end
+    end
+    view.sync(window)
+    local out = {}
+    for _, sb in ipairs(sidebars) do
+      local state = ok and transport.state and transport.state(sb) or "absent"
+      out[#out + 1] = string.format("%d=%s", sb:pane_id(), tostring(state))
+    end
+    wezterm.log_info(
+      string.format("e2e: transport %s writes %d crossings %d", table.concat(out, ","), inbox_writes, link_crossings)
+    )
+    inbox_writes, link_crossings = 0, 0
+  end,
   probe_active_title = function(window)
     wezterm.log_info("e2e: active title " .. tostring(window:active_tab():get_title()))
   end,

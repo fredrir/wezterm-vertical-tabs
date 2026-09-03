@@ -105,6 +105,8 @@ local SESSION = {
   given_up = "pane",
   spawned = "pane",
   quitting = "pane",
+  server_pane = "pane",
+  keys_mode = "pane",
 
   failed_domains = "process",
   spawned_domains = "process",
