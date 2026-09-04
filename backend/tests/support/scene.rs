@@ -85,7 +85,7 @@ pub fn sidebar() -> RenderInput {
                 x2: 4,
             }),
         }),
-        strip_buttons: ["toggle", "new_tab", "settings"]
+        strip_buttons: ["toggle_sidebar", "new_tab", "open_settings"]
             .map(|id| StripButton {
                 id: id.into(),
                 icon: None,

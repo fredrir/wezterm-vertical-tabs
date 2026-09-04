@@ -10,8 +10,8 @@ use crate::settings::presentation::PresentationField;
 use crate::settings::{self, SpanId};
 use crate::ui::{ArmKind, Armed, Ms, PressDrag, SettingsUi, UiState};
 use vtabs_protocol::event::modifiers;
+use vtabs_protocol::payload::MenuItem;
 use vtabs_protocol::types::{Button, Mods, Mouse, MouseKind};
-use vtabs_protocol::v2::MenuItem;
 use vtabs_protocol::{CardPart, Event, Intent};
 
 pub const DRAG_START_ROWS: i64 = 3;
@@ -607,7 +607,7 @@ fn settings_out(ui: &SettingsUi) -> Resolution {
 }
 
 /// An internal verb for the focused option, or nothing: a locked row is consumed and left alone.
-/// The runtime applies it to `SettingsDocument`; only a legacy DTO client receives the intent.
+/// The runtime applies it to `SettingsDocument`.
 #[derive(Clone, Copy)]
 enum OptionAction {
     Activate,
@@ -632,7 +632,7 @@ fn bare(mods: Mods) -> bool {
 }
 
 /// One key from the settings pane. Navigation and modal state stay local. Document-backed verbs
-/// are consumed and committed by Rust; legacy settings DTOs retain their old intent round trip.
+/// are consumed and committed by Rust.
 pub fn settings_key(s: &SettingsScreen, ui: &SettingsUi, name: &str, mods: Mods) -> Resolution {
     let mut out = settings_out(ui);
     let st = out.settings.as_mut().expect("settings state");

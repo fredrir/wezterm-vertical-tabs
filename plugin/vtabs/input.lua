@@ -17,6 +17,33 @@ local util = require "vtabs.util"
 local M = {}
 
 local DRAG_TIMEOUT_MS = 3000
+local READY_KEYS = { t = true, cols = true, rows = true, pane = true, transport = true, n = true }
+
+local function whole(value, positive)
+  return type(value) == "number" and value == math.floor(value) and value >= (positive and 1 or 0) and value or nil
+end
+
+local function current_ready(ev)
+  for key in pairs(ev) do
+    if READY_KEYS[key] ~= true then
+      return nil
+    end
+  end
+  if ev.n ~= nil and not whole(ev.n, false) then
+    return nil
+  end
+  if ev.transport ~= nil then
+    if type(ev.transport) ~= "table" or type(ev.transport.inbox) ~= "string" then
+      return nil
+    end
+    for key in pairs(ev.transport) do
+      if key ~= "inbox" then
+        return nil
+      end
+    end
+  end
+  return whole(ev.pane, false), whole(ev.cols, true), whole(ev.rows, true)
+end
 
 ---Runs the strip button under the pointer, through the one dispatch table every other caller reads.
 ---A `hooked` button is the user's to point elsewhere, so its hook gets first refusal; the rest are
@@ -209,15 +236,11 @@ local MENU_INTENT = {
 
 ---A menu level the backend could not draw: a refused confirm falls through to WezTerm's own
 ---overlay for a close, and any other refused level simply closes, so the pane never deadlocks.
-local function on_note(gui_window, ev)
-  if ev.k ~= "menu_refused" then
-    util.log("backend note: %s", tostring(ev.k))
-    return
-  end
+local function on_menu_refused(gui_window, ev)
   local wid = gui_window:window_id()
   local pop = popover.get(wid)
   popover.close(gui_window)
-  if pop and ev.a == "confirm" and pop.confirm == "close" then
+  if pop and ev.level == "confirm" and pop.confirm == "close" then
     actions.close_with_overlay(gui_window, pop.tab_id)
   end
   view.sync(gui_window)
@@ -253,10 +276,19 @@ local function on_cli(gui_window, pane, ev)
 end
 
 local function on_theme_resolved(gui_window, ev)
-  local generation = require("vtabs.wire").generation(gui_window:window_id())
-  if theme_bridge.accept(gui_window, ev, generation) then
+  if theme_bridge.accept(gui_window, ev) then
     view.sync(gui_window)
   end
+end
+
+---Window-global space/theme state has one stable identity-based writer. Background panes still
+---answer hooks and paint their own committed state, but their delayed results cannot replace the
+---designated pane's host projection.
+local function is_shared_result_authority(gui_window, pane)
+  local tab = mux.tab_of(pane)
+  local pane_window = tab and mux.call(tab, "window") or nil
+  local wid = gui_window:window_id()
+  return mux.window_id(pane_window) == wid and require("vtabs.wire").is_policy_authority(wid, pane:pane_id())
 end
 
 ---The backend's answer to the inbox handshake, for the session Lua is negotiating.
@@ -271,6 +303,13 @@ local function on_dropped(pane, ev)
     require("vtabs.wire").reset_pane(pid)
     return true
   end
+  if ev.what == "sync" then
+    require("vtabs.wire").reset_pane(pid)
+    if ev.reason == "busy" then
+      util.log("backend %d is finishing its pending publication; marked for retry", pid)
+      return false
+    end
+  end
   util.warn_once(
     string.format("backend-drop-%d-%s-%s", pid, tostring(ev.what), tostring(ev.reason)),
     "backend dropped %s: %s",
@@ -280,7 +319,7 @@ local function on_dropped(pane, ev)
   return false
 end
 
----Typed backend intent; the popover-open guard mirrors v1's click-through dismiss.
+---Typed backend intent; the popover-open guard prevents click-through dismiss.
 local function on_intent(gui_window, pane, ev)
   if protocol.INTENT_NAMES[ev.a] ~= true then
     return
@@ -297,102 +336,6 @@ local function on_intent(gui_window, pane, ev)
   if not QUIET_INTENT[ev.a] then
     view.sync(gui_window)
   end
-end
-
----The one compatibility boundary for legacy backends. Internal handlers only see typed fields.
-local LEGACY = {
-  press_card = function(id, a)
-    return { a = "press_card", tab_id = id, x = a.x, y = a.y, part = a.part }
-  end,
-  drag_to = function(_, a)
-    return { a = "drag_to", x = a.x, y = a.y, slot = a.slot, outside = a.outside }
-  end,
-  drag_end = function(_, a)
-    return { a = "drag_end", slot = a.slot, outside = a.outside }
-  end,
-  request_close = function(id, a)
-    return { a = "request_close", tab_id = id, row = a.row, col = a.col, from_key = a.from_key }
-  end,
-  toggle_pin = function(id)
-    return { a = "toggle_pin", tab_id = id }
-  end,
-  open_menu = function(id, a)
-    return { a = "open_menu", tab_id = id, row = a.row, col = a.col }
-  end,
-  new_tab = function()
-    return { a = "new_tab" }
-  end,
-  strip = function(id)
-    return { a = "strip", button_id = id }
-  end,
-  footer = function(_, a)
-    return { a = "footer", index = a.index }
-  end,
-  switch_space = function(id)
-    return { a = "switch_space", space_id = id }
-  end,
-  wheel_tab = function(_, a)
-    return { a = "wheel_tab", dy = a.dy }
-  end,
-  set_scroll = function(_, a)
-    return { a = "set_scroll", top = a.top, user = a.user }
-  end,
-  set_focus_index = function(_, a)
-    return { a = "set_focus_index", index = a.index }
-  end,
-  activate_tab_by_id = function(id)
-    return { a = "activate_tab", tab_id = id }
-  end,
-  blur_sidebar = function()
-    return { a = "blur_sidebar" }
-  end,
-  menu_pick = function(_, a)
-    return { a = "menu_pick", item_id = a.id }
-  end,
-  menu_back = function()
-    return { a = "menu_back" }
-  end,
-  menu_closed = function()
-    return { a = "menu_closed" }
-  end,
-  rename_commit = function(_, a)
-    return { a = "rename_commit", text = a.text }
-  end,
-  rename_tab = function(id)
-    return { a = "rename_tab", tab_id = id }
-  end,
-  move_tab = function(id, a)
-    return { a = "move_tab", tab_id = id, slot = a.slot, focus_index = a.focus_index }
-  end,
-  set_rail_reserve = function(_, a)
-    return { a = "set_rail_reserve", cols = a.cols }
-  end,
-  nudge_option = function(_, a)
-    return { a = "nudge_option", key = a.key, delta = a.delta }
-  end,
-  activate_option = function(_, a)
-    return { a = "activate_option", key = a.key }
-  end,
-  reset_option = function(_, a)
-    return { a = "reset_option", key = a.key }
-  end,
-  settings_copy = function()
-    return { a = "settings_copy" }
-  end,
-  edit_key = function(_, a)
-    return { a = "edit_key", key = a.key }
-  end,
-  record_chord = function(_, a)
-    return { a = "record_chord", key = a.key, mods = a.mods }
-  end,
-  close_settings = function()
-    return { a = "close_settings" }
-  end,
-}
-
-local function legacy_intent(ev)
-  local adapt = LEGACY[ev.a]
-  return adapt and adapt(ev.id, type(ev.args) == "table" and ev.args or {}) or nil
 end
 
 local FORWARD_MAX_RAW = protocol.FORWARDED_KEY_MAX_ENCODED_BYTES
@@ -599,20 +542,26 @@ function M.handle(gui_window, pane, name, value)
     util.log("handle: %s from pane %d", tostring(ev.t), pane:pane_id())
   end
 
+  if not sidebar.is_settings(pane) then
+    local tab = mux.tab_of(pane)
+    local current = tab and sidebar.find(tab) or nil
+    if not current or current:pane_id() ~= pane:pane_id() then
+      return
+    end
+  end
+
   local function accept_ready()
-    local v = tonumber(ev.v) or 1
-    if v ~= protocol.VERSION or ev.paints ~= true then
-      sidebar.refuse_v1(pane, v)
+    local server, cols, rows = current_ready(ev)
+    if not server or not cols or not rows then
+      sidebar.refuse_ready(pane)
       return false
     end
     local pid = pane:pane_id()
-    store.proto[pid] = v
-    store.paints[pid] = true
     -- the backend's own id on its server: what `kill` by id names through another backend there
-    local server = tonumber(ev.pane)
-    store.server_pane[pid] = server and server >= 0 and math.floor(server) or nil
-    sidebar.set_capabilities(pane, ev.caps or ev.capabilities)
-    require("vtabs.wire").reset_pane(pid)
+    store.server_pane[pid] = server
+    local wire = require "vtabs.wire"
+    wire.reset_pane(pid)
+    wire.policy_ready(gui_window:window_id(), pid)
     sidebar.auth(pane)
     transport.offer(pane, ev)
     return true
@@ -631,14 +580,6 @@ function M.handle(gui_window, pane, name, value)
         return
       end
       view.sync(gui_window)
-    elseif
-      ev.t == "settings_commit"
-      and tonumber(ev.settings_rev) ~= require("vtabs.wire").revision(gui_window:window_id(), "settings")
-    then
-      util.warn_once(
-        "settings-stale-" .. pane:pane_id(),
-        "ignored a settings commit from an obsolete document revision"
-      )
     elseif require("vtabs.settings_model").effect(gui_window, ev) then
       view.sync(gui_window)
     elseif ev.t == "theme_hook_request" then
@@ -647,11 +588,13 @@ function M.handle(gui_window, pane, name, value)
       require("vtabs.spaces").answer_hook(gui_window, pane, ev)
     elseif ev.t == "spaces_resolved" then
       local wid = gui_window:window_id()
-      if require("vtabs.spaces").accept(ev, wid, require("vtabs.wire").generation(wid)) then
+      if is_shared_result_authority(gui_window, pane) and require("vtabs.spaces").accept(ev, wid) then
         view.sync(gui_window)
       end
     elseif ev.t == "theme_resolved" then
-      on_theme_resolved(gui_window, ev)
+      if is_shared_result_authority(gui_window, pane) then
+        on_theme_resolved(gui_window, ev)
+      end
     elseif TRANSPORT[ev.t] then
       TRANSPORT[ev.t](pane, ev)
     elseif ev.t == "dropped" then
@@ -672,7 +615,7 @@ function M.handle(gui_window, pane, name, value)
     -- a mux domain the server's own word on the width: the answer to the adjust in flight, and
     -- the width the next correction reads, over a mirror that can lag. Nothing is published for
     -- it: the pane has already repainted itself at the new size, and a publish per report is a
-    -- generation per frame across every tab. From a mux pane it is a server-side resize, the
+    -- publication per frame across every tab. From a mux pane it is a server-side resize, the
     -- visible edge of the mirror rebuild storm nothing may cross the link into, and one more
     -- frame of the burst no adjust is computed inside.
     local wid = gui_window:window_id()
@@ -688,11 +631,13 @@ function M.handle(gui_window, pane, name, value)
     require("vtabs.spaces").answer_hook(gui_window, pane, ev)
   elseif ev.t == "spaces_resolved" then
     local wid = gui_window:window_id()
-    if require("vtabs.spaces").accept(ev, wid, require("vtabs.wire").generation(wid)) then
+    if is_shared_result_authority(gui_window, pane) and require("vtabs.spaces").accept(ev, wid) then
       view.sync(gui_window)
     end
   elseif ev.t == "theme_resolved" then
-    on_theme_resolved(gui_window, ev)
+    if is_shared_result_authority(gui_window, pane) then
+      on_theme_resolved(gui_window, ev)
+    end
   elseif TRANSPORT[ev.t] then
     TRANSPORT[ev.t](pane, ev)
   elseif ev.t == "dropped" then
@@ -701,15 +646,10 @@ function M.handle(gui_window, pane, name, value)
     end
   elseif ev.t == "intent" then
     on_intent(gui_window, pane, ev)
-  elseif ev.t == "do" then
-    local intent = legacy_intent(ev)
-    if intent then
-      on_intent(gui_window, pane, intent)
-    end
   elseif ev.t == "cli" then
     on_cli(gui_window, pane, ev)
-  elseif ev.t == "note" then
-    on_note(gui_window, ev)
+  elseif ev.t == "menu_refused" then
+    on_menu_refused(gui_window, ev)
   elseif ev.t == "key" then
     M.key(gui_window, pane, ev)
   elseif ev.t == "paste" then

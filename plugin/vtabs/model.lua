@@ -9,7 +9,7 @@ local util = require "vtabs.util"
 
 local M = {}
 
----The three title sources, separately: v2 sends them raw so Rust can own the fallback.
+---The three title sources, separately, so Rust can own the fallback.
 local function title_parts(tab, pane, cfg, observed, pane_facts)
   local override = nil
   if cfg.title then
@@ -243,10 +243,7 @@ function M.survey(gui_window, snapshot)
   if not spaces.enabled(cfg) then
     return { all = items, visible = items }
   end
-  local active = snapshot and snapshot.active or nil
-  local active_sidebar = active and active.sidebar or sidebar.find(util.active_tab(gui_window))
-  local capable = active_sidebar and sidebar.supports(active_sidebar, "spaces_policy") or false
-  return spaces.project(cfg, wid, items, capable)
+  return spaces.project(cfg, wid, items)
 end
 
 ---The sidebar's list for a window: the active space's tabs, in physical order.

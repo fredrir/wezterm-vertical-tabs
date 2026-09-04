@@ -25,7 +25,7 @@ function M.defaults()
     move_tab_up = { key = "PageUp", mods = SUPER2 },
     move_tab_down = { key = "PageDown", mods = SUPER2 },
     tab_last = { key = "9", mods = SUPER },
-    settings = { key = ",", mods = SUPER },
+    open_settings = { key = ",", mods = SUPER },
     next_space = { key = "e", mods = SUPER },
     prev_space = { key = "e", mods = SUPER2 },
   }
@@ -39,7 +39,7 @@ function M.defaults()
   return keys
 end
 
--- Second default chords for a behaviour; the behaviour's own renames live in `actions.canonical`.
+-- Second default chords for a behaviour.
 local ALIASES = {
   private_window_alt = "private_window",
   next_tab_alt = "next_tab",
@@ -57,7 +57,7 @@ local function action_for(name)
   if n then
     return actions.action.activate_tab(tonumber(n) - 1)
   end
-  local action = actions.action[actions.canonical(name)]
+  local action = actions.action[name]
   return type(action) == "table" and action or nil
 end
 

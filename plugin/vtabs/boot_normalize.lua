@@ -13,7 +13,6 @@ local M = {}
 
 local REQUEST_MAX = 1024 * 1024
 local RESPONSE_MAX = 1024 * 1024
-local NORMALIZER_VERSION = 1
 
 local function cleanup(path, dir)
   if path then
@@ -82,7 +81,6 @@ local function request_body(opts, persisted)
   local projected, opaque, invalid = settings_model.project(opts, wire.array)
   local _, explicit = config.explicit_keys(opts)
   local body = wire.encode {
-    normalizer_v = NORMALIZER_VERSION,
     plugin_version = version,
     schema_id = schema.schema_id,
     persisted = persisted,
@@ -103,7 +101,6 @@ local function parse_response(body)
   local response = util.try(wezterm.json_parse, body)
   if
     type(response) ~= "table"
-    or response.normalizer_v ~= NORMALIZER_VERSION
     or response.plugin_version ~= version
     or response.schema_id ~= schema.schema_id
     or type(response.values) ~= "table"
@@ -120,8 +117,8 @@ local function parse_response(body)
   return response
 end
 
----Uses only an already-resolvable local binary. Any absence, old binary, malformed reply, or local
----I/O failure returns nil so apply_to_config can use the generated-schema Lua bootstrap path.
+---Uses only an already-resolvable local binary. Any absence, incompatibility, malformed reply, or
+---local I/O failure returns nil so apply_to_config can use the generated-schema Lua bootstrap path.
 function M.try(opts)
   opts = type(opts) == "table" and opts or {}
   local candidates = backend.normalizer_candidates(opts)

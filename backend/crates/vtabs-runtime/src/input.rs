@@ -365,7 +365,14 @@ fn parse_control_line(bytes: &[u8], wait: Wait) -> Step {
             },
             end + 1,
         ),
-        Err(_) => Step::Skip(end + 1),
+        Err(_) => Step::Token(
+            Input::Dropped {
+                token: Some(token.to_owned()),
+                what: "command",
+                reason: "invalid",
+            },
+            end + 1,
+        ),
     }
 }
 

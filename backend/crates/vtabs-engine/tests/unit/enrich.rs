@@ -1,5 +1,5 @@
 use super::*;
-use vtabs_protocol::v2::{ChromeFacts, PaneMetrics, StripButton, StripState};
+use vtabs_protocol::payload::{ChromeFacts, StripButton, StripState};
 
 fn space(icon: Option<&str>, name: &str) -> SpaceItem {
     SpaceItem {
@@ -26,23 +26,19 @@ fn a_space_shows_its_icon_else_its_initial_else_a_dot() {
 #[test]
 fn the_active_space_is_the_one_the_model_names() {
     let cfg = EngineConfig::try_from(
-        serde_json::from_str::<vtabs_protocol::v2::ConfigMsg>(r#"{"rev":1}"#).unwrap(),
+        serde_json::from_str::<vtabs_protocol::payload::ConfigMsg>(r#"{}"#).unwrap(),
     )
     .unwrap();
-    let raw_theme: ThemeMsg = serde_json::from_str(r#"{"rev":1}"#).unwrap();
-    let model: vtabs_protocol::v2::ModelMsg = serde_json::from_str(
-        r#"{"rev":1,"space":"pi","spaces":[{"id":"home","name":"Home"},{"id":"pi","icon":"@","unseen":true}]}"#,
-    )
-    .unwrap();
-    let theme = theme_of(&raw_theme, model.private());
-    let view = enrich(
-        &cfg,
-        &theme,
-        model.sidebar().unwrap(),
-        (28, 20),
-        &UiState::default(),
-    )
-    .view;
+    let raw_theme: ThemeMsg = serde_json::from_str(r#"{"private":false}"#).unwrap();
+    let mut active = space(Some("@"), "pi");
+    active.unseen = true;
+    let model = SidebarModel {
+        space: Some("pi".into()),
+        spaces: vec![space(None, "Home"), active],
+        ..Default::default()
+    };
+    let theme = theme_of(&raw_theme, model.private);
+    let view = enrich(&cfg, &theme, &model, (28, 20), &UiState::default()).view;
     let seen: Vec<(&str, bool, bool, &str)> = view
         .spaces
         .iter()
@@ -95,16 +91,16 @@ fn a_shell_shows_where_it_is_and_a_tool_shows_what_it_runs() {
 #[test]
 fn a_lua_resolved_user_icon_wins_over_the_builtin_process_icon() {
     let cfg = EngineConfig::try_from(
-        serde_json::from_str::<vtabs_protocol::v2::ConfigMsg>(
-            r#"{"rev":1,"icons":true,"render":{"padding":{},"meta":true}}"#,
+        serde_json::from_str::<vtabs_protocol::payload::ConfigMsg>(
+            r#"{"icons":true,"render":{"padding":{},"meta":true}}"#,
         )
         .unwrap(),
     )
     .unwrap();
-    let raw_theme: ThemeMsg = serde_json::from_str(r#"{"rev":1}"#).unwrap();
+    let raw_theme: ThemeMsg = serde_json::from_str(r#"{"private":false}"#).unwrap();
     let mut custom = tab(Some("nvim"), None);
     custom.icon = Some("CUSTOM".into());
-    let mut model = vtabs_protocol::v2::SidebarModel::default();
+    let mut model = vtabs_protocol::payload::SidebarModel::default();
     model.tabs.push(custom);
     let theme = theme_of(&raw_theme, model.private);
     let view = enrich(&cfg, &theme, &model, (28, 20), &UiState::default()).view;
@@ -159,8 +155,8 @@ fn the_title_falls_back_through_every_source() {
 #[test]
 fn current_menu_headers_share_the_card_title_and_meta_policy() {
     let cfg = EngineConfig::try_from(
-        serde_json::from_str::<vtabs_protocol::v2::ConfigMsg>(
-            r#"{"rev":1,"meta":"auto","meta_sep":" · "}"#,
+        serde_json::from_str::<vtabs_protocol::payload::ConfigMsg>(
+            r#"{"meta":"auto","meta_sep":" · "}"#,
         )
         .unwrap(),
     )
@@ -172,7 +168,7 @@ fn current_menu_headers_share_the_card_title_and_meta_policy() {
     model.tabs.push(subject);
 
     let root: MenuMsg =
-        serde_json::from_str(r#"{"rev":1,"open":true,"target":7,"subject":7,"items":[]}"#).unwrap();
+        serde_json::from_str(r#"{"open":true,"target":7,"subject":7,"items":[]}"#).unwrap();
     assert_eq!(
         menu_header(&root, &model, &cfg),
         Some(MenuHeader {
@@ -182,7 +178,7 @@ fn current_menu_headers_share_the_card_title_and_meta_policy() {
     );
 
     let confirm: MenuMsg = serde_json::from_str(
-        r#"{"rev":2,"open":true,"level":"confirm","subject":7,"victims":3,"items":[]}"#,
+        r#"{"open":true,"level":"confirm","subject":7,"victims":3,"items":[]}"#,
     )
     .unwrap();
     assert_eq!(
@@ -195,20 +191,19 @@ fn current_menu_headers_share_the_card_title_and_meta_policy() {
 }
 
 #[test]
-fn unknown_theme_keys_are_ignored_not_fatal() {
-    let msg: ThemeMsg = serde_json::from_str(
-        r##"{"rev":1,"overrides":{"accent":"#ff0000","nonsense":"#00ff00","scrim":0.25}}"##,
-    )
-    .unwrap();
-    let t = msg.overrides;
-    assert_eq!(t.accent.as_deref(), Some("#ff0000"));
-    assert_eq!(t.scrim, Some(0.25));
+fn unknown_theme_keys_are_rejected() {
+    assert!(
+        serde_json::from_str::<ThemeMsg>(
+            r##"{"private":false,"overrides":{"accent":"#ff0000","nonsense":"#00ff00"}}"##,
+        )
+        .is_err()
+    );
 }
 
 fn geometry_cfg() -> EngineConfig {
     EngineConfig::try_from(
-        serde_json::from_str::<vtabs_protocol::v2::ConfigMsg>(
-            r#"{"rev":1,"rail_width":5,"position":"left","render":{"padding":{"left":1,"right":1,"top":1,"bottom":1}}}"#,
+        serde_json::from_str::<vtabs_protocol::payload::ConfigMsg>(
+            r#"{"rail_width":5,"position":"left","render":{"padding":{"left":1,"right":1,"top":1,"bottom":1}}}"#,
         )
         .unwrap(),
     )
@@ -219,19 +214,11 @@ fn raw_geometry_model(chrome: ChromeFacts, rail: bool, toggle: bool) -> SidebarM
     SidebarModel {
         rail,
         strip: Some(StripState {
-            // 8.4 point cells across and 19 down: 70/8.4 -> 9 cols, 28/19 -> 2 rows.
-            metrics: Some(PaneMetrics {
-                cols: 28,
-                viewport_rows: 30,
-                pixel_width: 235.0,
-                pixel_height: 570.0,
-                dpi: None,
-            }),
             dpi: None,
             chrome: Some(chrome),
             buttons: toggle
                 .then(|| StripButton {
-                    id: "toggle".into(),
+                    id: "toggle_sidebar".into(),
                     icon: None,
                 })
                 .into_iter()
@@ -242,7 +229,7 @@ fn raw_geometry_model(chrome: ChromeFacts, rail: bool, toggle: bool) -> SidebarM
 }
 
 #[test]
-fn raw_pane_and_chrome_facts_are_the_only_strip_geometry_input() {
+fn pane_and_chrome_facts_are_the_only_strip_geometry_input() {
     let cfg = geometry_cfg();
     let mac = ChromeFacts {
         is_mac: true,
@@ -251,7 +238,13 @@ fn raw_pane_and_chrome_facts_are_the_only_strip_geometry_input() {
         ..Default::default()
     };
 
-    let (strip, reserve) = strip_of(&cfg, &raw_geometry_model(mac, false, true), 28, 30, None);
+    let (strip, reserve) = strip_of(
+        &cfg,
+        &raw_geometry_model(mac, false, true),
+        28,
+        30,
+        Some((235, 570)),
+    );
     assert_eq!((strip.rows, strip.cols, strip.toggle_row), (3, 9, Some(1)));
     assert_eq!(reserve, Some(9));
 
@@ -266,7 +259,7 @@ fn raw_pane_and_chrome_facts_are_the_only_strip_geometry_input() {
         &raw_geometry_model(preview, false, true),
         28,
         30,
-        None,
+        Some((235, 570)),
     );
     assert_eq!((strip.rows, strip.cols), (3, 9));
     assert_eq!(reserve, Some(9), "preview uses non-Mac logical DPI");
@@ -280,41 +273,51 @@ fn raw_pane_and_chrome_facts_are_the_only_strip_geometry_input() {
         &raw_geometry_model(fullscreen, false, true),
         28,
         30,
-        None,
+        Some((235, 570)),
     );
     assert_eq!((strip.rows, strip.cols, strip.toggle_row), (2, 0, Some(2)));
     assert_eq!(reserve, Some(0), "fullscreen clears Lua's prior reserve");
 
-    let (strip, reserve) = strip_of(&cfg, &raw_geometry_model(mac, true, true), 28, 30, None);
+    let (strip, reserve) = strip_of(
+        &cfg,
+        &raw_geometry_model(mac, true, true),
+        28,
+        30,
+        Some((235, 570)),
+    );
     assert_eq!((strip.rows, strip.cols, strip.toggle_row), (4, 9, Some(3)));
     assert_eq!(reserve, Some(9), "rail toggle sits below the lights");
 
-    let (strip, reserve) = strip_of(&cfg, &raw_geometry_model(mac, false, false), 28, 30, None);
+    let (strip, reserve) = strip_of(
+        &cfg,
+        &raw_geometry_model(mac, false, false),
+        28,
+        30,
+        Some((235, 570)),
+    );
     assert_eq!((strip.rows, strip.cols), (3, 9));
     assert_eq!(reserve, Some(9), "no toggle still reserves native chrome");
 
-    let mut no_metrics = raw_geometry_model(fullscreen, false, true);
-    no_metrics.strip.as_mut().unwrap().metrics = None;
-    let (_, reserve) = strip_of(&cfg, &no_metrics, 28, 30, None);
+    let no_pixels = raw_geometry_model(fullscreen, false, true);
+    let (_, reserve) = strip_of(&cfg, &no_pixels, 28, 30, None);
     assert_eq!(
         reserve,
         Some(0),
-        "fullscreen conclusively clears a reserve without pane metrics"
+        "fullscreen conclusively clears a reserve without pixel dimensions"
     );
 
-    let mut enabled_without_metrics = raw_geometry_model(mac, false, true);
-    enabled_without_metrics.strip.as_mut().unwrap().metrics = None;
-    let (_, reserve) = strip_of(&cfg, &enabled_without_metrics, 28, 30, None);
-    assert_eq!(reserve, None, "a positive reserve requires current metrics");
+    let enabled_without_pixels = raw_geometry_model(mac, false, true);
+    let (_, reserve) = strip_of(&cfg, &enabled_without_pixels, 28, 30, None);
+    assert_eq!(reserve, None, "a positive reserve requires current pixels");
 
     let right = EngineConfig::try_from(
-        serde_json::from_str::<vtabs_protocol::v2::ConfigMsg>(
-            r#"{"rev":1,"position":"right","render":{"padding":{"left":1,"right":1,"top":1,"bottom":1}}}"#,
+        serde_json::from_str::<vtabs_protocol::payload::ConfigMsg>(
+            r#"{"position":"right","render":{"padding":{"left":1,"right":1,"top":1,"bottom":1}}}"#,
         )
         .unwrap(),
     )
     .unwrap();
-    let (_, reserve) = strip_of(&right, &enabled_without_metrics, 28, 30, None);
+    let (_, reserve) = strip_of(&right, &enabled_without_pixels, 28, 30, None);
     assert_eq!(
         reserve,
         Some(0),
@@ -331,25 +334,18 @@ fn the_pane_measures_its_own_pixels_and_lua_supplies_only_the_dpi() {
         native_button_style: true,
         ..Default::default()
     };
-    // a current plugin: no pane metrics at all, the dpi alone, and the pty's own pixel size
-    let mut own = raw_geometry_model(mac, false, true);
-    let strip = own.strip.as_mut().unwrap();
-    strip.metrics = None;
-    strip.dpi = None;
+    let own = raw_geometry_model(mac, false, true);
     let (strip_out, reserve) = strip_of(&cfg, &own, 28, 30, Some((235, 570)));
     assert_eq!((strip_out.rows, strip_out.cols), (3, 9));
     assert_eq!(reserve, Some(9), "the pty's pixel size is a size");
-    // the pty's measurement outranks a legacy plugin's copy of it
-    let stale = raw_geometry_model(mac, false, true);
-    let (fresh, _) = strip_of(&cfg, &stale, 28, 30, Some((470, 570)));
+    let (fresh, _) = strip_of(&cfg, &own, 28, 30, Some((470, 570)));
     assert!(
         fresh.cols < 9,
         "twice the pixels per cell halves the reserve"
     );
-    // zero pixels (a host that sets none) fall back to whatever the plugin sent
-    let (legacy, reserve) = strip_of(&cfg, &stale, 28, 30, Some((0, 0)));
-    assert_eq!((legacy.cols, reserve), (9, Some(9)));
-    // a dpi sent beside the chrome scales the points the same way a metrics dpi did
+    let (without_pixels, reserve) = strip_of(&cfg, &own, 28, 30, Some((0, 0)));
+    assert_eq!((without_pixels.cols, reserve), (0, None));
+    // Lua supplies the window DPI beside the chrome facts.
     let mut hi = own.clone();
     hi.strip.as_mut().unwrap().dpi = Some(144.0);
     let (scaled, _) = strip_of(&cfg, &hi, 28, 30, Some((235, 570)));

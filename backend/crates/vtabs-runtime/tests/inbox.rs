@@ -172,7 +172,9 @@ fn the_reader_scans_without_a_watcher_and_wakes_the_loop() {
         std::sync::Arc::new(move |batch: Batch| tx.send(batch).is_ok()),
         false,
     );
-    write(&dir.join(msg(1)), b"woke on the scan");
+    let partial = dir.join("00000001.tmp");
+    write(&partial, b"woke on the scan");
+    fs::rename(partial, dir.join(msg(1))).unwrap();
     let batch = rx
         .recv_timeout(Duration::from_secs(2))
         .expect("a watcher-free reader still scans");

@@ -153,10 +153,9 @@ mod tests {
     #[test]
     fn normalize_request_resolves_persistence_before_explicit_options() {
         let request = serde_json::json!({
-            "normalizer_v": vtabs_engine::settings::normalize::NORMALIZER_VERSION,
             "plugin_version": env!("CARGO_PKG_VERSION"),
             "schema_id": vtabs_engine::settings::schema::identity(),
-            "persisted": "{\"version\":1,\"options\":{\"width\":31}}",
+            "persisted": "{\"options\":{\"width\":31}}",
             "opts": {"width": 42},
             "explicit": [["width"]],
         });

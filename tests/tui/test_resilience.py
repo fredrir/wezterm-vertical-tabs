@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 
 from .adapter import Terminal
-from .support import dress_sidebar, sidebar_model, tab
+from .support import dress_sidebar, sidebar_model, spaces_section, tab
 
 
 @pytest.mark.asyncio
@@ -31,16 +31,15 @@ async def test_unframed_json_and_literal_brace_are_keyboard_input(terminal: Term
 
 
 @pytest.mark.asyncio
-async def test_oversized_model_is_dropped_and_last_valid_screen_is_retained(
+async def test_oversized_tab_census_is_dropped_and_last_valid_screen_is_retained(
     terminal: Terminal,
 ) -> None:
-    valid = sidebar_model([tab(1, "Last valid tab")])
-    await dress_sidebar(terminal, valid)
+    await dress_sidebar(terminal, [tab(1, "Last valid tab")])
     await terminal.wait_text("Last valid tab")
     too_many_tabs = [tab(index, f"Rejected {index}", index=index) for index in range(1, 202)]
 
-    await terminal.send(sidebar_model(too_many_tabs, rev=2))
+    await terminal.publish(spaces_section(too_many_tabs), sidebar_model(active=1))
 
-    await terminal.wait_event("dropped", where={"what": "model", "reason": "bounds"})
+    await terminal.wait_event("dropped", where={"what": "spaces", "reason": "bounds"})
     await terminal.wait_text("Last valid tab")
     await terminal.wait_text("Rejected 1", absent=True)

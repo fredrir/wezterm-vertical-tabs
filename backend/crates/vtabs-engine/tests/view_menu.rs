@@ -1,7 +1,8 @@
+use vtabs_engine::enrich::MenuHeader;
 use vtabs_engine::menu::{self, Level, MenuCfg, MenuState, Outcome};
 use vtabs_engine::theme::{Palette, Theme, UserTheme};
 use vtabs_engine::{color::Color, scene::PopRow};
-use vtabs_protocol::v2::MenuMsg;
+use vtabs_protocol::payload::MenuMsg;
 
 fn theme() -> Theme {
     vtabs_engine::theme::resolve(&UserTheme::default(), &Palette::default(), false)
@@ -22,8 +23,7 @@ fn msg(json: &str) -> MenuMsg {
 /// The root level as popover.lua's `wire_body` composes it.
 fn root() -> MenuMsg {
     msg(
-        r#"{"rev":1,"open":true,"level":"root","anchor":{"row":4,"col":2},"target":7,"selected":1,
-        "header":{"title":"nvim","meta":"~/src/vtabs"},
+        r#"{"open":true,"level":"root","anchor":{"row":4,"col":2},"target":7,"selected":1,
         "items":[
           {"id":"activate","label":"Switch to tab"},
           {"id":"pin","label":"Pin tab","hint":"^P"},
@@ -35,17 +35,47 @@ fn root() -> MenuMsg {
 
 fn confirm() -> MenuMsg {
     msg(
-        r#"{"rev":2,"open":true,"level":"confirm","anchor":{"row":4,"col":2},"target":7,"selected":2,
-        "header":{"title":"Close nvim?","meta":"and 2 others"},
+        r#"{"open":true,"level":"confirm","anchor":{"row":4,"col":2},"target":7,"selected":2,
         "items":[{"id":"confirm_close","label":"Close","danger":true},
                  {"id":"confirm_cancel","label":"Cancel"}]}"#,
     )
 }
 
 fn open(m: &MenuMsg, state: &MenuState, dims: (i64, i64)) -> Box<menu::Placed> {
-    match menu::plan(m, state, &cfg(), &theme(), dims) {
+    let header = test_header(m);
+    open_with_header(m, &header, state, dims)
+}
+
+fn open_with_header(
+    m: &MenuMsg,
+    header: &MenuHeader,
+    state: &MenuState,
+    dims: (i64, i64),
+) -> Box<menu::Placed> {
+    match menu::plan(m, Some(header), state, &cfg(), &theme(), dims) {
         Outcome::Open(placed) => placed,
         other => panic!("expected an open menu, got {other:?}"),
+    }
+}
+
+fn test_header(m: &MenuMsg) -> MenuHeader {
+    match Level::of(m) {
+        Level::Confirm => MenuHeader {
+            title: "Close nvim?".into(),
+            meta: Some("and 2 others".into()),
+        },
+        Level::Rename => MenuHeader {
+            title: "Rename tab".into(),
+            meta: None,
+        },
+        Level::Spaces => MenuHeader {
+            title: "Move to space".into(),
+            meta: Some("nvim".into()),
+        },
+        Level::Root => MenuHeader {
+            title: "nvim".into(),
+            meta: Some("~/src/vtabs".into()),
+        },
     }
 }
 
@@ -149,7 +179,14 @@ fn a_disabled_row_is_dim_and_still_carries_its_id() {
 #[test]
 fn a_confirm_that_cannot_be_drawn_is_refused_and_draws_nothing() {
     // MIN_RENDER_W is 4: three columns minus the padding leaves the rect nothing to hold.
-    let narrow = menu::plan(&confirm(), &MenuState::default(), &cfg(), &theme(), (4, 24));
+    let narrow = menu::plan(
+        &confirm(),
+        None,
+        &MenuState::default(),
+        &cfg(),
+        &theme(),
+        (4, 24),
+    );
     assert!(
         matches!(
             narrow,
@@ -160,7 +197,14 @@ fn a_confirm_that_cannot_be_drawn_is_refused_and_draws_nothing() {
         ),
         "too narrow: {narrow:?}"
     );
-    let flat = menu::plan(&confirm(), &MenuState::default(), &cfg(), &theme(), (28, 2));
+    let flat = menu::plan(
+        &confirm(),
+        None,
+        &MenuState::default(),
+        &cfg(),
+        &theme(),
+        (28, 2),
+    );
     assert!(
         matches!(
             flat,
@@ -173,23 +217,37 @@ fn a_confirm_that_cannot_be_drawn_is_refused_and_draws_nothing() {
     );
     // and a pane that can hold two borders and a cell draws, however cramped
     assert!(matches!(
-        menu::plan(&confirm(), &MenuState::default(), &cfg(), &theme(), (28, 3)),
+        menu::plan(
+            &confirm(),
+            None,
+            &MenuState::default(),
+            &cfg(),
+            &theme(),
+            (28, 3)
+        ),
         Outcome::Open(_)
     ));
 }
 
 #[test]
 fn a_closed_message_draws_nothing() {
-    let closed = msg(r#"{"rev":3,"open":false}"#);
+    let closed = msg(r#"{"open":false}"#);
     assert!(matches!(
-        menu::plan(&closed, &MenuState::default(), &cfg(), &theme(), (28, 24)),
+        menu::plan(
+            &closed,
+            None,
+            &MenuState::default(),
+            &cfg(),
+            &theme(),
+            (28, 24)
+        ),
         Outcome::Closed
     ));
     // but one this backend already told Lua to close draws nothing at all
     let mut state = adopted(&root());
     state.dismiss();
     assert!(matches!(
-        menu::plan(&root(), &state, &cfg(), &theme(), (28, 24)),
+        menu::plan(&root(), None, &state, &cfg(), &theme(), (28, 24)),
         Outcome::Closed
     ));
 }
@@ -216,9 +274,12 @@ fn every_row_answers_for_the_whole_rect_so_a_click_beside_the_menu_is_click_away
 
 #[test]
 fn the_header_wraps_the_title_and_keeps_the_confirm_question_whole() {
-    let mut long = root();
-    long.header.as_mut().unwrap().title = "a very long tab title that will not fit".into();
-    let placed = open(&long, &adopted(&long), (28, 24));
+    let long = root();
+    let header = MenuHeader {
+        title: "a very long tab title that will not fit".into(),
+        meta: Some("~/src/vtabs".into()),
+    };
+    let placed = open_with_header(&long, &header, &adopted(&long), (28, 24));
     let w = placed.rect.w.unwrap();
     let head: Vec<String> = placed.rect.rows[1..4]
         .iter()
@@ -245,8 +306,7 @@ fn the_rename_box_keeps_the_width_the_menu_it_came_from_asked_for() {
     let root_w = open(&root(), &state, (28, 24)).rect.w.unwrap();
 
     let rename = msg(
-        r#"{"rev":4,"open":true,"level":"rename","anchor":{"row":4,"col":2},"target":7,"selected":1,
-            "header":{"title":"Rename tab"},
+        r#"{"open":true,"level":"rename","anchor":{"row":4,"col":2},"target":7,"selected":1,
             "items":[{"id":"rename_field","mode":"edit","label":"","value":"nvim"}]}"#,
     );
     state.adopt(&rename);
@@ -280,8 +340,7 @@ fn the_selection_is_local_until_the_level_or_its_items_change() {
 
 fn spaces() -> MenuMsg {
     msg(
-        r#"{"rev":4,"open":true,"level":"spaces","anchor":{"row":4,"col":2},"target":7,"selected":1,
-        "header":{"title":"Move to space","meta":"nvim"},
+        r#"{"open":true,"level":"spaces","anchor":{"row":4,"col":2},"target":7,"selected":1,
         "items":[{"id":"space:home","label":"Home","hint":"3","disabled":true},
                  {"id":"space:claude","label":"Claude","hint":"1"},
                  {"id":"space:pi","label":"pi"},

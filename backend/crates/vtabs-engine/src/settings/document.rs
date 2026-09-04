@@ -921,21 +921,32 @@ mod tests {
     }
 
     #[test]
-    fn canonicalizes_aliases_and_resets_invalid_known_values() {
+    fn resets_invalid_known_values() {
         let mut raw = RawSettings::default();
         set_path(&mut raw.values, "tab_height", 3.into());
         set_path(&mut raw.values, "width", 4.into());
         let document = SettingsDocument::new(raw);
         assert_eq!(
             get_at(document.values(), &path("tab_height")),
-            Some(&Value::String("tall".to_owned()))
+            Some(&Value::String("card".to_owned()))
         );
         assert_eq!(
             get_at(document.values(), &path("width")),
             Some(&Value::Number(28.0))
         );
-        assert_eq!(document.issues().len(), 1);
-        assert_eq!(document.issues()[0].path, path("width"));
+        assert_eq!(document.issues().len(), 2);
+        assert!(
+            document
+                .issues()
+                .iter()
+                .any(|issue| issue.path == path("tab_height"))
+        );
+        assert!(
+            document
+                .issues()
+                .iter()
+                .any(|issue| issue.path == path("width"))
+        );
     }
 
     #[test]

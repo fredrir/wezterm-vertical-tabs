@@ -2,9 +2,9 @@
 
 use std::collections::BTreeMap;
 
-use vtabs_protocol::v2::{ConfigMsg, ContextSpec, PaddingSpec, PopoverWidth};
+use vtabs_protocol::payload::{ConfigMsg, ContextSpec, PaddingSpec, PopoverWidth};
 
-pub use vtabs_protocol::v2::PaddingSpec as Padding;
+pub use vtabs_protocol::payload::PaddingSpec as Padding;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Position {
@@ -129,7 +129,6 @@ pub struct PopoverConfig {
 
 #[derive(Debug, Clone)]
 pub struct EngineConfig {
-    pub rev: u64,
     pub rail_width: u32,
     pub icon_map: BTreeMap<String, String>,
     pub glyph_custom_block: bool,
@@ -176,7 +175,7 @@ impl TryFrom<ConfigMsg> for EngineConfig {
     fn try_from(msg: ConfigMsg) -> Result<Self, Self::Error> {
         let render = msg
             .render
-            .unwrap_or_else(|| vtabs_protocol::v2::RenderSection {
+            .unwrap_or_else(|| vtabs_protocol::payload::RenderSection {
                 meta: true,
                 padding: PaddingSpec::default(),
                 frame: false,
@@ -237,7 +236,6 @@ impl TryFrom<ConfigMsg> for EngineConfig {
             ],
         )?;
         Ok(Self {
-            rev: msg.rev,
             rail_width: msg.rail_width,
             icon_map: msg.icon_map,
             glyph_custom_block: msg.glyphs.custom_block,
@@ -340,17 +338,16 @@ mod tests {
 
     #[test]
     fn false_disables_the_lua_context_action() {
-        let cfg = config(r#"{"rev":1,"context":false}"#).unwrap();
+        let cfg = config(r#"{"context":false}"#).unwrap();
         assert_eq!(cfg.context, ContextMode::Disabled);
     }
 
     #[test]
     fn wire_modes_and_values_are_validated_once() {
-        assert!(config(r#"{"rev":1,"wheel":"teleport"}"#).is_err());
-        assert!(config(r#"{"rev":1,"popover":{"width":0}}"#).is_err());
+        assert!(config(r#"{"wheel":"teleport"}"#).is_err());
+        assert!(config(r#"{"popover":{"width":0}}"#).is_err());
         assert!(
-            config(r#"{"rev":1,"render":{"padding":{"left":-1,"right":0,"top":0,"bottom":0}}}"#)
-                .is_err()
+            config(r#"{"render":{"padding":{"left":-1,"right":0,"top":0,"bottom":0}}}"#).is_err()
         );
     }
 }

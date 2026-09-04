@@ -5,16 +5,14 @@
 
 | Crate             | Responsibility                                                                                                            |
 | ----------------- | ------------------------------------------------------------------------------------------------------------------------- |
-| `vtabs-protocol`  | wire DTOs (`Command`, `Event`, typed `Intent`), `VERSION`, bounds, and the generated Lua protocol mirror                  |
+| `vtabs-protocol`  | wire DTOs (`Command`, `Event`, typed `Intent`), bounds, and the generated Lua protocol mirror                             |
 | `vtabs-engine`    | pure state, theme/spaces policy, interaction, strip geometry, layout/rendering, and the canonical settings/config schema  |
-| `vtabs-runtime`   | stdin parser, atomic generation state machine, terminal guard, event emission, signals and paint — the sole stdout writer |
+| `vtabs-runtime`   | stdin parser, atomic transaction state machine, terminal guard, event emission, signals and paint — the sole stdout writer |
 | `vtabs-zen`       | rounded-frame rendering and PNG encoding for the `wez-vtabs frame` subcommand                                             |
 | `wez-vtabs` (bin) | `frame`/`settings normalize` subcommand dispatch and the runtime entrypoint                                               |
 
-The former `vtabs-core`, `vtabs-input`, `vtabs-theme`, and `vtabs-view` crates are now modules of
-`vtabs-engine`. That keeps wire compatibility separate without forcing internal domain and scene
-types through crate boundaries. The engine produces typed intents; the runtime retains one
-centralized legacy `do` downgrade for older clients.
+`vtabs-engine` keeps its domain and scene types behind one crate boundary. The engine produces
+typed intents, and the runtime emits those intents without translation.
 
 ```sh
 cd backend
@@ -26,11 +24,10 @@ cargo build --release      # target/release/wez-vtabs
 
 ## Architecture and ownership
 
-Lua gathers one immutable mux snapshot per update and sends raw host facts. A capable client wraps
-the changed `config`, `theme`, `spaces`, `model`/`settings`, and optional `menu` sections in one
-generation's `begin`/`commit`. The runtime validates that staging state and publishes it once, so a
-batch cannot paint or hit-test a mixture of revisions. Legacy clients may still send the original
-sections immediately; `spaces` uses the atomic `spaces_policy` path only.
+Lua gathers one immutable mux snapshot per update and sends raw host facts. Every publication wraps
+the changed `config`, `theme`, `spaces`, `model` or `settings`, and optional `menu` sections in one
+`begin`/`commit` transaction. The runtime validates the staging state and publishes it once, so a
+batch cannot paint or hit-test a mixture of staged states.
 
 Rust owns the policies that must agree with painting: theme resolution and contrast, spaces
 validation/routing/visibility/theme selection, focused key resolution, pointer hit-testing, and
@@ -38,30 +35,30 @@ derived strip geometry. Lua owns the WezTerm API boundary, mux mutations, execut
 and host projection. In particular:
 
 - `ThemeMsg` carries a raw effective palette, typed overrides, window-private state, and a
-  hook-needed flag. Rust resolves the base. When a capable client requests a theme hook, commit
-  pauses for one generation-matched `theme_hook_result`, then publishes and paints exactly once.
-  A lost request is replayed once after 500 ms and then falls back to the same deterministic base.
+  hook-needed flag. Rust resolves the base. When the plugin requests a theme hook, commit
+  pauses for the pending `theme_hook_result`, then publishes and paints exactly once.
+  After 500 ms without an answer, Rust falls back to the same deterministic base and stops asking
+  that hook for the rest of the authenticated session, so a late untagged answer cannot attach to
+  a later transaction.
   Every committed effective answer is exposed as `theme_resolved` for Lua and Zen host projection.
 - `SpacesMsg` carries raw definitions plus a complete window census and current assignment facts.
   `vtabs-engine::spaces` validates and matches rules/globs, expands templates, owns sticky/manual
   routing and dynamic admission, derives summaries/visibility, and selects the active theme layer.
-  A needed Lua route hook pauses the same generation as one batched request; its exact answer is
+  A needed Lua route hook pauses the same transaction as one batched request; its exact answer is
   resolved before any theme-hook request, and the runtime still publishes and paints only once.
-  Lua retains only mux/window state application and bounded hook/result caches. Without the
-  `spaces_policy` capability it warns once and exposes all tabs unpartitioned; there is no Lua
-  policy fallback.
+  Lua retains only mux/window state application and bounded hook/result caches.
 - The engine emits flattened, variant-specific `intent` events. Focus-mode `r`, `J`/`K`, and
   `[`/`]` resolve to rename, move-tab, and switch-space intents in Rust; only unfocused host
   forwarding uses a raw `key` event.
-- Lua sends raw pane metrics and window-chrome facts. `vtabs-engine::geom` computes rows, cell
-  dimensions, toggle positions, and the rail reserve; Lua only applies the returned reserve to the
-  host window.
+- The pane measures its own cells and pixels; Lua sends only window DPI and chrome facts.
+  `vtabs-engine::geom` computes rows, cell dimensions, toggle positions, and the rail reserve; Lua
+  only applies the returned reserve to the host window.
 - Lua sends raw title, override, pane-title, process, cwd, user, host, and domain facts plus menu
   subject ids. `vtabs-engine::enrich` alone derives card titles/metadata and every menu header,
   keeping shell/remote/title precedence in one policy.
 
 With `VTABS_LOG` set, each successful terminal write logs cumulative `commits`, `paints`, and
-`bytes` beside the current size/revision. A hook-delayed generation increments `commits` only when
+`bytes` beside the current size. A hook-delayed transaction increments `commits` only when
 published; an identical repaint that writes no bytes increments neither paint counter.
 
 ## Dependency spikes
@@ -157,9 +154,6 @@ against the newest WezTerm nightly, and the pinned scheduled lane also exercises
 SSH mux server in Docker. Failures retain CLI history, endpoint topology, client state, and all owned
 process logs under `.pytest-artifacts/wezterm/`.
 
-There is intentionally no historical version matrix: one checksum-pinned release is the stable merge
-signal and the latest-nightly job is the compatibility canary. See `tests/wezterm/README.md` for the
-behavior inventory, isolation model, Docker command, and assertion policy.
 
 ## Generated Lua mirrors
 
@@ -174,18 +168,17 @@ intent inventories used at the Lua boundary. `plugin/vtabs/gen/schema.lua` mirro
 descriptors in `vtabs-engine`; `plugin/vtabs/schema.lua` contains only generic dotted-key and
 default-building helpers. Generated documentation consumes that same Lua mirror.
 
-Persistence has one intentional host boundary. During `apply_to_config`, Lua calls an already
-installed local `wez-vtabs settings normalize` directly when one is resolvable. A bounded request
-file lives in a fresh `0700` directory, is restricted to `0600` before config bytes are written,
-and is removed with the directory after the synchronous call. No bootstrap, build, download,
-remote command, or WezTerm CLI participates. Rust parses/filters persistence v1, migrates aliases,
-and resolves `defaults < stored < opts`; Lua restores functions, userdata, and cyclic config-as-code
-values by reference only for Function/Any/open/callback-bearing owners. Typed non-JSON values are
-reported to Rust and reset to their descriptor defaults. The response must match the normalizer
-protocol, plugin version, and generated schema identity before Lua adopts it. A missing/older
-backend falls back to the generated-schema Lua path, which is why a fresh installation remains
-network-free at config evaluation time. `settings.persist=false` disables writes, not loading an
-existing file.
+Persistence has one intentional host boundary. During `apply_to_config`, Lua calls an installed
+local `wez-vtabs settings normalize` directly when one is resolvable. A bounded request file lives
+in a fresh `0700` directory, is restricted to `0600` before config bytes are written, and is removed
+with the directory after the synchronous call. No bootstrap, build, download, remote command, or
+WezTerm CLI participates. Rust parses and filters the canonical document, then resolves
+`defaults < stored < opts`; Lua restores functions, userdata, and cyclic config-as-code values by
+reference only for Function/Any/open/callback-bearing owners. Typed non-JSON values are reported to
+Rust and reset to their descriptor defaults. The response must match the plugin version and
+generated schema identity before Lua adopts it. If the backend is unavailable, the generated-schema
+Lua path keeps a fresh installation network-free during config evaluation.
+`settings.persist=false` disables writes, not loading an existing file.
 
 Once the settings page is live, Rust exclusively canonicalizes and validates values, computes
 changes, mutates the document, and serializes the complete deterministic JSON body; Lua performs
@@ -204,10 +197,10 @@ and live writes replace from a fresh private sibling directory rather than follo
 
 - The long-term backend boundary is undecided: neither a mux adapter nor a broader `wezterm cli`
   backend has been selected. The existing narrow kill/rescue CLI bridge is not that decision.
-- Direct dependencies on `wezterm-gui`/`wezterm-mux-server` and their version-pinning policy remain
+- Direct dependencies on `wezterm-gui`/`wezterm-mux-server` and their pinning policy remain
   on hold until the backend boundary is chosen.
-- Broad CI/CD expansion and a historical WezTerm compatibility matrix remain on hold. Keep checks
-  small and contract-focused rather than multiplying platform/version combinations.
+- Broad CI/CD expansion and a historical WezTerm release matrix remain on hold. Keep checks small and
+  contract-focused rather than multiplying platform and release combinations.
 
 ## `just check`
 
@@ -233,7 +226,7 @@ lua scripts/gen-docs.lua --check  # fail when it is stale (run by `just lint`)
 | `key`                  | dotted path, e.g. `padding.top`, `backend.repo`                                                |
 | `type`                 | `number` `string` `boolean` `enum` `table` `function` `any`                                    |
 | `default`              | omitted when the option has none                                                               |
-| `enum` `min` `max`     | validation; `alias` maps values users already write onto the canonical one                     |
+| `enum` `min` `max`     | canonical value validation                                                                     |
 | `container` `open`     | `open` containers (`theme`, `icon_map`, `keys`, `private.env`) do not enumerate their children |
 | `docs`                 | `false` hides the row from the generated table                                                 |
 | `shown`                | overrides the rendered default cell, backticks included                                        |
@@ -288,19 +281,19 @@ HOME=$(mktemp -d) WEZTERM_LOG=info wezterm --config-file scripts/probe-coroutine
 
 ## Crash bisect
 
-| Trigger                         | Where                                                               |
-| ------------------------------- | ------------------------------------------------------------------- |
-| `top_level = true` split        | `sidebar_attach.lua` `attach`                                       |
-| close by activation             | `sidebar_attach.lua` `close_pane_by_activation`, `close_orphan`     |
-| `AdjustPaneSize`, `Multiple`    | `geometry.lua` `correct`                                            |
-| `set_config_overrides`          | `view.lua` `apply_titlebar_band`, `frame.lua` `install`, `page.lua` |
-| `move_to_new_window`            | `actions.lua` `tear_off`                                            |
-| `set_inner_size`                | `sidebar_attach.lua` `fit_to_window`                                |
-| `cli split-pane --move-pane-id` | `sidebar_rescue.lua` `rescue_splits`                                |
-| `cli adjust-pane-size`          | `vtabs-runtime` `cli.rs` `adjust`, asked by `geometry.lua` `correct` |
-| `send_text` to a mux pane       | `sidebar_identity.lua` `send_raw`, held by `link.lua` while busy; only remote hosts and the `transport_barrier` after the inbox transport |
-| inbox message                   | `transport.lua` `write`; read by `vtabs-runtime` `inbox.rs`         |
-| `cli send-text`, `cli kill-pane`| `vtabs-runtime` `cli.rs`, forwarded keys and `kill` by pane id      |
+| Trigger                          | Where                                                                                                                                     |
+| -------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| `top_level = true` split         | `sidebar_attach.lua` `attach`                                                                                                             |
+| close by activation              | `sidebar_attach.lua` `close_pane_by_activation`, `close_orphan`                                                                           |
+| `AdjustPaneSize`, `Multiple`     | `geometry.lua` `correct`                                                                                                                  |
+| `set_config_overrides`           | `view.lua` `apply_titlebar_band`, `frame.lua` `install`, `page.lua`                                                                       |
+| `move_to_new_window`             | `actions.lua` `tear_off`                                                                                                                  |
+| `set_inner_size`                 | `sidebar_attach.lua` `fit_to_window`                                                                                                      |
+| `cli split-pane --move-pane-id`  | `sidebar_rescue.lua` `rescue_splits`                                                                                                      |
+| `cli adjust-pane-size`           | `vtabs-runtime` `cli.rs` `adjust`, asked by `geometry.lua` `correct`                                                                      |
+| `send_text` to a mux pane        | `sidebar_identity.lua` `send_raw`, held by `link.lua` while busy; only remote hosts and the `transport_barrier` after the inbox transport |
+| inbox message                    | `transport.lua` `write`; read by `vtabs-runtime` `inbox.rs`                                                                               |
+| `cli send-text`, `cli kill-pane` | `vtabs-runtime` `cli.rs`, forwarded keys and `kill` by pane id                                                                            |
 
 A GUI that stops responding rather than crashing leaves a macOS hang report in
 `/Library/Logs/DiagnosticReports/wezterm-gui_*.hang`, a stackshot of every process: the GUI's main

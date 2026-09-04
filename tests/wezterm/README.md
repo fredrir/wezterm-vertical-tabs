@@ -71,7 +71,7 @@ only random values name private resources.
 
 A failed test prints and retains a directory under `.pytest-artifacts/wezterm/` containing:
 
-- every GUI generation log, the mux-server log, and backend log;
+- every GUI process log, the mux-server log, and backend log;
 - final GUI/mux topology and mux-client diagnostics;
 - an ordered history of every CLI command, result, duration, and timeout;
 - SSH container/backend logs for the Docker lane.
@@ -86,6 +86,6 @@ should leave these tests unchanged when behavior is unchanged.
 ## CI policy
 
 Pull requests run the smoke subset on Ubuntu 22.04/Xvfb with a checksum-pinned WezTerm package.
-The full suite runs weekly against the latest Ubuntu 24.04 nightly as a compatibility canary, while
+The full suite runs weekly against the latest Ubuntu 24.04 nightly as an upstream canary, while
 the pinned scheduled lane also runs the localhost SSH container. This gives a stable merge signal
-and early warning about upstream changes without maintaining a historical version matrix.
+and early warning about upstream changes without maintaining a historical release matrix.

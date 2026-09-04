@@ -89,9 +89,6 @@ local SESSION = {
 
   dims = "pane",
   ready = "pane",
-  proto = "pane",
-  capabilities = "pane",
-  paints = "pane",
   seen = "pane",
   pinged = "pane",
   unanswered = "pane",

@@ -1,12 +1,12 @@
 use std::collections::BTreeMap;
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::Color;
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ConfigMsg {
-    pub rev: u64,
     #[serde(default)]
     pub rail_width: u32,
     #[serde(default)]
@@ -45,6 +45,7 @@ pub struct ConfigMsg {
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PopoverSection {
     /// `"auto"` or a column count, represented as the exact wire union.
     #[serde(default)]
@@ -95,6 +96,7 @@ fn yes() -> bool {
 
 /// The renderer-facing config surface, normalised by Lua before it crosses the wire.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct RenderSection {
     /// False when the meta line is off; the mode string ConfigMsg.meta carries what it shows.
     #[serde(default)]
@@ -125,6 +127,7 @@ pub struct RenderSection {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PaddingSpec {
     #[serde(default)]
     pub left: i64,
@@ -137,6 +140,7 @@ pub struct PaddingSpec {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct GlyphFlags {
     #[serde(default)]
     pub custom_block: bool,
@@ -145,25 +149,23 @@ pub struct GlyphFlags {
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ThemeMsg {
-    pub rev: u64,
     #[serde(default)]
     pub scheme: Scheme,
     /// Raw user/space overrides. Rust is the only place that resolves these against the scheme.
     #[serde(default)]
     pub overrides: ThemeOverrides,
-    /// Window-global private state, shared by sidebar and settings panes. Older clients omit it and
-    /// the runtime falls back to the sidebar model's historical `private` field.
-    #[serde(default)]
-    pub private: Option<bool>,
-    /// Ask a capable backend to round-trip its resolved base through `hooks.theme` before commit.
+    /// Window-global private state, shared by sidebar and settings panes.
+    pub private: bool,
+    /// Ask the backend to round-trip its resolved base through `hooks.theme` before commit.
     #[serde(default)]
     pub hook: bool,
 }
 
-/// The theme keys accepted at the wire boundary. Unknown keys remain forward-compatible through
-/// serde's default behavior; known keys can no longer carry the wrong kind of value.
+/// The complete theme override surface accepted at the wire boundary.
 #[derive(Debug, Clone, PartialEq, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct ThemeOverrides {
     pub fg: Option<String>,
     pub bg: Option<String>,
@@ -179,7 +181,6 @@ pub struct ThemeOverrides {
     pub dim: Option<String>,
     pub title_idle: Option<String>,
     pub title_active: Option<String>,
-    pub active_title_fg: Option<String>,
     pub pinned_fg: Option<String>,
     pub separator: Option<String>,
     pub border: Option<String>,
@@ -217,7 +218,6 @@ pub const THEME_COLOR_FIELDS: &[&str] = &[
     "dim",
     "title_idle",
     "title_active",
-    "active_title_fg",
     "pinned_fg",
     "separator",
     "border",
@@ -240,6 +240,7 @@ pub const THEME_COLOR_FIELDS: &[&str] = &[
 pub const THEME_FRACTION_FIELDS: &[&str] = &["elevation", "scrim"];
 
 #[derive(Debug, Clone, PartialEq, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Scheme {
     #[serde(default)]
     pub background: Option<String>,
@@ -287,7 +288,6 @@ pub struct ResolvedTheme {
     pub scroll_fg: Color,
     pub scroll_idle_fg: Color,
     pub title_active: Color,
-    pub active_title_fg: Color,
     pub title_active_contrast: f64,
     pub content_bg: Color,
     pub surface_raised: Color,
@@ -298,18 +298,28 @@ pub struct ResolvedTheme {
     pub popover_sel_hint: Color,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+/// Per-pane UI state supplied by Lua. The window tab census and space state arrive in `SpacesMsg`.
+#[derive(Debug, Clone, PartialEq, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ModelMsg {
-    pub rev: u64,
-    pub screen: ModelScreen,
+    /// The window's collapse mode is Lua state; the pane only knows its width.
+    #[serde(default)]
+    pub rail: bool,
+    #[serde(default)]
+    pub active: Option<i64>,
+    #[serde(default)]
+    pub focus: Option<FocusState>,
+    #[serde(default)]
+    pub scroll: Option<ScrollState>,
+    #[serde(default)]
+    pub drag: Option<DragState>,
+    #[serde(default)]
+    pub strip: Option<StripState>,
+    #[serde(default)]
+    pub footer: Vec<FooterItem>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub enum ModelScreen {
-    Sidebar(SidebarModel),
-    Settings(SettingsModel),
-}
-
+/// Renderer model assembled by Rust from `ModelMsg`, `SpacesMsg`, and `ThemeMsg`.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct SidebarModel {
     /// The window's collapse mode is Lua state; the pane only knows its width.
@@ -321,26 +331,19 @@ pub struct SidebarModel {
     pub strip: Option<StripState>,
     pub footer: Vec<FooterItem>,
     pub tabs: Vec<TabRecord>,
+    /// Rust copies the authoritative value from `ThemeMsg` while assembling this model.
     pub private: bool,
     /// The active space's id, Lua's to decide; each entry's highlight is derived from it here.
     pub space: Option<String>,
     pub spaces: Vec<SpaceItem>,
 }
 
-#[derive(Debug, Clone, PartialEq, Default)]
-pub struct SettingsModel {
-    pub fields: Vec<SettingsField>,
-    pub groups: Vec<SettingsGroup>,
-    pub caveat: Option<Vec<String>>,
-    pub version: Option<String>,
-}
-
 /// The host facts Rust needs to own the live settings document. Values are deliberately JSON at
 /// this transport boundary; `vtabs-engine` converts them to its canonical typed value tree and is
 /// the sole owner of schema validation and mutation semantics.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SettingsMsg {
-    pub rev: u64,
     pub values: serde_json::Value,
     #[serde(default)]
     pub explicit: Vec<Vec<String>>,
@@ -356,157 +359,8 @@ pub struct SettingsMsg {
     pub version: Option<String>,
 }
 
-impl ModelMsg {
-    pub fn sidebar(&self) -> Option<&SidebarModel> {
-        match &self.screen {
-            ModelScreen::Sidebar(model) => Some(model),
-            ModelScreen::Settings(_) => None,
-        }
-    }
-
-    pub fn settings(&self) -> Option<&SettingsModel> {
-        match &self.screen {
-            ModelScreen::Sidebar(_) => None,
-            ModelScreen::Settings(model) => Some(model),
-        }
-    }
-
-    pub fn private(&self) -> bool {
-        self.sidebar().is_some_and(|model| model.private)
-    }
-
-    pub fn tab_count(&self) -> usize {
-        self.sidebar().map_or(0, |model| model.tabs.len())
-    }
-
-    pub fn field_count(&self) -> usize {
-        self.settings().map_or(0, |model| model.fields.len())
-    }
-
-    pub fn space_count(&self) -> usize {
-        self.sidebar().map_or(0, |model| model.spaces.len())
-    }
-}
-
-/// Transitional flat decoder: current messages are tagged by `screen`; older sidebar messages
-/// omitted that field, so absence remains the one legacy case and maps to Sidebar.
-#[derive(Deserialize)]
-struct FlatModel {
-    rev: u64,
-    #[serde(default)]
-    screen: Option<String>,
-    #[serde(default)]
-    rail: bool,
-    #[serde(default)]
-    active: Option<i64>,
-    #[serde(default)]
-    focus: Option<FocusState>,
-    #[serde(default)]
-    scroll: Option<ScrollState>,
-    #[serde(default)]
-    drag: Option<DragState>,
-    #[serde(default)]
-    strip: Option<StripState>,
-    #[serde(default)]
-    footer: Vec<FooterItem>,
-    #[serde(default)]
-    tabs: Vec<TabRecord>,
-    #[serde(default)]
-    private: bool,
-    #[serde(default)]
-    space: Option<String>,
-    #[serde(default)]
-    spaces: Vec<SpaceItem>,
-    #[serde(default)]
-    fields: Vec<SettingsField>,
-    #[serde(default)]
-    groups: Vec<SettingsGroup>,
-    #[serde(default)]
-    caveat: Option<Vec<String>>,
-    #[serde(default)]
-    version: Option<String>,
-}
-
-impl<'de> Deserialize<'de> for ModelMsg {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        use serde::de::Error as _;
-
-        let flat = FlatModel::deserialize(deserializer)?;
-        let screen = match flat.screen.as_deref() {
-            None | Some("sidebar") => ModelScreen::Sidebar(SidebarModel {
-                rail: flat.rail,
-                active: flat.active,
-                focus: flat.focus,
-                scroll: flat.scroll,
-                drag: flat.drag,
-                strip: flat.strip,
-                footer: flat.footer,
-                tabs: flat.tabs,
-                private: flat.private,
-                space: flat.space,
-                spaces: flat.spaces,
-            }),
-            Some("settings") => ModelScreen::Settings(SettingsModel {
-                fields: flat.fields,
-                groups: flat.groups,
-                caveat: flat.caveat,
-                version: flat.version,
-            }),
-            Some(_) => return Err(D::Error::custom("unknown model screen")),
-        };
-        Ok(Self {
-            rev: flat.rev,
-            screen,
-        })
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub struct SettingsGroup {
-    pub id: String,
-    pub label: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Default, Deserialize)]
-pub struct SettingsLock {
-    pub text: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Default, Deserialize)]
-pub struct SettingsEditing {
-    #[serde(default)]
-    pub buffer: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub struct SettingsField {
-    pub key: String,
-    #[serde(default)]
-    pub label: String,
-    #[serde(default)]
-    pub group: String,
-    #[serde(default)]
-    pub widget: String,
-    #[serde(default)]
-    pub value_text: String,
-    #[serde(default)]
-    pub changed: bool,
-    #[serde(default)]
-    pub locked: Option<SettingsLock>,
-    #[serde(default)]
-    pub depth: i64,
-    #[serde(default)]
-    pub help: String,
-    #[serde(default)]
-    pub editing: Option<SettingsEditing>,
-    #[serde(default)]
-    pub armed: bool,
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct FocusState {
     #[serde(default)]
     pub on: bool,
@@ -515,6 +369,7 @@ pub struct FocusState {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ScrollState {
     #[serde(default)]
     pub top: i64,
@@ -523,6 +378,7 @@ pub struct ScrollState {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct DragState {
     pub id: i64,
     #[serde(default)]
@@ -535,6 +391,7 @@ pub struct DragState {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct DragOrigin {
     pub x: i64,
     pub y: i64,
@@ -542,11 +399,8 @@ pub struct DragOrigin {
 }
 
 #[derive(Debug, Clone, PartialEq, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct StripState {
-    /// Legacy: a plugin that measures the pane for the backend. Current plugins send `dpi` alone;
-    /// the backend measures its own cells and the pty's pixel size.
-    #[serde(default)]
-    pub metrics: Option<PaneMetrics>,
     /// The window's dpi, the one measurement a pane cannot take for itself.
     #[serde(default)]
     pub dpi: Option<f64>,
@@ -556,23 +410,9 @@ pub struct StripState {
     pub buttons: Vec<StripButton>,
 }
 
-/// Raw pane measurements from WezTerm. Geometry derived from them never crosses the wire.
-#[derive(Debug, Clone, Copy, PartialEq, Default, Deserialize)]
-pub struct PaneMetrics {
-    #[serde(default)]
-    pub cols: u32,
-    #[serde(default)]
-    pub viewport_rows: u32,
-    #[serde(default)]
-    pub pixel_width: f64,
-    #[serde(default)]
-    pub pixel_height: f64,
-    #[serde(default)]
-    pub dpi: Option<f64>,
-}
-
 /// Host chrome facts Rust combines with pane metrics and render configuration.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ChromeFacts {
     #[serde(default)]
     pub is_mac: bool,
@@ -587,6 +427,7 @@ pub struct ChromeFacts {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct StripButton {
     pub id: String,
     #[serde(default)]
@@ -595,6 +436,7 @@ pub struct StripButton {
 
 /// One switcher entry; the tab count travels on the menu's `spaces` level, not here.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SpaceItem {
     pub id: String,
     #[serde(default)]
@@ -609,8 +451,8 @@ pub struct SpaceItem {
 /// raw at the protocol boundary so one malformed entry or field can be dropped with a precise
 /// warning while the other entries remain usable.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SpacesMsg {
-    pub rev: u64,
     pub window_id: i64,
     #[serde(default)]
     pub enabled: bool,
@@ -637,22 +479,91 @@ pub struct SpacesMsg {
 }
 
 /// Renderer data plus the routing state that the existing sidebar model deliberately omits.
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct SpaceTabFact {
-    #[serde(flatten)]
     pub tab: TabRecord,
-    #[serde(default)]
     pub remote: bool,
-    #[serde(default)]
     pub space: Option<String>,
-    #[serde(default)]
     pub manual: bool,
     /// Opaque planner-produced stamp accepted back on the next poll.
-    #[serde(default)]
     pub fingerprint: Option<String>,
 }
 
+/// Strict wire representation for the deliberately flat tab census entry. A derived flattened
+/// `TabRecord` cannot be combined with `deny_unknown_fields`, so this private DTO enumerates the
+/// complete accepted key set before rebuilding the public renderer-plus-routing shape.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SpaceTabFactWire {
+    id: i64,
+    index: i64,
+    #[serde(default)]
+    title: String,
+    #[serde(default)]
+    pane_title: Option<String>,
+    #[serde(default, rename = "override")]
+    override_title: Option<String>,
+    #[serde(default)]
+    proc: Option<String>,
+    #[serde(default)]
+    icon: Option<String>,
+    #[serde(default)]
+    cwd: Option<String>,
+    #[serde(default)]
+    host: Option<String>,
+    #[serde(default)]
+    user: Option<String>,
+    #[serde(default)]
+    domain: Option<String>,
+    #[serde(default)]
+    pinned: bool,
+    #[serde(default)]
+    unseen: bool,
+    #[serde(default)]
+    settings: bool,
+    #[serde(default)]
+    remote: bool,
+    #[serde(default)]
+    space: Option<String>,
+    #[serde(default)]
+    manual: bool,
+    #[serde(default)]
+    fingerprint: Option<String>,
+}
+
+impl<'de> Deserialize<'de> for SpaceTabFact {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let wire = SpaceTabFactWire::deserialize(deserializer)?;
+        Ok(Self {
+            tab: TabRecord {
+                id: wire.id,
+                index: wire.index,
+                title: wire.title,
+                pane_title: wire.pane_title,
+                override_title: wire.override_title,
+                proc: wire.proc,
+                icon: wire.icon,
+                cwd: wire.cwd,
+                host: wire.host,
+                user: wire.user,
+                domain: wire.domain,
+                pinned: wire.pinned,
+                unseen: wire.unseen,
+                settings: wire.settings,
+            },
+            remote: wire.remote,
+            space: wire.space,
+            manual: wire.manual,
+            fingerprint: wire.fingerprint,
+        })
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct SpaceFollow {
     pub tab_id: i64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -660,12 +571,14 @@ pub struct SpaceFollow {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct SpaceLastTab {
     pub space_id: String,
     pub tab_id: i64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct DynamicSpace {
     pub id: String,
     pub name: String,
@@ -699,6 +612,7 @@ pub struct SpaceRouteHookFact {
 /// An explicit row with no `space` is the hook's nil/no-op answer; omitting the row means the
 /// batch is incomplete and must not be published.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SpaceRouteHookAnswer {
     pub tab_id: i64,
     #[serde(default)]
@@ -736,8 +650,7 @@ pub struct SpaceWarning {
     pub field: Option<String>,
 }
 
-/// A complete planner result. Lua applies its state fields and mux effects only after checking the
-/// event's generation; the same value directly supplies the renderer and active theme layer.
+/// A complete planner result. The same value supplies host state, the renderer, and active theme.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct SpaceResolution {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -754,6 +667,7 @@ pub struct SpaceResolution {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct FooterItem {
     #[serde(default)]
     pub id: Option<String>,
@@ -770,6 +684,7 @@ pub struct FooterItem {
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct TabRecord {
     pub id: i64,
     pub index: i64,
@@ -801,8 +716,8 @@ pub struct TabRecord {
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct MenuMsg {
-    pub rev: u64,
     #[serde(default)]
     pub open: bool,
     #[serde(default)]
@@ -821,13 +736,12 @@ pub struct MenuMsg {
     #[serde(default)]
     pub victims: Option<usize>,
     #[serde(default)]
-    pub header: Option<MenuHeader>,
-    #[serde(default)]
     pub items: Vec<MenuItem>,
 }
 
 /// `col` is absent when the menu was opened from a key binding, which knows no column.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct MenuAnchor {
     #[serde(default)]
     pub row: i64,
@@ -835,15 +749,8 @@ pub struct MenuAnchor {
     pub col: Option<i64>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Default, Deserialize)]
-pub struct MenuHeader {
-    #[serde(default)]
-    pub title: String,
-    #[serde(default)]
-    pub meta: Option<String>,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct MenuItem {
     pub id: String,
     pub label: String,
@@ -862,6 +769,7 @@ pub struct MenuItem {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct MenuConfirm {
     pub q: String,
     pub yes: String,
@@ -869,6 +777,7 @@ pub struct MenuConfirm {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct FxMsg {
     pub phase: String,
     #[serde(default)]
@@ -878,6 +787,7 @@ pub struct FxMsg {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct NoticeMsg {
     #[serde(default)]
     pub level: Option<String>,

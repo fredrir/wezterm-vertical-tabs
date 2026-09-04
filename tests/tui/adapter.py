@@ -1,4 +1,4 @@
-"""Small compatibility boundary around tui-test 0.1.0b2."""
+"""Small adapter around tui-test 0.1.0b2."""
 
 from __future__ import annotations
 
@@ -34,7 +34,7 @@ _ENV = {
     "VTABS_PANIC_ON_READY": "",
     "VTABS_USERVAR": "vtabs",
     "WEZTERM_EXECUTABLE_DIR": "",
-    "WEZTERM_PANE": "",
+    "WEZTERM_PANE": "42",
     "WEZTERM_UNIX_SOCKET": "",
 }
 
@@ -109,7 +109,7 @@ class Terminal:
             profile=_PROFILE,
         )
         await self.wait_event("ready")
-        await self.send({"t": "auth", "token": self._token, "caps": []})
+        await self.send({"t": "auth", "token": self._token})
         echoed = await self.wait_user_var("vtabs_token")
         if echoed != self._token:
             raise AssertionError("backend did not authenticate the test control session")
@@ -128,6 +128,15 @@ class Terminal:
             for command in commands
         )
         await self._client.write(wire)
+
+    async def publish(self, *sections: Mapping[str, Any]) -> None:
+        """Publish semantic sections as one atomic transaction."""
+
+        await self.send(
+            {"t": "begin"},
+            *sections,
+            {"t": "commit"},
+        )
 
     async def write(self, data: str) -> None:
         await self._client.write(data)

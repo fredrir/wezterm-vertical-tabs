@@ -4,16 +4,24 @@ local sidebar = require "vtabs.sidebar"
 local state = require "vtabs.state"
 local store = require "vtabs.store"
 local theme_bridge = require "vtabs.theme_bridge"
+local transport = require "vtabs.transport"
 local util = require "vtabs.util"
 
 local M = {}
 
+local POLICY_RESET_MS = 3000
+M.POLICY_RESET_MS = POLICY_RESET_MS
+
 ---Declared through `store`, so a forgotten pane or window drops its wire state with it.
 local scope = store.scope "wire"
 local sent = scope.pane()
-local revs = scope.window()
-local generations = scope.window()
 local debug_metrics = scope.window()
+local policy = scope.window()
+local policy_seen = scope.window()
+local policy_owner = scope.process()
+local policy_reset = scope.process()
+local policy_failed = scope.pane()
+local policy_recovered = scope.pane()
 
 local function note_delivery(wid, cfg, mode, changed, bytes, committed)
   local metrics = debug_metrics[wid] or { deliveries = 0, sections = 0, bytes = 0, commits = 0 }
@@ -41,6 +49,176 @@ end
 ---Forget only delivery state; authentication and lifecycle state still belong to the pane.
 function M.reset_pane(pane_id)
   sent[pane_id] = nil
+end
+
+---The sole pane allowed to project Rust's space/theme result onto window-global host state. It is
+---stable across tab activation; an unarmed pane is still resetting and has no authority yet.
+function M.policy_pane(window_id)
+  local current = policy[window_id]
+  return current and current.pane_id or nil
+end
+
+function M.is_policy_authority(window_id, pane_id)
+  local current = policy[window_id]
+  return current ~= nil and current.pane_id == pane_id and current.armed == true
+end
+
+---A reset candidate becomes eligible only after the backend has acknowledged its fresh auth with
+---a structurally valid Ready. The first complete publication arms it below.
+function M.policy_ready(window_id, pane_id)
+  local current = policy[window_id]
+  if not current or current.pane_id ~= pane_id then
+    if policy_failed[pane_id] == true then
+      policy_failed[pane_id] = nil
+      if current == nil then
+        policy_recovered[pane_id] = true
+      end
+    end
+    return false
+  end
+  current.ready = true
+  current.armed = false
+  sent[pane_id] = nil
+  return true
+end
+
+local function invalidate_policy_pane(window_id, pane_id, force)
+  if pane_id == nil then
+    return false
+  end
+  local owner = policy_owner[pane_id]
+  if not force and owner ~= nil and owner ~= window_id then
+    return false
+  end
+  sent[pane_id] = nil
+  store.ready[pane_id] = nil
+  transport.forget(pane_id)
+  policy_reset[pane_id] = true
+  if force or owner == window_id then
+    policy_owner[pane_id] = nil
+  end
+  return true
+end
+
+local function candidate_by_id(candidates, pane_id)
+  for _, candidate in ipairs(candidates) do
+    if candidate.pane:pane_id() == pane_id then
+      return candidate
+    end
+  end
+  return nil
+end
+
+local function choose_policy_candidate(candidates, active_tab_id)
+  local function eligible(candidate)
+    local pid = candidate.pane:pane_id()
+    return candidate.ready
+      and policy_failed[pid] ~= true
+      and store.given_up[pid] ~= true
+      and store.quitting[pid] ~= true
+  end
+  for _, candidate in ipairs(candidates) do
+    if candidate.role == "sidebar" and eligible(candidate) and candidate.tab_id == active_tab_id then
+      return candidate
+    end
+  end
+  for _, candidate in ipairs(candidates) do
+    if candidate.role == "sidebar" and eligible(candidate) then
+      return candidate
+    end
+  end
+  for _, candidate in ipairs(candidates) do
+    if eligible(candidate) then
+      return candidate
+    end
+  end
+  return nil
+end
+
+---Keeps one policy pane until it disappears or changes role. A successor that may already hold a
+---staged publication is reset with a fresh auth token; the same token is retried after a failed
+---write, never rotated again for the same handoff.
+local function ensure_policy(gui_window, candidates, active_tab_id)
+  local wid = gui_window:window_id()
+  local current = policy[wid]
+  if current then
+    local existing = candidate_by_id(candidates, current.pane_id)
+    local pid = current.pane_id
+    local unavailable = store.given_up[pid] == true or store.quitting[pid] == true
+    local expired = current.resetting and current.deadline ~= nil and util.now_ms() >= current.deadline
+    if existing and existing.role == current.role and not unavailable and not expired then
+      if current.resetting and not current.auth_sent and current.frame_token then
+        current.auth_sent = sidebar.auth(existing.pane, current.frame_token) == true
+      end
+      return current
+    end
+    invalidate_policy_pane(wid, pid, false)
+    if unavailable or expired then
+      policy_failed[pid] = true
+    end
+    policy[wid] = nil
+  end
+
+  local candidate = choose_policy_candidate(candidates, active_tab_id)
+  if not candidate then
+    return nil
+  end
+  local pid = candidate.pane:pane_id()
+  local recovered = policy_recovered[pid] == true
+  for _, other in ipairs(candidates) do
+    local other_pid = other.pane:pane_id()
+    if other_pid ~= pid then
+      policy_recovered[other_pid] = nil
+    end
+  end
+  local needs_reset = not recovered
+    and (
+      policy_seen[wid] == true
+      or policy_reset[pid] == true
+      or sent[pid] ~= nil
+      or (policy_owner[pid] ~= nil and policy_owner[pid] ~= wid)
+    )
+  current = {
+    pane_id = pid,
+    role = candidate.role,
+    ready = candidate.ready and not needs_reset,
+    armed = false,
+    resetting = needs_reset,
+    deadline = needs_reset and (util.now_ms() + POLICY_RESET_MS) or nil,
+  }
+  policy[wid] = current
+  policy_seen[wid] = true
+  policy_owner[pid] = wid
+  sent[pid] = nil
+  if recovered then
+    policy_recovered[pid] = nil
+    policy_reset[pid] = nil
+  end
+  if needs_reset then
+    local frame_token = state.token_for(pid)
+    current.frame_token = frame_token
+    invalidate_policy_pane(wid, pid, true)
+    policy_owner[pid] = wid
+    if type(frame_token) == "string" and frame_token ~= "" then
+      state.set_token(pid, util.random_token())
+      current.auth_sent = sidebar.auth(candidate.pane, frame_token) == true
+    else
+      current.auth_sent = false
+    end
+  end
+  return current
+end
+
+local function arm_policy(window_id, pane_id)
+  local current = policy[window_id]
+  if not current or current.pane_id ~= pane_id or not current.ready then
+    return
+  end
+  current.armed = true
+  current.resetting = false
+  current.deadline = nil
+  current.frame_token = nil
+  policy_reset[pane_id] = nil
 end
 
 ---True once a section has reached the pane: a bare pane is written to whichever tab it is in.
@@ -161,7 +339,7 @@ function M.render_section(cfg)
     pinned_style = cfg.pinned_style,
     close_button = cfg.close_button,
     show_index = cfg.show_index,
-    scroll_indicator = cfg.scroll_indicator == false and "never" or cfg.scroll_indicator,
+    scroll_indicator = cfg.scroll_indicator,
     new_tab_button = not not cfg.new_tab_button,
     new_tab_label = cfg.new_tab_label,
     hover = cfg.hover,
@@ -186,7 +364,7 @@ local function config_body(cfg, ctx)
     wheel = cfg.wheel,
     context = cfg.context,
     hover_timeout_ms = cfg.hover_timeout_ms,
-    hover_highlight = cfg.hover_highlight ~= false,
+    hover_highlight = cfg.hover_highlight,
     ellipsis = cfg.ellipsis,
     popover = {
       width = cfg.popover.width,
@@ -211,49 +389,12 @@ local function theme_body(cfg, ctx)
       brights = palette_list(palette.brights),
     },
     overrides = theme_bridge.overrides(user),
-    hook = type((cfg.hooks or {}).theme) == "function" or nil,
-    private = ctx.private == true or nil,
+    hook = type((cfg.hooks or {}).theme) == "function",
+    private = ctx.private == true,
   }
-end
-
-local function tab_record(item)
-  local raw = item.raw
-  return {
-    id = item.tab_id,
-    index = item.index,
-    ["override"] = raw and raw.override or nil,
-    title = raw and raw.title or (not raw and item.title) or nil,
-    pane_title = raw and raw.pane_title or nil,
-    proc = raw and raw.proc or nil,
-    icon = raw and raw.icon or nil,
-    cwd = raw and raw.cwd or nil,
-    host = raw and raw.host or nil,
-    user = raw and raw.user or nil,
-    domain = raw and raw.domain or nil,
-    pinned = item.is_pinned,
-    unseen = item.has_unseen,
-    settings = item.is_settings or nil,
-  }
-end
-
----The switcher only earns its row once there is something to switch between.
-local function spaces_body(list)
-  if type(list) ~= "table" or #list < 2 then
-    return nil
-  end
-  local out = M.array()
-  for _, space in ipairs(list) do
-    out[#out + 1] = { id = space.id, name = space.name, icon = space.icon, unseen = space.unseen }
-  end
-  return out
 end
 
 local function model_body(cfg, ctx, wid)
-  local tabs = M.array()
-  for _, item in ipairs(ctx.items or {}) do
-    tabs[#tabs + 1] = tab_record(item)
-  end
-  local spaces = spaces_body(ctx.spaces)
   local footer = M.array()
   for _, entry in ipairs(ctx.footer or {}) do
     footer[#footer + 1] = type(entry) == "string" and { text = entry } or entry
@@ -264,7 +405,6 @@ local function model_body(cfg, ctx, wid)
     buttons[#buttons + 1] = { id = action.id, icon = action.icon }
   end
   return {
-    screen = "sidebar",
     rail = state.is_collapsed(wid) and cfg.collapsed == "rail" or false,
     active = ctx.active_tab_id,
     focus = { on = state.has_focus(wid), index = store.focus_index[wid] or 1 },
@@ -282,10 +422,6 @@ local function model_body(cfg, ctx, wid)
       buttons = buttons,
     } or { buttons = buttons },
     footer = footer,
-    tabs = tabs,
-    private = state.is_private(wid),
-    space = spaces and ctx.space or nil,
-    spaces = spaces,
   }
 end
 
@@ -319,57 +455,8 @@ local function settled(wid, kind, ctx, build)
   return body
 end
 
----Bumps the per-window rev only when the body changed; the encoded string is the change detector.
----`tag` is the wire's `t` when it differs from the dedupe kind: two models share one tag.
-local function versioned(wid, kind, body, tag)
-  local per = revs[wid]
-  if not per then
-    per = {}
-    revs[wid] = per
-  end
-  local entry = per[kind]
-  if not entry or entry.body ~= body then
-    entry = { rev = (entry and entry.rev or 0) + 1, body = body }
-    per[kind] = entry
-    entry.line = string.format('{"t":"%s","rev":%d,%s', tag or kind, entry.rev, body:sub(2))
-  end
-  return entry.line
-end
-
-local SEMANTIC = { "config", "theme", "spaces", "model", "settings", "menu" }
-
----One window generation covers all of the semantic sections. Per-section revisions remain in their
----v2 messages for compatibility; atomic backends use the generation to stage them as one state.
-local function generation_for(wid, lines)
-  local current = generations[wid]
-  if not current then
-    current = { value = 0, lines = {} }
-    generations[wid] = current
-  end
-  local changed = false
-  for _, kind in ipairs(SEMANTIC) do
-    if current.lines[kind] ~= lines[kind] then
-      changed = true
-    end
-  end
-  if changed then
-    current.value = current.value + 1
-    for _, kind in ipairs(SEMANTIC) do
-      current.lines[kind] = lines[kind]
-    end
-  end
-  return current.value
-end
-
-function M.generation(window_id)
-  local current = generations[window_id]
-  return current and current.value or nil
-end
-
-function M.revision(window_id, kind)
-  local per = revs[window_id]
-  local entry = per and per[kind]
-  return entry and entry.rev or nil
+local function section(kind, body)
+  return string.format('{"t":"%s",%s', kind, body:sub(2))
 end
 
 local function sendable(wid, kinds, lines)
@@ -391,53 +478,67 @@ end
 
 M.sendable = sendable
 
----Sends the v2 state to the sidebar the window shows, skipping unchanged sends per pane. A sidebar
----in a background tab is left as it is and catches up the poll its tab comes to the front: nothing
----it paints meanwhile can be seen, and every frame it did paint would cross the mux and be rendered
----all the same. A pane that has never been dressed is the exception, so it paints at all.
+---Sends changed state to the shown pane and the stable policy pane. Other background panes catch up
+---when shown because their pixels cannot be seen; the policy pane stays current in the background
+---so its ordered Rust results remain authoritative for the whole window. Every bare pane is dressed
+---once regardless.
 function M.sync(gui_window, ctx)
   local wid = gui_window:window_id()
   local cfg = ctx.cfg
   local menu = require("vtabs.popover").wire_body(gui_window, ctx.survey)
   local lines = {
-    config = versioned(wid, "config", settled(wid, "config", ctx, config_body)),
-    theme = versioned(wid, "theme", settled(wid, "theme", ctx, theme_body)),
-    spaces = versioned(wid, "spaces", encode(require("vtabs.spaces").body(cfg, wid, ctx.survey.all, M.array))),
-    model = versioned(wid, "model", encode(model_body(cfg, ctx, wid))),
-    menu = versioned(wid, "menu", encode(menu or { open = false })),
+    config = section("config", settled(wid, "config", ctx, config_body)),
+    theme = section("theme", settled(wid, "theme", ctx, theme_body)),
+    spaces = section("spaces", encode(require("vtabs.spaces").body(cfg, wid, ctx.survey.all, M.array))),
+    model = section("model", encode(model_body(cfg, ctx, wid))),
+    menu = section("menu", encode(menu or { open = false })),
   }
   local mux_win = gui_window:mux_window()
   local settings = require "vtabs.settings"
   local page_tab, page_pane = settings.find(mux_win, ctx.snapshot)
   if page_pane then
     local body = require("vtabs.settings_model").body(cfg, M.array)
-    lines.settings = versioned(wid, "settings", encode(body))
+    lines.settings = section("settings", encode(body))
   end
-  local generation = generation_for(wid, lines)
+  local observed_tabs = ctx.snapshot and ctx.snapshot.tabs or mux_win:tabs_with_info()
+  local deliveries = {}
+  local candidates = {}
+  for _, observed in ipairs(observed_tabs) do
+    local info = observed.info or observed
+    local tab_id = observed.tab_id or info.tab:tab_id()
+    local sb = ctx.snapshot and observed.sidebar or sidebar.find(info.tab)
+    if sb and not sidebar.is_settings(sb) then
+      local ready = sidebar.is_ready(sb, observed.panes)
+      deliveries[#deliveries + 1] = {
+        pane = sb,
+        tab_id = tab_id,
+        ready = ready,
+        kinds = { "config", "theme", "spaces", "model", "menu" },
+      }
+      candidates[#candidates + 1] = { pane = sb, tab_id = tab_id, ready = ready, role = "sidebar" }
+    end
+  end
+  local page_id = page_tab and page_tab:tab_id() or nil
+  local settings_panes = ctx.snapshot and ctx.snapshot.settings and ctx.snapshot.settings.entry.panes or nil
+  if page_pane then
+    local ready = sidebar.is_ready(page_pane, settings_panes)
+    deliveries[#deliveries + 1] = {
+      pane = page_pane,
+      tab_id = page_id,
+      ready = ready,
+      kinds = { "config", "theme", "spaces", "settings" },
+    }
+    candidates[#candidates + 1] = { pane = page_pane, tab_id = page_id, ready = ready, role = "settings" }
+  end
+  ensure_policy(gui_window, candidates, ctx.active_tab_id)
 
-  local function push_legacy(pane, kinds)
+  local function push(pane, kinds)
     if not sendable(wid, kinds, lines) then
       return false
     end
     local pid = pane:pane_id()
     local seen = sent[pid] or {}
-    for _, kind in ipairs(kinds) do
-      local line = lines[kind]
-      if seen[kind] ~= line and sidebar.send_raw(pane, line) then
-        sent[pid] = seen
-        seen[kind] = line
-        note_delivery(wid, cfg, "legacy", { kind }, #line, false)
-      end
-    end
-  end
-
-  local function push_atomic(pane, kinds)
-    if not sendable(wid, kinds, lines) then
-      return false
-    end
-    local pid = pane:pane_id()
-    local seen = sent[pid] or {}
-    local changed, batch = {}, { string.format('{"t":"begin","generation":%d}', generation) }
+    local changed, batch = {}, { '{"t":"begin"}' }
     for _, kind in ipairs(kinds) do
       local line = lines[kind]
       if line ~= nil and seen[kind] ~= line then
@@ -448,7 +549,7 @@ function M.sync(gui_window, ctx)
     if #changed == 0 then
       return true
     end
-    batch[#batch + 1] = string.format('{"t":"commit","generation":%d}', generation)
+    batch[#batch + 1] = '{"t":"commit"}'
     local payload = table.concat(batch, "\n")
     if not sidebar.send_raw(pane, payload) then
       return false
@@ -458,56 +559,24 @@ function M.sync(gui_window, ctx)
     for _, kind in ipairs(changed) do
       seen[kind] = lines[kind]
     end
-    seen.generation = generation
+    arm_policy(wid, pid)
     note_delivery(wid, cfg, "atomic", changed, #payload, true)
     return true
   end
 
-  local function push(pane, kinds)
-    if sidebar.supports(pane, "atomic_sync") then
-      return push_atomic(pane, kinds)
-    end
-    return push_legacy(pane, kinds)
-  end
   local function shown_or_bare(pane, tab_id)
     return sent[pane:pane_id()] == nil or (ctx.active_tab_id ~= nil and tab_id == ctx.active_tab_id)
   end
-  local function speaks_v2(pane, panes)
-    return sidebar.is_ready(pane, panes) and (store.proto[pane:pane_id()] or 1) >= 2
-  end
-  local observed_tabs = ctx.snapshot and ctx.snapshot.tabs or mux_win:tabs_with_info()
-  for _, observed in ipairs(observed_tabs) do
-    local info = observed.info or observed
-    local tab_id = observed.tab_id or info.tab:tab_id()
-    local sb
-    if ctx.snapshot then
-      sb = observed.sidebar
-    else
-      sb = sidebar.find(info.tab)
-    end
-    if sb and shown_or_bare(sb, tab_id) and not sidebar.is_settings(sb) and speaks_v2(sb, observed.panes) then
-      if sidebar.supports(sb, "spaces_policy") then
-        push(sb, { "config", "theme", "spaces", "model", "menu" })
-      else
-        push(sb, { "config", "theme", "model", "menu" })
-      end
-    end
-  end
-  -- The settings pane shares config and theme; its raw host projection becomes a Rust-owned model.
-  local page_id = page_tab and page_tab:tab_id() or nil
-  local settings_panes = ctx.snapshot and ctx.snapshot.settings and ctx.snapshot.settings.entry.panes or nil
-  if page_pane and shown_or_bare(page_pane, page_id) and speaks_v2(page_pane, settings_panes) then
-    if sidebar.supports(page_pane, "settings_document") then
-      if sidebar.supports(page_pane, "spaces_policy") then
-        push(page_pane, { "config", "theme", "spaces", "settings" })
-      else
-        push(page_pane, { "config", "theme", "settings" })
-      end
-    else
-      util.warn_once(
-        "settings-document-" .. page_pane:pane_id(),
-        "settings backend lacks settings_document; update the bundled backend"
-      )
+  for _, delivery in ipairs(deliveries) do
+    local pid = delivery.pane:pane_id()
+    local authority = policy[wid]
+    local waiting_for_ready = authority ~= nil and authority.pane_id == pid and authority.ready ~= true
+    if
+      delivery.ready
+      and not waiting_for_ready
+      and (shown_or_bare(delivery.pane, delivery.tab_id) or M.policy_pane(wid) == pid)
+    then
+      push(delivery.pane, delivery.kinds)
     end
   end
 end

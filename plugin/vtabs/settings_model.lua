@@ -291,7 +291,7 @@ function M.effect(gui_window, ev)
     end
     return true
   end
-  if (ev.t == "intent" or ev.t == "do") and ev.a == "close_settings" then
+  if ev.t == "intent" and ev.a == "close_settings" then
     require("vtabs.settings").close(gui_window)
     return true
   end

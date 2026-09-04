@@ -100,11 +100,7 @@ function M.normalizer_candidates(opts)
   add(raw_backend.path)
   add(util.getenv "VTABS_BIN")
 
-  local wanted = type(raw_backend.version) == "string" and raw_backend.version or version
-  if not wanted:match "^[%w._-]+$" then
-    wanted = version
-  end
-  local name = "wez-vtabs-" .. platform.triple .. "-" .. wanted .. (platform.is_windows and ".exe" or "")
+  local name = "wez-vtabs-" .. platform.triple .. "-" .. version .. (platform.is_windows and ".exe" or "")
   if platform.is_windows then
     local base = util.getenv "LOCALAPPDATA"
     if type(base) == "string" and base ~= "" then
@@ -180,7 +176,7 @@ function M.env(cfg, domain, host, bg)
   end
   env.VTABS_USERVAR = cfg.backend.uservar
   env.VTABS_REPO = cfg.backend.repo
-  env.VTABS_VERSION = cfg.backend.version or version
+  env.VTABS_VERSION = version
   env.VTABS_BG = type(bg) == "string" and bg:match "^#%x%x%x%x%x%x$" or nil
   if M.is_local(domain, host) then
     env.VTABS_TARGET = platform.triple

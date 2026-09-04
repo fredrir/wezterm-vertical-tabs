@@ -8,7 +8,6 @@ local M = {}
 
 local scope = store.scope "theme_bridge"
 local resolved = scope.window()
-local hook_answers = scope.window()
 
 local function rgb_hex(value)
   if type(value) ~= "table" then
@@ -111,85 +110,46 @@ function M.raw_overrides(user)
   return out
 end
 
----Runs the user hook against Rust's resolved base and returns its typed answer for this generation.
+---Runs the user hook against Rust's resolved base and returns its typed answer.
 ---An absent/failing/non-table hook answers with an empty overlay so the paused commit can finish.
 function M.answer_hook(gui_window, pane, ev)
-  local generation = tonumber(ev and ev.generation)
-  if not generation or type(ev.theme) ~= "table" then
+  if type(ev) ~= "table" or type(ev.theme) ~= "table" then
     return false
   end
-  local wid = gui_window:window_id()
-  local current = require("vtabs.wire").generation(wid)
-  if current and generation ~= current then
-    return false
-  end
-  local per = hook_answers[wid]
-  if not per then
-    per = {}
-    hook_answers[wid] = per
-  end
-  local answer = per[generation]
-  if answer == nil then
-    answer = {}
-    local hook = (config.get().hooks or {}).theme
-    if type(hook) == "function" then
-      local ok, value = pcall(hook, gui_window, ev.theme)
-      if not ok then
-        util.warn_once("hook-theme", "theme hook failed: %s", tostring(value))
-      elseif type(value) == "table" then
-        answer = M.overrides(value)
-      end
-    end
-    per[generation] = answer
-    local count, oldest = 0, generation
-    for seen in pairs(per) do
-      count = count + 1
-      oldest = math.min(oldest, seen)
-    end
-    if count > 4 then
-      per[oldest] = nil
+  local answer = {}
+  local hook = (config.get().hooks or {}).theme
+  if type(hook) == "function" then
+    local ok, value = pcall(hook, gui_window, ev.theme)
+    if not ok then
+      util.warn_once("hook-theme", "theme hook failed: %s", tostring(value))
+    elseif type(value) == "table" then
+      answer = M.overrides(value)
     end
   end
-  return identity.send(pane, { t = "theme_hook_result", generation = generation, overrides = answer })
+  return identity.send(pane, { t = "theme_hook_result", overrides = answer })
 end
 
----Caches only a current Rust answer. The caller supplies the window's semantic generation so a
----delayed background process cannot roll host chrome back after a space/theme/model change.
-function M.accept(gui_window, ev, current_generation)
+---Caches a structurally valid answer from the window's current authenticated backend pane.
+function M.accept(gui_window, ev)
   if type(ev) ~= "table" or type(ev.theme) ~= "table" then
     return false
   end
   local wid = gui_window:window_id()
-  local generation = tonumber(ev.generation)
-  if generation and current_generation and generation ~= current_generation then
-    return false
-  end
-  local previous = resolved[wid]
-  if generation and previous and previous.generation and generation < previous.generation then
-    return false
-  end
-  if generation and previous and previous.generation == generation then
-    return false
-  end
-  resolved[wid] = { generation = generation, theme = ev.theme }
+  resolved[wid] = ev.theme
   return true
 end
 
 function M.get(window_id)
-  local entry = resolved[window_id]
-  return entry and entry.theme or nil
+  return resolved[window_id]
 end
 
 function M.clear(window_id)
   if window_id then
     resolved[window_id] = nil
-    hook_answers[window_id] = nil
     return
   end
-  for _, cache in ipairs { resolved, hook_answers } do
-    for id in pairs(cache) do
-      cache[id] = nil
-    end
+  for id in pairs(resolved) do
+    resolved[id] = nil
   end
 end
 

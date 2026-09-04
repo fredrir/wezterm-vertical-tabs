@@ -9,7 +9,6 @@ from .adapter import Terminal
 
 CONFIG: dict[str, Any] = {
     "t": "config",
-    "rev": 1,
     "rail_width": 5,
     "position": "left",
     "icons": False,
@@ -33,7 +32,6 @@ CONFIG: dict[str, Any] = {
 
 THEME: dict[str, Any] = {
     "t": "theme",
-    "rev": 1,
     "scheme": {
         "background": "#1e1e2e",
         "foreground": "#cdd6f4",
@@ -51,7 +49,10 @@ THEME: dict[str, Any] = {
         ],
     },
     "overrides": {"accent": "#89b4fa", "elevation": 0.06},
+    "private": False,
 }
+
+MENU_CLOSED: dict[str, Any] = {"t": "menu", "open": False}
 
 
 def tab(tab_id: int, title: str, *, index: int | None = None) -> dict[str, Any]:
@@ -68,29 +69,52 @@ def tab(tab_id: int, title: str, *, index: int | None = None) -> dict[str, Any]:
     }
 
 
-def sidebar_model(
-    tabs: Iterable[dict[str, Any]],
-    *,
-    rev: int = 1,
-    active: int | None = None,
-) -> dict[str, Any]:
-    records = list(tabs)
+def sidebar_model(*, active: int | None = None) -> dict[str, Any]:
     return {
         "t": "model",
-        "rev": rev,
-        "screen": "sidebar",
         "rail": False,
-        "active": active if active is not None else (records[0]["id"] if records else None),
+        "active": active,
         "focus": {"on": False, "index": 1},
         "scroll": {"top": 1, "user": False},
-        "tabs": records,
-        "private": False,
-        "spaces": [],
+        "strip": {
+            "buttons": [
+                {"id": "toggle_sidebar"},
+                {"id": "open_settings"},
+            ]
+        },
         "footer": [],
     }
 
 
-async def dress_sidebar(terminal: Terminal, model: dict[str, Any]) -> None:
+def spaces_section(tabs: Iterable[dict[str, Any]], *, active: int | None = None) -> dict[str, Any]:
+    records = list(tabs)
+    return {
+        "t": "spaces",
+        "window_id": 1,
+        "enabled": False,
+        "hook": False,
+        "definitions": [],
+        "tabs": records,
+        "active_tab": active if active is not None else (records[0]["id"] if records else None),
+        "last_tabs": [],
+        "dynamics": [],
+    }
+
+
+async def dress_sidebar(
+    terminal: Terminal,
+    tabs: Iterable[dict[str, Any]],
+    *,
+    active: int | None = None,
+) -> None:
     """Send a complete public state; incomplete state intentionally does not draw."""
 
-    await terminal.send(CONFIG, THEME, model)
+    records = list(tabs)
+    active_tab = active if active is not None else (records[0]["id"] if records else None)
+    await terminal.publish(
+        CONFIG,
+        THEME,
+        spaces_section(records, active=active_tab),
+        sidebar_model(active=active_tab),
+        MENU_CLOSED,
+    )

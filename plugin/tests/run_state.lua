@@ -51,17 +51,26 @@ local function count_log(needle)
   return n
 end
 
-test("the state file holds only a version, pins and closed tabs", function()
+test("the state file holds only restorable state", function()
   restart_vm()
   state.set_pinned(31, true)
   state.push_closed { cwd = "/tmp", domain = "local" }
   local body = read_state()
-  assert(body:find '"version"', "version written")
+  local saved = wezterm.json_parse(body)
+  eq(saved.pinned["31"], true)
+  eq(saved.closed["1"].cwd, "/tmp")
   assert(not body:find("token", 1, true), "no token on disk")
   assert(not body:find("sidebars", 1, true), "no pane ids on disk")
   assert(not body:find("private", 1, true), "no window ids on disk")
   state.set_pinned(31, false)
   eq(state.pop_closed().cwd, "/tmp")
+end)
+
+test("state outside the current shape starts empty", function()
+  local removed = table.concat { "format_", "revi", "sion" }
+  restart_vm(string.format('{"%s":1,"pinned":{"31":true},"closed":[]}', removed))
+  eq(state.pins_pending(), false)
+  eq(state.is_pinned(31), false)
 end)
 
 test("a corrupt state file warns once and starts empty", function()
@@ -77,7 +86,7 @@ end)
 test("pins are restored only when a backend pane survived the mux", function()
   local win, gui = window(1)
   local tab = win.tab_list[1]
-  restart_vm(string.format('{"version":1,"pinned":{"%d":true},"closed":[]}', tab.id))
+  restart_vm(string.format('{"pinned":{"%d":true},"closed":[]}', tab.id))
   assert(state.pins_pending(), "pins held back")
   eq(state.is_pinned(tab.id), false)
   local ghost = fake.pane(tab, { title = "wez-vtabs:abcd" })
@@ -90,7 +99,7 @@ end)
 test("pins are discarded when nothing survived", function()
   local win, gui = window(1)
   local tab = win.tab_list[1]
-  restart_vm(string.format('{"version":1,"pinned":{"%d":true},"closed":[]}', tab.id))
+  restart_vm(string.format('{"pinned":{"%d":true},"closed":[]}', tab.id))
   sidebar.ensure(gui)
   eq(state.is_pinned(tab.id), false)
   local real_now = util.now_ms
@@ -131,9 +140,7 @@ test("a backend pane that outlived the GUI is adopted, not duplicated", function
   assert(sb.sent[#sb.sent]:find(token, 1, true), "re-authed with the fresh token")
   eq(sb.control_token, token, "which the backend accepted")
   local auth = wezterm.json_parse(H.control_payload(sb.sent[#sb.sent]))
-  eq(auth.caps[1] or auth.caps["1"], "typed_intents", "auth advertises the typed intent client contract")
-  eq(auth.caps[2] or auth.caps["2"], "theme_hooks", "auth advertises the theme hook client contract")
-  eq(auth.caps[3] or auth.caps["3"], "settings_document", "auth advertises Rust-owned settings")
+  eq(auth.token, token, "auth carries the current session")
   sb.vars.vtabs_token = token
   eq(sidebar.is_ready(sb), true)
   eq(sidebars_in(tab), 1)
@@ -289,7 +296,6 @@ test("a marker pane before the sidebar in pane order does not steal the role", f
   eq(sidebar.find(tab):pane_id(), sb:pane_id(), "ranked above a bare marker")
   sidebar.ensure(gui)
   eq(state.token_for(sb:pane_id()), token, "token kept")
-  state.session.proto[sb:pane_id()] = 2
   local sent = #sb.sent
   require("vtabs.view").sync(gui)
   assert(#sb.sent > sent, "the model still goes to the real sidebar")

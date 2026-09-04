@@ -34,19 +34,20 @@ test("raw space overrides preserve representable mistakes for Rust diagnostics",
   eq(out.mystery, "value")
 end)
 
-test("a Rust-resolved generation is cached and mismatched generations are rejected", function()
+test("a structurally valid Rust-resolved theme replaces the cached theme", function()
   local _, gui = H.window(1)
   local first = { bg = { 1, 2, 3 }, content_bg = { 4, 5, 6 } }
-  assert(theme.accept(gui, { generation = 4, theme = first }, 4))
+  assert(theme.accept(gui, { theme = first }))
   eq(theme.get(gui:window_id()), first)
-  assert(not theme.accept(gui, { generation = 3, theme = {} }, 4))
-  assert(not theme.accept(gui, { generation = 5, theme = {} }, 4), "future generation")
-  eq(theme.get(gui:window_id()), first)
-  assert(not theme.accept(gui, { generation = 4, theme = {} }, 4), "duplicate generation")
+  assert(not theme.accept(gui, { theme = false }))
+  eq(theme.get(gui:window_id()), first, "an invalid answer is inert")
+  local second = { bg = { 7, 8, 9 } }
+  assert(theme.accept(gui, { theme = second }))
+  eq(theme.get(gui:window_id()), second)
 end)
 
-test("a theme hook request must match the window's current wire generation", function()
-  local win, gui = H.window(1, { attach = true, ready = true })
+test("a theme hook request must contain a theme", function()
+  local win, gui = H.window(1)
   local pane = win.tab_list[1].pane_list[1]
   local calls = 0
   config.setup {
@@ -58,13 +59,11 @@ test("a theme hook request must match the window's current wire generation", fun
       end,
     },
   }
-  require("vtabs.view").sync(gui)
-  local current = assert(require("vtabs.wire").generation(gui:window_id()))
-  assert(not theme.answer_hook(gui, pane, { generation = current + 1, theme = {} }))
+  assert(not theme.answer_hook(gui, pane, {}))
   eq(calls, 0)
 end)
 
-test("the user theme hook runs once per window generation and every requester gets its answer", function()
+test("each pending theme hook request runs the user hook and returns a fieldless answer", function()
   local win, gui = H.window(1)
   local pane = win.tab_list[1].pane_list[1]
   state.set_token(pane:pane_id(), "theme-test")
@@ -80,17 +79,16 @@ test("the user theme hook runs once per window generation and every requester ge
       end,
     },
   }
-  local ev = { generation = 9, theme = { bg = { 10, 20, 30 } } }
+  local ev = { theme = { bg = { 10, 20, 30 } } }
   assert(theme.answer_hook(gui, pane, ev))
   assert(theme.answer_hook(gui, pane, ev))
-  eq(calls, 1)
+  eq(calls, 2)
   local answer = wezterm.json_parse(H.control_payload(pane.sent[#pane.sent]))
   eq(answer.t, "theme_hook_result")
-  eq(answer.generation, 9)
   eq(answer.overrides.accent, "#040506")
-  for generation = 10, 13 do
-    assert(theme.answer_hook(gui, pane, { generation = generation, theme = ev.theme }))
+  local fields = 0
+  for _ in pairs(answer) do
+    fields = fields + 1
   end
-  assert(theme.answer_hook(gui, pane, ev))
-  eq(calls, 6, "the hook cache retains only a bounded tail of generations")
+  eq(fields, 2, "the reply contains only its tag and overrides")
 end)

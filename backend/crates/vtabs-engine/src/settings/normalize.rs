@@ -6,11 +6,9 @@ use super::persistence;
 use super::schema::{by_key, canonical_value, defaults, is_open, options};
 use super::value::{SettingPath, Value, get_path, set_at, set_path};
 
-pub const NORMALIZER_VERSION: u8 = 1;
-
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct NormalizeRequest {
-    pub normalizer_v: u8,
     pub plugin_version: String,
     pub schema_id: String,
     #[serde(default)]
@@ -24,7 +22,6 @@ pub struct NormalizeRequest {
 
 #[derive(Debug, PartialEq, Serialize)]
 pub struct NormalizeResponse {
-    pub normalizer_v: u8,
     pub plugin_version: &'static str,
     pub schema_id: String,
     pub values: Value,
@@ -34,8 +31,7 @@ pub struct NormalizeResponse {
 /// Resolves the serializable boot configuration as defaults < persisted < wezterm.lua options.
 /// Opaque Lua values are intentionally absent and are restored by the host after this returns.
 pub fn normalize(request: NormalizeRequest) -> Result<NormalizeResponse, &'static str> {
-    if request.normalizer_v != NORMALIZER_VERSION
-        || request.plugin_version != env!("CARGO_PKG_VERSION")
+    if request.plugin_version != env!("CARGO_PKG_VERSION")
         || request.schema_id != super::schema::identity()
     {
         return Err("normalizer contract mismatch");
@@ -47,7 +43,7 @@ pub fn normalize(request: NormalizeRequest) -> Result<NormalizeResponse, &'stati
     let stored = request.persisted.map_or_else(
         || Value::Table(BTreeMap::new()),
         |body| {
-            let loaded = persistence::parse_v1(&body);
+            let loaded = persistence::parse(&body);
             warnings.extend(loaded.warnings);
             loaded.values
         },
@@ -64,6 +60,7 @@ pub fn normalize(request: NormalizeRequest) -> Result<NormalizeResponse, &'stati
 
     let mut values = merge(defaults(), stored);
     values = merge(values, request.opts);
+    prune_unknown(&mut values, &SettingPath(vec![]), &mut warnings);
     let schema_defaults = defaults();
     for path in &request.invalid {
         warnings.push(format!("invalid {}, using default", path.dotted()));
@@ -78,7 +75,6 @@ pub fn normalize(request: NormalizeRequest) -> Result<NormalizeResponse, &'stati
         warnings.push("popover.width must be \"auto\" or a whole number, using auto".into());
     }
     Ok(NormalizeResponse {
-        normalizer_v: NORMALIZER_VERSION,
         plugin_version: env!("CARGO_PKG_VERSION"),
         schema_id: super::schema::identity(),
         values,
@@ -109,6 +105,51 @@ fn merge(base: Value, overlay: Value) -> Value {
             Value::Table(base)
         }
         (_, overlay) => overlay,
+    }
+}
+
+fn current_theme_key(key: &str) -> bool {
+    key == "split"
+        || vtabs_protocol::payload::THEME_COLOR_FIELDS.contains(&key)
+        || vtabs_protocol::payload::THEME_FRACTION_FIELDS.contains(&key)
+}
+
+fn warn_unknown(warnings: &mut Vec<String>, path: &SettingPath) {
+    let warning = format!("unknown option {}", path.dotted());
+    if !warnings.contains(&warning) {
+        warnings.push(warning);
+    }
+}
+
+/// Removes values outside the current schema before returning the effective configuration. Open
+/// maps remain opaque, except for `theme`, whose accepted keys come from the protocol manifest.
+fn prune_unknown(values: &mut Value, path: &SettingPath, warnings: &mut Vec<String>) {
+    let Some(table) = values.as_table_mut() else {
+        return;
+    };
+    let keys: Vec<String> = table.keys().cloned().collect();
+    for key in keys {
+        let child_path = path.child(&key);
+        let dotted = child_path.dotted();
+        let theme_child = path.0.len() == 1 && path.0[0] == "theme";
+        if theme_child && !current_theme_key(&key) {
+            table.remove(&key);
+            warn_unknown(warnings, &child_path);
+            continue;
+        }
+        match by_key(&dotted) {
+            Some(option) if option.container || dotted == "theme" => {
+                if let Some(child) = table.get_mut(&key) {
+                    prune_unknown(child, &child_path, warnings);
+                }
+            }
+            Some(_) => {}
+            None if is_open(&dotted) => {}
+            None => {
+                table.remove(&key);
+                warn_unknown(warnings, &child_path);
+            }
+        }
     }
 }
 
@@ -162,7 +203,6 @@ mod tests {
 
     fn request(opts: Value) -> NormalizeRequest {
         NormalizeRequest {
-            normalizer_v: NORMALIZER_VERSION,
             plugin_version: env!("CARGO_PKG_VERSION").into(),
             schema_id: super::super::schema::identity(),
             persisted: None,
@@ -173,14 +213,13 @@ mod tests {
     }
 
     #[test]
-    fn resolves_precedence_aliases_bounds_and_cross_rules() {
+    fn resolves_precedence_bounds_and_cross_rules() {
         let mut request = request(Value::Table(BTreeMap::from([
             ("width".into(), 44.into()),
             ("row_gap".into(), (-1).into()),
             ("hover".into(), "press".into()),
         ])));
-        request.persisted =
-            Some(r#"{"version":1,"options":{"width":31,"tab_height":2,"row_gap":4}}"#.into());
+        request.persisted = Some(r#"{"options":{"width":31,"tab_height":2,"row_gap":4}}"#.into());
         request.explicit = vec![SettingPath::from_dotted("width")];
         let response = normalize(request).unwrap();
         assert_eq!(get_path(&response.values, "width"), Some(&44.into()));
@@ -212,12 +251,54 @@ mod tests {
     }
 
     #[test]
+    fn unknown_closed_and_theme_keys_are_removed() {
+        let removed_theme = ["active", "_title", "_fg"].concat();
+        let removed_backend = ["ver", "sion"].concat();
+        let response = normalize(request(table([
+            (
+                "theme",
+                Value::Table(BTreeMap::from([
+                    ("accent".into(), "#ff0000".into()),
+                    ("split".into(), "auto".into()),
+                    (removed_theme.clone(), "#00ff00".into()),
+                ])),
+            ),
+            (
+                "backend",
+                Value::Table(BTreeMap::from([
+                    ("path".into(), "/bin/wez-vtabs".into()),
+                    (removed_backend.clone(), "unused".into()),
+                ])),
+            ),
+        ])))
+        .unwrap();
+
+        assert_eq!(
+            get_path(&response.values, "theme.accent"),
+            Some(&"#ff0000".into())
+        );
+        assert_eq!(
+            get_path(&response.values, "theme.split"),
+            Some(&"auto".into())
+        );
+        assert_eq!(
+            get_path(&response.values, &format!("theme.{removed_theme}")),
+            None
+        );
+        assert_eq!(
+            get_path(&response.values, &format!("backend.{removed_backend}")),
+            None
+        );
+        assert_eq!(response.warnings.len(), 2);
+    }
+
+    #[test]
     fn lists_replace_instead_of_deep_merging() {
         let mut request = request(Value::Table(BTreeMap::from([(
             "strip_actions".into(),
             Value::List(vec![]),
         )])));
-        request.persisted = Some(r#"{"version":1,"options":{"strip_actions":["search"]}}"#.into());
+        request.persisted = Some(r#"{"options":{"strip_actions":["search"]}}"#.into());
         let response = normalize(request).unwrap();
         assert_eq!(
             get_path(&response.values, "strip_actions"),
@@ -228,7 +309,7 @@ mod tests {
     #[test]
     fn invalid_typed_opaque_paths_override_stored_values_with_defaults() {
         let mut request = request(Value::Table(BTreeMap::new()));
-        request.persisted = Some(r#"{"version":1,"options":{"width":45}}"#.into());
+        request.persisted = Some(r#"{"options":{"width":45}}"#.into());
         request.explicit = vec![SettingPath::from_dotted("width")];
         request.invalid = vec![SettingPath::from_dotted("width")];
         let response = normalize(request).unwrap();
@@ -261,7 +342,7 @@ mod tests {
     #[test]
     fn mismatched_normalizer_contract_is_rejected() {
         let mut request = request(Value::Table(BTreeMap::new()));
-        request.normalizer_v = 99;
+        request.plugin_version = "0.0.0".into();
         assert_eq!(
             normalize(request).unwrap_err(),
             "normalizer contract mismatch"

@@ -120,26 +120,6 @@ function M.is_ready(pane, panes)
   return false
 end
 
----Normalises ready capabilities into a set. Arrays are the wire form; accepting a boolean map too
----keeps tests and future adapters from having to manufacture an array merely to ask a question.
-function M.set_capabilities(pane, capabilities)
-  local out = {}
-  for key, value in pairs(type(capabilities) == "table" and capabilities or {}) do
-    if type(key) == "number" and type(value) == "string" then
-      out[value] = true
-    elseif type(key) == "string" and value == true then
-      out[key] = true
-    end
-  end
-  store.capabilities[pane:pane_id()] = out
-  return out
-end
-
-function M.supports(pane, capability)
-  local available = pane and store.capabilities[pane:pane_id()] or nil
-  return available ~= nil and available[capability] == true
-end
-
 local RANK = { none = 0, marker = 1, mapped = 2, ready = 3 }
 
 ---Declared through `store`, so a forgotten tab or window takes them with it.
@@ -391,13 +371,13 @@ function M.auth(pane, frame_token)
     store.authed_at[pid] = util.now_ms()
     local keys = M.keys_mode(pane)
     store.keys_mode[pid] = keys or "host"
-    M.send_stdin(pane, {
+    return M.send_stdin(pane, {
       t = "auth",
       token = token,
-      caps = { "typed_intents", "theme_hooks", "settings_document", "spaces_policy" },
       keys = keys,
     }, frame_token or user_vars(pane)[M.TOKEN_VAR] or token)
   end
+  return false
 end
 
 return M

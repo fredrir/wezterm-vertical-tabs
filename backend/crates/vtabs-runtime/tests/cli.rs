@@ -1,6 +1,5 @@
 use vtabs_runtime::cli::{
-    PaneInfo, adjust_delta, adjust_plan, content_pane, is_marker, kill_target, panes_from_json,
-    rescue_plan,
+    PaneInfo, adjust_delta, adjust_plan, content_pane, is_marker, panes_from_json, rescue_plan,
 };
 
 fn pane(id: u64, tab: u64, title: &str, left: i64, cols: i64) -> PaneInfo {
@@ -15,20 +14,7 @@ fn pane(id: u64, tab: u64, title: &str, left: i64, cols: i64) -> PaneInfo {
 }
 
 #[test]
-fn only_a_backend_title_names_a_kill_and_only_one_pane_may_carry_it() {
-    let panes = vec![
-        pane(1, 1, "wez-vtabs:abcd", 0, 28),
-        pane(2, 1, "zsh", 29, 100),
-        pane(3, 2, "wez-vtabs:ffff", 0, 28),
-        pane(4, 2, "wez-vtabs:ffff", 29, 28),
-    ];
-    assert_eq!(kill_target(&panes, "wez-vtabs:abcd"), Ok(1));
-    assert!(
-        kill_target(&panes, "zsh").is_err(),
-        "a shell is never a target"
-    );
-    assert!(kill_target(&panes, "wez-vtabs:0000").is_err(), "unknown");
-    assert!(kill_target(&panes, "wez-vtabs:ffff").is_err(), "ambiguous");
+fn only_backend_titles_are_markers() {
     assert!(is_marker("wez-vtabs-settings:1a2b"));
     assert!(!is_marker("wez-vtabs:") && !is_marker("wez-vtabs:zz"));
 }

@@ -15,7 +15,6 @@ local test, eq = H.test, H.eq
 
 local function normalize_reply(values, warnings)
   return {
-    normalizer_v = 1,
     plugin_version = version,
     schema_id = schema.schema_id,
     values = values,
@@ -25,11 +24,10 @@ end
 
 local function commit(gui, path, value, mode, body)
   return page.commit_effect(gui, {
-    settings_rev = 1,
     path = path,
     change = { op = "set", value = value },
     mode = mode or "instant",
-    persistence_json = body or '{"version":1,"options":{}}',
+    persistence_json = body or '{"options":{}}',
   })
 end
 
@@ -138,6 +136,12 @@ test("plugin reload watches include both generated Rust mirrors", function()
   assert(watched:find("/vtabs/gen/schema.lua", 1, true), "schema mirror is watched")
 end)
 
+test("backend downloads always use the plugin release", function()
+  local backend = require "vtabs.backend"
+  local cfg = config.setup { backend = { path = "/bin/wez-vtabs" } }
+  eq(backend.env(cfg, "local", nil).VTABS_VERSION, version)
+end)
+
 test("a Rust-normalized poll interval remains an integer at the WezTerm boundary", function()
   local boot_normalize = require "vtabs.boot_normalize"
   local init = require "init"
@@ -166,21 +170,19 @@ end)
 test("live settings applies Rust's derived cross-field patches without a second Lua policy pass", function()
   config.setup { hover = "follow", close_button = "hover", settings = false, backend = { path = "/bin/wez-vtabs" } }
   page.commit_effect(nil, {
-    settings_rev = 1,
     path = { "hover" },
     change = { op = "set", value = "press" },
     derived = {},
     mode = "instant",
-    persistence_json = '{"version":1,"options":{}}',
+    persistence_json = '{"options":{}}',
   })
   eq(config.get().close_button, "hover", "Lua does not invent a derived change")
   page.commit_effect(nil, {
-    settings_rev = 1,
     path = { "hover" },
     change = { op = "set", value = "press" },
     derived = { { path = { "close_button" }, change = { op = "set", value = "always" } } },
     mode = "instant",
-    persistence_json = '{"version":1,"options":{"hover":"press","close_button":"always"}}',
+    persistence_json = '{"options":{"hover":"press","close_button":"always"}}',
   })
   eq(config.get().close_button, "always", "the Rust-derived host value is applied")
 end)
@@ -192,12 +194,11 @@ test("derived paths receive host projection and escalate reload once", function(
   config.host_config = {}
   config.setup { hover = "follow", settings = false, backend = { path = "/bin/wez-vtabs" } }
   local mode = page.commit_effect(gui, {
-    settings_rev = 1,
     path = { "width" },
     change = { op = "set", value = 29 },
     derived = { { path = { "hover" }, change = { op = "set", value = "press" } } },
     mode = "instant",
-    persistence_json = '{"version":1,"options":{"width":29,"hover":"press"}}',
+    persistence_json = '{"options":{"width":29,"hover":"press"}}',
   })
   eq(mode, "reload")
   eq(wezterm.reloads, 1, "all derived projections aggregate into one reload")
@@ -209,7 +210,7 @@ test("a settings commit is saved and becomes the next resolved configuration", f
   os.remove(path)
   config.host_config = {}
   config.setup { settings = { path = path }, backend = { path = "/bin/wez-vtabs" } }
-  eq(commit(nil, { "width" }, 37, "instant", '{"version":1,"options":{"width":37}}'), "instant")
+  eq(commit(nil, { "width" }, 37, "instant", '{"options":{"width":37}}'), "instant")
   local stored = assert(settings.load { settings = { path = path } })
   eq(stored.width, 37, "the accepted edit was written")
   eq(config.setup({}, stored).width, 37, "the next config evaluation restores it")
@@ -222,7 +223,7 @@ test("a settings commit never copies wezterm.lua-owned values into settings.json
   os.remove(path)
   config.host_config = {}
   config.setup({ width = 42, settings = { path = path } }, nil)
-  eq(commit(nil, { "poll_ms" }, 700, "instant", '{"version":1,"options":{"poll_ms":700}}'), "instant")
+  eq(commit(nil, { "poll_ms" }, 700, "instant", '{"options":{"poll_ms":700}}'), "instant")
   local stored = assert(settings.load { settings = { path = path } })
   eq(stored.width, nil, "an unrelated explicit value is not persisted")
   eq(stored.poll_ms, 700, "the page-owned edit is persisted")
@@ -247,7 +248,7 @@ test("the final persistence-disable and path-change commits use old permission a
 
   local ok, err = pcall(function()
     config.setup { settings = { path = "/tmp/vtabs-old.json" }, backend = { path = "/bin/wez-vtabs" } }
-    commit(nil, { "settings", "persist" }, false, "reload", '{"version":1,"options":{"settings":{"persist":false}}}')
+    commit(nil, { "settings", "persist" }, false, "reload", '{"options":{"settings":{"persist":false}}}')
     eq(writes[#writes].path, "/tmp/vtabs-old.json", "persist=false is written once before taking effect")
 
     config.setup { settings = { path = "/tmp/vtabs-old.json" }, backend = { path = "/bin/wez-vtabs" } }
@@ -256,12 +257,12 @@ test("the final persistence-disable and path-change commits use old permission a
       { "settings", "path" },
       "/tmp/vtabs-new.json",
       "reload",
-      '{"version":1,"options":{"settings":{"path":"/tmp/vtabs-new.json"}}}'
+      '{"options":{"settings":{"path":"/tmp/vtabs-new.json"}}}'
     )
     eq(writes[#writes].path, "/tmp/vtabs-new.json", "the new path receives the path-changing commit")
 
     config.setup { settings = { path = "/tmp/vtabs-old.json" }, backend = { path = "/bin/wez-vtabs" } }
-    commit(nil, { "settings" }, false, "reload", '{"version":1,"options":{"settings":false}}')
+    commit(nil, { "settings" }, false, "reload", '{"options":{"settings":false}}')
     eq(
       writes[#writes].path,
       "/tmp/vtabs-settings-regression/settings.json",
@@ -544,13 +545,13 @@ test("boot normalization uses a local binary, restores opaque values, and remove
   assert(request_path and io.open(request_path, "r") == nil, "request is removed after success")
 end)
 
-test("a missing or old local normalizer removes its request and preserves the Lua fallback", function()
+test("an unavailable local normalizer removes its request and preserves the Lua fallback", function()
   local wezterm = require "wezterm"
   local init = require "init"
   local executable = os.tmpname()
   local persisted = os.tmpname()
   local file = assert(io.open(persisted, "w"))
-  file:write '{"version":1,"options":{"width":39}}'
+  file:write '{"options":{"width":39}}'
   file:close()
   local request_path
   local old_dir = settings.dir
@@ -572,7 +573,7 @@ test("a missing or old local normalizer removes its request and preserves the Lu
   if not ok then
     error(err, 0)
   end
-  eq(config.get().width, 39, "generated-schema Lua path still loads persistence v1")
+  eq(config.get().width, 39, "generated-schema Lua path still loads persisted settings")
   eq(settings.persists(config.get()), false, "the write permission remains disabled")
   assert(request_path and io.open(request_path, "r") == nil, "request is removed after failure")
 end)
@@ -590,7 +591,7 @@ test("boot normalization rejects missing stale and incomplete response contracts
     normalize_reply {},
     normalize_reply "not-an-object",
   }
-  replies[2].normalizer_v = 99
+  replies[2].plugin_version = version .. "-stale"
   replies[3].schema_id = "stale"
   local ok, err = pcall(function()
     for index, response in ipairs(replies) do
@@ -652,8 +653,7 @@ test("the boot loader retains lists, dotted open keys and an empty frame table",
   local path = os.tmpname()
   local f = assert(io.open(path, "w"))
   f:write(
-    '{"version":1,"options":{"strip_actions":["search"],"spaces":[{"id":"work"}],'
-      .. '"backend":{"env":{"A.B":"1"}},"frame":{}}}'
+    '{"options":{"strip_actions":["search"],"spaces":[{"id":"work"}],' .. '"backend":{"env":{"A.B":"1"}},"frame":{}}}'
   )
   f:close()
   local loaded = assert(settings.load { settings = { path = path } })
@@ -661,6 +661,16 @@ test("the boot loader retains lists, dotted open keys and an empty frame table",
   eq(loaded.spaces[1].id, "work")
   eq(loaded.backend.env["A.B"], "1")
   assert(type(loaded.frame) == "table" and next(loaded.frame) == nil)
+  os.remove(path)
+end)
+
+test("the boot loader rejects persistence outside the current shape", function()
+  local path = os.tmpname()
+  local removed = table.concat { "format_", "revi", "sion" }
+  local f = assert(io.open(path, "w"))
+  f:write(string.format('{"%s":1,"options":{"width":39}}', removed))
+  f:close()
+  eq(settings.load { settings = { path = path } }, nil)
   os.remove(path)
 end)
 

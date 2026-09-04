@@ -427,7 +427,7 @@ class WezTermMuxInstance:
         self.gui_socket: Path | None = None
         self._mux_log_handle: Any = None
         self._gui_log_handles: list[Any] = []
-        self._gui_generation = 0
+        self._gui_log_index = 0
         self._commands: list[dict[str, Any]] = []
         self._last_observation: Any = None
         self._captured = False
@@ -529,8 +529,8 @@ class WezTermMuxInstance:
         if self.gui_process is not None:
             raise AssertionError("the GUI is already connected")
         before = set(self._gui_sockets())
-        self._gui_generation += 1
-        log_path = self.logs / f"wezterm-gui-{self._gui_generation}.log"
+        self._gui_log_index += 1
+        log_path = self.logs / f"wezterm-gui-{self._gui_log_index}.log"
         log_handle = log_path.open("wb")
         self._gui_log_handles.append(log_handle)
         self.gui_process = subprocess.Popen(

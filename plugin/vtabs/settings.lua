@@ -14,7 +14,6 @@ local protocol = require "vtabs.gen.protocol"
 
 local M = {}
 
-local VERSION = 1
 local READ_MAX = protocol.SETTINGS_BODY_MAX_BYTES
 
 local function opt(cfg, key, fallback)
@@ -145,12 +144,15 @@ function M.load(cfg)
     util.warn_once("settings-corrupt", "settings file unreadable, starting from the defaults")
     return nil
   end
-  if parsed.version ~= VERSION then
-    util.warn_once("settings-version", "settings file version %s ignored", tostring(parsed.version))
+  if type(parsed.options) ~= "table" then
+    util.warn_once("settings-shape", "settings file has an incompatible shape, ignored")
     return nil
   end
-  if type(parsed.options) ~= "table" then
-    return nil
+  for key in pairs(parsed) do
+    if key ~= "options" then
+      util.warn_once("settings-shape", "settings file has an incompatible shape, ignored")
+      return nil
+    end
   end
   local dropped = {}
   local kept = keep_known(parsed.options, nil, {}, dropped)
@@ -161,8 +163,8 @@ function M.load(cfg)
   return kept
 end
 
----Writes Rust's final versioned JSON body atomically, 0600. Lua owns the host filesystem path and
----the pre-backend boot guard; it does not own changed-set calculation, aliases, or serialization.
+---Writes Rust's final guarded JSON body atomically, 0600. Lua owns the host filesystem path and
+---the pre-backend boot guard; it does not own changed-set calculation or serialization.
 function M.save_body(cfg, body, permission_cfg)
   cfg = cfg or config.get()
   if not M.persists(permission_cfg or cfg) or type(body) ~= "string" then

@@ -25,6 +25,7 @@ test("the schema describes every option the defaults expose, and nothing it does
       assert(seen[option.key], option.key .. " has a default the config never grows")
     end
     assert(option.label and option.group, option.key .. " needs a label and a group")
+    eq(option.alias, nil, option.key .. " must expose only canonical values")
     if option.type == "enum" then
       assert(option.enum and #option.enum > 0, option.key .. " is an enum with no values")
       local ok = false
@@ -34,6 +35,25 @@ test("the schema describes every option the defaults expose, and nothing it does
       assert(ok, option.key .. " default is not one of its own enum values")
     end
   end
+end)
+
+test("retired option spellings are rejected instead of translated", function()
+  local retired = {
+    tab_height = true,
+    meta = true,
+    new_tab_button = true,
+    scroll_indicator = true,
+    tear_off = "edge",
+    tooltip = true,
+    animations = true,
+  }
+  for key, value in pairs(retired) do
+    local cfg = config.setup { [key] = value }
+    eq(cfg[key], config.defaults[key], key .. " resets to its canonical default")
+  end
+  eq(require("vtabs.actions").resolve "toggle", nil)
+  eq(require("vtabs.actions").resolve "settings", nil)
+  config.setup { backend = { path = "/bin/wez-vtabs" } }
 end)
 
 test("schema.defaults is a fresh deep copy each time, so setup cannot poison it", function()
@@ -66,6 +86,28 @@ test("a key the schema does not know warns, including inside a closed container"
   eq(warns_for { keys = { new_tab = false } }, nil, "and keys")
   eq(warns_for { private = { env = { FOO = "1" } } }, nil, "and private.env")
   eq(warns_for { backend = { path = "/bin/wez-vtabs" } }, nil, "a known nested key is quiet")
+  config.setup { backend = { path = "/bin/wez-vtabs" } }
+end)
+
+test("unknown closed and theme keys are absent from the effective config", function()
+  local removed_theme = table.concat { "active", "_title", "_fg" }
+  local removed_backend = table.concat { "ver", "sion" }
+  local cfg = config.setup {
+    theme = { accent = "#ff0000", split = "auto", [removed_theme] = "#00ff00" },
+    backend = { path = "/bin/wez-vtabs", [removed_backend] = "unused" },
+  }
+  eq(cfg.theme.accent, "#ff0000")
+  eq(cfg.theme.split, "auto")
+  eq(cfg.theme[removed_theme], nil)
+  eq(cfg.backend[removed_backend], nil)
+end)
+
+test("current renderer values cross the wire without coercion", function()
+  local render_section = require("vtabs.wire").render_section
+  for _, value in ipairs { "auto", "always", "never" } do
+    local cfg = config.setup { scroll_indicator = value, backend = { path = "/bin/wez-vtabs" } }
+    eq(render_section(cfg).scroll_indicator, value)
+  end
   config.setup { backend = { path = "/bin/wez-vtabs" } }
 end)
 

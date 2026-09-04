@@ -30,7 +30,7 @@ class UserVar:
 
 
 def cast_output(recording: str) -> str:
-    """Join terminal-output records from an asciicast v2 document.
+    """Join terminal-output records from a supported asciicast document.
 
     A live recording can end between writes. An incomplete final JSON line is
     ignored until the next poll; malformed complete records are rejected.
@@ -45,7 +45,7 @@ def cast_output(recording: str) -> str:
     except json.JSONDecodeError as error:
         raise ValueError("recording has an invalid asciicast header") from error
     if not isinstance(header, dict) or header.get("version") != 2:
-        raise ValueError("recording is not an asciicast v2 document")
+        raise ValueError("recording uses an unsupported asciicast format")
 
     output: list[str] = []
     complete = recording.endswith(("\n", "\r"))

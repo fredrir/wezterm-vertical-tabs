@@ -58,7 +58,6 @@ pub struct Descriptor {
     pub min: Option<f64>,
     pub max: Option<f64>,
     pub allowed: Vec<Value>,
-    pub aliases: Vec<(Value, Value)>,
     pub list_of: Option<Kind>,
     pub container: bool,
     pub open: bool,
@@ -86,7 +85,6 @@ impl Descriptor {
             min: None,
             max: None,
             allowed: Vec::new(),
-            aliases: Vec::new(),
             list_of: None,
             container: false,
             open: false,
@@ -124,11 +122,6 @@ impl Descriptor {
 
     fn allowed(mut self, values: Vec<Value>) -> Self {
         self.allowed = values;
-        self
-    }
-
-    fn aliases(mut self, values: Vec<(Value, Value)>) -> Self {
-        self.aliases = values;
         self
     }
 
@@ -307,15 +300,13 @@ fn build_options() -> Vec<Descriptor> {
         Descriptor::new("tab_height", Kind::Enum)
             .with_default("card")
             .allowed(values!["card", "row", "tall"])
-            .aliases(vec![(Value::from(false), Value::from("row")), (Value::from(true), Value::from("card")), (Value::from(1), Value::from("row")), (Value::from(2), Value::from("card")), (Value::from(3), Value::from("tall"))])
             .label("Card height")
             .group("cards")
-            .values("`\"card\"` (`3`) \\| `\"row\"` (`1`) \\| `\"tall\"` (`5`)")
+            .values("`\"card\"` \\| `\"row\"` \\| `\"tall\"`")
             .help("painted rows per tab: content plus a blank pad row each side, one more with `meta` on"),
         Descriptor::new("meta", Kind::Enum)
             .with_default(false)
             .allowed(values!["auto", "cwd", "process", false])
-            .aliases(vec![(Value::from(true), Value::from("auto"))])
             .label("Meta line")
             .group("cards")
             .values("`\"auto\"` \\| `\"cwd\"` \\| `\"process\"` \\| `false`")
@@ -335,7 +326,6 @@ fn build_options() -> Vec<Descriptor> {
         Descriptor::new("new_tab_button", Kind::Enum)
             .with_default("ghost")
             .allowed(values!["ghost", "row", false])
-            .aliases(vec![(Value::from(true), Value::from("ghost"))])
             .label("New tab button")
             .group("chrome")
             .values("`\"ghost\"` \\| `\"row\"` \\| `false`")
@@ -408,13 +398,13 @@ fn build_options() -> Vec<Descriptor> {
             .label("Popover overflow")
             .group("behaviour"),
         Descriptor::new("strip_actions", Kind::List)
-            .with_default(Value::List(values!["toggle", "new_tab", "settings"]))
-            .allowed(values!["toggle", "new_tab", "settings", "search"])
+            .with_default(Value::List(values!["toggle_sidebar", "new_tab", "open_settings"]))
+            .allowed(values!["toggle_sidebar", "new_tab", "open_settings", "search"])
             .list_of(Kind::Enum)
-            .shown("`{ \"toggle\", \"new_tab\", \"settings\" }`")
+            .shown("`{ \"toggle_sidebar\", \"new_tab\", \"open_settings\" }`")
             .label("Strip actions")
             .group("chrome")
-            .values("`\"toggle\"` \\| `\"new_tab\"` \\| `\"settings\"` \\| `\"search\"` \\| `{ id, icon, on_click }`")
+            .values("`\"toggle_sidebar\"` \\| `\"new_tab\"` \\| `\"open_settings\"` \\| `\"search\"` \\| `{ id, icon, on_click }`")
             .help("icon buttons in the top strip, in the order given"),
         Descriptor::new("toggle_button", Kind::Boolean)
             .with_default(true)
@@ -457,10 +447,9 @@ fn build_options() -> Vec<Descriptor> {
         Descriptor::new("scroll_indicator", Kind::Enum)
             .with_default("auto")
             .allowed(values!["auto", "always", "never"])
-            .aliases(vec![(Value::from(false), Value::from("never")), (Value::from(true), Value::from("auto"))])
             .label("Scroll indicator")
             .group("chrome")
-            .values("`\"auto\"` \\| `\"always\"` \\| `\"never\"` \\| `true` \\| `false`")
+            .values("`\"auto\"` \\| `\"always\"` \\| `\"never\"`")
             .help("right-edge thumb when tabs overflow"),
         Descriptor::new("wheel", Kind::Enum)
             .with_default("scroll")
@@ -471,7 +460,6 @@ fn build_options() -> Vec<Descriptor> {
         Descriptor::new("tear_off", Kind::Enum)
             .with_default(true)
             .allowed(values![true, false])
-            .aliases(vec![(Value::from("edge"), Value::from(true))])
             .label("Tear off")
             .group("behaviour")
             .values("`true` \\| `false`")
@@ -511,10 +499,9 @@ fn build_options() -> Vec<Descriptor> {
         Descriptor::new("tooltip", Kind::Enum)
             .with_default("auto")
             .allowed(values!["auto", "on", "off"])
-            .aliases(vec![(Value::from(false), Value::from("off")), (Value::from(true), Value::from("on"))])
             .label("Tooltip")
             .group("behaviour")
-            .values("`\"auto\"` \\| `true` \\| `false`")
+            .values("`\"auto\"` \\| `\"on\"` \\| `\"off\"`")
             .help("hover tooltip; `auto` needs `hover = \"follow\"`"),
         Descriptor::new("tooltip_delay_ms", Kind::Number)
             .with_default(600)
@@ -533,10 +520,9 @@ fn build_options() -> Vec<Descriptor> {
         Descriptor::new("animations", Kind::Enum)
             .with_default("auto")
             .allowed(values!["auto", "on", "off"])
-            .aliases(vec![(Value::from(false), Value::from("off")), (Value::from(true), Value::from("on"))])
             .label("Animations")
             .group("behaviour")
-            .values("`\"auto\"` \\| `true` \\| `false`")
+            .values("`\"auto\"` \\| `\"on\"` \\| `\"off\"`")
             .help("colour fades; the width still changes in one step"),
         Descriptor::new("animation", Kind::Table)
             .container()
@@ -696,12 +682,6 @@ fn build_options() -> Vec<Descriptor> {
             .label("Backend repo")
             .group("backend")
             .help("GitHub repo used for release downloads"),
-        Descriptor::new("backend.version", Kind::String)
-            .shown("plugin version")
-            .apply_mode(ApplyMode::Reload)
-            .label("Backend version")
-            .group("backend")
-            .help("release tag to download"),
         Descriptor::new("backend.build", Kind::Boolean)
             .with_default(true)
             .label("Backend build")
@@ -784,14 +764,9 @@ pub fn defaults() -> Value {
     root
 }
 
-/// Applies a descriptor alias, then checks the value's kind, enumeration and numeric bounds.
+/// Checks a value's kind, enumeration, and numeric bounds.
 pub fn canonical_value(option: &Descriptor, value: &Value) -> Option<Value> {
-    let value = option
-        .aliases
-        .iter()
-        .find_map(|(from, to)| (value == from).then(|| to.clone()))
-        .unwrap_or_else(|| value.clone());
-    accepts(option, &value).then_some(value)
+    accepts(option, value).then_some(value.clone())
 }
 
 fn accepts(option: &Descriptor, value: &Value) -> bool {
@@ -880,7 +855,7 @@ mod tests {
     #[test]
     fn descriptors_are_self_consistent() {
         validate_schema().unwrap();
-        assert_eq!(options().len(), 81);
+        assert_eq!(options().len(), 80);
         assert_eq!(identity().len(), 16);
     }
 
@@ -895,33 +870,22 @@ mod tests {
     }
 
     #[test]
-    fn validation_applies_aliases_bounds_and_list_shapes() {
-        let aliases = [
-            ("tab_height", 3.into(), "tall".into()),
-            ("tab_height", 2.into(), "card".into()),
-            ("tab_height", 1.into(), "row".into()),
-            ("tab_height", true.into(), "card".into()),
-            ("tab_height", false.into(), "row".into()),
-            ("meta", true.into(), "auto".into()),
-            ("new_tab_button", true.into(), "ghost".into()),
-            ("scroll_indicator", true.into(), "auto".into()),
-            ("scroll_indicator", false.into(), "never".into()),
-            ("tear_off", "edge".into(), true.into()),
-            ("tooltip", true.into(), "on".into()),
-            ("tooltip", false.into(), "off".into()),
-            ("animations", true.into(), "on".into()),
-            ("animations", false.into(), "off".into()),
-        ];
-        for (key, from, to) in aliases {
-            assert_eq!(
-                canonical_value(by_key(key).unwrap(), &from),
-                Some(to),
-                "{key}"
-            );
+    fn validation_rejects_retired_values_bounds_and_bad_list_shapes() {
+        for (key, value) in [
+            ("tab_height", Value::from(3)),
+            ("meta", Value::from(true)),
+            ("new_tab_button", Value::from(true)),
+            ("scroll_indicator", Value::from(false)),
+            ("tear_off", Value::from("edge")),
+            ("tooltip", Value::from(true)),
+            ("animations", Value::from(false)),
+        ] {
+            assert_eq!(canonical_value(by_key(key).unwrap(), &value), None, "{key}");
         }
         assert_eq!(canonical_value(by_key("width").unwrap(), &4.into()), None);
         let strip = by_key("strip_actions").unwrap();
-        assert!(canonical_value(strip, &values!["toggle", "search"].into()).is_some());
+        assert!(canonical_value(strip, &values!["toggle_sidebar", "search"].into()).is_some());
+        assert!(canonical_value(strip, &values!["toggle"].into()).is_none());
         assert!(canonical_value(strip, &values!["not-an-action"].into()).is_none());
         assert!(
             canonical_value(strip, &Value::List(vec![table([("id", "custom".into())])])).is_some()

@@ -60,7 +60,7 @@ local adopted = scope.window()
 local adopted_for = scope.window()
 local rail_reserve = scope.window()
 local resized_at = scope.window()
-local resize_gen = scope.window()
+local resize_tick = scope.window()
 -- The last size a mux pane reported: the server dealing a frame to it, which the GUI's frames do
 -- not account for one by one, and which its own adjusts and a divider drag cause too.
 local server_resized_at = scope.window()
@@ -124,16 +124,16 @@ end
 
 M.forget_window = scope.forget_window
 
----Records one frame of a window resize and returns the burst's generation, so the settle timer
----armed by the last frame is the one that publishes.
+---Records one frame of a window resize and returns its tick, so only the settle timer armed by the
+---last frame publishes.
 function M.on_resize(window_id)
   resized_at[window_id] = util.now_ms()
-  resize_gen[window_id] = (resize_gen[window_id] or 0) + 1
-  return resize_gen[window_id]
+  resize_tick[window_id] = (resize_tick[window_id] or 0) + 1
+  return resize_tick[window_id]
 end
 
-function M.resize_gen(window_id)
-  return resize_gen[window_id] or 0
+function M.resize_tick(window_id)
+  return resize_tick[window_id] or 0
 end
 
 ---A size report from a pane on a mux domain: the server is still dealing columns to the tab,
@@ -585,8 +585,7 @@ local function correct(gui_window, snapshot)
     if cfg.debug then
       util.log("geometry: tab %d sidebar %d -> %d of %d cols (server)", tab_id, cols, target, layout.cols)
     end
-    local message =
-      { t = "adjust", direction = dir, amount = n, park = false, target = target, min_content = MIN_CONTENT }
+    local message = { t = "adjust", target = target, min_content = MIN_CONTENT }
     if not sidebar.send(sb, message) then
       return false
     end

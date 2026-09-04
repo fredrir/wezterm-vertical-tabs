@@ -1,5 +1,3 @@
-pub const VERSION: u8 = 3;
-
 /// Record-separator framing keeps control input disjoint from literal JSON-shaped keyboard input.
 pub const CONTROL_PREFIX: &[u8] = b"\x1eVTABS ";
 pub const CONTROL_TOKEN_MAX_BYTES: usize = 64;
@@ -51,4 +49,4 @@ pub const TITLEBAR_PT: u32 = 28;
 
 pub const FX_MAX_MS: u64 = 2000;
 pub const FX_MIN_FPS: u32 = 15;
-pub const FX_MAX_FPS: u32 = 60;
+pub const FX_MAX_FPS: u32 = 120;

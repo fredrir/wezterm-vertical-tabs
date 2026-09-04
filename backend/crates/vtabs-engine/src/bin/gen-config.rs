@@ -95,15 +95,6 @@ fn descriptor(out: &mut String, option: &Descriptor) {
             &lua_value(&Value::List(option.allowed.clone())),
         );
     }
-    if !option.aliases.is_empty() {
-        let aliases = option
-            .aliases
-            .iter()
-            .map(|(from, to)| format!("[{}] = {}", lua_value(from), lua_value(to)))
-            .collect::<Vec<_>>()
-            .join(", ");
-        field(out, "alias", &format!("{{ {aliases} }}"));
-    }
     if let Some(kind) = option.list_of {
         field(out, "of", &lua_string(kind.lua_name()));
     }
@@ -162,11 +153,7 @@ fn lua_type_literal(value: &Value) -> String {
 
 fn enum_type(option: &Descriptor) -> String {
     let mut values = Vec::new();
-    for value in option
-        .allowed
-        .iter()
-        .chain(option.aliases.iter().map(|(from, _)| from))
-    {
+    for value in &option.allowed {
         let value = lua_type_literal(value);
         if !values.contains(&value) {
             values.push(value);

@@ -2,8 +2,8 @@ use vtabs_engine::interaction::{MenuView, menu_key, menu_mouse};
 use vtabs_engine::menu::{self, MenuCfg, MenuState, Outcome, Placed};
 use vtabs_engine::theme::{Palette, Theme, UserTheme};
 use vtabs_engine::ui::UiState;
+use vtabs_protocol::payload::MenuMsg;
 use vtabs_protocol::types::{Button, Mods, Mouse, MouseKind};
-use vtabs_protocol::v2::MenuMsg;
 use vtabs_protocol::{Event, Intent};
 
 const DIMS: (i64, i64) = (28, 24);
@@ -26,7 +26,7 @@ fn msg(json: &str) -> MenuMsg {
 
 fn root() -> MenuMsg {
     msg(
-        r#"{"rev":1,"open":true,"level":"root","anchor":{"row":4,"col":2},"target":7,"selected":1,
+        r#"{"open":true,"level":"root","anchor":{"row":4,"col":2},"target":7,"selected":1,
         "items":[
           {"id":"activate","label":"Switch to tab"},
           {"id":"pin","label":"Pin tab"},
@@ -38,8 +38,7 @@ fn root() -> MenuMsg {
 
 fn confirm() -> MenuMsg {
     msg(
-        r#"{"rev":2,"open":true,"level":"confirm","anchor":{"row":4,"col":2},"target":7,"selected":2,
-        "header":{"title":"Close nvim?"},
+        r#"{"open":true,"level":"confirm","anchor":{"row":4,"col":2},"target":7,"selected":2,
         "items":[{"id":"confirm_close","label":"Close","danger":true},
                  {"id":"confirm_cancel","label":"Cancel"}]}"#,
     )
@@ -47,7 +46,7 @@ fn confirm() -> MenuMsg {
 
 fn rename() -> MenuMsg {
     msg(
-        r#"{"rev":3,"open":true,"level":"rename","anchor":{"row":4,"col":2},"target":7,"selected":1,
+        r#"{"open":true,"level":"rename","anchor":{"row":4,"col":2},"target":7,"selected":1,
         "items":[{"id":"rename_field","mode":"edit","label":"","value":"nvim"}]}"#,
     )
 }
@@ -62,7 +61,7 @@ struct Open {
 fn opened(m: MenuMsg) -> Open {
     let mut state = MenuState::default();
     state.adopt(&m);
-    let placed = match menu::plan(&m, &state, &cfg(), &theme(), DIMS) {
+    let placed = match menu::plan(&m, None, &state, &cfg(), &theme(), DIMS) {
         Outcome::Open(placed) => placed,
         other => panic!("expected an open menu, got {other:?}"),
     };
@@ -429,8 +428,7 @@ fn the_rename_buffer_commits_the_text_rust_owns() {
 /// The "Move to space ▸" level as popover.lua composes it: the current space cannot be picked.
 fn spaces() -> MenuMsg {
     msg(
-        r#"{"rev":4,"open":true,"level":"spaces","anchor":{"row":4,"col":2},"target":7,"selected":1,
-        "header":{"title":"Move to space","meta":"nvim"},
+        r#"{"open":true,"level":"spaces","anchor":{"row":4,"col":2},"target":7,"selected":1,
         "items":[{"id":"space:home","label":"Home","hint":"3","disabled":true},
                  {"id":"space:claude","label":"Claude","hint":"1"},
                  {"id":"space:pi","label":"pi"},

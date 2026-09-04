@@ -12,11 +12,9 @@ use vtabs_engine::layout;
 use vtabs_engine::menu::{self, MenuCfg, MenuState, Outcome};
 use vtabs_engine::render::frame_of;
 use vtabs_engine::settings::document::{
-    ApplyMode, DocumentAction, DocumentEffect, RawSettings, SettingsDocument, Widget,
+    ApplyMode, DocumentAction, DocumentEffect, RawSettings, SettingsDocument,
 };
-use vtabs_engine::settings::presentation::{
-    PresentationField, PresentationGroup, PresentationLock, SettingsPresentation,
-};
+use vtabs_engine::settings::presentation::SettingsPresentation;
 use vtabs_engine::settings::value::{SettingPath, Value};
 use vtabs_engine::settings::{self, SettingsView};
 use vtabs_engine::spaces::{self, Plan as SpacesPlan};
@@ -27,7 +25,7 @@ use vtabs_protocol::limits::{
     MODEL_MAX_TABS, SETTINGS_BODY_MAX_BYTES,
 };
 use vtabs_protocol::{
-    Command, Event, Intent, Modifier, SettingsApplyMode, SettingsChange, SettingsPatch, v2,
+    Command, Event, Intent, Modifier, SettingsApplyMode, SettingsChange, SettingsPatch, payload,
 };
 
 use crate::cli::Cli;
@@ -43,8 +41,6 @@ const MOTION_ON: &str = "\x1b[?1003h";
 const MOTION_OFF: &str = "\x1b[?1003l";
 /// A hole in the inbox sequence waits this long for the file before it counts as lost.
 const GAP_GRACE: Duration = Duration::from_millis(100);
-/// Columns each band of content keeps when an `adjust` names a target but no minimum of its own.
-const MIN_CONTENT: u32 = 20;
 /// A window drag resizes the pane once per frame, and a mux server deals every frame to every
 /// tab: the frame is adopted once the size has sat still this long, or at the latest after
 /// `RESIZE_MAX_WAIT`, so a burst costs a few paints and reports rather than one of each per frame.
@@ -73,8 +69,6 @@ pub struct App<W: Write> {
     /// The pty's pixel size, asked beside `probe`: the strip's cell metrics come from here, so a
     /// resize lays it out again with no model round trip.
     pub pixel_probe: fn() -> Option<(u16, u16)>,
-    /// The content pane a server-side `adjust` with `park` displaced, owed its focus back.
-    pub parked_focus: Option<u64>,
     /// A size change wipes the pane before the next frame.
     pub needs_clear: bool,
     pub fx: Option<FxRun>,
@@ -84,7 +78,7 @@ pub struct App<W: Write> {
     /// that differ; a fade tick, a wipe or a resize leaves the screen elsewhere and clears it.
     pub shown_is_final: bool,
     pub seq: u64,
-    pub v2: V2State,
+    pub sync: SyncState,
     pub ui: UiState,
     pub started: Instant,
     /// Where the menu Lua composed sits, from the last frame; the bridge reports against it.
@@ -92,8 +86,9 @@ pub struct App<W: Write> {
     /// The menu's own state: the selection Lua no longer drives and the rename buffer Rust owns.
     pub menu_ui: MenuState,
     pub settings_ui: SettingsUi,
-    /// The menu rev a `menu_refused` was already sent for, so a resize does not repeat it.
-    pub noted_menu: Option<u64>,
+    /// Whether `menu_refused` was already sent for the current publication, so a resize does not
+    /// repeat it.
+    pub menu_refused: bool,
     pub hover_deadline: Option<Instant>,
     /// The last token Lua authed with; a change means the plugin restarted around us.
     pub token: Option<String>,
@@ -101,15 +96,8 @@ pub struct App<W: Write> {
     pub token_announced: Option<Instant>,
     /// The newest size a resize burst reported, adopted once the burst has paused.
     pub resize: Option<PendingResize>,
-    /// Negotiated per client; older plugins receive the centralized `do` downgrade.
-    pub client_typed_intents: bool,
-    /// Only clients advertising this can complete the generation-bound host-hook handshake.
-    pub client_theme_hooks: bool,
-    /// Only clients advertising this send full window facts and understand Rust's space results.
-    pub client_spaces_policy: bool,
-    /// Last generation/effective-theme pair reported to Lua. Legacy unversioned updates still
-    /// dedupe equal answers, while every atomic generation gets an answer of its own.
-    pub last_reported_theme: Option<(Option<u64>, Theme)>,
+    /// Last effective theme reported to Lua.
+    pub last_reported_theme: Option<Theme>,
     /// Last Rust-computed traffic-light reserve reported to this Lua process.
     pub last_rail_reserve: Option<i64>,
     /// The server's own `wezterm cli`, where this pane has one to act for.
@@ -167,7 +155,7 @@ enum Step {
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct RuntimeMetrics {
-    pub committed_generations: u64,
+    pub commits: u64,
     pub terminal_paints: u64,
     pub paint_bytes: u64,
 }
@@ -221,24 +209,20 @@ impl FxRun {
     }
 }
 
-/// The four independently encoded sections that become visible together in atomic mode.
+/// One transaction's sections, published together.
 #[derive(Clone, Default)]
-pub struct V2Sections {
+pub struct Sections {
     pub config: Option<EngineConfig>,
     /// Raw theme input. `resolved_theme` is the only theme rendering consumes.
-    pub theme: Option<v2::ThemeMsg>,
+    pub theme: Option<payload::ThemeMsg>,
     pub resolved_theme: Option<Theme>,
     /// Raw full-window facts and the last Rust-owned projection derived from them.
-    pub spaces: Option<v2::SpacesMsg>,
-    pub space_resolution: Option<v2::SpaceResolution>,
-    /// Sidebar model only. A legacy protocol settings model is adapted into `settings` at ingress.
-    pub model: Option<v2::ModelMsg>,
+    pub spaces: Option<payload::SpacesMsg>,
+    pub space_resolution: Option<payload::SpaceResolution>,
+    pub model: Option<payload::SidebarModel>,
     pub settings: Option<SettingsPresentation>,
-    pub settings_rev: Option<u64>,
-    /// Present only for the Rust-owned raw settings projection. A legacy model has a presentation
-    /// but no document, so it retains its historical intent round trip.
     pub settings_document: Option<SettingsDocument>,
-    pub menu: Option<v2::MenuMsg>,
+    pub menu: Option<payload::MenuMsg>,
 }
 
 const SEEN_CONFIG: u8 = 1 << 0;
@@ -246,22 +230,18 @@ const SEEN_THEME: u8 = 1 << 1;
 const SEEN_MODEL: u8 = 1 << 2;
 const SEEN_MENU: u8 = 1 << 3;
 const SEEN_SPACES: u8 = 1 << 4;
+const SEEN_SETTINGS: u8 = 1 << 5;
 const HOOK_TIMEOUT: Duration = Duration::from_millis(500);
-const HOOK_RETRIES: u8 = 1;
 
 struct PendingSync {
-    generation: u64,
-    sections: V2Sections,
+    sections: Sections,
     seen: u8,
     valid: bool,
     /// Exact tab ids in the one route-hook batch awaiting a host answer.
     space_hook_requested: Option<Vec<i64>>,
     /// The base-theme hook follows space resolution and is the last publication barrier.
     hook_requested: bool,
-    /// Exact request replayed once if the host callback/result delivery is lost.
-    hook_event: Option<Event>,
     hook_deadline: Option<Instant>,
-    hook_retries: u8,
 }
 
 impl PendingSync {
@@ -270,28 +250,30 @@ impl PendingSync {
     }
 }
 
-/// Committed state plus, for atomic-capable clients, at most one unpublished generation.
+/// Committed state plus at most one unpublished transaction.
 #[derive(Default)]
-pub struct V2State {
-    committed: V2Sections,
-    committed_generation: Option<u64>,
+pub struct SyncState {
+    committed: Sections,
     pending: Option<PendingSync>,
-    /// A rejected Begin still owns the untagged sections up to its matching Commit; quarantine that
-    /// batch so it cannot spill into a newer pending generation.
-    discarding_generation: Option<u64>,
-    /// Once Begin has been accepted, bare sections cannot accidentally fall back to legacy mode.
-    atomic: bool,
+    /// A Begin rejected while a hook is outstanding still owns the untagged sections up to its
+    /// Commit. Quarantine that batch so it cannot alter the sole hooked transaction.
+    discarding: bool,
+    /// After a request times out, skip that host hook for the rest of this authenticated session.
+    /// With no result identifier, this fail-closed circuit breaker prevents a late answer from
+    /// being mistaken for an answer to a future request.
+    skip_space_hook: bool,
+    skip_theme_hook: bool,
 }
 
-impl std::ops::Deref for V2State {
-    type Target = V2Sections;
+impl std::ops::Deref for SyncState {
+    type Target = Sections;
 
     fn deref(&self) -> &Self::Target {
         &self.committed
     }
 }
 
-impl std::ops::DerefMut for V2State {
+impl std::ops::DerefMut for SyncState {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.committed
     }
@@ -303,8 +285,7 @@ enum Applied {
     Quit,
 }
 
-fn settings_input(msg: v2::SettingsMsg) -> Option<(u64, SettingsPresentation, SettingsDocument)> {
-    let rev = msg.rev;
+fn settings_input(msg: payload::SettingsMsg) -> Option<(SettingsPresentation, SettingsDocument)> {
     let version = msg.version;
     let values: Value = serde_json::from_value(msg.values).ok()?;
     if !matches!(values, Value::Table(_)) {
@@ -339,65 +320,20 @@ fn settings_input(msg: v2::SettingsMsg) -> Option<(u64, SettingsPresentation, Se
         return None;
     }
     let presentation = document.presentation(version);
-    Some((rev, presentation, document))
+    Some((presentation, document))
 }
 
-/// The sole adapter for the old pre-rendered settings DTO. It is never stored or consumed inside
-/// the engine, and raw settings documents never make the reverse trip through protocol types.
-fn legacy_settings(model: v2::SettingsModel) -> SettingsPresentation {
-    let fields = model
-        .fields
-        .into_iter()
-        .map(|field| PresentationField {
-            path: SettingPath::from_dotted(&field.key),
-            label: field.label,
-            group: field.group,
-            widget: Widget::from_legacy_name(&field.widget),
-            value_text: field.value_text,
-            changed: field.changed,
-            locked: field
-                .locked
-                .map(|lock| PresentationLock { text: lock.text }),
-            depth: usize::try_from(field.depth).unwrap_or_default(),
-            help: field.help,
-            editing: field.editing.map(|editing| editing.buffer),
-            armed: field.armed,
-        })
-        .collect();
-    let groups = model
-        .groups
-        .into_iter()
-        .map(|group| PresentationGroup {
-            id: group.id,
-            label: group.label,
-        })
-        .collect();
-    SettingsPresentation {
-        fields,
-        groups,
-        caveat: model.caveat,
-        version: model.version,
+fn sidebar_model(msg: payload::ModelMsg) -> payload::SidebarModel {
+    payload::SidebarModel {
+        rail: msg.rail,
+        active: msg.active,
+        focus: msg.focus,
+        scroll: msg.scroll,
+        drag: msg.drag,
+        strip: msg.strip,
+        footer: msg.footer,
+        ..Default::default()
     }
-}
-
-fn adopt_model(sections: &mut V2Sections, msg: v2::ModelMsg) {
-    let rev = msg.rev;
-    match msg.screen {
-        v2::ModelScreen::Sidebar(model) => {
-            sections.model = Some(v2::ModelMsg {
-                rev,
-                screen: v2::ModelScreen::Sidebar(model),
-            });
-            sections.settings = None;
-            sections.settings_rev = None;
-        }
-        v2::ModelScreen::Settings(model) => {
-            sections.model = None;
-            sections.settings = Some(legacy_settings(model));
-            sections.settings_rev = Some(rev);
-        }
-    }
-    sections.settings_document = None;
 }
 
 fn apply_mode(mode: ApplyMode) -> SettingsApplyMode {
@@ -424,11 +360,6 @@ impl<W: Write> App<W> {
     }
 
     pub fn emit(&mut self, event: &Event) -> io::Result<()> {
-        let downgraded = match event {
-            Event::Intent { intent } if !self.client_typed_intents => Some(intent.downgrade()),
-            _ => None,
-        };
-        let event = downgraded.as_ref().unwrap_or(event);
         let mut json = event.to_json();
         // WezTerm fires user-var-changed only on a value change; without n, repeated identical
         // events are silently dropped.
@@ -451,14 +382,14 @@ impl<W: Write> App<W> {
 
     /// On until a config says otherwise, which is also the terminal's state at startup.
     fn hover_highlight(&self) -> bool {
-        self.v2.config.as_ref().is_none_or(|c| c.hover_highlight)
+        self.sync.config.as_ref().is_none_or(|c| c.hover_highlight)
     }
 
     /// Nothing can be drawn or hit-tested until all three commands have landed at least once.
     fn dressed(&self) -> bool {
-        self.v2.config.is_some()
-            && self.v2.resolved_theme.is_some()
-            && (self.v2.model.is_some() || self.v2.settings.is_some())
+        self.sync.config.is_some()
+            && self.sync.resolved_theme.is_some()
+            && (self.sync.model.is_some() || self.sync.settings.is_some())
     }
 
     /// Returns `Ok(false)` when the backend should exit.
@@ -485,8 +416,18 @@ impl<W: Write> App<W> {
                 reason,
             } => {
                 if token.as_deref() == self.token.as_deref() && self.token.is_some() {
-                    self.invalidate_pending();
-                    self.emit(&Event::dropped(what, reason))?;
+                    // A rejected busy batch is quarantined through its Commit; malformed content
+                    // in it must not poison the older transaction that is waiting on a hook.
+                    if self.sync.discarding {
+                        return Ok(true);
+                    }
+                    // An invalid framed command matters only while it can corrupt a staged
+                    // transaction. Outside one, retain the quiet refusal malformed commands have
+                    // always had. Size/transport drops remain observable in either state.
+                    if what != "command" || self.sync.pending.is_some() {
+                        self.invalidate_pending();
+                        self.emit(&Event::dropped(what, reason))?;
+                    }
                 }
             }
             Input::Key { name, mods, raw } => {
@@ -572,7 +513,7 @@ impl<W: Write> App<W> {
 
     fn menu_gesture(&mut self, m: &vtabs_protocol::Mouse) -> io::Result<bool> {
         let now = self.now_ms();
-        let resolved = match (self.menu_outcome(), self.v2.menu.as_ref()) {
+        let resolved = match (self.menu_outcome(), self.sync.menu.as_ref()) {
             (Outcome::Open(placed), Some(msg)) => {
                 let view = MenuView {
                     level: placed.level,
@@ -654,16 +595,11 @@ impl<W: Write> App<W> {
         Ok(())
     }
 
-    /// Runs settings semantics locally when this client supplied a canonical settings document.
-    /// `false` leaves non-settings and legacy-model intents on their compatibility path to Lua.
+    /// Runs settings semantics locally against the committed canonical settings document.
     fn apply_document_intent(&mut self, intent: &Intent) -> io::Result<bool> {
-        let Some(document) = self.v2.settings_document.as_ref() else {
+        let Some(document) = self.sync.settings_document.as_ref() else {
             return Ok(false);
         };
-        let settings_rev = self
-            .v2
-            .settings_rev
-            .expect("a canonical settings document always has a source revision");
         let action = match intent {
             Intent::NudgeOption { key, delta } => {
                 document.path_for_key(key).map(|path| DocumentAction::Step {
@@ -687,13 +623,13 @@ impl<W: Write> App<W> {
             return Ok(true);
         };
         let previous_document = self
-            .v2
+            .sync
             .settings_document
             .as_ref()
             .expect("document checked above")
             .clone();
         let effect = self
-            .v2
+            .sync
             .settings_document
             .as_mut()
             .expect("document checked above")
@@ -706,7 +642,7 @@ impl<W: Write> App<W> {
             DocumentEffect::Commit(effect)
                 if effect.persistence_json.len() > SETTINGS_BODY_MAX_BYTES =>
             {
-                self.v2.settings_document = Some(previous_document);
+                self.sync.settings_document = Some(previous_document);
                 self.refresh_settings_presentation();
                 self.emit(&Event::dropped("settings", "size"))?;
             }
@@ -724,7 +660,6 @@ impl<W: Write> App<W> {
                     })
                     .collect::<io::Result<Vec<_>>>()?;
                 self.emit(&Event::SettingsCommit {
-                    settings_rev,
                     path: effect.path.0,
                     change,
                     derived,
@@ -737,21 +672,21 @@ impl<W: Write> App<W> {
     }
 
     fn refresh_settings_presentation(&mut self) {
-        let Some(document) = self.v2.settings_document.as_ref() else {
+        let Some(document) = self.sync.settings_document.as_ref() else {
             return;
         };
-        let Some(current) = self.v2.settings.as_ref() else {
+        let Some(current) = self.sync.settings.as_ref() else {
             return;
         };
-        self.v2.settings = Some(document.presentation(current.version.clone()));
+        self.sync.settings = Some(document.presentation(current.version.clone()));
     }
 
     /// The settings widget's input, from the same three messages the sidebar reads.
     fn settings_view(&self) -> Option<SettingsView<'_>> {
         let (cfg, theme, presentation) = (
-            self.v2.config.as_ref()?,
-            self.v2.resolved_theme.as_ref()?,
-            self.v2.settings.as_ref()?,
+            self.sync.config.as_ref()?,
+            self.sync.resolved_theme.as_ref()?,
+            self.sync.settings.as_ref()?,
         );
         Some(SettingsView {
             cols: self.dims().0,
@@ -804,7 +739,7 @@ impl<W: Write> App<W> {
 
     /// While the menu is open it consumes every key: navigation, first-letter jump, edit buffer.
     fn menu_key(&mut self, name: &str, mods: vtabs_protocol::Mods) -> io::Result<bool> {
-        let resolved = match (self.menu_outcome(), self.v2.menu.as_ref()) {
+        let resolved = match (self.menu_outcome(), self.sync.menu.as_ref()) {
             (Outcome::Open(placed), Some(msg)) => {
                 let view = MenuView {
                     level: placed.level,
@@ -829,7 +764,7 @@ impl<W: Write> App<W> {
     }
 
     fn menu_cfg(&self) -> MenuCfg {
-        let Some(cfg) = self.v2.config.as_ref() else {
+        let Some(cfg) = self.sync.config.as_ref() else {
             return MenuCfg::default();
         };
         let padding = cfg.render.padding;
@@ -844,24 +779,28 @@ impl<W: Write> App<W> {
 
     /// What the stored menu message asks for, against this pane's size.
     fn menu_outcome(&self) -> Outcome {
-        let (Some(msg), Some(theme)) = (self.effective_menu(), self.v2.resolved_theme.as_ref())
+        let (Some(msg), Some(theme)) = (self.effective_menu(), self.sync.resolved_theme.as_ref())
         else {
             return Outcome::Closed;
         };
-        menu::plan(&msg, &self.menu_ui, &self.menu_cfg(), theme, self.dims())
+        let header = self
+            .sync
+            .model
+            .as_ref()
+            .zip(self.sync.config.as_ref())
+            .and_then(|(model, cfg)| vtabs_engine::enrich::menu_header(&msg, model, cfg));
+        menu::plan(
+            &msg,
+            header.as_ref(),
+            &self.menu_ui,
+            &self.menu_cfg(),
+            theme,
+            self.dims(),
+        )
     }
 
-    fn effective_menu(&self) -> Option<v2::MenuMsg> {
-        let mut msg = self.v2.menu.clone()?;
-        if msg.header.is_none()
-            && let (Some(cfg), Some(model)) = (
-                self.v2.config.as_ref(),
-                self.v2.model.as_ref().and_then(v2::ModelMsg::sidebar),
-            )
-        {
-            msg.header = vtabs_engine::enrich::menu_header(&msg, model, cfg);
-        }
-        Some(msg)
+    fn effective_menu(&self) -> Option<payload::MenuMsg> {
+        self.sync.menu.clone()
     }
 
     fn scene(&self) -> (Enriched, Outcome) {
@@ -869,13 +808,17 @@ impl<W: Write> App<W> {
         let mut e = enrich(cfg, theme, model, self.dims(), &self.ui);
         let effective_menu = self.effective_menu();
         let outcome = match effective_menu.as_ref() {
-            Some(msg) => menu::plan(
-                msg,
-                &self.menu_ui,
-                &self.menu_cfg(),
-                &e.view.theme,
-                self.dims(),
-            ),
+            Some(msg) => {
+                let header = vtabs_engine::enrich::menu_header(msg, model, cfg);
+                menu::plan(
+                    msg,
+                    header.as_ref(),
+                    &self.menu_ui,
+                    &self.menu_cfg(),
+                    &e.view.theme,
+                    self.dims(),
+                )
+            }
             None => Outcome::Closed,
         };
         match &outcome {
@@ -891,12 +834,12 @@ impl<W: Write> App<W> {
         (e, outcome)
     }
 
-    fn state(&self) -> (&EngineConfig, &Theme, &v2::SidebarModel) {
-        let model = self.v2.model.as_ref().expect("dressed");
+    fn state(&self) -> (&EngineConfig, &Theme, &payload::SidebarModel) {
+        let model = self.sync.model.as_ref().expect("dressed");
         (
-            self.v2.config.as_ref().expect("dressed"),
-            self.v2.resolved_theme.as_ref().expect("dressed"),
-            model.sidebar().expect("sidebar state"),
+            self.sync.config.as_ref().expect("dressed"),
+            self.sync.resolved_theme.as_ref().expect("dressed"),
+            model,
         )
     }
 
@@ -1005,44 +948,33 @@ impl<W: Write> App<W> {
     }
 
     fn paint_log_line(&self) -> String {
-        let rev = self
-            .v2
-            .model
-            .as_ref()
-            .map(|model| model.rev)
-            .or(self.v2.settings_rev)
-            .unwrap_or(0);
         let (cols, rows) = self.size;
         format!(
-            "paint {cols}x{rows} rev {rev} totals={{commits={},paints={},bytes={}}}",
-            self.metrics.committed_generations,
-            self.metrics.terminal_paints,
-            self.metrics.paint_bytes,
+            "paint {cols}x{rows} totals={{commits={},paints={},bytes={}}}",
+            self.metrics.commits, self.metrics.terminal_paints, self.metrics.paint_bytes,
         )
     }
 
-    /// An open level that cannot be placed is Lua's to unwind; the note is sent once per message.
+    /// An open level that cannot be placed is Lua's to unwind; send the event once per publication.
     fn refuse(&mut self, outcome: &Outcome) -> io::Result<()> {
         let Outcome::Refused { why, level } = outcome else {
             return Ok(());
         };
-        let rev = self.v2.menu.as_ref().map(|m| m.rev);
-        if self.noted_menu == rev {
+        if self.menu_refused {
             return Ok(());
         }
-        self.noted_menu = rev;
-        let id = self.v2.menu.as_ref().and_then(|m| m.target);
-        self.emit(&Event::Note {
-            k: "menu_refused",
+        self.menu_refused = true;
+        let id = self.sync.menu.as_ref().and_then(|m| m.target);
+        self.emit(&Event::MenuRefused {
             why: Some(why),
             id,
-            a: Some(level.name()),
+            level: Some(level.name()),
         })
     }
 
     /// Hover goes stale on its own clock, so a pointer that left the pane stops lighting a row.
     fn arm_hover(&mut self) {
-        let ms = self.v2.config.as_ref().map_or(0, |c| c.hover_timeout_ms);
+        let ms = self.sync.config.as_ref().map_or(0, |c| c.hover_timeout_ms);
         self.hover_deadline = (ms > 0 && self.ui.hover.is_some())
             .then(|| Instant::now() + std::time::Duration::from_millis(ms + 1));
     }
@@ -1054,7 +986,7 @@ impl<W: Write> App<W> {
     pub fn tick_hover(&mut self, now: Instant) -> io::Result<()> {
         if self.hover_deadline.is_some_and(|at| now >= at) {
             self.hover_deadline = None;
-            let ms = self.v2.config.as_ref().map_or(0, |c| c.hover_timeout_ms);
+            let ms = self.sync.config.as_ref().map_or(0, |c| c.hover_timeout_ms);
             if self.ui.expire_hover(self.now_ms(), ms) {
                 self.repaint()?;
             }
@@ -1063,42 +995,26 @@ impl<W: Write> App<W> {
     }
 
     pub fn next_hook_deadline(&self) -> Option<Instant> {
-        self.v2
+        self.sync
             .pending
             .as_ref()
             .and_then(|pending| pending.hook_deadline)
     }
 
-    /// Replays one lost host-hook request, then commits a deterministic no-hook fallback. The Lua
-    /// side caches answers per generation, so replay never runs user code twice.
+    /// Commits a deterministic no-hook fallback if the sole host-hook request gets no answer.
+    /// Requests are not replayed: an uncorrelated duplicate answer could otherwise satisfy a later
+    /// transaction.
     pub fn tick_hooks(&mut self, now: Instant) -> io::Result<()> {
         let due = self
-            .v2
+            .sync
             .pending
             .as_ref()
             .is_some_and(|pending| pending.hook_deadline.is_some_and(|at| now >= at));
         if !due {
             return Ok(());
         }
-        let retry = self.v2.pending.as_ref().is_some_and(|pending| {
-            pending.hook_retries < HOOK_RETRIES && pending.hook_event.is_some()
-        });
-        if retry {
-            let event = {
-                let pending = self
-                    .v2
-                    .pending
-                    .as_mut()
-                    .expect("due hook has pending state");
-                pending.hook_retries += 1;
-                pending.hook_deadline = Some(now + HOOK_TIMEOUT);
-                pending.hook_event.clone().expect("retry checked an event")
-            };
-            self.emit(&event)?;
-            return Ok(());
-        }
         let what = if self
-            .v2
+            .sync
             .pending
             .as_ref()
             .is_some_and(|pending| pending.space_hook_requested.is_some())
@@ -1120,51 +1036,55 @@ impl<W: Write> App<W> {
         what: &'static str,
         reason: &'static str,
     ) -> io::Result<Applied> {
-        let Some(generation) = self.v2.pending.as_ref().map(|pending| pending.generation) else {
+        if self.sync.pending.is_none() {
             return Ok(Applied::Continue);
-        };
+        }
+        if reason == "timeout" {
+            match what {
+                "space_route_hook" => self.sync.skip_space_hook = true,
+                "theme_hook" => self.sync.skip_theme_hook = true,
+                _ => {}
+            }
+        }
         self.emit(&Event::dropped(what, reason))?;
         let requested = self
-            .v2
+            .sync
             .pending
             .as_ref()
             .and_then(|pending| pending.space_hook_requested.clone());
         if let Some(requested) = requested {
             let answers = requested
                 .into_iter()
-                .map(|tab_id| v2::SpaceRouteHookAnswer {
+                .map(|tab_id| payload::SpaceRouteHookAnswer {
                     tab_id,
                     space: None,
                 })
                 .collect::<Vec<_>>();
             let plan = {
-                let pending = self.v2.pending.as_ref().expect("matching pending sync");
+                let pending = self.sync.pending.as_ref().expect("matching pending sync");
                 let (Some(input), Some(theme)) = (
                     pending.sections.spaces.as_ref(),
                     pending.sections.theme.as_ref(),
                 ) else {
-                    self.v2.pending.take();
+                    self.sync.pending.take();
                     return Ok(Applied::Continue);
                 };
                 spaces::plan(input, &theme.scheme, Some(&answers))
             };
             let SpacesPlan::Resolved(resolution) = plan else {
-                self.v2.pending.take();
+                self.sync.pending.take();
                 return Ok(Applied::Continue);
             };
-            let pending = self.v2.pending.as_mut().expect("matching pending sync");
+            let pending = self.sync.pending.as_mut().expect("matching pending sync");
             pending.space_hook_requested = None;
-            pending.hook_event = None;
             pending.hook_deadline = None;
-            pending.hook_retries = 0;
             Self::apply_space_resolution(&mut pending.sections, *resolution);
-            return self.continue_sync(generation);
+            return self.continue_sync();
         }
-        let Some(mut pending) = self.v2.pending.take() else {
+        let Some(mut pending) = self.sync.pending.take() else {
             return Ok(Applied::Continue);
         };
         pending.hook_requested = false;
-        pending.hook_event = None;
         pending.hook_deadline = None;
         self.publish_pending(pending, None)
     }
@@ -1184,10 +1104,9 @@ impl<W: Write> App<W> {
     /// The optimistic wheel override retires once the model comes back carrying it.
     fn settle_scroll(&mut self) {
         let landed = self
-            .v2
+            .sync
             .model
             .as_ref()
-            .and_then(v2::ModelMsg::sidebar)
             .and_then(|m| m.scroll)
             .is_some_and(|s| s.user && Some(s.top) == self.ui.scroll);
         if landed {
@@ -1195,9 +1114,9 @@ impl<W: Write> App<W> {
         }
     }
 
-    /// Transactional clients may only mutate the pending clone between Begin and Commit.
-    fn stage(&mut self, seen: u8, update: impl FnOnce(&mut V2Sections)) {
-        let Some(pending) = self.v2.pending.as_mut() else {
+    /// Sections may only mutate the pending transaction between Begin and Commit.
+    fn stage(&mut self, seen: u8, update: impl FnOnce(&mut Sections)) {
+        let Some(pending) = self.sync.pending.as_mut() else {
             return;
         };
         if pending.valid && !pending.awaiting_hook() {
@@ -1206,23 +1125,25 @@ impl<W: Write> App<W> {
         }
     }
 
-    fn ignores_atomic_section(&self) -> bool {
-        self.v2.atomic
-            && (self.v2.discarding_generation.is_some()
-                || self
-                    .v2
-                    .pending
-                    .as_ref()
-                    .is_none_or(PendingSync::awaiting_hook))
+    fn ignores_section(&self) -> bool {
+        self.sync.discarding
+            || self
+                .sync
+                .pending
+                .as_ref()
+                .is_none_or(PendingSync::awaiting_hook)
     }
 
     fn invalidate_pending(&mut self) {
-        if let Some(pending) = self.v2.pending.as_mut() {
+        if let Some(pending) = self.sync.pending.as_mut() {
             pending.valid = false;
         }
     }
 
-    fn resolve_sections(sections: &V2Sections, hook: Option<&v2::ThemeOverrides>) -> Option<Theme> {
+    fn resolve_sections(
+        sections: &Sections,
+        hook: Option<&payload::ThemeOverrides>,
+    ) -> Option<Theme> {
         let raw = sections.theme.as_ref()?;
         if sections.model.is_none() && sections.settings.is_none() {
             return None;
@@ -1234,45 +1155,38 @@ impl<W: Write> App<W> {
         if let Some(hook) = hook {
             layered = theme::overlay(&layered, hook);
         }
-        Some(theme::resolve(
-            &layered,
-            &raw.scheme,
-            raw.private
-                .unwrap_or_else(|| sections.model.as_ref().is_some_and(v2::ModelMsg::private)),
-        ))
+        Some(theme::resolve(&layered, &raw.scheme, raw.private))
     }
 
-    fn apply_space_resolution(sections: &mut V2Sections, resolution: v2::SpaceResolution) {
+    fn apply_space_resolution(sections: &mut Sections, resolution: payload::SpaceResolution) {
         if let (Some(spaces), Some(model)) = (&sections.spaces, sections.model.as_mut()) {
             let visible = resolution
                 .visible_tab_ids
                 .iter()
                 .copied()
                 .collect::<BTreeSet<_>>();
-            if let v2::ModelScreen::Sidebar(sidebar) = &mut model.screen {
-                sidebar.tabs = spaces
-                    .tabs
-                    .iter()
-                    .filter(|fact| visible.contains(&fact.tab.id))
-                    .map(|fact| fact.tab.clone())
-                    .collect();
-                sidebar.space = resolution.active.clone();
-                sidebar.spaces = resolution
-                    .summary
-                    .iter()
-                    .map(|space| v2::SpaceItem {
-                        id: space.id.clone(),
-                        name: space.name.clone(),
-                        icon: space.icon.clone(),
-                        unseen: space.unseen,
-                    })
-                    .collect();
-            }
+            model.tabs = spaces
+                .tabs
+                .iter()
+                .filter(|fact| visible.contains(&fact.tab.id))
+                .map(|fact| fact.tab.clone())
+                .collect();
+            model.space = resolution.active.clone();
+            model.spaces = resolution
+                .summary
+                .iter()
+                .map(|space| payload::SpaceItem {
+                    id: space.id.clone(),
+                    name: space.name.clone(),
+                    icon: space.icon.clone(),
+                    unseen: space.unseen,
+                })
+                .collect();
         }
         sections.space_resolution = Some(resolution);
     }
 
-    fn valid_space_answer(requested: &[i64], routes: &[v2::SpaceRouteHookAnswer]) -> bool {
+    fn valid_space_answer(requested: &[i64], routes: &[payload::SpaceRouteHookAnswer]) -> bool {
         if requested.len() != routes.len() {
             return false;
         }
@@ -1284,7 +1198,7 @@ impl<W: Write> App<W> {
         expected.len() == requested.len() && received.len() == routes.len() && expected == received
     }
 
-    fn valid_spaces_input(input: &v2::SpacesMsg) -> bool {
+    fn valid_spaces_input(input: &payload::SpacesMsg) -> bool {
         if input.tabs.len() > MODEL_MAX_TABS
             || input.dynamics.len() > MODEL_MAX_SPACES
             || input.last_tabs.len() > MODEL_MAX_SPACES
@@ -1311,43 +1225,41 @@ impl<W: Write> App<W> {
             && last_tabs.len() == input.last_tabs.len()
     }
 
-    fn report_committed_theme(&mut self, generation: Option<u64>) -> io::Result<()> {
-        let Some(effective) = self.v2.resolved_theme.as_ref() else {
+    fn report_committed_theme(&mut self) -> io::Result<()> {
+        let Some(effective) = self.sync.resolved_theme.as_ref() else {
             return Ok(());
         };
-        let reported = (generation, effective.clone());
+        let reported = effective.clone();
         if self.last_reported_theme.as_ref() == Some(&reported) {
             return Ok(());
         }
         self.emit(&Event::ThemeResolved {
-            generation,
-            theme: reported.1.clone(),
+            theme: reported.clone(),
         })?;
         self.last_reported_theme = Some(reported);
         Ok(())
     }
 
-    /// Legacy sections still resolve in Rust; they simply cannot pause for an atomic host hook.
-    fn refresh_legacy_theme(&mut self) -> io::Result<()> {
-        self.v2.resolved_theme = Self::resolve_sections(&self.v2.committed, None);
-        self.report_committed_theme(None)
-    }
-
     fn publish_pending(
         &mut self,
         mut pending: PendingSync,
-        hook: Option<&v2::ThemeOverrides>,
+        hook: Option<&payload::ThemeOverrides>,
     ) -> io::Result<Applied> {
+        if let (Some(model), Some(theme)) = (
+            pending.sections.model.as_mut(),
+            pending.sections.theme.as_ref(),
+        ) {
+            model.private = theme.private;
+        }
         let Some(effective) = Self::resolve_sections(&pending.sections, hook) else {
             return Ok(Applied::Continue);
         };
         pending.sections.resolved_theme = Some(effective);
 
         let previous_motion = self.hover_highlight();
-        let generation = pending.generation;
-        self.v2.committed = pending.sections;
-        self.v2.committed_generation = Some(generation);
-        self.metrics.committed_generations = self.metrics.committed_generations.saturating_add(1);
+        self.sync.committed = pending.sections;
+        self.metrics.commits = self.metrics.commits.saturating_add(1);
+        self.menu_refused = false;
         let next_motion = self.hover_highlight();
         if previous_motion != next_motion {
             self.write(if next_motion {
@@ -1356,184 +1268,189 @@ impl<W: Write> App<W> {
                 MOTION_OFF.as_bytes()
             })?;
         }
-        if let Some(menu) = self.v2.menu.as_ref() {
+        if let Some(menu) = self.sync.menu.as_ref() {
             self.menu_ui.adopt(menu);
         }
-        if let Some(spaces) = self.v2.space_resolution.clone() {
+        if let Some(spaces) = self.sync.space_resolution.clone() {
             let window_id = self
-                .v2
+                .sync
                 .spaces
                 .as_ref()
                 .map(|input| input.window_id)
                 .unwrap_or_default();
             self.emit(&Event::SpacesResolved {
-                generation,
                 window_id,
                 resolution: Box::new(spaces),
             })?;
         }
-        self.report_committed_theme(Some(generation))?;
+        self.report_committed_theme()?;
         Ok(Applied::Repaint)
     }
 
-    fn begin_sync(&mut self, generation: u64) {
-        let stale_committed = self
-            .v2
-            .committed_generation
-            .is_some_and(|current| generation <= current);
-        let rejected_pending = self.v2.pending.as_ref().is_some_and(|pending| {
-            generation < pending.generation
-                || (generation == pending.generation && pending.awaiting_hook())
-        });
-        if stale_committed || rejected_pending {
-            self.v2.discarding_generation = Some(generation);
-            return;
+    fn begin_sync(&mut self) -> io::Result<()> {
+        if self.sync.discarding
+            || self
+                .sync
+                .pending
+                .as_ref()
+                .is_some_and(PendingSync::awaiting_hook)
+        {
+            self.sync.discarding = true;
+            self.emit(&Event::dropped("sync", "busy"))?;
+            return Ok(());
         }
-        // Lua retries the same generation when an atomic write reports failure. While still
-        // building, replay starts from committed state again instead of keeping a partial prefix.
-        self.v2.atomic = true;
-        self.v2.discarding_generation = None;
-        self.v2.pending = Some(PendingSync {
-            generation,
-            sections: self.v2.committed.clone(),
+        // A repeated Begin before Commit restarts staging from committed state. Later
+        // transactions may replace only changed sections; the resulting state remains complete.
+        self.sync.pending = Some(PendingSync {
+            sections: self.sync.committed.clone(),
             seen: 0,
             valid: true,
             space_hook_requested: None,
             hook_requested: false,
-            hook_event: None,
             hook_deadline: None,
-            hook_retries: 0,
         });
+        Ok(())
     }
 
-    fn continue_sync(&mut self, generation: u64) -> io::Result<Applied> {
-        if self.client_spaces_policy {
-            let needs_plan = self
-                .v2
-                .pending
-                .as_ref()
-                .is_some_and(|pending| pending.sections.space_resolution.is_none());
-            if needs_plan {
-                let plan = {
-                    let pending = self.v2.pending.as_ref().expect("matching pending sync");
-                    let Some(input) = pending.sections.spaces.as_ref() else {
-                        self.v2.pending.take();
-                        return Ok(Applied::Continue);
-                    };
-                    let Some(theme) = pending.sections.theme.as_ref() else {
-                        self.v2.pending.take();
-                        return Ok(Applied::Continue);
-                    };
-                    spaces::plan(input, &theme.scheme, None)
+    fn continue_sync(&mut self) -> io::Result<Applied> {
+        let needs_plan = self
+            .sync
+            .pending
+            .as_ref()
+            .is_some_and(|pending| pending.sections.space_resolution.is_none());
+        if needs_plan {
+            let plan = {
+                let pending = self.sync.pending.as_ref().expect("matching pending sync");
+                let Some(input) = pending.sections.spaces.as_ref() else {
+                    self.sync.pending.take();
+                    return Ok(Applied::Continue);
                 };
-                match plan {
-                    SpacesPlan::NeedsHooks { tabs } => {
+                let Some(theme) = pending.sections.theme.as_ref() else {
+                    self.sync.pending.take();
+                    return Ok(Applied::Continue);
+                };
+                spaces::plan(input, &theme.scheme, None)
+            };
+            match plan {
+                SpacesPlan::NeedsHooks { tabs } => {
+                    if self.sync.skip_space_hook {
+                        let answers = tabs
+                            .iter()
+                            .map(|tab| payload::SpaceRouteHookAnswer {
+                                tab_id: tab.tab_id,
+                                space: None,
+                            })
+                            .collect::<Vec<_>>();
+                        let resolution = {
+                            let pending =
+                                self.sync.pending.as_ref().expect("matching pending sync");
+                            let input = pending
+                                .sections
+                                .spaces
+                                .as_ref()
+                                .expect("validated spaces section");
+                            let theme = pending
+                                .sections
+                                .theme
+                                .as_ref()
+                                .expect("validated theme section");
+                            let SpacesPlan::Resolved(resolution) =
+                                spaces::plan(input, &theme.scheme, Some(&answers))
+                            else {
+                                self.sync.pending.take();
+                                return Ok(Applied::Continue);
+                            };
+                            resolution
+                        };
+                        let pending = self.sync.pending.as_mut().expect("matching pending sync");
+                        Self::apply_space_resolution(&mut pending.sections, *resolution);
+                    } else {
                         let window_id = self
-                            .v2
+                            .sync
                             .pending
                             .as_ref()
                             .and_then(|pending| pending.sections.spaces.as_ref())
                             .map(|input| input.window_id)
                             .unwrap_or_default();
                         let requested = tabs.iter().map(|tab| tab.tab_id).collect();
-                        let event = Event::SpaceRouteHookRequest {
-                            generation,
-                            window_id,
-                            tabs,
-                        };
-                        let pending = self.v2.pending.as_mut().expect("matching pending sync");
+                        let event = Event::SpaceRouteHookRequest { window_id, tabs };
+                        let pending = self.sync.pending.as_mut().expect("matching pending sync");
                         pending.space_hook_requested = Some(requested);
-                        pending.hook_event = Some(event.clone());
                         pending.hook_deadline = Some(Instant::now() + HOOK_TIMEOUT);
-                        pending.hook_retries = 0;
                         self.emit(&event)?;
                         return Ok(Applied::Continue);
                     }
-                    SpacesPlan::Resolved(resolution) => {
-                        let pending = self.v2.pending.as_mut().expect("matching pending sync");
-                        Self::apply_space_resolution(&mut pending.sections, *resolution);
-                    }
+                }
+                SpacesPlan::Resolved(resolution) => {
+                    let pending = self.sync.pending.as_mut().expect("matching pending sync");
+                    Self::apply_space_resolution(&mut pending.sections, *resolution);
                 }
             }
         }
 
-        let pending = self.v2.pending.as_ref().expect("matching pending sync");
+        let pending = self.sync.pending.as_ref().expect("matching pending sync");
         if pending.hook_requested {
             return Ok(Applied::Continue);
         }
-        let needs_hook = self.client_theme_hooks
-            && pending
-                .sections
-                .theme
-                .as_ref()
-                .is_some_and(|theme| theme.hook);
+        let needs_hook = pending
+            .sections
+            .theme
+            .as_ref()
+            .is_some_and(|theme| theme.hook);
         if needs_hook {
+            if self.sync.skip_theme_hook {
+                let pending = self.sync.pending.take().expect("matching pending sync");
+                return self.publish_pending(pending, None);
+            }
             let Some(base) = Self::resolve_sections(&pending.sections, None) else {
-                self.v2.pending.take();
+                self.sync.pending.take();
                 return Ok(Applied::Continue);
             };
-            let event = Event::ThemeHookRequest {
-                generation,
-                theme: base,
-            };
-            let pending = self.v2.pending.as_mut().expect("matching pending sync");
+            let event = Event::ThemeHookRequest { theme: base };
+            let pending = self.sync.pending.as_mut().expect("matching pending sync");
             pending.hook_requested = true;
-            pending.hook_event = Some(event.clone());
             pending.hook_deadline = Some(Instant::now() + HOOK_TIMEOUT);
-            pending.hook_retries = 0;
             self.emit(&event)?;
             return Ok(Applied::Continue);
         }
-        let pending = self.v2.pending.take().expect("matching pending sync");
+        let pending = self.sync.pending.take().expect("matching pending sync");
         self.publish_pending(pending, None)
     }
 
-    fn commit_sync(&mut self, generation: u64) -> io::Result<Applied> {
-        if let Some(discarded) = self.v2.discarding_generation {
-            if discarded == generation {
-                self.v2.discarding_generation = None;
-            }
+    fn commit_sync(&mut self) -> io::Result<Applied> {
+        if self.sync.discarding {
+            self.sync.discarding = false;
             return Ok(Applied::Continue);
         }
-        if self
-            .v2
-            .committed_generation
-            .is_some_and(|current| generation <= current)
-        {
-            return Ok(Applied::Continue);
-        }
-        let Some(pending) = self.v2.pending.as_ref() else {
+        let Some(pending) = self.sync.pending.as_ref() else {
             return Ok(Applied::Continue);
         };
-        if pending.generation != generation {
-            return Ok(Applied::Continue);
-        }
         if !pending.valid
             || pending.seen == 0
             || pending.sections.config.is_none()
             || pending.sections.theme.is_none()
-            || (self.client_spaces_policy && pending.sections.spaces.is_none())
+            || pending.sections.spaces.is_none()
             || (pending.sections.model.is_none() && pending.sections.settings.is_none())
+            || (pending.sections.model.is_some() && pending.sections.menu.is_none())
         {
-            self.v2.pending.take();
+            self.sync.pending.take();
             return Ok(Applied::Continue);
         }
         if pending.awaiting_hook() {
             return Ok(Applied::Continue);
         }
-        self.continue_sync(generation)
+        self.continue_sync()
     }
 
     fn space_hook_result(
         &mut self,
-        generation: u64,
-        routes: Vec<v2::SpaceRouteHookAnswer>,
+        routes: Vec<payload::SpaceRouteHookAnswer>,
     ) -> io::Result<Applied> {
         let Some(requested) = self
-            .v2
+            .sync
             .pending
             .as_ref()
-            .filter(|pending| pending.generation == generation && pending.valid)
+            .filter(|pending| pending.valid)
             .and_then(|pending| pending.space_hook_requested.clone())
         else {
             return Ok(Applied::Continue);
@@ -1542,7 +1459,7 @@ impl<W: Write> App<W> {
             return self.fallback_pending_hook("space_route_hook_result", "invalid");
         }
         let plan = {
-            let pending = self.v2.pending.as_ref().expect("matching pending sync");
+            let pending = self.sync.pending.as_ref().expect("matching pending sync");
             let (Some(input), Some(theme)) = (
                 pending.sections.spaces.as_ref(),
                 pending.sections.theme.as_ref(),
@@ -1555,49 +1472,42 @@ impl<W: Write> App<W> {
         let SpacesPlan::Resolved(resolution) = plan else {
             return self.fallback_pending_hook("space_route_hook_result", "incomplete");
         };
-        let pending = self.v2.pending.as_mut().expect("matching pending sync");
+        let pending = self.sync.pending.as_mut().expect("matching pending sync");
         pending.space_hook_requested = None;
-        pending.hook_event = None;
         pending.hook_deadline = None;
-        pending.hook_retries = 0;
         Self::apply_space_resolution(&mut pending.sections, *resolution);
-        self.continue_sync(generation)
+        self.continue_sync()
     }
 
-    fn theme_hook_result(
-        &mut self,
-        generation: u64,
-        overrides: v2::ThemeOverrides,
-    ) -> io::Result<Applied> {
-        let matches = self.v2.pending.as_ref().is_some_and(|pending| {
-            pending.generation == generation && pending.valid && pending.hook_requested
-        });
+    fn theme_hook_result(&mut self, overrides: payload::ThemeOverrides) -> io::Result<Applied> {
+        let matches = self
+            .sync
+            .pending
+            .as_ref()
+            .is_some_and(|pending| pending.valid && pending.hook_requested);
         if !matches {
             return Ok(Applied::Continue);
         }
         if !theme::valid_overrides(&overrides) {
             return self.fallback_pending_hook("theme_hook_result", "invalid");
         }
-        let pending = self.v2.pending.take().expect("matching pending sync");
+        let pending = self.sync.pending.take().expect("matching pending sync");
         self.publish_pending(pending, Some(&overrides))
     }
 
     fn reset_for_auth(&mut self) -> io::Result<()> {
         let motion_was_on = self.hover_highlight();
-        self.v2 = V2State::default();
+        self.sync = SyncState::default();
         self.ui = UiState::default();
         self.menu_ui = MenuState::default();
         self.settings_ui = SettingsUi::default();
         self.popover = None;
-        self.noted_menu = None;
+        self.menu_refused = false;
         self.hover_deadline = None;
         self.fx = None;
         self.last_rows = None;
         self.shown_is_final = false;
         self.needs_clear = false;
-        self.client_typed_intents = false;
-        self.client_theme_hooks = false;
-        self.client_spaces_policy = false;
         self.last_reported_theme = None;
         self.last_rail_reserve = None;
         self.transport = Transport::Off;
@@ -1615,93 +1525,56 @@ impl<W: Write> App<W> {
                 return Ok(Applied::Repaint);
             }
             Command::Ping { n } => self.emit(&Event::Pong { echo: n })?,
-            Command::Auth { token, caps, keys } => {
+            Command::Auth { token, keys } => {
                 self.write(set_user_var(TOKEN_VAR, &token).as_bytes())?;
-                let typed_intents = caps.iter().any(|cap| cap == "typed_intents");
-                let theme_hooks = caps.iter().any(|cap| cap == "theme_hooks");
-                let spaces_policy = caps.iter().any(|cap| cap == "spaces_policy");
                 let server_keys = keys.as_deref() == Some("server");
                 // A new token is a new Lua process: the mux kept this backend but the plugin lost
-                // `store.proto`/`store.paints` with its old state, and only `ready` restores them.
+                // its process state, and only `ready` restores it.
                 // Re-announcing on the same token would ping-pong, since Lua re-auths on ready.
                 let renewed = self.token.as_deref() != Some(token.as_str());
                 if renewed {
                     self.token = Some(token);
                     self.reset_for_auth()?;
                 }
-                self.client_typed_intents = typed_intents;
-                self.client_theme_hooks = theme_hooks;
-                self.client_spaces_policy = spaces_policy;
                 self.server_keys = server_keys;
                 if renewed {
                     self.announce_ready()?;
                 }
             }
-            Command::Begin { generation } => self.begin_sync(generation),
-            Command::Commit { generation } => return self.commit_sync(generation),
-            Command::ThemeHookResult {
-                generation,
-                overrides,
-            } => return self.theme_hook_result(generation, *overrides),
-            Command::SpaceRouteHookResult { generation, routes } => {
-                return self.space_hook_result(generation, routes);
+            Command::Begin => self.begin_sync()?,
+            Command::Commit => return self.commit_sync(),
+            Command::ThemeHookResult { overrides } => {
+                return self.theme_hook_result(*overrides);
+            }
+            Command::SpaceRouteHookResult { routes } => {
+                return self.space_hook_result(routes);
             }
             Command::Config(msg) => {
-                if self.ignores_atomic_section() {
+                if self.ignores_section() {
                     return Ok(Applied::Continue);
                 }
                 let Ok(msg) = EngineConfig::try_from(*msg) else {
                     self.invalidate_pending();
                     self.emit(&Event::dropped("config", "invalid"))?;
-                    return Ok(if self.v2.atomic {
-                        Applied::Continue
-                    } else {
-                        Applied::Repaint
-                    });
-                };
-                if self.v2.atomic {
-                    self.stage(SEEN_CONFIG, |sections| sections.config = Some(msg));
                     return Ok(Applied::Continue);
-                }
-                // Motion reports are the one input the pane can decline: every pointer move over
-                // it is otherwise written through the mux to this pty.
-                if msg.hover_highlight != self.hover_highlight() {
-                    self.write(
-                        if msg.hover_highlight {
-                            MOTION_ON
-                        } else {
-                            MOTION_OFF
-                        }
-                        .as_bytes(),
-                    )?;
-                }
-                self.v2.config = Some(msg);
-                return Ok(Applied::Repaint);
+                };
+                self.stage(SEEN_CONFIG, |sections| sections.config = Some(msg));
+                return Ok(Applied::Continue);
             }
             Command::Theme(msg) => {
-                if self.ignores_atomic_section() {
+                if self.ignores_section() {
                     return Ok(Applied::Continue);
                 }
-                if self.v2.atomic {
-                    self.stage(SEEN_THEME, |sections| {
-                        sections.theme = Some(*msg);
-                        sections.resolved_theme = None;
-                        // Automatic space accents are selected from this raw palette.
-                        sections.space_resolution = None;
-                    });
-                    return Ok(Applied::Continue);
-                }
-                self.v2.theme = Some(*msg);
-                self.refresh_legacy_theme()?;
-                return Ok(Applied::Repaint);
+                self.stage(SEEN_THEME, |sections| {
+                    sections.theme = Some(*msg);
+                    sections.resolved_theme = None;
+                    // Automatic space accents are selected from this raw palette.
+                    sections.space_resolution = None;
+                });
+                return Ok(Applied::Continue);
             }
             Command::Spaces(msg) => {
-                if self.ignores_atomic_section() {
-                    return Ok(Applied::Continue);
-                }
-                if !self.v2.atomic || !self.client_spaces_policy {
-                    self.invalidate_pending();
-                    self.emit(&Event::dropped("spaces", "unsupported"))?;
+                if self.ignores_section() {
                     return Ok(Applied::Continue);
                 }
                 if !Self::valid_spaces_input(&msg) {
@@ -1716,92 +1589,52 @@ impl<W: Write> App<W> {
                 return Ok(Applied::Continue);
             }
             Command::Model(msg) => {
-                if self.ignores_atomic_section() {
+                if self.ignores_section() {
                     return Ok(Applied::Continue);
                 }
-                if msg.tab_count() > MODEL_MAX_TABS
-                    || msg.field_count() > MODEL_MAX_FIELDS
-                    || msg.space_count() > MODEL_MAX_SPACES
-                {
-                    self.invalidate_pending();
-                    self.emit(&Event::dropped("model", "bounds"))?;
-                    return Ok(if self.v2.atomic {
-                        Applied::Continue
-                    } else {
-                        Applied::Repaint
-                    });
-                } else if self.v2.atomic {
-                    self.stage(SEEN_MODEL, |sections| {
-                        adopt_model(sections, *msg);
-                        if let Some(resolution) = sections.space_resolution.clone() {
-                            Self::apply_space_resolution(sections, resolution);
-                        }
-                    });
-                    return Ok(Applied::Continue);
-                } else {
-                    adopt_model(&mut self.v2.committed, *msg);
-                }
-                self.refresh_legacy_theme()?;
-                return Ok(Applied::Repaint);
+                self.stage(SEEN_MODEL, |sections| {
+                    sections.model = Some(sidebar_model(*msg));
+                    sections.settings = None;
+                    sections.settings_document = None;
+                    if let Some(resolution) = sections.space_resolution.clone() {
+                        Self::apply_space_resolution(sections, resolution);
+                    }
+                });
+                return Ok(Applied::Continue);
             }
             Command::Settings(msg) => {
-                if self.ignores_atomic_section() {
+                if self.ignores_section() {
                     return Ok(Applied::Continue);
                 }
-                let Some((rev, presentation, document)) = settings_input(*msg) else {
+                let Some((presentation, document)) = settings_input(*msg) else {
                     self.invalidate_pending();
                     self.emit(&Event::dropped("settings", "invalid"))?;
-                    return Ok(if self.v2.atomic {
-                        Applied::Continue
-                    } else {
-                        Applied::Repaint
-                    });
+                    return Ok(Applied::Continue);
                 };
                 if presentation.fields.len() > MODEL_MAX_FIELDS {
                     self.invalidate_pending();
                     self.emit(&Event::dropped("settings", "bounds"))?;
-                    return Ok(if self.v2.atomic {
-                        Applied::Continue
-                    } else {
-                        Applied::Repaint
-                    });
-                } else if self.v2.atomic {
-                    self.stage(SEEN_MODEL, |sections| {
-                        sections.model = None;
-                        sections.settings = Some(presentation);
-                        sections.settings_rev = Some(rev);
-                        sections.settings_document = Some(document);
-                    });
                     return Ok(Applied::Continue);
-                } else {
-                    self.v2.model = None;
-                    self.v2.settings = Some(presentation);
-                    self.v2.settings_rev = Some(rev);
-                    self.v2.settings_document = Some(document);
                 }
-                self.refresh_legacy_theme()?;
-                return Ok(Applied::Repaint);
+                self.stage(SEEN_SETTINGS, |sections| {
+                    sections.model = None;
+                    sections.menu = None;
+                    sections.settings = Some(presentation);
+                    sections.settings_document = Some(document);
+                });
+                return Ok(Applied::Continue);
             }
             Command::Menu(msg) => {
-                if self.ignores_atomic_section() {
+                if self.ignores_section() {
                     return Ok(Applied::Continue);
                 }
                 if msg.items.len() > MENU_MAX_ITEMS {
                     self.invalidate_pending();
                     self.emit(&Event::dropped("menu", "bounds"))?;
-                    return Ok(if self.v2.atomic {
-                        Applied::Continue
-                    } else {
-                        Applied::Repaint
-                    });
-                } else if self.v2.atomic {
-                    self.stage(SEEN_MENU, |sections| sections.menu = Some(*msg));
                     return Ok(Applied::Continue);
-                } else {
-                    self.menu_ui.adopt(&msg);
-                    self.v2.menu = Some(*msg);
                 }
-                return Ok(Applied::Repaint);
+                self.stage(SEEN_MENU, |sections| sections.menu = Some(*msg));
+                return Ok(Applied::Continue);
             }
             Command::Fx(msg) => self.start_fx(&msg)?,
             Command::Notice(msg) => self.log.log(format!(
@@ -1809,45 +1642,35 @@ impl<W: Write> App<W> {
                 msg.level.as_deref().unwrap_or("info"),
                 msg.text
             )),
-            Command::Kill { title, pane } => {
+            Command::Kill { pane } => {
                 let done = self
                     .cli
                     .as_ref()
                     .ok_or_else(|| "no cli here".to_string())
-                    .and_then(|cli| match (pane, title) {
-                        (Some(pane), _) => cli.kill_pane(pane),
-                        (None, Some(title)) => cli.kill_by_title(&title),
-                        (None, None) => Err("kill: neither pane nor title".to_string()),
-                    });
+                    .and_then(|cli| cli.kill_pane(pane));
                 self.report("kill", done.map(|()| String::new()))?;
             }
             Command::Rescue { band, position } => {
-                let right = position.as_deref() == Some("right");
-                let done = self
-                    .cli
-                    .as_ref()
-                    .ok_or_else(|| "no cli here".to_string())
-                    .and_then(|cli| cli.rescue(i64::from(band), right));
+                let done = match position.as_str() {
+                    "left" | "right" => self
+                        .cli
+                        .as_ref()
+                        .ok_or_else(|| "no cli here".to_string())
+                        .and_then(|cli| cli.rescue(i64::from(band), position == "right")),
+                    _ => Err(format!("rescue: invalid position {position}")),
+                };
                 self.report("rescue", done.map(|n| n.to_string()))?;
             }
             Command::Adjust {
-                direction,
-                amount,
-                park,
                 target,
                 min_content,
             } => {
-                let parked = self.parked_focus.take();
-                let target = target.map(|cols| (cols, min_content.unwrap_or(MIN_CONTENT)));
                 let done = self
                     .cli
                     .as_ref()
                     .ok_or_else(|| "no cli here".to_string())
-                    .and_then(|cli| cli.adjust(&direction, amount, park, parked, target));
-                let done = done.map(|owed| {
-                    self.parked_focus = owed;
-                    owed.map(|id| id.to_string()).unwrap_or_default()
-                });
+                    .and_then(|cli| cli.adjust(target, min_content));
+                let done = done.map(|()| String::new());
                 // The split moved under this pane before the cli answered: the pane adopts the
                 // size now and says so, rather than leaving Lua to wait for a SIGWINCH.
                 let cols = if done.is_ok() {
@@ -1875,6 +1698,11 @@ impl<W: Write> App<W> {
 
     /// `ready`, offering a fresh inbox session whenever a root was given and can be prepared.
     pub fn announce_ready(&mut self) -> io::Result<()> {
+        let pane = self
+            .cli
+            .as_ref()
+            .map(Cli::own_pane)
+            .ok_or_else(|| io::Error::other("WEZTERM_PANE is required"))?;
         self.transport = Transport::Off;
         if let Some(offer) = self.inbox.as_ref() {
             match Inbox::create(&offer.root) {
@@ -1885,7 +1713,6 @@ impl<W: Write> App<W> {
                 Err(err) => self.log.log(format!("inbox: {err}")),
             }
         }
-        let pane = self.cli.as_ref().map(Cli::own_pane);
         let inbox = self.transport.session().map(str::to_owned);
         self.emit(&Event::ready_at(self.size.0, self.size.1, pane, inbox))
     }
@@ -2093,7 +1920,7 @@ impl<W: Write> App<W> {
     }
 
     /// A fade over the frame the pane shows: the phase's rows rise out of the page colour.
-    fn start_fx(&mut self, msg: &v2::FxMsg) -> io::Result<()> {
+    fn start_fx(&mut self, msg: &payload::FxMsg) -> io::Result<()> {
         let Some(mut phase) = fx::phase_named(&msg.phase) else {
             self.log.log(format!("fx {}: unknown phase", msg.phase));
             return Ok(());
@@ -2249,7 +2076,7 @@ fn protocol_setting_change(value: Option<Value>) -> io::Result<SettingsChange> {
 }
 
 /// `model.ordered`: pinned first, then the rest, both in the order Lua sent them.
-fn ordered_ids(model: &v2::SidebarModel) -> Vec<i64> {
+fn ordered_ids(model: &payload::SidebarModel) -> Vec<i64> {
     let mut ids: Vec<i64> = model
         .tabs
         .iter()
@@ -2260,13 +2087,13 @@ fn ordered_ids(model: &v2::SidebarModel) -> Vec<i64> {
     ids
 }
 
-fn space_ids(model: &v2::SidebarModel) -> Vec<&str> {
+fn space_ids(model: &payload::SidebarModel) -> Vec<&str> {
     model.spaces.iter().map(|s| s.id.as_str()).collect()
 }
 
 fn knobs<'a>(
     cfg: &'a EngineConfig,
-    model: &'a v2::SidebarModel,
+    model: &'a payload::SidebarModel,
     view: &'a vtabs_engine::scene::RenderInput,
     ordered: &'a [i64],
     space_ids: &'a [&'a str],

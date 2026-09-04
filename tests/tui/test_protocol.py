@@ -35,5 +35,5 @@ def test_ignores_invalid_user_variable_without_losing_later_events() -> None:
 def test_rejects_non_asciicast_input_with_a_useful_error() -> None:
     recording = json.dumps({"version": 1}) + "\n"
 
-    with pytest.raises(ValueError, match="asciicast v2"):
+    with pytest.raises(ValueError, match="unsupported asciicast format"):
         cast_output(recording)

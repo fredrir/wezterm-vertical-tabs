@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 
 from .adapter import Terminal
-from .support import dress_sidebar, sidebar_model, tab
+from .support import dress_sidebar, tab
 
 
 async def event_barrier(terminal: Terminal, echo: int) -> int:
@@ -13,7 +13,9 @@ async def event_barrier(terminal: Terminal, echo: int) -> int:
 
 
 def menu_picks(events: list[dict[str, object]]) -> list[dict[str, object]]:
-    return [event for event in events if event.get("t") == "do" and event.get("a") == "menu_pick"]
+    return [
+        event for event in events if event.get("t") == "intent" and event.get("a") == "menu_pick"
+    ]
 
 
 @pytest.mark.asyncio
@@ -22,17 +24,15 @@ async def test_destructive_menu_item_requires_matching_press_and_release(
 ) -> None:
     safe_label = "KEEP"
     destructive_label = "DESTROY"
-    await dress_sidebar(terminal, sidebar_model([tab(7, "Workspace")]))
-    await terminal.send(
+    await dress_sidebar(terminal, [tab(7, "Workspace")])
+    await terminal.publish(
         {
             "t": "menu",
-            "rev": 1,
             "open": True,
             "level": "root",
             "anchor": {"row": 3, "col": 14},
             "target": 7,
             "selected": 2,
-            "header": {"title": "Actions"},
             "items": [
                 {"id": "keep", "label": safe_label},
                 {"id": "destroy", "label": destructive_label, "danger": True},
@@ -57,5 +57,26 @@ async def test_destructive_menu_item_requires_matching_press_and_release(
     await event_barrier(terminal, 81003)
     picks = menu_picks(await terminal.events_after(after_wrong_release))
     assert len(picks) == 1
-    assert isinstance(picks[0].get("args"), dict)
-    assert picks[0]["args"].get("id") == "destroy"
+    assert picks[0].get("item_id") == "destroy"
+
+
+@pytest.mark.asyncio
+async def test_unplaceable_menu_emits_typed_refusal(terminal_factory) -> None:
+    terminal = await terminal_factory(cols=3)
+    await dress_sidebar(terminal, [tab(7, "Workspace")])
+
+    await terminal.publish(
+        {
+            "t": "menu",
+            "open": True,
+            "level": "root",
+            "anchor": {"row": 3, "col": 1},
+            "target": 7,
+            "items": [{"id": "keep", "label": "KEEP"}],
+        }
+    )
+
+    await terminal.wait_event(
+        "menu_refused",
+        where={"why": "width", "id": 7, "level": "root"},
+    )

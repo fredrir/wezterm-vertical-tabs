@@ -250,12 +250,12 @@ end
 ---corrects whatever a tab had to wait for, then publishes.
 function M.on_resize(gui_window)
   local wid = gui_window:window_id()
-  local gen = geometry.on_resize(wid)
+  local tick = geometry.on_resize(wid)
   geometry.correct(gui_window)
   local attempts = 0
   local settle
   settle = function()
-    if geometry.resize_gen(wid) ~= gen then
+    if geometry.resize_tick(wid) ~= tick then
       return
     end
     attempts = attempts + 1
@@ -304,7 +304,7 @@ end
 function M.sync(gui_window)
   local cfg = config.get()
   -- Every frame of a window resize changes the sidebar's metrics, and a publish per frame is a
-  -- generation (with its spaces and theme round trips) per frame. The sidebar repaints itself from
+  -- full spaces/theme round trip per frame. The sidebar repaints itself from
   -- its own size meanwhile; the settle timer publishes once the frames have stopped.
   if geometry.in_burst(gui_window:window_id()) then
     return false

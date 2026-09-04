@@ -1,6 +1,6 @@
-//! The v2 command state plus this pane's own dimensions and pointer state, composed into the
-//! renderer's input. This is the single owner of title/meta fallback and the resolution formerly
-//! done per window in Lua: icons, glyphs, theme and the strip's geometry.
+//! The command state plus this pane's own dimensions and pointer state, composed into the
+//! renderer's input. This is the single owner of title/meta fallback, icons, glyphs, theme, and
+//! strip geometry.
 
 use std::collections::BTreeMap;
 
@@ -8,7 +8,7 @@ use crate::config::{EngineConfig, MetaMode};
 use crate::geom::{Dims, StripOpts, strip_geometry};
 use crate::theme::Theme;
 use crate::{basename, icons, sanitize, ui::UiState};
-use vtabs_protocol::v2::{MenuHeader, MenuMsg, SidebarModel, SpaceItem, TabRecord, ThemeMsg};
+use vtabs_protocol::payload::{MenuMsg, SidebarModel, SpaceItem, TabRecord, ThemeMsg};
 
 use crate::glyphs;
 use crate::scene::{Drag, Hover, Item, RenderInput, SpaceEntry, Strip};
@@ -33,6 +33,12 @@ pub struct PopoverHits {
     pub h: i64,
     /// One entry per row, top to bottom: the row's id and whether it refuses clicks.
     pub rows: Vec<(Option<String>, bool)>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MenuHeader {
+    pub title: String,
+    pub meta: Option<String>,
 }
 
 impl PopoverHits {
@@ -117,12 +123,8 @@ pub(crate) fn title_of(tab: &TabRecord) -> String {
         .unwrap_or_else(|| format!("tab {}", tab.id))
 }
 
-/// Derives plugin menu headers from the same raw tab record as the card. A supplied header remains
-/// the legacy escape hatch; current Lua sends only ids/counts and owns no title/meta fallback.
+/// Derives plugin menu headers from the same raw tab record as the card.
 pub fn menu_header(msg: &MenuMsg, model: &SidebarModel, cfg: &EngineConfig) -> Option<MenuHeader> {
-    if let Some(header) = &msg.header {
-        return Some(header.clone());
-    }
     let tab = msg
         .subject
         .or(msg.target)
@@ -182,8 +184,7 @@ pub fn theme_of(msg: &ThemeMsg, private: bool) -> crate::theme::Theme {
 }
 
 /// The sole strip geometry calculation, from the pane as this process measures it (cells from the
-/// terminal, `pixels` from the pty's winsize), the window dpi and chrome facts Lua sends, and,
-/// for a plugin that still measures the pane itself, its pane metrics.
+/// terminal, `pixels` from the pty's winsize), and the window dpi and chrome facts Lua sends.
 fn strip_of(
     cfg: &EngineConfig,
     model: &SidebarModel,
@@ -192,17 +193,14 @@ fn strip_of(
     pixels: Option<(u32, u32)>,
 ) -> (Strip, Option<i64>) {
     let sent = model.strip.as_ref();
-    let metrics_fact = sent.and_then(|strip| strip.metrics);
     let chrome_fact = sent.and_then(|strip| strip.chrome);
-    let metrics = metrics_fact.unwrap_or_default();
     let chrome = chrome_fact.unwrap_or_default();
     let measured = pixels
         .filter(|(w, h)| *w > 0 && *h > 0)
         .map(|(w, h)| (f64::from(w), f64::from(h)));
-    let (pixel_width, pixel_height) =
-        measured.unwrap_or((metrics.pixel_width, metrics.pixel_height));
-    let sized = measured.is_some() || metrics_fact.is_some();
-    let dpi = metrics.dpi.or(sent.and_then(|strip| strip.dpi));
+    let (pixel_width, pixel_height) = measured.unwrap_or_default();
+    let sized = measured.is_some();
+    let dpi = sent.and_then(|strip| strip.dpi);
     let position_left = !cfg.render.position.is_right();
     let reserve_disabled = !position_left
         || chrome_fact.is_some_and(|facts| {
@@ -211,16 +209,12 @@ fn strip_of(
                 || !facts.native_button_style
                 || facts.is_full_screen
         });
-    let toggle_button = sent.is_some_and(|s| s.buttons.iter().any(|b| b.id == "toggle"));
+    let toggle_button = sent.is_some_and(|s| s.buttons.iter().any(|b| b.id == "toggle_sidebar"));
     // The terminal's own cell count is the pane this process paints; a plugin's copy can lag it.
     let g = strip_geometry(
         Dims {
-            cols: if cols > 0 { cols as u32 } else { metrics.cols },
-            viewport_rows: if rows > 0 {
-                rows as u32
-            } else {
-                metrics.viewport_rows
-            },
+            cols: cols.max(0) as u32,
+            viewport_rows: rows.max(0) as u32,
             pixel_width,
             pixel_height,
             dpi,

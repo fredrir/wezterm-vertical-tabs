@@ -7,7 +7,7 @@ use vtabs_protocol::limits::{
     CONTROL_PREFIX, CONTROL_TOKEN_MAX_BYTES, FORWARDED_KEY_MAX_BYTES,
     FORWARDED_KEY_MAX_ENCODED_BYTES, FRAME_MAX_AREA, FRAME_MAX_SIDE, INBOX_FILE_MAX_BYTES,
     INBOX_SEQ_DIGITS, INBOX_SESSION_MAX_BYTES, LINE_MAX, MODEL_MAX_SPACES, PASTE_MAX_BYTES,
-    PASTE_MAX_ENCODED_BYTES, SETTINGS_BODY_MAX_BYTES, TITLEBAR_PT, VERSION,
+    PASTE_MAX_ENCODED_BYTES, SETTINGS_BODY_MAX_BYTES, TITLEBAR_PT,
 };
 
 fn lua_string(bytes: &[u8]) -> String {
@@ -26,7 +26,6 @@ fn lua_string(bytes: &[u8]) -> String {
 
 fn contents() -> String {
     let rows = [
-        ("VERSION", VERSION as u64),
         ("FRAME_MAX_SIDE", FRAME_MAX_SIDE as u64),
         ("FRAME_MAX_AREA", FRAME_MAX_AREA),
         ("CONTROL_TOKEN_MAX_BYTES", CONTROL_TOKEN_MAX_BYTES as u64),
@@ -56,11 +55,11 @@ fn contents() -> String {
         lua_string(CONTROL_PREFIX)
     ));
     out.push_str("  THEME_COLOR_FIELDS = {\n");
-    for field in vtabs_protocol::v2::THEME_COLOR_FIELDS {
+    for field in vtabs_protocol::payload::THEME_COLOR_FIELDS {
         out.push_str(&format!("    [{:?}] = true,\n", field));
     }
     out.push_str("  },\n  THEME_FRACTION_FIELDS = {\n");
-    for field in vtabs_protocol::v2::THEME_FRACTION_FIELDS {
+    for field in vtabs_protocol::payload::THEME_FRACTION_FIELDS {
         out.push_str(&format!("    [{:?}] = true,\n", field));
     }
     out.push_str("  },\n  INTENT_NAMES = {\n");

@@ -747,7 +747,7 @@ test("the rail's narrow width is never adopted as the user's desired width", fun
   eq(#win.actions > 0, true)
 end)
 
-test("typed Rust rail reserve effects are stored and applied only by geometry", function()
+test("Rust rail reserve effects are stored and applied only by geometry", function()
   config.setup {
     collapsed = "rail",
     rail_width = 5,
@@ -768,8 +768,8 @@ test("typed Rust rail reserve effects are stored and applied only by geometry", 
   win.active_tab_ref = win.tab_list[2]
   input.handle(gui, first, "vtabs", '{"t":"intent","a":"set_rail_reserve","cols":0}')
   eq(geometry.rail_reserve(wid), 9, "the former active pane cannot clear the new tab's reserve")
-  input.handle(gui, second, "vtabs", '{"t":"do","a":"set_rail_reserve","args":{"cols":7}}')
-  eq(geometry.rail_reserve(wid), 7, "the legacy envelope reaches the same guarded effect")
+  input.handle(gui, second, "vtabs", '{"t":"intent","a":"set_rail_reserve","cols":7}')
+  eq(geometry.rail_reserve(wid), 7, "the active pane can update the guarded effect")
   eq(geometry.desired(wid), 7)
   config.setup { backend = BACKEND }
 end)
@@ -792,16 +792,13 @@ end)
 test("the backend's resize report corrects from the tree and publishes nothing, with no width of its own", function()
   local win, gui, _, sb = settled_tab()
   local input = require "vtabs.input"
-  local store = require "vtabs.store"
-  local protocol = require "vtabs.gen.protocol"
-  store.proto[sb:pane_id()] = protocol.VERSION
   win:resize(6)
   eq(sb.cols, 31)
   local sent = #sb.sent
   input.handle(gui, sb, "vtabs", '{"t":"resize","cols":31,"rows":24,"n":2}')
   eq(sb.cols, 28, "the report triggered a correction")
   eq(last_action(win).arg[2], 3)
-  eq(#sb.sent, sent, "and no publish: the pane repainted itself, and a report per frame is not a generation per frame")
+  eq(#sb.sent, sent, "and no publish: the pane repainted itself, so reports do not publish per frame")
 end)
 
 ---A tab whose panes live on a mux domain, the backend's server-side adjust queued the way a mux
@@ -904,11 +901,9 @@ end)
 
 test("an adjust's answer carries the width the split landed at, releasing the wait or closing the ask", function()
   local input = require "vtabs.input"
-  local store = require "vtabs.store"
   local win, gui, tab, sb = settled_tab()
   local content = sidebar.content_pane(tab)
   sb.domain, content.domain = "e2emux", "e2emux"
-  store.proto[sb:pane_id()] = require("vtabs.gen.protocol").VERSION
   local wid = gui:window_id()
   local clock = H.clock()
   fake.remote_lag = true
@@ -988,8 +983,6 @@ test("a server that refuses the adjust releases the wait at once", function()
   local win, gui, _, sb, _ = remote_tab()
   local wid = gui:window_id()
   local input = require "vtabs.input"
-  local store = require "vtabs.store"
-  store.proto[sb:pane_id()] = require("vtabs.gen.protocol").VERSION
   win:resize(10)
   assert(geometry.correct(gui))
   local sent = #sb.sent

@@ -181,7 +181,7 @@ local function register_events(cfg)
       local wid = window:window_id()
       local applying = state.applying_recently(wid)
       -- Installing the optional frame changes effective config but not the Rust-resolved palette.
-      -- Keep that answer: the backend deliberately emits it once per semantic generation.
+      -- Keep that answer: the backend emits a replacement after the next semantic publication.
       view.invalidate_theme(wid, applying)
       -- Our own `set_config_overrides` fires this; re-entering correction mid-toggle would fight it.
       if not applying then

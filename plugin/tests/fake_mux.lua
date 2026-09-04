@@ -193,15 +193,8 @@ function M.ready(gui, pane, opts)
     pane.inbox_dir = root .. "/" .. pane.inbox
     transport = string.format(',"transport":{"inbox":"%s"}', pane.inbox)
   end
-  local caps = opts.caps
-    or '"atomic_sync","typed_intents","theme_hooks","settings_document","spaces_policy","inbox_transport"'
-  local json = string.format(
-    '{"t":"ready","v":3,"cols":%d,"rows":24,"paints":true,"caps":[%s],"pane":%d%s,"n":1}',
-    pane.cols,
-    caps,
-    pane.server_id,
-    transport
-  )
+  local json =
+    string.format('{"t":"ready","cols":%d,"rows":24,"pane":%d%s,"n":1}', pane.cols, pane.server_id, transport)
   require("vtabs.input").handle(gui, pane, "vtabs", json)
   return pane.inbox
 end
@@ -335,22 +328,18 @@ local function obey_payload(pane, frame_token, payload)
     end
   elseif verb == "kill" then
     -- the server lists every pane it holds: here, every pane of this window's tabs
-    local title = payload:match '"title":"([^"]*)"'
     local server = tonumber(payload:match '"pane":(%d+)')
     for _, tab in ipairs(pane._tab._window.tab_list) do
       for _, p in ipairs { table.unpack(tab.pane_list) } do
-        if (title ~= nil and p.title == title) or (server ~= nil and p.server_id == server) then
+        if server ~= nil and p.server_id == server then
           M.kill_pane(p)
           pane.killed = (pane.killed or 0) + 1
         end
       end
     end
   elseif verb == "adjust" then
-    -- `Cli::adjust` on the server: from the tab's active pane, via this pane when that one cannot
-    -- reach the sidebar's split, focus handed back unless parked.
-    local direction = payload:match '"direction":"(%a+)"'
-    local amount = tonumber(payload:match '"amount":(%d+)') or 0
-    local park = payload:find('"park":true', 1, true) ~= nil
+    -- `Cli::adjust` derives the delta from the target and the server's current tree.
+    local target = tonumber(payload:match '"target":(%d+)') or pane.cols
     local tab = pane._tab
     local function apply()
       local was = tab.active
@@ -359,15 +348,14 @@ local function obey_payload(pane, frame_token, payload)
       if dance then
         tab.active = pane
       end
+      local amount = math.abs(target - pane.cols)
       if amount > 0 then
+        local grows = target > pane.cols
+        local direction = (first == pane) == grows and "Right" or "Left"
         tab:adjust_from_active(direction, amount)
       end
-      local owed = pane.parked or (dance and was or nil)
-      pane.parked = nil
-      if park then
-        pane.parked = owed
-      elseif owed then
-        tab.active = owed
+      if dance then
+        tab.active = was
       end
       pane.adjusted = (pane.adjusted or 0) + 1
     end

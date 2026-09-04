@@ -383,7 +383,7 @@ function retire(gui_window, tab, pane, hung)
     -- `forget_pane` deliberately removed the normal lookup above. Keep the retiring session proof
     -- on its job; a split that never reached ready is authenticated before its privileged quit.
     if job.token and (mux.user_vars(pane) or {}).vtabs_token ~= job.token then
-      identity.send(pane, { t = "auth", token = job.token, caps = {} }, job.token)
+      identity.send(pane, { t = "auth", token = job.token }, job.token)
     end
     identity.send(pane, { t = "quit" }, job.token)
     return "quit"
@@ -393,17 +393,9 @@ function retire(gui_window, tab, pane, hung)
   end
   local remote = mux.domain(pane) ~= "local"
   local helper = (job.rung == 2 or remote) and helper_for(gui_window, pane) or nil
-  if helper then
-    if job.server_pane then
-      identity.send(helper, { t = "kill", pane = job.server_pane })
-      return "kill"
-    end
-    -- a backend too old to report its id is still named by its title
-    local title = identity.title(pane)
-    if identity.marker(title) then
-      identity.send(helper, { t = "kill", title = title })
-      return "kill"
-    end
+  if helper and job.server_pane then
+    identity.send(helper, { t = "kill", pane = job.server_pane })
+    return "kill"
   end
   if gui_window then
     close_by_activation(gui_window, tab, pane)
@@ -451,17 +443,16 @@ function M.give_up(_, _, sb)
   util.warn("sidebar backend did not start in %s; fix backend.path and close that pane", place)
 end
 
-function M.refuse_v1(pane, version)
+function M.refuse_ready(pane)
   local pid = pane:pane_id()
   local place = store.pane_domain[pid] or "local@"
   store.given_up[pid] = true
   if not domain_failed(place, util.now_ms()) then
     store.failed_domains[place] = util.now_ms()
     util.warn_once(
-      "v1-" .. place,
-      "backend in %s speaks protocol v%s and cannot paint; update it (backend.path) and close that pane",
-      place,
-      tostring(version)
+      "ready-" .. place,
+      "backend in %s sent an incompatible ready payload; update it (backend.path) and close that pane",
+      place
     )
   end
 end

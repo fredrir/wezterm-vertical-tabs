@@ -12,6 +12,7 @@ local state = require "vtabs.state"
 local theme_bridge = require "vtabs.theme_bridge"
 local view = require "vtabs.view"
 local wire = require "vtabs.wire"
+local fake = require "fake_mux"
 
 local test, eq = H.test, H.eq
 local BACKEND = { path = "/bin/wez-vtabs" }
@@ -38,12 +39,7 @@ end
 
 local function ready_with_spaces(gui, tab)
   local pane = sidebar.find(tab)
-  input.handle(
-    gui,
-    pane,
-    "vtabs",
-    '{"t":"ready","v":3,"cols":28,"rows":24,"paints":true,"caps":["atomic_sync","spaces_policy"],"n":1}'
-  )
+  fake.ready(gui, pane, { transport = false })
   return pane
 end
 
@@ -59,7 +55,7 @@ local function messages(pane, tag)
   return out
 end
 
-local function resolution(wid, generation, tabs, opts)
+local function resolution(wid, tabs, opts)
   opts = opts or {}
   local assignments, ids = {}, {}
   for _, entry in ipairs(tabs) do
@@ -75,7 +71,6 @@ local function resolution(wid, generation, tabs, opts)
   end
   return {
     t = "spaces_resolved",
-    generation = generation,
     window_id = wid,
     active = opts.active or "home",
     assignments = assignments,
@@ -128,12 +123,12 @@ test("malformed raw match values remain valid JSON for Rust to reject field-by-f
   eq(win:window_id(), gui:window_id())
 end)
 
-test("without spaces_policy the projection is one unpartitioned tab list", function()
+test("before the first spaces result the projection is one unpartitioned tab list", function()
   local win, gui = H.window(2)
   local cfg = setup()
   local items = model.survey(gui).all
   state.set_space(win.tab_list[1].id, "claude", false)
-  local projected = spaces.project(cfg, gui:window_id(), items, false)
+  local projected = spaces.project(cfg, gui:window_id(), items)
   eq(#projected.visible, 2)
   eq(projected.space, nil)
   eq(projected.spaces, nil)
@@ -144,7 +139,7 @@ test("a current Rust result atomically supplies assignment, visibility, summary 
   local cfg, wid = setup(), gui:window_id()
   local one, two = win.tab_list[1].id, win.tab_list[2].id
   assert(spaces.accept(
-    resolution(wid, 4, {
+    resolution(wid, {
       { id = one, space = "home", fingerprint = "a" },
       { id = two, space = "scratch", fingerprint = "b", visible = false },
     }, {
@@ -155,34 +150,30 @@ test("a current Rust result atomically supplies assignment, visibility, summary 
         { id = "scratch", name = "Scratch", count = 1, unseen = false },
       },
     }),
-    wid,
-    4
+    wid
   ))
   eq(state.space_of(one), "home")
   eq(state.space_of(two), "scratch")
   eq(spaces.last_tab_in(wid, "scratch"), two)
-  local projected = spaces.project(cfg, wid, model.survey(gui).all, true)
+  local projected = spaces.project(cfg, wid, model.survey(gui).all)
   eq(#projected.visible, 1)
   eq(projected.visible[1].tab_id, one)
   eq(projected.spaces[2].name, "Scratch")
 
-  assert(not spaces.accept(resolution(wid, 4, { { id = one, space = "wrong" } }), wid, 4), "duplicate generation")
-  assert(not spaces.accept(resolution(wid + 1, 5, { { id = one, space = "wrong" } }), wid, 5), "wrong window")
-  assert(not spaces.accept(resolution(wid, 6, { { id = one, space = "wrong" } }), wid, 5), "future result")
+  assert(not spaces.accept(resolution(wid + 1, { { id = one, space = "wrong" } }), wid), "wrong window")
   eq(state.space_of(one), "home")
 
   assert(spaces.accept(
-    resolution(wid, 5, {
+    resolution(wid, {
       { id = one, space = "home", fingerprint = "c" },
       { id = two, space = "home", fingerprint = "d" },
     }),
-    wid,
-    5
+    wid
   ))
   eq(#spaces.body(cfg, wid, model.survey(gui).all, array).dynamics, 0, "empty dynamics are authoritative")
 end)
 
-test("one route-hook batch is evaluated once per window generation and reused for every pane", function()
+test("each pending route-hook request is evaluated and receives a fieldless answer", function()
   local win, gui = H.window(2, { attach = true })
   local calls = 0
   setup {
@@ -194,12 +185,7 @@ test("one route-hook batch is evaluated once per window generation and reused fo
       end,
     },
   }
-  local original_generation = wire.generation
-  wire.generation = function()
-    return 9
-  end
   local event = {
-    generation = 9,
     window_id = gui:window_id(),
     tabs = {
       { tab_id = win.tab_list[1].id, title = "final title" },
@@ -209,8 +195,7 @@ test("one route-hook batch is evaluated once per window generation and reused fo
   local first, second = sidebar.find(win.tab_list[1]), sidebar.find(win.tab_list[2])
   assert(spaces.answer_hook(gui, first, event))
   assert(spaces.answer_hook(gui, second, event))
-  wire.generation = original_generation
-  eq(calls, 2, "one call per requested tab, not per backend pane")
+  eq(calls, 4, "each pane's pending request runs once per requested tab")
   local a, b = messages(first, "space_route_hook_result"), messages(second, "space_route_hook_result")
   eq(#a, 1)
   eq(#b, 1)
@@ -218,7 +203,7 @@ test("one route-hook batch is evaluated once per window generation and reused fo
   eq(b[1].routes["2"].space, "scratch")
 end)
 
-test("atomic wire sends full-window spaces facts to a capable sidebar", function()
+test("atomic wire sends full-window spaces facts to a sidebar", function()
   local win, gui = H.window(2, { attach = true, ready = true })
   setup()
   local pane = ready_with_spaces(gui, win.tab_list[1])
@@ -231,18 +216,253 @@ test("atomic wire sends full-window spaces facts to a capable sidebar", function
   eq(#messages(pane, "commit"), 1)
 end)
 
-test("space convergence advances once and the matching follow-up theme reaches host state", function()
+test("policy authority is stable across an active-tab ABA and stays updated in the background", function()
+  local win, gui = H.window(2, { attach = true, ready = true })
+  setup()
+  local wid = gui:window_id()
+  local one = win.tab_list[1].id
+  local a = sidebar.find(win.tab_list[1])
+  local b = sidebar.find(win.tab_list[2])
+  view.sync(gui)
+  eq(wire.policy_pane(wid), a:pane_id())
+  local a_sent = #a.sent
+  theme_bridge.clear(wid)
+
+  win.tab_list[2]:activate()
+  win.tab_list[2]:set_title "changed while A is background"
+  view.sync(gui)
+  eq(wire.policy_pane(wid), a:pane_id(), "activation does not hand authority to B")
+  assert(#a.sent > a_sent, "the stable authority receives semantic changes while background")
+
+  input.handle(gui, b, "vtabs", wire.encode(resolution(wid, { { id = one, space = "claude" } })))
+  input.handle(gui, b, "vtabs", '{"t":"theme_resolved","theme":{"bg":[9,9,9]}}')
+  eq(state.space_of(one), nil, "B cannot publish shared state while active")
+  eq(theme_bridge.get(wid), nil)
+
+  input.handle(gui, a, "vtabs", wire.encode(resolution(wid, { { id = one, space = "home" } })))
+  input.handle(gui, a, "vtabs", '{"t":"theme_resolved","theme":{"bg":[4,5,6]}}')
+  eq(state.space_of(one), "home")
+  eq(theme_bridge.get(wid).bg[1], 4)
+
+  win.tab_list[1]:activate()
+  view.sync(gui)
+  eq(wire.policy_pane(wid), a:pane_id(), "returning to A does not revive a different authority")
+  input.handle(gui, b, "vtabs", wire.encode(resolution(wid, { { id = one, space = "late" } })))
+  eq(state.space_of(one), "home", "B's delayed result remains inert after A is active again")
+end)
+
+test("an active settings tab does not displace an existing policy authority", function()
+  local win, gui = H.window(1, { attach = true, ready = true })
+  setup()
+  local content = win.tab_list[1]
+  local authority = sidebar.find(content)
+  view.sync(gui)
+  local settings_tab, settings_pane = win:spawn_tab { args = { "/bin/wez-vtabs", "--role", "settings" } }
+  state.set_token(settings_pane:pane_id(), "settings-authority")
+  settings_pane.vars.vtabs_token = "settings-authority"
+  local wid = gui:window_id()
+  local result = wire.encode(resolution(wid, { { id = content.id, space = "claude" } }))
+  theme_bridge.clear(wid)
+
+  settings_tab:activate()
+  view.sync(gui)
+  eq(wire.policy_pane(wid), authority:pane_id())
+  input.handle(gui, settings_pane, "vtabs", result)
+  input.handle(gui, settings_pane, "vtabs", '{"t":"theme_resolved","theme":{"bg":[1,2,3]}}')
+  eq(state.space_of(content.id), nil, "settings activity does not confer policy authority")
+  eq(theme_bridge.get(wid), nil)
+
+  input.handle(gui, authority, "vtabs", result)
+  input.handle(gui, authority, "vtabs", '{"t":"theme_resolved","theme":{"bg":[4,5,6]}}')
+  eq(state.space_of(content.id), "claude")
+  eq(theme_bridge.get(wid).bg[1], 4)
+end)
+
+test("authority disappearance resets one successor and arms it only after fresh Ready and publish", function()
+  local win, gui = H.window(2, { attach = true, ready = true })
+  setup()
+  local wid = gui:window_id()
+  local a = sidebar.find(win.tab_list[1])
+  local b = sidebar.find(win.tab_list[2])
+  view.sync(gui)
+  eq(wire.policy_pane(wid), a:pane_id())
+  local old_token = state.token_for(b:pane_id())
+  fake.kill_pane(a)
+  b.fail_send = true
+
+  view.sync(gui)
+  local fresh_token = state.token_for(b:pane_id())
+  eq(wire.policy_pane(wid), b:pane_id())
+  assert(fresh_token ~= old_token, "handoff rotates the successor token")
+  assert(not wire.is_policy_authority(wid, b:pane_id()), "the successor is unarmed before fresh Ready")
+  view.sync(gui)
+  eq(state.token_for(b:pane_id()), fresh_token, "a failed reset auth does not rotate again")
+  b.fail_send = false
+  view.sync(gui)
+  eq(state.token_for(b:pane_id()), fresh_token, "retry uses the same fresh token")
+  local after_reset = #b.sent
+  view.sync(gui)
+  eq(#b.sent, after_reset, "a successful reset auth is not repeated")
+
+  local current = wire.encode(resolution(wid, { { id = win.tab_list[1].id, space = "home" } }))
+  input.handle(gui, b, "vtabs", current)
+  eq(state.space_of(win.tab_list[1].id), nil, "a pre-Ready successor result is inert")
+  b.vars.vtabs_token = fresh_token
+  fake.ready(gui, b, { transport = false })
+  assert(wire.is_policy_authority(wid, b:pane_id()), "fresh Ready plus a complete publish arms the successor")
+  input.handle(gui, b, "vtabs", current)
+  eq(state.space_of(win.tab_list[1].id), "home")
+end)
+
+local function authority_timeout_case(auth_write_fails)
+  local clock = H.clock()
+  local ok, err = pcall(function()
+    local win, gui = H.window(3, { attach = true, ready = true })
+    setup()
+    local wid = gui:window_id()
+    local a = sidebar.find(win.tab_list[1])
+    local b = sidebar.find(win.tab_list[2])
+    local c = sidebar.find(win.tab_list[3])
+    view.sync(gui)
+    eq(wire.policy_pane(wid), a:pane_id())
+
+    b.fail_send = auth_write_fails
+    fake.kill_pane(a)
+    view.sync(gui)
+    eq(wire.policy_pane(wid), b:pane_id())
+    assert(not wire.is_policy_authority(wid, b:pane_id()))
+
+    clock.advance(wire.POLICY_RESET_MS + 1)
+    view.sync(gui)
+    eq(wire.policy_pane(wid), c:pane_id(), "the timed-out candidate yields to another ready pane")
+    assert(not wire.is_policy_authority(wid, c:pane_id()))
+    local fresh_token = state.token_for(c:pane_id())
+    c.vars.vtabs_token = fresh_token
+    fake.ready(gui, c, { transport = false })
+    assert(wire.is_policy_authority(wid, c:pane_id()))
+  end)
+  clock.restore()
+  if not ok then
+    error(err, 0)
+  end
+end
+
+test("a successful authority reset auth without fresh Ready times out", function()
+  authority_timeout_case(false)
+end)
+
+test("a permanently failing authority reset auth times out", function()
+  authority_timeout_case(true)
+end)
+
+test("a timed-out sole survivor can recover through a new reset-safe handoff", function()
+  local clock = H.clock()
+  local ok, err = pcall(function()
+    local win, gui = H.window(2, { attach = true, ready = true })
+    setup()
+    local wid = gui:window_id()
+    local first = sidebar.find(win.tab_list[1])
+    local survivor = sidebar.find(win.tab_list[2])
+    view.sync(gui)
+    eq(wire.policy_pane(wid), first:pane_id())
+
+    fake.kill_pane(first)
+    view.sync(gui)
+    eq(wire.policy_pane(wid), survivor:pane_id())
+    local timed_out_token = state.token_for(survivor:pane_id())
+    assert(not wire.is_policy_authority(wid, survivor:pane_id()))
+
+    clock.advance(wire.POLICY_RESET_MS + 1)
+    view.sync(gui)
+    eq(wire.policy_pane(wid), nil, "the sole timed-out candidate is dropped")
+
+    local before = #messages(survivor, "begin")
+    survivor.vars.vtabs_token = timed_out_token
+    fake.ready(gui, survivor, { transport = false })
+    eq(wire.policy_pane(wid), survivor:pane_id())
+    eq(state.token_for(survivor:pane_id()), timed_out_token, "the late Ready proves the existing reset")
+    eq(#messages(survivor, "begin"), before + 1, "recovery publishes a fresh complete batch")
+    assert(wire.is_policy_authority(wid, survivor:pane_id()))
+
+    view.sync(gui)
+    eq(state.token_for(survivor:pane_id()), timed_out_token, "recovery does not rotate per poll")
+  end)
+  clock.restore()
+  if not ok then
+    error(err, 0)
+  end
+end)
+
+test("a moved authority is not invalidated by either old/new window sync order", function()
+  local function exercise(new_window_first)
+    local source, source_gui = H.window(1, { attach = true, ready = true })
+    setup()
+    local tab = source.tab_list[1]
+    local pane = sidebar.find(tab)
+    view.sync(source_gui)
+    eq(wire.policy_pane(source_gui:window_id()), pane:pane_id())
+
+    local destination = fake.window()
+    fake.move_tab(source, tab, destination)
+    if not new_window_first then
+      view.sync(source_gui)
+    end
+    view.sync(destination.gui)
+    local fresh_token = state.token_for(pane:pane_id())
+    pane.vars.vtabs_token = fresh_token
+    fake.ready(destination.gui, pane, { transport = false })
+    assert(wire.is_policy_authority(destination.id, pane:pane_id()))
+
+    if new_window_first then
+      view.sync(source_gui)
+    end
+    assert(wire.is_policy_authority(destination.id, pane:pane_id()), "the old window cannot invalidate the new owner")
+    local result = wire.encode(resolution(destination.id, { { id = tab.id, space = "home" } }))
+    input.handle(destination.gui, pane, "vtabs", result)
+    eq(state.space_of(tab.id), "home")
+  end
+
+  exercise(false)
+  exercise(true)
+end)
+
+test("a closed settings authority hands off reset-safely to its replacement", function()
+  local win = fake.window()
+  local _, first = win:spawn_tab { args = { "/bin/wez-vtabs", "--role", "settings" } }
+  setup()
+  state.set_token(first:pane_id(), "settings-first")
+  first.vars.vtabs_token = "settings-first"
+  view.sync(win.gui)
+  eq(wire.policy_pane(win.id), first:pane_id())
+  assert(wire.is_policy_authority(win.id, first:pane_id()))
+
+  fake.kill_pane(first)
+  view.sync(win.gui)
+  eq(wire.policy_pane(win.id), nil)
+  local _, replacement = win:spawn_tab { args = { "/bin/wez-vtabs", "--role", "settings" } }
+  state.set_token(replacement:pane_id(), "settings-replacement")
+  replacement.vars.vtabs_token = "settings-replacement"
+  view.sync(win.gui)
+  local fresh_token = state.token_for(replacement:pane_id())
+  assert(fresh_token ~= "settings-replacement")
+  assert(not wire.is_policy_authority(win.id, replacement:pane_id()))
+
+  replacement.vars.vtabs_token = fresh_token
+  fake.ready(win.gui, replacement, { transport = false })
+  assert(wire.is_policy_authority(win.id, replacement:pane_id()))
+end)
+
+test("space convergence settles and a current-pane theme reaches host state", function()
   local win, gui = H.window(2, { attach = true, ready = true })
   setup()
   local pane = ready_with_spaces(gui, win.tab_list[1])
   view.sync(gui)
   local wid = gui:window_id()
-  local first_generation = assert(wire.generation(wid))
   local one, two = win.tab_list[1].id, win.tab_list[2].id
   theme_bridge.clear(wid)
 
   local resolved_json = string.format(
-    '{"t":"spaces_resolved","generation":%%d,"window_id":%d,"active":"claude",'
+    '{"t":"spaces_resolved","window_id":%d,"active":"claude",'
       .. '"assignments":[{"tab_id":%d,"space":"home","manual":false,"fingerprint":"a"},'
       .. '{"tab_id":%d,"space":"claude","manual":false,"fingerprint":"b"}],'
       .. '"dynamics":[],"last_tabs":[],"summary":[{"id":"home","name":"Home","count":1,"unseen":false},'
@@ -253,28 +473,13 @@ test("space convergence advances once and the matching follow-up theme reaches h
     two,
     two
   )
-  input.handle(gui, pane, "vtabs", string.format(resolved_json, first_generation))
-  local follow_up = assert(wire.generation(wid))
-  assert(follow_up > first_generation, "the newly applied assignment produces one converging sync")
-
-  input.handle(
-    gui,
-    pane,
-    "vtabs",
-    string.format('{"t":"theme_resolved","generation":%d,"theme":{"bg":[1,2,3]}}', first_generation)
-  )
-  eq(theme_bridge.get(wid), nil, "the superseded generation cannot project host colour")
-
-  input.handle(gui, pane, "vtabs", string.format(resolved_json, follow_up))
-  eq(wire.generation(wid), follow_up, "the converged answer does not start a third generation")
-  input.handle(
-    gui,
-    pane,
-    "vtabs",
-    string.format('{"t":"theme_resolved","generation":%d,"theme":{"bg":[4,5,6]}}', follow_up)
-  )
+  local before = #pane.sent
+  input.handle(gui, pane, "vtabs", resolved_json)
+  eq(#pane.sent, before + 1, "the newly applied assignment produces one converging sync")
+  input.handle(gui, pane, "vtabs", resolved_json)
+  eq(#pane.sent, before + 1, "the converged answer does not publish again")
+  input.handle(gui, pane, "vtabs", '{"t":"theme_resolved","theme":{"bg":[4,5,6]}}')
   eq(theme_bridge.get(wid).bg[1], 4)
-  eq(wire.generation(wid), follow_up, "host projection does not loop semantic sync")
 end)
 
 test("space mux actions remain host-side while policy decisions do not", function()
@@ -283,7 +488,7 @@ test("space mux actions remain host-side while policy decisions do not", functio
   ready_with_spaces(gui, win.tab_list[1])
   local wid, one, two = gui:window_id(), win.tab_list[1].id, win.tab_list[2].id
   spaces.accept(
-    resolution(wid, 1, {
+    resolution(wid, {
       { id = one, space = "home" },
       { id = two, space = "claude", visible = false },
     }, {
@@ -293,8 +498,7 @@ test("space mux actions remain host-side while policy decisions do not", functio
         { id = "claude", name = "Claude", count = 1, unseen = false },
       },
     }),
-    wid,
-    1
+    wid
   )
   eq(actions.switch_space(gui, "claude"), true)
   eq(win.active_tab_ref.id, two)

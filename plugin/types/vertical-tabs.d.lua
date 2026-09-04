@@ -25,9 +25,9 @@ local M = {}
 ---@field on_click fun(window: Window) Called when the button is clicked.
 
 ---@alias VerticalTabs.StripAction
----|"toggle"
+---|"toggle_sidebar"
 ---|"new_tab"
----|"settings"
+---|"open_settings"
 ---|"search"
 ---|VerticalTabs.CustomStripAction
 
@@ -38,7 +38,6 @@ local M = {}
 ---Overrides for the plugin's named key bindings. Set an entry to `false` to disable it.
 ---@class (exact) VerticalTabs.KeyMap
 ---@field toggle_sidebar? false|VerticalTabs.KeyBinding
----@field toggle? false|VerticalTabs.KeyBinding Alias for `toggle_sidebar`.
 ---@field focus_sidebar? false|VerticalTabs.KeyBinding
 ---@field new_tab? false|VerticalTabs.KeyBinding
 ---@field close_tab? false|VerticalTabs.KeyBinding
@@ -64,7 +63,6 @@ local M = {}
 ---@field tab_7? false|VerticalTabs.KeyBinding
 ---@field tab_8? false|VerticalTabs.KeyBinding
 ---@field tab_last? false|VerticalTabs.KeyBinding
----@field settings? false|VerticalTabs.KeyBinding
 ---@field open_settings? false|VerticalTabs.KeyBinding
 ---@field next_space? false|VerticalTabs.KeyBinding
 ---@field prev_space? false|VerticalTabs.KeyBinding
@@ -95,7 +93,6 @@ local M = {}
 ---@field dim? VerticalTabs.ThemeColor
 ---@field title_idle? VerticalTabs.ThemeColor
 ---@field title_active? VerticalTabs.ThemeColor
----@field active_title_fg? VerticalTabs.ThemeColor Legacy alias for `title_active`.
 ---@field pinned_fg? VerticalTabs.ThemeColor
 ---@field separator? VerticalTabs.ThemeColor
 ---@field border? VerticalTabs.ThemeColor
@@ -145,7 +142,6 @@ local M = {}
 ---@field scroll_fg VerticalTabs.Rgb
 ---@field scroll_idle_fg VerticalTabs.Rgb
 ---@field title_active VerticalTabs.Rgb
----@field active_title_fg VerticalTabs.Rgb
 ---@field title_active_contrast number
 ---@field content_bg VerticalTabs.Rgb
 ---@field surface_raised VerticalTabs.Rgb
@@ -206,7 +202,6 @@ local M = {}
 ---@class (exact) VerticalTabs.Backend
 ---@field path? VerticalTabs.BackendPath Path to `wez-vtabs`, optionally selected by domain or OSC 7 host.
 ---@field repo? string GitHub repository used for release downloads.
----@field version? string Release tag to download.
 ---@field build? boolean Fall back to `cargo build` when no release matches.
 ---@field uservar? string WezTerm user-variable name used by the backend.
 ---@field env? table<string, string> Extra environment; plugin-owned `VTABS_*` values win.

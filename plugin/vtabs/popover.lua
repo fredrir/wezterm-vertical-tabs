@@ -22,7 +22,7 @@ local ITEMS = {
   { id = "space", label = "Move to space", hint = "▸", level = "spaces" },
   { id = "tear_off", label = "Move to new window", action = "tear_off" },
   { id = "duplicate", label = "Duplicate tab" },
-  { id = "settings", label = "Settings…", action = "open_settings", key = "settings" },
+  { id = "open_settings", label = "Settings…", action = "open_settings", key = "open_settings" },
   { id = "close_others", label = "Close other tabs", action = "close_others_now", confirm = "close_others" },
   { id = "close", label = "Close tab", action = "close_tab_now", key = "close_tab", confirm = "close" },
 }
@@ -228,7 +228,7 @@ function M.run(gui_window, id)
 end
 
 ---Applies one key to the rename buffer; returns "commit", "cancel" or nil when it was consumed.
----The v2 menu message for this window's popover, one level at a time; nil when nothing is open.
+---The menu message for this window's popover, one level at a time; nil when nothing is open.
 ---`survey` is the poll's own when the caller has one, so the menu costs no second walk.
 function M.wire_body(gui_window, survey)
   local pop = store.popover[gui_window:window_id()]

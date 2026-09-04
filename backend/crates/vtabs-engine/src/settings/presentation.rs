@@ -1,8 +1,7 @@
 use super::document::{Field, Group, LockReason, SettingsDocument, Widget};
 use super::value::SettingPath;
 
-/// Renderer-facing settings state. Protocol v2's similarly shaped `SettingsModel` exists only so
-/// the runtime can accept legacy clients at its decode boundary.
+/// Renderer-facing settings state derived from the canonical settings document.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct SettingsPresentation {
     pub fields: Vec<PresentationField>,
@@ -35,24 +34,6 @@ pub struct PresentationGroup {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PresentationLock {
     pub text: String,
-}
-
-impl Widget {
-    /// The one compatibility parser for the legacy v2 settings DTO. Unknown future widgets remain
-    /// visible but inert, matching the former renderer's string comparisons.
-    pub fn from_legacy_name(name: &str) -> Self {
-        match name {
-            "toggle" => Self::Toggle,
-            "picker" => Self::Picker,
-            "stepper" => Self::Stepper,
-            "colour" => Self::Colour,
-            "text" => Self::Text,
-            "recorder" => Self::Recorder,
-            "variant" => Self::Variant,
-            "entries" => Self::Entries,
-            _ => Self::Locked,
-        }
-    }
 }
 
 impl From<Field> for PresentationField {

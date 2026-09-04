@@ -1,6 +1,6 @@
 use crate::color::Color;
 
-pub use vtabs_protocol::v2::{
+pub use vtabs_protocol::payload::{
     ResolvedTheme as Theme, Scheme as Palette, ThemeOverrides as UserTheme,
 };
 
@@ -31,7 +31,6 @@ macro_rules! theme_color_fields {
             dim,
             title_idle,
             title_active,
-            active_title_fg,
             pinned_fg,
             separator,
             border,
@@ -197,7 +196,7 @@ pub fn resolve(user: &UserTheme, palette: &Palette, private: bool) -> Theme {
     let active_bg = first(&[s(&user.active_bg)]).unwrap_or_else(|| mix(lift(0.12), accent, 0.12));
     let meta_fg = first(&[s(&user.meta_fg)])
         .unwrap_or_else(|| ensure_contrast(mix(fg, bg, 0.48), active_bg, fg, 3.5));
-    let title_active = first(&[s(&user.title_active), s(&user.active_title_fg)])
+    let title_active = first(&[s(&user.title_active)])
         .unwrap_or_else(|| ensure_contrast(accent, active_bg, fg, 4.5));
     let raised = first(&[s(&user.surface_raised)]).unwrap_or_else(|| raise(bg, fg, lift));
     let scrim = user.scrim.unwrap_or_else(|| scrim_for(bg, fg));
@@ -264,7 +263,6 @@ pub fn resolve(user: &UserTheme, palette: &Palette, private: bool) -> Theme {
         scroll_idle_fg: first(&[s(&user.scroll_idle_fg)])
             .unwrap_or_else(|| mix(scroll_fg, bg, 0.55)),
         title_active,
-        active_title_fg: title_active,
         // Render draws the accent bar only when the tinted title is not distinct enough on its own.
         title_active_contrast: contrast(title_active, active_bg),
         content_bg: base_bg,
@@ -294,7 +292,7 @@ pub fn overlay(base: &UserTheme, hook: &UserTheme) -> UserTheme {
 }
 
 /// Hook results are executable-extension output, not forgiving user configuration: reject a whole
-/// generation rather than silently substituting a fallback for a malformed colour or fraction.
+/// publication rather than silently substituting a fallback for a malformed colour or fraction.
 pub fn valid_overrides(user: &UserTheme) -> bool {
     macro_rules! valid_colors {
         ($($field:ident),+ $(,)?) => {
@@ -326,11 +324,11 @@ mod field_manifest_tests {
         }
         assert_eq!(
             theme_color_fields!(names),
-            vtabs_protocol::v2::THEME_COLOR_FIELDS
+            vtabs_protocol::payload::THEME_COLOR_FIELDS
         );
         assert_eq!(
             theme_fraction_fields!(names),
-            vtabs_protocol::v2::THEME_FRACTION_FIELDS
+            vtabs_protocol::payload::THEME_FRACTION_FIELDS
         );
     }
 }

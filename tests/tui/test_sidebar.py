@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 
 from .adapter import Terminal
-from .support import dress_sidebar, sidebar_model, tab
+from .support import dress_sidebar, sidebar_model, spaces_section, tab
 
 
 @pytest.mark.asyncio
@@ -11,7 +11,8 @@ from .support import dress_sidebar, sidebar_model, tab
 async def test_complete_state_renders_visible_tabs(terminal: Terminal) -> None:
     await dress_sidebar(
         terminal,
-        sidebar_model([tab(11, "Editor"), tab(22, "Test shell")], active=11),
+        [tab(11, "Editor"), tab(22, "Test shell")],
+        active=11,
     )
 
     await terminal.wait_text("Editor")
@@ -19,11 +20,12 @@ async def test_complete_state_renders_visible_tabs(terminal: Terminal) -> None:
 
 
 @pytest.mark.asyncio
-async def test_new_model_replaces_the_visible_tab_list(terminal: Terminal) -> None:
-    await dress_sidebar(terminal, sidebar_model([tab(11, "Old workspace")]))
+async def test_new_tab_census_replaces_the_visible_tab_list(terminal: Terminal) -> None:
+    await dress_sidebar(terminal, [tab(11, "Old workspace")])
     await terminal.wait_text("Old workspace")
 
-    await terminal.send(sidebar_model([tab(22, "New workspace")], rev=2))
+    records = [tab(22, "New workspace")]
+    await terminal.publish(spaces_section(records, active=22), sidebar_model(active=22))
 
     await terminal.wait_text("New workspace")
     await terminal.wait_text("Old workspace", absent=True)
@@ -35,7 +37,8 @@ async def test_clicking_visible_tab_requests_activation_for_that_tab(
 ) -> None:
     await dress_sidebar(
         terminal,
-        sidebar_model([tab(11, "Editor"), tab(22, "Dotfiles")], active=11),
+        [tab(11, "Editor"), tab(22, "Dotfiles")],
+        active=11,
     )
     await terminal.wait_text("Dotfiles")
     x, y = await terminal.locate_text("Dotfiles")
@@ -43,15 +46,15 @@ async def test_clicking_visible_tab_requests_activation_for_that_tab(
     await terminal.mouse_down(x, y)
     await terminal.mouse_up(x, y)
 
-    event = await terminal.wait_event("do", where={"a": "press_card", "id": 22})
-    assert event["args"]["part"] == "title"
+    event = await terminal.wait_event("intent", where={"a": "press_card", "tab_id": 22})
+    assert event["part"] == "title"
 
 
 @pytest.mark.asyncio
 async def test_resize_reflows_existing_model_at_the_new_terminal_size(
     terminal: Terminal,
 ) -> None:
-    await dress_sidebar(terminal, sidebar_model([tab(11, "Editor")]))
+    await dress_sidebar(terminal, [tab(11, "Editor")])
     await terminal.wait_text("Editor")
 
     await terminal.resize(18, 12)

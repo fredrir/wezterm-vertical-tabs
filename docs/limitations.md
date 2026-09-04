@@ -102,7 +102,7 @@
   the tab alone at full width, and the page is not recorded for reopening.
 - A backend pane closes by being told to quit; its pane goes with the process.
   One that outlives its process is killed by another backend on the same server
-  through that server's `wezterm cli`, by title. Only a pane no backend can
+  through that server's `wezterm cli`, by pane id. Only a pane no backend can
   reach is closed by activation, which is the one path the mux client has been
   seen to abort on (`wezterm-client/src/domain.rs:624`). The GUI's own
   `wezterm cli` is used only for panes in its `local` domain.

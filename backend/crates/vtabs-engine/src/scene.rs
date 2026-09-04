@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use crate::color::Color;
 use crate::config::RenderConfig;
 pub use crate::config::{Padding, RenderConfig as RenderCfg};
-pub use vtabs_protocol::v2::{FooterItem as FooterEntry, StripButton};
+pub use vtabs_protocol::payload::{FooterItem as FooterEntry, StripButton};
 
 #[derive(Debug, Clone)]
 pub struct Item {

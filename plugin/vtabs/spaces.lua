@@ -5,7 +5,7 @@ local util = require "vtabs.util"
 
 ---Rust owns space validation, routing, sticky assignment, summaries and theme selection. This
 ---module is only the WezTerm boundary: it sends raw snapshot/state facts, executes route hooks when
----Rust asks, and applies generation-bound results to the mux-side state cache.
+---Rust asks, and applies current-pane results to the mux-side state cache.
 local M = {}
 
 local scope = store.scope "spaces"
@@ -14,7 +14,6 @@ local last_active = scope.window()
 local last_tab = scope.window()
 local dynamics = scope.window()
 local resolved = scope.window()
-local hook_answers = scope.window()
 
 local function raw_match(value, array)
   if type(value) ~= "table" then
@@ -129,7 +128,7 @@ local function tab_fact(item)
   }
 end
 
----Raw policy input shared by sidebar and settings panes in the same atomic generation.
+---Raw policy input shared by sidebar and settings panes in the same atomic publication.
 function M.body(cfg, wid, items, array)
   local tabs = array()
   local active_tab = nil
@@ -143,7 +142,7 @@ function M.body(cfg, wid, items, array)
   return {
     window_id = wid,
     enabled = M.enabled(cfg),
-    hook = type((cfg.hooks or {}).route) == "function" or nil,
+    hook = type((cfg.hooks or {}).route) == "function",
     definitions = definitions(cfg, array),
     tabs = tabs,
     active_tab = active_tab,
@@ -162,16 +161,10 @@ local function warning_text(warning)
   return "spaces: " .. tostring(warning.code or "invalid") .. suffix
 end
 
----Accepts only the current semantic generation. Multiple sidebar panes may answer for one window;
----the first valid result applies shared state and later duplicates are inert.
-function M.accept(ev, expected_window, current_generation)
+---Applies a structurally valid result from a current authenticated pane in this window.
+function M.accept(ev, expected_window)
   local wid = tonumber(ev and ev.window_id)
-  local generation = tonumber(ev and ev.generation)
-  if not wid or wid ~= tonumber(expected_window) or not generation or generation ~= tonumber(current_generation) then
-    return false
-  end
-  local previous = resolved[wid]
-  if previous and previous.generation == generation then
+  if not wid or wid ~= tonumber(expected_window) then
     return false
   end
   for _, assignment in ipairs(type(ev.assignments) == "table" and ev.assignments or {}) do
@@ -207,21 +200,17 @@ function M.accept(ev, expected_window, current_generation)
   for _, warning in ipairs(type(ev.warnings) == "table" and ev.warnings or {}) do
     util.warn_once("space-policy-" .. tostring(warning.code), "%s", warning_text(warning))
   end
-  resolved[wid] = { generation = generation, value = ev }
+  resolved[wid] = ev
   return true
 end
 
----Projects the last Rust answer onto freshly collected item handles. No answer (or an old backend)
----degrades to one unpartitioned list; Lua never runs a second routing implementation.
-function M.project(cfg, wid, items, capable)
+---Projects the last Rust answer onto freshly collected item handles. No answer degrades to one
+---unpartitioned list; Lua never runs a second routing implementation.
+function M.project(cfg, wid, items)
   if not M.enabled(cfg) then
     return { all = items, visible = items }
   end
-  if not capable then
-    util.warn_once("spaces-policy", "spaces need a backend advertising spaces_policy; showing all tabs")
-    return { all = items, visible = items }
-  end
-  local cached = resolved[wid] and resolved[wid].value or nil
+  local cached = resolved[wid]
   if not cached then
     return { all = items, visible = items }
   end
@@ -268,50 +257,28 @@ function M.move(tab_id, id, manual)
   end
 end
 
-local function prune_answers(per, generation)
-  for old in pairs(per) do
-    if type(old) == "number" and old + 4 < generation then
-      per[old] = nil
-    end
-  end
-end
-
----Runs one shared hook batch per window/generation and sends the cached answer to every backend
----pane that requested it. Rust decides which tabs need asking and how each answer affects routing.
+---Runs one hook batch for the sole pending publication in this pane. Rust decides which tabs need
+---asking and how each answer affects routing.
 function M.answer_hook(gui_window, pane, ev)
   local wid = tonumber(ev and ev.window_id)
-  local generation = tonumber(ev and ev.generation)
-  if not wid or not generation or wid ~= gui_window:window_id() then
+  if not wid or wid ~= gui_window:window_id() then
     return false
   end
-  if generation ~= tonumber(require("vtabs.wire").generation(wid)) then
-    return false
-  end
-  local per = hook_answers[wid] or {}
-  hook_answers[wid] = per
-  local routes = per[generation]
-  if routes == nil then
-    routes = {}
-    local hook = (require("vtabs.config").get().hooks or {}).route
-    for _, facts in ipairs(type(ev.tabs) == "table" and ev.tabs or {}) do
-      local space = nil
-      if type(hook) == "function" then
-        local ok, answer = pcall(hook, facts)
-        if not ok then
-          util.warn_once("hook-route", "route hook failed: %s", tostring(answer))
-        elseif type(answer) == "string" and answer ~= "" then
-          space = answer
-        end
+  local routes = {}
+  local hook = (require("vtabs.config").get().hooks or {}).route
+  for _, facts in ipairs(type(ev.tabs) == "table" and ev.tabs or {}) do
+    local space = nil
+    if type(hook) == "function" then
+      local ok, answer = pcall(hook, facts)
+      if not ok then
+        util.warn_once("hook-route", "route hook failed: %s", tostring(answer))
+      elseif type(answer) == "string" and answer ~= "" then
+        space = answer
       end
-      routes[#routes + 1] = { tab_id = facts.tab_id, space = space }
     end
-    per[generation] = routes
-    prune_answers(per, generation)
+    routes[#routes + 1] = { tab_id = facts.tab_id, space = space }
   end
-  return require("vtabs.sidebar_identity").send(
-    pane,
-    { t = "space_route_hook_result", generation = generation, routes = routes }
-  )
+  return require("vtabs.sidebar_identity").send(pane, { t = "space_route_hook_result", routes = routes })
 end
 
 return M

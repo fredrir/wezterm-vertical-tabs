@@ -7,7 +7,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use serde_json::{Map, Value};
-use vtabs_protocol::v2::{
+use vtabs_protocol::payload::{
     DynamicSpace, Scheme, SpaceAssignment, SpaceFollow, SpaceLastTab, SpaceResolution,
     SpaceRouteHookAnswer, SpaceRouteHookFact, SpaceSummary, SpaceTabFact, SpaceWarning, SpacesMsg,
     ThemeOverrides,
@@ -781,7 +781,7 @@ pub fn plan(msg: &SpacesMsg, scheme: &Scheme, answers: Option<&[SpaceRouteHookAn
 #[cfg(test)]
 mod tests {
     use serde_json::json;
-    use vtabs_protocol::v2::{Scheme, SpaceRouteHookAnswer, SpacesMsg};
+    use vtabs_protocol::payload::{Scheme, SpaceRouteHookAnswer, SpacesMsg};
 
     use super::{Plan, fingerprint, glob_matches, plan};
 
@@ -800,7 +800,7 @@ mod tests {
     fn resolved(
         msg: &SpacesMsg,
         answers: Option<&[SpaceRouteHookAnswer]>,
-    ) -> vtabs_protocol::v2::SpaceResolution {
+    ) -> vtabs_protocol::payload::SpaceResolution {
         match plan(msg, &scheme(), answers) {
             Plan::Resolved(result) => *result,
             Plan::NeedsHooks { .. } => panic!("unexpected hook request"),
@@ -813,7 +813,7 @@ mod tests {
         assert!(glob_matches("a*a", "aba"));
         assert!(!glob_matches("a*b", "abx"));
         let msg = msg(json!({
-            "rev": 1, "window_id": 7, "enabled": true,
+            "window_id": 7, "enabled": true,
             "definitions": [
                 {"id":"work", "match":{"domain":["tls:*","ssh:*"], "cwd":"~/work"}},
                 {"id":"claude", "match":{"proc":"cla*"}},
@@ -838,7 +838,7 @@ mod tests {
     #[test]
     fn templates_are_utf8_safe_capped_and_skip_missing_facts() {
         let msg = msg(json!({
-            "rev":1,"window_id":1,"enabled":true,
+            "window_id":1,"enabled":true,
             "definitions":[
                 {"id":"home"},
                 {"id":"$host", "name":"Remote $host", "match":{"remote":true}}
@@ -858,7 +858,7 @@ mod tests {
     #[test]
     fn hook_is_batched_only_for_changed_automatic_tabs_and_wins_before_rules() {
         let msg = msg(json!({
-            "rev":1,"window_id":9,"enabled":true,"hook":true,
+            "window_id":9,"enabled":true,"hook":true,
             "definitions":[{"id":"home"},{"id":"rules","match":{"proc":"cargo"}}],
             "tabs":[
                 {"id":1,"index":1,"title":"one","proc":"zsh","space":"home","fingerprint":"stale"},
@@ -900,13 +900,12 @@ mod tests {
     #[test]
     fn hook_fingerprint_covers_every_fact_the_callback_can_observe() {
         let base = msg(json!({
-            "rev":1,"window_id":9,"enabled":true,"hook":true,
+            "window_id":9,"enabled":true,"hook":true,
             "tabs":[{"id":1,"index":1,"title":"one","proc":"zsh","cwd":"~","host":"host",
                 "user":"user","domain":"local","remote":false,"space":"home","manual":false}]
         }));
         let stamp = fingerprint(&base, &base.tabs[0], Some("home"), false);
-        let changed = |mut value: serde_json::Value| {
-            value["rev"] = json!(1);
+        let changed = |value: serde_json::Value| {
             let changed = msg(value);
             fingerprint(
                 &changed,
@@ -935,7 +934,7 @@ mod tests {
     #[test]
     fn sticky_assignment_holds_on_no_match_but_moves_into_a_new_match() {
         let mut msg = msg(json!({
-            "rev":1,"window_id":1,"enabled":true,
+            "window_id":1,"enabled":true,
             "definitions":[{"id":"home"},{"id":"claude","match":{"proc":"claude"}}],
             "tabs":[{"id":1,"index":1,"title":"one","proc":"zsh","space":"home","fingerprint":"old"}],
             "active_tab":1,"active_space":"home"
@@ -953,7 +952,7 @@ mod tests {
     #[test]
     fn active_follow_is_a_trigger_and_empty_manual_switch_holds() {
         let base = json!({
-            "rev":1,"window_id":1,"enabled":true,
+            "window_id":1,"enabled":true,
             "definitions":[{"id":"home"},{"id":"scratch"}],
             "tabs":[{"id":1,"index":1,"title":"one","space":"home","fingerprint":"same"}],
             "active_tab":1,"follow":{"tab_id":1,"space":"home"}
@@ -973,7 +972,7 @@ mod tests {
     #[test]
     fn summary_keeps_static_order_then_dynamic_first_sight_and_settings_are_global() {
         let msg = msg(json!({
-            "rev":1,"window_id":1,"enabled":true,
+            "window_id":1,"enabled":true,
             "definitions":[{"id":"home"},{"id":"$host","icon":"R","match":{"remote":true}}],
             "dynamics":[{"id":"old","name":"Old","seq":1},{"id":"empty","name":"Empty","seq":2}],
             "tabs":[
@@ -1001,7 +1000,7 @@ mod tests {
     #[test]
     fn disabling_spaces_clears_the_authoritative_dynamic_ledger() {
         let msg = msg(json!({
-            "rev":1,"window_id":1,"enabled":false,
+            "window_id":1,"enabled":false,
             "dynamics":[{"id":"stale","name":"Stale","seq":1}],
             "tabs":[{"id":1,"index":1,"title":"one","space":"stale"}],
             "active_tab":1,"active_space":"stale"
@@ -1019,7 +1018,7 @@ mod tests {
             .collect::<Vec<_>>();
         definitions.push(json!({"id":"$host","match":{"remote":true}}));
         let msg = msg(json!({
-            "rev":1,"window_id":44,"enabled":true,"definitions":definitions,
+            "window_id":44,"enabled":true,"definitions":definitions,
             "tabs":[
                 {"id":1,"index":1,"title":"one","remote":true,"host":"pi"},
                 {"id":2,"index":2,"title":"two","remote":true,"host":"nas"}
@@ -1042,7 +1041,7 @@ mod tests {
     #[test]
     fn validation_drops_only_bad_parts_and_theme_layer_is_typed() {
         let msg = msg(json!({
-            "rev":1,"window_id":1,"enabled":true,
+            "window_id":1,"enabled":true,
             "definitions":[
                 7,
                 {"id":"home","name":9,"theme":{"accent":[1,2,3],"bg":false,"elevation":2,"scrim":-0.1,"mystery":true},"match":{"proc":["zsh",4],"wat":"x"}},
@@ -1081,7 +1080,7 @@ mod tests {
     #[test]
     fn automatic_theme_accent_uses_normal_then_bright_palette_slots_stably() {
         let msg = msg(json!({
-            "rev":1,"window_id":1,"enabled":true,
+            "window_id":1,"enabled":true,
             "definitions":[{"id":"home"},{"id":"$host","theme":"auto","match":{"remote":true}}],
             "tabs":[{"id":1,"index":1,"title":"one","remote":true,"host":"pi"}],"active_tab":1
         }));

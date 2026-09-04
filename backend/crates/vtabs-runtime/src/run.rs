@@ -119,26 +119,22 @@ pub fn run() -> io::Result<()> {
         size,
         probe: terminal::size,
         pixel_probe: terminal::pixels,
-        parked_focus: None,
         needs_clear: false,
         fx: None,
         last_rows: None,
         shown_is_final: false,
         seq: 0,
-        v2: crate::app::V2State::default(),
+        sync: crate::app::SyncState::default(),
         ui: Default::default(),
         started: Instant::now(),
         popover: None,
         menu_ui: Default::default(),
         settings_ui: Default::default(),
-        noted_menu: None,
+        menu_refused: false,
         hover_deadline: None,
         token: None,
         token_announced: None,
         resize: None,
-        client_typed_intents: false,
-        client_theme_hooks: false,
-        client_spaces_policy: false,
         last_reported_theme: None,
         last_rail_reserve: None,
         cli: crate::cli::Cli::from_env(),
@@ -150,7 +146,6 @@ pub fn run() -> io::Result<()> {
     app.write(set_user_var(ROLE_VAR, role.name()).as_bytes())?;
     // Marker only: it lets the plugin find this pane again, it proves nothing and carries no token.
     app.write(title_marker(role, &nonce()).as_bytes())?;
-    // `paints` is the capability flip Lua reads to refuse a backend that cannot draw for itself.
     app.announce_ready()?;
     if cfg!(debug_assertions) && std::env::var_os("VTABS_PANIC_ON_READY").is_some_and(|v| v == "1")
     {

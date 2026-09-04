@@ -256,25 +256,12 @@ pub struct Cli {
     own_pane: u64,
 }
 
-/// A backend's own title marker, in either role; the one kind of title a `kill` may name.
+/// A backend's own title marker, in either role.
 pub fn is_marker(title: &str) -> bool {
     let nonce = title
         .strip_prefix("wez-vtabs:")
         .or_else(|| title.strip_prefix("wez-vtabs-settings:"));
     nonce.is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_hexdigit()))
-}
-
-/// The pane to kill for `title`: exactly one match, or the reason there is none.
-pub fn kill_target(panes: &[PaneInfo], title: &str) -> Result<u64, String> {
-    if !is_marker(title) {
-        return Err(format!("not a backend title: {title}"));
-    }
-    let mut hits = panes.iter().filter(|p| p.title == title);
-    match (hits.next(), hits.next()) {
-        (Some(p), None) => Ok(p.pane_id),
-        (None, _) => Err(format!("no pane titled {title}")),
-        (Some(_), Some(_)) => Err(format!("more than one pane titled {title}")),
-    }
 }
 
 /// The panes of `own`'s tab inside the sidebar's band, and the content pane to put them under.
@@ -371,11 +358,6 @@ impl Cli {
         panes_from_json(&self.run(&["list", "--format", "json"])?)
     }
 
-    pub fn kill_by_title(&self, title: &str) -> Result<(), String> {
-        let id = kill_target(&self.list()?, title)?;
-        self.kill_pane(id)
-    }
-
     pub fn kill_pane(&self, pane: u64) -> Result<(), String> {
         self.run(&["kill-pane", "--pane-id", &pane.to_string()])
             .map(|_| ())
@@ -398,54 +380,37 @@ impl Cli {
         Ok(pane)
     }
 
-    /// Resizes this pane's own split by `amount` cells in `direction`. A content pane that cannot
-    /// reach the split hands focus to this pane for the adjust; `parked` is one it kept from an
-    /// earlier `park`, and the answer is the pane still owed its focus back (only with `park`).
-    /// `amount` 0 does nothing but the hand-back. A `target` (width, minimum content per band)
-    /// replaces `direction` and `amount` with the delta the server's own list says is needed.
-    pub fn adjust(
-        &self,
-        direction: &str,
-        amount: u32,
-        park: bool,
-        parked: Option<u64>,
-        target: Option<(u32, u32)>,
-    ) -> Result<Option<u64>, String> {
-        if direction != "Left" && direction != "Right" {
-            return Err(format!(
-                "adjust: direction must be Left or Right, not {direction}"
-            ));
-        }
+    /// Resizes this pane's own split to `target`, preserving the content pane's focus.
+    pub fn adjust(&self, target: u32, min_content: u32) -> Result<(), String> {
         let own = self.own_pane.to_string();
         let panes = self.list()?;
-        let displaced = adjust_plan(&panes, self.own_pane)?;
-        let (direction, amount) = match target {
-            Some((cols, min_content)) => {
-                adjust_delta(&panes, self.own_pane, cols, min_content)?.unwrap_or((direction, 0))
-            }
-            None => (direction, amount),
+        let Some((direction, amount)) = adjust_delta(&panes, self.own_pane, target, min_content)?
+        else {
+            return Ok(());
         };
+        let displaced = adjust_plan(&panes, self.own_pane)?;
         if displaced.is_some() {
             self.run(&["activate-pane", "--pane-id", &own])?;
         }
-        if amount > 0 {
-            self.run(&[
+        let adjusted = self
+            .run(&[
                 "adjust-pane-size",
                 "--pane-id",
                 &own,
                 "--amount",
                 &amount.to_string(),
                 direction,
-            ])?;
+            ])
+            .map(|_| ());
+        let restored = displaced.map_or(Ok(()), |pane| {
+            self.run(&["activate-pane", "--pane-id", &pane.to_string()])
+                .map(|_| ())
+        });
+        match (adjusted, restored) {
+            (Err(err), _) => Err(err),
+            (Ok(()), Err(err)) => Err(err),
+            (Ok(()), Ok(())) => Ok(()),
         }
-        let owed = parked.or(displaced);
-        if park {
-            return Ok(owed);
-        }
-        if let Some(pane) = owed {
-            self.run(&["activate-pane", "--pane-id", &pane.to_string()])?;
-        }
-        Ok(None)
     }
 
     /// Moves every intruder under the host; the count moved, or the first failure.

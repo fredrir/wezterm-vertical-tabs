@@ -3,9 +3,9 @@ use crate::{
     sanitize,
     strings::{grapheme_count, graphemes},
 };
-use vtabs_protocol::v2::{MenuItem, MenuMsg};
+use vtabs_protocol::payload::{MenuItem, MenuMsg};
 
-use crate::enrich::PopoverHits;
+use crate::enrich::{MenuHeader, PopoverHits};
 use crate::text;
 use crate::{
     color::Color,
@@ -290,8 +290,13 @@ fn drop_to(lines: &[HeadLine], keep: usize) -> Vec<HeadLine> {
     out
 }
 
-fn header(msg: &MenuMsg, level: Level, budget: i64, ellipsis: &str) -> Vec<HeadLine> {
-    let (title, meta) = match msg.header.as_ref() {
+fn header(
+    menu_header: Option<&MenuHeader>,
+    level: Level,
+    budget: i64,
+    ellipsis: &str,
+) -> Vec<HeadLine> {
+    let (title, meta) = match menu_header {
         Some(h) => (h.title.as_str(), h.meta.as_deref()),
         None => ("tab", None),
     };
@@ -510,11 +515,11 @@ fn rename_rows(state: &MenuState, w: i64, theme: &Theme, ellipsis: &str) -> Vec<
     ]
 }
 
-fn head_texts(msg: &MenuMsg, level: Level) -> Vec<String> {
+fn head_texts(menu_header: Option<&MenuHeader>, level: Level) -> Vec<String> {
     if level != Level::Confirm {
         return Vec::new();
     }
-    let Some(h) = msg.header.as_ref() else {
+    let Some(h) = menu_header else {
         return Vec::new();
     };
     let mut out = vec![h.title.clone()];
@@ -525,6 +530,7 @@ fn head_texts(msg: &MenuMsg, level: Level) -> Vec<String> {
 /// The rect `composite` overlays, plus the rows a click can name: popover.lua's `rect()`.
 pub fn plan(
     msg: &MenuMsg,
+    menu_header: Option<&MenuHeader>,
     state: &MenuState,
     cfg: &MenuCfg,
     theme: &Theme,
@@ -537,7 +543,7 @@ pub fn plan(
         return Outcome::Closed;
     }
     let level = Level::of(msg);
-    let head = head_texts(msg, level);
+    let head = head_texts(menu_header, level);
     let floor = match level {
         Level::Rename | Level::Spaces => state.root_width.unwrap_or(MIN_W),
         _ => MIN_W,
@@ -571,7 +577,7 @@ pub fn plan(
         ids.extend(content.iter().map(|_| (None, false)));
         body = content;
     } else {
-        let full = header(msg, level, w - LABEL_PAD, &cfg.ellipsis);
+        let full = header(menu_header, level, w - LABEL_PAD, &cfg.ellipsis);
         let placed = layout(&full, count, selected, anchor.row, rows);
         a = placed.a;
         for line in &placed.lines {

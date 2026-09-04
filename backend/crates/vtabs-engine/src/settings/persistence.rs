@@ -5,21 +5,18 @@ use serde::{Deserialize, Serialize};
 use super::schema::{Kind, by_key, canonical_value, defaults, options};
 use super::value::{SettingPath, Value, get_path, set_at};
 
-pub const VERSION: u32 = 1;
-
 #[derive(Serialize)]
 struct Output<'a> {
-    version: u32,
     options: &'a BTreeMap<String, Value>,
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct Input {
-    version: u32,
     options: Value,
 }
 
-/// The usable part of a persistence-v1 document plus non-fatal diagnostics for the host.
+/// The usable part of a persisted settings document plus non-fatal diagnostics for the host.
 #[derive(Debug, PartialEq)]
 pub struct Loaded {
     pub values: Value,
@@ -35,9 +32,9 @@ impl Default for Loaded {
     }
 }
 
-/// Parses, filters, and migrates a persistence-v1 body. A broken file is an empty overlay rather
-/// than a startup error: user configuration and defaults must still be usable.
-pub fn parse_v1(body: &str) -> Loaded {
+/// Parses and filters a persisted body. A broken file is an empty overlay rather than a startup
+/// error: user configuration and defaults must still be usable.
+pub fn parse(body: &str) -> Loaded {
     let mut loaded = Loaded::default();
     let input: Input = match serde_json::from_str(body) {
         Ok(input) => input,
@@ -48,13 +45,6 @@ pub fn parse_v1(body: &str) -> Loaded {
             return loaded;
         }
     };
-    if input.version != VERSION {
-        loaded.warnings.push(format!(
-            "settings file version {} ignored (expected {VERSION})",
-            input.version
-        ));
-        return loaded;
-    }
     let Value::Table(options) = input.options else {
         loaded
             .warnings
@@ -66,7 +56,6 @@ pub fn parse_v1(body: &str) -> Loaded {
         &SettingPath(Vec::new()),
         &mut loaded.warnings,
     ));
-    migrate_aliases(&mut loaded.values);
     loaded
 }
 
@@ -98,23 +87,6 @@ fn filter_table(
         }
     }
     kept
-}
-
-fn migrate_aliases(values: &mut Value) {
-    for option in options() {
-        let Some(value) = get_path(values, option.key).cloned() else {
-            continue;
-        };
-        let Some((_, replacement)) = option.aliases.iter().find(|(alias, _)| *alias == value)
-        else {
-            continue;
-        };
-        set_at(
-            values,
-            &SettingPath::from_dotted(option.key),
-            Some(replacement.clone()),
-        );
-    }
 }
 
 /// Returns only serializable, changed values, excluding config-as-code keys and their children.
@@ -217,17 +189,14 @@ fn diff_open(
     }
 }
 
-/// Produces the complete deterministic version-1 JSON body for Lua's later atomic write.
+/// Produces the complete deterministic JSON body for Lua's later atomic write.
 pub fn json_body(
     resolved: &Value,
     explicit: &BTreeSet<SettingPath>,
     opaque: &BTreeSet<SettingPath>,
 ) -> Result<String, serde_json::Error> {
     let options = changed_values(resolved, explicit, opaque);
-    serde_json::to_string(&Output {
-        version: VERSION,
-        options: &options,
-    })
+    serde_json::to_string(&Output { options: &options })
 }
 
 #[cfg(test)]
@@ -260,11 +229,11 @@ mod tests {
     }
 
     #[test]
-    fn final_body_is_compact_deterministic_and_versioned() {
+    fn final_body_is_compact_and_deterministic() {
         let resolved = table([("width", 40.into()), ("row_gap", 1.into())]);
         assert_eq!(
             json_body(&resolved, &BTreeSet::new(), &BTreeSet::new()).unwrap(),
-            r#"{"version":1,"options":{"row_gap":1.0,"width":40.0}}"#
+            r#"{"options":{"row_gap":1.0,"width":40.0}}"#
         );
     }
 
@@ -310,9 +279,9 @@ mod tests {
     }
 
     #[test]
-    fn persistence_v1_parses_filters_closed_keys_and_preserves_open_maps_and_lists() {
-        let loaded = parse_v1(
-            r#"{"version":1,"options":{"bogus":1,"padding":{"top":3,"bogus":4},"backend":{"env":{"A.B":"one"}},"strip_actions":[],"spaces":[{"id":"work"}]}}"#,
+    fn persistence_parses_filters_closed_keys_and_preserves_open_maps_and_lists() {
+        let loaded = parse(
+            r#"{"options":{"bogus":1,"padding":{"top":3,"bogus":4},"backend":{"env":{"A.B":"one"}},"strip_actions":[],"spaces":[{"id":"work"}]}}"#,
         );
         assert_eq!(get_path(&loaded.values, "bogus"), None);
         assert_eq!(get_path(&loaded.values, "padding.bogus"), None);
@@ -340,21 +309,22 @@ mod tests {
     }
 
     #[test]
-    fn persistence_v1_migrates_aliases() {
-        let loaded = parse_v1(r#"{"version":1,"options":{"tab_height":2,"tooltip":true}}"#);
-        assert_eq!(get_path(&loaded.values, "tab_height"), Some(&"card".into()));
-        assert_eq!(get_path(&loaded.values, "tooltip"), Some(&"on".into()));
+    fn persistence_keeps_values_for_canonical_validation() {
+        let loaded = parse(r#"{"options":{"tab_height":2,"tooltip":true}}"#);
+        assert_eq!(get_path(&loaded.values, "tab_height"), Some(&2.into()));
+        assert_eq!(get_path(&loaded.values, "tooltip"), Some(&true.into()));
         assert!(loaded.warnings.is_empty());
     }
 
     #[test]
-    fn persistence_v1_rejects_corrupt_versions_and_non_object_options() {
+    fn persistence_rejects_invalid_document_shapes() {
         for body in [
             "not json",
-            r#"{"version":2,"options":{}}"#,
-            r#"{"version":1,"options":[]}"#,
+            r#"{}"#,
+            r#"{"options":[]}"#,
+            r#"{"options":{},"marker":1}"#,
         ] {
-            let loaded = parse_v1(body);
+            let loaded = parse(body);
             assert_eq!(loaded.values, Value::Table(BTreeMap::new()));
             assert_eq!(loaded.warnings.len(), 1);
         }

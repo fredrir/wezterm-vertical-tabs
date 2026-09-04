@@ -3,20 +3,14 @@ use serde::Serialize;
 use crate::b64;
 use crate::types::Mods;
 
-pub use crate::limits::VERSION;
-
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(tag = "t", rename_all = "snake_case")]
 pub enum Event {
     Ready {
-        v: u8,
         cols: u16,
         rows: u16,
-        paints: bool,
-        caps: Vec<&'static str>,
         /// The backend's own server pane id, so Lua can `kill` it by id through a sibling.
-        #[serde(skip_serializing_if = "Option::is_none")]
-        pane: Option<u64>,
+        pane: u64,
         /// The inbox session offered for this ready; absent where no transport root was given.
         #[serde(skip_serializing_if = "Option::is_none")]
         transport: Option<Transport>,
@@ -68,36 +62,29 @@ pub enum Event {
         #[serde(flatten)]
         intent: Intent,
     },
-    /// Rust's resolved base, passed to the host hook while this generation remains unpublished.
+    /// Rust's resolved base, passed to the host hook while the publication remains staged.
     ThemeHookRequest {
-        generation: u64,
-        theme: crate::v2::ResolvedTheme,
+        theme: crate::payload::ResolvedTheme,
     },
     /// The effective theme Rust committed, for host chrome and the Zen companion.
     ThemeResolved {
-        #[serde(skip_serializing_if = "Option::is_none")]
-        generation: Option<u64>,
-        theme: crate::v2::ResolvedTheme,
+        theme: crate::payload::ResolvedTheme,
     },
-    /// All sticky-cache misses for one atomic generation. The host executes its Lua route hook and
-    /// answers once with a `space_route_hook_result`; nothing from this generation is published in
-    /// between.
+    /// All sticky-cache misses for the staged publication. The host executes its Lua route hook
+    /// and answers once with a `space_route_hook_result` before anything is published.
     SpaceRouteHookRequest {
-        generation: u64,
         window_id: i64,
-        tabs: Vec<crate::v2::SpaceRouteHookFact>,
+        tabs: Vec<crate::payload::SpaceRouteHookFact>,
     },
-    /// The complete topology and active raw theme layer committed for one atomic generation.
+    /// The complete topology and active raw theme layer committed atomically.
     SpacesResolved {
-        generation: u64,
         window_id: i64,
         #[serde(flatten)]
-        resolution: Box<crate::v2::SpaceResolution>,
+        resolution: Box<crate::payload::SpaceResolution>,
     },
     /// One canonical Rust commit. Lua applies only this path to its host-side config, then writes
     /// the already-final JSON body if persistence is enabled.
     SettingsCommit {
-        settings_rev: u64,
         path: Vec<String>,
         change: SettingsChange,
         #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -109,24 +96,13 @@ pub enum Event {
     SettingsCopy {
         lua: String,
     },
-    /// Legacy compatibility envelope for clients without typed intents. The args are boxed because
-    /// every variant sets only a handful of this wide union.
-    Do {
-        a: &'static str,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        id: Option<DoId>,
-        #[serde(skip_serializing_if = "DoArgs::is_empty")]
-        args: Box<DoArgs>,
-    },
-    Note {
-        k: &'static str,
+    MenuRefused {
         #[serde(skip_serializing_if = "Option::is_none")]
         why: Option<&'static str>,
         #[serde(skip_serializing_if = "Option::is_none")]
         id: Option<i64>,
-        /// The level the note is about, so Lua picks its own fallback rather than being told one.
         #[serde(skip_serializing_if = "Option::is_none")]
-        a: Option<&'static str>,
+        level: Option<&'static str>,
     },
     /// What a `kill`, `rescue` or `adjust` did on the server: `detail` is the count moved, the
     /// pane still owed its focus, or the error; `cols` is this pane's own width once an `adjust`
@@ -296,17 +272,6 @@ pub enum CardPart {
     Gap,
 }
 
-impl CardPart {
-    fn name(self) -> &'static str {
-        match self {
-            Self::Pad => "pad",
-            Self::Title => "title",
-            Self::Meta => "meta",
-            Self::Gap => "gap",
-        }
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Modifier {
@@ -353,16 +318,6 @@ pub fn modifiers(mods: Mods) -> Vec<Modifier> {
     list
 }
 
-impl Modifier {
-    fn name(self) -> &'static str {
-        match self {
-            Self::Shift => "shift",
-            Self::Ctrl => "ctrl",
-            Self::Alt => "alt",
-        }
-    }
-}
-
 impl Intent {
     pub const NAMES: &'static [&'static str] = {
         macro_rules! names {
@@ -383,198 +338,14 @@ impl Intent {
         }
         intent_contract!(match_name)
     }
-
-    fn legacy_name(&self) -> &'static str {
-        match self {
-            Intent::ActivateTab { .. } => "activate_tab_by_id",
-            _ => self.name(),
-        }
-    }
-
-    /// The single compatibility mapping for clients that have not advertised `typed_intents`.
-    pub fn downgrade(&self) -> Event {
-        let name = self.legacy_name();
-        match self {
-            Intent::PressCard { tab_id, x, y, part } => Event::do_tab(name, *tab_id).with(|args| {
-                args.x = Some(*x);
-                args.y = Some(*y);
-                args.part = part.map(CardPart::name);
-            }),
-            Intent::DragTo {
-                x,
-                y,
-                slot,
-                outside,
-            } => Event::do_(name).with(|args| {
-                args.x = Some(*x);
-                args.y = Some(*y);
-                args.slot = Some(*slot);
-                args.outside = Some(*outside);
-            }),
-            Intent::DragEnd { outside, slot } => Event::do_(name).with(|args| {
-                args.outside = Some(*outside);
-                args.slot = *slot;
-            }),
-            Intent::RequestClose {
-                tab_id,
-                row,
-                col,
-                from_key,
-            } => Event::do_tab(name, *tab_id).with(|args| {
-                args.row = Some(*row);
-                args.col = *col;
-                args.from_key = from_key.then_some(true);
-            }),
-            Intent::TogglePin { tab_id } => Event::do_tab(name, *tab_id),
-            Intent::OpenMenu { tab_id, row, col } => Event::do_tab(name, *tab_id).with(|args| {
-                args.row = Some(*row);
-                args.col = *col;
-            }),
-            Intent::NewTab => Event::do_(name),
-            Intent::Strip { button_id } => Event::do_named(name, button_id.clone()),
-            Intent::Footer { index } => Event::do_(name).with(|args| args.index = Some(*index)),
-            Intent::SwitchSpace { space_id } => Event::do_named(name, space_id.clone()),
-            Intent::WheelTab { dy } => Event::do_(name).with(|args| args.dy = Some(*dy)),
-            Intent::SetScroll { top, user } => Event::do_(name).with(|args| {
-                args.top = Some(*top);
-                args.user = Some(*user);
-            }),
-            Intent::SetFocusIndex { index } => {
-                Event::do_(name).with(|args| args.index = Some(*index))
-            }
-            Intent::ActivateTab { tab_id } => Event::do_tab(name, *tab_id),
-            Intent::BlurSidebar => Event::do_(name),
-            Intent::MenuPick { item_id } => {
-                Event::do_(name).with(|args| args.id = Some(item_id.clone()))
-            }
-            Intent::MenuBack => Event::do_(name),
-            Intent::MenuClosed => Event::do_(name),
-            Intent::RenameCommit { text } => {
-                Event::do_(name).with(|args| args.text = Some(text.clone()))
-            }
-            Intent::RenameTab { tab_id } => Event::do_tab(name, *tab_id),
-            Intent::MoveTab {
-                tab_id,
-                slot,
-                focus_index,
-            } => Event::do_tab(name, *tab_id).with(|args| {
-                args.slot = Some(*slot);
-                args.focus_index = Some(*focus_index);
-            }),
-            Intent::SetRailReserve { cols } => {
-                Event::do_(name).with(|args| args.cols = Some(*cols))
-            }
-            Intent::NudgeOption { key, delta } => Event::do_(name).with(|args| {
-                args.key = Some(key.clone());
-                args.delta = Some(*delta);
-            }),
-            Intent::ActivateOption { key } => {
-                Event::do_(name).with(|args| args.key = Some(key.clone()))
-            }
-            Intent::ResetOption { key } => {
-                Event::do_(name).with(|args| args.key = Some(key.clone()))
-            }
-            Intent::SettingsCopy => Event::do_(name),
-            Intent::EditKey { key } => Event::do_(name).with(|args| args.key = Some(key.clone())),
-            Intent::RecordChord { key, mods } => Event::do_(name).with(|args| {
-                args.key = Some(key.clone());
-                args.mods = mods.iter().map(|modifier| modifier.name()).collect();
-            }),
-            Intent::CloseSettings => Event::do_(name),
-        }
-    }
-}
-
-/// A `do` target: tab ids are numbers, strip buttons are their string id.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(untagged)]
-pub enum DoId {
-    Tab(i64),
-    Name(String),
-}
-
-/// Every argument any `do` action carries; each event sets only the ones its handler reads.
-#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize)]
-pub struct DoArgs {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub x: Option<i64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub y: Option<i64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub part: Option<&'static str>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub slot: Option<i64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub outside: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub from_key: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub row: Option<i64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub col: Option<i64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub top: Option<i64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub user: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub dy: Option<i64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub index: Option<i64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub focus_index: Option<i64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub cols: Option<i64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub k: Option<&'static str>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub b: Option<&'static str>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub kind: Option<&'static str>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub disabled: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub inside: Option<bool>,
-    /// The rename buffer Rust owns, handed back whole on commit.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub text: Option<String>,
-    /// The settings verbs' target: an option key, or the raw key name for `edit_key`/`record_chord`.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub key: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub delta: Option<i64>,
-    /// `record_chord` only; settings_model.lua joins the list with `|`.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub mods: Vec<&'static str>,
-}
-
-impl DoArgs {
-    pub fn is_empty(&self) -> bool {
-        *self == DoArgs::default()
-    }
 }
 
 impl Event {
-    pub fn ready(cols: u16, rows: u16) -> Self {
-        Self::ready_at(cols, rows, None, None)
-    }
-
     /// `ready` from a pane that knows its server id and, with `inbox`, offers a session there.
-    pub fn ready_at(cols: u16, rows: u16, pane: Option<u64>, inbox: Option<String>) -> Self {
+    pub fn ready_at(cols: u16, rows: u16, pane: u64, inbox: Option<String>) -> Self {
         Event::Ready {
-            v: VERSION,
             cols,
             rows,
-            paints: true,
-            caps: vec![
-                "atomic_sync",
-                "typed_intents",
-                "theme_hooks",
-                "settings_document",
-                "spaces_policy",
-                "inbox_transport",
-            ],
             pane,
             transport: inbox.map(|inbox| Transport { inbox }),
         }
@@ -599,38 +370,6 @@ impl Event {
 
     pub fn intent(intent: Intent) -> Self {
         Event::Intent { intent }
-    }
-
-    fn do_(a: &'static str) -> Self {
-        Event::Do {
-            a,
-            id: None,
-            args: Box::default(),
-        }
-    }
-
-    fn do_tab(a: &'static str, id: i64) -> Self {
-        Event::Do {
-            a,
-            id: Some(DoId::Tab(id)),
-            args: Box::default(),
-        }
-    }
-
-    /// A verb aimed at something Lua names by string: a strip button, a space.
-    fn do_named(a: &'static str, id: String) -> Self {
-        Event::Do {
-            a,
-            id: Some(DoId::Name(id)),
-            args: Box::default(),
-        }
-    }
-
-    fn with(mut self, set: impl FnOnce(&mut DoArgs)) -> Self {
-        if let Event::Do { args, .. } = &mut self {
-            set(args.as_mut());
-        }
-        self
     }
 
     pub fn paste(data: Option<Vec<u8>>) -> Self {

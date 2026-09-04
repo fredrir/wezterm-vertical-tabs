@@ -64,21 +64,6 @@ function M.palette(bg, fg)
   return { background = bg, foreground = fg, ansi = {}, brights = {} }
 end
 
--- These assert renderer mechanics at a fixed layout, so they state it rather than tracking defaults.
-local LEGACY_LAYOUT = {
-  row_gap = 0,
-  padding = { top = 1, left = 1, right = 1 },
-  separator = "rule",
-  pinned_style = "compact",
-  new_tab_button = "row",
-  meta = false,
-  toggle_button = false,
-}
-
-function M.legacy(opts)
-  return util.merge(LEGACY_LAYOUT, opts or {})
-end
-
 ---Runs `fn` with the clock moved on, so a width can be observed as having sat still since.
 function M.later(ms, fn)
   local real = util.now_ms
@@ -231,7 +216,7 @@ function M.open_popover(index)
   local win, gui = M.ready_window()
   local sb = sidebar.find(win.tab_list[1])
   local tab = win.tab_list[index or 1]
-  input.handle(gui, sb, "vtabs", '{"t":"do","a":"open_menu","id":' .. tab.id .. ',"args":{"row":3,"col":5}}')
+  input.handle(gui, sb, "vtabs", '{"t":"intent","a":"open_menu","tab_id":' .. tab.id .. ',"row":3,"col":5}')
   require("vtabs.view").sync(gui)
   return win, gui, sb, popover.get(gui:window_id())
 end

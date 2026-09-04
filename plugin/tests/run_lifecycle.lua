@@ -42,10 +42,6 @@ local function batch_lines(text)
   return out
 end
 
-local function batch_generation(text)
-  return tonumber(tostring(text):match '"t":"begin","generation":(%d+)')
-end
-
 test("a deferred split leaves the tree alone until the task resumes", function()
   local win = H.window(1)
   local tab = win.tab_list[1]
@@ -406,29 +402,28 @@ test("a backend is restarted after three unanswered pings, never for idle time a
   clock.restore()
 end)
 
-test("the model goes to the shown sidebar; a background one catches up when its tab comes forward", function()
+test("tab facts go to the shown sidebar and the stable policy pane while background", function()
   local win, gui = H.window(2, { attach = true, ready = true })
   local view = require "vtabs.view"
   local shown, hidden = sidebar.find(win.tab_list[1]), sidebar.find(win.tab_list[2])
-  store.proto[shown:pane_id()], store.proto[hidden:pane_id()] = protocol.VERSION, protocol.VERSION
-  local function models(sb)
+  local function spaces_sections(sb)
     local n = 0
     for _, line in ipairs(sb.sent) do
-      n = n + (line:find('"t":"model"', 1, true) and 1 or 0)
+      n = n + (line:find('"t":"spaces"', 1, true) and 1 or 0)
     end
     return n
   end
   view.sync(gui)
-  eq(models(shown), 1)
-  eq(models(hidden), 1, "a sidebar never written to is dressed once")
+  eq(spaces_sections(shown), 1)
+  eq(spaces_sections(hidden), 1, "a sidebar never written to is dressed once")
   win.tab_list[2]:set_title "renamed"
   view.sync(gui)
-  eq(models(shown), 2, "the shown sidebar gets the change")
-  eq(models(hidden), 1, "the background one is left as it is")
+  eq(spaces_sections(shown), 2, "the shown sidebar gets the change")
+  eq(spaces_sections(hidden), 1, "the background one is left as it is")
   win.active_tab_ref = win.tab_list[2]
   view.sync(gui)
-  eq(models(hidden), 2, "and catches up once shown")
-  eq(models(shown), 2)
+  eq(spaces_sections(hidden), 2, "and catches up once shown")
+  eq(spaces_sections(shown), 3, "the policy pane stays current after it moves to the background")
 end)
 
 test("one publish enumerates the window tabs once", function()
@@ -436,10 +431,6 @@ test("one publish enumerates the window tabs once", function()
   local view = require "vtabs.view"
   config.get().debug = true
   local logs_before = #wezterm.log
-  for _, tab in ipairs(win.tab_list) do
-    local sb = sidebar.find(tab)
-    store.proto[sb:pane_id()] = protocol.VERSION
-  end
   win.tab_enumerations = 0
   eq(view.sync(gui), true)
   eq(win.tab_enumerations, 1, "snapshot is the publish's only mux-tree observation")
@@ -453,9 +444,7 @@ end)
 test("the strip wire never borrows cached or background metrics for the active pane", function()
   local win, gui = H.window(2, { attach = true, ready = true })
   local view = require "vtabs.view"
-  local first, second = sidebar.find(win.tab_list[1]), sidebar.find(win.tab_list[2])
-  store.proto[first:pane_id()] = protocol.VERSION
-  store.proto[second:pane_id()] = protocol.VERSION
+  local second = sidebar.find(win.tab_list[2])
   view.sync(gui)
   win.active_tab_ref = win.tab_list[2]
   second.get_dimensions = function()
@@ -465,11 +454,14 @@ test("the strip wire never borrows cached or background metrics for the active p
   view.sync(gui)
   local model_line = nil
   for i = before + 1, #second.sent do
-    model_line = second.sent[i]:find('"t":"model"', 1, true) and second.sent[i] or model_line
+    for line in second.sent[i]:gmatch "[^\n]+" do
+      model_line = line:find('"t":"model"', 1, true) and line or model_line
+    end
   end
   assert(model_line, "active pane receives its changed raw-facts model")
   assert(model_line:find('"chrome"', 1, true), "raw host chrome facts cross the model wire")
   assert(not model_line:find('"metrics"', 1, true), "no cached or background pane metrics are borrowed")
+  assert(not model_line:find('"tabs"', 1, true), "the tab census belongs only to the spaces section")
   assert(not model_line:find('"toggle_row"', 1, true), "Lua sends no derived toggle geometry")
   assert(not model_line:find('"cell_w"', 1, true), "Lua sends no derived cell width")
 
@@ -478,7 +470,9 @@ test("the strip wire never borrows cached or background metrics for the active p
   view.sync(gui)
   model_line = nil
   for i = before + 1, #second.sent do
-    model_line = second.sent[i]:find('"t":"model"', 1, true) and second.sent[i] or model_line
+    for line in second.sent[i]:gmatch "[^\n]+" do
+      model_line = line:find('"t":"model"', 1, true) and line or model_line
+    end
   end
   assert(model_line and model_line:find('"is_full_screen":true', 1, true), "fullscreen chrome refreshes")
   assert(not model_line:find('"metrics"', 1, true), "fullscreen needs no invented metrics")
@@ -489,7 +483,6 @@ test("a geometry adjustment discards the snapshot it invalidated", function()
   local view = require "vtabs.view"
   local tab = win.tab_list[1]
   local sb = sidebar.find(tab)
-  store.proto[sb:pane_id()] = protocol.VERSION
   tab:set_split(38)
   local sent = #sb.sent
   eq(view.sync(gui), false, "the correcting pass is not publishable")
@@ -497,22 +490,12 @@ test("a geometry adjustment discards the snapshot it invalidated", function()
   assert(#win.actions > 0, "geometry issued its correction")
 end)
 
-test("ready atomic_sync capability selects one ordered publish batch", function()
+test("ready selects one ordered atomic publish batch", function()
   local win, gui = H.window(1, { attach = true, ready = true })
   local sb = sidebar.find(win.tab_list[1])
-  require("vtabs.input").handle(
-    gui,
-    sb,
-    "vtabs",
-    '{"t":"ready","v":3,"cols":28,"rows":24,"paints":true,"caps":["atomic_sync",'
-      .. '"typed_intents","theme_hooks","settings_document"],"n":1}'
-  )
-  assert(sidebar.supports(sb, "atomic_sync"), "ready capability was recorded")
-  assert(sidebar.supports(sb, "typed_intents"), "typed intent capability was recorded")
-  assert(sidebar.supports(sb, "theme_hooks"), "theme hook capability was recorded")
-  assert(sidebar.supports(sb, "settings_document"), "settings ownership capability was recorded")
+  fake.ready(gui, sb, { transport = false })
   local lines = batch_lines(sb.sent[#sb.sent])
-  eq(#lines, 6, "begin, four sidebar sections, commit share one send_text")
+  eq(#lines, 7, "begin, five sidebar sections, commit share one send_text")
   local frame_prefix = protocol.CONTROL_PREFIX .. state.token_for(sb:pane_id()) .. " "
   for _, line in ipairs(lines) do
     eq(line:sub(1, #frame_prefix), frame_prefix, "every record carries the pane session proof")
@@ -520,23 +503,24 @@ test("ready atomic_sync capability selects one ordered publish batch", function(
   assert(lines[1]:find('"t":"begin"', 1, true), "begin first")
   assert(lines[2]:find('"t":"config"', 1, true), "config second")
   assert(lines[3]:find('"t":"theme"', 1, true), "theme third")
-  assert(lines[4]:find('"t":"model"', 1, true), "model fourth")
-  assert(lines[5]:find('"t":"menu"', 1, true), "menu fifth")
-  assert(lines[6]:find('"t":"commit"', 1, true), "commit last")
-  eq(batch_generation(lines[1]), tonumber(lines[6]:match '"generation":(%d+)'), "transaction generations match")
+  assert(lines[4]:find('"t":"spaces"', 1, true), "spaces fourth")
+  assert(lines[5]:find('"t":"model"', 1, true), "model fifth")
+  assert(lines[6]:find('"t":"menu"', 1, true), "menu sixth")
+  assert(lines[7]:find('"t":"commit"', 1, true), "commit last")
+  eq(H.control_payload(lines[1]), '{"t":"begin"}', "begin carries no correlation field")
+  eq(H.control_payload(lines[7]), '{"t":"commit"}', "commit carries no correlation field")
 end)
 
-test("ready requires the exact framed protocol version before auth", function()
+test("ready rejects fields outside the current shape before auth", function()
   local _, gui, _, sb = H.key_window(1)
-  store.proto[sb:pane_id()] = nil
   local before = #sb.sent
+  local removed = table.concat { "ca", "ps" }
   require("vtabs.input").handle(
     gui,
     sb,
     "vtabs",
-    '{"t":"ready","v":2,"cols":28,"rows":24,"paints":true,"caps":["atomic_sync"],"n":1}'
+    string.format('{"t":"ready","cols":28,"rows":24,"pane":%d,"%s":[],"n":1}', sb.server_id, removed)
   )
-  eq(store.proto[sb:pane_id()], nil, "an older unframed transport is not negotiated")
   eq(store.given_up[sb:pane_id()], true, "the incompatible backend is retired")
   eq(#sb.sent, before, "no auth token is disclosed to the incompatible backend")
   store.given_up[sb:pane_id()] = nil
@@ -553,9 +537,6 @@ test("only the current settings pane may apply delayed effects or run hooks", fu
   current.vars.vtabs_token = "current-settings"
   state.set_token(stale:pane_id(), "stale-settings")
   stale.vars.vtabs_token = "stale-settings"
-  store.proto[current:pane_id()] = protocol.VERSION
-  sidebar.set_capabilities(current, { "atomic_sync", "settings_document" })
-
   local hooks = 0
   config.setup {
     width = 28,
@@ -569,76 +550,42 @@ test("only the current settings pane may apply delayed effects or run hooks", fu
     backend = { path = "/bin/wez-vtabs" },
   }
   require("vtabs.view").sync(gui)
-  local wire = require "vtabs.wire"
-  local source_rev = assert(wire.revision(gui:window_id(), "settings"))
   require("vtabs.input").handle(
     gui,
     current,
     "vtabs",
-    string.format(
-      '{"t":"settings_commit","settings_rev":%d,"path":["width"],'
-        .. '"change":{"op":"set","value":30},"mode":"instant",'
-        .. '"persistence_json":"{\\"version\\":1,\\"options\\":{}}"}',
-      source_rev
-    )
+    '{"t":"settings_commit","path":["width"],'
+      .. '"change":{"op":"set","value":30},"mode":"instant",'
+      .. '"persistence_json":"{\\"options\\":{}}"}'
   )
-  eq(config.get().width, 30, "the current pane's current revision is accepted")
-  for _, revision in ipairs { source_rev, source_rev + 99 } do
-    require("vtabs.input").handle(
-      gui,
-      current,
-      "vtabs",
-      string.format(
-        '{"t":"settings_commit","settings_rev":%d,"path":["width"],'
-          .. '"change":{"op":"set","value":98},"mode":"instant",'
-          .. '"persistence_json":"{\\"version\\":1,\\"options\\":{}}"}',
-        revision
-      )
-    )
-  end
-  require("vtabs.input").handle(
-    gui,
-    current,
-    "vtabs",
-    '{"t":"settings_commit","path":["width"],"change":{"op":"set","value":97},'
-      .. '"mode":"instant","persistence_json":"{\\"version\\":1,\\"options\\":{}}"}'
-  )
-  eq(config.get().width, 30, "stale, future and missing revisions are inert")
+  eq(config.get().width, 30, "the current pane's structurally valid commit is accepted")
   require("vtabs.input").handle(
     gui,
     stale,
     "vtabs",
     '{"t":"settings_commit","path":["width"],"change":{"op":"set","value":99},'
-      .. '"mode":"instant","persistence_json":"{\\"version\\":1,\\"options\\":{}}"}'
+      .. '"mode":"instant","persistence_json":"{\\"options\\":{}}"}'
   )
   eq(config.get().width, 30, "a duplicate settings pane cannot mutate config")
-  require("vtabs.input").handle(gui, stale, "vtabs", '{"t":"theme_hook_request","generation":7,"theme":{}}')
+  require("vtabs.input").handle(gui, stale, "vtabs", '{"t":"theme_hook_request","theme":{}}')
   eq(hooks, 0, "a duplicate settings pane cannot invoke the theme hook")
   config.setup { backend = { path = "/bin/wez-vtabs" } }
 end)
 
-test("raw settings ownership is capability-gated without rebuilding a Lua model", function()
+test("the settings page receives the raw document without a Lua settings model", function()
   local win, gui = H.window(1)
   local _, pane = win:spawn_tab { args = { "/bin/wez-vtabs", "--role", "settings" } }
   state.set_token(pane:pane_id(), "settings-cap")
   pane.vars.vtabs_token = "settings-cap"
-  store.proto[pane:pane_id()] = protocol.VERSION
-
   require("vtabs.view").sync(gui)
-  eq(#pane.sent, 0, "an older backend is not sent an unknown raw settings command")
-
-  sidebar.set_capabilities(pane, { "atomic_sync", "settings_document" })
-  require("vtabs.view").sync(gui)
-  assert(pane.sent[#pane.sent]:find('"t":"settings"', 1, true), "a capable backend receives the raw document")
+  assert(pane.sent[#pane.sent]:find('"t":"settings"', 1, true), "the backend receives the raw document")
 end)
 
-test("an oversized settings section never begins a partial atomic generation", function()
+test("an oversized settings section never begins a partial atomic publication", function()
   local win, gui = H.window(1)
   local _, pane = win:spawn_tab { args = { "/bin/wez-vtabs", "--role", "settings" } }
   state.set_token(pane:pane_id(), "settings-large")
   pane.vars.vtabs_token = "settings-large"
-  store.proto[pane:pane_id()] = protocol.VERSION
-  sidebar.set_capabilities(pane, { "atomic_sync", "settings_document" })
   config.setup {
     backend = { path = "/bin/wez-vtabs", env = { LARGE = string.rep("x", protocol.LINE_MAX) } },
   }
@@ -649,36 +596,32 @@ test("an oversized settings section never begins a partial atomic generation", f
   assert(pane.sent[#pane.sent]:find('"t":"begin"', 1, true), "a later bounded document can publish")
 end)
 
-test("a new background atomic pane catches up at the current generation", function()
+test("a new background atomic pane catches up with the current sections", function()
   local win, gui = H.window(2, { attach = true, ready = true })
   local view = require "vtabs.view"
   local shown, background = sidebar.find(win.tab_list[1]), sidebar.find(win.tab_list[2])
-  store.proto[shown:pane_id()] = protocol.VERSION
-  sidebar.set_capabilities(shown, { "atomic_sync" })
-  local background_before = #background.sent
   view.sync(gui)
-  local first_generation = batch_generation(shown.sent[#shown.sent])
+  local background_before = #background.sent
+  local shown_before = #shown.sent
   win.tab_list[2]:set_title "new title"
   view.sync(gui)
-  local current = batch_generation(shown.sent[#shown.sent])
-  assert(current > first_generation, "a semantic model change advances the window generation")
+  eq(#shown.sent, shown_before + 1, "a semantic tab change updates the shown pane")
 
-  store.proto[background:pane_id()] = protocol.VERSION
-  sidebar.set_capabilities(background, { "atomic_sync" })
+  require("vtabs.wire").reset_pane(background:pane_id())
+  win.active_tab_ref = win.tab_list[2]
   view.sync(gui)
   eq(#background.sent, background_before + 1, "bare background pane receives one catch-up write")
   local batch = background.sent[#background.sent]
-  eq(batch_generation(batch), current, "catch-up does not invent another generation")
   local lines = batch_lines(batch)
-  eq(#lines, 6, "catch-up carries every sidebar section")
+  eq(#lines, 7, "catch-up carries every sidebar section")
+  eq(H.control_payload(lines[1]), '{"t":"begin"}')
+  eq(H.control_payload(lines[7]), '{"t":"commit"}')
 end)
 
-test("a failed atomic write advances no seen section and retries the same generation", function()
+test("a failed atomic write advances no seen section and retries the same publication", function()
   local win, gui = H.window(1, { attach = true, ready = true })
   local view = require "vtabs.view"
   local sb = sidebar.find(win.tab_list[1])
-  store.proto[sb:pane_id()] = protocol.VERSION
-  sidebar.set_capabilities(sb, { "atomic_sync" })
   view.sync(gui)
   local sent = #sb.sent
   win.tab_list[1]:set_title "retry me"
@@ -686,33 +629,32 @@ test("a failed atomic write advances no seen section and retries the same genera
   view.sync(gui)
   sb.fail_send = false
   eq(#sb.sent, sent, "the failing send records no delivery")
-  local failed_generation = batch_generation(sb.last_send_attempt)
-  assert(failed_generation, "the failed batch was attempted")
+  local failed_payload = sb.last_send_attempt
+  assert(failed_payload:find('"t":"begin"', 1, true), "the failed batch was attempted")
   view.sync(gui)
   eq(#sb.sent, sent + 1, "the unchanged semantic state is retried")
-  eq(batch_generation(sb.sent[#sb.sent]), failed_generation, "retry keeps the same window generation")
+  eq(sb.sent[#sb.sent], failed_payload, "retry carries the same sections")
 end)
 
-test("a backend without atomic_sync retains immediate section sends", function()
+test("a busy atomic drop dirties the pane and retries after the pending publication finishes", function()
   local win, gui = H.window(1, { attach = true, ready = true })
   local view = require "vtabs.view"
   local sb = sidebar.find(win.tab_list[1])
-  store.proto[sb:pane_id()] = protocol.VERSION
-  sidebar.set_capabilities(sb, {})
-  local before = #sb.sent
   view.sync(gui)
-  eq(#sb.sent, before + 4, "legacy config, theme, model, menu stay separate")
-  for i = before + 1, #sb.sent do
-    assert(not sb.sent[i]:find('"t":"begin"', 1, true), "legacy has no transaction envelope")
-    assert(not sb.sent[i]:find('"t":"commit"', 1, true), "legacy has no transaction envelope")
-  end
+  win.tab_list[1]:set_title "waiting"
+  view.sync(gui)
+  local before = #sb.sent
+  require("vtabs.input").handle(gui, sb, "vtabs", '{"t":"dropped","what":"sync","reason":"busy","n":8}')
+  eq(#sb.sent, before, "the busy pane is not collided with immediately")
+  view.sync(gui)
+  eq(#sb.sent, before + 1, "the next safe sync republishes every section")
+  eq(#batch_lines(sb.sent[#sb.sent]), 7)
 end)
 
-test("typed and legacy scroll intents share one quiet execution path", function()
+test("only typed scroll intents enter the quiet execution path", function()
   local _, gui, _, sb = H.key_window(1)
   local view = require "vtabs.view"
   local input = require "vtabs.input"
-  store.proto[sb:pane_id()] = protocol.VERSION
   view.sync(gui)
   local function models()
     local n = 0
@@ -725,9 +667,9 @@ test("typed and legacy scroll intents share one quiet execution path", function(
   input.handle(gui, sb, "vtabs", '{"t":"intent","a":"set_scroll","top":4,"user":true}')
   eq(store.scroll[gui:window_id()], 4, "the typed top-level field is recorded")
   eq(models(), before, "and nothing is sent until the poll")
-  input.handle(gui, sb, "vtabs", '{"t":"do","a":"set_scroll","args":{"top":3,"user":true}}')
-  eq(store.scroll[gui:window_id()], 3, "legacy do is adapted at the boundary")
-  eq(models(), before, "the legacy adapter keeps the typed intent quiet")
+  input.handle(gui, sb, "vtabs", '{"t":"obsolete_intent","a":"set_scroll","top":3,"user":true}')
+  eq(store.scroll[gui:window_id()], 4, "an unknown envelope is ignored")
+  eq(models(), before, "the rejected event publishes nothing")
   view.sync(gui)
   eq(models(), before + 1, "which carries it")
 end)
@@ -738,11 +680,11 @@ test("every Lua intent handler is covered by Rust's generated contract", functio
   end
 end)
 
-test("a sidebar that ignores quit is killed by another backend on its server, by title", function()
+test("a sidebar that ignores quit is killed by another backend on its server, by pane id", function()
   local win, gui = H.window(2, { attach = true, ready = true })
   local tab, helper_tab = win.tab_list[1], win.tab_list[2]
   local sb, helper = sidebar.find(tab), sidebar.find(helper_tab)
-  sb:send_text "\27]2;wez-vtabs:abcd\7"
+  store.server_pane[sb:pane_id()] = sb.server_id
   sb.hung = true
   local clock = H.clock()
   local acted = #win.actions
@@ -751,7 +693,7 @@ test("a sidebar that ignores quit is killed by another backend on its server, by
   clock.advance(2100)
   sidebar.ensure(gui)
   assert(helper.sent[#helper.sent]:find('"kill"', 1, true), "the helper was asked")
-  assert(helper.sent[#helper.sent]:find("wez-vtabs:abcd", 1, true), "by title")
+  assert(helper.sent[#helper.sent]:find('"pane":' .. sb.server_id, 1, true), "by pane id")
   eq(helper.killed, 1)
   eq(#tab:panes(), 1, "and the server killed it")
   eq(#win.actions, acted, "nothing closed by activation")
@@ -766,7 +708,6 @@ test("a split that landed in the sidebar's column on a mux domain is moved by th
   for _, p in ipairs(tab.pane_list) do
     p.domain = "localmux"
   end
-  store.proto[sb:pane_id()] = protocol.VERSION
   -- SplitHorizontal on the sidebar: a shell inside the 28 columns the sidebar is meant to have
   local stray = fake.pane(tab, { title = "zsh", cols = 13, domain = "localmux" })
   stray.left = 15
@@ -828,7 +769,6 @@ test("nothing is published while a resize burst is in flight; the settle publish
   local view = require "vtabs.view"
   local geometry = require "vtabs.geometry"
   local sb = sidebar.find(win.tab_list[1])
-  store.proto[sb:pane_id()] = protocol.VERSION
   win:resize(2)
   view.on_resize(gui)
   eq(sb.cols, 28, "the frame was corrected")
@@ -900,13 +840,11 @@ test("a resize report from a mux pane marks its link busy; one from a local pane
   local win, gui = H.window(2)
   sidebar.ensure(gui)
   local local_sb = H.mark_ready(win.tab_list[1])
-  store.proto[local_sb:pane_id()] = protocol.VERSION
   input.handle(gui, local_sb, "vtabs", '{"t":"resize","cols":28,"rows":24,"n":2}')
   eq(link.busy_any(), false)
   actions.activate_tab(gui, win.tab_list[2]:tab_id())
   local remote_sb = H.mark_ready(win.tab_list[2])
   remote_sb.domain, sidebar.content_pane(win.tab_list[2]).domain = "e2emux", "e2emux"
-  store.proto[remote_sb:pane_id()] = protocol.VERSION
   input.handle(gui, remote_sb, "vtabs", '{"t":"resize","cols":28,"rows":24,"n":2}')
   eq(link.busy "e2emux", true)
   eq(link.busy_any(), true)

@@ -98,10 +98,6 @@ local function validate(cfg)
   for _, option in ipairs(schema.options) do
     local value = schema.get(cfg, option.key)
     if value ~= nil then
-      if option.alias and option.alias[value] ~= nil then
-        value = option.alias[value]
-        schema.set(cfg, option.key, value)
-      end
       if not type_ok(option, value) or (option.type == "number" and not range_ok(option, value)) then
         util.warn("%s", reason(option, value))
         schema.set(cfg, option.key, schema.get(M.defaults, option.key))
@@ -110,21 +106,34 @@ local function validate(cfg)
   end
 end
 
----Warns about keys the schema does not know, so a typo is not silently ignored.
-local function check_unknown(opts, prefix)
-  for key, value in pairs(opts) do
+local theme_colours = require("vtabs.gen.protocol").THEME_COLOR_FIELDS
+local theme_fractions = require("vtabs.gen.protocol").THEME_FRACTION_FIELDS
+
+local function current_theme_key(key)
+  return key == "split" or theme_colours[key] == true or theme_fractions[key] == true
+end
+
+---Warns about and removes keys the current schema does not know. Open containers retain their
+---opaque children, except `theme`, whose public key set is supplied by the protocol manifest.
+local function prune_unknown(cfg, prefix)
+  for key, value in pairs(cfg) do
     if type(key) == "string" then
       local path = prefix and (prefix .. "." .. key) or key
       local option = schema.by_key[path]
-      if option then
-        if type(value) == "table" and not option.open then
-          check_unknown(value, path)
+      if prefix == "theme" and not current_theme_key(key) then
+        util.warn("unknown option %s", path)
+        cfg[key] = nil
+      elseif option then
+        if type(value) == "table" and (option.container or path == "theme") then
+          prune_unknown(value, path)
         end
       elseif not schema.is_open(path) then
         util.warn("unknown option %s", path)
+        cfg[key] = nil
       end
     end
   end
+  return cfg
 end
 
 ---Every dotted key the user named in `opts`. The page renders these LOCKED: config-as-code wins,
@@ -168,10 +177,10 @@ end
 ---user wrote in `wezterm.lua`.
 function M.setup(opts, stored)
   opts = opts or {}
-  check_unknown(opts)
   M.explicit, M.explicit_paths = M.explicit_keys(opts)
   local cfg = util.merge(M.defaults, stored or {})
   cfg = util.merge(cfg, opts)
+  prune_unknown(cfg)
   validate(cfg)
 
   -- `tab_height` decides the pad rows and `meta` whether there is a second content line; they are
@@ -186,12 +195,12 @@ end
 ---Opaque values have already been restored by the caller; policy validation stays in Rust.
 function M.adopt_normalized(opts, cfg)
   M.explicit, M.explicit_paths = M.explicit_keys(opts)
-  current = cfg
+  current = prune_unknown(cfg)
   return cfg
 end
 
----Bootstrap/fallback mirror of Rust's cross-key policy. The current-capability live settings path
----arrives already canonical and uses `replace_canonical`; this remains for a missing/older binary.
+---Bootstrap/fallback mirror of Rust's cross-key policy. Live settings arrive already canonical and
+---use `replace_canonical`; this remains when no binary is available at boot.
 function M.normalise(cfg)
   local popover_width = cfg.popover.width
   local popover_width_ok = popover_width == "auto"
@@ -212,10 +221,6 @@ function M.normalise(cfg)
   if (cfg.hover == "press" or cfg.hover_highlight == false) and cfg.close_button == "hover" then
     cfg.close_button = "always"
   end
-  if cfg.tear_off == "outside" then
-    util.warn 'tear_off="outside" is not supported, using edge'
-    cfg.tear_off = true
-  end
   return cfg
 end
 
@@ -223,7 +228,7 @@ function M.get()
   return current or M.setup {}
 end
 
----Swaps values already canonicalized by the Rust settings document. Current-capability settings
+---Swaps values already canonicalized by the Rust settings document. Live settings
 ---commits must not run a second Lua policy pass that can drift from persistence.
 function M.replace_canonical(tbl)
   current = tbl

@@ -14,11 +14,11 @@
 ---@field padding? VerticalTabs.Padding # balanced padding inside the sidebar; two columns match one row at a terminal cell's aspect ratio
 ---@field settings? boolean|VerticalTabs.Settings # the settings page; a table takes `{ persist, path }`, and it is a normal tab running this plugin's backend in its settings role
 ---@field edge_to_edge? true|"sides"|false # zero wezterm's window padding; `"sides"` keeps the content pane's top and bottom half-cell
----@field tab_height? "card"|"row"|"tall"|false|true|1|2|3 # painted rows per tab: content plus a blank pad row each side, one more with `meta` on
----@field meta? "auto"|"cwd"|"process"|false|true # what the second card row shows
+---@field tab_height? "card"|"row"|"tall" # painted rows per tab: content plus a blank pad row each side, one more with `meta` on
+---@field meta? "auto"|"cwd"|"process"|false # what the second card row shows
 ---@field meta_sep? string # between the process and the path on the meta line
 ---@field row_gap? integer # blank rows after each card; part of the card's click target
----@field new_tab_button? "ghost"|"row"|false|true # how the new-tab affordance is drawn
+---@field new_tab_button? "ghost"|"row"|false # how the new-tab affordance is drawn
 ---@field new_tab_label? string # label inside the new-tab card
 ---@field corners? "chamfer"|"square" # card corner treatment
 ---@field frame? "zen"|false|VerticalTabs.Frame # inset the sidebar, leaving a gutter column in the content colour
@@ -33,18 +33,18 @@
 ---@field show_index? boolean # prefix the tab index; on the meta line with 2-row cards
 ---@field pinned_style? "dense"|"compact"|"full" # how pinned entries are drawn
 ---@field separator? "rule"|"gap"|"none" # between the pinned block and the rest
----@field scroll_indicator? "auto"|"always"|"never"|false|true # right-edge thumb when tabs overflow
+---@field scroll_indicator? "auto"|"always"|"never" # right-edge thumb when tabs overflow
 ---@field wheel? "scroll"|"switch" # what the wheel does over the sidebar
----@field tear_off? true|false|"edge" # drop on the inner edge to move a tab to a new window
+---@field tear_off? true|false # drop on the inner edge to move a tab to a new window
 ---@field adopt? "auto"|true|false # take over an unmapped pane carrying the title marker
 ---@field window_title? boolean # title the window after the content pane
 ---@field hover? "follow"|"press" # when the sidebar holds focus
 ---@field hover_highlight? boolean # light the row under the pointer; `false` also stops mouse-motion reports and the menu following the pointer
 ---@field hover_timeout_ms? integer # clear the hover highlight after inactivity; `0` = never
----@field tooltip? "auto"|"on"|"off"|false|true # hover tooltip; `auto` needs `hover = "follow"`
+---@field tooltip? "auto"|"on"|"off" # hover tooltip; `auto` needs `hover = "follow"`
 ---@field tooltip_delay_ms? integer # hover dwell; effective delay is `max(this, poll_ms)`
 ---@field double_click_ms? integer # double-click window on empty space
----@field animations? "auto"|"on"|"off"|false|true # colour fades; the width still changes in one step
+---@field animations? "auto"|"on"|"off" # colour fades; the width still changes in one step
 ---@field animation? VerticalTabs.Animation
 ---@field ellipsis? string # used when truncating titles
 ---@field icons? boolean # show process icons

@@ -5,7 +5,7 @@ local util = require "vtabs.util"
 local M = {}
 
 local MAX_CLOSED = 20
-local VERSION = 1
+local PERSISTED_KEYS = { closed = true, pinned = true, space_of = true, space_manual = true }
 
 local function state_dir()
   local base = os.getenv "XDG_STATE_HOME"
@@ -100,9 +100,11 @@ local function read_file()
     util.warn_once("state-corrupt", "state file unreadable, starting empty")
     return nil
   end
-  if parsed.version ~= VERSION then
-    util.warn_once("state-version", "state file version %s ignored", tostring(parsed.version))
-    return nil
+  for key in pairs(parsed) do
+    if PERSISTED_KEYS[key] ~= true then
+      util.warn_once("state-shape", "state file has an incompatible shape, starting empty")
+      return nil
+    end
   end
   return parsed
 end
@@ -169,7 +171,7 @@ local function save(persist)
     wezterm.GLOBAL.vtabs = shared
   end
   if persist then
-    local subset = { version = VERSION }
+    local subset = {}
     for _, key in ipairs(PERSISTED) do
       subset[key] = data[key]
     end

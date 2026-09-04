@@ -54,77 +54,75 @@ vtabs.apply_to_config(config, vtabs_config)
 ## Options
 
 <!-- options:start -->
-| option                    | default                                                                      | values                                                                              |
-| ------------------------- | ---------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
-| `width`                   | `28`                                                                         | number >= `8`                                                                       |
-| `dim_inactive_panes`      | `false`                                                                      | `true` \| `false`                                                                   |
-| `position`                | `"left"`                                                                     | `"left"` \| `"right"`                                                               |
-| `collapsed`               | `"rail"`                                                                     | `"rail"` \| `"hidden"`                                                              |
-| `rail_width`              | `5`                                                                          | number >= `3`                                                                       |
-| `rail_titlebar`           | `"widen"`                                                                    | `"widen"` \| `"band"` \| `"none"`                                                   |
-| `hide_native_tab_bar`     | `true`                                                                       | `true` \| `false`                                                                   |
-| `poll_ms`                 | `500`                                                                        | number >= `50`                                                                      |
-| `padding`                 | `{ top = 1, left = 2, right = 2, bottom = 1 }`                               | `{ top, left, right, bottom }`                                                      |
-| `settings`                | `true`                                                                       | `true` \| `false` \| table                                                          |
-| `edge_to_edge`            | `"sides"`                                                                    | `true` \| `"sides"` \| `false`                                                      |
-| `tab_height`              | `"card"`                                                                     | `"card"` (`3`) \| `"row"` (`1`) \| `"tall"` (`5`)                                   |
-| `meta`                    | `false`                                                                      | `"auto"` \| `"cwd"` \| `"process"` \| `false`                                       |
-| `meta_sep`                | `"  "`                                                                       | string                                                                              |
-| `row_gap`                 | `0`                                                                          | number >= `0`                                                                       |
-| `new_tab_button`          | `"ghost"`                                                                    | `"ghost"` \| `"row"` \| `false`                                                     |
-| `new_tab_label`           | `"New tab"`                                                                  | string                                                                              |
-| `corners`                 | `"chamfer"`                                                                  | `"chamfer"` \| `"square"`                                                           |
-| `frame`                   | `false`                                                                      | `"zen"` \| `false` \| table                                                         |
-| `titlebar`                | `"auto"`                                                                     | `"auto"` \| `"integrate"` \| `"plain"` \| `"macos"`                                 |
-| `context`                 | `"popover"`                                                                  | `"popover"` \| `false`                                                              |
-| `popover`                 | `{ width = "auto", follow_pointer = true, fade_ms = 90, overflow = "clip" }` | see below                                                                           |
-| `strip_actions`           | `{ "toggle", "new_tab", "settings" }`                                        | `"toggle"` \| `"new_tab"` \| `"settings"` \| `"search"` \| `{ id, icon, on_click }` |
-| `toggle_button`           | `true`                                                                       | `true` \| `false`                                                                   |
-| `close_button`            | `"hover"`                                                                    | `"hover"` \| `"always"` \| `"never"`                                                |
-| `confirm_close`           | `true`                                                                       | `true` \| `false`                                                                   |
-| `debug`                   | `false`                                                                      | `true` \| `false`                                                                   |
-| `show_index`              | `false`                                                                      | `true` \| `false`                                                                   |
-| `pinned_style`            | `"dense"`                                                                    | `"dense"` \| `"compact"` \| `"full"`                                                |
-| `separator`               | `"gap"`                                                                      | `"rule"` \| `"gap"` \| `"none"`                                                     |
-| `scroll_indicator`        | `"auto"`                                                                     | `"auto"` \| `"always"` \| `"never"` \| `true` \| `false`                            |
-| `wheel`                   | `"scroll"`                                                                   | `"scroll"` \| `"switch"`                                                            |
-| `tear_off`                | `true`                                                                       | `true` \| `false`                                                                   |
-| `adopt`                   | `"auto"`                                                                     | `"auto"` \| `true` \| `false`                                                       |
-| `window_title`            | `true`                                                                       | `true` \| `false`                                                                   |
-| `hover`                   | `"follow"`                                                                   | `"follow"` \| `"press"`                                                             |
-| `hover_highlight`         | `true`                                                                       | `true` \| `false`                                                                   |
-| `hover_timeout_ms`        | `6000`                                                                       | number >= `0`                                                                       |
-| `tooltip`                 | `"auto"`                                                                     | `"auto"` \| `true` \| `false`                                                       |
-| `tooltip_delay_ms`        | `600`                                                                        | number >= `0`                                                                       |
-| `double_click_ms`         | `400`                                                                        | number >= `0`                                                                       |
-| `animations`              | `"auto"`                                                                     | `"auto"` \| `true` \| `false`                                                       |
-| `animation.fps`           | `30`                                                                         | `15`-`60`                                                                           |
-| `animation.expand_ms`     | `220`                                                                        | number >= `0`                                                                       |
-| `animation.collapse_ms`   | `160`                                                                        | number >= `0`                                                                       |
-| `animation.hover`         | `false`                                                                      | `true` \| `false`                                                                   |
-| `ellipsis`                | `"…"`                                                                        | string                                                                              |
-| `icons`                   | `true`                                                                       | `true` \| `false`                                                                   |
-| `icon_map`                | `{}`                                                                         | table                                                                               |
-| `title`                   | `nil`                                                                        | `fun(tab, pane): string`                                                            |
-| `domain`                  | `"CurrentPaneDomain"`                                                        | string                                                                              |
-| `skip_close_confirmation` | `true`                                                                       | `true` \| `false`                                                                   |
-| `private.env`             | `{ HISTFILE = "", fish_private_mode = "1", VTABS_PRIVATE = "1" }`            | table                                                                               |
-| `keys`                    | `{}`                                                                         | table \| `false`                                                                    |
-| `theme`                   | `{ elevation = 0.06, split = "auto" }`                                       | see Theme                                                                           |
-| `hooks.filter`            | `nil`                                                                        | `fun(tab, mux_window): boolean`                                                     |
-| `hooks.footer`            | `nil`                                                                        | `fun(mux_window): rows`                                                             |
-| `hooks.theme`             | `nil`                                                                        | `fun(window, theme): theme`                                                         |
-| `hooks.route`             | `nil`                                                                        | `fun(meta): space_id`                                                               |
-| `spaces`                  | `{}`                                                                         | list of `{ id, name, icon, theme, match }`                                          |
-| `backend.path`            | `nil`                                                                        | string \| table \| `fun(domain, host)`                                              |
-| `backend.repo`            | `"fredrir/wezterm-vertical-tabs"`                                            | string                                                                              |
-| `backend.version`         | plugin version                                                               | string                                                                              |
-| `backend.build`           | `true`                                                                       | `true` \| `false`                                                                   |
-| `backend.uservar`         | `"vtabs"`                                                                    | string                                                                              |
-| `backend.env`             | `{}`                                                                         | table                                                                               |
-| `backend.inbox`           | `true`                                                                       | `true` \| `false`                                                                   |
+| option                    | default                                                                      | values                                                                                           |
+| ------------------------- | ---------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| `width`                   | `28`                                                                         | number >= `8`                                                                                    |
+| `dim_inactive_panes`      | `false`                                                                      | `true` \| `false`                                                                                |
+| `position`                | `"left"`                                                                     | `"left"` \| `"right"`                                                                            |
+| `collapsed`               | `"rail"`                                                                     | `"rail"` \| `"hidden"`                                                                           |
+| `rail_width`              | `5`                                                                          | number >= `3`                                                                                    |
+| `rail_titlebar`           | `"widen"`                                                                    | `"widen"` \| `"band"` \| `"none"`                                                                |
+| `hide_native_tab_bar`     | `true`                                                                       | `true` \| `false`                                                                                |
+| `poll_ms`                 | `500`                                                                        | number >= `50`                                                                                   |
+| `padding`                 | `{ top = 1, left = 2, right = 2, bottom = 1 }`                               | `{ top, left, right, bottom }`                                                                   |
+| `settings`                | `true`                                                                       | `true` \| `false` \| table                                                                       |
+| `edge_to_edge`            | `"sides"`                                                                    | `true` \| `"sides"` \| `false`                                                                   |
+| `tab_height`              | `"card"`                                                                     | `"card"` \| `"row"` \| `"tall"`                                                                  |
+| `meta`                    | `false`                                                                      | `"auto"` \| `"cwd"` \| `"process"` \| `false`                                                    |
+| `meta_sep`                | `"  "`                                                                       | string                                                                                           |
+| `row_gap`                 | `0`                                                                          | number >= `0`                                                                                    |
+| `new_tab_button`          | `"ghost"`                                                                    | `"ghost"` \| `"row"` \| `false`                                                                  |
+| `new_tab_label`           | `"New tab"`                                                                  | string                                                                                           |
+| `corners`                 | `"chamfer"`                                                                  | `"chamfer"` \| `"square"`                                                                        |
+| `frame`                   | `false`                                                                      | `"zen"` \| `false` \| table                                                                      |
+| `titlebar`                | `"auto"`                                                                     | `"auto"` \| `"integrate"` \| `"plain"` \| `"macos"`                                              |
+| `context`                 | `"popover"`                                                                  | `"popover"` \| `false`                                                                           |
+| `popover`                 | `{ width = "auto", follow_pointer = true, fade_ms = 90, overflow = "clip" }` | see below                                                                                        |
+| `strip_actions`           | `{ "toggle_sidebar", "new_tab", "open_settings" }`                           | `"toggle_sidebar"` \| `"new_tab"` \| `"open_settings"` \| `"search"` \| `{ id, icon, on_click }` |
+| `toggle_button`           | `true`                                                                       | `true` \| `false`                                                                                |
+| `close_button`            | `"hover"`                                                                    | `"hover"` \| `"always"` \| `"never"`                                                             |
+| `confirm_close`           | `true`                                                                       | `true` \| `false`                                                                                |
+| `debug`                   | `false`                                                                      | `true` \| `false`                                                                                |
+| `show_index`              | `false`                                                                      | `true` \| `false`                                                                                |
+| `pinned_style`            | `"dense"`                                                                    | `"dense"` \| `"compact"` \| `"full"`                                                             |
+| `separator`               | `"gap"`                                                                      | `"rule"` \| `"gap"` \| `"none"`                                                                  |
+| `scroll_indicator`        | `"auto"`                                                                     | `"auto"` \| `"always"` \| `"never"`                                                              |
+| `wheel`                   | `"scroll"`                                                                   | `"scroll"` \| `"switch"`                                                                         |
+| `tear_off`                | `true`                                                                       | `true` \| `false`                                                                                |
+| `adopt`                   | `"auto"`                                                                     | `"auto"` \| `true` \| `false`                                                                    |
+| `window_title`            | `true`                                                                       | `true` \| `false`                                                                                |
+| `hover`                   | `"follow"`                                                                   | `"follow"` \| `"press"`                                                                          |
+| `hover_highlight`         | `true`                                                                       | `true` \| `false`                                                                                |
+| `hover_timeout_ms`        | `6000`                                                                       | number >= `0`                                                                                    |
+| `tooltip`                 | `"auto"`                                                                     | `"auto"` \| `"on"` \| `"off"`                                                                    |
+| `tooltip_delay_ms`        | `600`                                                                        | number >= `0`                                                                                    |
+| `double_click_ms`         | `400`                                                                        | number >= `0`                                                                                    |
+| `animations`              | `"auto"`                                                                     | `"auto"` \| `"on"` \| `"off"`                                                                    |
+| `animation.fps`           | `30`                                                                         | `15`-`60`                                                                                        |
+| `animation.expand_ms`     | `220`                                                                        | number >= `0`                                                                                    |
+| `animation.collapse_ms`   | `160`                                                                        | number >= `0`                                                                                    |
+| `animation.hover`         | `false`                                                                      | `true` \| `false`                                                                                |
+| `ellipsis`                | `"…"`                                                                        | string                                                                                           |
+| `icons`                   | `true`                                                                       | `true` \| `false`                                                                                |
+| `icon_map`                | `{}`                                                                         | table                                                                                            |
+| `title`                   | `nil`                                                                        | `fun(tab, pane): string`                                                                         |
+| `domain`                  | `"CurrentPaneDomain"`                                                        | string                                                                                           |
+| `skip_close_confirmation` | `true`                                                                       | `true` \| `false`                                                                                |
+| `private.env`             | `{ HISTFILE = "", fish_private_mode = "1", VTABS_PRIVATE = "1" }`            | table                                                                                            |
+| `keys`                    | `{}`                                                                         | table \| `false`                                                                                 |
+| `theme`                   | `{ elevation = 0.06, split = "auto" }`                                       | see Theme                                                                                        |
+| `hooks.filter`            | `nil`                                                                        | `fun(tab, mux_window): boolean`                                                                  |
+| `hooks.footer`            | `nil`                                                                        | `fun(mux_window): rows`                                                                          |
+| `hooks.theme`             | `nil`                                                                        | `fun(window, theme): theme`                                                                      |
+| `hooks.route`             | `nil`                                                                        | `fun(meta): space_id`                                                                            |
+| `spaces`                  | `{}`                                                                         | list of `{ id, name, icon, theme, match }`                                                       |
+| `backend.path`            | `nil`                                                                        | string \| table \| `fun(domain, host)`                                                           |
+| `backend.repo`            | `"fredrir/wezterm-vertical-tabs"`                                            | string                                                                                           |
+| `backend.build`           | `true`                                                                       | `true` \| `false`                                                                                |
+| `backend.uservar`         | `"vtabs"`                                                                    | string                                                                                           |
+| `backend.env`             | `{}`                                                                         | table                                                                                            |
+| `backend.inbox`           | `true`                                                                       | `true` \| `false`                                                                                |
 <!-- options:end -->
-                                       |
 
 ## Spaces
 
@@ -333,8 +331,8 @@ WezTerm runs only the first `format-window-title` handler; register yours before
 | `popover_sel_hint`   | `popover_sel_fg` mixed 40% toward the fill, lifted to 3.0 against it                                                                |
 | `split`              | `"auto"`                                                                                                                            | `"hidden"` | a colour; window-global, see the note above |
 
-Also settable: `active_fg hover_fg pinned_fg drag_fg`. `use_scheme_tab_bar` is deprecated and
-ignored — the sidebar paints the terminal background, so there is no background to borrow.
+Also settable: `active_fg hover_fg pinned_fg drag_fg`. The sidebar always paints the terminal
+background from the resolved theme.
 
 ```lua
 theme = { accent = "#f5c2e7", active_bg = "#313244", elevation = 0.06 }

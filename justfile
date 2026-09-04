@@ -55,6 +55,7 @@ test-wezterm-ssh-e2e *pytest_args:
     VTABS_SSH_E2E=1 WEZ_VTABS_BIN="{{ justfile_directory() }}/backend/target/debug/wez-vtabs" uv run --frozen pytest -q -n 1 -m ssh_mux_e2e tests/wezterm {{pytest_args}}
 
 lint:
+    sh scripts/check-current-contract.sh
     uv sync --locked
     uv run --frozen ruff check tests
     uv run --frozen ruff format --check tests

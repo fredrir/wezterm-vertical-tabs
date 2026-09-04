@@ -14,6 +14,14 @@ fn control(command: Command) -> Input {
     }
 }
 
+fn invalid_command() -> Input {
+    Input::Dropped {
+        token: Some(TOKEN.into()),
+        what: "command",
+        reason: "invalid",
+    }
+}
+
 fn frame(json: &str) -> Vec<u8> {
     format!("\x1eVTABS {TOKEN} {json}\n").into_bytes()
 }
@@ -29,9 +37,9 @@ fn key(name: impl Into<String>, mods: Mods) -> Input {
 #[test]
 fn a_command_line_past_line_max_is_dropped_whole_and_reported() {
     let mut p = Parser::new();
-    let mut payload = br#"{"t":"model","rev":1,"tabs":["#.to_vec();
+    let mut payload = br#"{"t":"model","footer":["#.to_vec();
     while payload.len() < LINE_MAX + 16 {
-        payload.extend_from_slice(br#"{"id":1,"index":1},"#);
+        payload.extend_from_slice(br#"{"text":"x"},"#);
     }
     payload.extend_from_slice(b"]}");
     let mut line = format!("\x1eVTABS {TOKEN} ").into_bytes();
@@ -295,12 +303,21 @@ fn utf8_chars_and_split_sequence() {
 }
 
 #[test]
-fn unknown_commands_ignored() {
+fn unknown_commands_are_classified_as_invalid_frames() {
     let mut input = frame(r#"{"t":"bogus"}"#);
     input.extend(frame(r#"{"t":"clear"}"#));
-    assert_eq!(feed(&input), vec![control(Command::Clear)]);
-    assert!(feed(&frame(r#"{"t":"frame","data":"\u001b[H"}"#)).is_empty());
-    assert!(feed(&frame(r#"{"t":"anim","id":1,"data":"x"}"#)).is_empty());
+    assert_eq!(
+        feed(&input),
+        vec![invalid_command(), control(Command::Clear)]
+    );
+    assert_eq!(
+        feed(&frame(r#"{"t":"frame","data":"\u001b[H"}"#)),
+        vec![invalid_command()]
+    );
+    assert_eq!(
+        feed(&frame(r#"{"t":"anim","id":1,"data":"x"}"#)),
+        vec![invalid_command()]
+    );
 }
 
 #[test]
@@ -325,7 +342,7 @@ fn a_control_record_requires_a_bounded_ascii_session_token() {
 #[test]
 fn a_multiline_batch_is_bounded_per_record_not_by_aggregate_write_size() {
     let padding = "x".repeat(800 * 1024);
-    let one = frame(&format!(r#"{{"t":"ping","pad":"{padding}"}}"#));
+    let one = frame(&format!(r#"{{"t":"notice","text":"{padding}"}}"#));
     let mut batch = Vec::new();
     for _ in 0..3 {
         batch.extend_from_slice(&one);
@@ -334,9 +351,18 @@ fn a_multiline_batch_is_bounded_per_record_not_by_aggregate_write_size() {
     assert_eq!(
         feed(&batch),
         vec![
-            control(Command::Ping { n: None }),
-            control(Command::Ping { n: None }),
-            control(Command::Ping { n: None }),
+            control(Command::Notice(vtabs_protocol::payload::NoticeMsg {
+                level: None,
+                text: padding.clone(),
+            })),
+            control(Command::Notice(vtabs_protocol::payload::NoticeMsg {
+                level: None,
+                text: padding.clone(),
+            })),
+            control(Command::Notice(vtabs_protocol::payload::NoticeMsg {
+                level: None,
+                text: padding,
+            })),
         ]
     );
 }
@@ -391,11 +417,14 @@ fn command_line_followed_by_mouse_in_same_chunk() {
 }
 
 #[test]
-fn malformed_json_ignored() {
+fn malformed_json_is_classified_as_an_invalid_frame() {
     let mut input = frame("{not json}");
     input.extend(frame(r#"{"t":"nope"}"#));
     input.extend(frame(r#"{"t":"quit"}"#));
-    assert_eq!(feed(&input), vec![control(Command::Quit)]);
+    assert_eq!(
+        feed(&input),
+        vec![invalid_command(), invalid_command(), control(Command::Quit)]
+    );
 }
 
 #[test]
@@ -467,10 +496,8 @@ fn stalled_command_line_is_dropped_whole() {
     let mut p = Parser::new();
     assert!(
         p.feed(
-            format!(
-                "\x1eVTABS {TOKEN} {{\"t\":\"model\",\"rev\":1,\"tabs\":[{{\"title\":\"\x1b[1;1Hx"
-            )
-            .as_bytes()
+            format!("\x1eVTABS {TOKEN} {{\"t\":\"model\",\"footer\":[{{\"text\":\"\x1b[1;1Hx")
+                .as_bytes()
         )
         .is_empty()
     );
@@ -483,10 +510,8 @@ fn a_command_line_split_by_a_long_gap_yields_no_keys() {
     let mut p = Parser::new();
     assert!(
         p.feed(
-            format!(
-                "\x1eVTABS {TOKEN} {{\"t\":\"model\",\"rev\":1,\"tabs\":[{{\"title\":\"\x1b[1;1Hab"
-            )
-            .as_bytes()
+            format!("\x1eVTABS {TOKEN} {{\"t\":\"model\",\"footer\":[{{\"text\":\"\x1b[1;1Hab")
+                .as_bytes()
         )
         .is_empty()
     );

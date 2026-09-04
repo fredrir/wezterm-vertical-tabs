@@ -793,21 +793,12 @@ M.dispatch = {
   close_others_now = { run = M.close_others, needs = "tab", label = "Close other tabs", internal = true },
 }
 
----Names the user may write that are not the behaviour's own: `settings` is what the strip button and
----the key binding are called.
-local ALIASES = { settings = "open_settings", toggle = "toggle_sidebar" }
-
----The behaviour name a user-facing name stands for.
-function M.canonical(name)
-  return ALIASES[name] or name
-end
-
 ---The dispatch row for a name, or nil when nothing answers to it.
 function M.resolve(name)
   if type(name) ~= "string" then
     return nil
   end
-  return M.dispatch[ALIASES[name] or name]
+  return M.dispatch[name]
 end
 
 ---Runs a named behaviour. `tab_id` is optional: a row that needs one and is not given one takes the
@@ -832,9 +823,9 @@ end
 ---The strip's buttons, in default order. `hooked` marks the ones a hook may point elsewhere, and an
 ---id with no `action` has no built-in behaviour at all, so it is only drawn when a hook answers it.
 M.strip = {
-  { id = "toggle", action = "toggle_sidebar", default = true },
+  { id = "toggle_sidebar", action = "toggle_sidebar", default = true },
   { id = "new_tab", action = "new_tab", default = true },
-  { id = "settings", action = "open_settings", default = true, hooked = true },
+  { id = "open_settings", action = "open_settings", default = true, hooked = true },
   { id = "search", hooked = true },
 }
 
@@ -892,9 +883,9 @@ function M.resolved_strip(cfg)
     local button = ACTION_BY_ID[entry]
     if type(entry) == "table" and entry.on_click then
       out[#out + 1] = { id = entry.id or "custom", icon = entry.icon }
-    elseif entry == "toggle" then
+    elseif entry == "toggle_sidebar" then
       if cfg.toggle_button then
-        out[#out + 1] = { id = "toggle" }
+        out[#out + 1] = { id = "toggle_sidebar" }
       end
     elseif button then
       -- no `action` means no built-in behaviour, so the glyph is drawn only when a hook answers it
