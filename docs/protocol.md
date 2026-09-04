@@ -60,7 +60,7 @@ commands carrying no proof of the active session are consumed without changing b
 | `quit`              | `{"t":"quit"}`                                                      | restore the terminal and exit 0                                              |
 | `kill`              | `{"t":"kill","title":"wez-vtabs:1a2b"}`                          | kill the one pane with that backend marker; answer with `cli`                |
 | `rescue`            | `{"t":"rescue","band":28,"position":"left"}`                   | move other panes out of the sidebar band through the existing CLI bridge    |
-| `adjust`            | `{"t":"adjust","direction":"Left","amount":3,"park":false}`     | resize this pane's split on the server, from the tab's active pane; answer with `cli` |
+| `adjust`            | `{"t":"adjust","direction":"Left","amount":3,"park":false,"target":28,"min_content":20}` | resize this pane's split on the server to `target` columns (by `amount` without one), from the tab's active pane; answer with `cli` |
 | `kill` by id        | `{"t":"kill","pane":17}`                                          | kill the server pane with that id; answer with `cli`                         |
 | `transport_probe`   | `{"t":"transport_probe","session":"inbox-4242-9f3a"}`           | inbox message 1: proves the directory is the one the backend reads          |
 | `transport_barrier` | `{"t":"transport_barrier","session":"inbox-4242-9f3a"}`         | last stdin frame; triggers one scan, then `transport_ready` or `transport_refused` |
@@ -75,12 +75,23 @@ from the server's pane list after every pane resize: the split is resized where 
 authoritative, once the frames have stopped. `adjust-pane-size` walks up from the tab's active
 pane, so when that pane cannot reach the sidebar's split the backend's own pane is activated for
 it and the focus handed back; with `park` it stays on the sidebar, owed to the next `adjust`.
+With `target` the backend reads its own width from the server's `wezterm cli list` and works the
+delta out there, keeping `min_content` columns (20 without one) for each band of content beside it:
+the GUI's mirror may name a width to land at, but a delta computed from it lands anywhere. The
+`cli` answer then carries `cols`, the pane's width once the split has moved, and the pane adopts
+that size at once rather than waiting for its `SIGWINCH`.
 
 Unknown commands are ignored. Malformed JSON lines are ignored.
 
 Changing the auth token starts a new client session. The backend clears committed and pending
 sections plus menu, settings, pointer, and generation state, clears the terminal, and emits a new
 `ready`; re-authenticating with the same token only refreshes negotiated client capabilities.
+
+An `auth` framed with a token the backend does not hold changes nothing. The backend answers it by
+setting `vtabs_token` to the token it does hold, at most once a second: a client that just attached
+to the mux has none of the pane's user vars, so it can only frame its first auth with the token it
+minted, and the answer is what it frames the next one with. The value was readable by every client
+of the mux already.
 
 ### Atomic publication
 
@@ -302,7 +313,7 @@ hatch.
 | event                | shape                                                                                                                        |
 | -------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
 | `ready`              | `{"t":"ready","v":3,"cols":N,"rows":M,"paints":true,"caps":["atomic_sync","typed_intents","theme_hooks","settings_document","spaces_policy","inbox_transport"],"pane":42,"transport":{"inbox":"inbox-42-9f3a1b2c"},"n":1}` |
-| `resize`             | `{"t":"resize","cols":N,"rows":M,"n":2}`                                                                             |
+| `resize`             | `{"t":"resize","cols":N,"rows":M,"n":2}` — once per pause of a resize burst (40 ms, 150 ms at most from its first frame), not per frame |
 | `theme_hook_request` | `{"t":"theme_hook_request","generation":N,"theme":{...},"n":3}` — resolved base; the generation remains unpublished  |
 | `theme_resolved`     | `{"t":"theme_resolved","generation":N,"theme":{...},"n":4}` — committed effective answer for host/Zen projection     |
 | `space_route_hook_request` | `{"t":"space_route_hook_request","generation":N,"window_id":W,"tabs":[...],"n":5}` — one unpublished hook batch |
@@ -319,7 +330,7 @@ hatch.
 | `pong`               | `{"t":"pong","n":13,"echo":7}` — `echo` is the ping's own `n`                                                          |
 | `note`               | `{"t":"note","k":"menu_refused","why":"rows","id":7,"a":"confirm","n":14}`                                   |
 | `dropped`            | `{"t":"dropped","what":"model","reason":"bounds","n":15}` — pending transaction is invalidated; `{"t":"dropped","what":"message","reason":"gap","seq":7}` — one inbox message never arrived, Lua republishes |
-| `cli`                | `{"t":"cli","op":"kill","ok":true,"detail":"1","n":16}` — `op` is `kill`, `rescue` or `adjust`; count or error detail |
+| `cli`                | `{"t":"cli","op":"kill","ok":true,"detail":"1","n":16}` — `op` is `kill`, `rescue` or `adjust`; count or error detail; an `adjust` adds `cols`, this pane's width once the split moved |
 
 Every `intent` is tagged by `a` and carries only that variant's fields. In particular,
 `set_rail_reserve` is `{"t":"intent","a":"set_rail_reserve","cols":9}`. The legacy `do`
@@ -523,6 +534,6 @@ before they reach `resolve` — only the last one is acted on.
 
 | Platform | Source                                   | Fallback                 |
 | -------- | ---------------------------------------- | ------------------------ |
-| unix     | `SIGWINCH`, wakes the loop at once       | full size poll every 2 s |
+| unix     | `SIGWINCH`, noted at once and adopted once the burst has paused for 40 ms (150 ms at most) | full size poll every 2 s |
 | other    | size poll every 250 ms                   | —                        |
 | any      | re-read before every frame and fade tick | —                        |

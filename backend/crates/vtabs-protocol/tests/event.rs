@@ -531,3 +531,27 @@ fn focus_and_pong() {
         r#"{"t":"pong","echo":5}"#
     );
 }
+
+#[test]
+fn a_cli_answer_carries_the_width_only_once_an_adjust_has_one() {
+    assert_eq!(
+        Event::Cli {
+            op: "kill",
+            ok: true,
+            detail: String::new(),
+            cols: None,
+        }
+        .to_json(),
+        r#"{"t":"cli","op":"kill","ok":true}"#
+    );
+    assert_eq!(
+        Event::Cli {
+            op: "adjust",
+            ok: true,
+            detail: "3".into(),
+            cols: Some(28),
+        }
+        .to_json(),
+        r#"{"t":"cli","op":"adjust","ok":true,"detail":"3","cols":28}"#
+    );
+}

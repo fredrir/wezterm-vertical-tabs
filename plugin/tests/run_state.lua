@@ -111,14 +111,25 @@ test("a backend pane that outlived the GUI is adopted, not duplicated", function
   sb:send_text "\27]2;wez-vtabs:abcd\7"
   eq(sb:get_title(), "wez-vtabs:abcd", "OSC 2 sets the pane title")
   local panes = #tab:panes()
+  local old = state.token_for(sb:pane_id())
   win:reattach()
   restart_vm()
+  local sent = #sb.sent
   sidebar.ensure(gui)
   eq(#tab:panes(), panes, "no second sidebar split")
   eq(sidebar.is_ready(sb), false, "not trusted before the echo")
   local token = state.token_for(sb:pane_id())
   assert(token, "fresh token minted")
-  assert(sb.sent[#sb.sent]:find(token, 1, true), "re-authed with it")
+  assert(token ~= old)
+  -- The first auth is framed blind: a fresh GUI has no user vars for the pane. The backend answers
+  -- it by publishing the session it holds, and the next auth is framed with that.
+  eq(#sb.sent - sent, 2, "two auths: one refused, one accepted")
+  local prefix = require("vtabs.gen.protocol").CONTROL_PREFIX
+  eq(sb.reannounced, 1, "the backend published the token it holds once")
+  assert(sb.sent[sent + 1]:find(prefix .. token .. " ", 1, true), "the first framed with the fresh token")
+  assert(sb.sent[#sb.sent]:find(prefix .. old .. " ", 1, true), "the second framed with the published one")
+  assert(sb.sent[#sb.sent]:find(token, 1, true), "re-authed with the fresh token")
+  eq(sb.control_token, token, "which the backend accepted")
   local auth = wezterm.json_parse(H.control_payload(sb.sent[#sb.sent]))
   eq(auth.caps[1] or auth.caps["1"], "typed_intents", "auth advertises the typed intent client contract")
   eq(auth.caps[2] or auth.caps["2"], "theme_hooks", "auth advertises the theme hook client contract")

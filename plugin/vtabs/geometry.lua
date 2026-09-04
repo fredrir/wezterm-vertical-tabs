@@ -19,9 +19,13 @@ local util = require "vtabs.util"
 ---On a mux domain the tree is a mirror. Every pane resize round-trips to the server, whose
 ---`TabResized` makes the client fetch the pane list and rebuild the mirror, sometimes to an
 ---intermediate state (wezterm-client/src/domain.rs `process_pane_list`). So on a mux domain the
----sidebar's own backend resizes the split on the server, once the frames have stopped; one adjust
----is in flight at a time, released by the sidebar's own size report; and a divider is read as the
----user's hand only once it has sat still across a round trip.
+---sidebar's own backend resizes the split on the server, once the frames have stopped -- the GUI's
+---and the server's, which the sidebar reports as they land on it; the backend is told the width to
+---land at and works the delta out against the server's own pane list, since a mirror can lag the
+---server by any amount; the sidebar's own report of its width, not the mirror's reading, is the
+---width corrected from; one adjust is in flight at a time, released by that report; and a divider
+---is read as the user's hand only once it has sat still across a round trip, well clear of any
+---window resize.
 local M = {}
 
 local MIN_WIDTH = 8
@@ -45,6 +49,10 @@ local REMOTE_WAIT_MS = 600
 -- that is only passing by, and the tab the hand stops on is served by the next poll.
 local SWITCH_DWELL_MS = 150
 M.SWITCH_DWELL_MS = SWITCH_DWELL_MS
+-- Columns a window resize dealt are corrected, never adopted. On a mux domain the mirror can lag
+-- the server past the quiet window, so a divider seen moving this soon after a frame is not a hand.
+local HAND_AFTER_RESIZE_MS = 1000
+M.HAND_AFTER_RESIZE_MS = HAND_AFTER_RESIZE_MS
 
 ---Declared through `store`, so forgetting a window clears them without a list to keep in step.
 local scope = store.scope "geometry"
@@ -53,6 +61,11 @@ local adopted_for = scope.window()
 local rail_reserve = scope.window()
 local resized_at = scope.window()
 local resize_gen = scope.window()
+-- The last size a mux pane reported: the server dealing a frame to it, which the GUI's frames do
+-- not account for one by one, and which its own adjusts and a divider drag cause too.
+local server_resized_at = scope.window()
+-- The sidebar's own last word on its size: on a mux domain the one width that is no mirror's guess.
+local reported = scope.window()
 -- The layout a correction last left behind or found in order. The divider moving away from it with
 -- the tab otherwise unchanged is the user's hand on it.
 local settled = scope.window()
@@ -71,6 +84,12 @@ local switched_at = scope.window()
 local rapid_until = scope.window()
 -- Follow-up corrections armed per window and reason, one of each at a time.
 local armed = scope.window()
+
+---`panes_with_info` hands its numbers over as floats; `AdjustPaneSize` and `ActivatePaneByIndex`
+---take only integers back, so every reading is whole from the start.
+local function int(value)
+  return math.floor(tonumber(value) or 0)
+end
 
 ---Target width: the rail when collapsed, else what the user last dragged it to, else `cfg.width`.
 function M.desired(window_id)
@@ -117,9 +136,19 @@ function M.resize_gen(window_id)
   return resize_gen[window_id] or 0
 end
 
----True while frames of a window resize are still arriving.
+---A size report from a pane on a mux domain: the server is still dealing columns to the tab,
+---whatever the GUI's own frames say, so the burst goes on from here.
+function M.on_server_resize(window_id)
+  server_resized_at[window_id] = util.now_ms()
+end
+
+local function last_frame(window_id)
+  return math.max(resized_at[window_id] or 0, server_resized_at[window_id] or 0)
+end
+
+---True while frames of a window resize are still arriving, from the GUI or from the server.
 function M.in_burst(window_id)
-  return util.now_ms() - (resized_at[window_id] or 0) < RESIZE_QUIET_MS
+  return util.now_ms() - last_frame(window_id) < RESIZE_QUIET_MS
 end
 
 function M.has_pending_adjust(window_id)
@@ -141,13 +170,37 @@ function M.switching(window_id)
   return (rapid_until[window_id] or 0) > util.now_ms()
 end
 
----The sidebar reporting its own size is the one word from the server side of a mux link: the
----adjust in flight has been applied there, so the next one need not wait for the mirror's timer.
-function M.landed(window_id, pane_id, cols)
-  local pending = pending_adjust[window_id]
-  if pending and pending.pane_id == pane_id and cols == pending.target then
-    pending.reported = true
+---The sidebar reporting its own size is the one word from the server side of a mux link. It is
+---the width the next correction reads, and for the adjust in flight it is the answer: landed, so
+---the next one need not wait for the mirror's timer, or elsewhere. Elsewhere in the adjust's own
+---answer (`answered`) is as far as the server let the split go, not asked for again until
+---something changes; elsewhere in a plain size report is something else moving the split, and
+---the next correction reads it afresh.
+function M.landed(window_id, pane_id, cols, rows, answered)
+  cols = tonumber(cols)
+  if cols == nil then
+    return
   end
+  local now = util.now_ms()
+  reported[window_id] = { pane_id = pane_id, cols = int(cols), rows = tonumber(rows) and int(rows) or nil, at = now }
+  local pending = pending_adjust[window_id]
+  if not pending or pending.pane_id ~= pane_id then
+    return
+  end
+  if cols == pending.target then
+    pending.reported = true
+    return
+  end
+  if answered then
+    unreachable[window_id] =
+      { tab_id = pending.tab_id, target = pending.target, cols = int(cols), remote = true, at = now }
+  end
+  pending_adjust[window_id] = nil
+end
+
+---The sidebar's last report of its own size, for probes and tests.
+function M.reported(window_id)
+  return reported[window_id]
 end
 
 ---The server refused the adjust in flight (its `cli` answer said so): nothing is coming, so the
@@ -175,12 +228,6 @@ local function fits(cols, tab_cols, floor, bands)
     return out
   end
   return math.min(out, math.max(floor, tab_cols - MIN_CONTENT * math.max(bands or 1, 1)))
-end
-
----`panes_with_info` hands its numbers over as floats; `AdjustPaneSize` and `ActivatePaneByIndex`
----take only integers back, so every reading is whole from the start.
-local function int(value)
-  return math.floor(tonumber(value) or 0)
 end
 
 ---The width a new sidebar is split off at: the window's own width, so the pane needs no adjust the
@@ -272,11 +319,13 @@ local function content_rect(layout, id)
   return nil
 end
 
-local function record(tab_id, layout)
+---`cols` and `rows` are the width and height the correction settled at, whichever source read them.
+local function record(tab_id, layout, cols, rows)
   return {
     tab_id = tab_id,
     tab_cols = layout.cols,
-    cols = layout.sidebar.width,
+    cols = cols,
+    rows = rows,
     shape = layout.shape,
     cell = layout.cell,
   }
@@ -418,17 +467,32 @@ local function correct(gui_window, snapshot)
   if tab_id == nil then
     return false
   end
+  local now = util.now_ms()
+  local quiet = now - last_frame(wid) >= RESIZE_QUIET_MS
+  local remote = mux.domain(sb) ~= "local"
+  if remote and not quiet then
+    -- The server is still dealing columns to the tab: nothing the mirror says meanwhile is worth an
+    -- adjust, and the follow-up reads it afresh once the reports have stopped.
+    follow_up(gui_window, wid, "quiet", RESIZE_QUIET_MS + 20)
+    return false
+  end
   -- Read afresh even under a snapshot: one taken before this poll's last frame would hand the
   -- adjust a stale delta, and the tree is one cheap call away.
   local layout = read_layout(tab, sb_id, cfg.position)
   if not layout or layout.zoomed or not at_edge(layout, cfg.position) then
     return false
   end
-  local now = util.now_ms()
-  local quiet = now - (resized_at[wid] or 0) >= RESIZE_QUIET_MS
   local collapsed = state.is_collapsed(wid)
-  local remote = mux.domain(sb) ~= "local"
   local cols = layout.sidebar.width
+  local report = reported[wid]
+  if not (remote and report and report.pane_id == sb_id) then
+    report = nil
+  end
+  if report then
+    -- The pane's own word over the mirror's: a mirror rebuilt from a stale pane list, or frozen
+    -- on one, reads any width at all, and an adjust computed from it lands anywhere.
+    cols = report.cols
+  end
   if still_pending(gui_window, wid, tab_id, cols, now) then
     return false
   end
@@ -460,6 +524,15 @@ local function correct(gui_window, snapshot)
   -- A mux mirror rebuilt mid-way through a server-side adjust reads as a tab of another width for
   -- one poll; a hand already seen holding this width is not made to start over by it.
   local moved = hand ~= nil or (same_shape(seen, tab_id, layout) and seen.cols ~= cols)
+  if moved and remote and not hand then
+    -- Dealt by a window resize the mirror has not caught up with: a frame within the last second,
+    -- or a height the report says changed, is no hand on the divider.
+    local resized = now - (resized_at[wid] or 0) < HAND_AFTER_RESIZE_MS
+    local taller = report and seen.rows and report.rows and report.rows ~= seen.rows
+    if resized or taller then
+      moved = false
+    end
+  end
   if moved and quiet and not collapsed then
     if not hand_has_settled(gui_window, wid, tab_id, cols, remote, now) then
       return false
@@ -474,7 +547,7 @@ local function correct(gui_window, snapshot)
   local want = int(M.desired(wid))
   local target = fits(want, layout.cols, collapsed and want or MIN_WIDTH, layout.bands)
   if target == cols then
-    settled[wid] = record(tab_id, layout)
+    settled[wid] = record(tab_id, layout, cols, report and report.rows or nil)
     unreachable[wid] = nil
     if restore then
       mux.call(gui_window, "perform_action", act.ActivatePaneByIndex(restore), sb)
@@ -483,15 +556,15 @@ local function correct(gui_window, snapshot)
   end
 
   local blocked = unreachable[wid]
-  if
-    blocked
-    and blocked.tab_id == tab_id
-    and blocked.tab_cols == layout.cols
-    and blocked.target == target
-    and blocked.cols == cols
-    and (blocked.moved or now - blocked.at < BLOCKED_MS)
-  then
-    return false
+  if blocked and blocked.tab_id == tab_id and blocked.target == target and blocked.cols == cols then
+    if blocked.remote then
+      -- the server's own answer to this very ask; the tab may give more once it has changed
+      if now - blocked.at < BLOCKED_MS then
+        return false
+      end
+    elseif blocked.tab_cols == layout.cols and (blocked.moved or now - blocked.at < BLOCKED_MS) then
+      return false
+    end
   end
 
   local dir, n = direction_for(cfg.position, target - cols), int(math.abs(target - cols))
@@ -500,10 +573,9 @@ local function correct(gui_window, snapshot)
     -- the client fetch the pane list and rebuild the whole mirror; a correction issued here would
     -- cost one such rebuild per pane and echo back stale widths. So the sidebar's own backend
     -- resizes the split on the server: one change there, one rebuild, no echo. Once per settle,
-    -- not per frame -- during a burst the frames alone already cost a rebuild per pane.
-    if not quiet then
-      return false
-    end
+    -- not per frame -- during a burst the frames alone already cost a rebuild per pane. The
+    -- backend is told the width to land at and reads its own from the server's list: the delta
+    -- here comes from a mirror, and a mirror can lag the server by any amount.
     if link.busy(mux.domain(sb)) and transport.state(sb) ~= "active" then
       -- the mirror rebuilds are still crossing the link the adjust would take; asked from a fresh
       -- reading once it is quiet. A sidebar on its inbox is asked at once: nothing crosses.
@@ -513,7 +585,9 @@ local function correct(gui_window, snapshot)
     if cfg.debug then
       util.log("geometry: tab %d sidebar %d -> %d of %d cols (server)", tab_id, cols, target, layout.cols)
     end
-    if not sidebar.send(sb, { t = "adjust", direction = dir, amount = n, park = false }) then
+    local message =
+      { t = "adjust", direction = dir, amount = n, park = false, target = target, min_content = MIN_CONTENT }
+    if not sidebar.send(sb, message) then
       return false
     end
     pending_adjust[wid] = { tab_id = tab_id, pane_id = sb_id, target = target, at = now }
@@ -567,7 +641,7 @@ local function correct(gui_window, snapshot)
     return true
   end
   local landed = after.sidebar.width
-  settled[wid] = record(tab_id, after)
+  settled[wid] = record(tab_id, after, landed, nil)
   if landed == target then
     unreachable[wid] = nil
   elseif landed ~= cols then
@@ -644,6 +718,8 @@ function M.inspect(window_id)
     parked = parked_focus[window_id],
     moving = moving[window_id],
     resized_at = resized_at[window_id],
+    server_resized_at = server_resized_at[window_id],
+    reported = reported[window_id],
     switching = M.switching(window_id),
   }
 end

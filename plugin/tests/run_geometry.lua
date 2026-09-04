@@ -828,9 +828,113 @@ test("on a mux domain the sidebar's own size report releases the adjust in fligh
   geometry.landed(wid, sb:pane_id(), 28)
   eq(geometry.correct(gui), false, "in order")
   eq(geometry.inspect(wid).pending, nil, "released by the report; no stability window to wait out")
+  geometry.on_resize(wid)
   win:resize(4)
-  assert(geometry.correct(gui), "so the next frame's correction goes out at once")
+  eq(geometry.correct(gui), false, "the mirror alone moved on the next frame: the pane has said nothing yet")
+  geometry.landed(wid, sb:pane_id(), 30)
+  H.later(geometry.RESIZE_QUIET_MS, function()
+    assert(geometry.correct(gui), "the columns the pane reports dealt go out for correction as soon as it is quiet")
+  end)
   fake.remote_lag = false
+end)
+
+test(
+  "on a mux domain the pane's own report is the width corrected from; a mirror frozen elsewhere is never chased",
+  function()
+    local win, gui, tab, sb = settled_tab()
+    local content = sidebar.content_pane(tab)
+    sb.domain, content.domain = "e2emux", "e2emux"
+    local wid = gui:window_id()
+    local clock = H.clock()
+    local sent = #sb.sent
+    geometry.landed(wid, sb:pane_id(), 28, 24)
+    eq(geometry.correct(gui), false)
+    -- a mirror rebuilt from a stale pane list, or one the link has stopped updating, reads 88
+    tab:set_split(88)
+    eq(geometry.correct(gui), false, "the mirror's width is not chased")
+    eq(adjusts_sent(sb, sent), 0)
+    eq(geometry.desired(wid), 28, "nor adopted")
+    tab:set_split(28)
+    -- a window resize dealt the pane five columns the mirror has not caught up with
+    geometry.on_resize(wid)
+    clock.advance(geometry.RESIZE_QUIET_MS)
+    geometry.landed(wid, sb:pane_id(), 33, 24)
+    assert(geometry.correct(gui), "the width the pane reports is corrected")
+    eq(adjusts_sent(sb, sent), 1)
+    eq(geometry.desired(wid), 28, "dealt columns are never the hand's, however the mirror lags")
+    local payload = wezterm.json_parse(H.control_payload(sb.sent[#sb.sent]))
+    eq(payload.target, 28, "the backend is told the width to land at, never a delta from a mirror")
+    eq(payload.min_content, 20)
+    eq(math.type(payload.target), "integer")
+    eq(#win.actions, 0, "and nothing through the GUI's mirror")
+    clock.restore()
+  end
+)
+
+test("server-side resize reports hold the correction and the publish until the server has been quiet", function()
+  local link = require "vtabs.link"
+  local input = require "vtabs.input"
+  local view = require "vtabs.view"
+  local win, gui, tab, sb = settled_tab()
+  local content = sidebar.content_pane(tab)
+  sb.domain, content.domain = "e2emux", "e2emux"
+  local wid = gui:window_id()
+  local clock = H.clock()
+  wezterm.timers = {}
+  local sent = #sb.sent
+  win:resize(10)
+  for i, cols in ipairs { 30, 31, 33 } do
+    input.handle(gui, sb, "vtabs", string.format('{"t":"resize","cols":%d,"rows":24,"n":%d}', cols, i))
+    eq(adjusts_sent(sb, sent), 0, "a frame the server dealt is no moment to compute an adjust from")
+    eq(geometry.in_burst(wid), true, "the server's frames are frames")
+    eq(view.sync(gui), false, "and nothing is published between them")
+    clock.advance(30)
+  end
+  eq(#wezterm.timers, 1, "one follow-up waits for the quiet")
+  eq(geometry.reported(wid).cols, 33)
+  clock.advance(link.QUIET_MS + 20)
+  eq(geometry.in_burst(wid), false)
+  wezterm.fire_timers()
+  eq(adjusts_sent(sb, sent), 1, "one adjust once the reports have stopped")
+  eq(wezterm.json_parse(H.control_payload(sb.sent[#sb.sent])).target, 28)
+  eq(sb.cols, 28, "the backend resized the split on the server")
+  link.reset()
+  clock.restore()
+end)
+
+test("an adjust's answer carries the width the split landed at, releasing the wait or closing the ask", function()
+  local input = require "vtabs.input"
+  local store = require "vtabs.store"
+  local win, gui, tab, sb = settled_tab()
+  local content = sidebar.content_pane(tab)
+  sb.domain, content.domain = "e2emux", "e2emux"
+  store.proto[sb:pane_id()] = require("vtabs.gen.protocol").VERSION
+  local wid = gui:window_id()
+  local clock = H.clock()
+  fake.remote_lag = true
+  win:resize(10)
+  local sent = #sb.sent
+  assert(geometry.correct(gui), "asked for 28")
+  -- landed exactly, with no resize report after it (the pane was there already)
+  input.handle(gui, sb, "vtabs", '{"t":"cli","op":"adjust","ok":true,"cols":28,"n":5}')
+  eq(geometry.inspect(wid).pending, nil, "the answer releases the wait")
+  eq(geometry.inspect(wid).settled.cols, 28)
+  eq(adjusts_sent(sb, sent), 1)
+  -- the next frame: the pane reports the column it was dealt, and the server gives back only 30
+  win:resize(2)
+  geometry.landed(wid, sb:pane_id(), 29)
+  assert(geometry.correct(gui), "asked again for the new frame")
+  eq(adjusts_sent(sb, sent), 2)
+  input.handle(gui, sb, "vtabs", '{"t":"cli","op":"adjust","ok":true,"cols":30,"n":6}')
+  eq(geometry.inspect(wid).pending, nil)
+  eq(geometry.inspect(wid).unreachable.cols, 30, "where the split could go is recorded")
+  eq(geometry.correct(gui), false, "and not asked for again")
+  eq(adjusts_sent(sb, sent), 2)
+  clock.advance(2100)
+  assert(geometry.correct(gui), "until the block has had time to clear")
+  eq(adjusts_sent(sb, sent), 3)
+  fake.remote_lag = false
+  clock.restore()
 end)
 
 test("a mux mirror rebuilt to a stale width around an adjust in flight is neither chased nor adopted", function()

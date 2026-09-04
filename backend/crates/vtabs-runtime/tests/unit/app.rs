@@ -37,6 +37,8 @@ fn app() -> App<Vec<u8>> {
         noted_menu: None,
         hover_deadline: None,
         token: None,
+        token_announced: None,
+        resize: None,
         client_typed_intents: false,
         client_theme_hooks: false,
         client_spaces_policy: false,
@@ -73,6 +75,8 @@ fn a_kill_or_rescue_with_no_cli_to_run_reports_the_failure() {
         direction: "Left".into(),
         amount: 5,
         park: false,
+        target: None,
+        min_content: None,
     }))
     .unwrap();
     let sent = payloads(&a);
@@ -175,6 +179,10 @@ fn control_commands_are_bound_to_the_initial_authenticated_session() {
             "a foreign session cannot quit the backend"
         );
     }
+    assert!(
+        a.out.is_empty(),
+        "foreign ordinary and privileged commands are inert"
+    );
     a.handle(input(
         "session2",
         Command::Auth {
@@ -184,11 +192,13 @@ fn control_commands_are_bound_to_the_initial_authenticated_session() {
         },
     ))
     .unwrap();
-    assert!(
-        a.out.is_empty(),
-        "foreign ordinary and privileged commands, and an unproved rotation, are inert"
+    assert_eq!(
+        String::from_utf8_lossy(&a.out),
+        set_user_var("vtabs_token", "session1"),
+        "an unproved rotation changes nothing; the held token is published for its next try"
     );
     assert_eq!(a.token.as_deref(), Some("session1"));
+    a.out.clear();
 
     a.handle(input(
         "session1",
@@ -2044,6 +2054,156 @@ fn a_resize_mid_fade_cancels_the_fade() {
     assert_eq!(a.size, (30, 24));
     assert!(saw(&a, r#""t":"resize","cols":30"#));
     assert!(painted(&a).contains(CLEAR_SCREEN), "the pane is wiped");
+}
+
+// --- adoption, adjust and resize bursts ----------------------------------------------------------
+
+#[test]
+fn an_auth_the_session_cannot_read_is_answered_with_the_token_it_holds_once_a_second() {
+    let mut a = app();
+    let auth = |frame: &str, claimed: &str| Input::Control {
+        token: frame.into(),
+        command: Command::Auth {
+            token: claimed.into(),
+            caps: Vec::new(),
+            keys: None,
+        },
+    };
+    a.handle(auth("old", "old")).unwrap();
+    a.out.clear();
+    // a GUI that just attached to the mux frames blind, with the fresh token it minted
+    a.handle(auth("new", "new")).unwrap();
+    assert_eq!(
+        String::from_utf8_lossy(&a.out),
+        set_user_var("vtabs_token", "old"),
+        "the held token is published again, and nothing else"
+    );
+    assert_eq!(
+        a.token.as_deref(),
+        Some("old"),
+        "the session is not taken over"
+    );
+    a.out.clear();
+    a.handle(auth("new", "new")).unwrap();
+    assert!(a.out.is_empty(), "once a second at most");
+    a.handle(Input::Control {
+        token: "stranger".into(),
+        command: Command::Ping { n: Some(1) },
+    })
+    .unwrap();
+    assert!(a.out.is_empty(), "only an auth is answered");
+    // framed with the token it just learned, the same auth rotates the session
+    a.handle(auth("old", "new")).unwrap();
+    assert!(String::from_utf8_lossy(&a.out).starts_with(&set_user_var("vtabs_token", "new")));
+    assert!(saw(&a, r#""t":"ready""#));
+    assert_eq!(a.token.as_deref(), Some("new"));
+}
+
+#[test]
+fn a_resize_burst_is_adopted_once_it_pauses_and_reported_once() {
+    let mut a = app();
+    dress(&mut a);
+    a.out.clear();
+    let t0 = Instant::now();
+    probe_returns((30, 24));
+    a.note_resize(t0);
+    assert!(a.out.is_empty(), "a frame is noted, not adopted");
+    assert_eq!(a.next_resize(), Some(t0 + RESIZE_DEBOUNCE));
+    probe_returns((31, 24));
+    let t1 = t0 + Duration::from_millis(30);
+    a.note_resize(t1);
+    assert_eq!(
+        a.next_resize(),
+        Some(t1 + RESIZE_DEBOUNCE),
+        "each frame pushes the pause out"
+    );
+    a.tick_resize(t1 + RESIZE_DEBOUNCE - Duration::from_millis(1))
+        .unwrap();
+    assert!(a.out.is_empty());
+    a.tick_resize(t1 + RESIZE_DEBOUNCE).unwrap();
+    let reports = payloads(&a)
+        .iter()
+        .filter(|p| p.contains(r#""t":"resize""#))
+        .count();
+    assert_eq!(reports, 1, "one report for the burst: {:?}", payloads(&a));
+    assert!(saw(&a, r#""t":"resize","cols":31,"rows":24"#));
+    assert_eq!(a.size, (31, 24));
+    assert!(
+        painted(&a).contains(CLEAR_SCREEN),
+        "and one frame at the new size"
+    );
+    assert!(a.next_resize().is_none());
+    // a frame back to the size the pane already has withdraws the note
+    probe_returns((32, 24));
+    a.note_resize(t1);
+    probe_returns((31, 24));
+    a.note_resize(t1);
+    assert!(a.next_resize().is_none());
+}
+
+#[test]
+fn a_burst_that_never_pauses_is_adopted_after_the_cap() {
+    let mut a = app();
+    let t0 = Instant::now();
+    let mut now = t0;
+    for i in 0..10u16 {
+        probe_returns((30 + i, 24));
+        a.note_resize(now);
+        now += Duration::from_millis(30);
+    }
+    assert_eq!(a.next_resize(), Some(t0 + RESIZE_MAX_WAIT));
+    a.tick_resize(now).unwrap();
+    assert_eq!(a.size, (39, 24));
+    assert!(saw(&a, r#""t":"resize","cols":39"#));
+}
+
+#[cfg(unix)]
+#[test]
+fn an_adjust_with_a_target_works_the_delta_out_on_the_server_and_answers_with_the_width() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = transport_root("adjust-target");
+    std::fs::create_dir_all(&dir).unwrap();
+    let log = dir.join("calls.log");
+    let list = r#"[{"window_id":0,"tab_id":7,"pane_id":1,"title":"wez-vtabs:abcd","left_col":0,"size":{"cols":36,"rows":24},"is_active":true},{"window_id":0,"tab_id":7,"pane_id":2,"title":"zsh","left_col":37,"size":{"cols":83,"rows":24},"is_active":false}]"#;
+    let script = dir.join("wezterm");
+    std::fs::write(
+        &script,
+        format!(
+            "#!/bin/sh\nshift 2\n[ \"$1\" = --prefer-mux ] && shift\nverb=$1\nshift\necho \"$verb $*\" >> '{}'\n[ \"$verb\" = list ] && printf '%s' '{list}'\nexit 0\n",
+            log.display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let mut a = app();
+    a.cli = Some(Cli::at(script, 1));
+    a.size = (36, 24);
+    probe_returns((36, 24));
+    a.out.clear();
+    // the mirror the plugin read was 60 wide: the delta it worked out is wrong, the target is not
+    a.handle(Input::Command(Command::Adjust {
+        direction: "Left".into(),
+        amount: 32,
+        park: false,
+        target: Some(28),
+        min_content: Some(20),
+    }))
+    .unwrap();
+    let calls = std::fs::read_to_string(&log).unwrap();
+    assert!(
+        calls.contains("adjust-pane-size --pane-id 1 --amount 8 Left"),
+        "{calls}"
+    );
+    assert!(!calls.contains("--amount 32"), "{calls}");
+    let answer = payloads(&a)
+        .into_iter()
+        .find(|p| p.contains(r#""op":"adjust""#))
+        .expect("the cli answer");
+    assert!(
+        answer.contains(r#""ok":true"#) && answer.contains(r#""cols":36"#),
+        "{answer}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 // --- inbox transport ---------------------------------------------------------------------------

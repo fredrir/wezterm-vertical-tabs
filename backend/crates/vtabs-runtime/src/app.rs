@@ -43,6 +43,24 @@ const MOTION_ON: &str = "\x1b[?1003h";
 const MOTION_OFF: &str = "\x1b[?1003l";
 /// A hole in the inbox sequence waits this long for the file before it counts as lost.
 const GAP_GRACE: Duration = Duration::from_millis(100);
+/// Columns each band of content keeps when an `adjust` names a target but no minimum of its own.
+const MIN_CONTENT: u32 = 20;
+/// A window drag resizes the pane once per frame, and a mux server deals every frame to every
+/// tab: the frame is adopted once the size has sat still this long, or at the latest after
+/// `RESIZE_MAX_WAIT`, so a burst costs a few paints and reports rather than one of each per frame.
+const RESIZE_DEBOUNCE: Duration = Duration::from_millis(40);
+const RESIZE_MAX_WAIT: Duration = Duration::from_millis(150);
+/// An `auth` framed with a token this session does not hold is answered by publishing the one it
+/// does, at most this often: a fresh GUI has no user vars for a pane the mux kept.
+const TOKEN_REANNOUNCE: Duration = Duration::from_secs(1);
+
+/// A size the terminal reported that the pane has not adopted yet.
+#[derive(Debug, Clone, Copy)]
+pub struct PendingResize {
+    pub size: (u16, u16),
+    pub first: Instant,
+    pub due: Instant,
+}
 
 /// Sole stdout writer, so user-var OSCs never interleave with frame bytes.
 pub struct App<W: Write> {
@@ -79,6 +97,10 @@ pub struct App<W: Write> {
     pub hover_deadline: Option<Instant>,
     /// The last token Lua authed with; a change means the plugin restarted around us.
     pub token: Option<String>,
+    /// When the held token was last re-published to a client that framed an auth without it.
+    pub token_announced: Option<Instant>,
+    /// The newest size a resize burst reported, adopted once the burst has paused.
+    pub resize: Option<PendingResize>,
     /// Negotiated per client; older plugins receive the centralized `do` downgrade.
     pub client_typed_intents: bool,
     /// Only clients advertising this can complete the generation-bound host-hook handshake.
@@ -489,11 +511,34 @@ impl<W: Write> App<W> {
                 if authorized {
                     return self.run(command);
                 }
+                if matches!(command, Command::Auth { .. }) {
+                    self.reannounce_token(Instant::now())?;
+                }
             }
             #[cfg(test)]
             Input::Command(command) => return self.run(command),
         }
         Ok(true)
+    }
+
+    /// An `auth` this session could not read: a GUI that just attached to the mux frames blind,
+    /// since the pane's user vars reach a client only as they change. The token the session holds
+    /// is published again so that client can frame its next one; the value was theirs to read all
+    /// along, and a paste at the pane gets it once a second at most.
+    fn reannounce_token(&mut self, now: Instant) -> io::Result<()> {
+        let Some(token) = self.token.clone() else {
+            return Ok(());
+        };
+        if self
+            .token_announced
+            .is_some_and(|at| now.duration_since(at) < TOKEN_REANNOUNCE)
+        {
+            return Ok(());
+        }
+        self.token_announced = Some(now);
+        self.log
+            .log("auth refused: re-publishing the token this session holds");
+        self.write(set_user_var(TOKEN_VAR, &token).as_bytes())
     }
 
     fn gesture(&mut self, m: &vtabs_protocol::Mouse) -> io::Result<()> {
@@ -1789,18 +1834,29 @@ impl<W: Write> App<W> {
                 direction,
                 amount,
                 park,
+                target,
+                min_content,
             } => {
                 let parked = self.parked_focus.take();
+                let target = target.map(|cols| (cols, min_content.unwrap_or(MIN_CONTENT)));
                 let done = self
                     .cli
                     .as_ref()
                     .ok_or_else(|| "no cli here".to_string())
-                    .and_then(|cli| cli.adjust(&direction, amount, park, parked));
+                    .and_then(|cli| cli.adjust(&direction, amount, park, parked, target));
                 let done = done.map(|owed| {
                     self.parked_focus = owed;
                     owed.map(|id| id.to_string()).unwrap_or_default()
                 });
-                self.report("adjust", done)?;
+                // The split moved under this pane before the cli answered: the pane adopts the
+                // size now and says so, rather than leaving Lua to wait for a SIGWINCH.
+                let cols = if done.is_ok() {
+                    self.poll_size()?;
+                    Some(self.size.0)
+                } else {
+                    None
+                };
+                self.report_cols("adjust", done, cols)?;
             }
             Command::TransportProbe { .. } => {}
             Command::TransportBarrier { session } => self.transport_barrier(session)?,
@@ -2010,12 +2066,26 @@ impl<W: Write> App<W> {
 
     /// One `cli` event per server-side verb: the count or an empty detail on success, the error otherwise.
     fn report(&mut self, op: &'static str, done: Result<String, String>) -> io::Result<()> {
+        self.report_cols(op, done, None)
+    }
+
+    fn report_cols(
+        &mut self,
+        op: &'static str,
+        done: Result<String, String>,
+        cols: Option<u16>,
+    ) -> io::Result<()> {
         self.log.log(format!("cli {op}: {done:?}"));
         let (ok, detail) = match done {
             Ok(detail) => (true, detail),
             Err(detail) => (false, detail),
         };
-        self.emit(&Event::Cli { op, ok, detail })
+        self.emit(&Event::Cli {
+            op,
+            ok,
+            detail,
+            cols,
+        })
     }
 
     pub fn next_fx(&self) -> Option<Instant> {
@@ -2104,6 +2174,38 @@ impl<W: Write> App<W> {
         Ok(())
     }
 
+    /// One frame of a resize burst: the size is noted, and adopted by `tick_resize` once no
+    /// further frame has landed for `RESIZE_DEBOUNCE`, or `RESIZE_MAX_WAIT` after the first.
+    pub fn note_resize(&mut self, now: Instant) {
+        let Some(size) = (self.probe)() else {
+            return;
+        };
+        if size == self.size {
+            self.resize = None;
+            return;
+        }
+        let first = self.resize.map_or(now, |pending| pending.first);
+        self.resize = Some(PendingResize {
+            size,
+            first,
+            due: (now + RESIZE_DEBOUNCE).min(first + RESIZE_MAX_WAIT),
+        });
+    }
+
+    pub fn next_resize(&self) -> Option<Instant> {
+        self.resize.map(|pending| pending.due)
+    }
+
+    /// Adopts the burst's last size once it is due; the terminal is asked again, in case a frame
+    /// landed since the note.
+    pub fn tick_resize(&mut self, now: Instant) -> io::Result<()> {
+        if self.next_resize().is_some_and(|due| now >= due) {
+            self.resize = None;
+            self.poll_size()?;
+        }
+        Ok(())
+    }
+
     /// Asks the terminal; `true` when the size moved and the pane needs a fresh frame. The pixel
     /// size rides along: a dpi change moves it without moving a cell, and the strip follows it.
     fn sync_size(&mut self) -> io::Result<bool> {
@@ -2129,6 +2231,7 @@ impl<W: Write> App<W> {
         let ((cols, rows), (w, h)) = (self.size, size);
         self.log.log(format!("resize {cols}x{rows} -> {w}x{h}"));
         self.size = size;
+        self.resize = None;
         self.needs_clear = true;
         self.shown_is_final = false;
         self.fx = None;

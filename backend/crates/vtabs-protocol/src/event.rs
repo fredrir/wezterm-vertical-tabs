@@ -128,12 +128,16 @@ pub enum Event {
         #[serde(skip_serializing_if = "Option::is_none")]
         a: Option<&'static str>,
     },
-    /// What a `kill` or `rescue` did on the server: `detail` is the count moved, or the error.
+    /// What a `kill`, `rescue` or `adjust` did on the server: `detail` is the count moved, the
+    /// pane still owed its focus, or the error; `cols` is this pane's own width once an `adjust`
+    /// has run, the server's word on where the split landed.
     Cli {
         op: &'static str,
         ok: bool,
         #[serde(skip_serializing_if = "String::is_empty")]
         detail: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        cols: Option<u16>,
     },
 }
 

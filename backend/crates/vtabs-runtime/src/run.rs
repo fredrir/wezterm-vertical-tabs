@@ -134,6 +134,8 @@ pub fn run() -> io::Result<()> {
         noted_menu: None,
         hover_deadline: None,
         token: None,
+        token_announced: None,
+        resize: None,
         client_typed_intents: false,
         client_theme_hooks: false,
         client_spaces_policy: false,
@@ -175,6 +177,9 @@ pub fn run() -> io::Result<()> {
         if let Some(at) = app.next_transport() {
             deadline = deadline.min(at);
         }
+        if let Some(at) = app.next_resize() {
+            deadline = deadline.min(at);
+        }
         let until_tick = deadline.saturating_duration_since(Instant::now());
         let timeout = if parser.has_pending() {
             until_tick.min(ESC_TIMEOUT)
@@ -184,7 +189,7 @@ pub fn run() -> io::Result<()> {
         let inputs = match rx.recv_timeout(timeout) {
             Ok(Wake::Stdin(chunk)) => parser.feed(&chunk),
             Ok(Wake::Resized) => {
-                app.poll_size()?;
+                app.note_resize(Instant::now());
                 Vec::new()
             }
             Ok(Wake::Inbox(batch)) => {
@@ -208,14 +213,16 @@ pub fn run() -> io::Result<()> {
         if !app.tick_transport(now)? {
             return Ok(());
         }
+        // The polls note a size the same way a SIGWINCH does, so a burst they catch is one burst.
         if next_poll.is_some_and(|at| now >= at) {
             next_poll = Some(now + SIZE_POLL);
-            app.poll_size()?;
+            app.note_resize(now);
         }
         if now >= next_full {
             next_full = now + SIZE_FALLBACK;
-            app.poll_size()?;
+            app.note_resize(now);
         }
+        app.tick_resize(now)?;
     }
     Ok(())
 }

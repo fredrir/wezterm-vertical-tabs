@@ -1,5 +1,6 @@
 use vtabs_runtime::cli::{
-    PaneInfo, adjust_plan, content_pane, is_marker, kill_target, panes_from_json, rescue_plan,
+    PaneInfo, adjust_delta, adjust_plan, content_pane, is_marker, kill_target, panes_from_json,
+    rescue_plan,
 };
 
 fn pane(id: u64, tab: u64, title: &str, left: i64, cols: i64) -> PaneInfo {
@@ -146,4 +147,54 @@ fn the_content_pane_is_the_one_spanning_the_column_and_a_marker_never_qualifies(
     ];
     assert!(content_pane(&panes, 1).is_err());
     assert!(content_pane(&panes, 9).is_err(), "an unlisted own pane");
+}
+
+#[test]
+fn a_target_becomes_the_delta_the_servers_own_list_calls_for() {
+    let panes = vec![
+        pane(1, 1, "wez-vtabs:abcd", 0, 36),
+        pane(2, 1, "zsh", 37, 83),
+    ];
+    assert_eq!(adjust_delta(&panes, 1, 28, 20), Ok(Some(("Left", 8))));
+    assert_eq!(adjust_delta(&panes, 1, 40, 20), Ok(Some(("Right", 4))));
+    assert_eq!(adjust_delta(&panes, 1, 36, 20), Ok(None), "there already");
+    // a mirror that believes the tab wider than 120 cannot ask for more than 120 - 20 = 100
+    assert_eq!(adjust_delta(&panes, 1, 110, 20), Ok(Some(("Right", 64))));
+    assert_eq!(
+        adjust_delta(&panes, 1, 0, 20),
+        Ok(Some(("Left", 35))),
+        "never below one column"
+    );
+    // two bands side by side each keep their minimum: 120 - 40 = 80
+    let split = vec![
+        pane(1, 1, "wez-vtabs:abcd", 0, 36),
+        pane(2, 1, "zsh", 37, 41),
+        pane(3, 1, "nvim", 79, 41),
+    ];
+    assert_eq!(adjust_delta(&split, 1, 110, 20), Ok(Some(("Right", 44))));
+    // stacked content shares one band
+    let stacked = vec![
+        pane(1, 1, "wez-vtabs:abcd", 0, 36),
+        pane(2, 1, "top", 37, 83),
+        pane(3, 1, "bottom", 37, 83),
+    ];
+    assert_eq!(adjust_delta(&stacked, 1, 110, 20), Ok(Some(("Right", 64))));
+    // another tab's panes are neither bands nor width
+    let two_tabs = vec![
+        pane(1, 1, "wez-vtabs:abcd", 0, 36),
+        pane(2, 1, "zsh", 37, 83),
+        pane(3, 2, "zsh", 0, 200),
+    ];
+    assert_eq!(adjust_delta(&two_tabs, 1, 110, 20), Ok(Some(("Right", 64))));
+    // a sidebar at the right edge is the split's second child, which Left grows
+    let right = vec![
+        pane(1, 1, "zsh", 0, 83),
+        pane(2, 1, "wez-vtabs:abcd", 84, 36),
+    ];
+    assert_eq!(adjust_delta(&right, 2, 28, 20), Ok(Some(("Right", 8))));
+    assert_eq!(adjust_delta(&right, 2, 40, 20), Ok(Some(("Left", 4))));
+    assert!(
+        adjust_delta(&panes, 9, 28, 20).is_err(),
+        "an unlisted own pane"
+    );
 }

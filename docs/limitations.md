@@ -34,7 +34,10 @@
   split tree (`panes_with_info`). A new sidebar is split at the width the window wants
   (adopted, rail or configured), and background tabs are corrected as they
   activate. Nothing is published while frames arrive; the sidebar repaints from
-  its own size and one publish follows the last frame.
+  its own size and one publish follows the last frame. The backend adopts a
+  burst of `SIGWINCH` once it has paused for 40 ms (150 ms at most from its
+  first frame), so a drag costs a few paints and `resize` reports per sidebar
+  rather than one of each per frame, on every tab of a mux window.
 - The adjust walks up from the tab's active pane, so a content pane narrower
   than the content column (one with a horizontal split above it) needs the
   sidebar made active for the adjust. That runs as one `Multiple` assignment so
@@ -47,13 +50,20 @@
   the pane list and rebuild the mirror, sometimes to an intermediate state
   (`wezterm-client/src/domain.rs process_pane_list`), and a correction issued
   from the GUI costs one such rebuild per pane and echoes stale widths back. So
-  there no frame is corrected: once the frames have stopped (100 ms) the
-  sidebar's own backend resizes the split on the server through that server's
-  `wezterm cli adjust-pane-size`, one adjust in flight at a time, released by
-  the sidebar's own `resize` report (or after 600 ms without one, or at once
-  when the server refuses it); nothing read from the mirror meanwhile is chased
-  or adopted, and a divider is read as the user's only once it has sat still
-  for 250 ms. On a local domain a drag is adopted the moment it moves.
+  there no frame is corrected: once the frames have stopped (100 ms without a
+  GUI frame or a `resize` report from the sidebar, since the server deals its
+  own frames to every tab) the sidebar's own backend resizes the split on the
+  server through that server's `wezterm cli adjust-pane-size`. It is told the
+  width to land at and works the delta out from the server's own pane list,
+  because the mirror can lag the server by any amount; the width the
+  correction reads is the sidebar's own last `resize` report, never the
+  mirror's. One adjust is in flight at a time, released by the sidebar's
+  report or the adjust's own answer (or after 600 ms without either, or at
+  once when the server refuses it); a width the server answered with instead
+  of the target is not asked for again for 2 s. Nothing read from the mirror
+  meanwhile is chased or adopted; a divider is read as the user's only once it
+  has sat still for 250 ms, and never within a second of a window resize. On
+  a local domain a drag is adopted the moment it moves.
 - A frame sent to a pane on a mux domain crosses the link on the GUI thread:
   `send_text` on a client pane blocks until the server answers
   (`wezterm-client/src/pane/clientpane.rs PaneWriter::write`). While the client
@@ -104,6 +114,13 @@
 - A second sidebar this process split into a tab is closed on the next poll.
   Two marker panes left behind by a GUI restart, neither spawned here, are not:
   adoption picks one and the other stays content.
+- A GUI that attaches to a mux the backends outlived has no user vars for their
+  panes (a client learns a pane's user vars only as they change), so its first
+  `auth` to each is framed with a token the backend does not hold. The backend
+  answers such an auth by publishing the token it does hold, at most once a
+  second, and the plugin frames its next auth with that; adoption completes in
+  one round trip instead of timing out after five tries and leaving the stale
+  sidebar as content beside a fresh one.
 - A tab moved to another window, by hand or by `tear_off`, keeps its sidebar,
   pin and space; nothing is recorded as closed.
 - "Move to new window" (drag to the inner edge, menu, or `tear_off`) only works

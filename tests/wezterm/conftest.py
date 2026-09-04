@@ -706,6 +706,9 @@ class WezTermMuxInstance:
         command = f"printf '\\033]1337;SetUserVar=vtabs_test={encoded}\\007'\n"
         self._cli("mux", "send-text", "--pane-id", str(pane_id), "--no-paste", command)
 
+    def set_tab_title(self, tab_id: int, title: str) -> None:
+        self._cli("mux", "set-tab-title", "--tab-id", str(tab_id), title)
+
     def send_shell(self, pane_id: int, command: str, endpoint: Endpoint = "mux") -> None:
         self._cli(
             endpoint,

@@ -140,11 +140,18 @@ function M.pane(tab, opts)
   return p:register()
 end
 
-local function deliver(pane, json)
+local function deliver(pane, json, var)
   local gui = pane._tab and pane._tab._window and pane._tab._window.gui
   if gui then
-    require("vtabs.input").handle(gui, pane, "vtabs", json)
+    require("vtabs.input").handle(gui, pane, var or "vtabs", json)
   end
+end
+
+---A user var the backend in `pane` set other than its event var: the mux keeps it, and every
+---client attached hears of the change.
+local function set_var(pane, name, value)
+  pane.vars[name] = value
+  deliver(pane, value, name)
 end
 
 ---An event the backend in `pane` raised: through the plugin at once, or held for `deliver` when
@@ -284,6 +291,10 @@ local function obey_payload(pane, frame_token, payload)
       -- The real echo arrives asynchronously through a user var; keep transport state separate so
       -- lifecycle tests do not accidentally gain trust merely because `send_text` returned.
       pane.control_token = claimed
+    elseif active ~= nil then
+      -- an auth framed with a token this session does not hold: the held one is published again
+      pane.reannounced = (pane.reannounced or 0) + 1
+      set_var(pane, "vtabs_token", active)
     end
   elseif active ~= frame_token then
     return
@@ -742,10 +753,12 @@ function Window:remove_tab(tab)
   end
 end
 
----A GUI reconnect to a surviving mux: panes and titles live on, user vars start empty.
+---A GUI reconnect to a surviving mux: panes and titles live on, and so does the session each
+---backend holds; only the client's copy of the user vars starts empty.
 function Window:reattach()
   for _, tab in ipairs(self.tab_list) do
     for _, pane in ipairs(tab.pane_list) do
+      pane.control_token = pane.control_token or pane.vars.vtabs_token
       pane.vars = {}
     end
   end

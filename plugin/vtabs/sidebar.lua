@@ -25,6 +25,7 @@ M.send = identity.send
 M.keys_mode = identity.keys_mode
 M.send_raw = identity.send_raw
 M.auth = identity.auth
+M.TOKEN_VAR = identity.TOKEN_VAR
 
 M.attach = attach.attach
 M.detach = attach.detach

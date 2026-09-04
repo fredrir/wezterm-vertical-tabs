@@ -223,8 +223,10 @@ local function on_note(gui_window, ev)
   view.sync(gui_window)
 end
 
----The outcome of a `kill` or `rescue` the backend ran on its server. A moved pane re-splits the
----tab and the width is corrected around it; a failure is said once and the next poll goes on.
+---The outcome of a `kill`, `rescue` or `adjust` the backend ran on its server. A moved pane
+---re-splits the tab and the width is corrected around it; an adjust answers with the width it
+---left the pane at, which releases the wait even when no resize followed it; a failure is said
+---once and the next poll goes on.
 local function on_cli(gui_window, pane, ev)
   if ev.ok ~= true then
     util.warn_once(
@@ -238,7 +240,10 @@ local function on_cli(gui_window, pane, ev)
     end
     return
   end
-  if ev.op == "rescue" then
+  if ev.op == "adjust" and tonumber(ev.cols) then
+    geometry.landed(gui_window:window_id(), pane:pane_id(), tonumber(ev.cols), nil, true)
+    geometry.correct(gui_window)
+  elseif ev.op == "rescue" then
     local tab = mux.tab_of(pane)
     if tab then
       sidebar.forget_split(tab:tab_id())
@@ -544,9 +549,41 @@ function M.key(gui_window, pane, ev)
   view.sync(gui_window)
 end
 
+-- A backend answers an auth it cannot read by publishing the token it holds; the plugin frames
+-- its next one with that, this many times per pane, so two plugins on one mux cannot trade a
+-- pane back and forth forever.
+local TOKEN_AUTHS_MAX = 5
+
+---The token var of a pane this process mapped but has not authenticated: the backend the mux
+---kept has published the session it holds, which a GUI that just attached had no user vars for.
+---Framing the auth with it is what the backend asked for; the value itself is never trusted, and
+---one the plugin minted is the echo `is_ready` reads for itself.
+local function on_token(_, pane, value)
+  local pid = pane:pane_id()
+  local token = state.token_for(pid)
+  if type(value) ~= "string" or value == "" or token == nil or value == token then
+    return
+  end
+  if store.ready[pid] or store.given_up[pid] or store.quitting[pid] or state.pane_for_token(value) ~= nil then
+    return
+  end
+  local tries = (store.token_auths[pid] or 0) + 1
+  if tries > TOKEN_AUTHS_MAX then
+    return
+  end
+  store.token_auths[pid] = tries
+  if config.get().debug then
+    util.log("pane %d holds another session; re-authenticating with it", pid)
+  end
+  sidebar.auth(pane, value)
+end
+
 ---Entry point for the `user-var-changed` event; only registered sidebar panes are trusted.
 function M.handle(gui_window, pane, name, value)
   local cfg = config.get()
+  if name == sidebar.TOKEN_VAR then
+    return on_token(gui_window, pane, value)
+  end
   if name ~= cfg.backend.uservar or not sidebar.is_ready(pane) then
     return
   end
@@ -632,13 +669,18 @@ function M.handle(gui_window, pane, name, value)
     view.sync(gui_window)
   elseif ev.t == "resize" then
     -- The sidebar reporting its own size is the one per-frame signal a divider drag gives, and on
-    -- a mux domain the proof that the server applied the adjust in flight; the width itself is
-    -- read from the tab's split tree. Nothing is published for it: the pane has already repainted
-    -- itself at the new size, and a publish per report is a generation per frame across every tab.
-    -- From a mux pane it is a server-side resize, the visible edge of the mirror rebuild storm
-    -- nothing may cross the link into.
+    -- a mux domain the server's own word on the width: the answer to the adjust in flight, and
+    -- the width the next correction reads, over a mirror that can lag. Nothing is published for
+    -- it: the pane has already repainted itself at the new size, and a publish per report is a
+    -- generation per frame across every tab. From a mux pane it is a server-side resize, the
+    -- visible edge of the mirror rebuild storm nothing may cross the link into, and one more
+    -- frame of the burst no adjust is computed inside.
+    local wid = gui_window:window_id()
     link.activity(pane)
-    geometry.landed(gui_window:window_id(), pane:pane_id(), tonumber(ev.cols))
+    if mux.domain(pane) ~= "local" then
+      geometry.on_server_resize(wid)
+    end
+    geometry.landed(wid, pane:pane_id(), tonumber(ev.cols), tonumber(ev.rows))
     geometry.correct(gui_window)
   elseif ev.t == "theme_hook_request" then
     theme_bridge.answer_hook(gui_window, pane, ev)

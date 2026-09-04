@@ -107,6 +107,7 @@ local SESSION = {
   quitting = "pane",
   server_pane = "pane",
   keys_mode = "pane",
+  token_auths = "pane",
 
   failed_domains = "process",
   spawned_domains = "process",

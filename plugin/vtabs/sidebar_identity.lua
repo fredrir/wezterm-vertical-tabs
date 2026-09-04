@@ -378,7 +378,13 @@ function M.keys_mode(pane)
   return "server"
 end
 
-function M.auth(pane)
+---The user var a backend echoes its session token in; a client that just attached to the mux
+---sees it only once the backend sets it again.
+M.TOKEN_VAR = "vtabs_token"
+
+---Frames the auth with the token the backend holds, which is the one its user var names; a
+---`frame_token` handed in stands in for a user var the client has not received yet.
+function M.auth(pane, frame_token)
   local pid = pane:pane_id()
   local token = state.token_for(pid)
   if token then
@@ -390,7 +396,7 @@ function M.auth(pane)
       token = token,
       caps = { "typed_intents", "theme_hooks", "settings_document", "spaces_policy" },
       keys = keys,
-    }, user_vars(pane).vtabs_token or token)
+    }, frame_token or user_vars(pane)[M.TOKEN_VAR] or token)
   end
 end
 

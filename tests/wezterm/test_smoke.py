@@ -50,6 +50,12 @@ def test_gui_reconnect_adopts_the_surviving_sidebar(
 
     wezterm_mux.start_gui()
     server, reconnected = wezterm_mux.wait_same_topology(before_ids)
+    # The new GUI has no user vars for the surviving pane, so its first auth is framed blind; the
+    # backend publishes the session it holds and the plugin re-authenticates with that.
+    wezterm_mux.wait_log(
+        "the surviving sidebar to be re-authenticated with the session it holds",
+        r"holds another session; re-authenticating with it",
+    )
     reconnected = wezterm_mux.wait_topology(
         "the reconnected GUI to remain duplicate-free",
         lambda topology: topology.shape == ((1, 1),),
@@ -59,6 +65,13 @@ def test_gui_reconnect_adopts_the_surviving_sidebar(
     assert server.pane_ids == before_ids
     assert _only_tab(server).sidebars[0].pane_id == sidebar_id
     assert reconnected.shape == ((1, 1),)
+
+    # An adopted sidebar keeps painting the live model: a title set after the reconnect reaches it.
+    wezterm_mux.set_tab_title(before_tab.tab_id, "readopted")
+    wezterm_mux.wait_for(
+        "the surviving sidebar to paint a title set after the reconnect",
+        lambda: "readopted" in wezterm_mux.pane_text(sidebar_id) or None,
+    )
 
 
 @pytest.mark.smoke

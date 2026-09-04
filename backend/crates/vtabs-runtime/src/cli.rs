@@ -190,6 +190,44 @@ pub fn adjust_plan(panes: &[PaneInfo], own: u64) -> Result<Option<u64>, String> 
     Ok(Some(active.pane_id))
 }
 
+/// What `adjust-pane-size` must do to put `own` at `target` columns, read from the server's own
+/// pane list rather than a mirror that may lag it: `Ok(None)` when the pane is there already.
+/// The target is held to what the tab can give, `min_content` for each band of content beside
+/// the pane (panes sharing a left edge are one band, the way the plugin counts them); WezTerm's
+/// own `[1, width-2]` clamp applies after that. `own` is the split's first child at the left
+/// edge, where `Right` grows it, and its second child anywhere else, where `Left` does.
+pub fn adjust_delta(
+    panes: &[PaneInfo],
+    own: u64,
+    target: u32,
+    min_content: u32,
+) -> Result<Option<(&'static str, u32)>, String> {
+    let me = panes
+        .iter()
+        .find(|p| p.pane_id == own)
+        .ok_or_else(|| format!("own pane {own} not listed"))?;
+    let tab: Vec<&PaneInfo> = panes.iter().filter(|p| p.tab_id == me.tab_id).collect();
+    let tab_cols = tab.iter().map(|p| p.left_col + p.cols).max().unwrap_or(0);
+    let mut lefts: Vec<i64> = tab
+        .iter()
+        .filter(|p| p.pane_id != own)
+        .map(|p| p.left_col)
+        .collect();
+    lefts.sort_unstable();
+    lefts.dedup();
+    let bands = i64::try_from(lefts.len().max(1)).unwrap_or(1);
+    let cap = (tab_cols - i64::from(min_content) * bands).max(1);
+    let target = i64::from(target).clamp(1, cap);
+    let delta = target - me.cols;
+    if delta == 0 {
+        return Ok(None);
+    }
+    let grows = if me.left_col == 0 { "Right" } else { "Left" };
+    let shrinks = if grows == "Right" { "Left" } else { "Right" };
+    let amount = u32::try_from(delta.unsigned_abs()).map_err(|_| "adjust: delta out of range")?;
+    Ok(Some((if delta > 0 { grows } else { shrinks }, amount)))
+}
+
 /// The pane a forwarded key belongs in: the one spanning the whole content column of `own`'s
 /// tab, read the way `adjust_plan` reads it; the active one when a vertical split stacks several.
 pub fn content_pane(panes: &[PaneInfo], own: u64) -> Result<u64, String> {
@@ -363,13 +401,15 @@ impl Cli {
     /// Resizes this pane's own split by `amount` cells in `direction`. A content pane that cannot
     /// reach the split hands focus to this pane for the adjust; `parked` is one it kept from an
     /// earlier `park`, and the answer is the pane still owed its focus back (only with `park`).
-    /// `amount` 0 does nothing but the hand-back.
+    /// `amount` 0 does nothing but the hand-back. A `target` (width, minimum content per band)
+    /// replaces `direction` and `amount` with the delta the server's own list says is needed.
     pub fn adjust(
         &self,
         direction: &str,
         amount: u32,
         park: bool,
         parked: Option<u64>,
+        target: Option<(u32, u32)>,
     ) -> Result<Option<u64>, String> {
         if direction != "Left" && direction != "Right" {
             return Err(format!(
@@ -377,7 +417,14 @@ impl Cli {
             ));
         }
         let own = self.own_pane.to_string();
-        let displaced = adjust_plan(&self.list()?, self.own_pane)?;
+        let panes = self.list()?;
+        let displaced = adjust_plan(&panes, self.own_pane)?;
+        let (direction, amount) = match target {
+            Some((cols, min_content)) => {
+                adjust_delta(&panes, self.own_pane, cols, min_content)?.unwrap_or((direction, 0))
+            }
+            None => (direction, amount),
+        };
         if displaced.is_some() {
             self.run(&["activate-pane", "--pane-id", &own])?;
         }

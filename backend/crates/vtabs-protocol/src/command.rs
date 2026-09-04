@@ -77,10 +77,13 @@ pub enum Command {
         #[serde(default)]
         position: Option<String>,
     },
-    /// Resize this pane's own split on the server by `amount` cells, `direction` being
-    /// `AdjustPaneSize`'s `Left` or `Right`, through the server's own `wezterm cli`: on a mux
-    /// domain the server's tree is the truth the GUI mirrors, so one change there is one change
-    /// everywhere. The walk starts at the tab's active pane; when that pane cannot reach the
+    /// Resize this pane's own split on the server through the server's own `wezterm cli`: on a
+    /// mux domain the server's tree is the truth the GUI mirrors, so one change there is one change
+    /// everywhere. With `target`, the width to land at, the backend reads its own column count
+    /// from the server's pane list and works the delta out there, keeping `min_content` for each
+    /// band of content beside it: a mirror that lags the server may name a target, never a delta.
+    /// Without it, `amount` cells in `direction` (`AdjustPaneSize`'s `Left` or `Right`) are asked
+    /// for as given. The walk starts at the tab's active pane; when that pane cannot reach the
     /// sidebar's split, the sidebar takes focus for the adjust and hands it back, unless `park`
     /// keeps it (a resize burst) until an adjust without `park` follows.
     Adjust {
@@ -88,5 +91,9 @@ pub enum Command {
         amount: u32,
         #[serde(default)]
         park: bool,
+        #[serde(default)]
+        target: Option<u32>,
+        #[serde(default)]
+        min_content: Option<u32>,
     },
 }

@@ -267,3 +267,29 @@ fn v2_lines_parse() {
     };
     assert_eq!(n.text, "hi");
 }
+
+#[test]
+fn an_adjust_names_a_target_beside_the_delta_or_keeps_the_old_shape() {
+    assert_eq!(
+        parse(r#"{"t":"adjust","direction":"Left","amount":3,"park":false}"#),
+        Command::Adjust {
+            direction: "Left".into(),
+            amount: 3,
+            park: false,
+            target: None,
+            min_content: None,
+        }
+    );
+    assert_eq!(
+        parse(
+            r#"{"t":"adjust","direction":"Left","amount":3,"park":false,"target":28,"min_content":20}"#
+        ),
+        Command::Adjust {
+            direction: "Left".into(),
+            amount: 3,
+            park: false,
+            target: Some(28),
+            min_content: Some(20),
+        }
+    );
+}
