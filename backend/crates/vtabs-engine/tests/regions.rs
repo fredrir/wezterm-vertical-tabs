@@ -1,6 +1,6 @@
 //! Integration coverage for the regions produced by sidebar layout.
 
-#[path = "../../../tests/support/scene.rs"]
+#[path = "support/scene.rs"]
 mod test_scene;
 
 use vtabs_engine::config::{Position, TabHeight};

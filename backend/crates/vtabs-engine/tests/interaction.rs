@@ -1,4 +1,4 @@
-#[path = "../../../tests/support/scene.rs"]
+#[path = "support/scene.rs"]
 mod test_scene;
 
 use vtabs_engine::config::{ContextMode, HoverMode, Position, WheelMode};
