@@ -1,27 +1,31 @@
 #!/bin/sh
-# Locates the wez-vtabs backend: explicit path, cached download, verified GitHub release, or cargo build.
+# Runs wez-vtabs on this machine: a VTABS_BIN line, the cached download, a verified GitHub release, or a cargo build.
 set -u
 
 name="wez-vtabs"
 data="${XDG_DATA_HOME:-$HOME/.local/share}/wez-vtabs"
-target="${VTABS_TARGET:-}"
 version="${VTABS_VERSION:-dev}"
 PATH="$HOME/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
 export PATH
 
-if [ -n "${VTABS_BIN:-}" ] && [ -x "$VTABS_BIN" ]; then
-  exec "$VTABS_BIN"
-fi
+# One path per line: the plugin lists every path backend.path names, since a mux may run this on another host.
+set -f
+IFS='
+'
+for candidate in ${VTABS_BIN:-}; do
+  [ -x "$candidate" ] && exec "$candidate" "$@"
+done
+unset IFS
+set +f
 
-if [ -z "$target" ]; then
-  case "$(uname -s)-$(uname -m)" in
-    Darwin-arm64) target=aarch64-apple-darwin ;;
-    Darwin-x86_64) target=x86_64-apple-darwin ;;
-    Linux-x86_64) target=x86_64-unknown-linux-gnu ;;
-    Linux-aarch64 | Linux-arm64) target=aarch64-unknown-linux-gnu ;;
-    *) target=unknown ;;
-  esac
-fi
+# uname is the truth about this machine; VTABS_TARGET is the plugin's own triple, kept for the odd platform.
+case "$(uname -s)-$(uname -m)" in
+  Darwin-arm64) target=aarch64-apple-darwin ;;
+  Darwin-x86_64) target=x86_64-apple-darwin ;;
+  Linux-x86_64) target=x86_64-unknown-linux-gnu ;;
+  Linux-aarch64 | Linux-arm64) target=aarch64-unknown-linux-gnu ;;
+  *) target="${VTABS_TARGET:-unknown}" ;;
+esac
 
 safe() { printf '%s' "$1" | grep -Eq '^[A-Za-z0-9._-]+$'; }
 if ! safe "$target" || ! safe "$version"; then
@@ -71,5 +75,5 @@ if [ "${VTABS_BUILD:-1}" = 1 ] && [ -f "${VTABS_SRC:-}/Cargo.toml" ] && command 
   printf 'build failed\n'
 fi
 
-printf 'backend not found: install cargo, publish a release, or set backend.path\n'
+printf 'backend not found on %s: install cargo, publish a release, or add its path here to backend.path\n' "$(uname -n)"
 exit 1

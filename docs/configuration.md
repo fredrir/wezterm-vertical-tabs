@@ -116,7 +116,7 @@ vtabs.apply_to_config(config, vtabs_config)
 | `hooks.theme`             | `nil`                                                                        | `fun(window, theme): theme`                                                                      |
 | `hooks.route`             | `nil`                                                                        | `fun(meta): space_id`                                                                            |
 | `spaces`                  | `{}`                                                                         | list of `{ id, name, icon, theme, match }`                                                       |
-| `backend.path`            | `nil`                                                                        | string \| table \| `fun(domain, host)`                                                           |
+| `backend.path`            | `nil`                                                                        | string \| string[] \| table \| `fun(domain, host)`                                               |
 | `backend.repo`            | `"fredrir/wezterm-vertical-tabs"`                                            | string                                                                                           |
 | `backend.build`           | `true`                                                                       | `true` \| `false`                                                                                |
 | `backend.uservar`         | `"vtabs"`                                                                    | string                                                                                           |

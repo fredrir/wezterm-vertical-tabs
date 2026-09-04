@@ -16,6 +16,7 @@ for _, suite in ipairs {
   "run_state",
   "run_geometry",
   "run_schema",
+  "run_backend",
   "run_theme",
   "run_apply",
   "run_spaces",

@@ -674,8 +674,8 @@ fn build_options() -> Vec<Descriptor> {
             .apply_mode(ApplyMode::Reload)
             .label("Backend path")
             .group("backend")
-            .values("string \\| table \\| `fun(domain, host)`")
-            .help("path to the `wez-vtabs` binary"),
+            .values("string \\| string[] \\| table \\| `fun(domain, host)`")
+            .help("`wez-vtabs` paths; the machine that runs the split execs the first one it has"),
         Descriptor::new("backend.repo", Kind::String)
             .with_default("fredrir/wezterm-vertical-tabs")
             .apply_mode(ApplyMode::Reload)

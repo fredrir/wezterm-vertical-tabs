@@ -1362,3 +1362,42 @@ test("keys go to the server only where the plugin would hand them over, and foll
     eq(transport.state(sb), "active", "the same token never reset the transport")
   end)
 end)
+
+test(
+  "a backend that never starts holds its domain on another machine, and only its own pane on a machine domain",
+  function()
+    local clock = H.clock()
+    local from = #wezterm.log
+    local win, gui = H.window(1)
+    local tls = win.tab_list[1]
+    tls.pane_list[1].domain = "archie-tls"
+    sidebar.ensure(gui)
+    eq(H.sidebars_in(tls), 1)
+    clock.advance(13000)
+    sidebar.ensure(gui)
+    assert(store.failed_domains["archie-tls"], "the domain is held")
+    eq(warnings(from, "did not start in archie-tls"), 1)
+    local again = win:add_tab { domain = "archie-tls" }
+    win.active_tab_ref = again
+    sidebar.ensure(gui)
+    eq(H.sidebars_in(again), 0, "no second attempt in that domain for a minute")
+
+    require("vtabs.backend").register_local_domains { unix_domains = { { name = "localmux" } } }
+    local proxied = win:add_tab { domain = "localmux" }
+    win.active_tab_ref = proxied
+    sidebar.ensure(gui)
+    local sb = sidebar.find(proxied)
+    clock.advance(13000)
+    sidebar.ensure(gui)
+    eq(store.given_up[sb:pane_id()], true)
+    eq(store.failed_domains.localmux, nil, "a unix domain may have run the split on another host")
+    eq(sidebar.find(proxied), sb, "the pane keeps its slot")
+    local fresh = win:add_tab { domain = "localmux" }
+    win.active_tab_ref = fresh
+    sidebar.ensure(gui)
+    eq(H.sidebars_in(fresh), 1, "the next tab is served")
+    eq(warnings(from, "did not start in pane"), 1)
+    store.failed_domains["archie-tls"] = nil
+    clock.restore()
+  end
+)

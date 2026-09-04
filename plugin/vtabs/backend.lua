@@ -9,7 +9,7 @@ M.root = nil
 
 local script_cache = nil
 
----Bootstrap source, embedded so remote hosts can run it without the plugin checkout.
+---Bootstrap source, embedded so the machine that runs the split needs no plugin checkout.
 local function bootstrap_script()
   if script_cache then
     return script_cache
@@ -34,6 +34,11 @@ function M.register_local_domains(config)
   end
 end
 
+---Local and unix domains: reached without ssh, though a unix mux may still proxy a pane to another host.
+function M.machine_domain(domain)
+  return domain == nil or machine_domains[domain] == true
+end
+
 local local_host = nil
 
 local function this_host()
@@ -44,9 +49,10 @@ local function this_host()
   return local_host
 end
 
----A pane is on this machine when its domain is local/unix and its cwd does not name another host.
+---A hint for transport and display, never for the command a split runs: a pane's cwd host arrives
+---with its shell's first prompt, and a shell that ssh'd elsewhere names that host while its pane stays here.
 function M.is_local(domain, host)
-  if domain ~= nil and not machine_domains[domain] then
+  if not M.machine_domain(domain) then
     return false
   end
   if host == nil or host == "" or host == "localhost" then
@@ -55,19 +61,52 @@ function M.is_local(domain, host)
   return host:lower():gsub("%..*$", "") == this_host()
 end
 
----`backend.path` may be a string (this machine), a table keyed by host or domain, or `fun(domain, host)`.
-function M.resolve_path(cfg, domain, host)
+local function sorted_keys(t)
+  local keys = {}
+  for key in pairs(t) do
+    keys[#keys + 1] = key
+  end
+  table.sort(keys, function(a, b)
+    return tostring(a) < tostring(b)
+  end)
+  return keys
+end
+
+local function add_paths(list, seen, value)
+  if type(value) == "table" then
+    for _, key in ipairs(sorted_keys(value)) do
+      add_paths(list, seen, value[key])
+    end
+  elseif type(value) == "string" and value ~= "" and not seen[value] then
+    seen[value] = true
+    list[#list + 1] = value
+  end
+end
+
+---Every path `backend.path` names, the one keyed to this host or domain first. Which of them exists
+---is for the machine that runs the split to find out: a unix mux may hand the split to another host.
+function M.candidates(cfg, domain, host)
   local path = cfg.backend.path
   if type(path) == "function" then
-    return util.try(path, domain, host)
+    path = util.try(path, domain, host)
   end
+  local list, seen = {}, {}
   if type(path) == "table" then
-    return (host and path[host]) or path[domain]
+    add_paths(list, seen, path[host])
+    add_paths(list, seen, path[domain])
   end
-  if type(path) == "string" and M.is_local(domain, host) then
-    return path
+  add_paths(list, seen, path)
+  return list
+end
+
+---Whether `backend.path` names this domain or host outright: a table keyed to it, or a function
+---answering for it. The plain string names no domain in particular.
+function M.names(cfg, domain, host)
+  local path = cfg.backend.path
+  if type(path) == "function" then
+    return util.try(path, domain, host) ~= nil
   end
-  return nil
+  return type(path) == "table" and (path[host] ~= nil or path[domain] ~= nil)
 end
 
 ---Local binaries that can answer the synchronous boot normalizer. This never returns a bootstrap,
@@ -97,8 +136,17 @@ function M.normalizer_candidates(opts)
     end
   end
   local raw_backend = type(opts.backend) == "table" and opts.backend or {}
-  add(raw_backend.path)
-  add(util.getenv "VTABS_BIN")
+  local listed = {}
+  add_paths(listed, {}, raw_backend.path)
+  local env_bin = util.getenv "VTABS_BIN"
+  if type(env_bin) == "string" then
+    for line in env_bin:gmatch "[^\n]+" do
+      listed[#listed + 1] = line
+    end
+  end
+  for _, path in ipairs(listed) do
+    add(path)
+  end
 
   local name = "wez-vtabs-" .. platform.triple .. "-" .. version .. (platform.is_windows and ".exe" or "")
   if platform.is_windows then
@@ -120,51 +168,34 @@ function M.normalizer_candidates(opts)
 end
 
 ---Extra argv for a non-default role; the bootstraps forward whatever follows them to the binary.
-local function role_args(role)
-  if role == nil or role == "sidebar" then
-    return nil
-  end
-  return { "--role", role }
-end
-
-local function with_role(args, role, shell_c)
-  local extra = role_args(role)
-  if not extra then
-    return args
-  end
-  if shell_c then
-    -- `sh -c script` takes the next word as $0, so the role needs one in front of it
-    args[#args + 1] = "wez-vtabs"
-  end
-  for _, arg in ipairs(extra) do
-    args[#args + 1] = arg
+local function with_role(args, role)
+  if role ~= nil and role ~= "sidebar" then
+    args[#args + 1] = "--role"
+    args[#args + 1] = role
   end
   return args
 end
 
-function M.spawn_args(cfg, domain, host, role)
-  local path = M.resolve_path(cfg, domain, host)
-  if path then
-    return with_role({ path }, role)
-  end
-  if M.is_local(domain, host) then
-    if platform.is_windows then
-      return with_role({
-        "powershell",
-        "-NoProfile",
-        "-ExecutionPolicy",
-        "Bypass",
-        "-File",
-        M.root .. "\\bin\\bootstrap.ps1",
-      }, role)
-    end
-    return with_role({ "sh", M.root .. "/bin/bootstrap.sh" }, role)
+---What a split runs, on whichever machine WezTerm hands it to: the bootstrap execs the first
+---`VTABS_BIN` line found there and otherwise fetches or builds for the machine it is on. Only a
+---Windows pane of a machine domain runs the PowerShell twin from this checkout.
+function M.spawn_args(domain, role)
+  if platform.is_windows and M.machine_domain(domain) then
+    return with_role({
+      "powershell",
+      "-NoProfile",
+      "-ExecutionPolicy",
+      "Bypass",
+      "-File",
+      M.root .. "\\bin\\bootstrap.ps1",
+    }, role)
   end
   local script = bootstrap_script()
   if not script then
     return nil
   end
-  return with_role({ "sh", "-c", script }, role, true)
+  -- `sh -c script` takes the next word as $0; the role flags follow it
+  return with_role({ "sh", "-c", script, "wez-vtabs" }, role)
 end
 
 function M.env(cfg, domain, host, bg)
@@ -178,17 +209,15 @@ function M.env(cfg, domain, host, bg)
   env.VTABS_REPO = cfg.backend.repo
   env.VTABS_VERSION = version
   env.VTABS_BG = type(bg) == "string" and bg:match "^#%x%x%x%x%x%x$" or nil
-  if M.is_local(domain, host) then
-    env.VTABS_TARGET = platform.triple
-    env.VTABS_SRC = M.root .. "/../backend"
-    env.VTABS_BUILD = cfg.backend.build and "1" or "0"
-    env.VTABS_BIN = M.resolve_path(cfg, domain, host)
-    -- a mux pane of this machine may take its frames from a directory instead of the link
-    if type(domain) == "string" and domain ~= "local" and cfg.backend.inbox ~= false then
-      env.VTABS_INBOX_ROOT = util.runtime_dir()
-    end
-  else
-    env.VTABS_BUILD = "0"
+  -- settled where the split runs: uname outranks the triple, the first VTABS_BIN line that exists is exec'd
+  env.VTABS_TARGET = platform.triple
+  env.VTABS_SRC = M.root .. "/../backend"
+  env.VTABS_BUILD = cfg.backend.build and "1" or "0"
+  local candidates = M.candidates(cfg, domain, host)
+  env.VTABS_BIN = candidates[1] and table.concat(candidates, "\n") or nil
+  -- a mux pane of this machine may take its frames from a directory instead of the link
+  if M.is_local(domain, host) and type(domain) == "string" and domain ~= "local" and cfg.backend.inbox ~= false then
+    env.VTABS_INBOX_ROOT = util.runtime_dir()
   end
   return env
 end

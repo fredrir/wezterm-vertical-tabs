@@ -219,7 +219,7 @@ local function open(gui_window)
   local cfg = config.get()
   local base = active_content_pane(gui_window)
   local pane_domain = base and mux.domain(base) or "local"
-  local args = backend.spawn_args(cfg, pane_domain, nil, "settings")
+  local args = backend.spawn_args(pane_domain, "settings")
   if not args then
     util.warn_once("settings-backend", "no backend for domain %s; settings unavailable", tostring(pane_domain))
     return nil

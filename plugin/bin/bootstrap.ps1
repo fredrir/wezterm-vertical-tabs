@@ -10,7 +10,10 @@ $env:PATH = "$env:USERPROFILE\.cargo\bin;$env:PATH"
 if ($target -notmatch '^[A-Za-z0-9._-]+$' -or $version -notmatch '^[A-Za-z0-9._-]+$') {
   Write-Host "invalid VTABS_TARGET or VTABS_VERSION"; exit 1
 }
-if ($env:VTABS_BIN -and (Test-Path $env:VTABS_BIN)) { & $env:VTABS_BIN; exit $LASTEXITCODE }
+# One path per line: the plugin lists every path backend.path names.
+foreach ($candidate in ($env:VTABS_BIN -split "`n")) {
+  if ($candidate -and (Test-Path $candidate)) { & $candidate @Passthru; exit $LASTEXITCODE }
+}
 
 $bin = Join-Path $data "bin\$name-$target-$version.exe"
 if (Test-Path $bin) { & $bin @Passthru; exit $LASTEXITCODE }

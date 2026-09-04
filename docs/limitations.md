@@ -7,12 +7,17 @@
   many tabs costs one pane split, not one per tab. Tabs spawned by bindings
   other than the plugin's are activated by WezTerm, so they still get theirs at
   once; `vtabs.action.new_tab` splits explicitly.
-- The sidebar process runs in the tab's domain; WezTerm cannot host a local
-  pane inside a remote-mux tab. On remote multiplexer domains (ssh/tls mux) the
-  plugin runs an inline bootstrap that downloads a release build for the remote
-  architecture; until a release exists, build `wez-vtabs` on the remote host and
-  point `backend.path[domain]` at it. A domain whose backend never answers gets
-  one warning and no further sidebars there for 60 s.
+- The sidebar process runs in the tab's domain: WezTerm cannot host a local
+  pane inside a remote-mux tab, and a unix mux (`localmux`) forwards the split
+  to whichever host it proxies the tab to, which the GUI cannot see. So every
+  split runs the inline bootstrap (`plugin/bin/bootstrap.sh`) with every path
+  `backend.path` names, one per line in `VTABS_BIN`; the machine that runs it
+  execs the first that exists there, else a cached or released build for its
+  own `uname`, else a cargo build where `VTABS_SRC` exists. Until a release
+  exists, build `wez-vtabs` on the remote host and list its path. A backend
+  that never answers leaves its pane for the user to close: an ssh/tls domain
+  gets one warning and no further sidebars for 60 s, a local/unix domain gives
+  up on that pane alone.
 - Only pins and closed-tab history persist, to
   `$XDG_STATE_HOME/wez-vtabs/state.json` (default `~/.local/state`, mode 0600,
   written tmp + rename, symlinks refused). Pane/tab/window ids and tokens never

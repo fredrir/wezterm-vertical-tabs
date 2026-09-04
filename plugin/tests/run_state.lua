@@ -207,10 +207,11 @@ end)
 
 test("a failed domain is retried after a minute", function()
   local win, gui = window(1)
-  state.session.failed_domains["local@"] = util.now_ms() - 61000
+  win.tab_list[1].pane_list[1].domain = "e2essh"
+  state.session.failed_domains.e2essh = util.now_ms() - 61000
   sidebar.ensure(gui)
   eq(sidebars_in(win.tab_list[1]), 1)
-  eq(state.session.failed_domains["local@"], nil, "expired entry dropped")
+  eq(state.session.failed_domains.e2essh, nil, "expired entry dropped")
 end)
 
 test("windows the mux forgot are dropped from state", function()

@@ -771,8 +771,8 @@ local options = {
     apply_mode = "reload",
     label = "Backend path",
     group = "backend",
-    values = "string \\| table \\| `fun(domain, host)`",
-    help = "path to the `wez-vtabs` binary",
+    values = "string \\| string[] \\| table \\| `fun(domain, host)`",
+    help = "`wez-vtabs` paths; the machine that runs the split execs the first one it has",
   },
   {
     key = "backend.repo",
@@ -822,5 +822,5 @@ local options = {
     help = "offer the inbox transport to same-machine mux sidebars; `false` keeps every pane on stdin",
   },
 }
-options.schema_id = "9e16ceada51b7545"
+options.schema_id = "6f9f0e910ccbe2fd"
 return options

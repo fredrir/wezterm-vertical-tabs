@@ -76,9 +76,7 @@ local function may_adopt(cfg, domain, host, place)
   if cfg.adopt ~= "auto" then
     return cfg.adopt == true
   end
-  return backend.is_local(domain, host)
-    or store.spawned_domains[place] == true
-    or backend.resolve_path(cfg, domain, host) ~= nil
+  return backend.machine_domain(domain) or store.spawned_domains[place] == true or backend.names(cfg, domain, host)
 end
 
 ---The domain and host this plugin would spawn the tab's sidebar in, when `sb` sits in that domain.
@@ -100,15 +98,31 @@ local function adoptable(tab, sb)
   return domain ~= nil and may_adopt(config.get(), domain, host, domain .. "@" .. (host or ""))
 end
 
-local function domain_failed(place, now)
-  local at = store.failed_domains[place]
+---A domain of another machine whose backend never answered is not asked again for a minute.
+local function domain_failed(domain, now)
+  local at = store.failed_domains[domain]
   if not at then
     return false
   end
   if now - at > FAILED_DOMAIN_MS then
-    store.failed_domains[place] = nil
+    store.failed_domains[domain] = nil
     return false
   end
+  return true
+end
+
+---The domain a backend pane was split in, from the place recorded at attach.
+local function domain_of(pane)
+  return (store.pane_domain[pane:pane_id()] or "local@"):match "^[^@]*"
+end
+
+---A machine domain is never held: the GUI cannot tell which host ran the split, so one failed pane
+---there must not stop the local tabs.
+local function record_failure(domain, now)
+  if backend.machine_domain(domain) or domain_failed(domain, now) then
+    return false
+  end
+  store.failed_domains[domain] = now
   return true
 end
 
@@ -138,27 +152,28 @@ local function attach(tab)
   end
   local host = identity.cwd_host(base)
   local place = pane_domain .. "@" .. (host or "")
-  if domain_failed(place, now) then
+  if domain_failed(pane_domain, now) then
     return nil
   end
   -- the split would await a server still rebuilding its mirror; the next poll asks again
   if link.busy(pane_domain) then
     return nil
   end
-  local args = backend.spawn_args(cfg, pane_domain, host)
+  local args = backend.spawn_args(pane_domain)
+  local env = backend.env(cfg, pane_domain, host, theme_bg(tab))
   if not store.logged_domains[place] then
     store.logged_domains[place] = true
     util.log(
-      "domain %s host %s: sidebar command %s",
+      "domain %s host %s: backend candidates %s",
       pane_domain,
       host or "?",
-      args and args[#args]:sub(1, 120) or "none"
+      ((env.VTABS_BIN or "none"):gsub("\n", ", "))
     )
   end
   if not args then
     util.warn_once(
       "backend-" .. tostring(pane_domain),
-      "no backend for domain %s; set backend.path",
+      "bootstrap.sh unreadable; no sidebar for domain %s",
       tostring(pane_domain)
     )
     return nil
@@ -175,7 +190,7 @@ local function attach(tab)
       top_level = true,
       size = width,
       args = args,
-      set_environment_variables = backend.env(cfg, pane_domain, host, theme_bg(tab)),
+      set_environment_variables = env,
       domain = domain,
     }
   end)
@@ -430,31 +445,32 @@ function M.close_orphan(gui_window, tab, sb)
 end
 
 ---A backend that never answers usually died at spawn; closing such panes over a mux link can wedge
----WezTerm's focus reconciliation, so the pane is left for the user and its place is not retried.
+---WezTerm's focus reconciliation, so the pane is left for the user. Its domain is not retried when
+---that names the machine; a machine domain gives up on the pane alone.
 function M.give_up(_, _, sb)
   local pid = sb:pane_id()
-  local now = util.now_ms()
-  local place = store.pane_domain[pid] or "local@"
-  if domain_failed(place, now) then
-    return
-  end
-  store.failed_domains[place] = now
   store.given_up[pid] = true
-  util.warn("sidebar backend did not start in %s; fix backend.path and close that pane", place)
+  local domain = domain_of(sb)
+  if backend.machine_domain(domain) then
+    util.warn(
+      "sidebar backend did not start in pane %d (%s); fix backend.path for its host and close that pane",
+      pid,
+      domain
+    )
+  elseif record_failure(domain, util.now_ms()) then
+    util.warn("sidebar backend did not start in %s; fix backend.path and close that pane", domain)
+  end
 end
 
 function M.refuse_ready(pane)
-  local pid = pane:pane_id()
-  local place = store.pane_domain[pid] or "local@"
-  store.given_up[pid] = true
-  if not domain_failed(place, util.now_ms()) then
-    store.failed_domains[place] = util.now_ms()
-    util.warn_once(
-      "ready-" .. place,
-      "backend in %s sent an incompatible ready payload; update it (backend.path) and close that pane",
-      place
-    )
-  end
+  store.given_up[pane:pane_id()] = true
+  local domain = domain_of(pane)
+  record_failure(domain, util.now_ms())
+  util.warn_once(
+    "ready-" .. domain,
+    "backend in %s sent an incompatible ready payload; update it (backend.path) and close that pane",
+    domain
+  )
 end
 
 ---A second sidebar this process split is closed, one per pass; only a winner that is ours or

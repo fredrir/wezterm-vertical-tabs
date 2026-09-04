@@ -323,12 +323,23 @@ vtabs.apply_to_config(config, {
 
 ## Bootstrap environment
 
-| Variable        | Description                          |
-| --------------- | ------------------------------------ |
-| `VTABS_TARGET`  | Rust triple                          |
-| `VTABS_REPO`    | Repository URL                       |
-| `VTABS_VERSION` | Release tag without `v`              |
-| `VTABS_SRC`     | Backend crate for the cargo fallback |
-| `VTABS_BUILD`   | `0` disables it                      |
-| `VTABS_BIN`     | Explicit binary                      |
-| `VTABS_USERVAR` | User variable                        |
+Every split runs `plugin/bin/bootstrap.sh` inline (`bootstrap.ps1` on a Windows machine domain),
+which resolves on the machine WezTerm hands it to, in this order:
+
+| Step | Source                                                      |
+| ---- | ----------------------------------------------------------- |
+| 1    | first `VTABS_BIN` line that is executable                   |
+| 2    | `$XDG_DATA_HOME/wez-vtabs/bin/wez-vtabs-<target>-<version>` |
+| 3    | GitHub release `v<version>` for `<target>`, checksum-verified |
+| 4    | `cargo build --release` in `VTABS_SRC`                      |
+
+| Env                | Value                                                                        |
+| ------------------ | ---------------------------------------------------------------------------- |
+| `VTABS_BIN`        | every path `backend.path` names, one per line, keyed host/domain first       |
+| `VTABS_TARGET`     | plugin host's Rust triple \| (`uname` decides; this is the unknown-OS fallback) |
+| `VTABS_VERSION`    | release tag without `v`; `dev` skips step 3                                  |
+| `VTABS_REPO`       | GitHub repo for step 3                                                       |
+| `VTABS_SRC`        | `<plugin root>/../backend`; step 4 only where `Cargo.toml` exists            |
+| `VTABS_BUILD`      | `1` \| `0` skips step 4                                                      |
+| `VTABS_USERVAR`    | user variable name                                                           |
+| `VTABS_INBOX_ROOT` | inbox root, offered to same-machine unix-domain panes only                   |

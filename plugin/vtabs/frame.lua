@@ -45,17 +45,12 @@ function M.border_width(cfg)
   return math.max(tonumber(options(cfg).border_width) or 1, 0)
 end
 
----The renderer runs on *this* machine. Only the plain string form of `backend.path` can name it,
----and only where that string is meant for a local domain: the table and function forms are keyed by
----remote host or domain, so `resolve_path` would hand a local execve an ssh host's path.
----`spawn_args` is worse still -- it falls back to the bootstrap shell script.
+---The renderer runs on *this* machine, so only the plain string form of `backend.path` can name it:
+---the table and function forms list paths for other hosts too, and `spawn_args` is a bootstrap.
 function M.renderer(cfg)
   local path = cfg.backend.path
   if type(path) == "string" then
-    if backend.is_local("local", nil) then
-      return path
-    end
-    return nil
+    return path
   end
   if path ~= nil then
     util.warn_once("frame-path", 'frame = "zen" needs backend.path as a plain local string')
