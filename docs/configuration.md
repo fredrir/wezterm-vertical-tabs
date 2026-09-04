@@ -26,6 +26,8 @@ return config
 
 To get LuaLS type support:
 
+.luarc.json:
+
 ```json
 {
   "runtime.version": "Lua 5.4",
@@ -36,7 +38,6 @@ To get LuaLS type support:
   "type.checkTableShape": true
 }
 ```
-
 
 
 ```lua
