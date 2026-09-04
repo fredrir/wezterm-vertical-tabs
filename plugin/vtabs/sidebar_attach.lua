@@ -145,6 +145,10 @@ local function attach(tab)
   if not base or identity.is_overlay(base) then
     return nil
   end
+  -- a pane another tab holds as well is a mirror mid-rebuild; no split lands beside it
+  if mux.tab_id(mux.tab_of(base)) ~= tab_id then
+    return nil
+  end
   local pane_domain = attach_domain(cfg, base)
   if not pane_domain then
     util.warn_once("domain-" .. tab_id, "cannot determine domain for tab %d; sidebar skipped", tab_id)
@@ -352,16 +356,24 @@ local function close_by_activation(gui_window, tab, pane)
   end
 end
 
+---Two places name the same server unless both name a host and the hosts differ: behind one unix
+---domain a pane may sit on this machine or on a host the mux proxies it to.
+local function same_host(a, b)
+  local ha, hb = (a or ""):match "@(.*)$", (b or ""):match "@(.*)$"
+  return ha == nil or hb == nil or ha == "" or hb == "" or ha == hb
+end
+
 ---A ready backend on the same server as `pane`, other than `pane`: it can reach the pane through
 ---the server's own `wezterm cli`, which the GUI's client cannot. A sidebar or the settings page.
-local function helper_for(gui_window, pane)
+---A pane id means something else on another server, so the places must not name different hosts.
+local function helper_for(gui_window, pane, place)
   local domain = mux.domain(pane)
   local pid = pane:pane_id()
   for _, info in ipairs(mux.tabs_with_info(mux.call(gui_window, "mux_window")) or {}) do
     for _, p in ipairs(mux.panes(info.tab) or {}) do
       local id = p:pane_id()
       if id ~= pid and not store.quitting[id] and (identity.is_backend(p) or identity.is_settings(p)) then
-        if mux.domain(p) == domain and identity.is_ready(p) then
+        if mux.domain(p) == domain and identity.is_ready(p) and same_host(place, store.pane_domain[id]) then
           return p
         end
       end
@@ -385,10 +397,18 @@ function retire(gui_window, tab, pane, hung)
     local token = state.token_for(pid)
     -- its frames go on stdin from here, `quit` included; the inbox goes with the process
     transport.forget(pid)
-    job = { at = now, rung = hung and 1 or 0, token = token, server_pane = store.server_pane[pid] }
+    job = {
+      at = now,
+      rung = hung and 1 or 0,
+      token = token,
+      server_pane = store.server_pane[pid],
+      place = store.pane_domain[pid],
+    }
     state.forget_pane(pid)
     store.quitting[pid] = job
     identity.forget_split(tab:tab_id())
+  elseif job.left then
+    return "left"
   elseif now - job.at < QUIT_GRACE_MS then
     return "waiting"
   end
@@ -407,10 +427,16 @@ function retire(gui_window, tab, pane, hung)
     return "cli"
   end
   local remote = mux.domain(pane) ~= "local"
-  local helper = (job.rung == 2 or remote) and helper_for(gui_window, pane) or nil
+  local helper = (job.rung == 2 or remote) and helper_for(gui_window, pane, job.place) or nil
   if helper and job.server_pane then
     identity.send(helper, { t = "kill", pane = job.server_pane })
     return "kill"
+  end
+  -- never ready: the mux may not even hold it any more, and activating such a pane has looped the GUI
+  if remote and not job.server_pane then
+    job.left = true
+    util.warn_once("left-" .. pid, "pane %d never answered and no backend can reach it; close it by hand", pid)
+    return "left"
   end
   if gui_window then
     close_by_activation(gui_window, tab, pane)
@@ -504,6 +530,79 @@ local function retire_pending(gui_window, tab)
   return pending
 end
 
+---Tabs holding a pane the mux lists in another tab too: a client rebuilding a tab it had dealt
+---out already, as when a pane is moved between tabs behind a mux server's back. Acting on either
+---tab has looped the GUI's focus reconciliation; both are left until the mux settles.
+local function shared_tabs(tabs)
+  local owner, shared = {}, {}
+  for _, info in ipairs(tabs) do
+    local tab_id = info.tab:tab_id()
+    for _, p in ipairs(mux.panes(info.tab) or {}) do
+      local pid = p:pane_id()
+      local first = owner[pid]
+      if first == nil then
+        owner[pid] = tab_id
+      elseif first ~= tab_id then
+        shared[first], shared[tab_id] = pid, pid
+      end
+    end
+  end
+  return shared
+end
+
+---One tab's turn in a pass: panes on their way out advanced, the sidebar adopted, checked or split
+---in, an orphan closed. True while the tab is one to remember.
+local function ensure_tab(gui_window, wid, tab, active, collapsed, now)
+  local tab_id = tab:tab_id()
+  local content, sb = identity.classify(tab)
+  -- a pane on its way out is advanced here and touched by nothing below
+  local leaving = retire_pending(gui_window, tab)
+  if #content == 0 then
+    if not sb then
+      return false
+    end
+    -- the tab still exists; forgetting it would strand a sidebar that authenticates later
+    if leaving then
+      return true
+    end
+    if not identity.is_ready(sb) then
+      await_auth(gui_window, tab, sb, now)
+    elseif #tab:panes() == 1 then
+      M.close_orphan(gui_window, tab, sb)
+    end
+    return true
+  end
+  local active_pane = tab:active_pane()
+  if active_pane and (not sb or active_pane:pane_id() ~= sb:pane_id()) then
+    store.content_pane[tab_id] = active_pane:pane_id()
+  end
+  store.tab_meta[tab_id] = identity.tab_meta(tab, identity.content_pane(tab))
+  reclaim_settings(content, now)
+  -- a sidebar on its way out keeps the slot: a new one waits for it to go
+  if sb ~= nil and store.quitting[sb:pane_id()] ~= nil then
+    return true
+  end
+  if collapsed then
+    if sb and identity.is_ready(sb) then
+      M.detach(gui_window, tab)
+    end
+  elseif sb then
+    repair_duplicates(gui_window, tab, sb)
+    if identity.is_ready(sb) then
+      rescue.rescue_splits(gui_window, tab)
+      rescue.check_liveness(gui_window, tab, sb, now)
+    else
+      await_auth(gui_window, tab, sb, now)
+    end
+  elseif (active or store.visited[tab_id]) and not require("vtabs.geometry").switching(wid) then
+    -- background tabs attach when they are first activated: 20 splits at once cost ~460 ms,
+    -- and a tab a held key is only passing through gets nothing split into it at all. One
+    -- the user did stop on while this pass was busy is still owed its sidebar.
+    M.attach(tab)
+  end
+  return true
+end
+
 ---Makes every tab match the collapsed/expanded state and closes tabs left with only a sidebar.
 local function ensure_window(gui_window)
   local mux_win = gui_window:mux_window()
@@ -517,6 +616,7 @@ local function ensure_window(gui_window)
   local tabs = mux_win:tabs_with_info()
   local active_tab = mux.active_tab(mux_win)
   local active_id = active_tab and active_tab:tab_id() or nil
+  local shared = shared_tabs(tabs)
 
   rescue.resolve_pins(tabs, now)
   rescue.prune_windows(now)
@@ -524,51 +624,15 @@ local function ensure_window(gui_window)
   for _, info in ipairs(tabs) do
     local tab = info.tab
     local tab_id = tab:tab_id()
-    local content, sb = identity.classify(tab)
-    -- a pane on its way out is advanced here and touched by nothing below
-    local leaving = retire_pending(gui_window, tab)
-    if #content == 0 then
-      if sb then
-        -- the tab still exists; forgetting it would strand a sidebar that authenticates later
-        seen[tab_id] = true
-        if leaving then
-          seen[tab_id] = true
-        elseif not identity.is_ready(sb) then
-          await_auth(gui_window, tab, sb, now)
-        elseif #tab:panes() == 1 then
-          M.close_orphan(gui_window, tab, sb)
-        end
-      end
-    else
+    if shared[tab_id] then
       seen[tab_id] = true
-      local active = tab:active_pane()
-      if active and (not sb or active:pane_id() ~= sb:pane_id()) then
-        store.content_pane[tab_id] = active:pane_id()
-      end
-      store.tab_meta[tab_id] = identity.tab_meta(tab, identity.content_pane(tab))
-      reclaim_settings(content, now)
-      -- a sidebar on its way out keeps the slot: a new one waits for it to go
-      local going = sb ~= nil and store.quitting[sb:pane_id()] ~= nil
-      if going then
-        seen[tab_id] = true
-      elseif collapsed then
-        if sb and identity.is_ready(sb) then
-          M.detach(gui_window, tab)
-        end
-      elseif sb then
-        repair_duplicates(gui_window, tab, sb)
-        if identity.is_ready(sb) then
-          rescue.rescue_splits(gui_window, tab)
-          rescue.check_liveness(gui_window, tab, sb, now)
-        else
-          await_auth(gui_window, tab, sb, now)
-        end
-      elseif (tab_id == active_id or store.visited[tab_id]) and not require("vtabs.geometry").switching(wid) then
-        -- background tabs attach when they are first activated: 20 splits at once cost ~460 ms,
-        -- and a tab a held key is only passing through gets nothing split into it at all. One
-        -- the user did stop on while this pass was busy is still owed its sidebar.
-        M.attach(tab)
-      end
+      util.warn_once(
+        "shared-" .. shared[tab_id],
+        "pane %d sits in two tabs; both left alone until the mux settles",
+        shared[tab_id]
+      )
+    elseif ensure_tab(gui_window, wid, tab, tab_id == active_id, collapsed, now) then
+      seen[tab_id] = true
     end
   end
   rescue.record_closed_tabs(wid, seen, private)

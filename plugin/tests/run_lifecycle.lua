@@ -1401,3 +1401,76 @@ test(
     clock.restore()
   end
 )
+
+test("a pane the mux lists in two tabs leaves both tabs alone until it settles", function()
+  local win, gui = H.window(2, { attach = true, ready = true })
+  local from = #wezterm.log
+  local tab = win.tab_list[1]
+  local content = sidebar.content_pane(tab)
+  -- the mirror dealt the same pane into a second tab, as a client rebuilding a tab it had emptied does
+  local twin = win:add_tab { existing = content }
+  win.active_tab_ref = twin
+  local acted = #win.actions
+  sidebar.ensure(gui)
+  eq(H.sidebars_in(twin), 0, "nothing split into the twin")
+  eq(H.sidebars_in(tab), 1, "the first tab keeps its sidebar")
+  eq(#win.actions, acted, "nothing closed or moved")
+  eq(warnings(from, "sits in two tabs"), 1)
+  sidebar.ensure(gui)
+  eq(warnings(from, "sits in two tabs"), 1, "said once")
+  win:remove_tab(twin)
+  content._tab = tab
+  win.active_tab_ref = tab
+  sidebar.ensure(gui)
+  eq(H.sidebars_in(tab), 1, "served again once the pane is one tab's")
+  eq(#win.tab_list, 2)
+end)
+
+test("a pane on a mux domain that never answered is left rather than closed by activation", function()
+  H.with_inbox(function()
+    local win, gui = H.mux_window(1)
+    local tab = win.tab_list[1]
+    local sb = sidebar.find(tab)
+    local dup = fake.pane(tab, { title = "wez-vtabs:beef", domain = "localmux" })
+    tab.pane_list[#tab.pane_list + 1] = dup
+    dup.hung = true
+    store.spawned[dup:pane_id()] = true
+    state.set_token(dup:pane_id(), "duplicate-mux-test")
+    local from, acted = #wezterm.log, #win.actions
+    local clock = H.clock()
+    win.active_tab_ref = tab
+    sidebar.ensure(gui)
+    eq(warnings(from, "duplicate sidebar"), 1)
+    assert(dup.sent[#dup.sent]:find('"quit"', 1, true), "told to quit")
+    clock.advance(2100)
+    sidebar.ensure(gui)
+    clock.advance(2100)
+    sidebar.ensure(gui)
+    eq(#tab:panes(), 3, "left open: it never said which pane it is on its server")
+    eq(#win.actions, acted, "never activated")
+    eq(warnings(from, "never answered"), 1)
+    eq(sidebar.find(tab), sb, "the live sidebar keeps the tab")
+    clock.restore()
+  end)
+end)
+
+test("a kill by pane id crosses to another backend only when their places name the same host", function()
+  H.with_inbox(function()
+    local win, gui = H.mux_window(2)
+    local tab, helper_tab = win.tab_list[1], win.tab_list[2]
+    local sb, helper = sidebar.find(tab), sidebar.find(helper_tab)
+    store.server_pane[sb:pane_id()] = sb.server_id
+    store.pane_domain[sb:pane_id()] = "localmux@archie"
+    store.pane_domain[helper:pane_id()] = "localmux@macie"
+    sb.hung = true
+    local clock = H.clock()
+    local acted = #win.actions
+    win.active_tab_ref = tab
+    sidebar.detach(gui, tab)
+    clock.advance(2100)
+    sidebar.ensure(gui)
+    eq(helper.killed or 0, 0, "an id from archie's server names another pane on macie's")
+    eq(#win.actions, acted + 1, "the last resort instead")
+    clock.restore()
+  end)
+end)

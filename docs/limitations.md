@@ -90,7 +90,15 @@
 - A sidebar or settings pane on a mux domain closes by its backend quitting, or
   by `wezterm cli kill-pane` from another backend on that server; closing by
   activation is used only when the server has no backend left, being the one
-  path the mux client has been seen to abort on.
+  path the mux client has been seen to abort on, and only for a backend that
+  once reported its server pane. One that never answered is left with a
+  warning: activating a pane the mux had already dropped has looped the GUI's
+  focus reconciliation until it hung. Behind one unix domain the other backend
+  must have been placed on the same named host, and a backend kills by id only
+  a pane its own server lists with this plugin's title marker.
+- A pane the mux lists in two tabs is a client rebuilding a tab it had dealt out
+  already, as after `wezterm cli split-pane --move-pane-id` on a pane proxied
+  through a mux server. Neither tab is touched until the mux settles.
 - A `resize` report from the sidebar corrects the width and publishes nothing:
   the pane has repainted itself at the new size, and the backend measures its
   own cells and pixels, so the host sends it only the window's dpi.

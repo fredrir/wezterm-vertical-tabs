@@ -256,6 +256,19 @@ pub struct Cli {
     own_pane: u64,
 }
 
+/// Whether `pane` is a backend pane listed on this server, the only thing a kill by id may hit.
+pub fn kill_target(panes: &[PaneInfo], pane: u64) -> Result<(), String> {
+    let target = panes
+        .iter()
+        .find(|p| p.pane_id == pane)
+        .ok_or_else(|| format!("pane {pane} not on this server"))?;
+    if is_marker(&target.title) {
+        Ok(())
+    } else {
+        Err(format!("pane {pane} is not a backend"))
+    }
+}
+
 /// A backend's own title marker, in either role.
 pub fn is_marker(title: &str) -> bool {
     let nonce = title
@@ -358,7 +371,10 @@ impl Cli {
         panes_from_json(&self.run(&["list", "--format", "json"])?)
     }
 
+    /// Kills `pane` once this server lists it as a backend of this plugin: an id that crossed
+    /// from another server would otherwise name whatever pane shares the number here.
     pub fn kill_pane(&self, pane: u64) -> Result<(), String> {
+        kill_target(&self.list()?, pane)?;
         self.run(&["kill-pane", "--pane-id", &pane.to_string()])
             .map(|_| ())
     }
@@ -434,6 +450,33 @@ impl Cli {
 #[cfg(test)]
 mod parser_tests {
     use super::*;
+
+    #[test]
+    fn kill_reaches_only_a_backend_listed_on_this_server() {
+        let pane = |pane_id, title: &str| PaneInfo {
+            pane_id,
+            tab_id: 7,
+            title: title.into(),
+            left_col: 0,
+            cols: 30,
+            is_active: false,
+        };
+        let panes = vec![
+            pane(3, "wez-vtabs:beef"),
+            pane(4, "zsh"),
+            pane(5, "wez-vtabs-settings:cafe"),
+        ];
+        assert_eq!(kill_target(&panes, 3), Ok(()));
+        assert_eq!(kill_target(&panes, 5), Ok(()));
+        assert_eq!(
+            kill_target(&panes, 4),
+            Err("pane 4 is not a backend".into())
+        );
+        assert_eq!(
+            kill_target(&panes, 9),
+            Err("pane 9 not on this server".into())
+        );
+    }
 
     #[test]
     fn standalone_socket_prefers_the_mux_protocol() {
