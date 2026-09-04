@@ -40,31 +40,31 @@ the old token may carry `auth.token=<new-token>`; after it succeeds, the old tok
 invalid. Tokens are non-empty ASCII graphic strings of at most 64 bytes. Malformed frames and
 commands carrying no proof of the active session are consumed without changing backend state.
 
-| command             | shape                                                                 | effect                                                                      |
-| ------------------- | --------------------------------------------------------------------- | --------------------------------------------------------------------------- |
-| `auth`              | `{"t":"auth","token":"<hex>","caps":["typed_intents","theme_hooks","settings_document","spaces_policy"],"keys":"server"}` | echo `vtabs_token` and negotiate client capabilities; `keys:"server"` asks for forwarded keys to be delivered through the server's cli |
-| `begin`             | `{"t":"begin","generation":N}`                                   | start or replay one atomic publication                                      |
-| `commit`            | `{"t":"commit","generation":N}`                                  | publish the matching valid generation, or start its theme-hook round-trip   |
-| `theme_hook_result` | `{"t":"theme_hook_result","generation":N,"overrides":{...}}`    | finish the matching generation after Lua runs `hooks.theme`                 |
-| `space_route_hook_result` | `{"t":"space_route_hook_result","generation":N,"routes":[...]}` | finish the matching batched `hooks.route` request                           |
-| `config`            | see below                                                             | raw render/behaviour knobs                                                   |
-| `theme`             | see below                                                             | raw palette, user overrides and hook/private facts                           |
-| `spaces`            | see below                                                             | full-window topology, raw rules, and current assignment facts                |
-| `model`             | see below                                                             | raw sidebar state, or the legacy pre-built settings view                     |
-| `settings`          | see below                                                             | JSON-safe host facts from which Rust builds the live settings document       |
-| `menu`              | see below                                                             | the action menu, or `{"t":"menu","rev":N,"open":false}` to close      |
-| `fx`                | `{"t":"fx","phase":"expand_in","ms":220,"fps":30}`           | animate this pane's rows on the backend's own clock                          |
-| `notice`            | `{"t":"notice","level":"warn","text":"..."}`                 | write to the debug log only                                                  |
-| `ping`              | `{"t":"ping","n":N}`                                              | reply with `pong` echoing `n`                                                |
-| `clear`             | `{"t":"clear"}`                                                     | repaint from the last committed state                                        |
-| `quit`              | `{"t":"quit"}`                                                      | restore the terminal and exit 0                                              |
-| `kill`              | `{"t":"kill","title":"wez-vtabs:1a2b"}`                          | kill the one pane with that backend marker; answer with `cli`                |
-| `rescue`            | `{"t":"rescue","band":28,"position":"left"}`                   | move other panes out of the sidebar band through the existing CLI bridge    |
-| `adjust`            | `{"t":"adjust","direction":"Left","amount":3,"park":false,"target":28,"min_content":20}` | resize this pane's split on the server to `target` columns (by `amount` without one), from the tab's active pane; answer with `cli` |
-| `kill` by id        | `{"t":"kill","pane":17}`                                          | kill the server pane with that id; answer with `cli`                         |
-| `transport_probe`   | `{"t":"transport_probe","session":"inbox-4242-9f3a"}`           | inbox message 1: proves the directory is the one the backend reads          |
-| `transport_barrier` | `{"t":"transport_barrier","session":"inbox-4242-9f3a"}`         | last stdin frame; triggers one scan, then `transport_ready` or `transport_refused` |
-| `transport_stop`    | `{"t":"transport_stop","session":"inbox-4242-9f3a"}`            | drain the inbox in order, remove it, read stdin only                         |
+| command                   | shape                                                                                                                     | effect                                                                                                                                 |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| `auth`                    | `{"t":"auth","token":"<hex>","caps":["typed_intents","theme_hooks","settings_document","spaces_policy"],"keys":"server"}` | echo `vtabs_token` and negotiate client capabilities; `keys:"server"` asks for forwarded keys to be delivered through the server's cli |
+| `begin`                   | `{"t":"begin","generation":N}`                                                                                            | start or replay one atomic publication                                                                                                 |
+| `commit`                  | `{"t":"commit","generation":N}`                                                                                           | publish the matching valid generation, or start its theme-hook round-trip                                                              |
+| `theme_hook_result`       | `{"t":"theme_hook_result","generation":N,"overrides":{...}}`                                                              | finish the matching generation after Lua runs `hooks.theme`                                                                            |
+| `space_route_hook_result` | `{"t":"space_route_hook_result","generation":N,"routes":[...]}`                                                           | finish the matching batched `hooks.route` request                                                                                      |
+| `config`                  | see below                                                                                                                 | raw render/behaviour knobs                                                                                                             |
+| `theme`                   | see below                                                                                                                 | raw palette, user overrides and hook/private facts                                                                                     |
+| `spaces`                  | see below                                                                                                                 | full-window topology, raw rules, and current assignment facts                                                                          |
+| `model`                   | see below                                                                                                                 | raw sidebar state, or the legacy pre-built settings view                                                                               |
+| `settings`                | see below                                                                                                                 | JSON-safe host facts from which Rust builds the live settings document                                                                 |
+| `menu`                    | see below                                                                                                                 | the action menu, or `{"t":"menu","rev":N,"open":false}` to close                                                                       |
+| `fx`                      | `{"t":"fx","phase":"expand_in","ms":220,"fps":30}`                                                                        | animate this pane's rows on the backend's own clock                                                                                    |
+| `notice`                  | `{"t":"notice","level":"warn","text":"..."}`                                                                              | write to the debug log only                                                                                                            |
+| `ping`                    | `{"t":"ping","n":N}`                                                                                                      | reply with `pong` echoing `n`                                                                                                          |
+| `clear`                   | `{"t":"clear"}`                                                                                                           | repaint from the last committed state                                                                                                  |
+| `quit`                    | `{"t":"quit"}`                                                                                                            | restore the terminal and exit 0                                                                                                        |
+| `kill`                    | `{"t":"kill","title":"wez-vtabs:1a2b"}`                                                                                   | kill the one pane with that backend marker; answer with `cli`                                                                          |
+| `rescue`                  | `{"t":"rescue","band":28,"position":"left"}`                                                                              | move other panes out of the sidebar band through the existing CLI bridge                                                               |
+| `adjust`                  | `{"t":"adjust","direction":"Left","amount":3,"park":false,"target":28,"min_content":20}`                                  | resize this pane's split on the server to `target` columns (by `amount` without one), from the tab's active pane; answer with `cli`    |
+| `kill` by id              | `{"t":"kill","pane":17}`                                                                                                  | kill the server pane with that id; answer with `cli`                                                                                   |
+| `transport_probe`         | `{"t":"transport_probe","session":"inbox-4242-9f3a"}`                                                                     | inbox message 1: proves the directory is the one the backend reads                                                                     |
+| `transport_barrier`       | `{"t":"transport_barrier","session":"inbox-4242-9f3a"}`                                                                   | last stdin frame; triggers one scan, then `transport_ready` or `transport_refused`                                                     |
+| `transport_stop`          | `{"t":"transport_stop","session":"inbox-4242-9f3a"}`                                                                      | drain the inbox in order, remove it, read stdin only                                                                                   |
 
 `kill`, `rescue` and `adjust` run the server's own `wezterm cli --no-auto-start`, found beside
 `WEZTERM_EXECUTABLE_DIR`, against `WEZTERM_UNIX_SOCKET`, acting for `WEZTERM_PANE`: the GUI's mux
@@ -310,27 +310,27 @@ hatch.
 
 ## Events (backend → Lua)
 
-| event                | shape                                                                                                                        |
-| -------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
-| `ready`              | `{"t":"ready","v":3,"cols":N,"rows":M,"paints":true,"caps":["atomic_sync","typed_intents","theme_hooks","settings_document","spaces_policy","inbox_transport"],"pane":42,"transport":{"inbox":"inbox-42-9f3a1b2c"},"n":1}` |
-| `resize`             | `{"t":"resize","cols":N,"rows":M,"n":2}` — once per pause of a resize burst (40 ms, 150 ms at most from its first frame), not per frame |
-| `theme_hook_request` | `{"t":"theme_hook_request","generation":N,"theme":{...},"n":3}` — resolved base; the generation remains unpublished  |
-| `theme_resolved`     | `{"t":"theme_resolved","generation":N,"theme":{...},"n":4}` — committed effective answer for host/Zen projection     |
-| `space_route_hook_request` | `{"t":"space_route_hook_request","generation":N,"window_id":W,"tabs":[...],"n":5}` — one unpublished hook batch |
-| `spaces_resolved`    | `{"t":"spaces_resolved","generation":N,"window_id":W,...,"n":6}` — committed assignments, summary, visibility, theme layer |
-| `settings_commit`    | source `settings_rev`, segmented set/remove patches, apply mode, and Rust's final persistence JSON                         |
-| `settings_copy`      | `{"t":"settings_copy","lua":"vtabs.apply_to_config(config, {...})"}` — complete paste-ready snippet             |
-| `intent`             | `{"t":"intent","a":"press_card","tab_id":7,"x":5,"y":6,"part":"title","n":9}` — variant-specific fields       |
-| `do`                 | centralized compatibility downgrade, only for clients without `typed_intents`                                               |
-| `key`                | `{"t":"key","key":"c","mods":["ctrl"],"raw":"Aw==","delivered":false,"n":10}` — host-forwarded keys; `delivered:true` means the bytes already reached the content pane through the server's cli and Lua only hands focus over |
-| `transport_ready`    | `{"t":"transport_ready","session":"inbox-4242-9f3a","n":11}` — probe and barrier both seen; Lua may write to the inbox |
-| `transport_refused`  | `{"t":"transport_refused","session":"inbox-4242-9f3a","why":"probe","n":11}` — `why` is `probe` (barrier without the probe; the offer is withdrawn), `session` (a session this backend is not negotiating; the current transport stays) or `state` (nothing offered) |
-| `paste`              | `{"t":"paste","data":"<base64>","n":11}`, or `{"t":"paste","dropped":"size","n":11}` past 64 KiB               |
-| `focus`              | not sent: focus out clears backend hover; focus in does nothing                                                              |
-| `pong`               | `{"t":"pong","n":13,"echo":7}` — `echo` is the ping's own `n`                                                          |
-| `note`               | `{"t":"note","k":"menu_refused","why":"rows","id":7,"a":"confirm","n":14}`                                   |
-| `dropped`            | `{"t":"dropped","what":"model","reason":"bounds","n":15}` — pending transaction is invalidated; `{"t":"dropped","what":"message","reason":"gap","seq":7}` — one inbox message never arrived, Lua republishes |
-| `cli`                | `{"t":"cli","op":"kill","ok":true,"detail":"1","n":16}` — `op` is `kill`, `rescue` or `adjust`; count or error detail; an `adjust` adds `cols`, this pane's width once the split moved |
+| event                      | shape                                                                                                                                                                                                                                                                |
+| -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ready`                    | `{"t":"ready","v":3,"cols":N,"rows":M,"paints":true,"caps":["atomic_sync","typed_intents","theme_hooks","settings_document","spaces_policy","inbox_transport"],"pane":42,"transport":{"inbox":"inbox-42-9f3a1b2c"},"n":1}`                                           |
+| `resize`                   | `{"t":"resize","cols":N,"rows":M,"n":2}` — once per pause of a resize burst (40 ms, 150 ms at most from its first frame), not per frame                                                                                                                              |
+| `theme_hook_request`       | `{"t":"theme_hook_request","generation":N,"theme":{...},"n":3}` — resolved base; the generation remains unpublished                                                                                                                                                  |
+| `theme_resolved`           | `{"t":"theme_resolved","generation":N,"theme":{...},"n":4}` — committed effective answer for host/Zen projection                                                                                                                                                     |
+| `space_route_hook_request` | `{"t":"space_route_hook_request","generation":N,"window_id":W,"tabs":[...],"n":5}` — one unpublished hook batch                                                                                                                                                      |
+| `spaces_resolved`          | `{"t":"spaces_resolved","generation":N,"window_id":W,...,"n":6}` — committed assignments, summary, visibility, theme layer                                                                                                                                           |
+| `settings_commit`          | source `settings_rev`, segmented set/remove patches, apply mode, and Rust's final persistence JSON                                                                                                                                                                   |
+| `settings_copy`            | `{"t":"settings_copy","lua":"vtabs.apply_to_config(config, {...})"}` — complete paste-ready snippet                                                                                                                                                                  |
+| `intent`                   | `{"t":"intent","a":"press_card","tab_id":7,"x":5,"y":6,"part":"title","n":9}` — variant-specific fields                                                                                                                                                              |
+| `do`                       | centralized compatibility downgrade, only for clients without `typed_intents`                                                                                                                                                                                        |
+| `key`                      | `{"t":"key","key":"c","mods":["ctrl"],"raw":"Aw==","delivered":false,"n":10}` — host-forwarded keys; `delivered:true` means the bytes already reached the content pane through the server's cli and Lua only hands focus over                                        |
+| `transport_ready`          | `{"t":"transport_ready","session":"inbox-4242-9f3a","n":11}` — probe and barrier both seen; Lua may write to the inbox                                                                                                                                               |
+| `transport_refused`        | `{"t":"transport_refused","session":"inbox-4242-9f3a","why":"probe","n":11}` — `why` is `probe` (barrier without the probe; the offer is withdrawn), `session` (a session this backend is not negotiating; the current transport stays) or `state` (nothing offered) |
+| `paste`                    | `{"t":"paste","data":"<base64>","n":11}`, or `{"t":"paste","dropped":"size","n":11}` past 64 KiB                                                                                                                                                                     |
+| `focus`                    | not sent: focus out clears backend hover; focus in does nothing                                                                                                                                                                                                      |
+| `pong`                     | `{"t":"pong","n":13,"echo":7}` — `echo` is the ping's own `n`                                                                                                                                                                                                        |
+| `note`                     | `{"t":"note","k":"menu_refused","why":"rows","id":7,"a":"confirm","n":14}`                                                                                                                                                                                           |
+| `dropped`                  | `{"t":"dropped","what":"model","reason":"bounds","n":15}` — pending transaction is invalidated; `{"t":"dropped","what":"message","reason":"gap","seq":7}` — one inbox message never arrived, Lua republishes                                                         |
+| `cli`                      | `{"t":"cli","op":"kill","ok":true,"detail":"1","n":16}` — `op` is `kill`, `rescue` or `adjust`; count or error detail; an `adjust` adds `cols`, this pane's width once the split moved                                                                               |
 
 Every `intent` is tagged by `a` and carries only that variant's fields. In particular,
 `set_rail_reserve` is `{"t":"intent","a":"set_rail_reserve","cols":9}`. The legacy `do`
@@ -349,20 +349,20 @@ the host theme without starting another semantic generation.
 
 ## Inbox transport
 
-| Name | Value |
-| --- | --- |
-| Why | `pane:send_text` on a mux-domain pane blocks the GUI thread on a server round trip; frames to same-machine mux panes go through files instead |
-| Eligible | `mux.domain(pane) ~= "local"` and the domain is a unix domain of this machine; `backend.inbox = true` |
-| Root | `VTABS_INBOX_ROOT` from Lua: `$XDG_RUNTIME_DIR/wez-vtabs`, else `$TMPDIR/wez-vtabs`, else no transport |
-| Session dir | `<root>/inbox-<pid>-<nonce>`, mode 0700, announced as `ready.transport.inbox`; absent when no root was given or it failed validation |
-| `ready.pane` | the backend's own server pane id from `WEZTERM_PANE`; absent when unset |
-| `auth.keys` | `"server"` only where Lua would hand a typed key over: an eligible sidebar, `hover ~= "press"`, plain content beside it; a same-token `auth` flips it live |
-| Message | `<seq zero-padded 8>.msg`, written as `<seq>.tmp` then renamed; framed control records, one or more |
-| Order | Lua writes the probe (seq 1) before the stdin barrier; the backend applies no inbox message before the barrier and applies messages in sequence |
-| Limits | `LINE_MAX` per record, 6 × `LINE_MAX` per file; a gap older than 100 ms is one `dropped` message |
-| Lost | write, close or rename failure: the frame is dropped, never replayed; Lua sends `transport_stop` |
-| Wake | inotify / kqueue on the directory, scan every 1 s with a watcher, every 50 ms without |
-| Cleanup | processed messages deleted; the directory removed on `quit`, `transport_stop`, new `auth`; dead siblings swept at create |
+| Name         | Value                                                                                                                                                      |
+| ------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Why          | `pane:send_text` on a mux-domain pane blocks the GUI thread on a server round trip; frames to same-machine mux panes go through files instead              |
+| Eligible     | `mux.domain(pane) ~= "local"` and the domain is a unix domain of this machine; `backend.inbox = true`                                                      |
+| Root         | `VTABS_INBOX_ROOT` from Lua: `$XDG_RUNTIME_DIR/wez-vtabs`, else `$TMPDIR/wez-vtabs`, else no transport                                                     |
+| Session dir  | `<root>/inbox-<pid>-<nonce>`, mode 0700, announced as `ready.transport.inbox`; absent when no root was given or it failed validation                       |
+| `ready.pane` | the backend's own server pane id from `WEZTERM_PANE`; absent when unset                                                                                    |
+| `auth.keys`  | `"server"` only where Lua would hand a typed key over: an eligible sidebar, `hover ~= "press"`, plain content beside it; a same-token `auth` flips it live |
+| Message      | `<seq zero-padded 8>.msg`, written as `<seq>.tmp` then renamed; framed control records, one or more                                                        |
+| Order        | Lua writes the probe (seq 1) before the stdin barrier; the backend applies no inbox message before the barrier and applies messages in sequence            |
+| Limits       | `LINE_MAX` per record, 6 × `LINE_MAX` per file; a gap older than 100 ms is one `dropped` message                                                           |
+| Lost         | write, close or rename failure: the frame is dropped, never replayed; Lua sends `transport_stop`                                                           |
+| Wake         | inotify / kqueue on the directory, scan every 1 s with a watcher, every 50 ms without                                                                      |
+| Cleanup      | processed messages deleted; the directory removed on `quit`, `transport_stop`, new `auth`; dead siblings swept at create                                   |
 
 ## Gesture → event (sidebar)
 
@@ -370,66 +370,66 @@ the host theme without starting another semantic generation.
 scene Rust painted. It emits typed `intent` variants; Lua dispatches those host operations by
 name. Only keys received while focus mode is off may leave Rust as raw `key` events.
 
-| Input                                                        | Condition                                      | Typed intent / outcome                                                                   |
-| ------------------------------------------------------------ | ---------------------------------------------- | ---------------------------------------------------------------------------------------- |
-| left press, card body                                        | not on the ✕/pin span                          | `press_card {tab_id,x,y,part}` — activate and arm drag                                    |
-| left press, ✕ span                                           |                                                | arm locally; nothing crosses until release                                                |
-| left press, pin span                                         |                                                | `toggle_pin {tab_id}`                                                                    |
-| middle press, card body                                      |                                                | arm locally (same close arming as ✕)                                                      |
-| right press, card body                                       | `config.context=="popover"`                    | arm locally; open on release                                                             |
-| motion past the drag threshold                               | a press is armed (locally or via `model.drag`) | `drag_to {x,y,slot,outside}`                                                              |
-| release, drag active                                         |                                                | `drag_end {slot?,outside}`                                                               |
-| release, ✕/middle armed and still on the same card           |                                                | `request_close {tab_id,row,col?,from_key:false}`                                          |
-| release, right armed and still on the same card              |                                                | `open_menu {tab_id,row,col?}`                                                             |
-| double left press, off-card / space / strip                  | within `double_click_ms`                       | `new_tab`                                                                                |
-| left press, strip button                                     |                                                | `strip {button_id}`                                                                      |
-| left press, new-tab ghost row                                |                                                | `new_tab`                                                                                |
-| left press, footer row                                       |                                                | `footer {index}`                                                                         |
-| left press, a space icon                                     |                                                | `switch_space {space_id}`; a lone visible icon targets the next space                    |
-| double press on the switcher row                             |                                                | nothing — never `new_tab`                                                                |
-| wheel over the switcher row                                  | either wheel mode                              | `switch_space {space_id}`, no wrap, silent at the ends                                   |
-| wheel                                                        | `config.wheel=="scroll"`                       | `set_scroll {top,user:true}` with optimistic local apply                                  |
-| wheel                                                        | `config.wheel=="switch"`                       | `wheel_tab {dy}`                                                                         |
-| release, no close/menu/drag outcome, `config.hover=="press"` |                                                | `blur_sidebar`                                                                           |
-| any key                                                      | focus mode off                                 | `key {...}` for guarded Lua forwarding to the content pane                               |
+| Input                                                        | Condition                                      | Typed intent / outcome                                                |
+| ------------------------------------------------------------ | ---------------------------------------------- | --------------------------------------------------------------------- |
+| left press, card body                                        | not on the ✕/pin span                          | `press_card {tab_id,x,y,part}` — activate and arm drag                |
+| left press, ✕ span                                           |                                                | arm locally; nothing crosses until release                            |
+| left press, pin span                                         |                                                | `toggle_pin {tab_id}`                                                 |
+| middle press, card body                                      |                                                | arm locally (same close arming as ✕)                                  |
+| right press, card body                                       | `config.context=="popover"`                    | arm locally; open on release                                          |
+| motion past the drag threshold                               | a press is armed (locally or via `model.drag`) | `drag_to {x,y,slot,outside}`                                          |
+| release, drag active                                         |                                                | `drag_end {slot?,outside}`                                            |
+| release, ✕/middle armed and still on the same card           |                                                | `request_close {tab_id,row,col?,from_key:false}`                      |
+| release, right armed and still on the same card              |                                                | `open_menu {tab_id,row,col?}`                                         |
+| double left press, off-card / space / strip                  | within `double_click_ms`                       | `new_tab`                                                             |
+| left press, strip button                                     |                                                | `strip {button_id}`                                                   |
+| left press, new-tab ghost row                                |                                                | `new_tab`                                                             |
+| left press, footer row                                       |                                                | `footer {index}`                                                      |
+| left press, a space icon                                     |                                                | `switch_space {space_id}`; a lone visible icon targets the next space |
+| double press on the switcher row                             |                                                | nothing — never `new_tab`                                             |
+| wheel over the switcher row                                  | either wheel mode                              | `switch_space {space_id}`, no wrap, silent at the ends                |
+| wheel                                                        | `config.wheel=="scroll"`                       | `set_scroll {top,user:true}` with optimistic local apply              |
+| wheel                                                        | `config.wheel=="switch"`                       | `wheel_tab {dy}`                                                      |
+| release, no close/menu/drag outcome, `config.hover=="press"` |                                                | `blur_sidebar`                                                        |
+| any key                                                      | focus mode off                                 | `key {...}` for guarded Lua forwarding to the content pane            |
 
 Focus mode (`model.focus.on`), keyed entirely in Rust:
 
-| Key                                         | Typed intent / outcome                                        |
-| ------------------------------------------- | ------------------------------------------------------------- |
-| `j`/`down`/`tab`, `k`/`up` (shift reverses) | `set_focus_index {index}`                                     |
-| `home`/`g`, `end`/`G`                       | `set_focus_index {index}`                                     |
-| `1`-`9`, `enter`/`space`                    | `activate_tab {tab_id}`                                       |
-| `x`/`d`/`delete`                            | `request_close {tab_id,row,from_key:true}`                    |
-| `p`                                         | `toggle_pin {tab_id}`                                         |
-| `r`                                         | `rename_tab {tab_id}`                                         |
-| `m`                                         | `open_menu {tab_id,row}`                                      |
-| `J` / `K`                                   | `move_tab {tab_id,slot,focus_index}`                           |
-| `]` / `[`                                   | `switch_space {space_id}` with wraparound                     |
-| `n`                                         | `new_tab`                                                     |
-| `escape`/`q`/ctrl-`c`                       | `blur_sidebar`                                                |
-| anything else                               | consumed; focused keys are never forwarded back through Lua   |
+| Key                                         | Typed intent / outcome                                      |
+| ------------------------------------------- | ----------------------------------------------------------- |
+| `j`/`down`/`tab`, `k`/`up` (shift reverses) | `set_focus_index {index}`                                   |
+| `home`/`g`, `end`/`G`                       | `set_focus_index {index}`                                   |
+| `1`-`9`, `enter`/`space`                    | `activate_tab {tab_id}`                                     |
+| `x`/`d`/`delete`                            | `request_close {tab_id,row,from_key:true}`                  |
+| `p`                                         | `toggle_pin {tab_id}`                                       |
+| `r`                                         | `rename_tab {tab_id}`                                       |
+| `m`                                         | `open_menu {tab_id,row}`                                    |
+| `J` / `K`                                   | `move_tab {tab_id,slot,focus_index}`                        |
+| `]` / `[`                                   | `switch_space {space_id}` with wraparound                   |
+| `n`                                         | `new_tab`                                                   |
+| `escape`/`q`/ctrl-`c`                       | `blur_sidebar`                                              |
+| anything else                               | consumed; focused keys are never forwarded back through Lua |
 
 ## Gesture → event (menu)
 
 The menu owns the pane while it is open — every pointer and key event over it is the menu's; the
 sidebar's own hit map is not consulted.
 
-| Input                                              | Condition                               | Typed intent / outcome                                             |
-| -------------------------------------------------- | --------------------------------------- | ------------------------------------------------------------------ |
-| left press, outside the menu's columns             | including a row it doesn't cover at all | `menu_closed`                                                      |
-| left press, an enabled row                         | not `danger`                            | `menu_pick {item_id}`                                              |
-| left press, a `danger` row                         |                                         | arms locally; picked on release over the same row                  |
-| left release, armed danger row, still over it      |                                         | `menu_pick {item_id}`                                              |
-| right press, a row outside the menu's rows (scrim) |                                         | `menu_closed`, then the click falls through to the sidebar         |
-| wheel                                              |                                         | moves the selection locally; no event                              |
-| enter/space                                        | selected item enabled                   | `menu_pick {item_id}`                                              |
-| escape/ctrl-c, root level                          |                                         | `menu_closed`                                                      |
-| escape/ctrl-c, sub-level                           |                                         | `menu_back`                                                        |
-| `j`/`down`/`tab`, `k`/`up` (shift reverses)        |                                         | moves the selection locally                                       |
-| a single character                                 | jump-to-letter                          | moves the selection locally                                       |
-| enter, rename level                                |                                         | `rename_commit {text}`                                             |
-| escape, rename level                               |                                         | `menu_back`                                                        |
+| Input                                              | Condition                               | Typed intent / outcome                                     |
+| -------------------------------------------------- | --------------------------------------- | ---------------------------------------------------------- |
+| left press, outside the menu's columns             | including a row it doesn't cover at all | `menu_closed`                                              |
+| left press, an enabled row                         | not `danger`                            | `menu_pick {item_id}`                                      |
+| left press, a `danger` row                         |                                         | arms locally; picked on release over the same row          |
+| left release, armed danger row, still over it      |                                         | `menu_pick {item_id}`                                      |
+| right press, a row outside the menu's rows (scrim) |                                         | `menu_closed`, then the click falls through to the sidebar |
+| wheel                                              |                                         | moves the selection locally; no event                      |
+| enter/space                                        | selected item enabled                   | `menu_pick {item_id}`                                      |
+| escape/ctrl-c, root level                          |                                         | `menu_closed`                                              |
+| escape/ctrl-c, sub-level                           |                                         | `menu_back`                                                |
+| `j`/`down`/`tab`, `k`/`up` (shift reverses)        |                                         | moves the selection locally                                |
+| a single character                                 | jump-to-letter                          | moves the selection locally                                |
+| enter, rename level                                |                                         | `rename_commit {text}`                                     |
+| escape, rename level                               |                                         | `menu_back`                                                |
 
 Pointer drift (`Move`/`Drag`) never selects a `danger` row at the `confirm` level — a Rust-tested
 invariant. A destructive item acts only on release, and only when press and release land on the
@@ -441,16 +441,16 @@ Navigation, filtering, widgets, edit buffers, the chord recorder, validation, an
 Rust-local. `vtabs-engine::interaction` produces typed document actions which the runtime consumes
 directly when a `settings` document is present.
 
-| Key/click                                                              | Rust outcome                                                                           |
-| ---------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
-| `left`/`right` on a focused field, or a click on its `-`/`+` glyph     | step the canonical value and emit `settings_commit`                                    |
-| `enter`/`space`, or a left click on a field's value                    | toggle/pick, enter edit mode, or arm the chord recorder                                |
-| `r`                                                                    | restore the schema default and emit `settings_commit`                                  |
-| `c`                                                                    | emit `settings_copy` from the canonical changed set                                    |
-| any key while editing a buffer                                         | mutate locally; Enter validates/commits, Escape cancels                                |
+| Key/click                                                              | Rust outcome                                                                          |
+| ---------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
+| `left`/`right` on a focused field, or a click on its `-`/`+` glyph     | step the canonical value and emit `settings_commit`                                   |
+| `enter`/`space`, or a left click on a field's value                    | toggle/pick, enter edit mode, or arm the chord recorder                               |
+| `r`                                                                    | restore the schema default and emit `settings_commit`                                 |
+| `c`                                                                    | emit `settings_copy` from the canonical changed set                                   |
+| any key while editing a buffer                                         | mutate locally; Enter validates/commits, Escape cancels                               |
 | any key while a chord recorder is armed                                | commit the segmented binding path; Escape cancels                                     |
 | `escape`, or `q` with no modifiers                                     | typed `close_settings` intent to Lua, because closing the host tab is a mux operation |
-| `j`/`down`, `k`/`up`, `tab`, `/` + filter typing, a click on a nav tab | move focus/filter/group locally; no event                                              |
+| `j`/`down`, `k`/`up`, `tab`, `/` + filter typing, a click on a nav tab | move focus/filter/group locally; no event                                             |
 
 `settings_commit` carries the source `settings_rev`, `path:[segment,...]`, `change:{op:"set",value:...}` or
 `change:{op:"remove"}`, optional `derived:[{path,...change}]` patches, an apply
@@ -466,31 +466,31 @@ changed-set computation.
 
 ## Bounds
 
-| Bound            | Value                                                              | On breach                                                                       |
-| ---------------- | ------------------------------------------------------------------ | ------------------------------------------------------------------------------- |
-| `model.tabs`     | 200 (`MODEL_MAX_TABS`)                                             | `dropped{what:"model",reason:"bounds"}`; previous model kept                    |
-| `model.fields`   | 512 (`MODEL_MAX_FIELDS`)                                           | `dropped{what:"model",reason:"bounds"}`; previous model kept                    |
-| generated settings fields | 512 (`MODEL_MAX_FIELDS`)                                  | `dropped{what:"settings",reason:"bounds"}`; pending generation invalidated      |
-| persisted settings body | 512 KiB (`SETTINGS_BODY_MAX_BYTES`), inclusive                | Rust rolls the edit back and emits `dropped{what:"settings",reason:"size"}`; Lua also refuses an oversized write |
-| `model.spaces`   | 32 (`MODEL_MAX_SPACES`)                                          | `dropped{what:"model",reason:"bounds"}`; previous model kept                    |
-| `spaces.tabs`    | 200 (`MODEL_MAX_TABS`), with unique tab ids                       | `dropped{what:"spaces",reason:"bounds"}`; pending generation invalidated        |
-| `spaces.dynamics` / `last_tabs` | 32 each (`MODEL_MAX_SPACES`), with unique ids       | `dropped{what:"spaces",reason:"bounds"}`; pending generation invalidated        |
-| `menu.items`     | 64 (`MENU_MAX_ITEMS`)                                              | `dropped{what:"menu",reason:"bounds"}`; previous menu kept                      |
-| any JSON control payload | 1 MiB (`LINE_MAX`, `limits.rs`); framing is additional        | Lua preflights whole sections; an authenticated frame gets `dropped{what:"line",reason:"size"}` |
-| stdin residual buffer | 2 MiB, or ~300ms with no `\n`                                  | a runaway frame is discarded — never replayed as key events                     |
-| paste payload    | 64 KiB                                                             | `{"t":"paste","dropped":"size"}`                                                |
+| Bound                           | Value                                                  | On breach                                                                                                        |
+| ------------------------------- | ------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------- |
+| `model.tabs`                    | 200 (`MODEL_MAX_TABS`)                                 | `dropped{what:"model",reason:"bounds"}`; previous model kept                                                     |
+| `model.fields`                  | 512 (`MODEL_MAX_FIELDS`)                               | `dropped{what:"model",reason:"bounds"}`; previous model kept                                                     |
+| generated settings fields       | 512 (`MODEL_MAX_FIELDS`)                               | `dropped{what:"settings",reason:"bounds"}`; pending generation invalidated                                       |
+| persisted settings body         | 512 KiB (`SETTINGS_BODY_MAX_BYTES`), inclusive         | Rust rolls the edit back and emits `dropped{what:"settings",reason:"size"}`; Lua also refuses an oversized write |
+| `model.spaces`                  | 32 (`MODEL_MAX_SPACES`)                                | `dropped{what:"model",reason:"bounds"}`; previous model kept                                                     |
+| `spaces.tabs`                   | 200 (`MODEL_MAX_TABS`), with unique tab ids            | `dropped{what:"spaces",reason:"bounds"}`; pending generation invalidated                                         |
+| `spaces.dynamics` / `last_tabs` | 32 each (`MODEL_MAX_SPACES`), with unique ids          | `dropped{what:"spaces",reason:"bounds"}`; pending generation invalidated                                         |
+| `menu.items`                    | 64 (`MENU_MAX_ITEMS`)                                  | `dropped{what:"menu",reason:"bounds"}`; previous menu kept                                                       |
+| any JSON control payload        | 1 MiB (`LINE_MAX`, `limits.rs`); framing is additional | Lua preflights whole sections; an authenticated frame gets `dropped{what:"line",reason:"size"}`                  |
+| stdin residual buffer           | 2 MiB, or ~300ms with no `\n`                          | a runaway frame is discarded — never replayed as key events                                                      |
+| paste payload                   | 64 KiB                                                 | `{"t":"paste","dropped":"size"}`                                                                                 |
 
 Every bound lives in `backend/crates/vtabs-protocol/src/limits.rs`, the one home both languages
 read (`just gen-protocol` mirrors what Lua still needs).
 
 ## Versioning
 
-| Mechanism      | Rule                                                                                                      |
-| -------------- | --------------------------------------------------------------------------------------------------------- |
-| `ready.v`      | protocol version (`VERSION` in `limits.rs`); exactly `3` today                                           |
-| `ready.paints` | `true` once the pane's own render pipeline is live — both roles set it unconditionally                    |
-| `ready.caps`   | additive backend features; clients opt in through `auth.caps` where a feature changes the dialogue       |
-| Lua records    | `store.proto[pid] = ev.v`, `store.paints[pid] = ev.paints` on every `ready`                               |
+| Mechanism      | Rule                                                                                                             |
+| -------------- | ---------------------------------------------------------------------------------------------------------------- |
+| `ready.v`      | protocol version (`VERSION` in `limits.rs`); exactly `3` today                                                   |
+| `ready.paints` | `true` once the pane's own render pipeline is live — both roles set it unconditionally                           |
+| `ready.caps`   | additive backend features; clients opt in through `auth.caps` where a feature changes the dialogue               |
+| Lua records    | `store.proto[pid] = ev.v`, `store.paints[pid] = ev.paints` on every `ready`                                      |
 | Refuse         | `ev.v != VERSION` or `paints` false → `warn_once` + the same 60s failed-domain block an unanswering backend gets |
 
 ## Input parsing rules
@@ -532,8 +532,8 @@ before they reach `resolve` — only the last one is acted on.
 
 ## Size changes
 
-| Platform | Source                                   | Fallback                 |
-| -------- | ---------------------------------------- | ------------------------ |
+| Platform | Source                                                                                     | Fallback                 |
+| -------- | ------------------------------------------------------------------------------------------ | ------------------------ |
 | unix     | `SIGWINCH`, noted at once and adopted once the burst has paused for 40 ms (150 ms at most) | full size poll every 2 s |
-| other    | size poll every 250 ms                   | —                        |
-| any      | re-read before every frame and fade tick | —                        |
+| other    | size poll every 250 ms                                                                     | —                        |
+| any      | re-read before every frame and fade tick                                                   | —                        |
