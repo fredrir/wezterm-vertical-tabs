@@ -310,7 +310,8 @@ local function apply_decorations(config, cfg)
 end
 
 ---@param config Config
----@param opts table|nil
+---@param opts? VerticalTabs.Config
+---@return Config
 function M.apply_to_config(config, opts)
   -- read before this function writes any of its own: a non-nil entry means the host owns that key
   config_mod.host_config = host_config.capture(config)

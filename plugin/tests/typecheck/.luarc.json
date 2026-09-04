@@ -1,0 +1,11 @@
+{
+	"runtime.version": "Lua 5.4",
+	"workspace.library": ["${workspaceFolder}/../../../types"],
+	"workspace.checkThirdParty": false,
+	"diagnostics.groupFileStatus": {
+		"strong": "Any",
+		"type-check": "Any"
+	},
+	"type.checkTableShape": true,
+	"telemetry.enable": false
+}

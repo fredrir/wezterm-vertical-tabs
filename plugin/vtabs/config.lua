@@ -193,8 +193,17 @@ end
 ---Bootstrap/fallback mirror of Rust's cross-key policy. The current-capability live settings path
 ---arrives already canonical and uses `replace_canonical`; this remains for a missing/older binary.
 function M.normalise(cfg)
-  if cfg.popover.width ~= "auto" and type(cfg.popover.width) ~= "number" then
-    util.warn 'popover.width must be "auto" or a number, using auto'
+  local popover_width = cfg.popover.width
+  local popover_width_ok = popover_width == "auto"
+    or (
+      type(popover_width) == "number"
+      and popover_width == popover_width
+      and popover_width ~= math.huge
+      and popover_width ~= -math.huge
+      and popover_width == math.floor(popover_width)
+    )
+  if not popover_width_ok then
+    util.warn 'popover.width must be "auto" or a whole number, using auto'
     cfg.popover.width = "auto"
   end
 

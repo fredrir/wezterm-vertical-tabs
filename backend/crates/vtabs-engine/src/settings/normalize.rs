@@ -75,7 +75,7 @@ pub fn normalize(request: NormalizeRequest) -> Result<NormalizeResponse, &'stati
         .iter()
         .any(|path| path == &SettingPath::from_dotted("popover.width"))
     {
-        warnings.push("popover.width must be \"auto\" or a number, using auto".into());
+        warnings.push("popover.width must be \"auto\" or a whole number, using auto".into());
     }
     Ok(NormalizeResponse {
         normalizer_v: NORMALIZER_VERSION,
@@ -136,7 +136,7 @@ pub fn normalize_cross_fields(values: &mut Value) -> Vec<SettingPath> {
     let mut changed = Vec::new();
     let popover_width_ok = match get_path(values, "popover.width") {
         Some(Value::String(value)) => value == "auto",
-        Some(Value::Number(_)) => true,
+        Some(Value::Number(value)) => value.is_finite() && value.fract() == 0.0,
         _ => false,
     };
     if !popover_width_ok {
@@ -158,6 +158,7 @@ pub fn normalize_cross_fields(values: &mut Value) -> Vec<SettingPath> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::settings::value::table;
 
     fn request(opts: Value) -> NormalizeRequest {
         NormalizeRequest {
@@ -237,6 +238,23 @@ mod tests {
                 .warnings
                 .iter()
                 .any(|warning| warning.contains("width"))
+        );
+    }
+
+    #[test]
+    fn popover_width_is_a_whole_cell_count() {
+        let response = normalize(request(table([(
+            "popover",
+            table([("width", Value::from(12.5))]),
+        )])))
+        .unwrap();
+        assert_eq!(
+            get_path(&response.values, "popover.width"),
+            Some(&"auto".into())
+        );
+        assert_eq!(
+            response.warnings,
+            vec!["popover.width must be \"auto\" or a whole number, using auto"]
         );
     }
 

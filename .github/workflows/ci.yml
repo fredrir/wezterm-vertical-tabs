@@ -69,9 +69,9 @@ jobs:
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           version: 2.5.2
-          args: --check plugin/init.lua plugin/vtabs plugin/tests
+          args: --check plugin/init.lua plugin/vtabs plugin/tests plugin/types
       - run: luarocks install luacheck
-      - run: luacheck init.lua vtabs tests
+      - run: luacheck init.lua vtabs tests types
       - run: lua tests/run.lua
       - name: docs table matches the schema
         run: lua scripts/gen-docs.lua --check

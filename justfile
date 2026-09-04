@@ -61,8 +61,12 @@ lint:
     cd backend && cargo fmt --check && cargo clippy --all-targets --locked -- -D warnings
     cd backend && cargo run -q -p vtabs-protocol --bin gen-lua -- --check
     cd backend && cargo run -q -p vtabs-engine --bin gen-config -- --check
-    cd plugin && luacheck init.lua vtabs tests && stylua --check init.lua vtabs tests
+    cd plugin && luacheck init.lua vtabs tests types && stylua --check init.lua vtabs tests types
     lua scripts/gen-docs.lua --check
+
+# Check the public LuaCATS contract with lua-language-server
+typecheck:
+    sh scripts/check-types.sh
 
 # Regenerate all Rust-owned Lua mirrors and their derived documentation
 generate: gen-protocol gen-config docs
@@ -71,7 +75,7 @@ generate: gen-protocol gen-config docs
 gen-protocol:
     cd backend && cargo run -q -p vtabs-protocol --bin gen-lua
 
-# Regenerate plugin/vtabs/gen/schema.lua from vtabs-engine's typed descriptors
+# Regenerate runtime and LuaCATS schemas from vtabs-engine's typed descriptors
 gen-config:
     cd backend && cargo run -q -p vtabs-engine --bin gen-config
 
@@ -84,3 +88,6 @@ build profile="release":
 
 tag:
     @sh scripts/tag.sh
+
+ls:
+    @sh scripts/ls.sh
