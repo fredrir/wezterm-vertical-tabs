@@ -22,12 +22,14 @@ addopts = ["-ra", "--strict-config", "--strict-markers"]
 asyncio_default_fixture_loop_scope = "function"
 asyncio_mode = "strict"
 markers = [
+  "plugin: headless tests of the production Lua plugin boundary",
   "smoke: representative startup, render, and shutdown checks",
   "ssh_mux_e2e: containerized localhost SSH mux-domain tests",
+  "typecheck: public LuaCATS contract checks with Lua Language Server",
   "tui: black-box tests that exercise wez-vtabs in a real PTY",
   "wezterm_e2e: tests that launch an owned real WezTerm GUI and mux domain",
 ]
-testpaths = ["tests/tui"]
+testpaths = ["tests/plugin", "tests/tui"]
 
 [tool.ruff]
 line-length = 100

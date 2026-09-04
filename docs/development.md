@@ -104,13 +104,28 @@ hyperfine --warmup 5 --runs 30 \
   --out /tmp/vtabs-spike-frame.png"
 ```
 
-## Plugin
+## Headless tests
+
+`pytest`, `just test`, and `just check` do not launch WezTerm or another GUI. Pytest discovery is
+limited to `tests/plugin` and `tests/tui`; `tests/wezterm` is opt-in.
+
+| Suite | Command | Boundary |
+| ----- | ------- | -------- |
+| plugin | `just test-plugin` | production Lua modules in fresh Lua processes (5.4 in CI) |
+| TUI | `just test-tui` | real `wez-vtabs` in fresh pseudo-terminals |
+| Lua types | `just typecheck` | public LuaCATS contract through Lua Language Server |
+| default pytest | `uv run --frozen pytest -q` | plugin + TUI |
+
+Lua lint:
 
 ```sh
+just test-plugin
 cd plugin
-lua tests/run.lua
-luacheck init.lua vtabs tests
-stylua --check init.lua vtabs tests
+luacheck init.lua vtabs types ../tests/wezterm/config.lua \
+  ../tests/typecheck/fixtures ../tests/plugin/lua/wezterm_stub.lua
+stylua --config-path stylua.toml --check \
+  init.lua vtabs types ../tests/wezterm/config.lua ../tests/typecheck/fixtures \
+  ../tests/plugin/lua/wezterm_stub.lua
 ```
 
 ## Black-box TUI tests
@@ -140,19 +155,20 @@ network access, wall-clock assertions, or shared sessions. The full suite is par
 CI runs it on Linux in the existing Rust job and runs only the representative `smoke` subset on
 macOS to keep CPU and runner use modest.
 
-The real-GUI suite owns a standalone `wezterm-mux-server` and one reconnectable GUI per test. Run it
-from a macOS desktop session or a Linux graphical session (`DISPLAY` or `WAYLAND_DISPLAY` is
-required):
+## Real WezTerm tests (opt-in)
+
+These commands launch a real GUI. They are excluded from bare `pytest`, `just test`, `just check`,
+and the current CI workflow. Run them only from a macOS desktop or a Linux graphical session with
+`DISPLAY` or `WAYLAND_DISPLAY`:
 
 ```sh
 just test-wezterm-e2e          # full behavior suite, two isolated workers
-just test-wezterm-e2e-smoke    # pinned PR-gate subset
+just test-wezterm-e2e-smoke    # representative subset
+just test-wezterm-ssh-e2e      # Linux + Docker SSH-domain contract
 ```
 
-The pinned smoke subset is a normal Linux/Xvfb pull-request gate. A weekly job runs the full suite
-against the newest WezTerm nightly, and the pinned scheduled lane also exercises a real localhost
-SSH mux server in Docker. Failures retain CLI history, endpoint topology, client state, and all owned
-process logs under `.pytest-artifacts/wezterm/`.
+Failures retain CLI history, endpoint topology, client state, and owned process logs under
+`.pytest-artifacts/wezterm/`.
 
 
 ## Generated Lua mirrors
@@ -207,6 +223,8 @@ and live writes replace from a fresh private sibling directory rather than follo
 ```sh
 just check
 ```
+
+This is headless. Real WezTerm tests remain opt-in.
 
 ## Lints
 

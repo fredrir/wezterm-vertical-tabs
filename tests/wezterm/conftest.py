@@ -24,7 +24,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 BACKEND = ROOT / "backend"
-E2E_CONFIG = ROOT / "plugin" / "tests" / "wezterm-e2e.lua"
+E2E_CONFIG = Path(__file__).parent / "config.lua"
 SSH_IMAGE_DIR = Path(__file__).parent / "ssh"
 BACKEND_OVERRIDE = "WEZ_VTABS_BIN"
 Endpoint = Literal["gui", "mux"]

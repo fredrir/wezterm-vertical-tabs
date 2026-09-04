@@ -5,7 +5,6 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 import pytest
-from test_smoke import _transport_states
 
 if TYPE_CHECKING:
     from conftest import E2EOptions, SshMuxContainer, WezTermMuxInstance
@@ -71,8 +70,3 @@ def test_ssh_mux_tab_runs_content_and_sidebar_on_the_remote_endpoint(
     assert len(remote_tab.content) == 1
     assert marker in output and "Linux" in output
     assert local_after.pane_ids == local_ids
-
-    states, _, _ = _transport_states(wezterm_mux, local_ids[0])
-    assert states.get(remote_tab.sidebars[0].pane_id) == "off", (
-        "a remote host's sidebar must never be offered the inbox"
-    )

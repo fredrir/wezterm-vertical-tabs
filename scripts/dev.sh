@@ -43,14 +43,24 @@ detail() { [ "$verbose" = 0 ] || say "$*"; }
 bin=$(bin_for "$profile")
 
 if [ "$mode" = check ]; then
-  cd "$root/plugin"
-  if lua tests/run.lua >/tmp/vtabs-dev-test.log 2>&1; then
-    [ "$verbose" = 0 ] || ok "lua $(tail -1 /tmp/vtabs-dev-test.log)"
+  cd "$root"
+  if uv run --frozen pytest -q -m plugin tests/plugin >/tmp/vtabs-dev-test.log 2>&1; then
+    [ "$verbose" = 0 ] || ok "plugin $(tail -1 /tmp/vtabs-dev-test.log)"
   else
-    printf '%slua tests failed%s\n' "$red" "$off" >&2
+    printf '%splugin tests failed%s\n' "$red" "$off" >&2
     tail -15 /tmp/vtabs-dev-test.log
   fi
-  command -v luacheck >/dev/null 2>&1 && { luacheck -q init.lua vtabs || true; }
+  command -v luacheck >/dev/null 2>&1 && {
+    cd plugin
+    luacheck -q init.lua vtabs types ../tests/wezterm/config.lua \
+      ../tests/typecheck/fixtures ../tests/plugin/lua/wezterm_stub.lua || true
+  }
+  command -v stylua >/dev/null 2>&1 && {
+    cd "$root/plugin"
+    stylua --config-path stylua.toml --check \
+      init.lua vtabs types ../tests/wezterm/config.lua ../tests/typecheck/fixtures \
+      ../tests/plugin/lua/wezterm_stub.lua || true
+  }
   exit 0
 fi
 

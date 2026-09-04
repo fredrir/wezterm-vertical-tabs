@@ -1,5 +1,8 @@
 # Real WezTerm mux-domain tests
 
+> Opt-in: these tests launch a GUI. Bare `pytest`, `just test`, `just check`, and the current CI
+> workflow exclude `tests/wezterm`.
+
 This suite treats WezTerm, `wezterm-mux-server`, the plugin, and `wez-vtabs` as one user-visible
 system. Every test owns a foreground mux server on a private Unix socket and a separately owned GUI
 client. It drives both endpoints through `wezterm cli` and asserts pane/tab behavior rather than Lua
@@ -12,7 +15,7 @@ Linux session with `DISPLAY`/`WAYLAND_DISPLAY`:
 
 ```sh
 just test-wezterm-e2e                 # full Unix-domain suite, two workers
-just test-wezterm-e2e-smoke           # representative PR-gate subset
+just test-wezterm-e2e-smoke           # representative opt-in subset
 VTABS_E2E_WORKERS=1 just test-wezterm-e2e -k reconnect
 ```
 
@@ -25,8 +28,7 @@ WEZ_VTABS_BIN="$PWD/backend/target/debug/wez-vtabs" \
 ```
 
 The optional SSH-domain contract is Linux-only because the source-built host backend is mounted
-into an Ubuntu container. It needs Docker and a host WezTerm version matching the image. CI runs it
-with the repository's pinned `20240203-110809-5046fc22` package:
+into an Ubuntu container. It needs Docker and a host WezTerm version matching the image:
 
 ```sh
 just test-wezterm-ssh-e2e
@@ -46,10 +48,10 @@ To test another exact host/container build, provide both
 - a held tab-switch key leaves every tab's content and single sidebar intact and the GUI attached;
 - the settings page closes as a whole tab, never leaving a tab holding only its sidebar;
 - local and standalone-mux tabs remain on their own endpoints;
-- the scheduled Docker lane executes a tab and its sidebar through a real localhost SSH domain.
+- the Docker lane executes a tab and its sidebar through a real localhost SSH domain.
 
-The marker split is intentional: `smoke` is the short pinned PR gate, `wezterm_e2e` names every
-real-GUI test, and `ssh_mux_e2e` isolates the more expensive container scenario.
+The marker split is intentional: `smoke` is the short representative subset, `wezterm_e2e` names
+every real-GUI test, and `ssh_mux_e2e` isolates the more expensive container scenario.
 
 ## Isolation and determinism
 
@@ -76,7 +78,7 @@ A failed test prints and retains a directory under `.pytest-artifacts/wezterm/` 
 - an ordered history of every CLI command, result, duration, and timeout;
 - SSH container/backend logs for the Docker lane.
 
-CI uploads that directory on failure. Successful tests remove their private runtime roots.
+Successful tests remove their private runtime roots.
 
 Keep new scenarios outcome-driven: one question per test, public CLI/terminal observations, explicit
 failure cases, and the smallest stable wait. Do not assert private Lua state, debug log text, exact
@@ -85,7 +87,9 @@ should leave these tests unchanged when behavior is unchanged.
 
 ## CI policy
 
-Pull requests run the smoke subset on Ubuntu 22.04/Xvfb with a checksum-pinned WezTerm package.
-The full suite runs weekly against the latest Ubuntu 24.04 nightly as an upstream canary, while
-the pinned scheduled lane also runs the localhost SSH container. This gives a stable merge signal
-and early warning about upstream changes without maintaining a historical release matrix.
+| Lane | Policy |
+| ---- | ------ |
+| default CI | headless plugin and TUI suites only |
+| real GUI | local opt-in via `just test-wezterm-e2e` |
+| GUI smoke | local opt-in via `just test-wezterm-e2e-smoke` |
+| SSH mux | local opt-in via `just test-wezterm-ssh-e2e` |

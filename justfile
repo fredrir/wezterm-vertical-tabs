@@ -22,8 +22,13 @@ test:
     sh tests/test_dev_monitor.sh
     sh tests/test_restart.sh
     cd backend && cargo test --locked
-    cd plugin && lua tests/run.lua
+    @just test-plugin
     @just test-tui
+
+# Fast headless tests against production Lua modules in fresh Lua processes
+test-plugin *pytest_args:
+    uv sync --locked
+    uv run --frozen pytest -q -m plugin tests/plugin {{pytest_args}}
 
 # Fast black-box tests against a fresh wez-vtabs PTY per test
 test-tui *pytest_args:
@@ -35,7 +40,7 @@ test-tui *pytest_args:
 test-wezterm-e2e *pytest_args:
     @just _test-wezterm-e2e "not ssh_mux_e2e" {{pytest_args}}
 
-# Representative PR-gate subset of the real standalone mux suite
+# Representative subset of the real standalone mux suite
 test-wezterm-e2e-smoke *pytest_args:
     @just _test-wezterm-e2e "smoke and not ssh_mux_e2e" {{pytest_args}}
 
@@ -55,19 +60,19 @@ test-wezterm-ssh-e2e *pytest_args:
     VTABS_SSH_E2E=1 WEZ_VTABS_BIN="{{ justfile_directory() }}/backend/target/debug/wez-vtabs" uv run --frozen pytest -q -n 1 -m ssh_mux_e2e tests/wezterm {{pytest_args}}
 
 lint:
-    sh scripts/check-current-contract.sh
     uv sync --locked
     uv run --frozen ruff check tests
     uv run --frozen ruff format --check tests
     cd backend && cargo fmt --check && cargo clippy --all-targets --locked -- -D warnings
     cd backend && cargo run -q -p vtabs-protocol --bin gen-lua -- --check
     cd backend && cargo run -q -p vtabs-engine --bin gen-config -- --check
-    cd plugin && luacheck init.lua vtabs tests types && stylua --check init.lua vtabs tests types
+    cd plugin && luacheck init.lua vtabs types ../tests/wezterm/config.lua ../tests/typecheck/fixtures ../tests/plugin/lua/wezterm_stub.lua && stylua --config-path stylua.toml --check init.lua vtabs types ../tests/wezterm/config.lua ../tests/typecheck/fixtures ../tests/plugin/lua/wezterm_stub.lua
     lua scripts/gen-docs.lua --check
 
 # Check the public LuaCATS contract with lua-language-server
 typecheck:
-    sh scripts/check-types.sh
+    uv sync --locked
+    uv run --frozen pytest -q -m typecheck tests/typecheck
 
 # Regenerate all Rust-owned Lua mirrors and their derived documentation
 generate: gen-protocol gen-config docs
