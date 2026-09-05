@@ -5,6 +5,18 @@ use std::time::Duration;
 use vtabs_core::{Intent, Model, RailMode, SettingKind, settings};
 
 impl SidebarUi {
+    /// Report a failed native read without replacing an editor's unsaved contents.
+    pub fn clipboard_failed(&mut self, message: &str) {
+        if matches!(self.overlay, Some(Overlay::Form(_))) {
+            self.set_error(message);
+        } else {
+            if let Some(overlay) = self.overlay.take() {
+                self.overlay_stack.push(overlay);
+            }
+            self.show_error(message);
+        }
+    }
+
     pub fn text_input_active(&self) -> bool {
         match &self.overlay {
             Some(Overlay::Form(_)) => self.focused == Some(ElementId::Editor),

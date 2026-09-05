@@ -188,7 +188,7 @@ index 2a21edcf..b949e40c 100644
              self.min_scroll_bar_height() as usize,
          );
 diff --git a/wezterm-gui/src/termwindow/native_ui.rs b/wezterm-gui/src/termwindow/native_ui.rs
-index 9dfe7d55..184ce2ff 100644
+index 9dfe7d55..826a922e 100644
 --- a/wezterm-gui/src/termwindow/native_ui.rs
 +++ b/wezterm-gui/src/termwindow/native_ui.rs
 @@ -1,10 +1,11 @@
@@ -1213,6 +1213,32 @@ index 9dfe7d55..184ce2ff 100644
              ui.provider.render(geometry, Instant::now());
              let consumed = ui.provider.input(input);
              ui.needs_commit |= consumed;
+@@ -1198,16 +1974,16 @@ impl TermWindow {
+                     let window_id = self.mux_window_id;
+                     if let Some(window) = self.window.clone() {
+                         promise::spawn::spawn(async move {
+-                            if let Ok(text) =
+-                                window.get_clipboard(window::Clipboard::Clipboard).await
++                            let message = match window
++                                .get_clipboard(window::Clipboard::Clipboard)
++                                .await
+                             {
+-                                window.notify(TermWindowNotif::Apply(Box::new(move |tw| {
+-                                    tw.native_message_for(
+-                                        window_id,
+-                                        serde_json::json!({"paste":text,"token":token}),
+-                                    )
+-                                })));
+-                            }
++                                Ok(text) => serde_json::json!({"paste":text,"token":token}),
++                                Err(error) => serde_json::json!({"paste_error":error.to_string(),"token":token}),
++                            };
++                            window.notify(TermWindowNotif::Apply(Box::new(move |tw| {
++                                tw.native_message_for(window_id, message)
++                            })));
+                         })
+                         .detach();
+                     }
 @@ -1216,8 +1992,235 @@ impl TermWindow {
              }
          }

@@ -578,6 +578,26 @@ fn clipboard_commands_work_in_settings_search_and_color_forms() {
 }
 
 #[test]
+fn clipboard_error_preserves_search_draft_and_selection_for_retry() {
+    let model = model();
+    let mut ui = SidebarUi::new();
+    ui.open_tab_navigator(&model);
+    ui.event(&model, UiInput::Text("Alpha".into()));
+    command(&mut ui, &model, 'a');
+    ui.clipboard_failed("Clipboard unavailable. Try pasting again.");
+    draw(&mut ui, &model);
+    assert!(!ui.text_input_active());
+    key(&mut ui, &model, Key::Escape);
+    draw(&mut ui, &model);
+    assert!(ui.text_input_active());
+    assert_eq!(results(&ui), 1);
+    assert!(matches!(
+        command(&mut ui, &model, 'c').as_slice(),
+        [UiIntent::SetClipboard(text)] if text == "Alpha"
+    ));
+}
+
+#[test]
 fn editor_context_menu_preserves_form_drafts_and_applies_clipboard_actions() {
     let mut model = model();
     model.settings.keyboard_shortcuts = false;

@@ -9,7 +9,10 @@ use crate::termwindow::native_ui::{
     Bounds, Command, Geometry, Input, Navigation, Projection, Provider, Reservation,
     RoundedSurface, Snapshot, Surface,
 };
-use std::{collections::HashMap, time::Instant};
+use std::{
+    collections::{HashMap, VecDeque},
+    time::{Duration, Instant},
+};
 use vtabs_app::{self as app, core, ui, WindowApp};
 use window::{KeyCode, MouseEventKind, MousePress, Window};
 
@@ -17,6 +20,17 @@ pub use lua::register;
 
 pub fn create(window_id: usize) -> Box<dyn Provider> {
     Box::new(Adapter::new(window_id))
+}
+
+const PASTE_TIMEOUT: Duration = Duration::from_secs(1);
+const MAX_PASTE_INPUTS: usize = 128;
+const MAX_PASTE_INPUT_BYTES: usize = 16 * 1024;
+
+struct PendingPaste {
+    token: u64,
+    deadline: Instant,
+    inputs: VecDeque<ui::UiInput>,
+    bytes: usize,
 }
 
 struct Adapter {
@@ -42,6 +56,7 @@ struct Adapter {
     hooks_enabled: bool,
     window_hook_dirty: bool,
     input_epoch: u64,
+    pending_paste: Option<PendingPaste>,
     hook_queued: HashMap<u64, core::Tab>,
 }
 
@@ -82,6 +97,7 @@ impl Adapter {
             hooks_enabled: false,
             window_hook_dirty: true,
             input_epoch: 0,
+            pending_paste: None,
             hook_queued: HashMap::new(),
         }
     }
@@ -99,7 +115,7 @@ impl Adapter {
         }
     }
     fn dispatch(&mut self, intent: core::Intent) {
-        self.input_epoch = self.input_epoch.wrapping_add(1);
+        self.cancel_paste();
         let before = self.app.model().revision;
         let result = self.app.dispatch(intent);
         self.apply(result);
@@ -114,7 +130,15 @@ impl Adapter {
                 self.app.ui_mut().invalidate();
             }
             app::Command::SetClipboard(text) => self.commands.push(Command::Clipboard(text)),
-            app::Command::RequestClipboard => self.commands.push(Command::Paste(self.input_epoch)),
+            app::Command::RequestClipboard => {
+                self.pending_paste = Some(PendingPaste {
+                    token: self.input_epoch,
+                    deadline: Instant::now() + PASTE_TIMEOUT,
+                    inputs: VecDeque::new(),
+                    bytes: 0,
+                });
+                self.commands.push(Command::Paste(self.input_epoch));
+            }
             app::Command::Host(command) => match command {
                 C::Activate(id) => self.commands.push(Command::Activate(id as usize)),
                 C::Close(id) => self.commands.push(Command::Close(id as usize, false)),
@@ -157,6 +181,160 @@ impl Adapter {
         }
     }
     fn ui_input(&mut self, input: ui::UiInput) {
+        if self.pending_paste.is_some() {
+            if !self.app.ui().text_input_active() {
+                self.cancel_paste();
+            } else if self.defer_until_paste(&input) {
+                if self.pending_paste.as_ref().unwrap().deadline <= Instant::now() {
+                    self.finish_paste(None, Some(input));
+                    return;
+                }
+                let bytes = match &input {
+                    ui::UiInput::Text(text)
+                    | ui::UiInput::Paste(text)
+                    | ui::UiInput::ImeCommit(text)
+                    | ui::UiInput::ImePreedit { text, .. } => text.len(),
+                    _ => 0,
+                };
+                let pending = self.pending_paste.as_mut().unwrap();
+                if pending.inputs.len() < MAX_PASTE_INPUTS
+                    && bytes <= MAX_PASTE_INPUT_BYTES.saturating_sub(pending.bytes)
+                {
+                    pending.bytes += bytes;
+                    pending.inputs.push_back(input);
+                    return;
+                }
+                self.finish_paste(None, Some(input));
+                return;
+            } else if !matches!(&input, ui::UiInput::PointerMove { .. })
+                && !matches!(&input, ui::UiInput::ImePreedit { text, .. } if text.is_empty())
+            {
+                self.cancel_paste();
+            } else {
+                self.expire_paste(Instant::now());
+            }
+        }
+        self.deliver_ui_input(input);
+    }
+
+    fn defer_until_paste(&self, input: &ui::UiInput) -> bool {
+        match input {
+            ui::UiInput::Key { key, modifiers } => {
+                *key != ui::Key::Escape
+                    && !(self.app.model().settings.keyboard_shortcuts
+                        && ui::is_shortcut(key, *modifiers))
+            }
+            ui::UiInput::PointerDown { x, y, .. } => {
+                self.app
+                    .ui()
+                    .hit_test(*x, *y)
+                    .is_some_and(|hit| match &hit.id {
+                        ui::ElementId::Editor
+                        | ui::ElementId::SettingsSearch
+                        | ui::ElementId::Submit => true,
+                        ui::ElementId::Menu(id) => {
+                            matches!(id.as_str(), "cut" | "copy" | "paste" | "select-all")
+                        }
+                        _ => false,
+                    })
+            }
+            ui::UiInput::PointerMove { .. } => self.pointer_captured,
+            ui::UiInput::ImePreedit { text, .. } => {
+                !text.is_empty()
+                    || self.pending_paste.as_ref().is_some_and(|pending| {
+                        pending.inputs.iter().any(|input| {
+                            matches!(
+                                input,
+                                ui::UiInput::ImePreedit { .. } | ui::UiInput::ImeCommit(_)
+                            )
+                        })
+                    })
+            }
+            ui::UiInput::PointerUp { .. }
+            | ui::UiInput::Scroll { .. }
+            | ui::UiInput::Text(_)
+            | ui::UiInput::Paste(_)
+            | ui::UiInput::ImeCommit(_) => true,
+            ui::UiInput::Focus(_) | ui::UiInput::Visibility(_) => false,
+        }
+    }
+
+    fn cancel_paste(&mut self) {
+        self.pending_paste = None;
+        self.input_epoch = self.input_epoch.wrapping_add(1);
+    }
+
+    fn expire_paste(&mut self, now: Instant) {
+        if self
+            .pending_paste
+            .as_ref()
+            .is_some_and(|pending| now >= pending.deadline)
+        {
+            self.finish_paste(None, None);
+        }
+    }
+
+    fn finish_paste(&mut self, text: Option<String>, trailing: Option<ui::UiInput>) {
+        let Some(pending) = self.pending_paste.take() else {
+            return;
+        };
+        if pending.token != self.input_epoch || !self.app.ui().text_input_active() {
+            return;
+        }
+        let failed = text.is_none();
+        let revision = self.app.model().revision;
+        self.input_epoch = self.input_epoch.wrapping_add(1);
+        if let Some(text) = text {
+            self.deliver_ui_input(ui::UiInput::Paste(text));
+        } else {
+            log::warn!("native tabs: clipboard read failed or timed out");
+        }
+        let mut pointer_gesture = false;
+        for input in pending.inputs.into_iter().chain(trailing) {
+            // A failed read must not save the old value or launch further clipboard
+            // work from a deadline repaint. Keep typed text and caret edits for retry.
+            let safe_after_failure = match &input {
+                ui::UiInput::Text(_)
+                | ui::UiInput::ImeCommit(_)
+                | ui::UiInput::ImePreedit { .. } => true,
+                ui::UiInput::Key { key, modifiers } => {
+                    matches!(
+                        key,
+                        ui::Key::Character(_)
+                            | ui::Key::Backspace
+                            | ui::Key::Delete
+                            | ui::Key::Left
+                            | ui::Key::Right
+                            | ui::Key::Home
+                            | ui::Key::End
+                    ) && !(modifiers.command()
+                        && matches!(key, ui::Key::Character('c' | 'C' | 'x' | 'X' | 'v' | 'V')))
+                }
+                _ => false,
+            };
+            if failed && !safe_after_failure {
+                continue;
+            }
+            match &input {
+                ui::UiInput::PointerDown { .. } => pointer_gesture = true,
+                ui::UiInput::PointerUp { .. } => pointer_gesture = false,
+                _ => {}
+            }
+            self.ui_input(input);
+            if !pointer_gesture
+                && (self.app.model().revision != revision || !self.app.ui().text_input_active())
+            {
+                break;
+            }
+        }
+        if failed && self.app.model().revision == revision && self.app.ui().text_input_active() {
+            self.app
+                .ui_mut()
+                .clipboard_failed("Clipboard unavailable. Try pasting again.");
+        }
+    }
+
+    fn deliver_ui_input(&mut self, input: ui::UiInput) {
         // Passive pointer motion and composition cleanup retain an outstanding paste.
         let changes_input = match &input {
             ui::UiInput::PointerMove { .. } => self.pointer_captured,
@@ -293,6 +471,9 @@ impl Provider for Adapter {
         self.storage();
     }
     fn snapshot(&mut self, snapshot: Snapshot) {
+        if !snapshot.focused {
+            self.cancel_paste();
+        }
         self.app.set_window_identity(snapshot.window_id as u64);
         let before = self.app.model().revision;
         if self.config_generation != snapshot.config_epoch {
@@ -300,7 +481,7 @@ impl Provider for Adapter {
             self.hooks_enabled = lua::hooks_enabled();
             self.hook_metadata.clear();
             self.window_hook_dirty = true;
-            self.input_epoch = self.input_epoch.wrapping_add(1);
+            self.cancel_paste();
             let result = self.app.config(lua::configuration().value());
             self.apply(result);
         }
@@ -581,7 +762,7 @@ impl Provider for Adapter {
                 if !in_sidebar && !modal && !self.pointer_captured {
                     if matches!(event.kind, MouseEventKind::Press(_)) {
                         self.app.ui_mut().release_focus();
-                        self.input_epoch = self.input_epoch.wrapping_add(1);
+                        self.cancel_paste();
                     } else if matches!(event.kind, MouseEventKind::Move) {
                         self.ui_input(ui::UiInput::PointerMove {
                             x: u16::MAX,
@@ -661,7 +842,7 @@ impl Provider for Adapter {
                 if !focused {
                     self.pointer_captured = false;
                 }
-                self.input_epoch = self.input_epoch.wrapping_add(1);
+                self.cancel_paste();
                 self.app.set_focus(focused);
                 if focused {
                     self.app.refresh_storage();
@@ -720,11 +901,20 @@ impl Provider for Adapter {
             if let Ok(token) = serde_json::from_value::<app::SpawnToken>(context["token"].clone()) {
                 self.app.cancel_spawn(&token);
             }
-        } else if let Some(paste) = message.get("paste").and_then(|v| v.as_str()) {
-            if message["token"].as_u64() == Some(self.input_epoch)
-                && self.app.ui().text_input_active()
+        } else if message.get("paste").is_some() || message.get("paste_error").is_some() {
+            self.expire_paste(Instant::now());
+            if self
+                .pending_paste
+                .as_ref()
+                .is_some_and(|pending| message["token"].as_u64() == Some(pending.token))
             {
-                self.ui_input(ui::UiInput::Paste(paste.into()));
+                self.finish_paste(
+                    message
+                        .get("paste")
+                        .and_then(|value| value.as_str())
+                        .map(str::to_owned),
+                    None,
+                );
             }
         } else if let Some(result) = message.get("store") {
             self.outstanding = None;
@@ -743,7 +933,7 @@ impl Provider for Adapter {
                 self.app.storage_failed(request, error);
             }
         } else if let Some(action) = message.get("action") {
-            self.input_epoch = self.input_epoch.wrapping_add(1);
+            self.cancel_paste();
             match action.as_str() {
                 Some("settings") => self.app.open_settings(),
                 Some("create_space") => self.app.open_create_space(),
@@ -790,6 +980,7 @@ impl Provider for Adapter {
         std::mem::take(&mut self.commands)
     }
     fn render(&mut self, geometry: Geometry, now: Instant) {
+        self.expire_paste(now);
         if self.geometry != geometry {
             self.app.ui_mut().invalidate();
         }
@@ -884,6 +1075,9 @@ impl Provider for Adapter {
         self.app
             .next_deadline()
             .map(|duration| self.epoch + duration)
+            .into_iter()
+            .chain(self.pending_paste.as_ref().map(|pending| pending.deadline))
+            .min()
     }
     fn caret(&self) -> Option<(usize, usize)> {
         self.cursor
@@ -1336,6 +1530,254 @@ mod native_input_tests {
                 _ => None,
             })
             .expect("native clipboard write request")
+    }
+
+    fn editor_command(adapter: &mut Adapter, key: char) {
+        assert!(adapter.input(Input::RawKey(&raw(
+            KeyCode::Char(key),
+            window::Modifiers::CTRL,
+            true,
+        ))));
+    }
+
+    fn begin_paste(adapter: &mut Adapter) -> u64 {
+        editor_command(adapter, 'v');
+        paste_token(adapter)
+    }
+
+    fn editor_text(adapter: &mut Adapter) -> String {
+        editor_command(adapter, 'a');
+        editor_command(adapter, 'c');
+        copied_text(adapter)
+    }
+
+    #[test]
+    fn delayed_paste_precedes_typed_text_and_enter_without_timing_assumptions() {
+        config::designate_this_as_the_main_thread();
+        let mut adapter = Adapter::new(9850);
+        adapter.app.open_create_space();
+        let token = begin_paste(&mut adapter);
+        adapter.ui_input(ui::UiInput::Text(" suffix".into()));
+        adapter.ui_input(ui::UiInput::key(ui::Key::Enter));
+        adapter.ui_input(ui::UiInput::Text("must not reach another editor".into()));
+        assert_eq!(adapter.app.model().spaces.len(), 1);
+        adapter.message(serde_json::json!({"paste":"Project","token":token}));
+        assert!(adapter
+            .app
+            .model()
+            .spaces
+            .iter()
+            .any(|space| space.name == "Project suffix"));
+        assert!(adapter.pending_paste.is_none());
+        adapter.render(geometry(), Instant::now());
+        assert!(!adapter.app.ui().has_overlay());
+    }
+
+    #[test]
+    fn delayed_pastes_preserve_copy_cut_and_multiple_read_order() {
+        config::designate_this_as_the_main_thread();
+        let mut adapter = Adapter::new(9851);
+        adapter.app.open_create_space();
+        let first = begin_paste(&mut adapter);
+        editor_command(&mut adapter, 'a');
+        editor_command(&mut adapter, 'c');
+        editor_command(&mut adapter, 'x');
+        editor_command(&mut adapter, 'v');
+        adapter.ui_input(ui::UiInput::Text(" tail".into()));
+        assert!(adapter.commands().is_empty());
+        adapter.message(serde_json::json!({"paste":"First","token":first}));
+        let commands = adapter.commands();
+        assert!(
+            matches!(commands.as_slice(), [Command::Clipboard(copy), Command::Clipboard(cut), Command::Paste(_)] if copy == "First" && cut == "First")
+        );
+        let second = adapter.pending_paste.as_ref().unwrap().token;
+        assert_ne!(first, second);
+        adapter.message(serde_json::json!({"paste":"stale","token":first}));
+        adapter.message(serde_json::json!({"paste":"Second","token":second}));
+        assert_eq!(editor_text(&mut adapter), "Second tail");
+    }
+
+    #[test]
+    fn failed_or_expired_paste_preserves_typing_but_never_submits_the_old_value() {
+        config::designate_this_as_the_main_thread();
+        for expired in [false, true] {
+            let mut adapter = Adapter::new(9852);
+            adapter.app.open_create_space();
+            adapter.ui_input(ui::UiInput::Text("Old".into()));
+            let token = begin_paste(&mut adapter);
+            adapter.ui_input(ui::UiInput::Text(" tail".into()));
+            adapter.ui_input(ui::UiInput::key(ui::Key::Enter));
+            adapter.ui_input(ui::UiInput::key(ui::Key::F10));
+            editor_command(&mut adapter, 'x');
+            editor_command(&mut adapter, 'v');
+            if expired {
+                let deadline = adapter.pending_paste.as_ref().unwrap().deadline;
+                assert!(adapter.deadline().unwrap() <= deadline);
+                adapter.render(geometry(), deadline);
+            } else {
+                adapter.message(serde_json::json!({"paste_error":"unavailable","token":token}));
+                adapter.render(geometry(), Instant::now());
+            }
+            assert!(adapter.pending_paste.is_none());
+            assert!(adapter.commands().is_empty());
+            assert_eq!(adapter.app.model().spaces.len(), 1);
+            assert!(adapter.app.ui().has_overlay());
+            let rendered = adapter
+                .app
+                .buffer()
+                .content
+                .iter()
+                .map(|cell| cell.symbol())
+                .collect::<String>();
+            assert!(rendered.contains("Clipboard unavailable"));
+            adapter.message(serde_json::json!({"paste":"late","token":token}));
+            assert_eq!(editor_text(&mut adapter), "Old tail");
+        }
+    }
+
+    #[test]
+    fn pending_paste_bounds_release_input_and_ignore_late_completion() {
+        config::designate_this_as_the_main_thread();
+        for bytes in [false, true] {
+            let mut adapter = Adapter::new(9853);
+            adapter.app.open_create_space();
+            let token = begin_paste(&mut adapter);
+            if bytes {
+                adapter.ui_input(ui::UiInput::Text("x".repeat(MAX_PASTE_INPUT_BYTES + 1)));
+            } else {
+                for _ in 0..=MAX_PASTE_INPUTS {
+                    adapter.ui_input(ui::UiInput::key(ui::Key::Character('x')));
+                }
+            }
+            assert!(adapter.pending_paste.is_none());
+            adapter.message(serde_json::json!({"paste":"late","token":token}));
+            let expected = if bytes {
+                ui::TextEditor::MAX_BYTES
+            } else {
+                MAX_PASTE_INPUTS + 1
+            };
+            assert_eq!(editor_text(&mut adapter), "x".repeat(expected));
+        }
+    }
+
+    #[test]
+    fn pending_paste_cancels_queued_input_on_escape_and_focus_departure() {
+        config::designate_this_as_the_main_thread();
+        for focus_loss in [false, true] {
+            let mut adapter = Adapter::new(9854);
+            adapter.app.open_create_space();
+            let token = begin_paste(&mut adapter);
+            adapter.ui_input(ui::UiInput::Text("discarded".into()));
+            adapter.ui_input(ui::UiInput::key(ui::Key::Enter));
+            if focus_loss {
+                adapter.input(Input::Focus(false));
+                adapter.input(Input::Focus(true));
+            } else {
+                adapter.ui_input(ui::UiInput::key(ui::Key::Escape));
+                adapter.message(serde_json::json!({"action":"create_space"}));
+            }
+            adapter.ui_input(ui::UiInput::Text("Keep".into()));
+            adapter.message(serde_json::json!({"paste":"late","token":token}));
+            assert_eq!(editor_text(&mut adapter), "Keep");
+            assert_eq!(adapter.app.model().spaces.len(), 1);
+        }
+    }
+
+    #[test]
+    fn pending_paste_precedes_clipboard_context_and_mouse_submit() {
+        config::designate_this_as_the_main_thread();
+        let mut adapter = Adapter::new(9855);
+        adapter.app.open_create_space();
+        let token = begin_paste(&mut adapter);
+        editor_command(&mut adapter, 'a');
+        adapter.ui_input(ui::UiInput::key(ui::Key::F10));
+        editor_command(&mut adapter, 'c');
+        adapter.message(serde_json::json!({"paste":"Project","token":token}));
+        assert_eq!(copied_text(&mut adapter), "Project");
+        adapter.render(geometry(), Instant::now());
+        let submit = adapter
+            .app
+            .ui()
+            .hit_regions()
+            .iter()
+            .find(|hit| hit.id == ui::ElementId::Submit)
+            .unwrap()
+            .rect;
+        let token = begin_paste(&mut adapter);
+        adapter.ui_input(ui::UiInput::PointerDown {
+            x: submit.x,
+            y: submit.y,
+            button: ui::MouseButton::Left,
+            modifiers: ui::Modifiers::default(),
+        });
+        adapter.ui_input(ui::UiInput::PointerUp {
+            x: submit.x,
+            y: submit.y,
+            button: ui::MouseButton::Left,
+        });
+        adapter.message(serde_json::json!({"paste":"Mouse submit","token":token}));
+        assert!(adapter
+            .app
+            .model()
+            .spaces
+            .iter()
+            .any(|space| space.name == "Mouse submit"));
+    }
+
+    #[test]
+    fn enter_arriving_after_the_paste_deadline_does_not_submit_stale_text() {
+        config::designate_this_as_the_main_thread();
+        let mut adapter = Adapter::new(9856);
+        adapter.app.open_create_space();
+        adapter.ui_input(ui::UiInput::Text("Old".into()));
+        let token = begin_paste(&mut adapter);
+        adapter.pending_paste.as_mut().unwrap().deadline = Instant::now();
+        adapter.ui_input(ui::UiInput::key(ui::Key::Enter));
+        assert_eq!(adapter.app.model().spaces.len(), 1);
+        assert!(adapter.pending_paste.is_none());
+        adapter.message(serde_json::json!({"paste":"late","token":token}));
+        assert_eq!(editor_text(&mut adapter), "Old");
+    }
+
+    #[test]
+    fn paste_replay_stops_at_focus_departure_and_preserves_ime_cancellation() {
+        config::designate_this_as_the_main_thread();
+        let mut adapter = Adapter::new(9857);
+        adapter.app.open_create_space();
+        adapter.render(geometry(), Instant::now());
+        let token = begin_paste(&mut adapter);
+        adapter.ui_input(ui::UiInput::ImePreedit {
+            text: "かな".into(),
+            cursor: None,
+        });
+        adapter.ui_input(ui::UiInput::ImePreedit {
+            text: String::new(),
+            cursor: None,
+        });
+        adapter.message(serde_json::json!({"paste":"Project","token":token}));
+        adapter.render(geometry(), Instant::now());
+        let rendered = adapter
+            .app
+            .buffer()
+            .content
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+        assert!(!rendered.contains("かな"));
+        let token = begin_paste(&mut adapter);
+        adapter.ui_input(ui::UiInput::key(ui::Key::Tab));
+        adapter.ui_input(ui::UiInput::Text("discarded".into()));
+        adapter.ui_input(ui::UiInput::key(ui::Key::Enter));
+        adapter.message(serde_json::json!({"paste":" next","token":token}));
+        assert_eq!(adapter.app.ui().focused(), Some(&ui::ElementId::Submit));
+        assert_eq!(adapter.app.model().spaces.len(), 1);
+        adapter.ui_input(ui::UiInput::key(ui::Key::Enter));
+        assert!(adapter
+            .app
+            .model()
+            .spaces
+            .iter()
+            .any(|space| space.name == "Project next"));
     }
 
     #[test]

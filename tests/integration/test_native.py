@@ -1,7 +1,8 @@
 """Production native startup, rendering, and shutdown on owned displays."""
 
 import json
-from contextlib import ExitStack
+import subprocess
+from contextlib import ExitStack, suppress
 
 import pytest
 
@@ -59,6 +60,17 @@ def test_native_keyboard_pointer_and_clipboard(native_binaries, headless_display
         report = scenarios(probe, gui)
         (tmp_path / "report.json").write_text(json.dumps(report, indent=2) + "\n")
         assert report["errors"] == []
+    except Exception as error:
+        (tmp_path / "report.json").write_text(
+            json.dumps(
+                {"passed": False, "error": str(error), "screenshots": gui.captures}, indent=2
+            )
+            + "\n"
+        )
+        if gui.window is not None:
+            with suppress(OSError, subprocess.SubprocessError, AssertionError):
+                gui.capture("failure", pause=0)
+        raise
     finally:
         probe.close()
 
