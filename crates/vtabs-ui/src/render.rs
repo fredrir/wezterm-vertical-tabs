@@ -124,7 +124,7 @@ impl SidebarUi {
             .render(area, &mut self.staging);
         if area.width > 0 && area.height > 0 {
             let width = self.sidebar_columns.unwrap_or(area.width).min(area.width);
-            let sidebar = if self.settings_page && area.width > width {
+            let sidebar = if (self.settings_page || self.overlay_surface()) && area.width > width {
                 Rect::new(
                     if model.settings.side == vtabs_core::Side::Right {
                         area.right() - width
@@ -164,15 +164,7 @@ impl SidebarUi {
             if let Some(mut overlay) = self.overlay.take() {
                 // Modal hit regions replace underlying targets; background clicks dismiss.
                 self.hits.clear();
-                self.compose_overlay(
-                    model,
-                    if self.settings_page {
-                        self.page_rect
-                    } else {
-                        area
-                    },
-                    &mut overlay,
-                );
+                self.compose_overlay(model, area, &mut overlay);
                 self.overlay = Some(overlay);
             } else if self.show_tooltip {
                 self.compose_tooltip(area);
@@ -284,6 +276,7 @@ impl SidebarUi {
                 .or_else(|| Theme::parse_color(&settings.accent))
                 .unwrap_or(self.theme.accent)
         };
+        self.theme.sync_surfaces();
     }
 
     fn prune_targets(&mut self, model: &Model) {
@@ -365,9 +358,6 @@ impl SidebarUi {
         if self.hovered.as_ref() == Some(id) {
             style = style.bg(self.theme.card).fg(self.theme.accent);
         }
-        if self.focused.as_ref() == Some(id) {
-            style = style.add_modifier(Modifier::UNDERLINED);
-        }
         style
     }
 
@@ -391,21 +381,12 @@ impl SidebarUi {
             Overlay::Form(_) => 7,
         };
         let height = area.height.min(desired_height);
-        let rect = if searching && !self.settings_page && !self.search_rect.is_empty() {
-            Rect::new(
-                self.search_rect.x,
-                self.search_rect.y,
-                self.search_rect.width,
-                height.min(area.bottom().saturating_sub(self.search_rect.y)),
-            )
-        } else {
-            Rect::new(
-                area.x + (area.width - width) / 2,
-                area.y + (area.height - height) / 2,
-                width,
-                height,
-            )
-        };
+        let rect = Rect::new(
+            area.x + (area.width - width) / 2,
+            area.y + (area.height - height) / 2,
+            width,
+            height,
+        );
         self.overlay_rect = rect;
         Clear.render(rect, &mut self.staging);
         self.rounded(rect, self.theme.background, self.theme.border);
@@ -431,23 +412,20 @@ impl SidebarUi {
                         1,
                     );
                     if let Some(search) = &mut menu.search {
-                        self.rounded(
-                            Rect::new(
-                                rect.x,
-                                rect.y,
-                                rect.width,
-                                if search_header { 3 } else { 1 },
-                            ),
-                            self.theme.card,
-                            self.theme.accent,
+                        let field = Rect::new(
+                            rect.x,
+                            rect.y,
+                            rect.width,
+                            if search_header { 3 } else { 1 },
                         );
+                        self.rounded(field, self.theme.card, self.theme.accent);
                         let label = if title.width >= 12 { "⌕ " } else { "" };
                         let label_width = label.width() as u16;
                         let edit =
                             Rect::new(title.x + label_width, title.y, title.width - label_width, 1);
                         self.editor_rect = edit;
                         self.write(title, label, self.theme.muted());
-                        self.hit(ElementId::Editor, edit, "Search tabs");
+                        self.hit(ElementId::Editor, field, "Search tabs");
                         search.editor.keep_cursor_visible(usize::from(edit.width));
                         let mut col = 0;
                         let text: String = search
@@ -652,6 +630,7 @@ impl SidebarUi {
                     fill: self.theme.accent,
                     border: self.theme.accent,
                     radius: 2.0,
+                    inset: 0.0,
                 });
                 for x in columns {
                     self.staging[(x, rect.y)].set_style(
@@ -675,6 +654,8 @@ impl SidebarUi {
             .and_then(|id| self.hits.iter().find(|hit| &hit.id == id))
             .cloned()
         else {
+            self.show_tooltip = false;
+            self.tooltip_deadline = None;
             return;
         };
         if area.width < 8 || area.height < 4 {
@@ -706,16 +687,12 @@ impl SidebarUi {
         }
         let height = (lines + 2).min(usize::from(area.height)) as u16;
         let width = width as u16 + 2;
-        let below = hit.rect.bottom().saturating_add(1);
-        let y = if below.saturating_add(height) <= area.bottom() {
-            below
-        } else if hit.rect.y.saturating_sub(area.y) > height {
-            hit.rect.y - height - 1
-        } else {
-            hit.rect.y.min(area.bottom() - height).max(area.y)
-        };
-        let x = hit.rect.x.min(area.right() - width).max(area.x);
-        let rect = Rect::new(x, y, width, height);
+        let rect = Rect::new(
+            area.x + (area.width - width) / 2,
+            area.y + (area.height - height) / 2,
+            width,
+            height,
+        );
         Clear.render(rect, &mut self.staging);
         self.rounded(rect, self.theme.card, self.theme.border);
         let content = Rect::new(rect.x + 1, rect.y + 1, rect.width - 2, rect.height - 2);

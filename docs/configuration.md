@@ -183,3 +183,11 @@ vtabs.apply_to_config(config, {
 | `wezterm.native_tabs.inspect(window)` | Async diagnostic projection, geometry, model summary and native CPU timing counters |
 
 Use [development.md](development.md) for installation, build/update commands and GUI verification. Storage boundaries are documented in [protocol.md](protocol.md).
+
+| Appearance | Default behavior |
+| --- | --- |
+| Palette | Dark blue background `#192231`, accent `#a9c7f5`; saved and explicit colors retain priority |
+| Frame | Sidebar background surrounds rounded terminal content on every edge |
+| Search | Compact sidebar trigger; launcher and tooltips centered across the window |
+| Icons | Active foreground color; subtle centered hover surface |
+| Clipboard | Cmd/Ctrl+A, C, X and V in editors; Ctrl+Shift variants supported |

@@ -36,6 +36,41 @@ fn selection_copy_cut_and_paste_are_explicit_native_requests() {
 }
 
 #[test]
+fn copy_and_cut_without_selection_preserve_the_clipboard() {
+    for modifiers in [
+        Modifiers {
+            super_key: true,
+            ..Modifiers::default()
+        },
+        Modifiers {
+            control: true,
+            ..Modifiers::default()
+        },
+        Modifiers {
+            control: true,
+            shift: true,
+            ..Modifiers::default()
+        },
+    ] {
+        let mut editor = TextEditor::new("Keep this");
+        assert_eq!(
+            editor.key(&Key::Character('c'), modifiers),
+            EditResult::Unhandled
+        );
+        assert_eq!(
+            editor.key(&Key::Character('x'), modifiers),
+            EditResult::Unhandled
+        );
+        assert_eq!(editor.text(), "Keep this");
+        editor.select_all();
+        assert_eq!(
+            editor.key(&Key::Character('c'), modifiers),
+            EditResult::Copy("Keep this".into())
+        );
+    }
+}
+
+#[test]
 fn word_selection_and_combining_insertion_keep_valid_cursor() {
     let mut edit = TextEditor::new("one two");
     edit.key(

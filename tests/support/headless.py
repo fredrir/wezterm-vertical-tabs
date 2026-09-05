@@ -80,7 +80,7 @@ class HeadlessDisplay:
                     str(write_fd),
                     "-screen",
                     "0",
-                    "1280x900x24",
+                    "1600x1100x24",
                     "-nolisten",
                     "tcp",
                 ],

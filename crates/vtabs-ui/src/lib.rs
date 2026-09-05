@@ -101,6 +101,7 @@ enum Action {
     Settings,
     EditSetting(String),
     ResetSetting(String),
+    EditorCommand { key: Key, target: ElementId },
     Submenu { title: String, items: Vec<MenuItem> },
     Confirm { label: String, action: Box<Action> },
     Close,
@@ -243,6 +244,7 @@ pub struct RoundedSurface {
     pub fill: ratatui::style::Color,
     pub border: ratatui::style::Color,
     pub radius: f32,
+    pub inset: f32,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -331,9 +333,10 @@ impl SidebarUi {
     pub fn is_modal(&self) -> bool {
         self.overlay.is_some() || self.settings_page
     }
-    /// Forms and menus need usable width even when the user's rail preference is hidden.
+    /// Settings retain a sidebar beside their content page. Transient surfaces use the
+    /// window viewport without changing the user's sidebar reservation.
     pub fn needs_expanded_space(&self) -> bool {
-        self.is_modal()
+        self.settings_page
     }
     pub fn has_focus(&self) -> bool {
         self.focused.is_some() || self.is_modal()
@@ -453,22 +456,27 @@ impl SidebarUi {
     }
     fn start_effect(&mut self, model: &Model) {
         self.effect = None;
+        self.effect_area = None;
         if model.settings.animations
             && !model.settings.reduced_motion
             && model.settings.animation_ms > 0
             && self.visible
             && self.window_focused
         {
+            let Some(area) = self
+                .hovered
+                .as_ref()
+                .or(self.focused.as_ref())
+                .and_then(|id| self.hits.iter().find(|hit| &hit.id == id))
+                .map(|hit| hit.rect)
+            else {
+                return;
+            };
             self.effect = Some(fx::fade_from_fg(
                 self.theme.muted,
                 u32::from(model.settings.animation_ms),
             ));
-            self.effect_area = self
-                .hovered
-                .as_ref()
-                .or(self.focused.as_ref())
-                .and_then(|id| self.hits.iter().find(|h| &h.id == id))
-                .map(|h| h.rect);
+            self.effect_area = Some(area);
         }
     }
     /// Animate only the native surface. The caller has already committed the final pane
@@ -489,6 +497,8 @@ impl SidebarUi {
         self.overlay_stack.clear();
         self.focused = self.restore_focus.take();
         self.caret_deadline = None;
+        self.show_tooltip = false;
+        self.tooltip_deadline = None;
         self.cancel_effects();
         self.dirty = true;
     }
@@ -510,6 +520,11 @@ impl SidebarUi {
     pub fn content_page(&self) -> bool {
         self.settings_page
     }
+    /// Transient UI uses the window viewport while the terminal remains visible. Reserve
+    /// that viewport while a tooltip is pending so its first visible frame is centered.
+    pub fn overlay_surface(&self) -> bool {
+        self.overlay.is_some() || self.show_tooltip || self.tooltip_deadline.is_some()
+    }
     pub fn rounded_surfaces(&self) -> &[RoundedSurface] {
         &self.rounded_surfaces
     }
@@ -529,6 +544,8 @@ impl SidebarUi {
     fn open_overlay(&mut self, overlay: Overlay) {
         self.cancel_effects();
         self.caret_deadline = None;
+        self.show_tooltip = false;
+        self.tooltip_deadline = None;
         if self.overlay.is_none() && self.overlay_stack.is_empty() {
             self.restore_focus = self.focused.clone();
         }

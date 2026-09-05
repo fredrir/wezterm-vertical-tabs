@@ -5,7 +5,27 @@ use ratatui::{
     widgets::{Block, Widget},
 };
 use unicode_segmentation::UnicodeSegmentation;
+use unicode_width::UnicodeWidthStr;
 use vtabs_core::{Model, RailMode};
+
+fn icon_rect(mut rect: Rect, label: &str) -> Rect {
+    let width = label.width();
+    if usize::from(rect.width) > width && usize::from(rect.width) % 2 != width % 2 {
+        rect.x += 1;
+        rect.width -= 1;
+    }
+    rect
+}
+
+fn platform_tooltip(tooltip: String) -> String {
+    if cfg!(target_os = "macos") {
+        tooltip
+    } else {
+        tooltip
+            .replace("Cmd+Shift+", "Ctrl+Shift+")
+            .replace("Cmd+", "Ctrl+Shift+")
+    }
+}
 
 impl SidebarUi {
     pub(crate) fn rounded(&mut self, rect: Rect, fill: Color, border: Color) {
@@ -21,6 +41,7 @@ impl SidebarUi {
             fill,
             border,
             radius: 9.0,
+            inset: 0.0,
         });
     }
 
@@ -32,22 +53,10 @@ impl SidebarUi {
         tooltip: String,
         selected: bool,
     ) {
-        let mut style = self.item_style(&id, selected);
-        let hovered = self.hovered.as_ref() == Some(&id)
-            || matches!((&id, &self.hovered), (ElementId::Tab(tab), Some(ElementId::CloseTab(close))) if tab == close);
-        let focused = self.focused.as_ref() == Some(&id);
-        let fill = if selected || self.drag.as_ref() == Some(&id) && !self.dragging {
-            self.theme.selected
-        } else if hovered {
-            self.theme.card
-        } else {
-            self.theme.background
-        };
-        self.rounded(rect, fill, if focused { self.theme.accent } else { fill });
-        if id == ElementId::NewTab && !hovered && !focused {
-            style = style.fg(self.theme.muted);
+        if rect.is_empty() {
+            return;
         }
-        let centered = matches!(
+        let icon = matches!(
             id,
             ElementId::Rail
                 | ElementId::Settings
@@ -55,7 +64,54 @@ impl SidebarUi {
                 | ElementId::CreateFolder
                 | ElementId::CreateSpace
                 | ElementId::Space(_)
-        ) || rect.width < 12 && matches!(id, ElementId::Tab(_) | ElementId::NewTab);
+        );
+        let mut style = self.item_style(&id, selected);
+        let hovered = self.hovered.as_ref() == Some(&id)
+            || matches!((&id, &self.hovered), (ElementId::Tab(tab), Some(ElementId::CloseTab(close))) if tab == close);
+        let focused = self.focused.as_ref() == Some(&id);
+        let visual = if icon {
+            icon_rect(rect, label.trim())
+        } else {
+            rect
+        };
+        let pressed = self.drag.as_ref() == Some(&id) && !self.dragging;
+        let fill = if icon {
+            if hovered || pressed {
+                self.theme.hover
+            } else {
+                self.theme.background
+            }
+        } else if selected || pressed {
+            self.theme.selected
+        } else if hovered {
+            self.theme.card
+        } else {
+            self.theme.background
+        };
+        self.rounded(visual, fill, if focused { self.theme.accent } else { fill });
+        if icon {
+            if let Some(surface) = self.rounded_surfaces.last_mut() {
+                surface.inset = if rect.width >= 3 && rect.height >= 2 {
+                    5.0
+                } else {
+                    2.0
+                };
+                surface.radius = 8.0;
+            }
+            style = self
+                .theme
+                .base()
+                .fg(if selected || hovered || focused || pressed {
+                    self.theme.accent
+                } else {
+                    self.theme.muted
+                });
+        }
+        if id == ElementId::NewTab && !hovered && !focused {
+            style = style.fg(self.theme.muted);
+        }
+        let centered =
+            icon || rect.width < 12 && matches!(id, ElementId::Tab(_) | ElementId::NewTab);
         let label = if centered {
             Line::from(label.trim().to_owned()).alignment(Alignment::Center)
         } else {
@@ -67,18 +123,11 @@ impl SidebarUi {
             rect.y + rect.height.saturating_sub(1) / 2
         };
         self.write(
-            Rect::new(rect.x, text_y, rect.width, 1),
+            Rect::new(visual.x, text_y, visual.width, 1),
             label,
             style.bg(fill),
         );
-        let tooltip = if cfg!(target_os = "macos") {
-            tooltip
-        } else {
-            tooltip
-                .replace("Cmd+Shift+", "Ctrl+Shift+")
-                .replace("Cmd+", "Ctrl+Shift+")
-        };
-        self.hit(id, rect, tooltip);
+        self.hit(id, rect, platform_tooltip(tooltip));
     }
 
     pub(crate) fn sidebar_entries(model: &Model) -> Vec<SidebarRow> {
@@ -200,11 +249,16 @@ impl SidebarUi {
             );
         }
         let search_y = inner.y + toolbar_height;
-        let search_height = if area.height >= 12 { 3 } else { 1 };
+        let search_height = if area.height >= 12 { 2 } else { 1 };
         let search = Rect::new(inner.x, search_y, inner.width, search_height);
         self.search_rect = search;
+        let search_visual = if compact {
+            icon_rect(search, "⌕")
+        } else {
+            search
+        };
         self.rounded(
-            search,
+            search_visual,
             self.theme.card,
             if self.hovered == Some(ElementId::Search) || self.focused == Some(ElementId::Search) {
                 self.theme.accent
@@ -219,15 +273,21 @@ impl SidebarUi {
         };
         self.write(
             Rect::new(
-                search.x + u16::from(search.width > 1),
-                search.y + search.height / 2,
-                search.width.saturating_sub(2),
+                search_visual.x + u16::from(!compact && search_visual.width > 1),
+                search.y + search.height.saturating_sub(1) / 2,
+                search_visual
+                    .width
+                    .saturating_sub(if compact { 0 } else { 2 }),
                 1,
             ),
             search_label,
             self.theme.muted().bg(self.theme.card),
         );
-        self.hit(ElementId::Search, search, "Search tabs  Cmd+K");
+        self.hit(
+            ElementId::Search,
+            search,
+            platform_tooltip("Search tabs  Cmd+K".into()),
+        );
         let title_y = search.bottom();
         if title_y < footer_y && !compact {
             let name = model
@@ -423,7 +483,7 @@ impl SidebarUi {
                             Line::from("×").alignment(Alignment::Center),
                             self.item_style(&close_id, false).bg(fill),
                         );
-                        self.hit(close_id, close, "Close tab  Cmd+W");
+                        self.hit(close_id, close, platform_tooltip("Close tab  Cmd+W".into()));
                     }
                     if row_height >= 3 {
                         self.write(
@@ -434,7 +494,7 @@ impl SidebarUi {
                                 1,
                             ),
                             format!("{}  {}", display_text(&tab.cwd), display_text(&tab.domain)),
-                            self.theme.muted().bg(fill),
+                            self.theme.secondary_on(fill),
                         );
                     }
                 }
@@ -476,6 +536,7 @@ impl SidebarUi {
                 fill: Color::Reset,
                 border: self.theme.accent,
                 radius: 9.0,
+                inset: 0.0,
             });
         }
         if footer_height >= 3 {

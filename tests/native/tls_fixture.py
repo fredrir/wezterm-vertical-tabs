@@ -206,24 +206,34 @@ class LocalTlsMux:
                 time.sleep(0.05)
 
     def close(self) -> None:
-        if self.process is not None and self.process.poll() is None:
-            if os.name == "nt":
-                self.process.terminate()
-            else:
-                os.killpg(self.process.pid, signal.SIGTERM)
-            try:
-                self.process.wait(timeout=5)
-            except subprocess.TimeoutExpired:
+        try:
+            if self.process is not None:
                 if os.name == "nt":
-                    self.process.kill()
+                    if self.process.poll() is None:
+                        self.process.terminate()
                 else:
-                    os.killpg(self.process.pid, signal.SIGKILL)
-                self.process.wait(timeout=5)
-        if self.log is not None:
-            self.log.close()
-        if self.owns_certificates:
-            for key in self.certificates.glob("*.key"):
-                key.unlink(missing_ok=True)
+                    try:
+                        os.killpg(self.process.pid, signal.SIGTERM)
+                    except ProcessLookupError:
+                        pass
+                try:
+                    self.process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    if os.name == "nt":
+                        self.process.kill()
+                finally:
+                    if os.name != "nt":
+                        try:
+                            os.killpg(self.process.pid, signal.SIGKILL)
+                        except ProcessLookupError:
+                            pass
+                    self.process.wait(timeout=5)
+        finally:
+            if self.log is not None:
+                self.log.close()
+            if self.owns_certificates:
+                for key in self.certificates.glob("*.key"):
+                    key.unlink(missing_ok=True)
 
 
 def main() -> None:

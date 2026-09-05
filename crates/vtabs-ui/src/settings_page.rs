@@ -531,7 +531,7 @@ impl SidebarUi {
                 } else {
                     field.description
                 },
-                self.theme.muted().bg(fill),
+                self.theme.secondary_on(fill),
             );
         }
         self.hit(

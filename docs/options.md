@@ -14,11 +14,11 @@
 | `show_metadata` | `false` | Boolean. Show current directory and domain |
 | `show_close` | `true` | Boolean. Show close controls |
 | `confirm_close` | `true` | Boolean. Confirm destructive UI close actions |
-| `accent` | `"#a7c5b5"` | Hex color `#RRGGBB`. Default accent color |
-| `background` | `"#1d2423"` | Hex color `#RRGGBB`. Surface background |
-| `foreground` | `"#e2e8e4"` | Hex color `#RRGGBB`. Text foreground |
-| `muted` | `"#a1afa8"` | Hex color `#RRGGBB`. Secondary text foreground |
-| `selected_background` | `"#34483f"` | Hex color `#RRGGBB`. Selected card background |
+| `accent` | `"#a9c7f5"` | Hex color `#RRGGBB`. Default accent color |
+| `background` | `"#192231"` | Hex color `#RRGGBB`. Surface background |
+| `foreground` | `"#e1e7f0"` | Hex color `#RRGGBB`. Text foreground |
+| `muted` | `"#98a8be"` | Hex color `#RRGGBB`. Secondary text foreground |
+| `selected_background` | `"#34485f"` | Hex color `#RRGGBB`. Selected card background |
 | `private_accent` | `"#cba6f7"` | Hex color `#RRGGBB`. Private window accent |
 | `keyboard_shortcuts` | `true` | Boolean. Enable native tab, search, settings and sidebar shortcuts |
 | `reopen_limit` | `20` | Integer 0–100. Maximum in-memory launch intents |

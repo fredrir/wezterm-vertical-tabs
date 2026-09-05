@@ -280,14 +280,21 @@ impl TextEditor {
     }
     pub fn key(&mut self, key: &Key, mods: Modifiers) -> EditResult {
         use EditResult::*;
-        if mods.command() {
+        if mods.command() && !mods.alt {
             match key {
                 Key::Character('a' | 'A') => {
                     self.select_all();
                     return Changed;
                 }
-                Key::Character('c' | 'C') => return Copy(self.selected_text().to_owned()),
+                Key::Character('c' | 'C') => {
+                    return self
+                        .selection()
+                        .map_or(Unhandled, |_| Copy(self.selected_text().to_owned()));
+                }
                 Key::Character('x' | 'X') => {
+                    if self.selection().is_none() {
+                        return Unhandled;
+                    }
                     let value = self.selected_text().to_owned();
                     self.delete_selection();
                     return Copy(value);

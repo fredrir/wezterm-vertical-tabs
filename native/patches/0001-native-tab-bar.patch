@@ -432,7 +432,7 @@ index d0f0ff97..6f00f347 100644
 +++ b/wezterm-gui/src/termwindow/mod.rs
 @@ -1,5 +1,6 @@
  #![allow(clippy::range_plus_one)]
-
+ 
 +pub mod native_ui;
  use super::renderstate::*;
  use super::utilsprites::RenderMetrics;

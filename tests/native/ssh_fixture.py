@@ -200,18 +200,27 @@ class LocalSshMux:
         return self.domain
 
     def close(self):
-        for process in reversed(self.processes):
-            if process.poll() is None:
-                os.killpg(process.pid, signal.SIGTERM)
+        try:
+            for process in reversed(self.processes):
+                try:
+                    os.killpg(process.pid, signal.SIGTERM)
+                except ProcessLookupError:
+                    pass
                 try:
                     process.wait(timeout=5)
                 except subprocess.TimeoutExpired:
-                    os.killpg(process.pid, signal.SIGKILL)
+                    pass
+                finally:
+                    try:
+                        os.killpg(process.pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
                     process.wait(timeout=5)
-        for log in self.logs:
-            log.close()
-        for name in ("host_key", "client_key"):
-            (self.root / name).unlink(missing_ok=True)
+        finally:
+            for log in self.logs:
+                log.close()
+            for name in ("host_key", "client_key"):
+                (self.root / name).unlink(missing_ok=True)
 
 
 def main():

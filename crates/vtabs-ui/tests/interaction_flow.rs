@@ -54,6 +54,44 @@ fn hit(ui: &SidebarUi, id: &ElementId) -> Rect {
         .rect
 }
 
+fn click(ui: &mut SidebarUi, model: &Model, id: &ElementId) -> Vec<UiIntent> {
+    let rect = hit(ui, id);
+    let mut intents = ui.event(
+        model,
+        UiInput::PointerDown {
+            x: rect.x,
+            y: rect.y,
+            button: MouseButton::Left,
+            modifiers: Modifiers::default(),
+        },
+    );
+    intents.extend(ui.event(
+        model,
+        UiInput::PointerUp {
+            x: rect.x,
+            y: rect.y,
+            button: MouseButton::Left,
+        },
+    ));
+    intents
+}
+
+fn context(ui: &mut SidebarUi, model: &Model, id: &ElementId) {
+    let rect = hit(ui, id);
+    assert!(
+        ui.event(
+            model,
+            UiInput::PointerDown {
+                x: rect.x,
+                y: rect.y,
+                button: MouseButton::Right,
+                modifiers: Modifiers::default(),
+            },
+        )
+        .is_empty()
+    );
+}
+
 fn focus(ui: &mut SidebarUi, model: &Model, id: &ElementId) {
     for _ in 0..ui.hit_regions().len() + 1 {
         if ui.focused() == Some(id) {
@@ -204,8 +242,12 @@ fn search_pointer_selection_is_visible_and_escape_cancels_ime_first() {
     ui.open_tab_navigator(&model);
     draw(&mut ui, &model);
     ui.event(&model, UiInput::Text("Alpha".into()));
-    draw(&mut ui, &model);
-    let editor = hit(&ui, &ElementId::Editor);
+    let cursor = ui
+        .render(&model, Rect::new(0, 0, 40, 24), Duration::ZERO)
+        .unwrap()
+        .cursor
+        .unwrap();
+    let editor = Rect::new(cursor.x - 5, cursor.y, 5, 1);
     ui.event(
         &model,
         UiInput::PointerDown {
@@ -444,4 +486,234 @@ fn folder_context_menu_creates_a_tab_in_that_folder() {
     draw(&mut ui, &model);
     assert!(matches!(key(&mut ui, &model, Key::Enter).as_slice(),
         [UiIntent::Domain(Intent::NewTabInFolder(id))] if id == &folder));
+}
+
+#[test]
+fn clipboard_commands_work_in_settings_search_and_color_forms() {
+    for modifiers in [
+        Modifiers {
+            super_key: true,
+            ..Modifiers::default()
+        },
+        Modifiers {
+            control: true,
+            ..Modifiers::default()
+        },
+        Modifiers {
+            control: true,
+            shift: true,
+            ..Modifiers::default()
+        },
+    ] {
+        let mut model = model();
+        model.settings.keyboard_shortcuts = false;
+        let mut ui = SidebarUi::new();
+        ui.set_layout(24, 0);
+        ui.open_settings();
+        let draw_page = |ui: &mut SidebarUi| {
+            ui.render(&model, Rect::new(0, 0, 100, 35), Duration::ZERO);
+        };
+        draw_page(&mut ui);
+        ui.event(
+            &model,
+            UiInput::Key {
+                key: Key::Character('f'),
+                modifiers,
+            },
+        );
+        assert!(ui.text_input_active());
+        ui.event(&model, UiInput::Text("accent".into()));
+        ui.event(
+            &model,
+            UiInput::Key {
+                key: Key::Character('a'),
+                modifiers,
+            },
+        );
+        assert!(
+            matches!(ui.event(&model, UiInput::Key { key: Key::Character('c'), modifiers }).as_slice(),
+            [UiIntent::SetClipboard(text)] if text == "accent")
+        );
+        draw_page(&mut ui);
+        let accent = hit(&ui, &ElementId::Setting("accent".into()));
+        ui.event(
+            &model,
+            UiInput::PointerDown {
+                x: accent.x,
+                y: accent.y,
+                button: MouseButton::Left,
+                modifiers: Modifiers::default(),
+            },
+        );
+        ui.event(
+            &model,
+            UiInput::PointerUp {
+                x: accent.x,
+                y: accent.y,
+                button: MouseButton::Left,
+            },
+        );
+        draw_page(&mut ui);
+        assert!(ui.text_input_active());
+        assert_eq!(ui.focused(), Some(&ElementId::Editor));
+        assert!(
+            matches!(ui.event(&model, UiInput::Key { key: Key::Character('c'), modifiers }).as_slice(),
+            [UiIntent::SetClipboard(text)] if text == &model.settings.accent)
+        );
+        assert!(matches!(
+            ui.event(
+                &model,
+                UiInput::Key {
+                    key: Key::Character('v'),
+                    modifiers
+                }
+            )
+            .as_slice(),
+            [UiIntent::RequestClipboard]
+        ));
+        ui.event(&model, UiInput::Paste("#123456".into()));
+        assert!(matches!(key(&mut ui, &model, Key::Enter).as_slice(),
+            [UiIntent::Domain(Intent::SetSetting { key, value })] if key == "accent" && value == "#123456"));
+    }
+}
+
+#[test]
+fn editor_context_menu_preserves_form_drafts_and_applies_clipboard_actions() {
+    let mut model = model();
+    model.settings.keyboard_shortcuts = false;
+    let mut ui = SidebarUi::new();
+    ui.open_create_folder();
+    ui.event(&model, UiInput::Text("Project α".into()));
+    draw(&mut ui, &model);
+
+    context(&mut ui, &model, &ElementId::Cancel);
+    draw(&mut ui, &model);
+    assert!(ui.text_input_active());
+    context(&mut ui, &model, &ElementId::Editor);
+    draw(&mut ui, &model);
+    assert!(click(&mut ui, &model, &ElementId::Menu("copy".into())).is_empty());
+    assert!(ui.has_overlay());
+    click(&mut ui, &model, &ElementId::Menu("select-all".into()));
+    draw(&mut ui, &model);
+    context(&mut ui, &model, &ElementId::Editor);
+    draw(&mut ui, &model);
+    assert!(matches!(
+        click(&mut ui, &model, &ElementId::Menu("copy".into())).as_slice(),
+        [UiIntent::SetClipboard(text)] if text == "Project α"
+    ));
+    assert_eq!(ui.focused(), Some(&ElementId::Editor));
+    assert!(ui.text_input_active());
+    let frame = ui
+        .render(&model, Rect::new(0, 0, 40, 24), Duration::ZERO)
+        .unwrap();
+    assert!(frame.cursor.is_some());
+    assert!(frame.ime_rect.is_some());
+
+    context(&mut ui, &model, &ElementId::Editor);
+    draw(&mut ui, &model);
+    assert!(matches!(
+        click(&mut ui, &model, &ElementId::Menu("cut".into())).as_slice(),
+        [UiIntent::SetClipboard(text)] if text == "Project α"
+    ));
+    draw(&mut ui, &model);
+    context(&mut ui, &model, &ElementId::Editor);
+    draw(&mut ui, &model);
+    assert!(matches!(
+        click(&mut ui, &model, &ElementId::Menu("paste".into())).as_slice(),
+        [UiIntent::RequestClipboard]
+    ));
+    ui.event(&model, UiInput::Paste("Project α".into()));
+    assert!(matches!(
+        key(&mut ui, &model, Key::Enter).as_slice(),
+        [UiIntent::Domain(Intent::CreateFolder { name })] if name == "Project α"
+    ));
+}
+
+#[test]
+fn dismissing_editor_context_menu_retains_search_query_selection_and_results() {
+    let model = model();
+    let mut ui = SidebarUi::new();
+    ui.open_tab_navigator(&model);
+    ui.event(&model, UiInput::Text("a".into()));
+    key(&mut ui, &model, Key::Down);
+    command(&mut ui, &model, 'a');
+    draw(&mut ui, &model);
+
+    for outside in [false, true] {
+        context(&mut ui, &model, &ElementId::Editor);
+        draw(&mut ui, &model);
+        if outside {
+            ui.event(
+                &model,
+                UiInput::PointerDown {
+                    x: 0,
+                    y: 0,
+                    button: MouseButton::Left,
+                    modifiers: Modifiers::default(),
+                },
+            );
+        } else {
+            key(&mut ui, &model, Key::Escape);
+        }
+        draw(&mut ui, &model);
+        assert_eq!(results(&ui), 3);
+        assert!(matches!(
+            command(&mut ui, &model, 'c').as_slice(),
+            [UiIntent::SetClipboard(text)] if text == "a"
+        ));
+    }
+    assert!(matches!(
+        key(&mut ui, &model, Key::Enter).as_slice(),
+        [UiIntent::Domain(Intent::ActivateTab(20))]
+    ));
+}
+
+#[test]
+fn settings_context_menu_restores_search_focus_for_keyboard_cut_and_async_paste() {
+    let mut model = model();
+    model.settings.keyboard_shortcuts = false;
+    let mut ui = SidebarUi::new();
+    ui.set_layout(24, 0);
+    ui.open_settings();
+    let draw_page = |ui: &mut SidebarUi| {
+        ui.render(&model, Rect::new(0, 0, 100, 35), Duration::ZERO);
+    };
+    command(&mut ui, &model, 'f');
+    ui.event(&model, UiInput::Text("accent".into()));
+    command(&mut ui, &model, 'a');
+    draw_page(&mut ui);
+    context(&mut ui, &model, &ElementId::SettingsSearch);
+    draw_page(&mut ui);
+    assert!(ui.text_input_active());
+    assert!(matches!(
+        command(&mut ui, &model, 'x').as_slice(),
+        [UiIntent::SetClipboard(text)] if text == "accent"
+    ));
+    draw_page(&mut ui);
+    assert_eq!(ui.focused(), Some(&ElementId::SettingsSearch));
+    assert!(
+        ui.hit_regions()
+            .iter()
+            .any(|hit| hit.id == ElementId::Setting("width".into()))
+    );
+    key(&mut ui, &model, Key::F10);
+    draw_page(&mut ui);
+    assert!(matches!(
+        key(&mut ui, &model, Key::Enter).as_slice(),
+        [UiIntent::RequestClipboard]
+    ));
+    ui.event(&model, UiInput::Paste("accent".into()));
+    draw_page(&mut ui);
+    assert!(ui.content_page());
+    assert!(!ui.has_overlay());
+    assert!(
+        ui.hit_regions()
+            .iter()
+            .any(|hit| hit.id == ElementId::Setting("accent".into()))
+    );
+    assert!(
+        !ui.hit_regions()
+            .iter()
+            .any(|hit| hit.id == ElementId::Setting("width".into()))
+    );
 }

@@ -157,7 +157,15 @@ impl Adapter {
         }
     }
     fn ui_input(&mut self, input: ui::UiInput) {
-        self.input_epoch = self.input_epoch.wrapping_add(1);
+        // Passive pointer motion and composition cleanup retain an outstanding paste.
+        let changes_input = match &input {
+            ui::UiInput::PointerMove { .. } => self.pointer_captured,
+            ui::UiInput::ImePreedit { text, .. } => !text.is_empty(),
+            _ => true,
+        };
+        if changes_input {
+            self.input_epoch = self.input_epoch.wrapping_add(1);
+        }
         let before = self.app.model().revision;
         let result = self.app.input(input);
         self.apply(result);
@@ -207,7 +215,8 @@ impl Adapter {
         }
     }
     fn metrics(&self, geometry: Geometry) -> app::Metrics {
-        let bounds = geometry.ui_bounds(self.app.ui().content_page());
+        let bounds =
+            geometry.ui_bounds(self.app.ui().content_page() || self.app.ui().overlay_surface());
         app::Metrics {
             cols: (bounds.width / geometry.cell_width.max(1.))
                 .floor()
@@ -246,11 +255,7 @@ impl Provider for Adapter {
     fn reservation(&self) -> Reservation {
         let settings = &self.app.model().settings;
         Reservation {
-            width: if self.app.ui().needs_expanded_space() {
-                settings.width
-            } else {
-                settings.logical_width()
-            } as f32,
+            width: settings.logical_width() as f32,
             right: settings.side == core::Side::Right,
         }
     }
@@ -458,12 +463,24 @@ impl Provider for Adapter {
         match input {
             Input::RawKey(key) => {
                 let mods = modifiers(key.modifiers);
-                let Some(code) = shortcut_key(&key.key, mods) else {
+                let code = self
+                    .app
+                    .ui()
+                    .text_input_active()
+                    .then(|| editor_clipboard_key(&key.key, mods))
+                    .flatten()
+                    .or_else(|| {
+                        self.app
+                            .model()
+                            .settings
+                            .keyboard_shortcuts
+                            .then(|| shortcut_key(&key.key, mods))
+                            .flatten()
+                            .filter(|code| ui::is_shortcut(code, mods))
+                    });
+                let Some(code) = code else {
                     return false;
                 };
-                if !self.app.model().settings.keyboard_shortcuts || !ui::is_shortcut(&code, mods) {
-                    return false;
-                }
                 if key.key_is_down {
                     self.ui_input(ui::UiInput::Key {
                         key: code,
@@ -474,6 +491,21 @@ impl Provider for Adapter {
             }
             Input::Key(key) => {
                 let mods = modifiers(key.raw.as_ref().map_or(key.modifiers, |raw| raw.modifiers));
+                if let Some(code) = self
+                    .app
+                    .ui()
+                    .text_input_active()
+                    .then(|| editor_clipboard_key(&key.key, mods))
+                    .flatten()
+                {
+                    if key.key_is_down {
+                        self.ui_input(ui::UiInput::Key {
+                            key: code,
+                            modifiers: mods,
+                        });
+                    }
+                    return true;
+                }
                 if self.app.model().settings.keyboard_shortcuts {
                     if let Some(code) =
                         shortcut_key(&key.key, mods).filter(|code| ui::is_shortcut(code, mods))
@@ -535,15 +567,18 @@ impl Provider for Adapter {
                 }
                 self.ui_input(ui::UiInput::Key {
                     key: code,
-                    modifiers: modifiers(key.modifiers),
+                    modifiers: mods,
                 });
                 true
             }
             Input::Mouse(event, geometry) => {
-                let bounds = geometry.ui_bounds(self.content_page());
+                let bounds = geometry.ui_bounds(self.content_page() || self.overlay_surface());
                 let inside = bounds.contains(event.coords.x as f32, event.coords.y as f32);
                 let modal = self.app.is_modal();
-                if !inside && !modal && !self.pointer_captured {
+                let in_sidebar = geometry
+                    .sidebar
+                    .contains(event.coords.x as f32, event.coords.y as f32);
+                if !in_sidebar && !modal && !self.pointer_captured {
                     if matches!(event.kind, MouseEventKind::Press(_)) {
                         self.app.ui_mut().release_focus();
                         self.input_epoch = self.input_epoch.wrapping_add(1);
@@ -686,7 +721,9 @@ impl Provider for Adapter {
                 self.app.cancel_spawn(&token);
             }
         } else if let Some(paste) = message.get("paste").and_then(|v| v.as_str()) {
-            if message["token"].as_u64() == Some(self.input_epoch) && self.keyboard_focus() {
+            if message["token"].as_u64() == Some(self.input_epoch)
+                && self.app.ui().text_input_active()
+            {
                 self.ui_input(ui::UiInput::Paste(paste.into()));
             }
         } else if let Some(result) = message.get("store") {
@@ -754,7 +791,7 @@ impl Provider for Adapter {
     }
     fn render(&mut self, geometry: Geometry, now: Instant) {
         if self.geometry != geometry {
-            self.input_epoch = self.input_epoch.wrapping_add(1);
+            self.app.ui_mut().invalidate();
         }
         self.geometry = geometry;
         self.app.ui_mut().set_layout(
@@ -770,6 +807,12 @@ impl Provider for Adapter {
         }
         if let Some(frame) = self.app.render(now.saturating_duration_since(self.epoch)) {
             cells::update(&mut self.surface, self.app.buffer(), &frame, geometry);
+            let grid_offset = geometry.grid_offset(
+                self.content_page() || self.overlay_surface(),
+                self.surface.columns,
+            );
+            self.surface.offset.0 += grid_offset.0;
+            self.surface.offset.1 += grid_offset.1;
             self.cursor = frame.ime_rect.map(|r| (r.x as usize, r.y as usize));
             self.primitives.clear();
             self.primitives
@@ -786,6 +829,7 @@ impl Provider for Adapter {
                                 height: shape.rect.height as f32,
                             },
                             radius: shape.radius,
+                            inset: shape.inset,
                             fill: linear_color(shape.fill),
                             border: linear_color(shape.border),
                             border_width: if shape.fill == shape.border { 0. } else { 1. },
@@ -800,6 +844,7 @@ impl Provider for Adapter {
                         height: 1.,
                     },
                     radius: 0.,
+                    inset: 0.,
                     fill: linear_color(self.app.ui().theme.accent),
                     border: linear_color(self.app.ui().theme.accent),
                     border_width: 0.,
@@ -813,6 +858,9 @@ impl Provider for Adapter {
     }
     fn content_page(&self) -> bool {
         self.app.ui().content_page()
+    }
+    fn overlay_surface(&self) -> bool {
+        self.app.ui().overlay_surface()
     }
     fn primitives(&self) -> &[RoundedSurface] {
         &self.primitives
@@ -915,7 +963,10 @@ impl Provider for Adapter {
         serde_json::json!({"token":token,"new_window":new_window,"private":private,"launch":launch})
     }
     fn inspect(&self) -> serde_json::Value {
-        serde_json::json!({"folders":self.app.model().folders,"settings_page":self.content_page(),"hits":self.app.ui().hit_regions().iter().map(|h|serde_json::json!({"id":format!("{:?}",h.id),"x":h.rect.x,"y":h.rect.y,"width":h.rect.width,"height":h.rect.height})).collect::<Vec<_>>(),"spaces":self.app.model().spaces,"selected_space":self.app.model().selected_space,"settings":self.app.model().settings,"surface_revision":self.surface.revision,"private":self.app.model().private,"can_reopen":self.app.model().can_reopen(), "tabs":self.app.model().tabs.values().map(|tab|serde_json::json!({"id":tab.id,"pinned":tab.pinned,"space_id":tab.space_id,"folder_id":tab.folder_id})).collect::<Vec<_>>()})
+        let bounds = self
+            .geometry
+            .ui_bounds(self.content_page() || self.overlay_surface());
+        serde_json::json!({"folders":self.app.model().folders,"settings_page":self.content_page(),"overlay_surface":self.overlay_surface(),"grid":{"x":bounds.x+self.surface.offset.0,"y":bounds.y+self.surface.offset.1,"columns":self.surface.columns,"rows":self.surface.rows.len(),"cell_width":self.geometry.cell_width,"cell_height":self.geometry.cell_height},"hits":self.app.ui().hit_regions().iter().map(|h|serde_json::json!({"id":format!("{:?}",h.id),"x":h.rect.x,"y":h.rect.y,"width":h.rect.width,"height":h.rect.height})).collect::<Vec<_>>(),"spaces":self.app.model().spaces,"selected_space":self.app.model().selected_space,"settings":self.app.model().settings,"surface_revision":self.surface.revision,"private":self.app.model().private,"can_reopen":self.app.model().can_reopen(), "tabs":self.app.model().tabs.values().map(|tab|serde_json::json!({"id":tab.id,"pinned":tab.pinned,"space_id":tab.space_id,"folder_id":tab.folder_id})).collect::<Vec<_>>()})
     }
     fn keyboard_focus(&self) -> bool {
         self.app.is_modal() || (self.reservation().width > 0. && self.app.ui().focused().is_some())
@@ -955,7 +1006,7 @@ mod native_modal_tests {
     use super::*;
 
     #[test]
-    fn hidden_and_collapsed_native_modals_borrow_width_and_escape_restores_preferences() {
+    fn hidden_and_collapsed_native_modals_use_window_bounds_without_resizing_the_rail() {
         // Adapter construction reads the GUI's current Lua configuration. Initialize
         // the same thread-local host context as wezterm-gui startup before exercising it.
         config::designate_this_as_the_main_thread();
@@ -975,16 +1026,35 @@ mod native_modal_tests {
                 } else {
                     adapter.message(serde_json::json!({"action":action}));
                 }
-                assert_eq!(adapter.reservation().width, 256.);
+                assert_eq!(adapter.reservation().width, original);
                 assert!(adapter.keyboard_focus());
                 let mut geometry = Geometry::default();
                 geometry.sidebar.width = adapter.reservation().width;
                 geometry.sidebar.height = 480.;
+                geometry.content = Bounds {
+                    x: original,
+                    y: 0.,
+                    width: 800.,
+                    height: 480.,
+                };
                 geometry.cell_width = 8.;
                 geometry.cell_height = 20.;
                 geometry.dpi = 96.;
                 adapter.render(geometry, Instant::now());
-                assert_eq!(adapter.surface.columns, 32);
+                assert_eq!(adapter.surface.columns, ((original + 800.) / 8.) as usize);
+                assert_eq!(adapter.content_page(), action == "settings");
+                assert_eq!(adapter.overlay_surface(), action != "settings");
+                let inspected = adapter.inspect();
+                assert_eq!(inspected["overlay_surface"], action != "settings");
+                assert_eq!(inspected["grid"]["x"], 0.);
+                assert_eq!(inspected["grid"]["y"], 0.);
+                assert_eq!(inspected["grid"]["columns"], adapter.surface.columns);
+                if action != "settings" {
+                    let caret = adapter
+                        .caret()
+                        .expect("centered editor has an IME rectangle");
+                    assert!(caret.0 > (original / 8.) as usize);
+                }
                 assert!(!adapter.surface.rows.is_empty());
                 assert_eq!(adapter.surface.offset, (0., 0.));
                 assert_eq!(adapter.surface.opacity, 1.);
@@ -1015,6 +1085,8 @@ mod native_modal_tests {
                 assert!(!adapter.app.is_modal());
                 assert!(!adapter.keyboard_focus());
                 assert_eq!(adapter.reservation().width, original);
+                adapter.render(geometry, Instant::now());
+                assert_eq!(adapter.surface.columns, (original / 8.) as usize);
                 assert_eq!(
                     serde_json::to_value(&adapter.app.model().settings).unwrap(),
                     saved
@@ -1065,6 +1137,18 @@ fn shortcut_key(key: &KeyCode, mods: ui::Modifiers) -> Option<ui::Key> {
         KeyCode::LeftArrow => ui::Key::Left,
         KeyCode::RightArrow => ui::Key::Right,
         _ => return None,
+    })
+}
+
+fn editor_clipboard_key(key: &KeyCode, mods: ui::Modifiers) -> Option<ui::Key> {
+    if !mods.command() || mods.alt {
+        return None;
+    }
+    shortcut_key(key, mods).filter(|key| {
+        matches!(
+            key,
+            ui::Key::Character('a' | 'A' | 'c' | 'C' | 'x' | 'X' | 'v' | 'V')
+        )
     })
 }
 
@@ -1152,6 +1236,171 @@ mod native_input_tests {
         );
         assert_eq!(shortcut_key(&KeyCode::Char('\t'), mods), Some(ui::Key::Tab));
     }
+
+    fn logical_key(key: KeyCode, mods: window::Modifiers) -> window::KeyEvent {
+        window::KeyEvent {
+            key,
+            modifiers: mods,
+            leds: Default::default(),
+            repeat_count: 1,
+            key_is_down: true,
+            raw: None,
+            #[cfg(windows)]
+            win32_uni_char: None,
+        }
+    }
+
+    fn paste_token(adapter: &mut Adapter) -> u64 {
+        adapter
+            .commands()
+            .into_iter()
+            .find_map(|command| match command {
+                Command::Paste(token) => Some(token),
+                _ => None,
+            })
+            .expect("native clipboard read request")
+    }
+
+    fn copied_text(adapter: &mut Adapter) -> String {
+        adapter
+            .commands()
+            .into_iter()
+            .find_map(|command| match command {
+                Command::Clipboard(text) => Some(text),
+                _ => None,
+            })
+            .expect("native clipboard write request")
+    }
+
+    #[test]
+    fn native_editors_decode_clipboard_control_bytes_with_global_shortcuts_disabled() {
+        config::designate_this_as_the_main_thread();
+        for open_search in [false, true] {
+            let mut adapter = Adapter::new(9843);
+            adapter
+                .app
+                .config(serde_json::json!({"settings":{"keyboard_shortcuts":false}}))
+                .unwrap();
+            if open_search {
+                adapter.app.open_tab_navigator();
+            } else {
+                adapter.app.open_create_space();
+            }
+            adapter.ui_input(ui::UiInput::Text("Copy 界".into()));
+            assert!(adapter.input(Input::Key(&logical_key(
+                KeyCode::Char('\u{1}'),
+                window::Modifiers::CTRL
+            ))));
+            assert!(adapter.input(Input::Key(&logical_key(
+                KeyCode::Char('\u{3}'),
+                window::Modifiers::CTRL
+            ))));
+            assert_eq!(copied_text(&mut adapter), "Copy 界");
+            assert!(adapter.input(Input::Key(&logical_key(
+                KeyCode::Char('\u{16}'),
+                window::Modifiers::CTRL
+            ))));
+            let token = paste_token(&mut adapter);
+            adapter.message(serde_json::json!({"paste":"Pasted 界","token":token}));
+            adapter.input(Input::Key(&logical_key(
+                KeyCode::Char('\u{1}'),
+                window::Modifiers::CTRL,
+            )));
+            adapter.input(Input::Key(&logical_key(
+                KeyCode::Char('\u{3}'),
+                window::Modifiers::CTRL,
+            )));
+            assert_eq!(copied_text(&mut adapter), "Pasted 界");
+        }
+    }
+
+    #[test]
+    fn native_raw_clipboard_commands_are_scoped_to_text_focus() {
+        config::designate_this_as_the_main_thread();
+        for mods in [
+            window::Modifiers::CTRL,
+            window::Modifiers::CTRL | window::Modifiers::SHIFT,
+            window::Modifiers::SUPER,
+        ] {
+            let mut adapter = Adapter::new(9844);
+            assert!(!adapter.input(Input::RawKey(&raw(KeyCode::Char('c'), mods, true))));
+            adapter.app.open_create_space();
+            adapter.ui_input(ui::UiInput::Text("Native copy".into()));
+            assert!(adapter.input(Input::RawKey(&raw(KeyCode::Char('a'), mods, true))));
+            assert!(adapter.input(Input::RawKey(&raw(KeyCode::Char('c'), mods, true))));
+            assert_eq!(copied_text(&mut adapter), "Native copy");
+            assert!(adapter.input(Input::RawKey(&raw(KeyCode::Char('c'), mods, false))));
+            assert!(adapter.commands().is_empty());
+        }
+    }
+
+    #[test]
+    fn native_paste_survives_hover_and_empty_composition_notifications() {
+        config::designate_this_as_the_main_thread();
+        let mut adapter = Adapter::new(9845);
+        adapter.app.open_create_space();
+        adapter.ui_input(ui::UiInput::Text("Before".into()));
+        adapter.input(Input::RawKey(&raw(
+            KeyCode::Char('a'),
+            window::Modifiers::CTRL,
+            true,
+        )));
+        adapter.input(Input::RawKey(&raw(
+            KeyCode::Char('v'),
+            window::Modifiers::CTRL,
+            true,
+        )));
+        let token = paste_token(&mut adapter);
+        adapter.ui_input(ui::UiInput::PointerMove {
+            x: u16::MAX,
+            y: u16::MAX,
+        });
+        adapter.ui_input(ui::UiInput::ImePreedit {
+            text: String::new(),
+            cursor: None,
+        });
+        adapter.message(serde_json::json!({"paste":"After","token":token}));
+        adapter.input(Input::RawKey(&raw(
+            KeyCode::Char('a'),
+            window::Modifiers::CTRL,
+            true,
+        )));
+        adapter.input(Input::RawKey(&raw(
+            KeyCode::Char('c'),
+            window::Modifiers::CTRL,
+            true,
+        )));
+        assert_eq!(copied_text(&mut adapter), "After");
+    }
+
+    #[test]
+    fn native_paste_is_discarded_after_editing_focus_changes() {
+        config::designate_this_as_the_main_thread();
+        let mut adapter = Adapter::new(9846);
+        adapter.app.open_create_space();
+        adapter.ui_input(ui::UiInput::Text("Keep".into()));
+        adapter.input(Input::RawKey(&raw(
+            KeyCode::Char('v'),
+            window::Modifiers::CTRL,
+            true,
+        )));
+        let token = paste_token(&mut adapter);
+        adapter.input(Input::Focus(false));
+        adapter.input(Input::Focus(true));
+        adapter.message(serde_json::json!({"paste":"Discard","token":token}));
+        adapter.input(Input::RawKey(&raw(
+            KeyCode::Char('a'),
+            window::Modifiers::CTRL,
+            true,
+        )));
+        adapter.input(Input::RawKey(&raw(
+            KeyCode::Char('c'),
+            window::Modifiers::CTRL,
+            true,
+        )));
+        assert_eq!(copied_text(&mut adapter), "Keep");
+    }
+
     #[test]
     fn native_composed_release_does_not_duplicate_text_and_caret_is_visible() {
         config::designate_this_as_the_main_thread();

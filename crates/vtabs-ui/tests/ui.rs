@@ -214,7 +214,8 @@ fn native_navigator_recovers_hidden_sidebar_without_overwriting_lua_preferences(
                 model.config_owned.insert("rail".into());
             }
             ui.open_tab_navigator(&model);
-            assert!(ui.needs_expanded_space());
+            assert!(!ui.needs_expanded_space());
+            assert!(ui.overlay_surface());
             draw(&mut ui, &model, 0);
             let intents = domain(click(
                 &mut ui,

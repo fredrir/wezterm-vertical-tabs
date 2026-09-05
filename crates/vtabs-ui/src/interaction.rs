@@ -5,6 +5,20 @@ use std::time::Duration;
 use vtabs_core::{Intent, Model, RailMode, SettingKind, settings};
 
 impl SidebarUi {
+    pub fn text_input_active(&self) -> bool {
+        match &self.overlay {
+            Some(Overlay::Form(_)) => self.focused == Some(ElementId::Editor),
+            Some(Overlay::Menu(menu)) => {
+                menu.search.is_some() || self.editor_menu_target().is_some()
+            }
+            None => {
+                self.settings_page
+                    && self.settings_search_focused
+                    && self.focused == Some(ElementId::SettingsSearch)
+            }
+        }
+    }
+
     pub fn event(&mut self, model: &Model, event: UiInput) -> Vec<UiIntent> {
         if self
             .pending_form
@@ -109,7 +123,11 @@ impl SidebarUi {
                 self.tooltip_deadline = None;
                 let hit = self.hit_test(x, y).map(|hit| hit.id.clone());
                 if self.overlay.is_some() && !self.overlay_rect.contains(Position::new(x, y)) {
-                    self.dismiss();
+                    if let Some(target) = self.editor_menu_target() {
+                        self.restore_editor(target);
+                    } else {
+                        self.dismiss();
+                    }
                     return intents;
                 }
                 self.pointer_origin = Some((x, y));
@@ -270,7 +288,11 @@ impl SidebarUi {
                     search.editor.insert(&text);
                     filter_menu(menu);
                     self.dirty = true;
-                } else if self.settings_page && self.settings_search_focused {
+                } else if self.overlay.is_none()
+                    && self.settings_page
+                    && self.settings_search_focused
+                    && self.focused == Some(ElementId::SettingsSearch)
+                {
                     self.settings_input_text(&text);
                 }
             }
@@ -286,7 +308,11 @@ impl SidebarUi {
                 {
                     search.editor.set_preedit(&text, cursor);
                     self.dirty = true;
-                } else if self.settings_page && self.settings_search_focused {
+                } else if self.overlay.is_none()
+                    && self.settings_page
+                    && self.settings_search_focused
+                    && self.focused == Some(ElementId::SettingsSearch)
+                {
                     self.settings_query.set_preedit(&text, cursor);
                     self.reset_caret();
                     self.dirty = true;
@@ -299,6 +325,29 @@ impl SidebarUi {
 
     fn key(&mut self, model: &Model, key: Key, modifiers: Modifiers, intents: &mut Vec<UiIntent>) {
         if self.shortcut(model, &key, modifiers, intents) {
+            return;
+        }
+        if let Some(target) = self.editor_menu_target() {
+            if matches!(key, Key::Escape | Key::Left) {
+                self.restore_editor(target);
+                return;
+            }
+            if modifiers.command()
+                && !modifiers.alt
+                && matches!(
+                    key,
+                    Key::Character('a' | 'A' | 'c' | 'C' | 'x' | 'X' | 'v' | 'V')
+                )
+            {
+                self.restore_editor(target);
+            }
+        } else if key == Key::F10 && self.text_input_active() {
+            let target = if self.overlay.is_some() {
+                ElementId::Editor
+            } else {
+                ElementId::SettingsSearch
+            };
+            self.context_menu(model, target);
             return;
         }
         if let Some(Overlay::Form(form)) = &mut self.overlay {
@@ -736,6 +785,50 @@ impl SidebarUi {
     }
     fn context_menu(&mut self, model: &Model, id: ElementId) {
         match id {
+            ElementId::Editor | ElementId::SettingsSearch => {
+                let editor = match (&self.overlay, &id) {
+                    (Some(Overlay::Form(form)), ElementId::Editor) => Some(&form.editor),
+                    (Some(Overlay::Menu(menu)), ElementId::Editor) => {
+                        menu.search.as_ref().map(|search| &search.editor)
+                    }
+                    (None, ElementId::SettingsSearch) if self.settings_page => {
+                        Some(&self.settings_query)
+                    }
+                    _ => None,
+                };
+                let Some(editor) = editor else {
+                    return;
+                };
+                let has_selection = editor.selection().is_some();
+                let has_text = !editor.text().is_empty();
+                let items = [
+                    ("cut", "Cut", 'x', has_selection),
+                    ("copy", "Copy", 'c', has_selection),
+                    ("paste", "Paste", 'v', true),
+                    ("select-all", "Select all", 'a', has_text),
+                ]
+                .into_iter()
+                .map(|(name, label, key, enabled)| {
+                    let mut item = MenuItem::new(
+                        name,
+                        label,
+                        Action::EditorCommand {
+                            key: Key::Character(key),
+                            target: id.clone(),
+                        },
+                    );
+                    item.enabled = enabled;
+                    item
+                })
+                .collect();
+                self.focused = Some(id.clone());
+                if id == ElementId::SettingsSearch {
+                    self.settings_search_focused = true;
+                }
+                self.drag = None;
+                self.pointer_origin = None;
+                self.push_menu("Edit text", items);
+            }
             ElementId::Tab(id) | ElementId::CloseTab(id) => {
                 let Some(tab) = model.tabs.get(&id) else {
                     return;
@@ -931,8 +1024,31 @@ impl SidebarUi {
                 }
                 self.menu(key, items);
             }
-            _ => self.root_menu(model),
+            _ if self.overlay.is_none() => self.root_menu(model),
+            _ => {}
         }
+    }
+
+    fn editor_menu_target(&self) -> Option<ElementId> {
+        match &self.overlay {
+            Some(Overlay::Menu(menu)) => match &menu.items.first()?.action {
+                Action::EditorCommand { target, .. } => Some(target.clone()),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
+    fn restore_editor(&mut self, target: ElementId) {
+        self.back();
+        self.focused = Some(target.clone());
+        if target == ElementId::SettingsSearch {
+            self.settings_search_focused = true;
+        }
+        self.drag = None;
+        self.pointer_origin = None;
+        self.reset_caret();
+        self.dirty = true;
     }
 
     fn run_action(&mut self, model: &Model, action: Action, intents: &mut Vec<UiIntent>) {
@@ -1072,6 +1188,18 @@ impl SidebarUi {
                     intents.push(UiIntent::Domain(Intent::ResetSetting(key)));
                     self.dirty = true;
                 }
+            }
+            Action::EditorCommand { key, target } => {
+                self.restore_editor(target);
+                self.key(
+                    model,
+                    key,
+                    Modifiers {
+                        control: true,
+                        ..Modifiers::default()
+                    },
+                    intents,
+                );
             }
             Action::Submenu { title, items } => self.push_menu(title, items),
             Action::Confirm { label, action } => self.push_menu(
