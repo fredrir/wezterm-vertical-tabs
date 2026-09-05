@@ -1,2 +1,2 @@
-native/patches/*.patch text eol=lf -whitespace
-*.py text eol=lf
+* text=auto eol=lf
+native/patches/*.patch -whitespace
