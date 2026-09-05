@@ -2,8 +2,8 @@
 
 | Name        | Value                                                                                          |
 | ----------- | ---------------------------------------------------------------------------------------------- |
-| Toolchain   | Stable Rust, Git, Python 3.10+ for builds; uv and Python 3.12+ for tests; platform C/C++ tools |
-| Upstream    | Latest `wezterm/wezterm` `main`; resolved on every build                                       |
+| Toolchain   | Stable Rust, Git and platform C/C++ tools; uv/Python 3.12+ for tests |
+| Upstream    | `main` resolved once; `--upstream SHA` pins; `dev` reuses the cached revision                                       |
 | GUI         | WezTerm renderer with the native patch series and project Rust application                     |
 | UI          | Retained Ratatui text, native rounded geometry and finite TachyonFX effects                    |
 | Persistence | `wez-vtabs-store`; bundled SQLite, asynchronous bounded JSON requests                          |
@@ -20,21 +20,35 @@ just update
 just doctor
 ```
 
-Recipes use `uv run --locked python` on every platform. Direct builds also support `python3 scripts/native.py` (`py -3 scripts/native.py` on Windows).
+Recipes invoke `cargo xtask`. Installed launch entries invoke the bundled Rust binary directly.
 
-| Command                      | Value                                                                                                   |
-| ---------------------------- | ------------------------------------------------------------------------------------------------------- |
-| `just build`                 | Fetch main, check/apply ordered patches, stage adapter, build, run integrated native adapter/host tests |
-| `just dev`                   | Build and launch a separate GUI process                                                                 |
-| `just check`                 | Rust format/tests/Clippy, generated Lua contracts, Ruff and pytest behavior tests                       |
-| `just generate`              | Generate `plugin/schema.lua`, `plugin/types.lua` and `docs/options.md` from Rust                        |
-| `just package`               | Native platform bundle and `.zip`/`.tar.gz` in `dist/`                                                  |
-| `just install`               | Install an immutable bundle and managed launch entry                                                    |
-| `just install --bundle PATH` | Install an already extracted native bundle                                                              |
-| `just launch`                | Select a completed pending update and launch the native GUI                                             |
-| `just update`                | Build latest main and select the completed bundle for subsequent launches                               |
-| `just doctor`                | Tool versions, build metadata, update status and paths                                                  |
-| `--debug`                    | Use Cargo's debug profile for build/dev/package                                                         |
+| Command | Value |
+| --- | --- |
+| `just deps --upstream SHA` | Run selected upstream system dependency installer |
+| `just build --upstream SHA --timings` | Exact upstream, Cargo freshness, native validation, command timings |
+| `just dev` | Cached upstream, incremental `iterate` profile, runtime bundle without archive |
+| `just dev --watch` | Debounced Rust/adapter/plugin changes; separate owned GUI process |
+| `just check` | Rust format/tests/Clippy, schema contracts, Ruff and pytest |
+| `just test tools -- -k install` | Focused pytest suite; extra arguments after `--` |
+| `just generate` | Generate Lua schema/types and option documentation |
+| `just generate --check` | Verify generated artifacts |
+| `just package` | Verified bundle, ZIP/tar.gz archive and release manifest in `dist/` |
+| `just package --bundle PATH` | Verify and archive an existing bundle |
+| `just install --bundle PATH` | Verify and install an immutable local bundle |
+| `just launch -- start --always-new-process` | Promote completed pending version and forward GUI arguments |
+| `just update --check` | Resolve update availability without compiling or installing |
+| `just update --manifest PATH_OR_HTTPS_URL` | Download/copy a verified prebuilt release |
+| `just status` / `just versions` | Active, pending, previous and installed versions |
+| `just rollback [ID]` | Select a verified installed version; default previous |
+| `just plan dev --json` | Inputs and execution decisions without fetch/build |
+| `just doctor --for check` | Required tool versions and state health |
+| `just patch check --upstream SHA` | Check ordered patches in an isolated worktree |
+| `just cache inspect` | Owned run/bundle sizes and retention decisions |
+| `just cache gc --dry-run --keep 5` | Preview pruning; active/pending/running bundles protected |
+| `--offline` | No Git/network fetching; Cargo and uv offline |
+| `--profile NAME` / `--debug` | Explicit Cargo profile / development profile |
+| `--jobs N` | Cargo job limit and pytest worker count |
+| `--json` / `--explain` / `--timings` | Machine output / decisions / command durations |
 
 **Source boundaries**
 
@@ -47,7 +61,10 @@ Recipes use `uv run --locked python` on every platform. Direct builds also suppo
 | `native/adapter`     | Private WezTerm API integration                                                |
 | `native/patches`     | Generic native layout, surfaces, input and navigation hooks                    |
 | `plugin`             | Optional Lua configuration and generated contracts                             |
-| `scripts/native.py`  | Cross-platform build, package, install and update entry point                  |
+| `tools/src` | Rust CLI, process runner, source/build state, packaging and updates |
+| `tools/tests` | Rust-specific unit contracts |
+| `tests/tools` | pytest/tui-test tooling behavior through the compiled CLI |
+| `scripts/native.py` | Temporary forwarding shim for previously installed Python updaters |
 | `tests`              | uv-managed pytest, production process boundaries and isolated native scenarios |
 
 `vtabs-store` has no default features. The GUI links protocol types only; the `sqlite` feature builds the helper.
@@ -65,15 +82,18 @@ cargo run --quiet --locked -p vtabs-core --bin gen-schema -- json
 | `WEZ_VTABS_CACHE`      | `$XDG_CACHE_HOME/wez-vtabs-native`, `~/.cache/wez-vtabs-native`, or `%LOCALAPPDATA%/wez-vtabs-native`      |
 | `WEZ_VTABS_INSTALL`    | `$XDG_DATA_HOME/wez-vtabs-native`, `~/.local/share/wez-vtabs-native`, or `%LOCALAPPDATA%/wez-vtabs-native` |
 | `cache/upstream`       | Tool-owned upstream clone and Cargo target cache                                                           |
-| `cache/worktree`       | Disposable patched checkout; replaced by prepare/build                                                     |
+| `cache/worktree`       | Owned patched checkout; adapter changes synchronize in place                                                     |
 | `cache/project`        | Installed updater's separate native-branch checkout; an ownership marker is required before replacement    |
-| `cache/build.json`     | Diagnostic source/upstream hashes and target                                                               |
+| `cache/build.json`     | Separate source/compile/validation identities, toolchain/configuration and Cargo artifact paths                                                               |
 | `install/versions`     | Immutable bundles; running processes keep their files                                                      |
 | `install/active.json`  | Selected installed bundle                                                                                  |
 | `install/pending.json` | Completed update selected by the next managed launch                                                       |
 | `install/update.json`  | Last update attempt and result                                                                             |
 | `install/update.log`   | Background build output                                                                                    |
-| `install/runtime.json` | Python executable selected by install; used by native startup checks                                       |
+| `cache/runs/ID/run.json` | Invocation, resolved revisions/locks, configuration, command logs and timings |
+| `cache/runs/ID/source` | Project source snapshot for reproduction |
+| `install/previous.json` | Previous active version for rollback |
+| `install/wez-vtabs-launcher` | Stable dispatcher; versioned Rust tools own launch/update behavior |
 | macOS launch entry     | `install/WezTerm Native.app`                                                                               |
 | Linux launch entry     | `install/wez-vtabs` and `install/wez-vtabs.desktop`                                                        |
 | Windows launch entry   | `install/wez-vtabs.cmd`                                                                                    |
@@ -83,6 +103,37 @@ Use the managed launch entry for updates between launches. Versioned application
 Launch checks run asynchronously, at most daily. Installed updates fetch the recorded project branch (native by default) into a separate cache, then build against latest WezTerm main. A completed update becomes a separate version. Apply/build failures are recorded; no revision fallback or automatic patch rewriting occurs. Source-checkout commands build the current project files. The small three-OS workflow checks project changes and daily upstream changes.
 
 Install platform dependencies using the selected upstream checkout's `get-deps` instructions. The workflow uses upstream `get-deps` on macOS/Linux and the Windows MSVC toolchain. See [WezTerm source builds](https://wezterm.org/install/source.html).
+
+**Failure reproduction**
+
+```sh
+# Download and extract the CI tooling-reproduction artifact.
+just repro /path/to/run/run.json
+just repro /path/to/run/run.json --execute
+just repro /path/to/run/run.json --execute --project-root /path/to/checkout
+```
+
+| Name | Value |
+| --- | --- |
+| Inspection | Prints invocation, commands, selected source and configuration |
+| Execution | Separate `cache/reproductions/ID` source/cache/install; pinned recorded upstream |
+| Build inputs | Source snapshot, project revision, resolved Cargo locks, compiler/configuration identity |
+| Compatibility | Replay rejects incompatible compiler/target/profile/configuration inputs |
+| Logs | Per-command stdout/stderr paths, exit status, elapsed milliseconds |
+| CI | Failed/cancelled jobs upload reports and snapshots on all three platforms |
+| Scope | Prepare/deps/build/check/test/package/generate/patch operations; install/launch inspection only |
+
+**Prebuilt releases**
+
+`just package` writes an adjacent `*.manifest.json`. Publish it beside its archive, then use `just update --manifest URL`. CI uploads both as artifacts; no release is published by local commands.
+
+| Manifest field | Value |
+| --- | --- |
+| `schema_version` | `1` |
+| `id`, `target`, `source_digest`, `upstream` | Exact bundle identity and source/upstream hashes |
+| `project_source` | Recorded remote, branch and exact project revision |
+| `archive` | Sibling archive filename or HTTPS URL |
+| `sha256`, `size` | Archive integrity; extracted contents verified again |
 
 **Test suite**
 
@@ -101,10 +152,11 @@ uv run --locked pytest -n 2 tests/integration --run-native --run-container \
 | Default suite           | Tooling, production Rust schema/storage processes, headless Lua plugin boundary and CLI PTYs                                 |
 | Python tools            | pytest, pytest-asyncio, pytest-xdist, Ruff, tui-test; exact versions in `uv.lock`                                            |
 | Worker count            | `-n 2`; each test receives separate state and temporary files                                                                |
+| Tools binary | `--tools-bin=PATH`; built once under `target/pytest`, coordinated across workers |
 | Rust binaries           | Cached project-only build coordinated across workers; `--rust-bin-dir=PATH` uses supplied `gen-schema` and `wez-vtabs-store` |
 | Lua                     | `lua` or `luajit`; executes `plugin/init.lua` through its public configuration boundary                                      |
 | LuaCATS                 | `--run-luals`; requires `lua-language-server`; valid and invalid public option examples                                      |
-| Native binaries         | `--run-native --native-bin-dir=PATH`; prebuilt GUI, CLI, mux server and storage helper; no implicit WezTerm build            |
+| Native binaries         | `--run-native --native-bin-dir=PATH`; prebuilt GUI, CLI, mux server and storage helper; focused CLI suites use recorded Cargo artifacts when no directory is supplied            |
 | Native display          | Linux Xvfb and Openbox owned by the fixture; inherited desktop/session endpoints removed                                     |
 | Mouse and screenshots   | xdotool and ImageMagick; only the owned headless display                                                                     |
 | SSH mux                 | `--run-container`; loopback-only container, temporary keys, owned mux, Podman or Docker                                      |

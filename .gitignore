@@ -7,7 +7,6 @@ __pycache__/
 .claude/worktrees/
 .claude/team/
 dist/
-.native-completed
 
 .pytest_cache/
 

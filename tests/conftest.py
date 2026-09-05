@@ -33,6 +33,11 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         type=Path,
         help="Use prebuilt native WezTerm binaries from this directory",
     )
+    group.addoption(
+        "--tools-bin",
+        type=Path,
+        help="Use this prebuilt wez-vtabs management CLI for tooling tests",
+    )
 
 
 def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
@@ -144,3 +149,60 @@ def rust_binaries(
         if not path.is_file():
             pytest.fail(f"Production Rust binary {name} is missing: {path}")
     return binaries
+
+
+@pytest.fixture(scope="session")
+def tools_binary(
+    pytestconfig: pytest.Config,
+    tmp_path_factory: pytest.TempPathFactory,
+    worker_id: str,
+) -> Path:
+    """Build the production manager once across workers, without building WezTerm."""
+    supplied = pytestconfig.getoption("--tools-bin")
+    if supplied is not None:
+        binary = supplied.resolve()
+    else:
+        target = PROJECT_ROOT / "target" / "pytest"
+        target.mkdir(parents=True, exist_ok=True)
+        run_root = tmp_path_factory.getbasetemp()
+        if worker_id != "master":
+            run_root = run_root.parent
+        ready = run_root / "tools-binary-ready"
+        with FileLock(target / "build.lock", timeout=180):
+            if not ready.is_file():
+                result = subprocess.run(
+                    [
+                        "cargo",
+                        "build",
+                        "--locked",
+                        "--manifest-path",
+                        str(PROJECT_ROOT / "tools/Cargo.toml"),
+                        "--bin",
+                        "wez-vtabs",
+                    ],
+                    cwd=PROJECT_ROOT,
+                    env={**os.environ, "CARGO_TARGET_DIR": str(target)},
+                    text=True,
+                    capture_output=True,
+                    timeout=180,
+                    check=False,
+                )
+                if result.returncode:
+                    pytest.fail(f"Management CLI build failed:\n{result.stdout}\n{result.stderr}")
+                ready.write_text("ready\n", encoding="utf-8")
+        suffix = ".exe" if os.name == "nt" else ""
+        binary = target / "debug" / f"wez-vtabs{suffix}"
+    if not binary.is_file():
+        pytest.fail(f"Production management CLI is missing: {binary}")
+    return binary
+
+
+@pytest.fixture(scope="session")
+def rust_host() -> str:
+    result = subprocess.run(
+        ["rustc", "-vV"], text=True, capture_output=True, timeout=20, check=True
+    )
+    for line in result.stdout.splitlines():
+        if line.startswith("host: "):
+            return line.removeprefix("host: ")
+    pytest.fail(f"rustc did not report a host target:\n{result.stdout}")

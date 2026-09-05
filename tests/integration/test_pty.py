@@ -1,7 +1,6 @@
 """Public CLI behavior through tui-test's real pseudoterminal backend."""
 
 import json
-import shutil
 import subprocess
 import sys
 import time
@@ -9,50 +8,16 @@ import time
 import pytest
 from tui_test import TuiTest
 
-
-@pytest.mark.pty
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("arguments", "expected", "code"),
-    [
-        (["--help"], "prepare,build,dev,check,package,install,update,launch,doctor", 0),
-        (["unknown-command"], "invalid choice", 2),
-        (["doctor", "--unexpected"], "unexpected arguments", 2),
-    ],
-)
-async def test_public_management_cli_in_a_pty(
-    project_root, isolated_env, tmp_path, arguments, expected, code
-):
-    async with TuiTest.ephemeral(recording={"mode": "disabled"}) as terminal:
-        await terminal.run(
-            sys.executable,
-            str(project_root / "scripts/native.py"),
-            *arguments,
-            cols=140,
-            rows=40,
-            cwd=str(tmp_path),
-            env={"DISPLAY": "", "WAYLAND_DISPLAY": "", **isolated_env},
-            wait_ready=False,
-        )
-        await terminal.wait_exit(timeout=10_000)
-        await terminal.get_by_text(expected).any().expect()
-        assert (await terminal.state()).exited == code
+from tests.tools.support import create_bundle
 
 
 @pytest.fixture
-def managed_launcher(native_binaries, project_root, isolated_env, tmp_path):
+def managed_launcher(native_binaries, tools_binary, rust_host, isolated_env, tmp_path):
     if sys.platform != "linux":
         pytest.skip("managed PTY launcher fixture currently targets Linux bundles")
-    bundle = tmp_path / "bundle"
-    binaries = bundle / "bin"
-    binaries.mkdir(parents=True)
-    source = bundle / "source"
-    (source / "scripts").mkdir(parents=True)
-    shutil.copy2(project_root / "Cargo.toml", source / "Cargo.toml")
-    shutil.copy2(project_root / "scripts/native.py", source / "scripts/native.py")
-    for name in ("wezterm-gui", "wez-vtabs-store"):
-        shutil.copy2(native_binaries[name], binaries / name)
-    (bundle / "build.json").write_text(json.dumps({"id": "pty-fixture", "capability": 1}))
+    bundle = create_bundle(
+        tmp_path / "bundle", "pty-fixture", tools_binary, rust_host, native_binaries
+    )
     install = tmp_path / "installed"
     env = {
         **isolated_env,
@@ -61,8 +26,7 @@ def managed_launcher(native_binaries, project_root, isolated_env, tmp_path):
     }
     subprocess.run(
         [
-            sys.executable,
-            str(project_root / "scripts/native.py"),
+            str(tools_binary),
             "install",
             "--bundle",
             str(bundle),

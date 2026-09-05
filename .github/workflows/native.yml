@@ -45,35 +45,32 @@ jobs:
           head = subprocess.check_output(['git', 'ls-remote', 'https://github.com/wezterm/wezterm.git', 'refs/heads/main'], text=True).split()[0]
           with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
               output.write('head=' + head + '\n')
-      - uses: actions/cache@v4
-        id: completed
-        with:
-          path: .native-completed
-          key: native-completed-${{ runner.os }}-${{ github.sha }}-${{ steps.upstream.outputs.head }}
+          with open(os.environ['GITHUB_ENV'], 'a') as output:
+              output.write('WEZ_VTABS_UPSTREAM=' + head + '\n')
       - uses: dtolnay/rust-toolchain@stable
-        if: steps.completed.outputs.cache-hit != 'true'
         with:
           components: rustfmt, clippy
       - uses: mozilla-actions/sccache-action@v0.0.9
-        if: steps.completed.outputs.cache-hit != 'true'
       - uses: Swatinem/rust-cache@v2
-        if: steps.completed.outputs.cache-hit != 'true'
+        with:
+          workspaces: . -> target
+          cache-directories: target/pytest
+          cache-on-failure: true
       - name: Windows native dependencies
-        if: steps.completed.outputs.cache-hit != 'true' && runner.os == 'Windows'
+        if: runner.os == 'Windows'
         shell: python
         run: |
           import os
           with open(os.environ['GITHUB_PATH'], 'a') as output:
               output.write('C:\\Strawberry\\perl\\bin\n')
       - name: Install test dependencies
-        if: steps.completed.outputs.cache-hit != 'true'
         run: uv sync --locked
       - name: Linux test dependencies
-        if: steps.completed.outputs.cache-hit != 'true' && runner.os == 'Linux'
+        if: runner.os == 'Linux'
         shell: bash
         run: sudo apt-get update && sudo apt-get install -y lua5.4 xvfb openbox xdotool imagemagick
       - name: Install Lua Language Server
-        if: steps.completed.outputs.cache-hit != 'true' && runner.os == 'Linux'
+        if: runner.os == 'Linux'
         shell: bash
         run: |
           curl --fail --location --retry 3 https://github.com/LuaLS/lua-language-server/releases/download/3.19.1/lua-language-server-3.19.1-linux-x64.tar.gz -o "$RUNNER_TEMP/luals.tar.gz"
@@ -82,26 +79,23 @@ jobs:
           tar -xzf "$RUNNER_TEMP/luals.tar.gz" -C "$RUNNER_TEMP/luals"
           echo "$RUNNER_TEMP/luals/bin" >> "$GITHUB_PATH"
       - name: Focused checks
-        if: steps.completed.outputs.cache-hit != 'true'
-        run: uv run --locked python scripts/native.py check
+        run: cargo xtask check --timings
       - name: Prepare latest main
-        if: steps.completed.outputs.cache-hit != 'true'
-        run: python scripts/native.py prepare
+        run: cargo xtask prepare --timings
       - name: Upstream system dependencies
-        if: steps.completed.outputs.cache-hit != 'true' && runner.os != 'Windows'
+        if: runner.os != 'Windows'
         shell: bash
-        run: cd "$WEZ_VTABS_CACHE/worktree" && env CI=yes ./get-deps
+        run: cargo xtask deps --timings
       - name: Native build and package
-        if: steps.completed.outputs.cache-hit != 'true'
-        run: python scripts/native.py package
+        run: cargo xtask package --timings
       - name: Isolated native and SSH mux tests
-        if: steps.completed.outputs.cache-hit != 'true' && runner.os == 'Linux'
+        if: runner.os == 'Linux'
         shell: bash
         run: >-
-          uv run --locked pytest -n 2 tests/integration --run-native --run-container --run-luals --native-bin-dir="$WEZ_VTABS_CACHE/upstream/target/release" --basetemp="$RUNNER_TEMP/vtabs-tests"
+          cargo xtask test native --timings -- --run-container --run-luals --basetemp="$RUNNER_TEMP/vtabs-tests"
       - name: Native test diagnostics
         uses: actions/upload-artifact@v7
-        if: always() && runner.os == 'Linux' && steps.completed.outputs.cache-hit != 'true'
+        if: always() && runner.os == 'Linux'
         with:
           name: native-test-diagnostics
           path: |
@@ -113,17 +107,23 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
       - uses: actions/upload-artifact@v7
-        if: steps.completed.outputs.cache-hit != 'true'
         with:
           name: native-${{ runner.os }}
           path: |
             dist/*.zip
             dist/*.tar.gz
+            dist/*.manifest.json
           if-no-files-found: error
           retention-days: 7
-      - name: Record successful head pair
-        if: steps.completed.outputs.cache-hit != 'true'
-        shell: python
-        run: |
-          from pathlib import Path
-          Path('.native-completed').write_text('${{ github.sha }} ${{ steps.upstream.outputs.head }}\n')
+      - name: Tooling failure reproduction
+        uses: actions/upload-artifact@v7
+        if: failure() || cancelled()
+        with:
+          name: tooling-reproduction-${{ runner.os }}
+          path: ${{ env.WEZ_VTABS_CACHE }}/runs/
+          include-hidden-files: true
+          if-no-files-found: ignore
+          retention-days: 7
+      - name: Compiler cache statistics
+        if: always()
+        run: sccache --show-stats

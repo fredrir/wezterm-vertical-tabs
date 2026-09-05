@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 static SCHEDULED: AtomicBool = AtomicBool::new(false);
 
-fn script() -> anyhow::Result<Option<PathBuf>> {
+fn updater() -> anyhow::Result<Option<(PathBuf, PathBuf, PathBuf)>> {
     let exe = std::env::current_exe()?;
     let Some(directory) = exe.parent() else {
         return Ok(None);
@@ -20,6 +20,10 @@ fn script() -> anyhow::Result<Option<PathBuf>> {
     }
     let marker: serde_json::Value = serde_json::from_slice(&std::fs::read(marker)?)?;
     anyhow::ensure!(marker["capability"] == 1, "native bundle contract mismatch");
+    anyhow::ensure!(
+        marker["updater_protocol"] == 1,
+        "native updater protocol mismatch"
+    );
     let relative = marker["root"]
         .as_str()
         .ok_or_else(|| anyhow::anyhow!("native bundle root missing"))?;
@@ -39,22 +43,35 @@ fn script() -> anyhow::Result<Option<PathBuf>> {
     if !install.join("active.json").is_file() {
         return Ok(None);
     }
-    Ok(Some(root.join("source/scripts/native.py")))
+    let relative_tool = marker["tool"]
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("native updater tool missing"))?;
+    anyhow::ensure!(
+        std::path::Path::new(relative_tool)
+            .components()
+            .all(|component| matches!(component, std::path::Component::Normal(_))),
+        "invalid native updater tool path"
+    );
+    let tool = root.join(relative_tool).canonicalize()?;
+    anyhow::ensure!(
+        tool.starts_with(&root) && tool.is_file(),
+        "native updater tool invalid"
+    );
+    Ok(Some((tool, install.to_path_buf(), root.join("source"))))
 }
 
 pub fn schedule() {
+    if std::env::var("WEZ_VTABS_OFFLINE").as_deref() == Ok("1") {
+        return;
+    }
     if SCHEDULED.swap(true, Ordering::Relaxed) {
         return;
     }
     promise::spawn::spawn(async {
         let result = smol::unblock(|| -> anyhow::Result<()> {
-            let Some(script) = script()? else {
+            let Some((tool, install, source)) = updater()? else {
                 return Ok(());
             };
-            let install = script
-                .ancestors()
-                .nth(5)
-                .ok_or_else(|| anyhow::anyhow!("native install root missing"))?;
             let state = install.join("update.json");
             if state.is_file() {
                 let state: serde_json::Value = serde_json::from_slice(&std::fs::read(state)?)?;
@@ -69,19 +86,12 @@ pub fn schedule() {
                 .create(true)
                 .append(true)
                 .open(install.join("update.log"))?;
-            let runtime: serde_json::Value = serde_json::from_slice(
-                &std::fs::read(install.join("runtime.json")).map_err(|error| {
-                    anyhow::anyhow!("native Python runtime missing; run just install: {error}")
-                })?,
-            )?;
-            let python = runtime["python"].as_str().ok_or_else(|| {
-                anyhow::anyhow!("native Python runtime invalid; run just install")
-            })?;
-            let mut command = std::process::Command::new(python);
+            let mut command = std::process::Command::new(tool);
             command
-                .arg(&script)
                 .args(["update", "--daily", "--stage-only"])
-                .env("WEZ_VTABS_INSTALL", install);
+                .arg("--project-root")
+                .arg(source)
+                .env("WEZ_VTABS_INSTALL", &install);
             #[cfg(windows)]
             {
                 use std::os::windows::process::CommandExt;

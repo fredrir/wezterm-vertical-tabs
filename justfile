@@ -1,45 +1,65 @@
-python := "uv run --locked python"
+tool := "cargo xtask"
 
 _default:
     @just --list --unsorted
 
-# Fetch latest WezTerm main, apply the patch series, build the native GUI.
+deps *args:
+    @{{tool}} deps {{args}}
+
+# Resolve upstream once, compile and validate native binaries.
 build *args:
-    @{{python}} scripts/native.py build {{args}}
+    @{{tool}} build {{args}}
 
-# Build and start a separate native GUI process.
+# Build an iteration bundle; --watch rebuilds changed runtime inputs.
 dev *args:
-    @{{python}} scripts/native.py dev {{args}}
+    @{{tool}} dev {{args}}
 
-# Focused Rust and native integration contracts; no GUI is launched.
-check:
-    @{{python}} scripts/native.py check
+check *args:
+    @{{tool}} check {{args}}
 
+# Select all/tools/rust/lua/native/ssh/tls; pytest arguments follow --.
 test *args:
-    uv run --locked pytest -n 2 {{args}}
+    @{{tool}} test {{args}}
 
 lint:
     uv run --locked ruff check scripts tests
     uv run --locked ruff format --check scripts tests
 
 package *args:
-    @{{python}} scripts/native.py package {{args}}
+    @{{tool}} package {{args}}
 
-# Install immutable versions; existing GUI processes keep their binaries.
 install *args:
-    @{{python}} scripts/native.py install {{args}}
+    @{{tool}} install {{args}}
 
-# Build latest main and select the completed bundle for subsequent launches.
 update *args:
-    @{{python}} scripts/native.py update {{args}}
+    @{{tool}} update {{args}}
 
 launch *args:
-    @{{python}} scripts/native.py launch {{args}}
+    @{{tool}} launch {{args}}
 
-doctor:
-    @{{python}} scripts/native.py doctor
+doctor *args:
+    @{{tool}} doctor {{args}}
 
-generate:
-    cargo run --quiet --locked -p vtabs-core --bin gen-schema -- --write lua plugin/schema.lua
-    cargo run --quiet --locked -p vtabs-core --bin gen-schema -- --write types plugin/types.lua
-    cargo run --quiet --locked -p vtabs-core --bin gen-schema -- --write markdown docs/options.md
+generate *args:
+    @{{tool}} generate {{args}}
+
+plan *args:
+    @{{tool}} plan {{args}}
+
+status:
+    @{{tool}} status
+
+versions:
+    @{{tool}} versions
+
+rollback *args:
+    @{{tool}} rollback {{args}}
+
+cache *args:
+    @{{tool}} cache {{args}}
+
+patch *args:
+    @{{tool}} patch {{args}}
+
+repro *args:
+    @{{tool}} repro {{args}}

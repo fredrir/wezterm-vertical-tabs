@@ -1,5 +1,5 @@
 [workspace]
-members  = ["crates/vtabs-core", "crates/vtabs-ui", "crates/vtabs-app", "crates/vtabs-store"]
+members  = ["crates/vtabs-core", "crates/vtabs-ui", "crates/vtabs-app", "crates/vtabs-store", "tools"]
 resolver = "2"
 
 [workspace.package]
@@ -19,3 +19,10 @@ opt-level     = 3
 lto           = "thin"
 codegen-units = 1
 strip         = "debuginfo"
+
+[profile.iterate]
+inherits = "dev"
+opt-level = 1
+debug = "line-tables-only"
+incremental = true
+lto = "off"
