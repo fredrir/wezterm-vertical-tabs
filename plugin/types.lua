@@ -1,0 +1,32 @@
+-- Generated from vtabs-core; edit the Rust schema.
+---@meta
+---@class NativeTabsSettings
+---@field width? integer Expanded width in logical pixels
+---@field rail_width? integer Collapsed width in logical pixels
+---@field side? 'left'|'right' Native sidebar edge
+---@field rail? 'expanded'|'collapsed'|'hidden' Sidebar visibility
+---@field animations? boolean Enable finite visual transitions
+---@field reduced_motion? boolean Suppress transitions
+---@field animation_ms? integer Transition duration in milliseconds
+---@field cards? boolean Use cards instead of compact rows
+---@field show_indices? boolean Visible native tab indices
+---@field show_metadata? boolean Show current directory and domain
+---@field show_close? boolean Show close controls
+---@field confirm_close? boolean Confirm destructive UI close actions
+---@field accent? string Default accent color
+---@field background? string Surface background
+---@field foreground? string Text foreground
+---@field muted? string Secondary text foreground
+---@field selected_background? string Selected card background
+---@field private_accent? string Private window accent
+---@field reopen_limit? integer Maximum in-memory launch intents
+---@field default_domain? string? Spawn domain used in an empty space; null retains the host default
+---@field private_env? table<string, string> Environment additions for explicitly created private windows
+---@field menus? table[] Nested semantic action menus
+
+---@class NativeTabsOptions
+---@field profile? string
+---@field settings? NativeTabsSettings
+---@field spaces? table[]
+---@field templates? table[]
+---@field hooks? table<string, function>

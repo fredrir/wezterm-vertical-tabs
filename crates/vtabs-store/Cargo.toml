@@ -1,0 +1,18 @@
+[package]
+name = "vtabs-store"
+version.workspace = true
+edition.workspace = true
+
+[features]
+default = []
+sqlite = ["dep:rusqlite"]
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+rusqlite = { version = "0.40.2", features = ["bundled"], optional = true }
+
+[[bin]]
+name = "wez-vtabs-store"
+path = "src/main.rs"
+required-features = ["sqlite"]

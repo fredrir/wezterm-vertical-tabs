@@ -1,0 +1,90 @@
+name: Native
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: '23 5 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+concurrency:
+  group: native-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  native:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    env:
+      WEZ_VTABS_CACHE: ${{ runner.temp }}/wez-vtabs-native
+      CARGO_INCREMENTAL: '0'
+      SCCACHE_GHA_ENABLED: 'true'
+      RUSTC_WRAPPER: sccache
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.x'
+      - name: Resolve upstream main
+        id: upstream
+        shell: python
+        run: |
+          import os, subprocess
+          head = subprocess.check_output(['git', 'ls-remote', 'https://github.com/wezterm/wezterm.git', 'refs/heads/main'], text=True).split()[0]
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write('head=' + head + '\n')
+      - uses: actions/cache@v4
+        id: completed
+        with:
+          path: .native-completed
+          key: native-completed-${{ runner.os }}-${{ github.sha }}-${{ steps.upstream.outputs.head }}
+      - uses: dtolnay/rust-toolchain@stable
+        if: steps.completed.outputs.cache-hit != 'true'
+        with:
+          components: rustfmt, clippy
+      - uses: mozilla-actions/sccache-action@v0.0.9
+        if: steps.completed.outputs.cache-hit != 'true'
+      - uses: Swatinem/rust-cache@v2
+        if: steps.completed.outputs.cache-hit != 'true'
+      - name: Windows native dependencies
+        if: steps.completed.outputs.cache-hit != 'true' && runner.os == 'Windows'
+        shell: python
+        run: |
+          import os
+          with open(os.environ['GITHUB_PATH'], 'a') as output:
+              output.write('C:\\Strawberry\\perl\\bin\n')
+      - name: Focused checks
+        if: steps.completed.outputs.cache-hit != 'true'
+        run: python scripts/native.py check
+      - name: Prepare latest main
+        if: steps.completed.outputs.cache-hit != 'true'
+        run: python scripts/native.py prepare
+      - name: Upstream system dependencies
+        if: steps.completed.outputs.cache-hit != 'true' && runner.os != 'Windows'
+        shell: bash
+        run: cd "$WEZ_VTABS_CACHE/worktree" && env CI=yes ./get-deps
+      - name: Native build and package
+        if: steps.completed.outputs.cache-hit != 'true'
+        run: python scripts/native.py package
+      - uses: actions/upload-artifact@v7
+        if: steps.completed.outputs.cache-hit != 'true'
+        with:
+          name: native-${{ runner.os }}
+          path: |
+            dist/*.zip
+            dist/*.tar.gz
+          if-no-files-found: error
+          retention-days: 7
+      - name: Record successful head pair
+        if: steps.completed.outputs.cache-hit != 'true'
+        shell: python
+        run: |
+          from pathlib import Path
+          Path('.native-completed').write_text('${{ github.sha }} ${{ steps.upstream.outputs.head }}\n')

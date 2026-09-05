@@ -1,22 +1,28 @@
-# wezterm-vertical-tabs (WiP)
+# WezTerm vertical tabs
 
+Native vertical tabs with Rust, Ratatui and TachyonFX, rendered by WezTerm's existing renderer.
 
-## Installation
+| Name | Value |
+| --- | --- |
+| Build | Latest WezTerm `main` plus a compact native patch series |
+| Platforms | macOS, Linux, Windows |
+| Sessions | Local, Unix mux where supported, SSH mux |
+| State | Project-owned SQLite helper on the GUI machine |
+| Configuration | Rust defaults; optional Lua styling and semantic hooks |
+| Navigation | Native WezTerm tab actions follow the selected space's visible tabs |
 
 ```sh
-local wezterm = require "wezterm"
-local config = wezterm.config_builder()
-
--- your own bindings first: the plugin never overrides a key you already bound
-config.keys = { ... }
-
-local vtabs = wezterm.plugin.require "https://github.com/fredrir/wezterm-vertical-tabs"
-vtabs.apply_to_config(config, {
-  width = 28,
-})
-return config
+git clone https://github.com/fredrir/wezterm-vertical-tabs.git
+cd wezterm-vertical-tabs
+just install
+just launch
 ```
 
-## Configuration
+Requires Git, stable Rust, Python 3.10+, and the platform dependencies for [building WezTerm](https://wezterm.org/install/source.html). The managed launch entry builds updates asynchronously and selects completed bundles between launches.
 
-See [configuration.md](docs/configuration.md) for configuration options.
+| Reference | Value |
+| --- | --- |
+| [Configuration](docs/configuration.md) | Lua options, spaces, themes and hooks |
+| [Development](docs/development.md) | Build, packaging, updates and native GUI checks |
+| [Validation](docs/validation.md) | Integrated measurements, regression checks and verification limits |
+| [Boundaries](docs/limitations.md) | Persistence, remote operations and platform requirements |

@@ -1,0 +1,1725 @@
+diff --git a/mux/src/localpane.rs b/mux/src/localpane.rs
+index bffc5213..8b774de0 100644
+--- a/mux/src/localpane.rs
++++ b/mux/src/localpane.rs
+@@ -1044,25 +1044,40 @@ impl LocalPane {
+     fn get_leader(&self, policy: CachePolicy) -> CachedLeaderInfo {
+         let mut leader = self.leader.lock();
+ 
+-        if policy == CachePolicy::FetchImmediate {
+-            leader.replace(CachedLeaderInfo::new(self.pty.lock().as_raw_fd()));
+-        } else if let Some(info) = leader.as_mut() {
+-            // If stale, queue up some work in another thread to update.
+-            // Right now, we'll return the stale data.
+-            if info.expired() && info.can_update() {
+-                info.updating = true;
+-                let leader_ref = Arc::clone(&self.leader);
+-                std::thread::spawn(move || {
+-                    let mut leader = leader_ref.lock();
+-                    if let Some(leader) = leader.as_mut() {
+-                        leader.update();
+-                    }
+-                });
++        if policy != CachePolicy::FetchImmediate {
++            if let Some(info) = leader.as_mut() {
++                let refresh = if info.expired() && info.can_update() {
++                    info.updating = true;
++                    Some(info.clone())
++                } else {
++                    None
++                };
++                let cached = info.clone();
++                drop(leader);
++                if let Some(mut fresh) = refresh {
++                    let leader_ref = Arc::clone(&self.leader);
++                    std::thread::spawn(move || {
++                        let previous = fresh.updated;
++                        fresh.update();
++                        let mut leader = leader_ref.lock();
++                        if leader.as_ref().map(|info| info.updated) == Some(previous) {
++                            leader.replace(fresh);
++                        }
++                    });
++                }
++                return cached;
+             }
+-        } else {
+-            leader.replace(CachedLeaderInfo::new(self.pty.lock().as_raw_fd()));
+         }
+ 
++        let previous = leader.as_ref().map(|info| info.updated);
++        drop(leader);
++        // Process discovery must not hold cache or PTY locks needed by GUI readers.
++        let fd = self.pty.lock().as_raw_fd();
++        let fresh = CachedLeaderInfo::new(fd);
++        let mut leader = self.leader.lock();
++        if leader.as_ref().map(|info| info.updated) == previous {
++            leader.replace(fresh);
++        }
+         (*leader).clone().unwrap()
+     }
+ 
+@@ -1089,7 +1104,11 @@ impl LocalPane {
+         &self,
+         policy: CachePolicy,
+     ) -> Option<MappedMutexGuard<'_, CachedProcInfo>> {
+-        if let ProcessState::Running { pid: Some(pid), .. } = &*self.process.lock() {
++        let pid = match &*self.process.lock() {
++            ProcessState::Running { pid: Some(pid), .. } => *pid,
++            _ => return None,
++        };
++        {
+             let mut proc_list = self.proc_list.lock();
+ 
+             let expired = policy == CachePolicy::FetchImmediate
+@@ -1099,8 +1118,10 @@ impl LocalPane {
+                     .unwrap_or(true);
+ 
+             if expired {
++                let previous = proc_list.as_ref().map(|info| info.updated);
++                drop(proc_list);
+                 log::trace!("CachedProcInfo expired, refresh");
+-                let root = LocalProcessInfo::with_root_pid(*pid)?;
++                let root = LocalProcessInfo::with_root_pid(pid)?;
+ 
+                 // Windows doesn't have any job control or session concept,
+                 // so we infer that the equivalent to the process group
+@@ -1129,17 +1150,24 @@ impl LocalPane {
+                 let mut foreground = youngest.clone();
+                 foreground.children.clear();
+ 
+-                proc_list.replace(CachedProcInfo {
++                let fresh = CachedProcInfo {
+                     root,
+                     foreground,
+                     updated: Instant::now(),
+-                });
++                };
++                let process = self.process.lock();
++                if !matches!(&*process, ProcessState::Running { pid: Some(current), .. } if *current == pid) {
++                    return None;
++                }
++                proc_list = self.proc_list.lock();
++                if proc_list.as_ref().map(|info| info.updated) == previous {
++                    proc_list.replace(fresh);
++                }
+                 log::trace!("CachedProcInfo updated");
+             }
+ 
+             return Some(MutexGuard::map(proc_list, |info| info.as_mut().unwrap()));
+         }
+-        None
+     }
+ 
+     #[allow(dead_code)]
+diff --git a/wezterm-gui/src/main.rs b/wezterm-gui/src/main.rs
+index 5e7ca47b..3610fccf 100644
+--- a/wezterm-gui/src/main.rs
++++ b/wezterm-gui/src/main.rs
+@@ -52,6 +52,7 @@ mod shapecache;
+ mod spawn;
+ mod stats;
+ mod tabbar;
++mod native_vtabs;
+ mod termwindow;
+ mod unicode_names;
+ mod uniforms;
+diff --git a/wezterm-gui/src/quad.rs b/wezterm-gui/src/quad.rs
+index d51f8978..de365918 100644
+--- a/wezterm-gui/src/quad.rs
++++ b/wezterm-gui/src/quad.rs
+@@ -322,6 +322,26 @@ impl std::fmt::Debug for HeapQuadAllocator {
+ }
+ 
+ impl HeapQuadAllocator {
++    pub fn apply_transformed(&self, other: &mut TripleLayerQuadAllocator,
++        offset: (f32, f32), opacity: f32, clip: (f32, f32, f32, f32)) {
++        for (layer, quads) in [(0, &self.layer0), (1, &self.layer1), (2, &self.layer2)] {
++            for quad in quads {
++                let mut vertices = quad.to_vertices();
++                let (left, top, right, bottom) = quad.position;
++                let (left, top, right, bottom) = (left + offset.0, top + offset.1, right + offset.0, bottom + offset.1);
++                let (x1, y1, x2, y2) = (left.max(clip.0), top.max(clip.1), right.min(clip.2), bottom.min(clip.3));
++                if x1 >= x2 || y1 >= y2 { continue; }
++                let (u1, u2, v1, v2) = quad.tex;
++                let uv = |x: f32, y: f32| [u1 + (u2-u1) * (x-left)/(right-left), v1 + (v2-v1) * (y-top)/(bottom-top)];
++                for (vertex, (x,y)) in vertices.iter_mut().zip([(x1,y1),(x2,y1),(x1,y2),(x2,y2)]) {
++                    vertex.position = [x,y]; vertex.tex = uv(x,y);
++                    vertex.fg_color[3] *= opacity; vertex.alt_color[3] *= opacity;
++                }
++                other.extend_with(layer, &vertices);
++            }
++        }
++    }
++
+     pub fn apply_to(&self, other: &mut TripleLayerQuadAllocator) -> anyhow::Result<()> {
+         let start = std::time::Instant::now();
+         for (layer_num, quads) in [(0, &self.layer0), (1, &self.layer1), (2, &self.layer2)] {
+@@ -401,3 +421,102 @@ fn size() {
+     assert_eq!(std::mem::size_of::<Vertex>() * VERTICES_PER_CELL, 272);
+     assert_eq!(std::mem::size_of::<BoxedQuad>(), 84);
+ }
++
++#[cfg(test)]
++mod native_transform_tests {
++    use super::*;
++
++    fn close(actual: f32, expected: f32) {
++        assert!((actual - expected).abs() < 0.000_01, "{} != {}", actual, expected);
++    }
++
++    fn glyph(source: &mut HeapQuadAllocator, layer: usize) {
++        let mut quad = source.allocate(layer).unwrap();
++        quad.set_position(-30., -20., 50., 60.);
++        quad.set_texture_discrete(0.1, 0.9, 0.2, 1.);
++        quad.set_fg_color(LinearRgba::with_components(0.2, 0.3, 0.4, 0.8));
++        quad.set_alt_color_and_mix_value(LinearRgba::with_components(0.6, 0.5, 0.4, 0.4), 0.75);
++        quad.set_hsv(Some(HsbTransform { hue: 0.8, saturation: 0.7, brightness: 0.6 }));
++        quad.set_has_color(true);
++    }
++
++    #[test]
++    fn native_transform_clips_all_edges_and_preserves_texture_scale() {
++        let mut source = HeapQuadAllocator::default();
++        glyph(&mut source, 1);
++        let original = source.layer1[0].to_vertices();
++        let mut output = HeapQuadAllocator::default();
++        source.apply_transformed(&mut TripleLayerQuadAllocator::Heap(&mut output),
++            (10., 5.), 0.25, (0., 5., 40., 45.));
++        assert!(output.layer0.is_empty() && output.layer2.is_empty());
++        assert_eq!(output.layer1.len(), 1);
++        let vertices = output.layer1[0].to_vertices();
++        // The translated 80×80 glyph loses 20 pixels from each edge. Its
++        // texture must crop to the central half without stretching the glyph.
++        for (vertex, (position, texture)) in vertices.iter().zip([
++            ([0., 5.], [0.3, 0.4]), ([40., 5.], [0.7, 0.4]),
++            ([0., 45.], [0.3, 0.8]), ([40., 45.], [0.7, 0.8]),
++        ]) {
++            assert_eq!(vertex.position, position);
++            close(vertex.tex[0], texture[0]); close(vertex.tex[1], texture[1]);
++            close(vertex.fg_color[3], 0.2); close(vertex.alt_color[3], 0.1);
++            assert_eq!(&vertex.fg_color[..3], &original[0].fg_color[..3]);
++            assert_eq!(&vertex.alt_color[..3], &original[0].alt_color[..3]);
++            assert_eq!(vertex.hsv, original[0].hsv);
++            assert_eq!(vertex.has_color, IS_COLOR_EMOJI);
++            assert_eq!(vertex.mix_value, 0.75);
++        }
++        // Published cache contents remain reusable for later resize/effect frames.
++        assert_eq!(bytemuck::cast_slice::<Vertex, u8>(&original),
++            bytemuck::cast_slice::<Vertex, u8>(&source.layer1[0].to_vertices()));
++    }
++
++    #[test]
++    fn native_transform_reuses_all_layers_without_cumulative_translation_or_opacity() {
++        let mut source = HeapQuadAllocator::default();
++        for layer in 0..3 { glyph(&mut source, layer); }
++        for (offset, opacity) in [((0., 0.), 1.), ((17.5, -8.25), 0.5), ((-25., 40.), 0.)] {
++            let mut output = HeapQuadAllocator::default();
++            source.apply_transformed(&mut TripleLayerQuadAllocator::Heap(&mut output),
++                offset, opacity, (-1000., -1000., 1000., 1000.));
++            for layer in [&output.layer0, &output.layer1, &output.layer2] {
++                assert_eq!(layer.len(), 1);
++                let vertices = layer[0].to_vertices();
++                for (actual, original) in vertices.iter().zip(source.layer0[0].to_vertices()) {
++                    close(actual.position[0], original.position[0] + offset.0);
++                    close(actual.position[1], original.position[1] + offset.1);
++                    close(actual.tex[0], original.tex[0]); close(actual.tex[1], original.tex[1]);
++                    close(actual.fg_color[3], original.fg_color[3] * opacity);
++                    close(actual.alt_color[3], original.alt_color[3] * opacity);
++                }
++            }
++        }
++    }
++
++    #[test]
++    fn native_transform_drops_outside_edge_touching_and_degenerate_quads() {
++        let mut source = HeapQuadAllocator::default();
++        for (left, top, right, bottom) in [
++            (-20., 0., -1., 10.), (-10., 0., 0., 10.), (10., 0., 20., 10.),
++            (0., -10., 10., 0.), (0., 10., 10., 20.), (2., 2., 2., 8.), (2., 2., 8., 2.),
++        ] {
++            source.allocate(0).unwrap().set_position(left, top, right, bottom);
++        }
++        let mut output = HeapQuadAllocator::default();
++        source.apply_transformed(&mut TripleLayerQuadAllocator::Heap(&mut output),
++            (0., 0.), 1., (0., 0., 10., 10.));
++        assert!(output.layer0.is_empty());
++
++        // Cropping also preserves reversed atlas axes and fractional bounds.
++        let mut quad = source.allocate(2).unwrap();
++        quad.set_position(-0.5, -0.5, 1.5, 1.5);
++        quad.set_texture_discrete(1., 0., 0.75, 0.25);
++        source.apply_transformed(&mut TripleLayerQuadAllocator::Heap(&mut output),
++            (0., 0.), 1., (0., 0., 1., 1.));
++        assert!(output.layer0.is_empty());
++        assert_eq!(output.layer2.len(), 1);
++        let clipped = &output.layer2[0];
++        assert_eq!(clipped.position, (0., 0., 1., 1.));
++        assert_eq!(clipped.tex, (0.75, 0.25, 0.625, 0.375));
++    }
++}
+diff --git a/wezterm-gui/src/scripting/mod.rs b/wezterm-gui/src/scripting/mod.rs
+index 7188ca21..5289129b 100644
+--- a/wezterm-gui/src/scripting/mod.rs
++++ b/wezterm-gui/src/scripting/mod.rs
+@@ -16,6 +16,7 @@ fn luaerr(err: anyhow::Error) -> mlua::Error {
+ }
+ 
+ pub fn register(lua: &Lua) -> anyhow::Result<()> {
++    crate::native_vtabs::register(lua)?;
+     let window_mod = get_or_create_sub_module(lua, "gui")?;
+ 
+     window_mod.set(
+diff --git a/wezterm-gui/src/termwindow/keyevent.rs b/wezterm-gui/src/termwindow/keyevent.rs
+index d6690807..9e5fc113 100644
+--- a/wezterm-gui/src/termwindow/keyevent.rs
++++ b/wezterm-gui/src/termwindow/keyevent.rs
+@@ -428,6 +428,7 @@ impl super::TermWindow {
+     }
+ 
+     pub fn raw_key_event_impl(&mut self, key: RawKeyEvent, context: &dyn WindowOps) {
++        if self.native_ui.as_ref().map_or(false, |ui| ui.provider.keyboard_focus()) { return; }
+         // The leader key is a kind of modal modifier key.
+         // It is allowed to be active for up to the leader timeout duration,
+         // after which it auto-deactivates.
+@@ -597,6 +598,7 @@ impl super::TermWindow {
+     }
+ 
+     pub fn key_event_impl(&mut self, window_key: KeyEvent, context: &dyn WindowOps) {
++        if self.native_input(crate::termwindow::native_ui::Input::Key(&window_key)) { return; }
+         let pane = match self.get_active_pane_or_overlay() {
+             Some(pane) => pane,
+             None => return,
+@@ -642,6 +644,8 @@ impl super::TermWindow {
+             return;
+         }
+ 
++        if self.native_content_hidden() { return; }
++
+         // If we get here, then none of the keys matched
+         // any key table rules. Therefore, we should pop all `until_unknown`
+         // entries from the stack.
+diff --git a/wezterm-gui/src/termwindow/mouseevent.rs b/wezterm-gui/src/termwindow/mouseevent.rs
+index f7fefd06..2a21edcf 100644
+--- a/wezterm-gui/src/termwindow/mouseevent.rs
++++ b/wezterm-gui/src/termwindow/mouseevent.rs
+@@ -60,6 +60,7 @@ impl super::TermWindow {
+ 
+     pub fn mouse_event_impl(&mut self, event: MouseEvent, context: &dyn WindowOps) {
+         log::trace!("{:?}", event);
++        if self.native_input(crate::termwindow::native_ui::Input::Mouse(&event, self.native_geometry())) || self.native_content_hidden() { return; }
+         let pane = match self.get_active_pane_or_overlay() {
+             Some(pane) => pane,
+             None => return,
+diff --git a/wezterm-gui/src/termwindow/render/paint.rs b/wezterm-gui/src/termwindow/render/paint.rs
+index 3136f28e..1e640a56 100644
+--- a/wezterm-gui/src/termwindow/render/paint.rs
++++ b/wezterm-gui/src/termwindow/render/paint.rs
+@@ -134,7 +134,7 @@ impl crate::TermWindow {
+                             window.notify(TermWindowNotif::Apply(Box::new(move |tw| {
+                                 tw.scheduled_animation.borrow_mut().take();
+                                 if tw.tab_bar.next_progress_frame_due().is_some() {
+-                                    tw.update_title_post_status();
++                                    if tw.show_tab_bar { tw.update_title_post_status(); }
+                                 }
+                                 win.invalidate();
+                             })));
+@@ -162,6 +162,7 @@ impl crate::TermWindow {
+     }
+ 
+     pub fn paint_pass(&mut self) -> anyhow::Result<()> {
++        self.native_sync();
+         {
+             let gl_state = self.render_state.as_ref().unwrap();
+             for layer in gl_state.layers.borrow().iter() {
+@@ -272,6 +273,8 @@ impl crate::TermWindow {
+             self.paint_tab_bar(&mut layers).context("paint_tab_bar")?;
+         }
+ 
++        self.paint_native_ui(&mut layers).context("native UI")?;
++
+         self.paint_window_borders(&mut layers)
+             .context("paint_window_borders")?;
+         drop(layers);
+diff --git a/wezterm-gui/src/termwindow/native_ui.rs b/wezterm-gui/src/termwindow/native_ui.rs
+new file mode 100644
+index 00000000..9dfe7d55
+--- /dev/null
++++ b/wezterm-gui/src/termwindow/native_ui.rs
+@@ -0,0 +1,1376 @@
++//! Window-owned native surfaces. Product state lives in the registered provider.
++use crate::quad::{HeapQuadAllocator, TripleLayerQuadAllocator};
++use crate::tabbar::TabBarItem;
++use crate::termwindow::box_model::{
++    BorderColor, ComputedElement, DisplayType, Element, ElementColors, ElementContent, Float,
++    LayoutContext,
++};
++use crate::termwindow::render::RenderScreenLineParams;
++use crate::termwindow::{TermWindow, TermWindowNotif, UIItem, UIItemType};
++use config::keyassignment::SpawnCommand;
++use mux::renderable::RenderableDimensions;
++use mux::{tab::TabId, Mux};
++use std::{
++    collections::{HashMap, HashSet},
++    rc::Rc,
++    time::{Duration, Instant},
++};
++use termwiz::surface::Line;
++use wezterm_term::color::ColorAttribute;
++use window::color::LinearRgba;
++use window::{DeadKeyStatus, KeyEvent, MouseEvent, Window, WindowOps};
++
++#[derive(Clone, Copy, Debug, Default, PartialEq)]
++pub struct Bounds {
++    pub x: f32,
++    pub y: f32,
++    pub width: f32,
++    pub height: f32,
++}
++impl Bounds {
++    pub fn contains(&self, x: f32, y: f32) -> bool {
++        x >= self.x && y >= self.y && x < self.x + self.width && y < self.y + self.height
++    }
++}
++
++#[derive(Clone, Copy, Debug, PartialEq)]
++pub struct Reservation {
++    pub width: f32,
++    pub right: bool,
++}
++#[derive(Clone, Copy, Debug, Default, PartialEq)]
++pub struct Geometry {
++    pub sidebar: Bounds,
++    pub content: Bounds,
++    pub cell_width: f32,
++    pub cell_height: f32,
++    pub dpi: f32,
++}
++#[derive(Clone, Debug)]
++pub struct TabInfo {
++    pub id: TabId,
++    pub title: String,
++    pub cwd: String,
++    pub domain: String,
++    pub host: String,
++    pub user: String,
++    pub process: String,
++    pub unread: bool,
++    pub bell: bool,
++    pub remote: bool,
++    pub user_vars: std::collections::HashMap<String, String>,
++}
++pub struct Snapshot {
++    pub revision: u64,
++    pub window_id: usize,
++    pub tabs: Vec<TabInfo>,
++    pub active: Option<TabId>,
++    pub focused: bool,
++    pub config_epoch: usize,
++}
++#[derive(Clone, Debug, Default, PartialEq)]
++pub struct Projection {
++    pub tabs: Vec<TabId>,
++    pub active: Option<TabId>,
++}
++pub enum Navigation {
++    Index(isize),
++    Relative(isize, bool),
++    Last,
++    Move(usize),
++    MoveRelative(isize),
++    Navigator,
++}
++pub enum Input<'a> {
++    Key(&'a KeyEvent),
++    Mouse(&'a MouseEvent, Geometry),
++    Composition(&'a DeadKeyStatus),
++    Focus(bool),
++}
++pub enum Command {
++    MoveToNewWindow(TabId),
++    Activate(TabId),
++    Close(TabId, bool),
++    Rename(TabId, String),
++    Spawn(SpawnCommand, bool),
++    Reorder(Vec<TabId>),
++    Clipboard(String),
++    Paste(u64),
++    Semantic(String),
++}
++pub struct Surface {
++    pub rows: Vec<Rc<Line>>,
++    pub columns: usize,
++    pub revision: u64,
++    pub offset: (f32, f32),
++    pub opacity: f32,
++}
++pub trait Provider {
++    fn initialize(&mut self) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + '_>>;
++    fn reservation(&self) -> Reservation;
++    fn metadata_interval(&self) -> Option<Duration> {
++        None
++    }
++    fn bind(&mut self, window: Window);
++    fn snapshot(&mut self, snapshot: Snapshot);
++    fn navigation(&mut self, navigation: Navigation);
++    fn input(&mut self, input: Input<'_>) -> bool;
++    fn message(&mut self, message: serde_json::Value);
++    fn projection(&self) -> Projection;
++    fn commands(&mut self) -> Vec<Command>;
++    fn render(&mut self, geometry: Geometry, now: Instant);
++    fn surface(&self) -> &Surface;
++    fn deadline(&self) -> Option<Instant>;
++    fn caret(&self) -> Option<(usize, usize)>;
++    fn keyboard_focus(&self) -> bool;
++    fn inspect(&self) -> serde_json::Value;
++    fn shutdown(self: Box<Self>) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()>>>;
++    fn move_context(&self, tab: TabId) -> serde_json::Value;
++    fn prepare_command(&self, new_window: bool, command: &mut SpawnCommand);
++    fn reserve_spawn(&mut self, new_window: bool, command: &SpawnCommand) -> serde_json::Value;
++}
++
++thread_local! {
++    static ARRIVALS: std::cell::RefCell<std::collections::HashMap<usize, Vec<serde_json::Value>>> = Default::default();
++}
++pub fn spawn_completed(window: usize, tab: usize, context: serde_json::Value) {
++    ARRIVALS.with(|arrivals| {
++        arrivals
++            .borrow_mut()
++            .entry(window)
++            .or_default()
++            .push(serde_json::json!({"spawned":{"tab_id":tab,"context":context}}))
++    });
++}
++pub fn spawn_failed(window: usize, context: serde_json::Value) {
++    if let Some(gui) = crate::frontend::front_end().gui_window_for_mux_window(window) {
++        gui.window
++            .notify(TermWindowNotif::Apply(Box::new(move |tw| {
++                tw.native_message_for(window, serde_json::json!({"spawn_failed":context}))
++            })));
++    }
++}
++
++#[derive(Default)]
++pub struct PaintStats {
++    samples: std::collections::VecDeque<(u64, u64, u64, u64)>,
++    pub rows_shaped: u64,
++}
++impl PaintStats {
++    fn record(&mut self, compose: u64, shape: u64, submit: u64, total: u64) {
++        if self.samples.len() == 4096 {
++            self.samples.pop_front();
++        }
++        self.samples.push_back((compose, shape, submit, total));
++    }
++    pub fn inspect(&self) -> serde_json::Value {
++        let stages = [
++            "compose_and_convert_us",
++            "shape_us",
++            "quad_copy_us",
++            "native_paint_us",
++        ];
++        let mut result =
++            serde_json::json!({"samples":self.samples.len(),"rows_shaped":self.rows_shaped});
++        for (index, stage) in stages.iter().enumerate() {
++            let mut values = self
++                .samples
++                .iter()
++                .map(|sample| [sample.0, sample.1, sample.2, sample.3][index])
++                .collect::<Vec<_>>();
++            values.sort_unstable();
++            let percentile = |n: usize| {
++                values
++                    .get(values.len().saturating_sub(1) * n / 100)
++                    .copied()
++                    .unwrap_or(0)
++            };
++            result[*stage] =
++                serde_json::json!({"p50":percentile(50),"p95":percentile(95),"p99":percentile(99)});
++        }
++        result
++    }
++}
++struct RowCache {
++    line: Rc<Line>,
++    quads: HeapQuadAllocator,
++    origin: (f32, f32),
++}
++fn native_caret_rect(
++    geometry: Geometry,
++    offset: (f32, f32),
++    caret: (usize, usize),
++) -> Option<window::Rect> {
++    let bounds = geometry.sidebar;
++    if bounds.width <= 0.
++        || bounds.height <= 0.
++        || geometry.cell_width <= 0.
++        || geometry.cell_height <= 0.
++    {
++        return None;
++    }
++    let x = bounds.x + offset.0 + caret.0 as f32 * geometry.cell_width;
++    let y = bounds.y + offset.1 + caret.1 as f32 * geometry.cell_height;
++    if !x.is_finite() || !y.is_finite() {
++        return None;
++    }
++    let left = x.max(bounds.x).floor();
++    let top = y.max(bounds.y).floor();
++    let right = (x + geometry.cell_width)
++        .min(bounds.x + bounds.width)
++        .ceil();
++    let bottom = (y + geometry.cell_height)
++        .min(bounds.y + bounds.height)
++        .ceil();
++    if right <= left || bottom <= top {
++        return None;
++    }
++    Some(window::Rect::new(
++        window::Point::new(left as isize, top as isize),
++        window::Size::new((right - left) as isize, (bottom - top) as isize),
++    ))
++}
++#[cfg(test)]
++mod native_geometry_tests {
++    use super::*;
++    #[test]
++    fn native_caret_follows_the_painted_transform_and_sidebar_origin() {
++        let geometry = Geometry {
++            sidebar: Bounds {
++                x: 640.,
++                y: 56.,
++                width: 240.,
++                height: 400.,
++            },
++            cell_width: 9.5,
++            cell_height: 18.5,
++            ..Geometry::default()
++        };
++        let rect = native_caret_rect(geometry, (-12.5, 3.), (4, 2)).unwrap();
++        assert_eq!(
++            rect,
++            window::Rect::new(window::Point::new(665, 96), window::Size::new(10, 19))
++        );
++        let clipped = native_caret_rect(geometry, (-5., 0.), (0, 0)).unwrap();
++        assert_eq!(clipped.origin.x, 640);
++        assert_eq!(clipped.size.width, 5);
++        assert!(native_caret_rect(geometry, (-20., 0.), (0, 0)).is_none());
++        assert!(native_caret_rect(geometry, (0., 500.), (0, 0)).is_none());
++    }
++    #[test]
++    fn native_caret_rejects_hidden_or_invalid_geometry() {
++        assert!(native_caret_rect(Geometry::default(), (0., 0.), (0, 0)).is_none());
++        let geometry = Geometry {
++            sidebar: Bounds {
++                width: 20.,
++                height: 20.,
++                ..Bounds::default()
++            },
++            cell_width: 10.,
++            cell_height: 10.,
++            ..Geometry::default()
++        };
++        assert!(native_caret_rect(geometry, (f32::NAN, 0.), (0, 0)).is_none());
++    }
++}
++pub struct NativeUi {
++    pub provider: Box<dyn Provider>,
++    pub projection: Projection,
++    pub stats: PaintStats,
++    pub dirty: bool,
++    needs_commit: bool,
++    revision: u64,
++    actual_active: Option<TabId>,
++    known: HashSet<TabId>,
++    bells: HashSet<TabId>,
++    bound: bool,
++    initialized: bool,
++    cache: Vec<RowCache>,
++    cache_key: (usize, usize, usize, usize, usize),
++    chrome: Option<ComputedElement>,
++    chrome_items: Vec<UIItem>,
++    chrome_key: (usize, usize, usize, usize, usize, bool),
++    chrome_dragging: bool,
++    metadata_task: Option<promise::spawn::Task<()>>,
++    metadata_schedule: Option<(Duration, usize)>,
++    metadata_token: u64,
++    metadata_processes: HashMap<TabId, String>,
++}
++impl NativeUi {
++    pub fn new(window_id: usize) -> Self {
++        let mut provider = crate::native_vtabs::create(window_id);
++        let mut initialized = false;
++        ARRIVALS.with(|arrivals| {
++            if let Some(messages) = arrivals.borrow().get(&window_id) {
++                for message in messages {
++                    if message["spawned"]["context"]["new_window"] == true {
++                        provider.message(serde_json::json!({"initialize":message["spawned"]["context"],"tab_id":message["spawned"]["tab_id"]}));
++                        initialized = true;
++                    }
++                }
++            }
++        });
++        Self {
++            provider,
++            projection: Projection::default(),
++            stats: PaintStats::default(),
++            dirty: true,
++            needs_commit: true,
++            revision: 0,
++            actual_active: None,
++            known: HashSet::new(),
++            bells: HashSet::new(),
++            bound: false,
++            initialized,
++            cache: Vec::new(),
++            cache_key: (0, 0, 0, 0, 0),
++            chrome: None,
++            chrome_items: Vec::new(),
++            chrome_key: (0, 0, 0, 0, 0, false),
++            chrome_dragging: false,
++            metadata_task: None,
++            metadata_schedule: None,
++            metadata_token: 0,
++            metadata_processes: HashMap::new(),
++        }
++    }
++    pub fn cancel_metadata_refresh(&mut self) {
++        drop(self.metadata_task.take());
++        self.metadata_schedule = None;
++        self.metadata_token = 0;
++    }
++    pub fn shutdown(mut self) {
++        self.cancel_metadata_refresh();
++        let activity = mux::activity::Activity::new();
++        promise::spawn::spawn(async move {
++            self.provider.shutdown().await;
++            drop(activity);
++        })
++        .detach();
++    }
++    fn commit(&mut self) {
++        let next = self.provider.projection();
++        let mut seen = HashSet::new();
++        if next
++            .tabs
++            .iter()
++            .all(|id| self.known.contains(id) && seen.insert(*id))
++            && next.active.map_or(true, |id| seen.contains(&id))
++        {
++            self.projection = next;
++        } else {
++            log::error!("native UI rejected invalid tab projection");
++        }
++    }
++}
++
++impl TermWindow {
++    /// Optional process metadata refresh; independent of geometry and frame deadlines.
++    fn native_schedule_metadata_refresh(&mut self) {
++        let Some(window) = self.window.clone() else {
++            return;
++        };
++        let generation = self.config.generation();
++        let Some(ui) = self.native_ui.as_mut() else {
++            return;
++        };
++        let schedule = ui
++            .provider
++            .metadata_interval()
++            .filter(|_| !ui.known.is_empty())
++            .map(|interval| {
++                (
++                    interval.clamp(Duration::from_millis(500), Duration::from_secs(2)),
++                    generation,
++                )
++            });
++        if schedule.is_some() && ui.metadata_task.is_some() && ui.metadata_schedule == schedule {
++            return;
++        }
++        ui.cancel_metadata_refresh();
++        let Some((interval, _)) = schedule else {
++            return;
++        };
++        let window_id = self.mux_window_id;
++        let panes = {
++            let mux = Mux::get();
++            let Some(window) = mux.get_window(window_id) else {
++                return;
++            };
++            window
++                .iter_tabs()
++                .filter_map(|tab| tab.get_active_pane().map(|pane| (tab.tab_id(), pane)))
++                .collect::<Vec<_>>()
++        };
++        if panes.is_empty() {
++            return;
++        }
++        static NEXT_TOKEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
++        let token = NEXT_TOKEN.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
++        ui.metadata_token = token;
++        ui.metadata_schedule = schedule;
++        ui.metadata_task = Some(promise::spawn::spawn(async move {
++            smol::Timer::after(interval).await;
++            // Process discovery can inspect the OS process table. Keep it off the GUI
++            // thread and release all mux guards before the refresh begins.
++            let samples = smol::unblock(move || {
++                panes
++                    .into_iter()
++                    .map(|(tab, pane)| {
++                        (
++                            tab,
++                            pane.pane_id(),
++                            pane.get_foreground_process_name(
++                                mux::pane::CachePolicy::FetchImmediate,
++                            )
++                            .unwrap_or_default(),
++                        )
++                    })
++                    .collect::<Vec<_>>()
++            })
++            .await;
++            window.notify(TermWindowNotif::Apply(Box::new(move |tw| {
++                tw.native_metadata_refreshed(window_id, token, samples);
++            })));
++        }));
++    }
++    fn native_metadata_refreshed(
++        &mut self,
++        window_id: usize,
++        token: u64,
++        samples: Vec<(TabId, usize, String)>,
++    ) {
++        if window_id != self.mux_window_id {
++            return;
++        }
++        let Some(ui) = self.native_ui.as_mut() else {
++            return;
++        };
++        if ui.metadata_token != token {
++            return;
++        }
++        drop(ui.metadata_task.take());
++        let changed = {
++            let mux = Mux::get();
++            samples.iter().any(|(tab, pane, process)| {
++                ui.known.contains(tab)
++                    && ui.metadata_processes.get(tab) != Some(process)
++                    && mux
++                        .get_tab(*tab)
++                        .and_then(|tab| tab.get_active_pane())
++                        .map_or(false, |active| active.pane_id() == *pane)
++            })
++        };
++        if changed {
++            ui.dirty = true;
++            self.native_sync();
++            if let Some(window) = &self.window {
++                window.invalidate();
++            }
++        } else {
++            // An unchanged sample schedules only another optional metadata check, never
++            // a native frame, projection transaction, hook call, or layout correction.
++            self.native_schedule_metadata_refresh();
++        }
++    }
++    pub fn native_last_frame_us(&self) -> u64 {
++        self.last_frame_duration.as_micros() as u64
++    }
++    pub fn native_reserved_width(&self) -> f32 {
++        let request = self
++            .native_ui
++            .as_ref()
++            .map(|ui| ui.provider.reservation())
++            .unwrap_or(Reservation {
++                width: 0.,
++                right: false,
++            });
++        let border = self.get_os_border();
++        let context = config::DimensionContext {
++            dpi: self.dimensions.dpi as f32,
++            pixel_max: self.terminal_size.pixel_width as f32,
++            pixel_cell: self.render_metrics.cell_size.width as f32,
++        };
++        let padding = self.config.window_padding.left.evaluate_as_pixels(context)
++            + super::resize::effective_right_padding(&self.config, context) as f32;
++        let available = (self
++            .dimensions
++            .pixel_width
++            .saturating_sub((border.left + border.right).get()) as f32
++            - padding)
++            .max(0.);
++        (request.width * self.dimensions.dpi as f32 / 96.)
++            .round()
++            .clamp(
++                0.,
++                (available - self.render_metrics.cell_size.width as f32 * 2.).max(0.),
++            )
++    }
++    pub fn native_left_width(&self) -> f32 {
++        if self
++            .native_ui
++            .as_ref()
++            .map_or(false, |ui| ui.provider.reservation().right)
++        {
++            0.
++        } else {
++            self.native_reserved_width()
++        }
++    }
++    pub fn native_right_width(&self) -> f32 {
++        self.native_reserved_width() - self.native_left_width()
++    }
++    pub fn native_titlebar_height(&self) -> f32 {
++        Self::native_titlebar_height_impl(
++            &self.config,
++            &self.fonts,
++            self.dimensions.dpi as f32,
++            self.window_state.contains(window::WindowState::FULL_SCREEN),
++        )
++    }
++    pub fn native_titlebar_height_impl(
++        config: &config::ConfigHandle,
++        fonts: &wezterm_font::FontConfiguration,
++        dpi: f32,
++        fullscreen: bool,
++    ) -> f32 {
++        use window::{IntegratedTitleButtonStyle as Style, WindowDecorations as Decorations};
++        if !config
++            .window_decorations
++            .contains(Decorations::INTEGRATED_BUTTONS)
++            || config.window_decorations.contains(Decorations::TITLE)
++            || fullscreen
++        {
++            return 0.;
++        }
++        let scale = dpi / 96.;
++        let controls = match config.integrated_title_button_style {
++            Style::MacOsNative => 28.,
++            Style::Windows => 30.,
++            Style::Gnome => 38.,
++        } * scale;
++        let font_height = fonts
++            .title_font()
++            .map(|font| (font.metrics().cell_height.get() as f32 * 1.75).ceil())
++            .unwrap_or(controls);
++        controls.max(font_height)
++    }
++    fn ensure_native_titlebar(&mut self, ui: &mut NativeUi) -> anyhow::Result<()> {
++        let height = self.native_titlebar_height();
++        if height == 0. {
++            ui.chrome = None;
++            ui.chrome_items.clear();
++            return Ok(());
++        }
++        let key = (
++            self.dimensions.pixel_width,
++            self.dimensions.dpi,
++            self.config.generation(),
++            self.shape_generation,
++            self.window_state.bits() as usize,
++            self.focused.is_some(),
++        );
++        if ui.chrome.is_some() && ui.chrome_key == key {
++            return Ok(());
++        }
++        let font = self.fonts.title_font()?;
++        let metrics = crate::utilsprites::RenderMetrics::with_font_metrics(&font.metrics());
++        let colors = ElementColors {
++            border: BorderColor::default(),
++            bg: if self.focused.is_some() {
++                self.config.window_frame.active_titlebar_bg
++            } else {
++                self.config.window_frame.inactive_titlebar_bg
++            }
++            .to_linear()
++            .into(),
++            text: if self.focused.is_some() {
++                self.config.window_frame.active_titlebar_fg
++            } else {
++                self.config.window_frame.inactive_titlebar_fg
++            }
++            .to_linear()
++            .into(),
++        };
++        let maximized = self
++            .window_state
++            .intersects(window::WindowState::MAXIMIZED | window::WindowState::FULL_SCREEN);
++        // AppKit owns MacOsNative controls and their hit testing. Other styles reuse
++        // the existing native window button elements and actions without tab UI.
++        let buttons = if self.config.integrated_title_button_style
++            == window::IntegratedTitleButtonStyle::MacOsNative
++        {
++            Vec::new()
++        } else {
++            self.config
++                .integrated_title_buttons
++                .iter()
++                .map(|button| {
++                    crate::termwindow::render::window_buttons::window_button_element(
++                        *button,
++                        maximized,
++                        &font,
++                        &metrics,
++                        &self.config,
++                    )
++                })
++                .collect()
++        };
++        let group = Element::new(&font, ElementContent::Children(buttons))
++            .colors(colors.clone())
++            .float(
++                if self.config.integrated_title_button_alignment
++                    == window::IntegratedTitleButtonAlignment::Right
++                {
++                    Float::Right
++                } else {
++                    Float::None
++                },
++            );
++        let border = self.get_os_border();
++        let width = self
++            .dimensions
++            .pixel_width
++            .saturating_sub((border.left + border.right).get()) as f32;
++        let element = Element::new(&font, ElementContent::Children(vec![group]))
++            .display(DisplayType::Block)
++            .item_type(UIItemType::TabBar(TabBarItem::None))
++            .min_width(Some(config::Dimension::Pixels(width)))
++            .min_height(Some(config::Dimension::Pixels(height)))
++            .colors(colors);
++        let chrome = self.compute_element(
++            &LayoutContext {
++                height: config::DimensionContext {
++                    dpi: self.dimensions.dpi as f32,
++                    pixel_max: self.dimensions.pixel_height as f32,
++                    pixel_cell: metrics.cell_size.height as f32,
++                },
++                width: config::DimensionContext {
++                    dpi: self.dimensions.dpi as f32,
++                    pixel_max: self.dimensions.pixel_width as f32,
++                    pixel_cell: metrics.cell_size.width as f32,
++                },
++                bounds: euclid::rect(
++                    border.left.get() as f32,
++                    border.top.get() as f32,
++                    width,
++                    height,
++                ),
++                metrics: &metrics,
++                gl_state: self.render_state.as_ref().unwrap(),
++                zindex: 10,
++            },
++            &element,
++        )?;
++        ui.chrome_items = chrome.ui_items();
++        ui.chrome = Some(chrome);
++        ui.chrome_key = key;
++        Ok(())
++    }
++    fn native_titlebar_mouse(&mut self, event: &MouseEvent) -> bool {
++        use window::{MouseEventKind as Kind, MousePress};
++        let geometry = self.native_geometry();
++        let Some(window) = self.window.clone() else {
++            return false;
++        };
++        let Some(mut ui) = self.native_ui.take() else {
++            return false;
++        };
++        if let Err(error) = self.ensure_native_titlebar(&mut ui) {
++            log::error!("native window controls: {error}");
++            self.native_ui = Some(ui);
++            return false;
++        }
++        let item = ui
++            .chrome_items
++            .iter()
++            .rev()
++            .find(|item| {
++                Bounds {
++                    x: item.x as f32,
++                    y: item.y as f32,
++                    width: item.width as f32,
++                    height: item.height as f32,
++                }
++                .contains(event.coords.x as f32, event.coords.y as f32)
++            })
++            .cloned();
++        if item.is_none() && !ui.chrome_dragging {
++            let was_hovered = self.current_mouse_event.as_ref().map_or(false, |old| {
++                ui.chrome_items.iter().any(|item| {
++                    Bounds {
++                        x: item.x as f32,
++                        y: item.y as f32,
++                        width: item.width as f32,
++                        height: item.height as f32,
++                    }
++                    .contains(old.coords.x as f32, old.coords.y as f32)
++                })
++            });
++            if was_hovered {
++                self.current_mouse_event = Some(event.clone());
++                window.invalidate();
++            }
++            self.native_ui = Some(ui);
++            return false;
++        }
++        self.current_mouse_event = Some(event.clone());
++        // Header clicks release sidebar focus and modal capture just like content clicks.
++        ui.needs_commit |= ui.provider.input(Input::Mouse(event, geometry));
++        let action = item
++            .as_ref()
++            .and_then(|item| match &item.item_type {
++                UIItemType::TabBar(action) => Some(action.clone()),
++                _ => None,
++            })
++            .unwrap_or(TabBarItem::None);
++        if matches!(event.kind, Kind::Press(MousePress::Left)) {
++            let cell = self.render_metrics.cell_size;
++            let position = wezterm_term::input::ClickPosition {
++                column: (event.coords.x / cell.width.max(1)).max(0) as usize,
++                row: (event.coords.y / cell.height.max(1)) as i64,
++                x_pixel_offset: 0,
++                y_pixel_offset: 0,
++            };
++            let button = wezterm_term::input::MouseButton::Left;
++            self.last_mouse_click = Some(match self.last_mouse_click.take() {
++                Some(click) => click.add(button, position),
++                None => wezterm_term::input::LastMouseClick::new(button, position),
++            });
++            ui.chrome_dragging = matches!(action, TabBarItem::None);
++        }
++        let moving = ui.chrome_dragging && matches!(event.kind, Kind::Move);
++        if matches!(event.kind, Kind::Release(MousePress::Left)) {
++            ui.chrome_dragging = false;
++            self.window_drag_position = None;
++        }
++        self.last_ui_item = item;
++        self.native_ui = Some(ui);
++        if moving {
++            if let Some(start) = &self.window_drag_position {
++                window.set_window_position(window::ScreenPoint::new(
++                    event.screen_coords.x - start.coords.x,
++                    event.screen_coords.y - start.coords.y,
++                ));
++            }
++        } else if !matches!(event.kind, Kind::VertWheel(_) | Kind::HorzWheel(_)) {
++            self.mouse_event_tab_bar(action, event.clone(), &window);
++        }
++        window.set_cursor(Some(window::CursorIcon::Default));
++        window.invalidate();
++        true
++    }
++    pub fn native_geometry(&self) -> Geometry {
++        let border = self.get_os_border();
++        let width = self.native_reserved_width();
++        let top = self.native_titlebar_height();
++        let content = Bounds {
++            x: border.left.get() as f32 + self.native_left_width(),
++            y: border.top.get() as f32 + top,
++            width: (self.dimensions.pixel_width as f32
++                - (border.left + border.right).get() as f32
++                - width)
++                .max(0.),
++            height: (self.dimensions.pixel_height as f32
++                - (border.top + border.bottom).get() as f32
++                - top)
++                .max(0.),
++        };
++        Geometry {
++            sidebar: Bounds {
++                x: if self.native_right_width() > 0. {
++                    content.x + content.width
++                } else {
++                    border.left.get() as f32
++                },
++                y: content.y,
++                width,
++                height: content.height,
++            },
++            content,
++            cell_width: self.render_metrics.cell_size.width as f32,
++            cell_height: self.render_metrics.cell_size.height as f32,
++            dpi: self.dimensions.dpi as f32,
++        }
++    }
++    pub fn native_empty(&self) -> bool {
++        self.native_ui
++            .as_ref()
++            .map_or(false, |ui| !ui.dirty && ui.projection.active.is_none())
++    }
++    pub fn native_content_hidden(&self) -> bool {
++        self.native_empty()
++            && !Mux::get()
++                .get_active_tab_for_window(self.mux_window_id)
++                .map_or(false, |tab| self.tab_state(tab.tab_id()).overlay.is_some())
++    }
++    pub fn native_bell(&mut self, pane_id: usize) {
++        if let Some((_, window, tab)) = Mux::get().resolve_pane_id(pane_id) {
++            if window == self.mux_window_id {
++                if let Some(ui) = self.native_ui.as_mut() {
++                    ui.bells.insert(tab);
++                    ui.dirty = true;
++                }
++            }
++        }
++    }
++    pub fn native_mark_dirty(&mut self) {
++        if let Some(ui) = self.native_ui.as_mut() {
++            ui.dirty = true;
++        }
++    }
++    pub fn native_sync(&mut self) {
++        let old_reservation = (self.native_reserved_width(), self.native_left_width());
++        let Some(mut ui) = self.native_ui.take() else {
++            return;
++        };
++        let arrivals = ARRIVALS.with(|arrivals| {
++            arrivals
++                .borrow_mut()
++                .remove(&self.mux_window_id)
++                .unwrap_or_default()
++        });
++        ui.dirty |= !arrivals.is_empty()
++            || ui.actual_active
++                != Mux::get()
++                    .get_active_tab_for_window(self.mux_window_id)
++                    .map(|tab| tab.tab_id());
++        if !ui.dirty && !ui.needs_commit && ui.bound && arrivals.is_empty() {
++            self.native_ui = Some(ui);
++            return;
++        }
++        if !ui.initialized {
++            for arrival in &arrivals {
++                if arrival["spawned"]["context"]["new_window"] == true {
++                    ui.provider.message(serde_json::json!({"initialize":arrival["spawned"]["context"],"tab_id":arrival["spawned"]["tab_id"]}));
++                    ui.initialized = true;
++                }
++            }
++        }
++        if !ui.bound {
++            if let Some(window) = self.window.clone() {
++                ui.provider.bind(window);
++                ui.bound = true;
++            }
++        }
++        if ui.dirty {
++            let mux = Mux::get();
++            let (tabs, active) = if let Some(window) = mux.get_window(self.mux_window_id) {
++                let active = window.get_active_tab().map(|tab| tab.tab_id());
++                if let Some(id) = active {
++                    ui.bells.remove(&id);
++                }
++                let bells = &ui.bells;
++                let tabs = window
++                    .iter_tabs()
++                    .map(|tab| {
++                        let pane = tab.get_active_pane();
++                        let title = tab.get_title();
++                        let cwd = pane.as_ref().and_then(|p| {
++                            p.get_current_working_dir(mux::pane::CachePolicy::AllowStale)
++                        });
++                        let domain = pane
++                            .as_ref()
++                            .and_then(|p| mux.get_domain(p.domain_id()))
++                            .map(|d| d.domain_name().to_string())
++                            .unwrap_or_default();
++                        let ssh = self
++                            .config
++                            .ssh_domains
++                            .iter()
++                            .flatten()
++                            .find(|ssh| ssh.name == domain);
++                        TabInfo {
++                            id: tab.tab_id(),
++                            title: if title.is_empty() {
++                                pane.as_ref().map(|p| p.get_title()).unwrap_or_default()
++                            } else {
++                                title
++                            },
++                            cwd: cwd
++                                .as_ref()
++                                .map(|u| u.path().to_string())
++                                .unwrap_or_default(),
++                            host: cwd
++                                .as_ref()
++                                .and_then(|u| u.host_str())
++                                .filter(|h| !h.is_empty())
++                                .map(str::to_string)
++                                .or_else(|| ssh.map(|s| s.remote_address.clone()))
++                                .unwrap_or_default(),
++                            user: cwd
++                                .as_ref()
++                                .map(|u| u.username())
++                                .filter(|u| !u.is_empty())
++                                .map(str::to_string)
++                                .or_else(|| ssh.and_then(|s| s.username.clone()))
++                                .unwrap_or_default(),
++                            domain,
++                            process: pane
++                                .as_ref()
++                                .and_then(|p| {
++                                    p.get_foreground_process_name(
++                                        mux::pane::CachePolicy::AllowStale,
++                                    )
++                                })
++                                .unwrap_or_default(),
++                            unread: pane.as_ref().map_or(false, |p| p.has_unseen_output()),
++                            bell: bells.contains(&tab.tab_id()),
++                            remote: pane
++                                .as_ref()
++                                .and_then(|p| mux.get_domain(p.domain_id()))
++                                .map_or(false, |domain| {
++                                    domain.downcast_ref::<mux::domain::LocalDomain>().is_none()
++                                }),
++                            user_vars: pane
++                                .as_ref()
++                                .map(|p| p.copy_user_vars())
++                                .unwrap_or_default(),
++                        }
++                    })
++                    .collect::<Vec<_>>();
++                (tabs, active)
++            } else {
++                (Vec::new(), None)
++            };
++            ui.actual_active = active;
++            ui.revision += 1;
++            ui.known = tabs.iter().map(|t| t.id).collect();
++            ui.metadata_processes = tabs
++                .iter()
++                .map(|tab| (tab.id, tab.process.clone()))
++                .collect();
++            ui.provider.snapshot(Snapshot {
++                revision: ui.revision,
++                window_id: self.mux_window_id,
++                tabs,
++                active,
++                focused: self.focused.is_some(),
++                config_epoch: self.config.generation(),
++            });
++            ui.dirty = false;
++        }
++        for arrival in arrivals {
++            ui.provider.message(arrival);
++        }
++        ui.commit();
++        ui.needs_commit = false;
++        let mut commands = ui.provider.commands();
++        if let Some(id) = ui.projection.active {
++            if Mux::get()
++                .get_active_tab_for_window(self.mux_window_id)
++                .map(|tab| tab.tab_id())
++                != Some(id)
++                && !commands
++                    .iter()
++                    .any(|command| matches!(command, Command::Activate(target) if *target == id))
++            {
++                commands.push(Command::Activate(id));
++            }
++        }
++        self.native_ui = Some(ui);
++        self.native_commands(commands);
++        self.native_schedule_metadata_refresh();
++        if old_reservation != (self.native_reserved_width(), self.native_left_width()) {
++            if let Some(window) = self.window.clone() {
++                self.apply_dimensions(&self.dimensions.clone(), None, &window);
++            }
++        }
++    }
++    pub fn native_activate_visible(&mut self, id: TabId) {
++        self.native_sync();
++        if let Some(index) = self
++            .native_ui
++            .as_ref()
++            .and_then(|ui| ui.projection.tabs.iter().position(|tab| *tab == id))
++        {
++            let _ = self.native_navigation(Navigation::Index(index as isize));
++        }
++    }
++    pub fn native_navigation(&mut self, navigation: Navigation) -> anyhow::Result<()> {
++        self.native_sync();
++        let before = (self.native_reserved_width(), self.native_left_width());
++        if let Some(ui) = self.native_ui.as_mut() {
++            ui.provider.navigation(navigation);
++            ui.needs_commit = true;
++        }
++        self.native_sync();
++        if let Some(window) = self.window.clone() {
++            if before != (self.native_reserved_width(), self.native_left_width()) {
++                self.apply_dimensions(&self.dimensions.clone(), None, &window);
++            }
++            window.invalidate();
++        }
++        Ok(())
++    }
++    pub fn native_message_for(&mut self, window_id: usize, message: serde_json::Value) {
++        if window_id == self.mux_window_id {
++            self.native_message(message);
++        } else if let Some(ui) = self.native_suspended.get_mut(&window_id) {
++            ui.provider.message(message);
++            ui.needs_commit = true;
++        }
++    }
++    pub fn native_message(&mut self, message: serde_json::Value) {
++        let before = self.native_reserved_width();
++        let side = self.native_left_width();
++        if let Some(ui) = self.native_ui.as_mut() {
++            ui.provider.message(message);
++            ui.needs_commit = true;
++        }
++        self.native_sync();
++        if let Some(window) = self.window.clone() {
++            if before != self.native_reserved_width() || side != self.native_left_width() {
++                self.apply_dimensions(&self.dimensions.clone(), None, &window);
++            }
++            window.invalidate();
++        }
++    }
++    pub fn native_input(&mut self, input: Input<'_>) -> bool {
++        self.native_sync();
++        let before = (self.native_reserved_width(), self.native_left_width());
++        if let Input::Mouse(event, _) = &input {
++            if self.native_titlebar_mouse(event) {
++                self.native_sync();
++                if before != (self.native_reserved_width(), self.native_left_width()) {
++                    if let Some(window) = self.window.clone() {
++                        self.apply_dimensions(&self.dimensions.clone(), None, &window);
++                    }
++                }
++                return true;
++            }
++        }
++        let geometry = self.native_geometry();
++        let consumed = self.native_ui.as_mut().map_or(false, |ui| {
++            // Input uses the same complete surface and hit regions as the next paint.
++            ui.provider.render(geometry, Instant::now());
++            let consumed = ui.provider.input(input);
++            ui.needs_commit |= consumed;
++            consumed
++        });
++        self.native_sync();
++        if consumed {
++            if let Some(window) = self.window.clone() {
++                if before != (self.native_reserved_width(), self.native_left_width()) {
++                    self.apply_dimensions(&self.dimensions.clone(), None, &window);
++                }
++                window.invalidate();
++            }
++        }
++        consumed
++    }
++    fn native_commands(&mut self, commands: Vec<Command>) {
++        for command in commands {
++            let mux = Mux::get();
++            match command {
++                Command::Activate(id) => {
++                    if let Some(mut window) = mux.get_window_mut(self.mux_window_id) {
++                        let idx = window.iter_tabs().position(|tab| tab.tab_id() == id);
++                        if let Some(idx) = idx {
++                            window.remember_and_set_active_tab_idx(idx);
++                        }
++                    }
++                    if let Some(pane) = self.get_active_pane_or_overlay() {
++                        pane.focus_changed(true);
++                    }
++                    if let Some(ui) = self.native_ui.as_mut() {
++                        ui.actual_active = Some(id);
++                    }
++                    self.update_scrollbar();
++                }
++                Command::Close(id, confirm) => {
++                    let idx = mux
++                        .get_window(self.mux_window_id)
++                        .and_then(|w| w.iter_tabs().position(|t| t.tab_id() == id));
++                    if let Some(idx) = idx {
++                        self.close_specific_tab(idx, confirm);
++                    }
++                    self.native_mark_dirty();
++                }
++                Command::MoveToNewWindow(id) => {
++                    let Some(tab) = mux.get_tab(id) else { continue };
++                    let context = self
++                        .native_ui
++                        .as_ref()
++                        .map(|ui| ui.provider.move_context(id))
++                        .unwrap_or_default();
++                    if let Some(pane) = tab.get_active_pane() {
++                        if pane
++                            .downcast_ref::<wezterm_client::pane::ClientPane>()
++                            .is_some()
++                        {
++                            if tab.count_panes() != Some(1) {
++                                self.native_message(serde_json::json!({"error":"WezTerm mux supports moving single-pane tabs; this split tab stays in its window"}));
++                                continue;
++                            }
++                            let pane_id = pane.pane_id();
++                            let source_id = self.mux_window_id;
++                            let workspace = mux
++                                .get_window(source_id)
++                                .map(|w| w.get_workspace().to_owned());
++                            let source_window = self.window.clone();
++                            promise::spawn::spawn(async move {
++                                match Mux::get()
++                                    .move_pane_to_new_tab(pane_id, None, workspace)
++                                    .await
++                                {
++                                    Ok((tab, window)) => {
++                                        spawn_completed(window, tab.tab_id(), context);
++                                        if let Some(source) = source_window {
++                                            source.notify(TermWindowNotif::Apply(Box::new(
++                                                move |tw| {
++                                                    tw.native_message_for(
++                                                        source_id,
++                                                        serde_json::json!({"tab_departed":id}),
++                                                    );
++                                                },
++                                            )));
++                                        }
++                                    }
++                                    Err(error) => log::error!("move tab: {error}"),
++                                }
++                            })
++                            .detach();
++                            continue;
++                        }
++                    }
++                    // This operation retains the tab and its entire split tree.
++                    let builder = mux.new_empty_window(Some(mux.active_workspace().clone()), None);
++                    let destination = *builder;
++                    if let Some(mut source) = mux.get_window_mut(self.mux_window_id) {
++                        source.remove_tab_id(id);
++                    }
++                    if let Err(error) = mux.add_tab_to_window(&tab, destination) {
++                        let _ = mux.add_tab_to_window(&tab, self.mux_window_id);
++                        self.native_message(
++                            serde_json::json!({"error":format!("move tab: {error}")}),
++                        );
++                        continue;
++                    }
++                    spawn_completed(destination, id, context);
++                    self.native_message(serde_json::json!({"tab_departed":id}));
++                    drop(builder);
++                    mux.prune_dead_windows();
++                    self.native_mark_dirty();
++                }
++                Command::Rename(id, name) => {
++                    if let Some(tab) = mux.get_tab(id) {
++                        tab.set_title(&name);
++                    }
++                }
++                Command::Spawn(command, new_window) => self.spawn_command(
++                    &command,
++                    if new_window {
++                        crate::spawn::SpawnWhere::NewWindow
++                    } else {
++                        crate::spawn::SpawnWhere::NewTab
++                    },
++                ),
++                Command::Reorder(order) => {
++                    if let Some(mut window) = mux.get_window_mut(self.mux_window_id) {
++                        let active = window.get_active_tab().map(|t| t.tab_id());
++                        let known: HashSet<_> = window.iter_tabs().map(|t| t.tab_id()).collect();
++                        if order.len() == known.len()
++                            && order.iter().copied().collect::<HashSet<_>>() == known
++                        {
++                            for (index, id) in order.iter().enumerate() {
++                                let old =
++                                    window.iter_tabs().position(|t| t.tab_id() == *id).unwrap();
++                                if old != index {
++                                    let tab = window.remove_tab_idx(old);
++                                    window.insert_tab_at_idx(index, &tab);
++                                }
++                            }
++                            let index = window.iter_tabs().position(|t| Some(t.tab_id()) == active);
++                            if let Some(index) = index {
++                                window.set_active_tab_idx_without_saving(index);
++                            }
++                        }
++                    }
++                    self.native_mark_dirty();
++                }
++                Command::Clipboard(text) => {
++                    if let Some(window) = &self.window {
++                        window.set_clipboard(window::Clipboard::Clipboard, text);
++                    }
++                }
++                Command::Paste(token) => {
++                    let window_id = self.mux_window_id;
++                    if let Some(window) = self.window.clone() {
++                        promise::spawn::spawn(async move {
++                            if let Ok(text) =
++                                window.get_clipboard(window::Clipboard::Clipboard).await
++                            {
++                                window.notify(TermWindowNotif::Apply(Box::new(move |tw| {
++                                    tw.native_message_for(
++                                        window_id,
++                                        serde_json::json!({"paste":text,"token":token}),
++                                    )
++                                })));
++                            }
++                        })
++                        .detach();
++                    }
++                }
++                Command::Semantic(name) => self.emit_window_event(&name, None),
++            }
++        }
++    }
++    pub fn paint_native_ui(&mut self, layers: &mut TripleLayerQuadAllocator) -> anyhow::Result<()> {
++        let geometry = self.native_geometry();
++        let Some(mut ui) = self.native_ui.take() else {
++            return Ok(());
++        };
++        let result = (|| {
++            let start = Instant::now();
++            self.ensure_native_titlebar(&mut ui)?;
++            if let Some(chrome) = &ui.chrome {
++                self.render_element(chrome, self.render_state.as_ref().unwrap(), None)?;
++            }
++            ui.provider.render(geometry, start);
++            let composed = start.elapsed().as_micros() as u64;
++            let mut shaped = 0;
++            let mut copied = 0;
++            self.update_next_frame_time(ui.provider.deadline());
++            let surface = ui.provider.surface();
++            let origin = (
++                geometry.sidebar.x - self.dimensions.pixel_width as f32 / 2.,
++                geometry.sidebar.y - self.dimensions.pixel_height as f32 / 2.,
++            );
++            let grid_width = surface.columns as f32 * geometry.cell_width;
++            let key = (
++                self.shape_generation,
++                usize::from(self.focused.is_some()),
++                self.config.generation(),
++                geometry.cell_width as usize,
++                geometry.cell_height as usize,
++            );
++            if ui.cache_key != key {
++                ui.cache.clear();
++                ui.cache_key = key;
++            }
++            ui.cache.truncate(surface.rows.len());
++            let palette = self.palette().clone();
++            let gl_state = self.render_state.as_ref().unwrap();
++            let white_space = gl_state.util_sprites.white_space.texture_coords();
++            let filled_box = gl_state.util_sprites.filled_box.texture_coords();
++            self.filled_rectangle(
++                layers,
++                0,
++                euclid::rect(
++                    geometry.sidebar.x,
++                    geometry.sidebar.y,
++                    geometry.sidebar.width,
++                    geometry.sidebar.height,
++                ),
++                surface
++                    .rows
++                    .first()
++                    .and_then(|line| {
++                        line.visible_cells()
++                            .next()
++                            .map(|cell| palette.resolve_bg(cell.attrs().background()).to_linear())
++                    })
++                    .unwrap_or(palette.background.to_linear()),
++            )?;
++            for (y, line) in surface.rows.iter().enumerate() {
++                if ui
++                    .cache
++                    .get(y)
++                    .map_or(true, |cached| !Rc::ptr_eq(&cached.line, line))
++                {
++                    let shape_start = Instant::now();
++                    let mut quads = HeapQuadAllocator::default();
++                    self.render_screen_line(
++                        RenderScreenLineParams {
++                            top_pixel_y: geometry.sidebar.y + y as f32 * geometry.cell_height,
++                            left_pixel_x: geometry.sidebar.x,
++                            pixel_width: grid_width,
++                            stable_line_idx: None,
++                            line,
++                            selection: 0..0,
++                            cursor: &Default::default(),
++                            palette: &palette,
++                            dims: &RenderableDimensions {
++                                cols: surface.columns,
++                                physical_top: 0,
++                                scrollback_rows: 0,
++                                scrollback_top: 0,
++                                viewport_rows: surface.rows.len(),
++                                dpi: self.terminal_size.dpi,
++                                pixel_height: (surface.rows.len() as f32 * geometry.cell_height)
++                                    as usize,
++                                pixel_width: grid_width as usize,
++                                reverse_video: false,
++                            },
++                            config: &self.config,
++                            cursor_border_color: LinearRgba::default(),
++                            foreground: palette.foreground.to_linear(),
++                            pane: None,
++                            is_active: true,
++                            selection_fg: LinearRgba::default(),
++                            selection_bg: LinearRgba::default(),
++                            cursor_fg: LinearRgba::default(),
++                            cursor_bg: LinearRgba::default(),
++                            cursor_is_default_color: true,
++                            white_space,
++                            filled_box,
++                            window_is_transparent: false,
++                            default_bg: palette.resolve_bg(ColorAttribute::Default).to_linear(),
++                            style: None,
++                            font: None,
++                            use_pixel_positioning: false,
++                            render_metrics: self.render_metrics,
++                            shape_key: None,
++                            password_input: false,
++                        },
++                        &mut TripleLayerQuadAllocator::Heap(&mut quads),
++                    )?;
++                    shaped += shape_start.elapsed().as_micros() as u64;
++                    ui.stats.rows_shaped += 1;
++                    let cached = RowCache {
++                        line: Rc::clone(line),
++                        quads,
++                        origin,
++                    };
++                    if y < ui.cache.len() {
++                        ui.cache[y] = cached;
++                    } else {
++                        ui.cache.push(cached);
++                    }
++                }
++                let copy_start = Instant::now();
++                ui.cache[y].quads.apply_transformed(
++                    layers,
++                    (
++                        surface.offset.0 + origin.0 - ui.cache[y].origin.0,
++                        surface.offset.1 + origin.1 - ui.cache[y].origin.1,
++                    ),
++                    surface.opacity,
++                    (
++                        geometry.sidebar.x - self.dimensions.pixel_width as f32 / 2.,
++                        geometry.sidebar.y - self.dimensions.pixel_height as f32 / 2.,
++                        geometry.sidebar.x + geometry.sidebar.width
++                            - self.dimensions.pixel_width as f32 / 2.,
++                        geometry.sidebar.y + geometry.sidebar.height
++                            - self.dimensions.pixel_height as f32 / 2.,
++                    ),
++                );
++                copied += copy_start.elapsed().as_micros() as u64;
++            }
++            if ui.provider.keyboard_focus() {
++                if let (Some(window), Some(caret)) = (&self.window, ui.provider.caret()) {
++                    if let Some(rect) = native_caret_rect(geometry, surface.offset, caret) {
++                        window.set_text_cursor_position(rect);
++                    }
++                }
++            }
++            ui.stats
++                .record(composed, shaped, copied, start.elapsed().as_micros() as u64);
++            metrics::histogram!("native_ui.paint").record(start.elapsed());
++            Ok(())
++        })();
++        self.native_ui = Some(ui);
++        result
++    }
++}

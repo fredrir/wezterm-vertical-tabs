@@ -1,0 +1,1442 @@
+diff --git a/wezterm-client/src/domain.rs b/wezterm-client/src/domain.rs
+index 02fac8cb..399092e5 100644
+--- a/wezterm-client/src/domain.rs
++++ b/wezterm-client/src/domain.rs
+@@ -26,6 +26,7 @@ pub struct ClientInner {
+     remote_to_local_tab: Mutex<HashMap<TabId, TabId>>,
+     remote_to_local_pane: Mutex<HashMap<PaneId, PaneId>>,
+     pub focused_remote_pane_id: Mutex<Option<PaneId>>,
++    pub(crate) topology: crate::topology::TopologySync,
+ }
+ 
+ impl ClientInner {
+@@ -246,6 +247,7 @@ impl ClientInner {
+             remote_to_local_tab: Mutex::new(HashMap::new()),
+             remote_to_local_pane: Mutex::new(HashMap::new()),
+             focused_remote_pane_id: Mutex::new(None),
++            topology: crate::topology::TopologySync::default(),
+         }
+     }
+ }
+@@ -466,8 +468,7 @@ impl ClientDomain {
+     pub async fn reattach(domain_id: DomainId, ui: ConnectionUI) -> anyhow::Result<()> {
+         let inner = Self::get_client_inner_for_domain(domain_id)?;
+ 
+-        let panes = inner.client.list_panes().await?;
+-        Self::process_pane_list(inner, panes, None)?;
++        Self::resync_inner(inner).await?;
+ 
+         ui.close();
+         Ok(())
+@@ -475,12 +476,31 @@ impl ClientDomain {
+ 
+     pub async fn resync(&self) -> anyhow::Result<()> {
+         if let Some(inner) = self.inner() {
+-            let panes = inner.client.list_panes().await?;
+-            Self::process_pane_list(inner, panes, None)?;
++            Self::resync_inner(inner).await?;
+         }
+         Ok(())
+     }
+ 
++    async fn resync_inner(inner: Arc<ClientInner>) -> anyhow::Result<()> {
++        let request = inner.topology.request();
++        let _serial = inner.topology.serial.lock().await;
++        if inner.topology.completed(request) {
++            return Ok(());
++        }
++        loop {
++            let (epoch, included) = inner.topology.ready().await;
++            let panes = inner.client.list_panes().await?;
++            if !inner.topology.accepts(epoch) {
++                log::trace!("discard topology snapshot superseded by a local resize");
++                continue;
++            }
++            Self::process_pane_list(Arc::clone(&inner), panes, None)?;
++            if inner.topology.finish(included) {
++                return Ok(());
++            }
++        }
++    }
++
+     pub fn process_remote_window_title_change(&self, remote_window_id: WindowId, title: String) {
+         if let Some(inner) = self.inner() {
+             if let Some(local_window_id) = inner.remote_to_local_window(remote_window_id) {
+@@ -506,6 +526,7 @@ impl ClientDomain {
+         panes: ListPanesResponse,
+         mut primary_window_id: Option<WindowId>,
+     ) -> anyhow::Result<()> {
++        let _applying = inner.topology.applying();
+         let mux = Mux::get();
+         log::debug!(
+             "domain {}: ListPanes result {:#?}",
+@@ -536,6 +557,7 @@ impl ClientDomain {
+             .keys()
+             .copied()
+             .collect();
++        let mut relocated_sources = HashSet::new();
+ 
+         for (tabroot, tab_title) in panes.tabs.into_iter().zip(panes.tab_titles.iter()) {
+             let root_size = match tabroot.root_size() {
+@@ -582,7 +604,32 @@ impl ClientDomain {
+                     remote_panes_to_forget.remove(&entry.pane_id);
+                     if let Some(pane_id) = inner.remote_to_local_pane_id(entry.pane_id) {
+                         match mux.get_pane(pane_id) {
+-                            Some(pane) => pane,
++                            Some(pane) => {
++                                if let Some(client_pane) = pane.downcast_ref::<ClientPane>() {
++                                    let prior_remote_tab = client_pane.remote_tab_id();
++                                    if prior_remote_tab != entry.tab_id {
++                                        if let Some(source) = inner
++                                            .remote_to_local_tab_id(prior_remote_tab)
++                                            .filter(|id| *id != tab.tab_id())
++                                            .and_then(|id| mux.get_tab(id))
++                                        {
++                                            // The pane remains live in its new tab. Detach
++                                            // only its old ownership, without killing it or
++                                            // removing other panes from a mixed source tab.
++                                            if source
++                                                .iter_panes_ignoring_zoom()
++                                                .iter()
++                                                .any(|p| p.pane.pane_id() == pane_id)
++                                            {
++                                                source.remove_pane(pane_id);
++                                                relocated_sources.insert(source.tab_id());
++                                            }
++                                        }
++                                    }
++                                    client_pane.update_remote_tab_id(entry.tab_id);
++                                }
++                                pane
++                            }
+                             None => {
+                                 // We likely decided that we hit EOF on the tab and
+                                 // removed it from the mux.  Let's add it back, but
+@@ -704,6 +751,18 @@ impl ClientDomain {
+             }
+         }
+ 
++        // Tree application holds the destination tab's lock. Prune only after
++        // every tree and mapping is complete so mux pruning cannot reacquire
++        // that lock or leave a removed source window's mapping behind.
++        for source_id in relocated_sources {
++            if mux
++                .get_tab(source_id)
++                .is_some_and(|source| source.iter_panes_ignoring_zoom().is_empty())
++            {
++                mux.remove_tab(source_id);
++            }
++        }
++
+         Ok(())
+     }
+ 
+diff --git a/wezterm-client/src/lib.rs b/wezterm-client/src/lib.rs
+index 07352115..edbd954b 100644
+--- a/wezterm-client/src/lib.rs
++++ b/wezterm-client/src/lib.rs
+@@ -2,3 +2,4 @@ pub mod client;
+ pub mod discovery;
+ pub mod domain;
+ pub mod pane;
++mod topology;
+diff --git a/wezterm-client/src/pane/clientpane.rs b/wezterm-client/src/pane/clientpane.rs
+index aad21a54..b4dc9c9f 100644
+--- a/wezterm-client/src/pane/clientpane.rs
++++ b/wezterm-client/src/pane/clientpane.rs
+@@ -20,6 +20,7 @@ use ratelim::RateLimiter;
+ use std::cell::RefCell;
+ use std::collections::{BTreeMap, HashMap};
+ use std::ops::Range;
++use std::sync::atomic::{AtomicUsize, Ordering};
+ use std::sync::Arc;
+ use termwiz::input::KeyEvent;
+ use termwiz::surface::SequenceNo;
+@@ -35,7 +36,7 @@ pub struct ClientPane {
+     client: Arc<ClientInner>,
+     local_pane_id: PaneId,
+     pub remote_pane_id: PaneId,
+-    pub remote_tab_id: TabId,
++    remote_tab_id: AtomicUsize,
+     pub renderable: Mutex<RenderableState>,
+     configured_palette: Mutex<ColorPalette>,
+     palette: Mutex<ColorPalette>,
+@@ -118,7 +119,7 @@ impl ClientPane {
+             mouse,
+             remote_pane_id,
+             local_pane_id,
+-            remote_tab_id,
++            remote_tab_id: AtomicUsize::new(remote_tab_id),
+             application_palette: Mutex::new(false),
+             renderable: Mutex::new(render),
+             writer: Mutex::new(writer),
+@@ -134,6 +135,14 @@ impl ClientPane {
+         }
+     }
+ 
++    pub(crate) fn update_remote_tab_id(&self, tab_id: TabId) {
++        self.remote_tab_id.store(tab_id, Ordering::Relaxed);
++    }
++
++    pub(crate) fn remote_tab_id(&self) -> TabId {
++        self.remote_tab_id.load(Ordering::Relaxed)
++    }
++
+     pub async fn process_unilateral(&self, pdu: Pdu) -> anyhow::Result<()> {
+         match pdu {
+             Pdu::GetPaneRenderChangesResponse(mut delta) => {
+@@ -369,7 +378,7 @@ impl Pane for ClientPane {
+         let mut inner = render.inner.borrow_mut();
+         let client = Arc::clone(&self.client);
+         let remote_pane_id = self.remote_pane_id;
+-        let remote_tab_id = self.remote_tab_id;
++        let remote_tab_id = self.remote_tab_id();
+         // Invalidate any cached rows on a resize
+         inner.make_all_stale();
+         promise::spawn::spawn(async move {
+@@ -408,16 +417,23 @@ impl Pane for ClientPane {
+ 
+             let client = Arc::clone(&self.client);
+             let remote_pane_id = self.remote_pane_id;
+-            let remote_tab_id = self.remote_tab_id;
++            let remote_tab_id = self.remote_tab_id();
++            // Register before the async RPC is scheduled, so a concurrent ListPanes
++            // cannot read a partially resized split tree or overwrite optimistic sizes.
++            let Some(resize) = client.topology.begin_resize() else {
++                return Ok(());
++            };
+             promise::spawn::spawn(async move {
+-                client
++                let result = client
+                     .client
+                     .resize(Resize {
+                         containing_tab_id: remote_tab_id,
+                         pane_id: remote_pane_id,
+                         size,
+                     })
+-                    .await
++                    .await;
++                drop(resize);
++                result
+             })
+             .detach();
+             inner.update_last_send();
+diff --git a/wezterm-gui/src/frontend.rs b/wezterm-gui/src/frontend.rs
+index 4fc2285b..49af800c 100644
+--- a/wezterm-gui/src/frontend.rs
++++ b/wezterm-gui/src/frontend.rs
+@@ -284,7 +284,7 @@ impl GuiFrontEnd {
+                         config.initial_size(dpi as u32, crate::cell_pixel_dims(&config, dpi).ok());
+                     let term_config = Arc::new(config::TermConfig::with_config(config));
+ 
+-                    crate::spawn::spawn_command_impl(spawn, spawn_where, size, None, term_config)
++                    crate::spawn::spawn_command_impl(spawn, spawn_where, size, None, term_config, None)
+                 }
+ 
+                 match action {
+diff --git a/wezterm-gui/src/overlay/launcher.rs b/wezterm-gui/src/overlay/launcher.rs
+index d2cbd982..04308280 100644
+--- a/wezterm-gui/src/overlay/launcher.rs
++++ b/wezterm-gui/src/overlay/launcher.rs
+@@ -33,11 +33,12 @@ pub use config::keyassignment::LauncherFlags;
+ struct Entry {
+     pub label: String,
+     pub action: KeyAssignment,
++    pub tab_id: Option<mux::tab::TabId>,
+ }
+ 
+ pub struct LauncherTabEntry {
+     pub title: String,
+-    pub tab_idx: usize,
++    pub tab_id: mux::tab::TabId,
+     pub pane_count: Option<usize>,
+ }
+ 
+@@ -68,7 +69,8 @@ impl LauncherArgs {
+     pub async fn new(
+         title: &str,
+         flags: LauncherFlags,
+-        mux_window_id: WindowId,
++        _mux_window_id: WindowId,
++        visible_tabs: Vec<mux::tab::TabId>,
+         pane_id: PaneId,
+         domain_id_of_current_tab: DomainId,
+         help_text: &str,
+@@ -90,26 +92,13 @@ impl LauncherArgs {
+             // overlay, but since the overlay runs in a different thread, accessing
+             // the mux list is a bit awkward.  To get the ball rolling we capture
+             // the list of tabs up front and live with a static list.
+-            let window = mux
+-                .get_window(mux_window_id)
+-                .expect("to resolve my own window_id");
+-            window
+-                .iter_tabs()
+-                .enumerate()
+-                .map(|(tab_idx, tab)| {
++            visible_tabs.into_iter().filter_map(|id| mux.get_tab(id))
++                .map(|tab| {
+                     let tab_title = tab.get_title();
+                     let title = if tab_title.is_empty() {
+-                        tab.get_active_pane()
+-                            .expect("tab to have a pane")
+-                            .get_title()
+-                    } else {
+-                        tab_title
+-                    };
+-                    LauncherTabEntry {
+-                        title,
+-                        tab_idx,
+-                        pane_count: tab.count_panes(),
+-                    }
++                        tab.get_active_pane().map(|pane| pane.get_title()).unwrap_or_default()
++                    } else { tab_title };
++                    LauncherTabEntry { title, tab_id: tab.tab_id(), pane_count: tab.count_panes() }
+                 })
+                 .collect()
+         } else {
+@@ -233,6 +222,7 @@ impl LauncherState {
+         if args.flags.contains(LauncherFlags::LAUNCH_MENU_ITEMS) {
+             for item in &config.launch_menu {
+                 self.entries.push(Entry {
++                    tab_id: None,
+                     label: match item.label.as_ref() {
+                         Some(label) => label.to_string(),
+                         None => match item.args.as_ref() {
+@@ -248,7 +238,7 @@ impl LauncherState {
+         for domain in &args.domains {
+             let entry = if domain.state == DomainState::Attached {
+                 Entry {
+-                    label: format!("New Tab ({})", domain.label),
++                    tab_id: None,                    label: format!("New Tab ({})", domain.label),
+                     action: KeyAssignment::SpawnCommandInNewTab(SpawnCommand {
+                         domain: SpawnTabDomain::DomainName(domain.name.to_string()),
+                         ..SpawnCommand::default()
+@@ -256,7 +246,7 @@ impl LauncherState {
+                 }
+             } else {
+                 Entry {
+-                    label: format!("Attach {}", domain.label),
++                    tab_id: None,                    label: format!("Attach {}", domain.label),
+                     action: KeyAssignment::AttachDomain(domain.name.to_string()),
+                 }
+             };
+@@ -274,6 +264,7 @@ impl LauncherState {
+             for ws in &args.workspaces {
+                 if *ws != args.active_workspace {
+                     self.entries.push(Entry {
++                    tab_id: None,
+                         label: format!("Switch to workspace: `{}`", ws),
+                         action: KeyAssignment::SwitchToWorkspace {
+                             name: Some(ws.clone()),
+@@ -283,6 +274,7 @@ impl LauncherState {
+                 }
+             }
+             self.entries.push(Entry {
++                    tab_id: None,
+                 label: format!(
+                     "Create new Workspace (current is `{}`)",
+                     args.active_workspace
+@@ -296,11 +288,12 @@ impl LauncherState {
+ 
+         for tab in &args.tabs {
+             self.entries.push(Entry {
++                    tab_id: Some(tab.tab_id),
+                 label: match tab.pane_count {
+                     Some(pane_count) => format!("{}. {pane_count} panes", tab.title),
+                     None => format!("{}.", tab.title),
+                 },
+-                action: KeyAssignment::ActivateTab(tab.tab_idx as isize),
++                action: KeyAssignment::Nop,
+             });
+         }
+ 
+@@ -315,6 +308,7 @@ impl LauncherState {
+                     continue;
+                 }
+                 self.entries.push(Entry {
++                    tab_id: None,
+                     label: format!("{}. {}", cmd.brief, cmd.doc),
+                     action: cmd.action,
+                 });
+@@ -355,6 +349,7 @@ impl LauncherState {
+                 };
+ 
+                 key_entries.push(Entry {
++                    tab_id: None,
+                     label,
+                     action: entry.action,
+                 });
+@@ -476,6 +471,10 @@ impl LauncherState {
+ 
+     fn launch(&self, active_idx: usize) -> bool {
+         if let Some(entry) = self.filtered_entries.get(active_idx) {
++            if let Some(id) = entry.tab_id {
++                self.window.notify(TermWindowNotif::Apply(Box::new(move |tw|tw.native_activate_visible(id))));
++                return true;
++            }
+             let assignment = entry.action.clone();
+             self.window.notify(TermWindowNotif::PerformAssignment {
+                 pane_id: self.pane_id,
+diff --git a/wezterm-gui/src/spawn.rs b/wezterm-gui/src/spawn.rs
+index 28b9db9a..955a4585 100644
+--- a/wezterm-gui/src/spawn.rs
++++ b/wezterm-gui/src/spawn.rs
+@@ -23,14 +23,16 @@ pub fn spawn_command_impl(
+     size: TerminalSize,
+     src_window_id: Option<MuxWindowId>,
+     term_config: Arc<TermConfig>,
++    native_context: Option<serde_json::Value>,
+ ) {
+     let spawn = spawn.clone();
+ 
+     promise::spawn::spawn(async move {
+         if let Err(err) =
+-            spawn_command_internal(spawn, spawn_where, size, src_window_id, term_config).await
++            spawn_command_internal(spawn, spawn_where, size, src_window_id, term_config, native_context.clone()).await
+         {
+             log::error!("Failed to spawn: {:#}", err);
++            if let (Some(window), Some(context)) = (src_window_id,native_context) { crate::termwindow::native_ui::spawn_failed(window,context); }
+         }
+     })
+     .detach();
+@@ -42,6 +44,7 @@ pub async fn spawn_command_internal(
+     size: TerminalSize,
+     src_window_id: Option<MuxWindowId>,
+     term_config: Arc<TermConfig>,
++    native_context: Option<serde_json::Value>,
+ ) -> anyhow::Result<()> {
+     let mux = Mux::get();
+     let activity = Activity::new();
+@@ -123,7 +126,7 @@ pub async fn spawn_command_internal(
+             }
+         }
+         _ => {
+-            let (_tab, pane, window_id) = mux
++            let (tab, pane, window_id) = mux
+                 .spawn_tab_or_window(
+                     match spawn_where {
+                         SpawnWhere::NewWindow => None,
+@@ -140,6 +143,9 @@ pub async fn spawn_command_internal(
+                 .await
+                 .context("spawn_tab_or_window")?;
+ 
++            if let Some(context) = native_context {
++                crate::termwindow::native_ui::spawn_completed(window_id, tab.tab_id(), context);
++            }
+             // If it was created in this window, it copies our handlers.
+             // Otherwise, we'll pick them up when we later respond to
+             // the new window being created.
+diff --git a/wezterm-gui/src/termwindow/mod.rs b/wezterm-gui/src/termwindow/mod.rs
+index d0f0ff97..6f00f347 100644
+--- a/wezterm-gui/src/termwindow/mod.rs
++++ b/wezterm-gui/src/termwindow/mod.rs
+@@ -1,4 +1,5 @@
+ #![allow(clippy::range_plus_one)]
++pub mod native_ui;
+ use super::renderstate::*;
+ use super::utilsprites::RenderMetrics;
+ use crate::colorease::ColorEase;
+@@ -28,7 +29,7 @@ use crate::termwindow::render::{
+ use crate::termwindow::webgpu::WebGpuState;
+ use ::wezterm_term::input::{ClickPosition, MouseButton as TMB};
+ use ::window::*;
+-use anyhow::{anyhow, ensure, Context};
++use anyhow::{anyhow, Context};
+ use config::keyassignment::{
+     Confirmation, KeyAssignment, LauncherActionArgs, PaneDirection, Pattern, PromptInputLine,
+     QuickSelectArguments, RotationDirection, SpawnCommand, SplitSize,
+@@ -390,6 +391,8 @@ pub struct TermWindow {
+     leader_is_down: Option<std::time::Instant>,
+     dead_key_status: DeadKeyStatus,
+     key_table_state: KeyTableState,
++    pub(crate) native_ui: Option<crate::termwindow::native_ui::NativeUi>,
++    native_suspended: HashMap<MuxWindowId, crate::termwindow::native_ui::NativeUi>,
+     show_tab_bar: bool,
+     show_scroll_bar: bool,
+     tab_bar: TabBarState,
+@@ -590,6 +593,8 @@ impl TermWindow {
+         let dpi = config.dpi.unwrap_or_else(|| ::window::default_dpi()) as usize;
+         let fontconfig = Rc::new(FontConfiguration::new(Some(config.clone()), dpi)?);
+ 
++        let mut native_ui = crate::termwindow::native_ui::NativeUi::new(mux_window_id);
++        native_ui.provider.initialize().await;
+         let mux = Mux::get();
+         let size = match mux.get_active_tab_for_window(mux_window_id) {
+             Some(tab) => tab.get_size(),
+@@ -606,7 +611,9 @@ impl TermWindow {
+ 
+         // Initially we have only a single tab, so take that into account
+         // for the tab bar state.
+-        let show_tab_bar = config.enable_tab_bar && !config.hide_tab_bar_if_only_one_tab;
++        let reservation = native_ui.provider.reservation();
++        let native_width = (reservation.width * dpi as f32 / 96.).round() as usize;
++        let show_tab_bar = false;
+         let tab_bar_height = if show_tab_bar {
+             Self::tab_bar_pixel_height_impl(&config, &fontconfig, &render_metrics)? as usize
+         } else {
+@@ -643,14 +650,17 @@ impl TermWindow {
+             pixel_max: terminal_size.pixel_width as f32,
+             pixel_cell: render_metrics.cell_size.width as f32,
+         };
+-        let padding_left = config.window_padding.left.evaluate_as_pixels(h_context) as usize;
+-        let padding_right = resize::effective_right_padding(&config, h_context) as usize;
++        let padding_left = config.window_padding.left.evaluate_as_pixels(h_context) as usize
++            + if reservation.right { 0 } else { native_width };
++        let padding_right = resize::effective_right_padding(&config, h_context)
++            + if reservation.right { native_width } else { 0 };
+         let v_context = DimensionContext {
+             dpi: dpi as f32,
+             pixel_max: terminal_size.pixel_height as f32,
+             pixel_cell: render_metrics.cell_size.height as f32,
+         };
+-        let padding_top = config.window_padding.top.evaluate_as_pixels(v_context) as usize;
++        let padding_top = config.window_padding.top.evaluate_as_pixels(v_context) as usize
++            + Self::native_titlebar_height_impl(&config, &fontconfig, dpi as f32, false) as usize;
+         let padding_bottom = config.window_padding.bottom.evaluate_as_pixels(v_context) as usize;
+ 
+         let mut dimensions = Dimensions {
+@@ -712,6 +722,8 @@ impl TermWindow {
+             input_map: InputMap::new(&config),
+             leader_is_down: None,
+             dead_key_status: DeadKeyStatus::None,
++            native_ui: Some(native_ui),
++            native_suspended: HashMap::new(),
+             show_tab_bar,
+             show_scroll_bar: config.enable_scroll_bar,
+             tab_bar: TabBarState::default(),
+@@ -944,6 +956,7 @@ impl TermWindow {
+             }
+             WindowEvent::FocusChanged(focused) => {
+                 self.focus_changed(focused, window);
++                self.native_input(crate::termwindow::native_ui::Input::Focus(focused));
+                 Ok(true)
+             }
+             WindowEvent::MouseEvent(event) => {
+@@ -995,6 +1008,7 @@ impl TermWindow {
+                 } else {
+                     log::trace!("DeadKeyStatus now: {:?}", status);
+                 }
++                self.native_input(crate::termwindow::native_ui::Input::Composition(&status));
+                 self.dead_key_status = status;
+                 self.update_title();
+                 // Ensure that we repaint so that any composing
+@@ -1198,7 +1212,11 @@ impl TermWindow {
+             TermWindowNotif::CancelOverlayForTab { tab_id, pane_id } => {
+                 self.cancel_overlay_for_tab(tab_id, pane_id);
+             }
+-            TermWindowNotif::MuxNotification(n) => match n {
++            TermWindowNotif::MuxNotification(n) => {
++                if !matches!(&n, MuxNotification::PaneOutput(_) | MuxNotification::TabResized(_)) {
++                    self.native_mark_dirty();
++                }
++                match n {
+                 MuxNotification::Alert {
+                     alert: Alert::SetUserVar { name, value },
+                     pane_id,
+@@ -1243,6 +1261,7 @@ impl TermWindow {
+                         AudibleBell::Disabled => {}
+                     }
+ 
++                    self.native_bell(pane_id);
+                     log::trace!("Ding! (this is the bell) in pane {}", pane_id);
+                     self.emit_window_event("bell", Some(pane_id));
+ 
+@@ -1254,36 +1273,10 @@ impl TermWindow {
+                     alert: Alert::ToastNotification { .. },
+                     ..
+                 } => {}
+-                MuxNotification::TabAddedToWindow {
+-                    window_id: _,
+-                    tab_id,
+-                } => {
+-                    let mux = Mux::get();
+-                    let mut size = self.terminal_size;
+-                    if let Some(tab) = mux.get_tab(tab_id) {
+-                        // If we attached to a remote domain and loaded in
+-                        // a tab async, we need to fixup its size, either
+-                        // by resizing it or resizes ourselves.
+-                        // The strategy here is to adjust both by taking
+-                        // the maximal size in both horizontal and vertical
+-                        // dimensions and applying that. In practice that
+-                        // means that a new local client will resize larger
+-                        // to adjust to the size of an existing client.
+-                        let tab_size = tab.get_size();
+-                        size.rows = size.rows.max(tab_size.rows);
+-                        size.cols = size.cols.max(tab_size.cols);
+-
+-                        if size.rows != self.terminal_size.rows
+-                            || size.cols != self.terminal_size.cols
+-                            || size.pixel_width != self.terminal_size.pixel_width
+-                            || size.pixel_height != self.terminal_size.pixel_height
+-                        {
+-                            self.set_window_size(size, window)?;
+-                        } else if tab_size.dpi == 0 {
+-                            log::debug!("fixup dpi in newly added tab");
+-                            tab.resize(self.terminal_size);
+-                        }
+-                    }
++                MuxNotification::TabAddedToWindow { tab_id, .. } => {
++                    // The window owns content dimensions. Newly attached or spawned tabs
++                    // adopt them without requesting another window resize.
++                    if let Some(tab) = Mux::get().get_tab(tab_id) { tab.resize(self.terminal_size); }
+                 }
+                 MuxNotification::PaneOutput(pane_id) => {
+                     self.mux_pane_output_event(pane_id);
+@@ -1292,8 +1285,8 @@ impl TermWindow {
+                     window.invalidate();
+                     self.update_title_post_status();
+                 }
+-                MuxNotification::WindowRemoved(_window_id) => {
+-                    // Handled by frontend
++                MuxNotification::WindowRemoved(window_id) => {
++                    if let Some(ui) = self.native_suspended.remove(&window_id) { ui.shutdown(); }
+                 }
+                 MuxNotification::AssignClipboard { .. } => {
+                     // Handled by frontend
+@@ -1305,10 +1298,7 @@ impl TermWindow {
+                     // Also handled by clientpane
+                     self.update_title_post_status();
+                 }
+-                MuxNotification::TabResized(_) => {
+-                    // Also handled by wezterm-client
+-                    self.update_title_post_status();
+-                }
++                MuxNotification::TabResized(_) => {}
+                 MuxNotification::TabTitleChanged { .. } => {
+                     self.update_title_post_status();
+                 }
+@@ -1319,7 +1309,8 @@ impl TermWindow {
+                 | MuxNotification::ActiveWorkspaceChanged(_)
+                 | MuxNotification::Empty
+                 | MuxNotification::WindowCreated(_) => {}
+-            },
++            }
++            }
+             TermWindowNotif::EmitStatusUpdate => {
+                 self.emit_status_event();
+             }
+@@ -1337,6 +1328,14 @@ impl TermWindow {
+                 func(self);
+             }
+             TermWindowNotif::SwitchToMuxWindow(mux_window_id) => {
++                if let Some(mut ui) = self.native_ui.take() {
++                    ui.cancel_metadata_refresh();
++                    ui.provider.input(crate::termwindow::native_ui::Input::Focus(false));
++                    ui.dirty = true;
++                    self.native_suspended.insert(self.mux_window_id,ui);
++                }
++                self.native_ui = Some(self.native_suspended.remove(&mux_window_id)
++                    .unwrap_or_else(||crate::termwindow::native_ui::NativeUi::new(mux_window_id)));
+                 self.mux_window_id = mux_window_id;
+                 *self.mux_window_id_for_subscriptions.lock().unwrap() = mux_window_id;
+ 
+@@ -1345,12 +1344,11 @@ impl TermWindow {
+                 self.invalidate_fancy_tab_bar();
+                 self.invalidate_modal();
+ 
+-                let mux = Mux::get();
+-                if let Some(window) = mux.get_window(self.mux_window_id) {
+-                    for tab in window.iter_tabs() {
+-                        tab.resize(self.terminal_size);
+-                    }
+-                };
++                let removed = self.native_suspended.keys().copied()
++                    .filter(|id|Mux::get().get_window(*id).is_none()).collect::<Vec<_>>();
++                for id in removed { if let Some(ui) = self.native_suspended.remove(&id) { ui.shutdown(); } }
++                self.native_sync();
++                self.apply_dimensions(&self.dimensions.clone(),None,window);
+                 self.update_title();
+                 window.invalidate();
+             }
+@@ -1742,6 +1740,8 @@ impl TermWindow {
+             }
+         };
+         self.config = config.clone();
++        self.native_mark_dirty();
++        self.native_sync();
+         self.palette.take();
+ 
+         let mux = Mux::get();
+@@ -1750,9 +1750,9 @@ impl TermWindow {
+             _ => return,
+         };
+         if window.count_tabs() == 1 {
+-            self.show_tab_bar = config.enable_tab_bar && !config.hide_tab_bar_if_only_one_tab;
++            self.show_tab_bar = false;
+         } else {
+-            self.show_tab_bar = config.enable_tab_bar;
++            self.show_tab_bar = false;
+         }
+         *self.cursor_blink_state.borrow_mut() = ColorEase::new(
+             config.cursor_blink_rate,
+@@ -1969,46 +1969,49 @@ impl TermWindow {
+         let active_tab = tabs.iter().find(|t| t.is_active).cloned();
+         let active_pane = panes.iter().find(|p| p.is_active).cloned();
+ 
+-        let border = self.get_os_border();
+-        let tab_bar_height = self.tab_bar_pixel_height().unwrap_or(0.);
+-        let tab_bar_y = if self.config.tab_bar_at_bottom {
+-            ((self.dimensions.pixel_height as f32) - (tab_bar_height + border.bottom.get() as f32))
+-                .max(0.)
+-        } else {
+-            border.top.get() as f32
+-        };
++        if self.show_tab_bar {
++            let border = self.get_os_border();
++            let tab_bar_height = self.tab_bar_pixel_height().unwrap_or(0.);
++            let tab_bar_y = if self.config.tab_bar_at_bottom {
++                ((self.dimensions.pixel_height as f32) - (tab_bar_height + border.bottom.get() as f32))
++                    .max(0.)
++            } else {
++                border.top.get() as f32
++            };
+ 
+-        let tab_bar_height = self.tab_bar_pixel_height().unwrap_or(0.);
++            let tab_bar_height = self.tab_bar_pixel_height().unwrap_or(0.);
+ 
+-        let hovering_in_tab_bar = match &self.current_mouse_event {
+-            Some(event) => {
+-                let mouse_y = event.coords.y as f32;
+-                mouse_y >= tab_bar_y as f32 && mouse_y < tab_bar_y as f32 + tab_bar_height
+-            }
+-            None => false,
+-        };
++            let hovering_in_tab_bar = match &self.current_mouse_event {
++                Some(event) => {
++                    let mouse_y = event.coords.y as f32;
++                    mouse_y >= tab_bar_y as f32 && mouse_y < tab_bar_y as f32 + tab_bar_height
++                }
++                None => false,
++            };
+ 
+-        let new_tab_bar = TabBarState::new(
+-            self.dimensions.pixel_width / self.render_metrics.cell_size.width as usize,
+-            if hovering_in_tab_bar {
+-                Some(self.last_mouse_coords.0)
+-            } else {
+-                None
+-            },
+-            &tabs,
+-            &panes,
+-            self.config.resolved_palette.tab_bar.as_ref(),
+-            &self.config,
+-            &self.left_status,
+-            &self.right_status,
+-        );
+-        if new_tab_bar != self.tab_bar {
+-            self.tab_bar = new_tab_bar;
+-            self.invalidate_fancy_tab_bar();
+-            self.invalidate_modal();
+-            if let Some(window) = self.window.as_ref() {
+-                window.invalidate();
++            let new_tab_bar = TabBarState::new(
++                self.dimensions.pixel_width / self.render_metrics.cell_size.width as usize,
++                if hovering_in_tab_bar {
++                    Some(self.last_mouse_coords.0)
++                } else {
++                    None
++                },
++                &tabs,
++                &panes,
++                self.config.resolved_palette.tab_bar.as_ref(),
++                &self.config,
++                &self.left_status,
++                &self.right_status,
++            );
++            if new_tab_bar != self.tab_bar {
++                self.tab_bar = new_tab_bar;
++                self.invalidate_fancy_tab_bar();
++                self.invalidate_modal();
++                if let Some(window) = self.window.as_ref() {
++                    window.invalidate();
++                }
+             }
++
+         }
+ 
+         let tabs_count = window.count_tabs();
+@@ -2074,11 +2077,7 @@ impl TermWindow {
+         if let Some(window) = self.window.as_ref() {
+             window.set_title(&title);
+ 
+-            let show_tab_bar = if tabs_count == 1 {
+-                self.config.enable_tab_bar && !self.config.hide_tab_bar_if_only_one_tab
+-            } else {
+-                self.config.enable_tab_bar
+-            };
++            let show_tab_bar = false;
+ 
+             // If the number of tabs changed and caused the tab bar to
+             // hide/show, then we'll need to resize things.  It is simplest
+@@ -2177,101 +2176,19 @@ impl TermWindow {
+     }
+ 
+     fn activate_tab(&mut self, tab_idx: isize) -> anyhow::Result<()> {
+-        let mux = Mux::get();
+-        let mut window = mux
+-            .get_window_mut(self.mux_window_id)
+-            .ok_or_else(|| anyhow!("no such window"))?;
+-
+-        // This logic is coupled with the CliSubCommand::ActivateTab
+-        // logic in wezterm/src/main.rs. If you update this, update that!
+-        let max = window.count_tabs();
+-
+-        let tab_idx = if tab_idx < 0 {
+-            max.saturating_sub(tab_idx.abs() as usize)
+-        } else {
+-            tab_idx as usize
+-        };
+-
+-        if tab_idx < max {
+-            window.remember_and_set_active_tab_idx(tab_idx);
+-
+-            drop(window);
+-
+-            if let Some(pane) = self.get_active_pane_or_overlay() {
+-                pane.focus_changed(true);
+-            }
+-
+-            self.update_title();
+-            self.update_scrollbar();
+-        }
+-        Ok(())
++        self.native_navigation(crate::termwindow::native_ui::Navigation::Index(tab_idx))
+     }
+ 
+     fn activate_tab_relative(&mut self, delta: isize, wrap: bool) -> anyhow::Result<()> {
+-        let mux = Mux::get();
+-        let window = mux
+-            .get_window(self.mux_window_id)
+-            .ok_or_else(|| anyhow!("no such window"))?;
+-
+-        let max = window.count_tabs();
+-        ensure!(max > 0, "no more tabs");
+-
+-        // This logic is coupled with the CliSubCommand::ActivateTab
+-        // logic in wezterm/src/main.rs. If you update this, update that!
+-        let active = window.get_active_tab_idx() as isize;
+-        let tab = active + delta;
+-        let tab = if wrap {
+-            let tab = if tab < 0 { max as isize + tab } else { tab };
+-            (tab as usize % max) as isize
+-        } else {
+-            if tab < 0 {
+-                0
+-            } else if tab >= max as isize {
+-                max as isize - 1
+-            } else {
+-                tab
+-            }
+-        };
+-        drop(window);
+-        self.activate_tab(tab)
++        self.native_navigation(crate::termwindow::native_ui::Navigation::Relative(delta, wrap))
+     }
+ 
+     fn activate_last_tab(&mut self) -> anyhow::Result<()> {
+-        let mux = Mux::get();
+-        let window = mux
+-            .get_window(self.mux_window_id)
+-            .ok_or_else(|| anyhow!("no such window"))?;
+-
+-        let last_idx = window.get_last_active_tab_idx();
+-        drop(window);
+-        match last_idx {
+-            Some(idx) => self.activate_tab(idx as isize),
+-            None => Ok(()),
+-        }
++        self.native_navigation(crate::termwindow::native_ui::Navigation::Last)
+     }
+ 
+     fn move_tab(&mut self, tab_idx: usize) -> anyhow::Result<()> {
+-        let mux = Mux::get();
+-        let mut window = mux
+-            .get_window_mut(self.mux_window_id)
+-            .ok_or_else(|| anyhow!("no such window"))?;
+-
+-        let max = window.count_tabs();
+-        ensure!(max > 0, "no more tabs");
+-
+-        let active_tab_idx = window.get_active_tab_idx();
+-
+-        ensure!(tab_idx < max, "cannot move a tab out of range");
+-
+-        let tab = window.remove_tab_idx(active_tab_idx);
+-        window.insert_tab_at_idx(tab_idx, &tab);
+-        window.set_active_tab_idx_without_saving(tab_idx);
+-
+-        drop(window);
+-        self.update_title();
+-        self.update_scrollbar();
+-
+-        Ok(())
++        self.native_navigation(crate::termwindow::native_ui::Navigation::Move(tab_idx))
+     }
+ 
+     fn show_input_selector(&mut self, args: &config::keyassignment::InputSelector) {
+@@ -2368,20 +2285,7 @@ impl TermWindow {
+     }
+ 
+     fn show_tab_navigator(&mut self) {
+-        let mux = Mux::get();
+-        let active_tab_idx = match mux.get_window(self.mux_window_id) {
+-            Some(mux_window) => mux_window.get_active_tab_idx(),
+-            None => return,
+-        };
+-        let title = "Tab Navigator".to_string();
+-        let args = LauncherActionArgs {
+-            title: Some(title),
+-            flags: LauncherFlags::TABS,
+-            help_text: None,
+-            fuzzy_help_text: None,
+-            alphabet: None,
+-        };
+-        self.show_launcher_impl(args, active_tab_idx);
++        self.native_navigation(crate::termwindow::native_ui::Navigation::Navigator).ok();
+     }
+ 
+     fn show_launcher(&mut self) {
+@@ -2402,6 +2306,7 @@ impl TermWindow {
+ 
+     fn show_launcher_impl(&mut self, args: LauncherActionArgs, initial_choice_idx: usize) {
+         let mux_window_id = self.mux_window_id;
++        let visible_tabs = self.native_ui.as_ref().map(|ui|ui.projection.tabs.clone()).unwrap_or_default();
+         let window = self.window.as_ref().unwrap().clone();
+ 
+         let mux = Mux::get();
+@@ -2440,6 +2345,7 @@ impl TermWindow {
+                 &title,
+                 flags,
+                 mux_window_id,
++                visible_tabs,
+                 pane_id,
+                 domain_id_of_current_pane,
+                 &help_text,
+@@ -2558,26 +2464,7 @@ impl TermWindow {
+     }
+ 
+     fn move_tab_relative(&mut self, delta: isize) -> anyhow::Result<()> {
+-        let mux = Mux::get();
+-        let window = mux
+-            .get_window(self.mux_window_id)
+-            .ok_or_else(|| anyhow!("no such window"))?;
+-
+-        let max = window.count_tabs();
+-        ensure!(max > 0, "no more tabs");
+-
+-        let active = window.get_active_tab_idx();
+-        let tab = active as isize + delta;
+-        let tab = if tab < 0 {
+-            0usize
+-        } else if tab >= max as isize {
+-            max - 1
+-        } else {
+-            tab as usize
+-        };
+-
+-        drop(window);
+-        self.move_tab(tab)
++        self.native_navigation(crate::termwindow::native_ui::Navigation::MoveRelative(delta))
+     }
+ 
+     pub fn perform_key_assignment(
+@@ -2586,6 +2473,16 @@ impl TermWindow {
+         assignment: &KeyAssignment,
+     ) -> anyhow::Result<PerformAssignmentResult> {
+         use KeyAssignment::*;
++        self.native_sync();
++        if self.native_empty() && !matches!(assignment,
++            ActivateTab(_) | ActivateTabRelative(_) | ActivateTabRelativeNoWrap(_) | ActivateLastTab
++            | SpawnTab(_) | SpawnWindow | SpawnCommandInNewTab(_) | SpawnCommandInNewWindow(_)
++            | ShowTabNavigator | ShowLauncher | ShowLauncherArgs(_) | SwitchToWorkspace { .. } | SwitchWorkspaceRelative(_) | EmitEvent(_) | Multiple(_)
++            | ActivateKeyTable { .. } | PopKeyTable | ClearKeyTableStack | Nop | DisableDefaultAssignment
++            | QuitApplication | Hide | HideApplication | Show | ToggleFullScreen
++            | IncreaseFontSize | DecreaseFontSize | ResetFontSize | ReloadConfiguration
++            | ActivateWindow(_) | ActivateWindowRelative(_) | ActivateWindowRelativeNoWrap(_)
++        ) { return Ok(PerformAssignmentResult::Handled); }
+ 
+         if let Some(modal) = self.get_modal() {
+             if modal.perform_assignment(assignment, self) {
+@@ -3041,6 +2938,7 @@ impl TermWindow {
+                             size,
+                             Some(src_window_id),
+                             term_config,
++                            None,
+                         )
+                         .await
+                         {
+@@ -3210,6 +3108,7 @@ impl TermWindow {
+         }
+     }
+     fn close_current_pane(&mut self, confirm: bool) {
++        if self.native_empty() { return; }
+         let mux_window_id = self.mux_window_id;
+         let mux = Mux::get();
+         let tab = match mux.get_active_tab_for_window(mux_window_id) {
+@@ -3250,9 +3149,11 @@ impl TermWindow {
+ 
+         let tab_id = tab.tab_id();
+         if confirm && !tab.can_close_without_prompting(CloseReason::Tab) {
+-            if self.activate_tab(tab_idx as isize).is_err() {
+-                return;
++            if let Some(mut window) = mux.get_window_mut(self.mux_window_id) {
++                window.remember_and_set_active_tab_idx(tab_idx);
+             }
++            self.native_mark_dirty();
++            self.native_sync();
+ 
+             let window = self.window.clone().unwrap();
+             let (overlay, future) = start_overlay(self, &tab, move |tab_id, term| {
+@@ -3266,6 +3167,7 @@ impl TermWindow {
+     }
+ 
+     fn close_current_tab(&mut self, confirm: bool) {
++        if self.native_empty() { return; }
+         let mux = Mux::get();
+         let tab = match mux.get_active_tab_for_window(self.mux_window_id) {
+             Some(tab) => tab,
+@@ -3420,6 +3322,7 @@ impl TermWindow {
+     }
+ 
+     fn get_splits(&mut self) -> Vec<PositionedSplit> {
++        if self.native_empty() { return vec![]; }
+         let mux = Mux::get();
+         let tab = match mux.get_active_tab_for_window(self.mux_window_id) {
+             Some(tab) => tab,
+@@ -3456,35 +3359,18 @@ impl TermWindow {
+ 
+     fn get_tab_information(&mut self) -> Vec<TabInformation> {
+         let mux = Mux::get();
+-        let window = match mux.get_window(self.mux_window_id) {
+-            Some(window) => window,
+-            _ => return vec![],
+-        };
+-        let tab_index = window.get_active_tab_idx();
+-
+-        window
+-            .iter_tabs()
+-            .enumerate()
+-            .map(|(idx, tab)| {
+-                let panes = self.get_pos_panes_for_tab(tab);
+-
+-                TabInformation {
+-                    tab_index: idx,
+-                    tab_id: tab.tab_id(),
+-                    is_active: tab_index == idx,
+-                    is_last_active: window
+-                        .get_last_active_tab_idx()
+-                        .map(|last_active| last_active == idx)
+-                        .unwrap_or(false),
+-                    window_id: self.mux_window_id,
+-                    tab_title: tab.get_title(),
+-                    active_pane: panes
+-                        .iter()
+-                        .find(|p| p.is_active)
+-                        .map(Self::pos_pane_to_pane_info),
+-                }
++        let Some(window) = mux.get_window(self.mux_window_id) else { return vec![] };
++        let Some(ui) = self.native_ui.as_ref() else { return vec![] };
++        let last = window.get_last_active_tab_idx().and_then(|idx|window.iter_tabs().nth(idx)).map(|tab|tab.tab_id());
++        ui.projection.tabs.iter().enumerate().filter_map(|(index,id)| {
++            let tab = mux.get_tab(*id)?;
++            let panes = self.get_pos_panes_for_tab(&tab);
++            Some(TabInformation {
++                tab_index:index,tab_id:*id,is_active:ui.projection.active==Some(*id),
++                is_last_active:last==Some(*id),window_id:self.mux_window_id,tab_title:tab.get_title(),
++                active_pane:panes.iter().find(|p|p.is_active).map(Self::pos_pane_to_pane_info),
+             })
+-            .collect()
++        }).collect()
+     }
+ 
+     fn get_pane_information(&self) -> Vec<PaneInformation> {
+@@ -3528,6 +3414,7 @@ impl TermWindow {
+     }
+ 
+     fn get_panes_to_render(&self) -> Vec<PositionedPane> {
++        if self.native_content_hidden() { return vec![]; }
+         let mux = Mux::get();
+         let tab = match mux.get_active_tab_for_window(self.mux_window_id) {
+             Some(tab) => tab,
+@@ -3620,6 +3507,10 @@ impl TermWindow {
+ 
+ impl Drop for TermWindow {
+     fn drop(&mut self) {
++        if let Some(ui) = self.native_ui.take() {
++            ui.shutdown();
++        }
++        for (_,ui) in self.native_suspended.drain() { ui.shutdown(); }
+         // Mark the mux subscription as dead.
+         // (will actually unsubscribe on the next notif from mux)
+         self.mux_subscription_dead.store(true, Ordering::Relaxed);
+diff --git a/wezterm-gui/src/termwindow/render/mod.rs b/wezterm-gui/src/termwindow/render/mod.rs
+index af722551..af33daee 100644
+--- a/wezterm-gui/src/termwindow/render/mod.rs
++++ b/wezterm-gui/src/termwindow/render/mod.rs
+@@ -356,7 +356,7 @@ impl crate::TermWindow {
+             .left
+             .evaluate_as_pixels(h_context);
+         let padding_right = self.config.window_padding.right;
+-        let padding_top = self.config.window_padding.top.evaluate_as_pixels(v_context);
++        let padding_top = self.config.window_padding.top.evaluate_as_pixels(v_context) + self.native_titlebar_height();
+         let padding_bottom = self
+             .config
+             .window_padding
+@@ -366,6 +366,7 @@ impl crate::TermWindow {
+         let horizontal_gap = self.dimensions.pixel_width as f32
+             - self.terminal_size.pixel_width as f32
+             - padding_left
++            - self.native_reserved_width()
+             - if self.show_scroll_bar && padding_right.is_zero() {
+                 h_context.pixel_cell
+             } else {
+@@ -391,7 +392,7 @@ impl crate::TermWindow {
+             VerticalWindowContentAlignment::Bottom => vertical_gap,
+         };
+ 
+-        (padding_left + left_gap, padding_top + top_gap)
++        (padding_left + left_gap + self.native_left_width(), padding_top + top_gap)
+     }
+ 
+     fn resolve_lock_glyph(
+diff --git a/wezterm-gui/src/termwindow/render/pane.rs b/wezterm-gui/src/termwindow/render/pane.rs
+index 4af46389..349ef0b1 100644
+--- a/wezterm-gui/src/termwindow/render/pane.rs
++++ b/wezterm-gui/src/termwindow/render/pane.rs
+@@ -111,8 +111,8 @@ impl crate::TermWindow {
+             // We want to fill out to the edges of the splits
+             let (x, width_delta) = if pos.left == 0 {
+                 (
+-                    0.,
+-                    padding_left + border.left.get() as f32 + (cell_width / 2.0),
++                    self.native_left_width(),
++                    padding_left - self.native_left_width() + border.left.get() as f32 + (cell_width / 2.0),
+                 )
+             } else {
+                 (
+@@ -124,8 +124,8 @@ impl crate::TermWindow {
+ 
+             let (y, height_delta) = if pos.top == 0 {
+                 (
+-                    (top_pixel_y - padding_top),
+-                    padding_top + (cell_height / 2.0),
++                    (top_pixel_y - padding_top + self.native_titlebar_height()),
++                    padding_top - self.native_titlebar_height() + (cell_height / 2.0),
+                 )
+             } else {
+                 (
+@@ -138,7 +138,7 @@ impl crate::TermWindow {
+                 y,
+                 // Go all the way to the right edge if we're right-most
+                 if pos.left + pos.width >= self.terminal_size.cols as usize {
+-                    self.dimensions.pixel_width as f32 - x
++                    self.dimensions.pixel_width as f32 - x - self.native_right_width()
+                 } else {
+                     (pos.width as f32 * cell_width) + width_delta
+                 },
+@@ -227,7 +227,7 @@ impl crate::TermWindow {
+         // changes to ScrollHit, mouse positioning, PositionedPane
+         // and tab size calculation.
+         if pos.is_active && self.show_scroll_bar {
+-            let thumb_y_offset = top_bar_height as usize + border.top.get();
++            let thumb_y_offset = top_bar_height as usize + border.top.get() + self.native_titlebar_height() as usize;
+ 
+             let min_height = self.min_scroll_bar_height();
+ 
+@@ -247,7 +247,7 @@ impl crate::TermWindow {
+             let config = &self.config;
+             let padding = self.effective_right_padding(&config) as f32;
+ 
+-            let thumb_x = self.dimensions.pixel_width - padding as usize - border.right.get();
++            let thumb_x = self.dimensions.pixel_width - padding as usize - border.right.get() - self.native_right_width() as usize;
+ 
+             // Register the scroll bar location
+             self.ui_items.push(UIItem {
+@@ -605,8 +605,8 @@ impl crate::TermWindow {
+         // We want to fill out to the edges of the splits
+         let (x, width_delta) = if pos.left == 0 {
+             (
+-                0.,
+-                padding_left + border.left.get() as f32 + (cell_width / 2.0),
++                self.native_left_width(),
++                padding_left - self.native_left_width() + border.left.get() as f32 + (cell_width / 2.0),
+             )
+         } else {
+             (
+@@ -618,8 +618,8 @@ impl crate::TermWindow {
+ 
+         let (y, height_delta) = if pos.top == 0 {
+             (
+-                (top_pixel_y - padding_top),
+-                padding_top + (cell_height / 2.0),
++                (top_pixel_y - padding_top + self.native_titlebar_height()),
++                padding_top - self.native_titlebar_height() + (cell_height / 2.0),
+             )
+         } else {
+             (
+@@ -633,7 +633,7 @@ impl crate::TermWindow {
+             y,
+             // Go all the way to the right edge if we're right-most
+             if pos.left + pos.width >= self.terminal_size.cols as usize {
+-                self.dimensions.pixel_width as f32 - x
++                self.dimensions.pixel_width as f32 - x - self.native_right_width()
+             } else {
+                 (pos.width as f32 * cell_width) + width_delta
+             },
+diff --git a/wezterm-gui/src/termwindow/resize.rs b/wezterm-gui/src/termwindow/resize.rs
+index 86de9b8b..a4e8ded5 100644
+--- a/wezterm-gui/src/termwindow/resize.rs
++++ b/wezterm-gui/src/termwindow/resize.rs
+@@ -195,11 +195,11 @@ impl super::TermWindow {
+                 pixel_max: size.pixel_height as f32,
+                 pixel_cell: self.render_metrics.cell_size.height as f32,
+             };
+-            let padding_left = config.window_padding.left.evaluate_as_pixels(h_context) as usize;
+-            let padding_top = config.window_padding.top.evaluate_as_pixels(v_context) as usize;
++            let padding_left = config.window_padding.left.evaluate_as_pixels(h_context) as usize + self.native_left_width() as usize;
++            let padding_top = config.window_padding.top.evaluate_as_pixels(v_context) as usize + self.native_titlebar_height() as usize;
+             let padding_bottom =
+                 config.window_padding.bottom.evaluate_as_pixels(v_context) as usize;
+-            let padding_right = effective_right_padding(&config, h_context);
++            let padding_right = effective_right_padding(&config, h_context) + self.native_right_width() as usize;
+ 
+             let pixel_height = (rows * self.render_metrics.cell_size.height as usize)
+                 + (padding_top + padding_bottom)
+@@ -241,11 +241,11 @@ impl super::TermWindow {
+                 pixel_max: self.terminal_size.pixel_height as f32,
+                 pixel_cell: self.render_metrics.cell_size.height as f32,
+             };
+-            let padding_left = config.window_padding.left.evaluate_as_pixels(h_context) as usize;
+-            let padding_top = config.window_padding.top.evaluate_as_pixels(v_context) as usize;
++            let padding_left = config.window_padding.left.evaluate_as_pixels(h_context) as usize + self.native_left_width() as usize;
++            let padding_top = config.window_padding.top.evaluate_as_pixels(v_context) as usize + self.native_titlebar_height() as usize;
+             let padding_bottom =
+                 config.window_padding.bottom.evaluate_as_pixels(v_context) as usize;
+-            let padding_right = effective_right_padding(&config, h_context);
++            let padding_right = effective_right_padding(&config, h_context) + self.native_right_width() as usize;
+ 
+             let avail_width = dimensions.pixel_width.saturating_sub(
+                 (padding_left + padding_right) as usize
+@@ -259,8 +259,8 @@ impl super::TermWindow {
+                 )
+                 .saturating_sub(tab_bar_height as usize);
+ 
+-            let rows = avail_height / self.render_metrics.cell_size.height as usize;
+-            let cols = avail_width / self.render_metrics.cell_size.width as usize;
++            let rows = (avail_height / self.render_metrics.cell_size.height as usize).max(1);
++            let cols = (avail_width / self.render_metrics.cell_size.width as usize).max(1);
+ 
+             let size = TerminalSize {
+                 rows,
+@@ -300,7 +300,7 @@ impl super::TermWindow {
+         };
+         self.resize_overlays();
+         self.invalidate_fancy_tab_bar();
+-        self.update_title();
++        window.invalidate();
+ 
+         window.set_resize_increments(if self.config.use_resize_increments {
+             ri_calc.into()
+@@ -488,7 +488,7 @@ impl super::TermWindow {
+             dpi: size.dpi,
+         };
+ 
+-        let show_tab_bar = config.enable_tab_bar && !config.hide_tab_bar_if_only_one_tab;
++        let show_tab_bar = false;
+         let tab_bar_height = if show_tab_bar {
+             self.tab_bar_pixel_height()? as usize
+         } else {
+@@ -505,14 +505,14 @@ impl super::TermWindow {
+             pixel_max: self.dimensions.pixel_height as f32,
+             pixel_cell: render_metrics.cell_size.height as f32,
+         };
+-        let padding_left = config.window_padding.left.evaluate_as_pixels(h_context) as usize;
+-        let padding_top = config.window_padding.top.evaluate_as_pixels(v_context) as usize;
++        let padding_left = config.window_padding.left.evaluate_as_pixels(h_context) as usize + self.native_left_width() as usize;
++        let padding_top = config.window_padding.top.evaluate_as_pixels(v_context) as usize + self.native_titlebar_height() as usize;
+         let padding_bottom = config.window_padding.bottom.evaluate_as_pixels(v_context) as usize;
+ 
+         let dimensions = Dimensions {
+             pixel_width: ((terminal_size.cols as usize * render_metrics.cell_size.width as usize)
+                 + padding_left
+-                + effective_right_padding(&config, h_context)),
++                + effective_right_padding(&config, h_context) + self.native_right_width() as usize),
+             pixel_height: ((terminal_size.rows as usize * render_metrics.cell_size.height as usize)
+                 + padding_top
+                 + padding_bottom) as usize
+diff --git a/wezterm-gui/src/termwindow/spawn.rs b/wezterm-gui/src/termwindow/spawn.rs
+index 1395afc3..3bccb5b5 100644
+--- a/wezterm-gui/src/termwindow/spawn.rs
++++ b/wezterm-gui/src/termwindow/spawn.rs
+@@ -4,7 +4,7 @@ use config::TermConfig;
+ use std::sync::Arc;
+ 
+ impl super::TermWindow {
+-    pub fn spawn_command(&self, spawn: &SpawnCommand, spawn_where: SpawnWhere) {
++    pub fn spawn_command(&mut self, spawn: &SpawnCommand, spawn_where: SpawnWhere) {
+         let size = if spawn_where == SpawnWhere::NewWindow {
+             self.config.initial_size(
+                 self.dimensions.dpi as u32,
+@@ -13,14 +13,20 @@ impl super::TermWindow {
+         } else {
+             self.terminal_size
+         };
++        let mut spawn = spawn.clone();
++        if let Some(ui) = self.native_ui.as_ref() { ui.provider.prepare_command(spawn_where == SpawnWhere::NewWindow, &mut spawn); }
++        let native_context = if matches!(spawn_where, SpawnWhere::NewTab | SpawnWhere::NewWindow) {
++            self.native_ui.as_mut().map(|ui| ui.provider.reserve_spawn(spawn_where == SpawnWhere::NewWindow, &spawn))
++        } else { None };
+         let term_config = Arc::new(TermConfig::with_config(self.config.clone()));
+ 
+         crate::spawn::spawn_command_impl(
+-            spawn,
++            &spawn,
+             spawn_where,
+             size,
+             Some(self.mux_window_id),
+             term_config,
++            native_context,
+         )
+     }
+ 
+diff --git a/wezterm-client/src/topology.rs b/wezterm-client/src/topology.rs
+new file mode 100644
+index 00000000..afaf9801
+--- /dev/null
++++ b/wezterm-client/src/topology.rs
+@@ -0,0 +1,135 @@
++//! Order topology snapshots after local resize acknowledgements.
++use std::sync::{Arc, Mutex};
++use std::task::{Poll, Waker};
++
++#[derive(Default)]
++struct State {
++    epoch: u64,
++    pending: usize,
++    requested: u64,
++    completed: u64,
++    applying: usize,
++    waiter: Option<Waker>,
++}
++
++#[derive(Default)]
++pub(crate) struct TopologySync {
++    state: Arc<Mutex<State>>,
++    pub serial: smol::lock::Mutex<()>,
++}
++
++impl TopologySync {
++    pub fn begin_resize(&self) -> Option<ResizeGuard> {
++        let mut state = self.state.lock().unwrap();
++        // Applying remote geometry must not echo a new resize back to its source.
++        if state.applying != 0 {
++            return None;
++        }
++        state.epoch = state.epoch.wrapping_add(1);
++        state.pending += 1;
++        Some(ResizeGuard(Arc::clone(&self.state)))
++    }
++    pub fn request(&self) -> u64 {
++        let mut state = self.state.lock().unwrap();
++        state.requested += 1;
++        state.requested
++    }
++    pub fn completed(&self, request: u64) -> bool {
++        self.state.lock().unwrap().completed >= request
++    }
++    pub async fn ready(&self) -> (u64, u64) {
++        futures::future::poll_fn(|cx| {
++            let mut state = self.state.lock().unwrap();
++            if state.pending == 0 {
++                Poll::Ready((state.epoch, state.requested))
++            } else {
++                state.waiter = Some(cx.waker().clone());
++                Poll::Pending
++            }
++        })
++        .await
++    }
++    pub fn accepts(&self, epoch: u64) -> bool {
++        let state = self.state.lock().unwrap();
++        state.pending == 0 && state.epoch == epoch
++    }
++    pub fn finish(&self, request: u64) -> bool {
++        let mut state = self.state.lock().unwrap();
++        state.completed = request;
++        state.completed == state.requested
++    }
++    pub fn applying(&self) -> SnapshotGuard {
++        self.state.lock().unwrap().applying += 1;
++        SnapshotGuard(Arc::clone(&self.state))
++    }
++}
++
++pub(crate) struct ResizeGuard(Arc<Mutex<State>>);
++impl Drop for ResizeGuard {
++    fn drop(&mut self) {
++        let wake = {
++            let mut state = self.0.lock().unwrap();
++            state.pending -= 1;
++            if state.pending == 0 {
++                state.waiter.take()
++            } else {
++                None
++            }
++        };
++        if let Some(waker) = wake {
++            waker.wake();
++        }
++    }
++}
++pub(crate) struct SnapshotGuard(Arc<Mutex<State>>);
++impl Drop for SnapshotGuard {
++    fn drop(&mut self) {
++        self.0.lock().unwrap().applying -= 1;
++    }
++}
++
++#[cfg(test)]
++mod native_topology_tests {
++    use super::*;
++    use futures::{pin_mut, FutureExt};
++
++    #[test]
++    fn split_snapshot_waits_for_every_pane_resize_ack() {
++        let sync = TopologySync::default();
++        let left = sync.begin_resize().unwrap();
++        let right = sync.begin_resize().unwrap();
++        let ready = sync.ready();
++        pin_mut!(ready);
++        assert!(ready.as_mut().now_or_never().is_none());
++        drop(left);
++        assert!(ready.as_mut().now_or_never().is_none());
++        drop(right);
++        let (epoch, _) = ready.now_or_never().unwrap();
++        assert!(sync.accepts(epoch));
++    }
++    #[test]
++    fn snapshot_captured_before_new_resize_is_rejected_even_after_ack() {
++        let sync = TopologySync::default();
++        let (old_epoch, _) = sync.ready().now_or_never().unwrap();
++        let resize = sync.begin_resize().unwrap();
++        assert!(!sync.accepts(old_epoch));
++        drop(resize);
++        assert!(!sync.accepts(old_epoch));
++        let (current_epoch, _) = sync.ready().now_or_never().unwrap();
++        assert!(sync.accepts(current_epoch));
++    }
++    #[test]
++    fn remote_snapshot_does_not_echo_resizes_and_notifications_coalesce() {
++        let sync = TopologySync::default();
++        let first = sync.request();
++        let second = sync.request();
++        let (_, included) = sync.ready().now_or_never().unwrap();
++        let applying = sync.applying();
++        assert!(sync.begin_resize().is_none());
++        drop(applying);
++        assert!(sync.finish(included));
++        assert!(sync.completed(first) && sync.completed(second));
++        assert!(!sync.completed(sync.request()));
++        assert!(sync.begin_resize().is_some());
++    }
++}
