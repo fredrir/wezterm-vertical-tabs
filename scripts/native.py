@@ -26,6 +26,8 @@ PROJECT_BRANCH = "native"
 CAPABILITY = 1
 DAY = 24 * 60 * 60
 BINARIES = ("wezterm-gui", "wezterm", "wezterm-mux-server", "strip-ansi-escapes")
+WINDOWS_RUNTIME = (("conhost", "conpty.dll"), ("conhost", "OpenConsole.exe"),
+                   ("angle", "libEGL.dll"), ("angle", "libGLESv2.dll"))
 SOURCE_ITEMS = ("Cargo.toml", "Cargo.lock", "README.md", "justfile", "crates", "native", "plugin", "docs", "scripts/native.py", "tests/native")
 
 
@@ -284,6 +286,8 @@ def build(cache: Path, debug: bool = False) -> dict:
     flags = [] if debug else ["--release"]
     run("cargo", "build", *flags, "--locked", "--manifest-path", ROOT / "Cargo.toml", "-p", "vtabs-store", "--features", "sqlite", env=env)
     run("cargo", "build", *flags, "-p", "wezterm-gui", "-p", "wezterm", "-p", "wezterm-mux-server", "-p", "strip-ansi-escapes", cwd=worktree, env=env)
+    if os.name == "nt":
+        copy_windows_runtime(worktree, (binaries, binaries / "deps"))
     run("cargo", "test", *flags, "-p", "wezterm-gui", "native_", cwd=worktree, env=env)
     run("cargo", "test", *flags, "-p", "wezterm-client", "native_", "--lib", cwd=worktree, env=env)
     run("cargo", "test", *flags, "-p", "wezterm-input-types", "native_", "--lib", cwd=worktree, env=env)
@@ -344,9 +348,7 @@ def package(cache: Path, metadata: dict, output: Path) -> Path:
             shutil.copy2(binaries / (name + extension), bindir / (name + extension))
         shell_assets(source, staging, resources)
         if os.name == "nt":
-            for directory, name in (("conhost", "conpty.dll"), ("conhost", "OpenConsole.exe"), ("angle", "libEGL.dll"), ("angle", "libGLESv2.dll")):
-                shutil.copy2(source / "assets" / "windows" / directory / name, bindir / name)
-            shutil.copytree(source / "assets" / "windows" / "mesa", bindir / "mesa")
+            copy_windows_runtime(source, (bindir,))
         else:
             run("tic", "-xe", "wezterm", "-o", resources / "terminfo", source / "termwiz" / "data" / "wezterm.terminfo")
         if sys.platform.startswith("linux"):
@@ -392,6 +394,15 @@ def archive_bundle(destination: Path) -> Path:
     finally:
         shutil.rmtree(staging, ignore_errors=True)
     return archive_path
+
+
+def copy_windows_runtime(source: Path, destinations: tuple[Path, ...]) -> None:
+    assets = source / "assets" / "windows"
+    for destination in destinations:
+        destination.mkdir(parents=True, exist_ok=True)
+        for directory, name in WINDOWS_RUNTIME:
+            shutil.copy2(assets / directory / name, destination / name)
+        shutil.copytree(assets / "mesa", destination / "mesa", dirs_exist_ok=True)
 
 
 def shell_assets(source: Path, bundle: Path, resources: Path) -> None:

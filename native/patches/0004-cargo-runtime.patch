@@ -1,0 +1,52 @@
+diff --git a/wezterm-gui/build.rs b/wezterm-gui/build.rs
+--- a/wezterm-gui/build.rs
++++ b/wezterm-gui/build.rs
+@@ -1,3 +1,13 @@
++#[cfg(any(windows, target_os = "macos"))]
++fn executable_output_dir() -> std::path::PathBuf {
++    let out_dir = std::path::PathBuf::from(std::env::var_os("OUT_DIR").unwrap());
++    out_dir
++        .ancestors()
++        .nth(3)
++        .expect("Cargo OUT_DIR must be inside a profile build directory")
++        .to_path_buf()
++}
++
+ fn main() {
+     println!("cargo:rerun-if-changed=build.rs");
+ 
+@@ -6,12 +16,12 @@
+         use anyhow::Context as _;
+         use std::io::Write;
+         use std::path::Path;
+-        let profile = std::env::var("PROFILE").unwrap();
+         let repo_dir = std::env::current_dir()
+             .ok()
+             .and_then(|cwd| cwd.parent().map(|p| p.to_path_buf()))
+             .unwrap();
+-        let exe_output_dir = repo_dir.join("target").join(profile);
++        let exe_output_dir = executable_output_dir();
++        std::fs::create_dir_all(&exe_output_dir).unwrap();
+         let windows_dir = repo_dir.join("assets").join("windows");
+ 
+         let conhost_dir = windows_dir.join("conhost");
+@@ -154,7 +164,6 @@
+     #[cfg(target_os = "macos")]
+     {
+         use anyhow::Context as _;
+-        let profile = std::env::var("PROFILE").unwrap();
+         let repo_dir = std::env::current_dir()
+             .ok()
+             .and_then(|cwd| cwd.parent().map(|p| p.to_path_buf()))
+@@ -168,9 +177,8 @@
+             .join("WezTerm.app")
+             .join("Contents")
+             .join("Info.plist");
+-        let build_target_dir = std::env::var("CARGO_TARGET_DIR")
+-            .and_then(|s| Ok(std::path::PathBuf::from(s)))
+-            .unwrap_or(repo_dir.join("target").join(profile));
++        let build_target_dir = executable_output_dir();
++        std::fs::create_dir_all(&build_target_dir).unwrap();
+         let dest_plist = build_target_dir.join("Info.plist");
+         println!("cargo:rerun-if-changed=assets/macos/WezTerm.app/Contents/Info.plist");
+ 

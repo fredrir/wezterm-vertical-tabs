@@ -283,6 +283,35 @@ class ToolingTests(unittest.TestCase):
             for path in expected:
                 self.assertTrue((bundle / path).is_file(), path)
 
+    def test_windows_runtime_assets_follow_binary_test_and_bundle_destinations(self):
+        source = self.root / "checkout"
+        assets = source / "assets/windows"
+        for directory, name in (*native.WINDOWS_RUNTIME, ("mesa", "opengl32.dll")):
+            path = assets / directory / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b"current runtime")
+        binaries = self.root / "external-target/x86_64-pc-windows-msvc/release"
+        tests = binaries / "deps"
+        bundle = self.root / "bundle"
+        tests.mkdir(parents=True)
+        (tests / "conpty.dll").write_bytes(b"old runtime")
+        (binaries / "wezterm-gui.exe").write_bytes(b"built application")
+        native.copy_windows_runtime(source, (binaries, tests, bundle))
+        for destination in (binaries, tests, bundle):
+            for _, name in native.WINDOWS_RUNTIME:
+                self.assertEqual((destination / name).read_bytes(), b"current runtime")
+            self.assertEqual((destination / "mesa/opengl32.dll").read_bytes(), b"current runtime")
+        for path in assets.rglob("*"):
+            if path.is_file():
+                path.write_bytes(b"updated runtime")
+        native.copy_windows_runtime(source, (binaries, tests, bundle))
+        for destination in (binaries, tests, bundle):
+            for _, name in native.WINDOWS_RUNTIME:
+                self.assertEqual((destination / name).read_bytes(), b"updated runtime")
+            self.assertEqual((destination / "mesa/opengl32.dll").read_bytes(), b"updated runtime")
+        self.assertEqual((binaries / "wezterm-gui.exe").read_bytes(), b"built application")
+        self.assertFalse((source / "target").exists())
+
     @unittest.skipIf(os.name == "nt", "POSIX launcher execution")
     def test_managed_launcher_preserves_paths_and_arguments(self):
         root = self.root / "install with 'quotes' and $symbols"
