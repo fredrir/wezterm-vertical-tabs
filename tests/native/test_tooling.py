@@ -85,7 +85,11 @@ def test_prepare_checks_each_patch_in_order_and_never_guesses_repairs(tmp_path):
             native.prepare(cache, cache / "upstream", "current-main")
         stage.assert_not_called()
     apply = [args for args in calls if args[:2] == ("git", "apply")]
-    assert [args[2] for args in apply] == ["--check", str(patches / "0001-layout.patch"), "--check"]
+    assert [args[2] for args in apply] == [
+        "--check",
+        str(patches / "0001-layout.patch"),
+        "--check",
+    ]
     assert not (cache / "prepared.json").exists()
 
 
@@ -114,7 +118,8 @@ def test_stage_adapter_wires_only_project_dependencies(tmp_path):
 def test_daily_update_is_skipped_after_recent_attempt(tmp_path):
     install = tmp_path / "install"
     native.write_json(
-        install / "update.json", {"last_attempt": native.time.time(), "status": "failed"}
+        install / "update.json",
+        {"last_attempt": native.time.time(), "status": "failed"},
     )
     with patch.object(native, "build") as build:
         native.update(tmp_path / "cache", install, True, True, tmp_path / "dist")
@@ -175,7 +180,8 @@ def test_installed_update_preserves_the_recorded_project_branch(tmp_path):
         patch.object(native, "refresh_project", return_value=project) as refresh,
         patch.object(native, "run") as run,
         patch.dict(
-            os.environ, {"WEZ_VTABS_UPDATE_SOURCE_SYNCED": "0", "WEZ_VTABS_PROJECT_BRANCH": ""}
+            os.environ,
+            {"WEZ_VTABS_UPDATE_SOURCE_SYNCED": "0", "WEZ_VTABS_PROJECT_BRANCH": ""},
         ),
     ):
         native.update(tmp_path / "cache", tmp_path / "install", False, True, tmp_path / "bundles")
@@ -219,7 +225,9 @@ def test_project_branch_rejects_revision_expressions_and_unsafe_refs(tmp_path):
             run.assert_not_called()
 
 
-def test_project_refresh_switches_an_owned_legacy_cache_with_an_explicit_refspec(tmp_path):
+def test_project_refresh_switches_an_owned_legacy_cache_with_an_explicit_refspec(
+    tmp_path,
+):
     cache = tmp_path / "cache"
     project = cache / "project"
     (project / ".git").mkdir(parents=True)
@@ -259,14 +267,21 @@ def test_project_source_rejects_an_unexpected_recorded_remote(tmp_path):
     source.mkdir()
     native.write_json(
         source.parent / "build.json",
-        {"project_source": {"remote": "https://example.com/project.git", "branch": "native"}},
+        {
+            "project_source": {
+                "remote": "https://example.com/project.git",
+                "branch": "native",
+            }
+        },
     )
     with patch.object(native, "ROOT", source):
         with pytest.raises(RuntimeError, match="unexpected recorded project source"):
             native.project_source()
 
 
-def test_legacy_single_branch_cache_fetches_native_source_from_real_git_repository(tmp_path):
+def test_legacy_single_branch_cache_fetches_native_source_from_real_git_repository(
+    tmp_path,
+):
     repository = tmp_path / "upstream"
     repository.mkdir()
 
@@ -315,7 +330,11 @@ def test_legacy_single_branch_cache_fetches_native_source_from_real_git_reposito
     remote = str(repository)
     native.write_json(
         project / ".git/wez-vtabs-native.json",
-        {"path": str(project.resolve()), "remote": remote, "capability": native.CAPABILITY},
+        {
+            "path": str(project.resolve()),
+            "remote": remote,
+            "capability": native.CAPABILITY,
+        },
     )
     with patch.object(native, "PROJECT_URL", remote):
         assert native.refresh_project(cache) == project
@@ -336,11 +355,17 @@ def test_source_digest_ignores_build_outputs_and_tracks_source(tmp_path):
     assert native.source_digest(root) != before
 
 
-def test_source_bundle_preserves_test_dependencies_and_fixtures_without_runtime_outputs(tmp_path):
+def test_source_bundle_preserves_test_dependencies_and_fixtures_without_runtime_outputs(
+    tmp_path,
+):
     root = tmp_path / "project"
     sources = {
         "pyproject.toml": '[project]\nname = "test-suite"\n',
         "uv.lock": "version = 1\n",
+        "ruff.toml": 'line-length = 100\n[format]\nquote-style = "double"\n',
+        "rustfmt.toml": "max_width = 100\n",
+        "stylua.toml": "column_width = 100\n",
+        ".editorconfig": "root = true\n[*]\nend_of_line = lf\n",
         "tests/conftest.py": "import pytest\n",
         "tests/containers/sshd/Containerfile": "FROM test-image\n",
         "tests/lua/configuration.lua": "return {}\n",
@@ -380,7 +405,11 @@ def test_packaging_existing_bundle_recreates_archive_after_interrupted_publicati
     tmp_path, bundle
 ):
     bundle = bundle("wez-vtabs-native-first")
-    metadata = {"id": "first", "capability": 1, "source_digest": native.source_digest(native.ROOT)}
+    metadata = {
+        "id": "first",
+        "capability": 1,
+        "source_digest": native.source_digest(native.ROOT),
+    }
     native.write_json(bundle / "build.json", metadata)
     suffix = ".zip" if os.name == "nt" or native.sys.platform == "darwin" else ".tar.gz"
     archive = bundle.with_name(bundle.name + suffix)
@@ -400,7 +429,11 @@ def test_packaging_existing_bundle_recreates_archive_after_interrupted_publicati
 
 def test_shell_assets_follow_upstream_platform_locations(tmp_path, bundle):
     source = tmp_path / "upstream"
-    for name in ("shell-integration/wezterm.sh", "shell-completion/bash", "shell-completion/zsh"):
+    for name in (
+        "shell-integration/wezterm.sh",
+        "shell-completion/bash",
+        "shell-completion/zsh",
+    ):
         path = source / "assets" / name
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(name, encoding="utf-8")
@@ -414,7 +447,13 @@ def test_shell_assets_follow_upstream_platform_locations(tmp_path, bundle):
                 "share/zsh/site-functions/_wezterm",
             ),
         ),
-        ("win32", ("resources/shell-integration/wezterm.sh", "resources/shell-completion/bash")),
+        (
+            "win32",
+            (
+                "resources/shell-integration/wezterm.sh",
+                "resources/shell-completion/bash",
+            ),
+        ),
     ):
         bundle = tmp_path / system
         resources = bundle / "resources"

@@ -14,7 +14,11 @@ PROFILE = {"kind": "profile", "profile": "test"}
 
 
 def key(entity: str, field: str = "name", scope: dict | None = None) -> dict:
-    return {"scope": PROFILE if scope is None else scope, "entity": entity, "field": field}
+    return {
+        "scope": PROFILE if scope is None else scope,
+        "entity": entity,
+        "field": field,
+    }
 
 
 def put(item: dict, value, revision: int = 0) -> dict:
@@ -115,7 +119,10 @@ async def test_null_preference_and_deleted_preference_remain_distinct(request_st
     ("payload", "error_code"),
     [
         ("{", "invalid_request"),
-        (json.dumps({"version": 99, "request_id": 1, "operations": []}), "invalid_request"),
+        (
+            json.dumps({"version": 99, "request_id": 1, "operations": []}),
+            "invalid_request",
+        ),
         (" " * (1024 * 1024 + 1), "limit"),
     ],
     ids=["malformed-json", "unsupported-protocol", "oversized-request"],

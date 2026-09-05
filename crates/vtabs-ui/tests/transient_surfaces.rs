@@ -1,6 +1,6 @@
 use std::time::Duration;
-use vtabs_core::{Model, RailMode, Side, Tab};
-use vtabs_ui::{ElementId, Key, Modifiers, MouseButton, Rect, SidebarUi, UiInput};
+use vtabs_core::{Intent, Model, RailMode, Side, Tab};
+use vtabs_ui::{ElementId, Key, Modifiers, MouseButton, Rect, SidebarUi, UiInput, UiIntent};
 
 fn model() -> Model {
     let mut model = Model::default();
@@ -187,4 +187,90 @@ fn tooltip_centers_in_window_without_stealing_keyboard_or_pointer_targets() {
     ui.event(&model, UiInput::PointerMove { x: 99, y: 31 });
     assert!(!ui.overlay_surface());
     assert!(!ui.has_focus());
+}
+
+#[test]
+fn submitted_folder_dialog_keeps_rail_targets_stable_until_viewport_contracts() {
+    let area = Rect::new(3, 5, 100, 32);
+    for side in [Side::Left, Side::Right] {
+        let mut model = model();
+        model.settings.side = side;
+        let mut ui = SidebarUi::new();
+        ui.set_layout(28, 0);
+        ui.open_create_folder();
+        ui.render(&model, area, Duration::ZERO);
+        ui.event(&model, UiInput::Text("Project".into()));
+        for intent in ui.event(&model, UiInput::key(Key::Enter)) {
+            if let UiIntent::Domain(intent) = intent {
+                model.dispatch(intent).unwrap();
+            }
+        }
+        assert!(ui.overlay_surface());
+        ui.render(&model, area, Duration::from_millis(1));
+        assert!(!ui.overlay_surface());
+
+        let sidebar = Rect::new(
+            if side == Side::Right {
+                area.right() - 28
+            } else {
+                area.x
+            },
+            area.y,
+            28,
+            area.height,
+        );
+        assert!(
+            ui.hit_regions()
+                .iter()
+                .all(|hit| hit.rect.intersection(sidebar) == hit.rect)
+        );
+        let tab = ui
+            .hit_regions()
+            .iter()
+            .find(|hit| hit.id == ElementId::Tab(7))
+            .unwrap()
+            .rect;
+        let folder_id = model.folders[0].id.clone();
+        let folder = ui
+            .hit_regions()
+            .iter()
+            .find(|hit| hit.id == ElementId::Folder(folder_id.clone()))
+            .unwrap()
+            .rect;
+        ui.event(
+            &model,
+            UiInput::PointerDown {
+                x: tab.x + tab.width / 2,
+                y: tab.y + tab.height / 2,
+                button: MouseButton::Left,
+                modifiers: Modifiers::default(),
+            },
+        );
+        ui.render(&model, sidebar, Duration::from_millis(2));
+        assert!(
+            ui.hit_regions().iter().any(|hit| {
+                hit.id == ElementId::Folder(folder_id.clone()) && hit.rect == folder
+            })
+        );
+        ui.event(
+            &model,
+            UiInput::PointerMove {
+                x: folder.x + folder.width / 2,
+                y: folder.y + folder.height / 2,
+            },
+        );
+        let intents = ui.event(
+            &model,
+            UiInput::PointerUp {
+                x: folder.x + folder.width / 2,
+                y: folder.y + folder.height / 2,
+                button: MouseButton::Left,
+            },
+        );
+        assert!(matches!(
+            intents.as_slice(),
+            [UiIntent::Domain(Intent::AssignFolder { tab_id: 7, folder_id: Some(id) })]
+                if id == &folder_id
+        ));
+    }
 }

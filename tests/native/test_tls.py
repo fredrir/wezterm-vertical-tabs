@@ -88,7 +88,9 @@ async def test_connection_rejects_the_wrong_server_hostname(certificates: Path, 
         await asyncio.to_thread(connect, certificates, client_context(certificates), hostname)
 
 
-async def test_peer_reset_does_not_mask_client_certificate_verification(certificates: Path):
+async def test_peer_reset_does_not_mask_client_certificate_verification(
+    certificates: Path,
+):
     wrap_socket = ssl.SSLContext.wrap_socket
 
     def wrap(context, *args, **kwargs):
@@ -125,7 +127,9 @@ def test_private_keys_are_owner_only(certificates: Path):
         assert key.stat().st_mode & 0o777 == 0o600
 
 
-def test_certificate_creation_refuses_to_overwrite_an_existing_identity(certificates: Path):
+def test_certificate_creation_refuses_to_overwrite_an_existing_identity(
+    certificates: Path,
+):
     certificate = (certificates / "ca.pem").read_bytes()
     with pytest.raises(FileExistsError):
         tls_fixture.generate_certificates(certificates, "fixture-user")

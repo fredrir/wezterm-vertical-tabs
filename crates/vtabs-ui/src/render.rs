@@ -124,7 +124,9 @@ impl SidebarUi {
             .render(area, &mut self.staging);
         if area.width > 0 && area.height > 0 {
             let width = self.sidebar_columns.unwrap_or(area.width).min(area.width);
-            let sidebar = if (self.settings_page || self.overlay_surface()) && area.width > width {
+            // A successful form can close during this render before the host contracts
+            // its viewport. Keep rail targets within the configured width in that frame.
+            let sidebar = if area.width > width {
                 Rect::new(
                     if model.settings.side == vtabs_core::Side::Right {
                         area.right() - width

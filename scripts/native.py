@@ -37,6 +37,10 @@ SOURCE_ITEMS = (
     "Cargo.lock",
     "pyproject.toml",
     "uv.lock",
+    "ruff.toml",
+    "rustfmt.toml",
+    "stylua.toml",
+    ".editorconfig",
     "README.md",
     "justfile",
     "crates",
@@ -49,7 +53,10 @@ SOURCE_ITEMS = (
 
 
 def run(
-    *args: object, cwd: Path | None = None, capture: bool = False, env: dict[str, str] | None = None
+    *args: object,
+    cwd: Path | None = None,
+    capture: bool = False,
+    env: dict[str, str] | None = None,
 ) -> str:
     command = [str(arg) for arg in args]
     if not capture:
@@ -233,7 +240,11 @@ def refresh_project(cache: Path, branch: str = PROJECT_BRANCH) -> Path:
     branch = project_branch(branch)
     project = cache / "project"
     ownership = project / ".git" / "wez-vtabs-native.json"
-    identity = {"path": str(project.resolve()), "remote": PROJECT_URL, "capability": CAPABILITY}
+    identity = {
+        "path": str(project.resolve()),
+        "remote": PROJECT_URL,
+        "capability": CAPABILITY,
+    }
     if not project.exists():
         run(
             "git",
@@ -254,7 +265,14 @@ def refresh_project(cache: Path, branch: str = PROJECT_BRANCH) -> Path:
     if origin.rstrip("/").removesuffix(".git") != PROJECT_URL.removesuffix(".git"):
         raise RuntimeError("unexpected project cache remote")
     remote_ref = f"refs/remotes/origin/{branch}"
-    run("git", "fetch", "--prune", "origin", f"+refs/heads/{branch}:{remote_ref}", cwd=project)
+    run(
+        "git",
+        "fetch",
+        "--prune",
+        "origin",
+        f"+refs/heads/{branch}:{remote_ref}",
+        cwd=project,
+    )
     run("git", "reset", "--hard", remote_ref, cwd=project)
     run("git", "clean", "-ffd", cwd=project)
     if not all(
@@ -331,7 +349,16 @@ def prepare(cache: Path, upstream: Path, revision: str) -> Path:
         run("git", "worktree", "remove", "--force", "--force", worktree, cwd=upstream)
     run("git", "worktree", "prune", cwd=upstream)
     run("git", "worktree", "add", "--detach", worktree, revision, cwd=upstream)
-    run("git", "submodule", "update", "--init", "--recursive", "--depth", "1", cwd=worktree)
+    run(
+        "git",
+        "submodule",
+        "update",
+        "--init",
+        "--recursive",
+        "--depth",
+        "1",
+        cwd=worktree,
+    )
     patches = sorted((ROOT / "native" / "patches").glob("*.patch"))
     if not patches:
         raise RuntimeError("native patches missing")
@@ -409,7 +436,17 @@ def build(cache: Path, debug: bool = False) -> dict:
     if os.name == "nt":
         copy_windows_runtime(worktree, (binaries, binaries / "deps"))
     run("cargo", "test", *flags, "-p", "wezterm-gui", "native_", cwd=worktree, env=env)
-    run("cargo", "test", *flags, "-p", "wezterm-client", "native_", "--lib", cwd=worktree, env=env)
+    run(
+        "cargo",
+        "test",
+        *flags,
+        "-p",
+        "wezterm-client",
+        "native_",
+        "--lib",
+        cwd=worktree,
+        env=env,
+    )
     run(
         "cargo",
         "test",
@@ -492,7 +529,8 @@ def package(cache: Path, metadata: dict, output: Path) -> Path:
             shutil.copytree(source / "assets" / "icon", resources / "icons")
             shutil.copy2(source / "assets" / "wezterm.desktop", resources / "wezterm.desktop")
             shutil.copy2(
-                source / "assets" / "wezterm.appdata.xml", resources / "wezterm.appdata.xml"
+                source / "assets" / "wezterm.appdata.xml",
+                resources / "wezterm.appdata.xml",
             )
         shutil.copytree(ROOT / "plugin", resources / "plugin")
         copy_source(staging / "source")
@@ -784,7 +822,11 @@ def update(cache: Path, root: Path, daily: bool, stage_only: bool, output: Path)
         except BaseException as error:
             write_json(
                 root / "update.json",
-                {"last_attempt": int(time.time()), "status": "failed", "error": str(error)},
+                {
+                    "last_attempt": int(time.time()),
+                    "status": "failed",
+                    "error": str(error),
+                },
             )
             raise
 
@@ -908,7 +950,10 @@ def main(argv: list[str] | None = None) -> int:
                     install(bundle, root, args.stage_only)
         if args.command == "dev":
             return subprocess.call(
-                [str(gui_path(bundle)), *(gui_args or ["start", "--always-new-process"])],
+                [
+                    str(gui_path(bundle)),
+                    *(gui_args or ["start", "--always-new-process"]),
+                ],
                 env={**os.environ, "WEZ_VTABS_BUNDLE": str(bundle)},
             )
     return 0

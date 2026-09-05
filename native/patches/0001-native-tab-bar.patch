@@ -505,7 +505,24 @@ index d0f0ff97..6f00f347 100644
              show_tab_bar,
              show_scroll_bar: config.enable_scroll_bar,
              tab_bar: TabBarState::default(),
-@@ -944,6 +956,7 @@ impl TermWindow {
+@@ -888,6 +900,16 @@ impl TermWindow {
+             myself.load_os_parameters();
+             window.show();
+             myself.subscribe_to_pane_updates();
++            // Remote tabs can arrive while window creation and graphics setup await.
++            // Catch up after subscribing so no TabAddedToWindow notification is lost.
++            // The provisional connection UI may have supplied a different initial size.
++            if let Some(mux_window) = mux.get_window(mux_window_id) {
++                for tab in mux_window.iter_tabs() {
++                    if tab.get_size() != myself.terminal_size {
++                        tab.resize(myself.terminal_size);
++                    }
++                }
++            }
+             myself.emit_window_event("window-config-reloaded", None);
+             myself.emit_status_event();
+         }
+@@ -944,6 +966,7 @@ impl TermWindow {
              }
              WindowEvent::FocusChanged(focused) => {
                  self.focus_changed(focused, window);

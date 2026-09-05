@@ -4,15 +4,13 @@ on:
     branches: [main, native]
   pull_request:
   schedule:
-    - cron: '23 5 * * *'
+    - cron: "23 5 * * *"
   workflow_dispatch:
-
 permissions:
   contents: read
 concurrency:
   group: native-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
-
 jobs:
   native:
     strategy:
@@ -21,8 +19,8 @@ jobs:
         os: [macos-latest, ubuntu-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     env:
-      CARGO_INCREMENTAL: '0'
-      SCCACHE_GHA_ENABLED: 'true'
+      CARGO_INCREMENTAL: "0"
+      SCCACHE_GHA_ENABLED: "true"
       RUSTC_WRAPPER: sccache
     steps:
       - uses: actions/checkout@v7
@@ -30,8 +28,8 @@ jobs:
           persist-credentials: false
       - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
         with:
-          version: '0.11.16'
-          python-version: '3.12'
+          version: "0.11.16"
+          python-version: "3.12"
           enable-cache: true
       - name: Configure native cache
         shell: python
@@ -100,9 +98,20 @@ jobs:
         if: steps.completed.outputs.cache-hit != 'true' && runner.os == 'Linux'
         shell: bash
         run: >-
-          uv run --locked pytest -n 2 tests/integration
-          --run-native --run-container --run-luals
-          --native-bin-dir "$WEZ_VTABS_CACHE/upstream/target/release"
+          uv run --locked pytest -n 2 tests/integration --run-native --run-container --run-luals --native-bin-dir="$WEZ_VTABS_CACHE/upstream/target/release" --basetemp="$RUNNER_TEMP/vtabs-tests"
+      - name: Native test diagnostics
+        uses: actions/upload-artifact@v7
+        if: always() && runner.os == 'Linux' && steps.completed.outputs.cache-hit != 'true'
+        with:
+          name: native-test-diagnostics
+          path: |
+            ${{ runner.temp }}/vtabs-tests/**/*.log
+            ${{ runner.temp }}/vtabs-tests/**/report.json
+            ${{ runner.temp }}/vtabs-tests/**/result.json
+            ${{ runner.temp }}/vtabs-tests/**/samples.jsonl
+            ${{ runner.temp }}/vtabs-tests/**/*.png
+          if-no-files-found: ignore
+          retention-days: 7
       - uses: actions/upload-artifact@v7
         if: steps.completed.outputs.cache-hit != 'true'
         with:

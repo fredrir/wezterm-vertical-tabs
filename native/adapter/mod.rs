@@ -802,10 +802,22 @@ impl Provider for Adapter {
                 .ceil()
                 .clamp(0., u16::MAX as f32) as u16,
         );
-        if let Err(err) = self.app.resize(self.metrics(geometry)) {
+        let metrics = self.metrics(geometry);
+        if let Err(err) = self.app.resize(metrics) {
             log::error!("native tabs geometry: {err}");
         }
-        if let Some(frame) = self.app.render(now.saturating_duration_since(self.epoch)) {
+        let elapsed = now.saturating_duration_since(self.epoch);
+        let mut frame = self.app.render(elapsed);
+        // A successful form can dismiss itself while rendering the updated model.
+        // Publish cells and hit regions only after their viewport matches that state.
+        let settled_metrics = self.metrics(geometry);
+        if settled_metrics != metrics {
+            if let Err(err) = self.app.resize(settled_metrics) {
+                log::error!("native tabs geometry: {err}");
+            }
+            frame = self.app.render(elapsed);
+        }
+        if let Some(frame) = frame {
             cells::update(&mut self.surface, self.app.buffer(), &frame, geometry);
             let grid_offset = geometry.grid_offset(
                 self.content_page() || self.overlay_surface(),
@@ -1004,6 +1016,60 @@ fn mouse_button(button: MousePress) -> ui::MouseButton {
 #[cfg(test)]
 mod native_modal_tests {
     use super::*;
+
+    #[test]
+    fn native_form_completion_publishes_settled_grid_and_pointer_origin() {
+        config::designate_this_as_the_main_thread();
+        for right in [false, true] {
+            let mut adapter = Adapter::new(1);
+            adapter
+                .app
+                .config(serde_json::json!({"settings":{
+                    "animations":false,"side":if right {"right"} else {"left"}
+                }}))
+                .unwrap();
+            let geometry = Geometry {
+                sidebar: Bounds {
+                    x: if right { 1140. } else { 0. },
+                    y: 0.,
+                    width: 256.,
+                    height: 920.,
+                },
+                content: Bounds {
+                    x: if right { 0. } else { 256. },
+                    y: 0.,
+                    width: 1140.,
+                    height: 920.,
+                },
+                cell_width: 10.,
+                cell_height: 22.,
+                dpi: 96.,
+                ..Geometry::default()
+            };
+            adapter.render(geometry, Instant::now());
+            adapter.app.open_create_space();
+            adapter.render(geometry, Instant::now());
+            assert_eq!(adapter.surface.columns, 139);
+            adapter.ui_input(ui::UiInput::Text("Complete".into()));
+            adapter.ui_input(ui::UiInput::Key {
+                key: ui::Key::Enter,
+                modifiers: ui::Modifiers::default(),
+            });
+            assert!(adapter.overlay_surface());
+            adapter.render(geometry, Instant::now());
+            assert!(!adapter.overlay_surface());
+            assert_eq!(adapter.surface.columns, 25);
+            assert_eq!(adapter.app.buffer().area.width, 25);
+            assert_eq!(adapter.surface.offset, (0., 0.));
+            assert_eq!(adapter.inspect()["grid"]["x"], geometry.sidebar.x);
+            assert!(adapter
+                .app
+                .ui()
+                .hit_regions()
+                .iter()
+                .all(|hit| hit.rect.right() <= 25));
+        }
+    }
 
     #[test]
     fn hidden_and_collapsed_native_modals_use_window_bounds_without_resizing_the_rail() {

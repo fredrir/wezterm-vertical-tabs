@@ -14,13 +14,19 @@ def pytest_addoption(parser: pytest.Parser) -> None:
     group = parser.getgroup("native behavior tests")
     group.addoption("--run-container", action="store_true", help="Run isolated container scenarios")
     group.addoption(
-        "--run-native", action="store_true", help="Run prebuilt native integration scenarios"
+        "--run-native",
+        action="store_true",
+        help="Run prebuilt native integration scenarios",
     )
     group.addoption(
-        "--run-luals", action="store_true", help="Run Lua language-server contract checks"
+        "--run-luals",
+        action="store_true",
+        help="Run Lua language-server contract checks",
     )
     group.addoption(
-        "--rust-bin-dir", type=Path, help="Use production Rust binaries from this directory"
+        "--rust-bin-dir",
+        type=Path,
+        help="Use production Rust binaries from this directory",
     )
     group.addoption(
         "--native-bin-dir",
@@ -88,7 +94,9 @@ def isolate_application_environment(
 
 @pytest.fixture(scope="session")
 def rust_binaries(
-    pytestconfig: pytest.Config, tmp_path_factory: pytest.TempPathFactory, worker_id: str
+    pytestconfig: pytest.Config,
+    tmp_path_factory: pytest.TempPathFactory,
+    worker_id: str,
 ) -> dict[str, Path]:
     names = ("gen-schema", "wez-vtabs-store")
     binary_dir = pytestconfig.getoption("--rust-bin-dir")

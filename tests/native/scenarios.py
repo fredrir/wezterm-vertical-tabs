@@ -95,6 +95,7 @@ local function execute(window,pane,command)
     elseif value.name=='fullscreen' then action=wezterm.action.ToggleFullScreen
     elseif value.name=='zoom' then action=wezterm.action.TogglePaneZoomState
     elseif value.name=='close' then action=wezterm.action.CloseCurrentTab({confirm=false})
+    elseif value.name=='quit' then action=wezterm.action.QuitApplication
     else error('unknown native action') end
     window:perform_action(action,pane)
   elseif command.kind=='intent' then wezterm.native_tabs.dispatch(window,command.value)
@@ -265,7 +266,12 @@ class Probe:
         self.display.assert_live()
         process_env = dict(env or self.env)
         process_env.update({"DISPLAY": self.display.env["DISPLAY"], "GDK_BACKEND": "x11"})
-        for key in ("WAYLAND_DISPLAY", "XAUTHORITY", "DBUS_SESSION_BUS_ADDRESS", "SSH_AUTH_SOCK"):
+        for key in (
+            "WAYLAND_DISPLAY",
+            "XAUTHORITY",
+            "DBUS_SESSION_BUS_ADDRESS",
+            "SSH_AUTH_SOCK",
+        ):
             process_env.pop(key, None)
         output = (self.root / log).open("wb")
         self.outputs.append(output)
@@ -476,7 +482,10 @@ def geometry_scenarios(probe):
     dimensions = two["dimensions"]
     deltas = [0, 60, 120, 200, 300, 240, 140, 40, -80, -160, -80, 0]
     sizes = [
-        {"width": dimensions["pixel_width"] + delta, "height": dimensions["pixel_height"]}
+        {
+            "width": dimensions["pixel_width"] + delta,
+            "height": dimensions["pixel_height"],
+        }
         for delta in deltas
     ] * probe.resize_rounds
     start = len(probe.samples)
@@ -806,7 +815,11 @@ def edge_scenarios(probe):
     if probe.env["WEZ_VTABS_SCENARIO_CHROME"] == "1":
         assert right["sidebar"]["y"] > 0, "integrated chrome not reserved"
         assert right["sidebar"]["y"] == right["content"]["y"], "content and sidebar do not align"
-    for rail, expected in (("collapsed", "rail_width"), ("hidden", None), ("expanded", "width")):
+    for rail, expected in (
+        ("collapsed", "rail_width"),
+        ("hidden", None),
+        ("expanded", "width"),
+    ):
         command = probe.intent({"SetSetting": {"key": "rail", "value": rail}})
         state = probe.wait(
             lambda state, command=command, rail=rail: (
@@ -846,7 +859,8 @@ def edge_scenarios(probe):
         )
     )
     command = probe.send(
-        "resize", {"width": initial_size["pixel_width"], "height": initial_size["pixel_height"]}
+        "resize",
+        {"width": initial_size["pixel_width"], "height": initial_size["pixel_height"]},
     )
     restored = probe.wait(
         lambda state: (
@@ -893,7 +907,8 @@ def stock_tiny_scenario(probe, native_edges):
         )
     )
     command = probe.send(
-        "resize", {"width": dimensions["pixel_width"], "height": dimensions["pixel_height"]}
+        "resize",
+        {"width": dimensions["pixel_width"], "height": dimensions["pixel_height"]},
     )
     restored = probe.wait(
         lambda state: (
@@ -917,10 +932,14 @@ def main():
     parser.add_argument("--baseline-gui", type=Path)
     parser.add_argument("--geometry-only", action="store_true")
     parser.add_argument(
-        "--workspace", action="store_true", help="also check suspended native workspace state"
+        "--workspace",
+        action="store_true",
+        help="also check suspended native workspace state",
     )
     parser.add_argument(
-        "--chrome", action="store_true", help="use integrated title controls and nonzero padding"
+        "--chrome",
+        action="store_true",
+        help="use integrated title controls and nonzero padding",
     )
     parser.add_argument(
         "--edge-cases",
@@ -931,7 +950,9 @@ def main():
         "--trace-mux", action="store_true", help="record client/server resize traces"
     )
     parser.add_argument(
-        "--hooks", action="store_true", help="enable all Lua hooks and process routing metadata"
+        "--hooks",
+        action="store_true",
+        help="enable all Lua hooks and process routing metadata",
     )
     parser.add_argument(
         "--effects", action="store_true", help="retain default TachyonFX transitions"
@@ -943,14 +964,20 @@ def main():
         help="repeat the dense resize/reversal sequence in one window",
     )
     parser.add_argument(
-        "--capture", action="store_true", help="capture this runner's private X11 window"
+        "--capture",
+        action="store_true",
+        help="capture this runner's private X11 window",
     )
     parser.add_argument("--domain", choices=("local", "unix", "ssh", "tls"), default="local")
     parser.add_argument(
-        "--ssh-config", type=Path, help="SshDomain JSON for a disposable SSH-mux fixture"
+        "--ssh-config",
+        type=Path,
+        help="SshDomain JSON for a disposable SSH-mux fixture",
     )
     parser.add_argument(
-        "--tls-config", type=Path, help="TlsDomainClient JSON for a disposable TLS-mux fixture"
+        "--tls-config",
+        type=Path,
+        help="TlsDomainClient JSON for a disposable TLS-mux fixture",
     )
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()

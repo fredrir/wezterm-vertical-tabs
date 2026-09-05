@@ -1,17 +1,17 @@
 [project]
-name = "wezterm-vertical-tabs-tests"
-version = "0.1.0"
+name            = "wezterm-vertical-tabs-tests"
+version         = "0.1.0"
 requires-python = ">=3.12"
-dependencies = []
+dependencies    = []
 
 [dependency-groups]
 dev = [
-    "filelock>=3.32.5,<4",
-    "pytest>=9.1.1,<10",
-    "pytest-asyncio>=1.4.0,<2",
-    "pytest-xdist>=3.8.0,<4",
-    "ruff>=0.16.6,<0.17",
-    "tui-test==0.1.0b3",
+  "filelock>=3.32.5,<4",
+  "pytest>=9.1.1,<10",
+  "pytest-asyncio>=1.4.0,<2",
+  "pytest-xdist>=3.8.0,<4",
+  "ruff>=0.16.6,<0.17",
+  "tui-test==0.1.0b3",
 ]
 
 [tool.uv]
@@ -26,21 +26,10 @@ asyncio_default_fixture_loop_scope = "function"
 asyncio_default_test_loop_scope = "function"
 filterwarnings = ["error"]
 markers = [
-    "rust: behavior exercised through a production Rust process",
-    "pty: terminal behavior exercised through an isolated PTY",
-    "lua: behavior exercised through the public Lua plugin interface",
-    "luals: Lua language-server contract validation requiring --run-luals",
-    "container: isolated container integration requiring --run-container",
-    "native: prebuilt native integration requiring --run-native",
+  "rust: behavior exercised through a production Rust process",
+  "pty: terminal behavior exercised through an isolated PTY",
+  "lua: behavior exercised through the public Lua plugin interface",
+  "luals: Lua language-server contract validation requiring --run-luals",
+  "container: isolated container integration requiring --run-container",
+  "native: prebuilt native integration requiring --run-native",
 ]
-
-[tool.ruff]
-target-version = "py312"
-line-length = 100
-extend-exclude = ["backend", "dist", "target"]
-
-[tool.ruff.lint]
-select = ["E4", "E7", "E9", "F", "I", "UP", "B", "ASYNC", "PT"]
-
-[tool.ruff.format]
-line-ending = "lf"

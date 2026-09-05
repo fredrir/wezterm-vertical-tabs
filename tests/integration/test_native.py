@@ -1,7 +1,6 @@
 """Production native startup, rendering, and shutdown on owned displays."""
 
 import json
-import time
 from contextlib import ExitStack
 
 import pytest
@@ -32,18 +31,11 @@ def test_native_start_render_and_shutdown(native_binaries, headless_display, tmp
         assert state["model"]["can_reopen"] is False
         probe.intent({"SetSetting": {"key": "width", "value": 300}})
         probe.wait(lambda current: current["model"]["settings"]["width"] == 300)
-        closed = set()
-        deadline = time.monotonic() + 10
-        while probe.gui_process.poll() is None and time.monotonic() < deadline:
-            probe.read()
-            for window in list(probe.latest):
-                if window not in closed:
-                    probe.send("close_window", window=window)
-                    closed.add(window)
-                    probe.sample_for(0.1)
-            time.sleep(0.02)
-        probe.gui_process.wait(timeout=1)
+        probe.action("quit")
+        probe.gui_process.wait(timeout=10)
         assert probe.gui_process.returncode == 0
+        if domain == "unix":
+            assert probe.processes[0].poll() is None, "quitting the GUI stopped the remote mux"
     finally:
         probe.close()
     assert not any(process.poll() is None for process in probe.processes)
@@ -97,3 +89,35 @@ def test_native_mutual_tls_tab_lifecycle(native_binaries, headless_display, tmp_
         probe.wait(lambda state: len(state["tabs"]) == 2 and not state["model"]["can_reopen"])
     assert server.process.poll() is not None
     assert list(server.certificates.glob("*.key")) == []
+
+
+@pytest.mark.native
+def test_unix_attach_and_new_tab_agree_without_a_window_resize(
+    native_binaries, headless_display, tmp_path
+):
+    probe = Probe(
+        tmp_path / "unix",
+        native_binaries["wezterm-gui"],
+        native_binaries["wez-vtabs-store"],
+        "unix",
+        server=native_binaries["wezterm-mux-server"],
+        chrome=True,
+        initial_size={"cols": 100, "rows": 32},
+        display=headless_display,
+    )
+    try:
+        initial = probe.start()
+        dimensions = initial["dimensions"]
+        initial_size = initial["tabs"][0]["size"]
+        probe.action("new_tab")
+        created = probe.wait(lambda state: len(state.get("tabs", [])) == 2)
+        samples = [created, *probe.sample_for(0.25)]
+        for state in samples:
+            if state["window"] != probe.window:
+                continue
+            assert state["dimensions"] == dimensions, "attaching or spawning resized the window"
+            assert all(tab["size"] == initial_size for tab in state["tabs"]), (
+                "remote attachment kept provisional geometry until the next physical resize"
+            )
+    finally:
+        probe.close()

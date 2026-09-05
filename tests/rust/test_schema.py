@@ -23,7 +23,10 @@ async def test_public_schema_describes_every_setting_default(
 
 @pytest.mark.parametrize("format_name", ["lua", "types", "markdown"])
 async def test_generated_files_accept_platform_line_endings_and_reject_content_changes(
-    rust_binaries: dict[str, Path], tmp_path: Path, isolated_env: dict[str, str], format_name: str
+    rust_binaries: dict[str, Path],
+    tmp_path: Path,
+    isolated_env: dict[str, str],
+    format_name: str,
 ):
     binary = rust_binaries["gen-schema"]
     path = tmp_path / f"generated.{format_name}"

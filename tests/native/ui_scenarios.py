@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -68,7 +69,8 @@ class GuiInput:
     @staticmethod
     def hit(state, identifier):
         return next(
-            (hit for hit in state.get("model", {}).get("hits", []) if hit["id"] == identifier), None
+            (hit for hit in state.get("model", {}).get("hits", []) if hit["id"] == identifier),
+            None,
         )
 
     def hit_position(self, identifier):
@@ -109,7 +111,14 @@ class GuiInput:
         self.probe.sample_for(pause)
         path = self.output / f"{name}.png"
         subprocess.run(
-            ["import", "-display", self.display.env["DISPLAY"], "-window", self.window, str(path)],
+            [
+                "import",
+                "-display",
+                self.display.env["DISPLAY"],
+                "-window",
+                self.window,
+                str(path),
+            ],
             env=self.display.env,
             check=True,
             capture_output=True,
@@ -119,6 +128,34 @@ class GuiInput:
         assert path.stat().st_size > 1000, "GUI capture is empty"
         self.captures.append(str(path))
         return path
+
+    def terminal_text_pixels(self, capture):
+        state = self.state()
+        cell = state["model"]["grid"]
+        content = state["content"]
+        x = round(content["x"] + 2 * cell["cell_width"])
+        y = round(content["y"] + cell["cell_height"])
+        width, height = round(18 * cell["cell_width"]), round(cell["cell_height"])
+        command = shutil.which("magick") or shutil.which("convert")
+        if command is None:
+            raise RuntimeError("ImageMagick is required for terminal rendering checks")
+        pixels = subprocess.run(
+            [
+                command,
+                str(capture),
+                "-crop",
+                f"{width}x{height}+{x}+{y}",
+                "-depth",
+                "8",
+                "rgb:-",
+            ],
+            env=self.display.env,
+            check=True,
+            capture_output=True,
+            timeout=10,
+        ).stdout
+        assert len(set(pixels)) > 8, "Terminal fixture text is not visible"
+        return pixels
 
     def start_input_capture(self):
         self.focus_terminal()
@@ -138,7 +175,8 @@ class GuiInput:
         state = self.state()
         content = state["content"]
         self.point(
-            round(content["x"] + content["width"] / 2), round(content["y"] + content["height"] / 2)
+            round(content["x"] + content["width"] / 2),
+            round(content["y"] + content["height"] / 2),
         )
         self.command("click", "1")
 
@@ -224,9 +262,11 @@ def scenarios(probe: Probe, gui: GuiInput):
     gui.click(f"Tab({first})")
     probe.wait(lambda state: state.get("active") == first)
     capture = gui.start_input_capture()
-    gui.capture("sidebar")
+    terminal_pixels = gui.terminal_text_pixels(gui.capture("sidebar"))
     gui.hover("Settings")
-    gui.capture("tooltip", pause=0.9)
+    assert gui.terminal_text_pixels(gui.capture("tooltip", pause=0.9)) == terminal_pixels, (
+        "Tooltip changed uncovered terminal text"
+    )
     before = gui.state()
     geometry, topology = (before["sidebar"], before["content"]), pane_shape(before)
     gui.click("Settings")
@@ -274,7 +314,9 @@ def scenarios(probe: Probe, gui: GuiInput):
     gui.key("Escape")
     probe.wait(lambda state: not state["model"].get("settings_page"))
     shortcut(
-        "ctrl+shift+comma", lambda state: state["model"].get("settings_page") is True, "Settings"
+        "ctrl+shift+comma",
+        lambda state: state["model"].get("settings_page") is True,
+        "Settings",
     )
     gui.key("Escape")
     probe.wait(lambda state: not state["model"].get("settings_page"))
@@ -286,7 +328,9 @@ def scenarios(probe: Probe, gui: GuiInput):
             and gui.hit(state, f'Menu("tab/{first}")') is None
         )
     )
-    gui.capture("search")
+    assert gui.terminal_text_pixels(gui.capture("search")) == terminal_pixels, (
+        "Launcher changed uncovered terminal text"
+    )
     gui.key("ctrl+a")
     gui.key("ctrl+c")
     gui.text("no matching tabs")
@@ -306,15 +350,23 @@ def scenarios(probe: Probe, gui: GuiInput):
     probe.wait(lambda state: state.get("active") == first)
     gui.focus_terminal()
     shortcut(
-        "ctrl+shift+b", lambda state: state["model"]["settings"]["rail"] == "collapsed", "Rail"
+        "ctrl+shift+b",
+        lambda state: state["model"]["settings"]["rail"] == "collapsed",
+        "Rail",
     )
     gui.focus_terminal()
     state = shortcut(
-        "ctrl+shift+b", lambda state: state["model"]["settings"]["rail"] == "expanded", "Rail"
+        "ctrl+shift+b",
+        lambda state: state["model"]["settings"]["rail"] == "expanded",
+        "Rail",
     )
     assert {tab["id"] for tab in state["tabs"]} == set(ids), "Sidebar toggle lost tabs"
     gui.focus_terminal()
-    shortcut("super+comma", lambda state: state["model"].get("settings_page") is True, "Settings")
+    shortcut(
+        "super+comma",
+        lambda state: state["model"].get("settings_page") is True,
+        "Settings",
+    )
     gui.key("Escape")
     probe.wait(lambda state: not state["model"].get("settings_page"))
     probe.sample_for(0.2)

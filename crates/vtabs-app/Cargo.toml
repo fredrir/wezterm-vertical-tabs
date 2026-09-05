@@ -1,11 +1,11 @@
 [package]
-name = "vtabs-app"
+name              = "vtabs-app"
 version.workspace = true
 edition.workspace = true
 
 [dependencies]
-vtabs-core = { path = "../vtabs-core" }
-vtabs-ui = { path = "../vtabs-ui" }
-vtabs-store = { path = "../vtabs-store", default-features = false }
-serde.workspace = true
+vtabs-core           = { path = "../vtabs-core" }
+vtabs-ui             = { path = "../vtabs-ui" }
+vtabs-store          = { path = "../vtabs-store", default-features = false }
+serde.workspace      = true
 serde_json.workspace = true

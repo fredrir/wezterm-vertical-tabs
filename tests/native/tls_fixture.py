@@ -51,7 +51,11 @@ def generate_certificates(root: Path, username: str) -> None:
         str(root / "ca.pem"),
     )
     names = {
-        "server": ("localhost", "serverAuth", "subjectAltName=DNS:localhost,IP:127.0.0.1\n"),
+        "server": (
+            "localhost",
+            "serverAuth",
+            "subjectAltName=DNS:localhost,IP:127.0.0.1\n",
+        ),
         "client": (username, "clientAuth", ""),
     }
     for name, (common_name, usage, alternatives) in names.items():
@@ -251,7 +255,8 @@ def main() -> None:
     try:
         config = fixture.start()
         print(
-            f"TLS-mux authenticated using {fixture.protocol}; fixture: {fixture.root}", flush=True
+            f"TLS-mux authenticated using {fixture.protocol}; fixture: {fixture.root}",
+            flush=True,
         )
         scenario = args.scenario[1:] if args.scenario[:1] == ["--"] else args.scenario
         if scenario:

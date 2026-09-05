@@ -8,7 +8,8 @@ RUN if command -v pacman >/dev/null; then \
         && rm -rf /var/lib/apt/lists/*; \
     fi \
     && useradd --create-home --shell /bin/sh mux \
-    && passwd --delete mux
+    && passwd --delete mux \
+    && rm -f /etc/ssh/ssh_host_*
 COPY entrypoint.sh /usr/local/bin/ssh-mux-fixture
 RUN chmod 755 /usr/local/bin/ssh-mux-fixture
 EXPOSE 2222

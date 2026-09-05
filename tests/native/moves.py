@@ -165,7 +165,9 @@ def main():
     parser.add_argument("--mux-server", type=Path, help="defaults to the GUI's sibling mux server")
     parser.add_argument("--domain", choices=("local", "unix"), default="local")
     parser.add_argument(
-        "--external", action="store_true", help="move through a second Unix mux CLI client"
+        "--external",
+        action="store_true",
+        help="move through a second Unix mux CLI client",
     )
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()

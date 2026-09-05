@@ -7,6 +7,7 @@ import json
 import os
 import platform
 import shutil
+import socket
 import subprocess
 import time
 import uuid
@@ -78,11 +79,18 @@ class ContainerSshMux:
             timeout=10,
         )
         image = self.image()
+        try:
+            return self.start_container(staged, image)
+        except (OSError, subprocess.SubprocessError, RuntimeError, ValueError) as error:
+            raise RuntimeError(
+                f"SSH mux container startup failed: {error}\n{self.diagnostics()}"
+            ) from error
+
+    def start_container(self, staged: Path, image: str) -> Path:
         self.run_attempted = True
         self.command(
             "run",
             "--detach",
-            "--rm",
             "--name",
             self.name,
             "--publish",
@@ -95,15 +103,30 @@ class ContainerSshMux:
         )
         self.started = True
         address = self.command("port", self.name, "2222/tcp").stdout.strip()
-        self.port = int(address.rsplit(":", 1)[1])
+        host, separator, port = address.rpartition(":")
+        if host != "127.0.0.1" or not separator or not port.isdecimal():
+            raise RuntimeError(f"SSH mux container did not publish a loopback port: {address!r}")
+        self.port = int(port)
         deadline = time.monotonic() + 20
         while True:
             ready = self.command("exec", self.name, "test", "-S", "/tmp/mux/mux.sock", check=False)
             if ready.returncode == 0:
-                break
+                try:
+                    with socket.create_connection(
+                        ("127.0.0.1", self.port), timeout=0.5
+                    ) as connection:
+                        with connection.makefile("rb") as stream:
+                            if stream.readline(256).startswith(b"SSH-2.0-"):
+                                break
+                except (ConnectionError, TimeoutError):
+                    pass
+            running = self.command(
+                "inspect", "--format", "{{.State.Running}}", self.name, check=False
+            )
+            if running.returncode or running.stdout.strip() != "true":
+                raise RuntimeError("SSH mux container exited before its socket became ready")
             if time.monotonic() >= deadline:
-                log = self.command("exec", self.name, "cat", "/tmp/mux.log", check=False)
-                raise RuntimeError("container mux failed to start: " + log.stdout + log.stderr)
+                raise RuntimeError("SSH mux socket did not become ready within 20 seconds")
             time.sleep(0.1)
         host_key = self.command(
             "exec", self.name, "cat", "/etc/ssh/ssh_host_ed25519_key.pub"
@@ -160,7 +183,13 @@ class ContainerSshMux:
         image = "localhost/wez-vtabs-ssh:" + digest
         if self.command("image", "inspect", image, check=False).returncode:
             result = self.command(
-                "build", "--build-arg", f"BASE_IMAGE={base}", "--tag", image, context, timeout=300
+                "build",
+                "--build-arg",
+                f"BASE_IMAGE={base}",
+                "--tag",
+                image,
+                context,
+                timeout=300,
             )
             (self.root / "build.log").write_text(result.stdout + result.stderr, encoding="utf-8")
         return image
@@ -223,20 +252,37 @@ class ContainerSshMux:
         assert result.returncode == 255, result.stderr
         assert "Permission denied" in result.stderr, result.stderr
 
+    def diagnostics(self) -> str:
+        details = []
+        for label, arguments in (
+            ("State", ("inspect", "--format", "{{json .State}}", self.name)),
+            ("Logs", ("logs", self.name)),
+        ):
+            try:
+                result = self.command(*arguments, check=False)
+                details.append(f"{label}:\n{result.stdout}{result.stderr}")
+            except (OSError, subprocess.SubprocessError) as error:
+                details.append(f"{label}: {error}")
+        report = "\n".join(details)
+        (self.root / "container.log").write_text(report, encoding="utf-8")
+        return report
+
     def close(self) -> None:
         try:
             if self.run_attempted:
                 try:
-                    result = self.command("logs", self.name, check=False)
-                    (self.root / "container.log").write_text(
-                        result.stdout + result.stderr, encoding="utf-8"
-                    )
+                    self.diagnostics()
                 except (OSError, subprocess.SubprocessError):
                     pass
                 finally:
                     self.command("rm", "--force", self.name, check=False)
                 remaining = self.command(
-                    "ps", "--all", "--filter", f"name={self.name}", "--format", "{{.Names}}"
+                    "ps",
+                    "--all",
+                    "--filter",
+                    f"name={self.name}",
+                    "--format",
+                    "{{.Names}}",
                 )
                 if self.name in remaining.stdout.splitlines():
                     raise RuntimeError(f"container cleanup failed: {self.name}")

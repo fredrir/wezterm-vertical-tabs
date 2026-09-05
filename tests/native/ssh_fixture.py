@@ -58,7 +58,16 @@ class LocalSshMux:
         server = self.root / "bin" / self.server.name
         for name in ("host_key", "client_key"):
             subprocess.run(
-                ["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(self.root / name)],
+                [
+                    "ssh-keygen",
+                    "-q",
+                    "-t",
+                    "ed25519",
+                    "-N",
+                    "",
+                    "-f",
+                    str(self.root / name),
+                ],
                 check=True,
             )
         (self.root / "authorized_keys").write_bytes((self.root / "client_key.pub").read_bytes())
@@ -124,7 +133,10 @@ class LocalSshMux:
                     raise RuntimeError("isolated sshd did not begin listening") from error
                 time.sleep(0.05)
         subprocess.run(
-            self.ssh + ["printf VTABS_SSH_OK"], check=True, timeout=10, capture_output=True
+            self.ssh + ["printf VTABS_SSH_OK"],
+            check=True,
+            timeout=10,
+            capture_output=True,
         )
         socket_path = self.root / "mux.sock"
         config = self.root / "mux.lua"
