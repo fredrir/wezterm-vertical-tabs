@@ -1417,7 +1417,7 @@ index 9dfe7d55..184ce2ff 100644
 +            }
 +        }
 +        if frame.radius >= 1. {
-+            for ((x, y), corner) in frame.corners.into_iter().zip([
++            for ((x, y), corner) in frame.corners.iter().copied().zip([
 +                FRAME_TOP_LEFT,
 +                FRAME_TOP_RIGHT,
 +                FRAME_BOTTOM_LEFT,
