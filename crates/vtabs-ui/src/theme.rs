@@ -16,15 +16,15 @@ pub struct Theme {
 impl Default for Theme {
     fn default() -> Self {
         Self {
-            background: Color::Rgb(24, 26, 34),
-            foreground: Color::Rgb(221, 226, 240),
-            muted: Color::Rgb(133, 144, 165),
-            card: Color::Rgb(32, 36, 47),
-            selected: Color::Rgb(53, 64, 88),
-            accent: Color::Rgb(158, 190, 255),
+            background: Color::Rgb(29, 36, 35),
+            foreground: Color::Rgb(226, 232, 228),
+            muted: Color::Rgb(161, 175, 168),
+            card: Color::Rgb(38, 47, 44),
+            selected: Color::Rgb(52, 72, 63),
+            accent: Color::Rgb(167, 197, 181),
             danger: Color::Rgb(250, 122, 134),
             private: Color::Rgb(207, 166, 255),
-            border: Color::Rgb(65, 74, 94),
+            border: Color::Rgb(66, 79, 72),
         }
     }
 }

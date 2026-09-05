@@ -58,6 +58,91 @@ fn word_selection_and_combining_insertion_keep_valid_cursor() {
 }
 
 #[test]
+fn command_arrows_move_and_select_to_line_boundaries() {
+    let mut edit = TextEditor::new("one e\u{301} 界 👨‍👩‍👧‍👦");
+    let command = Modifiers {
+        super_key: true,
+        ..Modifiers::default()
+    };
+    edit.key(&Key::Left, command);
+    assert_eq!(edit.cursor(), 0);
+    assert!(edit.selection().is_none());
+    edit.key(&Key::Right, Modifiers::default());
+    edit.key(
+        &Key::Right,
+        Modifiers {
+            shift: true,
+            ..command
+        },
+    );
+    assert_eq!(edit.selected_text(), "ne e\u{301} 界 👨‍👩‍👧‍👦");
+    edit.key(&Key::Right, command);
+    assert_eq!(edit.cursor(), edit.grapheme_count());
+    assert!(edit.selection().is_none());
+    edit.key(
+        &Key::Left,
+        Modifiers {
+            shift: true,
+            ..command
+        },
+    );
+    assert_eq!(edit.selected_text(), edit.text());
+}
+
+#[test]
+fn command_backspace_deletes_prefix_or_selection_and_preserves_suffix() {
+    let command = Modifiers {
+        super_key: true,
+        ..Modifiers::default()
+    };
+    let mut edit = TextEditor::new("one 界👨‍👩‍👧‍👦");
+    edit.key(&Key::Left, Modifiers::default());
+    edit.key(&Key::Backspace, command);
+    assert_eq!(edit.text(), "👨‍👩‍👧‍👦");
+    assert_eq!(edit.cursor(), 0);
+    edit.key(&Key::Backspace, command);
+    assert_eq!(edit.text(), "👨‍👩‍👧‍👦");
+
+    let mut edit = TextEditor::new("one two");
+    edit.key(
+        &Key::Left,
+        Modifiers {
+            shift: true,
+            alt: true,
+            ..Modifiers::default()
+        },
+    );
+    edit.key(&Key::Backspace, command);
+    assert_eq!(edit.text(), "one ");
+    assert_eq!(edit.cursor(), 4);
+}
+
+#[test]
+fn control_and_option_keep_word_navigation_and_deletion() {
+    for modifier in [
+        Modifiers {
+            control: true,
+            ..Modifiers::default()
+        },
+        Modifiers {
+            alt: true,
+            ..Modifiers::default()
+        },
+    ] {
+        let mut edit = TextEditor::new("one two three");
+        edit.key(&Key::Left, modifier);
+        assert_eq!(edit.cursor(), 8);
+        edit.key(&Key::Left, modifier);
+        assert_eq!(edit.cursor(), 4);
+        edit.key(&Key::Right, modifier);
+        assert_eq!(edit.cursor(), 8);
+        edit.key(&Key::Backspace, modifier);
+        assert_eq!(edit.text(), "one three");
+        assert_eq!(edit.cursor(), 4);
+    }
+}
+
+#[test]
 fn ime_preedit_is_not_committed_until_native_commit_and_escape_cancels_it() {
     let mut edit = TextEditor::new("A");
     edit.set_preedit("かな", Some(3));

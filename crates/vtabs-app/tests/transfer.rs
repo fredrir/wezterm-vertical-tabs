@@ -40,6 +40,21 @@ fn window_transfer_preserves_private_profile_catalog_flags_and_launch() {
         })
         .unwrap();
     source
+        .dispatch(Intent::CreateFolder {
+            name: "Remote tools".into(),
+        })
+        .unwrap();
+    let folder = source.model().folders[0].id.clone();
+    source
+        .dispatch(Intent::AssignFolder {
+            tab_id: 1,
+            folder_id: Some(folder.clone()),
+        })
+        .unwrap();
+    source
+        .dispatch(Intent::ToggleFolder(folder.clone()))
+        .unwrap();
+    source
         .dispatch(Intent::RenameTab {
             id: 1,
             title: "Explicit title".into(),
@@ -68,6 +83,9 @@ fn window_transfer_preserves_private_profile_catalog_flags_and_launch() {
     let tab = &destination.model().tabs[&77];
     assert!(tab.pinned);
     assert!(tab.manual_assignment);
+    assert_eq!(tab.folder_id.as_deref(), Some(folder.as_str()));
+    assert_eq!(destination.model().folders[0].name, "Remote tools");
+    assert!(destination.model().folders[0].collapsed);
     assert_eq!(tab.display_title(), "Explicit title");
     assert_eq!(tab.launch, Some(launch));
     let request = destination
@@ -87,4 +105,42 @@ fn import_refuses_replacing_a_live_windows_application() {
     let transfer = source.export_transfer(1).unwrap();
     assert!(source.import_transfer_before_snapshot(transfer).is_err());
     assert_eq!(source.model().selected_tab, Some(1));
+}
+
+#[test]
+fn old_window_transfer_without_folders_remains_compatible() {
+    let mut source = WindowApp::default();
+    source.update(snapshot(1)).unwrap();
+    let mut value = serde_json::to_value(source.export_transfer(1).unwrap()).unwrap();
+    value.as_object_mut().unwrap().remove("folders");
+    value["tab"].as_object_mut().unwrap().remove("folder_id");
+    let transfer = serde_json::from_value(value).unwrap();
+    let mut destination = WindowApp::default();
+    destination
+        .import_transfer_before_snapshot(transfer)
+        .unwrap();
+    assert!(destination.model().folders.is_empty());
+    assert!(destination.model().tabs[&1].folder_id.is_none());
+}
+
+#[test]
+fn malformed_transferred_folder_catalog_does_not_replace_destination() {
+    let mut source = WindowApp::default();
+    source.update(snapshot(1)).unwrap();
+    source
+        .dispatch(Intent::CreateFolder {
+            name: "Tools".into(),
+        })
+        .unwrap();
+    let mut transfer = source.export_transfer(1).unwrap();
+    transfer.folders[0].space_id = "missing".into();
+    let mut destination = WindowApp::new("other", true);
+    assert!(
+        destination
+            .import_transfer_before_snapshot(transfer)
+            .is_err()
+    );
+    assert_eq!(destination.model().profile, "other");
+    assert!(destination.model().private);
+    assert!(destination.model().tabs.is_empty());
 }

@@ -312,7 +312,9 @@ impl TextEditor {
                 Changed
             }
             Key::Left => {
-                let target = if word {
+                let target = if mods.super_key {
+                    0
+                } else if word {
                     self.word_boundary(true)
                 } else if !mods.shift {
                     self.selection()
@@ -324,7 +326,9 @@ impl TextEditor {
                 Changed
             }
             Key::Right => {
-                let target = if word {
+                let target = if mods.super_key {
+                    self.grapheme_count()
+                } else if word {
                     self.word_boundary(false)
                 } else if !mods.shift {
                     self.selection().map_or(self.cursor + 1, |s| s.end)
@@ -344,7 +348,9 @@ impl TextEditor {
             }
             Key::Backspace => {
                 if !self.delete_selection() && self.cursor > 0 {
-                    let target = if word {
+                    let target = if mods.super_key {
+                        0
+                    } else if word {
                         self.word_boundary(true)
                     } else {
                         self.cursor - 1

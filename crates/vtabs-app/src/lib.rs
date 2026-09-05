@@ -47,6 +47,7 @@ pub struct NativeSnapshot {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Command {
+    Refresh,
     Host(HostCommand),
     SetClipboard(String),
     RequestClipboard,
@@ -97,6 +98,8 @@ pub enum HookResult {
 pub struct SpawnToken {
     pub request_id: u64,
     pub space_id: String,
+    #[serde(default)]
+    pub folder_id: Option<String>,
     selection_epoch: u64,
 }
 
@@ -108,6 +111,8 @@ pub struct WindowTransfer {
     pub profile: String,
     pub private: bool,
     pub spaces: Vec<core::Space>,
+    #[serde(default)]
+    pub folders: Vec<core::Folder>,
     pub templates: Vec<core::SpaceTemplate>,
     pub preferences: BTreeMap<String, Value>,
     pub configuration: BTreeMap<String, Value>,
@@ -202,6 +207,7 @@ impl WindowApp {
             profile: self.model.profile.clone(),
             private: self.model.private,
             spaces: self.model.spaces.clone(),
+            folders: self.model.folders.clone(),
             templates: self.model.templates.clone(),
             preferences: self.model.persisted_settings().clone(),
             configuration: self.model.configured_settings().clone(),
@@ -232,6 +238,7 @@ impl WindowApp {
         candidate
             .model
             .load_catalog(transfer.spaces, transfer.templates)?;
+        candidate.model.load_folders(transfer.folders)?;
         candidate.model.load_preferences(transfer.preferences)?;
         candidate.model.apply_config(transfer.configuration)?;
         candidate.configured_spaces = transfer.configured_spaces;
@@ -404,6 +411,10 @@ impl WindowApp {
         let mut update = Update::default();
         for intent in intents {
             match intent {
+                UiIntent::Refresh => {
+                    self.refresh_storage();
+                    update.commands.push(Command::Refresh);
+                }
                 UiIntent::Domain(intent) => update.merge(self.dispatch(intent)?),
                 UiIntent::SetClipboard(text) => update.commands.push(Command::SetClipboard(text)),
                 UiIntent::RequestClipboard => update.commands.push(Command::RequestClipboard),
@@ -471,6 +482,7 @@ impl WindowApp {
         let token = SpawnToken {
             request_id: self.spawn_sequence,
             space_id: self.model.selected_space.clone(),
+            folder_id: None,
             selection_epoch: self.selection_epoch,
         };
         self.pending_spawns.insert(token.request_id, token.clone());
@@ -485,23 +497,51 @@ impl WindowApp {
         self.pending_spawns.insert(token.request_id, token.clone());
         Ok(token)
     }
+    pub fn reserve_spawn_in_folder(&mut self, folder_id: &str) -> Result<SpawnToken, Error> {
+        let space = self
+            .model
+            .folders
+            .iter()
+            .find(|folder| folder.id == folder_id)
+            .map(|folder| folder.space_id.clone())
+            .ok_or_else(|| Error("Spawn folder no longer exists".into()))?;
+        let mut token = self.reserve_spawn_in(&space)?;
+        token.folder_id = Some(folder_id.into());
+        self.pending_spawns.insert(token.request_id, token.clone());
+        Ok(token)
+    }
     pub fn cancel_spawn(&mut self, token: &SpawnToken) {
-        self.pending_spawns.remove(&token.request_id);
+        if self.pending_spawns.get(&token.request_id) == Some(token) {
+            self.pending_spawns.remove(&token.request_id);
+        }
     }
     pub fn spawn_completed_with_token(
         &mut self,
         tab_id: TabId,
         token: SpawnToken,
     ) -> Result<Update, Error> {
-        if self.pending_spawns.remove(&token.request_id).as_ref() != Some(&token) || self.teardown {
+        if self.pending_spawns.get(&token.request_id) != Some(&token) || self.teardown {
             return Ok(Update::default());
         }
+        self.pending_spawns.remove(&token.request_id);
         let space = if self.model.spaces.iter().any(|s| s.id == token.space_id) {
             token.space_id
         } else {
             self.model.selected_space.clone()
         };
         self.model.assign_spawn_membership(tab_id, &space)?;
+        if let Some(folder_id) = token.folder_id
+            && self
+                .model
+                .folders
+                .iter()
+                .any(|folder| folder.id == folder_id && folder.space_id == space)
+        {
+            self.model.dispatch(Intent::AssignFolder {
+                tab_id,
+                folder_id: Some(folder_id),
+            })?;
+        }
         let mut out = Update {
             model_changed: true,
             projection_changed: true,

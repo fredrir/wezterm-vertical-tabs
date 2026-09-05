@@ -10,15 +10,15 @@
 | `reduced_motion` | `false` | Boolean. Suppress transitions |
 | `animation_ms` | `140` | Integer 0–1000. Transition duration in milliseconds |
 | `cards` | `true` | Boolean. Use cards instead of compact rows |
-| `show_indices` | `true` | Boolean. Visible native tab indices |
-| `show_metadata` | `true` | Boolean. Show current directory and domain |
+| `show_indices` | `false` | Boolean. Visible native tab indices |
+| `show_metadata` | `false` | Boolean. Show current directory and domain |
 | `show_close` | `true` | Boolean. Show close controls |
 | `confirm_close` | `true` | Boolean. Confirm destructive UI close actions |
-| `accent` | `"#89b4fa"` | Hex color `#RRGGBB`. Default accent color |
-| `background` | `"#181825"` | Hex color `#RRGGBB`. Surface background |
-| `foreground` | `"#cdd6f4"` | Hex color `#RRGGBB`. Text foreground |
-| `muted` | `"#7f849c"` | Hex color `#RRGGBB`. Secondary text foreground |
-| `selected_background` | `"#313244"` | Hex color `#RRGGBB`. Selected card background |
+| `accent` | `"#a7c5b5"` | Hex color `#RRGGBB`. Default accent color |
+| `background` | `"#1d2423"` | Hex color `#RRGGBB`. Surface background |
+| `foreground` | `"#e2e8e4"` | Hex color `#RRGGBB`. Text foreground |
+| `muted` | `"#a1afa8"` | Hex color `#RRGGBB`. Secondary text foreground |
+| `selected_background` | `"#34483f"` | Hex color `#RRGGBB`. Selected card background |
 | `private_accent` | `"#cba6f7"` | Hex color `#RRGGBB`. Private window accent |
 | `reopen_limit` | `20` | Integer 0–100. Maximum in-memory launch intents |
 | `default_domain` | `null` | String or null. Spawn domain used in an empty space; null retains the host default |

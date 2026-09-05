@@ -6,7 +6,8 @@ mod storage;
 mod update;
 
 use crate::termwindow::native_ui::{
-    Command, Geometry, Input, Navigation, Projection, Provider, Reservation, Snapshot, Surface,
+    Bounds, Command, Geometry, Input, Navigation, Projection, Provider, Reservation,
+    RoundedSurface, Snapshot, Surface,
 };
 use std::{collections::HashMap, time::Instant};
 use vtabs_app::{self as app, core, ui, WindowApp};
@@ -24,6 +25,7 @@ struct Adapter {
     epoch: Instant,
     window: Option<Window>,
     surface: Surface,
+    primitives: Vec<RoundedSurface>,
     commands: Vec<Command>,
     cursor: Option<(usize, usize)>,
     geometry: Geometry,
@@ -32,6 +34,7 @@ struct Adapter {
     config_generation: usize,
     pointer_captured: bool,
     next_spawn_space: Option<String>,
+    next_spawn_folder: Option<String>,
     next_private: bool,
     hook_metadata: HashMap<u64, core::Tab>,
     outstanding: Option<u64>,
@@ -62,6 +65,7 @@ impl Adapter {
                 offset: (0., 0.),
                 opacity: 1.,
             },
+            primitives: Vec::new(),
             commands: Vec::new(),
             cursor: None,
             geometry: Geometry::default(),
@@ -70,6 +74,7 @@ impl Adapter {
             config_generation: usize::MAX,
             pointer_captured: false,
             next_spawn_space: None,
+            next_spawn_folder: None,
             next_private: false,
             hook_metadata: HashMap::new(),
             outstanding: None,
@@ -104,13 +109,22 @@ impl Adapter {
     fn command(&mut self, command: app::Command) {
         use core::HostCommand as C;
         match command {
+            app::Command::Refresh => {
+                std::thread::spawn(config::reload);
+                self.app.ui_mut().invalidate();
+            }
             app::Command::SetClipboard(text) => self.commands.push(Command::Clipboard(text)),
             app::Command::RequestClipboard => self.commands.push(Command::Paste(self.input_epoch)),
             app::Command::Host(command) => match command {
                 C::Activate(id) => self.commands.push(Command::Activate(id as usize)),
                 C::Close(id) => self.commands.push(Command::Close(id as usize, false)),
                 C::Rename { id, title } => self.commands.push(Command::Rename(id as usize, title)),
-                C::Spawn { space_id, launch } => {
+                C::Spawn {
+                    space_id,
+                    launch,
+                    folder_id,
+                } => {
+                    self.next_spawn_folder = folder_id;
                     self.next_spawn_space = Some(space_id);
                     self.commands.push(Command::Spawn(spawn(launch), false));
                 }
@@ -193,15 +207,16 @@ impl Adapter {
         }
     }
     fn metrics(&self, geometry: Geometry) -> app::Metrics {
+        let bounds = geometry.ui_bounds(self.app.ui().content_page());
         app::Metrics {
-            cols: (geometry.sidebar.width / geometry.cell_width.max(1.))
+            cols: (bounds.width / geometry.cell_width.max(1.))
                 .floor()
                 .clamp(0., u16::MAX as f32) as u16,
-            rows: (geometry.sidebar.height / geometry.cell_height.max(1.))
+            rows: (bounds.height / geometry.cell_height.max(1.))
                 .floor()
                 .clamp(0., u16::MAX as f32) as u16,
-            pixel_width: geometry.sidebar.width.max(0.) as u32,
-            pixel_height: geometry.sidebar.height.max(0.) as u32,
+            pixel_width: bounds.width.max(0.) as u32,
+            pixel_height: bounds.height.max(0.) as u32,
             cell_width: geometry.cell_width.max(1.),
             cell_height: geometry.cell_height.max(1.),
             dpi: geometry.dpi.max(1.),
@@ -436,13 +451,10 @@ impl Provider for Adapter {
     fn input(&mut self, input: Input<'_>) -> bool {
         match input {
             Input::Key(key) => {
-                if !self.keyboard_focus() {
-                    return false;
-                }
-                if !key.key_is_down {
-                    return true;
-                }
                 if let KeyCode::Composed(text) = &key.key {
+                    if !self.keyboard_focus() {
+                        return false;
+                    }
                     self.ui_input(ui::UiInput::ImeCommit(text.clone()));
                     return true;
                 }
@@ -463,10 +475,18 @@ impl Provider for Adapter {
                     KeyCode::PageDown => ui::Key::PageDown,
                     KeyCode::Function(2) => ui::Key::F2,
                     KeyCode::Function(10) => ui::Key::F10,
-                    _ => return true,
+                    _ => return self.keyboard_focus(),
                 };
+                let shortcut = ui::is_shortcut(&code, modifiers(key.modifiers));
+                if !self.keyboard_focus() && !shortcut {
+                    return false;
+                }
+                if !key.key_is_down {
+                    return true;
+                }
                 // Navigation bindings are still native when the rail itself has focus.
-                if !self.app.is_modal()
+                if !shortcut
+                    && !self.app.is_modal()
                     && key
                         .modifiers
                         .intersects(window::Modifiers::SUPER | window::Modifiers::CTRL)
@@ -480,9 +500,8 @@ impl Provider for Adapter {
                 true
             }
             Input::Mouse(event, geometry) => {
-                let inside = geometry
-                    .sidebar
-                    .contains(event.coords.x as f32, event.coords.y as f32);
+                let bounds = geometry.ui_bounds(self.content_page());
+                let inside = bounds.contains(event.coords.x as f32, event.coords.y as f32);
                 let modal = self.app.is_modal();
                 if !inside && !modal && !self.pointer_captured {
                     if matches!(event.kind, MouseEventKind::Press(_)) {
@@ -491,10 +510,10 @@ impl Provider for Adapter {
                     }
                     return false;
                 }
-                let x = ((event.coords.x as f32 - geometry.sidebar.x - self.surface.offset.0)
+                let x = ((event.coords.x as f32 - bounds.x - self.surface.offset.0)
                     / geometry.cell_width.max(1.))
                 .floor();
-                let y = ((event.coords.y as f32 - geometry.sidebar.y - self.surface.offset.1)
+                let y = ((event.coords.y as f32 - bounds.y - self.surface.offset.1)
                     / geometry.cell_height.max(1.))
                 .floor();
                 let (x, y) = if inside
@@ -682,14 +701,48 @@ impl Provider for Adapter {
             self.input_epoch = self.input_epoch.wrapping_add(1);
         }
         self.geometry = geometry;
+        self.app.ui_mut().set_layout(
+            (geometry.sidebar.width / geometry.cell_width.max(1.))
+                .floor()
+                .clamp(0., u16::MAX as f32) as u16,
+            (geometry.header_inset / geometry.cell_width.max(1.))
+                .ceil()
+                .clamp(0., u16::MAX as f32) as u16,
+        );
         if let Err(err) = self.app.resize(self.metrics(geometry)) {
             log::error!("native tabs geometry: {err}");
         }
         if let Some(frame) = self.app.render(now.saturating_duration_since(self.epoch)) {
             cells::update(&mut self.surface, self.app.buffer(), &frame, geometry);
             self.cursor = frame.ime_rect.map(|r| (r.x as usize, r.y as usize));
+            self.primitives.clear();
+            self.primitives
+                .extend(
+                    self.app
+                        .ui()
+                        .rounded_surfaces()
+                        .iter()
+                        .map(|shape| RoundedSurface {
+                            bounds: Bounds {
+                                x: shape.rect.x as f32,
+                                y: shape.rect.y as f32,
+                                width: shape.rect.width as f32,
+                                height: shape.rect.height as f32,
+                            },
+                            radius: shape.radius,
+                            fill: linear_color(shape.fill),
+                            border: linear_color(shape.border),
+                            border_width: if shape.fill == shape.border { 0. } else { 1. },
+                        }),
+                );
         }
         self.storage();
+    }
+    fn content_page(&self) -> bool {
+        self.app.ui().content_page()
+    }
+    fn primitives(&self) -> &[RoundedSurface] {
+        &self.primitives
     }
     fn surface(&self) -> &Surface {
         &self.surface
@@ -739,28 +792,33 @@ impl Provider for Adapter {
         let token = if new_window {
             None
         } else {
-            let token = match self.next_spawn_space.take() {
-                Some(space) => self.app.reserve_spawn_in(&space).ok(),
-                None => Some(self.app.reserve_spawn()),
+            let space = self.next_spawn_space.take();
+            let token = match self.next_spawn_folder.take() {
+                Some(folder) => self.app.reserve_spawn_in_folder(&folder).ok(),
+                None => match space {
+                    Some(space) => self.app.reserve_spawn_in(&space).ok(),
+                    None => Some(self.app.reserve_spawn()),
+                },
             };
             token
         };
+        let domain = match &command.domain {
+            config::keyassignment::SpawnTabDomain::DomainName(name) => Some(name.clone()),
+            config::keyassignment::SpawnTabDomain::DefaultDomain => {
+                Some(mux::Mux::get().default_domain().domain_name().to_string())
+            }
+            config::keyassignment::SpawnTabDomain::DomainId(id) => mux::Mux::get()
+                .get_domain(*id)
+                .map(|d| d.domain_name().to_string()),
+            config::keyassignment::SpawnTabDomain::CurrentPaneDomain => self
+                .app
+                .model()
+                .selected_tab
+                .and_then(|id| self.app.model().tabs.get(&id))
+                .map(|tab| tab.domain.clone()),
+        };
         let launch = core::LaunchSpec {
-            domain: match &command.domain {
-                config::keyassignment::SpawnTabDomain::DomainName(name) => Some(name.clone()),
-                config::keyassignment::SpawnTabDomain::DefaultDomain => {
-                    Some(mux::Mux::get().default_domain().domain_name().to_string())
-                }
-                config::keyassignment::SpawnTabDomain::DomainId(id) => mux::Mux::get()
-                    .get_domain(*id)
-                    .map(|d| d.domain_name().to_string()),
-                config::keyassignment::SpawnTabDomain::CurrentPaneDomain => self
-                    .app
-                    .model()
-                    .selected_tab
-                    .and_then(|id| self.app.model().tabs.get(&id))
-                    .map(|tab| tab.domain.clone()),
-            },
+            domain: domain.clone(),
             cwd: command
                 .cwd
                 .as_ref()
@@ -770,6 +828,7 @@ impl Provider for Adapter {
                         .model()
                         .selected_tab
                         .and_then(|id| self.app.model().tabs.get(&id))
+                        .filter(|tab| domain.as_deref() == Some(tab.domain.as_str()))
                         .map(|tab| tab.cwd.clone())
                 }),
             args: command.args.clone().unwrap_or_default(),
@@ -783,7 +842,7 @@ impl Provider for Adapter {
         serde_json::json!({"token":token,"new_window":new_window,"private":private,"launch":launch})
     }
     fn inspect(&self) -> serde_json::Value {
-        serde_json::json!({"spaces":self.app.model().spaces,"selected_space":self.app.model().selected_space,"settings":self.app.model().settings,"surface_revision":self.surface.revision,"private":self.app.model().private,"can_reopen":self.app.model().can_reopen(), "tabs":self.app.model().tabs.values().map(|tab|serde_json::json!({"id":tab.id,"pinned":tab.pinned,"space_id":tab.space_id})).collect::<Vec<_>>()})
+        serde_json::json!({"folders":self.app.model().folders,"settings_page":self.content_page(),"hits":self.app.ui().hit_regions().iter().map(|h|serde_json::json!({"id":format!("{:?}",h.id),"x":h.rect.x,"y":h.rect.y,"width":h.rect.width,"height":h.rect.height})).collect::<Vec<_>>(),"spaces":self.app.model().spaces,"selected_space":self.app.model().selected_space,"settings":self.app.model().settings,"surface_revision":self.surface.revision,"private":self.app.model().private,"can_reopen":self.app.model().can_reopen(), "tabs":self.app.model().tabs.values().map(|tab|serde_json::json!({"id":tab.id,"pinned":tab.pinned,"space_id":tab.space_id,"folder_id":tab.folder_id})).collect::<Vec<_>>()})
     }
     fn keyboard_focus(&self) -> bool {
         self.app.is_modal() || (self.reservation().width > 0. && self.app.ui().focused().is_some())
@@ -889,5 +948,14 @@ mod native_modal_tests {
                 );
             }
         }
+    }
+}
+
+fn linear_color(color: ratatui::style::Color) -> window::color::LinearRgba {
+    match color {
+        ratatui::style::Color::Rgb(r, g, b) => {
+            window::color::SrgbaTuple::from((r, g, b)).to_linear()
+        }
+        _ => window::color::LinearRgba(0., 0., 0., 0.),
     }
 }

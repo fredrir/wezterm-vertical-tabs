@@ -65,6 +65,11 @@ elseif os.getenv('WEZ_VTABS_SCENARIO_DOMAIN') == 'ssh' then
   local domain=wezterm.json_parse(f:read('*a')); f:close()
   domain.name='scenario-ssh'; domain.multiplexing='WezTerm'
   cfg.ssh_domains={domain}
+elseif os.getenv('WEZ_VTABS_SCENARIO_DOMAIN') == 'tls' then
+  local f=assert(io.open(root..'/tls.json','r'))
+  local domain=wezterm.json_parse(f:read('*a')); f:close()
+  domain.name='scenario-tls'
+  cfg.tls_clients={domain}
 end
 local seen, started, sequence, current_step, requested, env_probe = {}, false, 0, 0, nil, false
 local closing = {}
@@ -167,7 +172,7 @@ return cfg
 
 
 class Probe:
-    def __init__(self, root, gui, helper, domain, ssh_config=None, native=True, capture=False, server=None, chrome=False, initial_size=None, trace_mux=False, hooks=False, effects=False, resize_rounds=1):
+    def __init__(self, root, gui, helper, domain, ssh_config=None, native=True, capture=False, server=None, chrome=False, initial_size=None, trace_mux=False, hooks=False, effects=False, resize_rounds=1, tls_config=None):
         self.root, self.gui, self.native = root, gui, native
         self.domain = domain
         self.resize_rounds = resize_rounds
@@ -204,6 +209,8 @@ class Probe:
             self.env["WEZ_VTABS_STORE"] = str(helper)
         if ssh_config:
             (root / "ssh.json").write_text(ssh_config.read_text(encoding="utf-8"), encoding="utf-8")
+        if tls_config:
+            (root / "tls.json").write_text(tls_config.read_text(encoding="utf-8"), encoding="utf-8")
         self.config = root / "wezterm.lua"
         self.config.write_text(CONFIG, encoding="utf-8")
 
@@ -571,18 +578,21 @@ def main():
     parser.add_argument("--effects", action="store_true", help="retain default TachyonFX transitions")
     parser.add_argument("--resize-rounds", type=int, default=1, help="repeat the dense resize/reversal sequence in one window")
     parser.add_argument("--capture", action="store_true", help="capture only this runner's macOS GUI window")
-    parser.add_argument("--domain", choices=("local", "unix", "ssh"), default="local")
+    parser.add_argument("--domain", choices=("local", "unix", "ssh", "tls"), default="local")
     parser.add_argument("--ssh-config", type=Path, help="SshDomain JSON for a disposable SSH-mux fixture")
+    parser.add_argument("--tls-config", type=Path, help="TlsDomainClient JSON for a disposable TLS-mux fixture")
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
     if not 1 <= args.resize_rounds <= 20:
         parser.error("--resize-rounds must be between 1 and 20")
     if args.domain == "ssh" and not args.ssh_config:
         parser.error("--domain ssh requires --ssh-config for a disposable test mux")
+    if args.domain == "tls" and not args.tls_config:
+        parser.error("--domain tls requires --tls-config for a disposable test mux")
     output = (args.output or Path(tempfile.mkdtemp(prefix="vtabs-native-scenarios-"))).resolve()
     output.mkdir(parents=True, exist_ok=True)
     report = {"domain": args.domain, "boundary": "GUI state samples and native actions; OS drag smoothness, GPU presentation and physical key latency require visual/profiling checks"}
-    probe = Probe(output / "native", args.gui.resolve(), args.helper.resolve() if args.helper else None, args.domain, args.ssh_config, capture=args.capture, server=args.mux_server, chrome=args.chrome, trace_mux=args.trace_mux, hooks=args.hooks, effects=args.effects, resize_rounds=args.resize_rounds)
+    probe = Probe(output / "native", args.gui.resolve(), args.helper.resolve() if args.helper else None, args.domain, args.ssh_config, capture=args.capture, server=args.mux_server, chrome=args.chrome, trace_mux=args.trace_mux, hooks=args.hooks, effects=args.effects, resize_rounds=args.resize_rounds, tls_config=args.tls_config)
     try:
         report["geometry"] = geometry_scenarios(probe)
         if args.workspace:
@@ -600,7 +610,7 @@ def main():
         (output / "report.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
         print(output)
     if args.baseline_gui:
-        baseline = Probe(output / "stock", args.baseline_gui.resolve(), None, args.domain, args.ssh_config, native=False, capture=args.capture, server=args.mux_server, chrome=args.chrome, initial_size=report["geometry"]["initial_size"], trace_mux=args.trace_mux, resize_rounds=args.resize_rounds)
+        baseline = Probe(output / "stock", args.baseline_gui.resolve(), None, args.domain, args.ssh_config, native=False, capture=args.capture, server=args.mux_server, chrome=args.chrome, initial_size=report["geometry"]["initial_size"], trace_mux=args.trace_mux, resize_rounds=args.resize_rounds, tls_config=args.tls_config)
         try:
             report["stock_geometry"] = geometry_scenarios(baseline)
             common = set(report["geometry"]["resize_steps"]) & set(report["stock_geometry"]["resize_steps"])

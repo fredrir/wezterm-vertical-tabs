@@ -3,10 +3,14 @@
 mod input;
 mod interaction;
 mod render;
+mod settings_page;
+mod shortcuts;
+mod sidebar;
 mod theme;
 
 pub use input::{EditResult, Key, Modifiers, MouseButton, TextEditor, UiInput};
 pub use ratatui::{buffer::Buffer, layout::Rect};
+pub use shortcuts::is_shortcut;
 pub use theme::Theme;
 
 use ratatui::layout::Position;
@@ -17,6 +21,14 @@ use vtabs_core::{Intent, Model, SpaceId, TabId};
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum ElementId {
     PrivateInfo,
+    Search,
+    Refresh,
+    CreateFolder,
+    Folder(String),
+    SettingsCategory(String),
+    SettingsSearch,
+    CloseSettings,
+    ResetSettings,
     CreateSpace,
     NewTab,
     Settings,
@@ -47,6 +59,7 @@ pub enum NativeUiAction {
 
 #[derive(Clone, Debug)]
 pub enum UiIntent {
+    Refresh,
     Domain(Intent),
     SetClipboard(String),
     RequestClipboard,
@@ -75,6 +88,9 @@ pub struct FrameUpdate {
 enum Action {
     Domain(Intent),
     NewSpace,
+    NewFolder,
+    RenameFolder(String),
+    MoveToFolder(TabId),
     RenameSpace(SpaceId),
     EditSpaceIcon(SpaceId),
     EditSpaceAccent(SpaceId),
@@ -128,6 +144,8 @@ struct MenuSearch {
 
 #[derive(Clone, Debug)]
 enum FormKind {
+    CreateFolder,
+    RenameFolder(String),
     CreateSpace,
     RenameSpace(SpaceId),
     SpaceIcon(SpaceId),
@@ -149,7 +167,6 @@ struct Form {
 enum Overlay {
     Menu(Menu),
     Form(Form),
-    Settings { selected: usize, scroll: usize },
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -170,6 +187,20 @@ pub struct SidebarUi {
     frame_revision: u64,
     dirty: bool,
     pub theme: Theme,
+    rounded_surfaces: Vec<RoundedSurface>,
+    sidebar_columns: Option<u16>,
+    header_inset: u16,
+    settings_page: bool,
+    settings_category: String,
+    settings_query: TextEditor,
+    settings_selected: usize,
+    settings_scroll: usize,
+    settings_search_focused: bool,
+    page_rect: Rect,
+    sidebar_rect: Rect,
+    sidebar_rows: Vec<SidebarRow>,
+    pointer_origin: Option<(u16, u16)>,
+    dragging: bool,
     hits: Vec<HitRegion>,
     focused: Option<ElementId>,
     hovered: Option<ElementId>,
@@ -204,6 +235,21 @@ pub struct SidebarUi {
     reveal_selection: bool,
 }
 
+#[derive(Clone, Debug)]
+pub struct RoundedSurface {
+    pub rect: Rect,
+    pub fill: ratatui::style::Color,
+    pub border: ratatui::style::Color,
+    pub radius: f32,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum SidebarRow {
+    Tab(TabId),
+    Folder(String),
+    NewTab,
+}
+
 pub type Ui = SidebarUi;
 
 impl Default for SidebarUi {
@@ -221,6 +267,20 @@ impl SidebarUi {
             frame_revision: 0,
             dirty: true,
             theme: Theme::default(),
+            rounded_surfaces: Vec::new(),
+            sidebar_columns: None,
+            header_inset: 0,
+            settings_page: false,
+            settings_category: "all".into(),
+            settings_query: TextEditor::default(),
+            settings_selected: 0,
+            settings_scroll: 0,
+            settings_search_focused: false,
+            page_rect: Rect::default(),
+            sidebar_rect: Rect::default(),
+            sidebar_rows: Vec::new(),
+            pointer_origin: None,
+            dragging: false,
             hits: Vec::new(),
             focused: None,
             hovered: None,
@@ -265,7 +325,7 @@ impl SidebarUi {
         self.focused.as_ref()
     }
     pub fn is_modal(&self) -> bool {
-        self.overlay.is_some()
+        self.overlay.is_some() || self.settings_page
     }
     /// Forms and menus need usable width even when the user's rail preference is hidden.
     pub fn needs_expanded_space(&self) -> bool {
@@ -276,7 +336,7 @@ impl SidebarUi {
     }
     /// Call when native content receives focus; this does not mark the OS window unfocused.
     pub fn release_focus(&mut self) {
-        self.dismiss();
+        self.close_settings();
         self.focused = None;
         self.drag = None;
     }
@@ -315,7 +375,7 @@ impl SidebarUi {
             all_items: items.clone(),
         });
         self.open_overlay(Overlay::Menu(Menu {
-            title: "Tabs · type to filter".into(),
+            title: "Search tabs".into(),
             items,
             selected: model
                 .selected_tab
@@ -428,10 +488,32 @@ impl SidebarUi {
         self.dirty = true;
     }
     pub fn open_settings(&mut self) {
-        self.open_overlay(Overlay::Settings {
-            selected: 0,
-            scroll: 0,
-        });
+        self.dismiss();
+        self.settings_page = true;
+        self.settings_search_focused = false;
+        self.dirty = true;
+    }
+    pub fn close_settings(&mut self) {
+        self.settings_page = false;
+        self.settings_search_focused = false;
+        self.dismiss();
+        self.focused = None;
+    }
+    pub fn content_page(&self) -> bool {
+        self.settings_page
+    }
+    pub fn rounded_surfaces(&self) -> &[RoundedSurface] {
+        &self.rounded_surfaces
+    }
+    pub fn set_layout(&mut self, sidebar_columns: u16, header_inset: u16) {
+        if self.sidebar_columns != Some(sidebar_columns) || self.header_inset != header_inset {
+            self.sidebar_columns = Some(sidebar_columns);
+            self.header_inset = header_inset;
+            self.invalidate();
+        }
+    }
+    pub fn open_create_folder(&mut self) {
+        self.open_form("New folder", FormKind::CreateFolder, "");
     }
     pub fn open_create_space(&mut self) {
         self.open_form("Create space", FormKind::CreateSpace, "");

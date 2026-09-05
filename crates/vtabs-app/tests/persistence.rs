@@ -190,3 +190,199 @@ fn shutdown_retries_cancelled_io_using_same_clock_domain() {
     assert_ne!(write.request_id, retry.request_id);
     assert_eq!(write.operations, retry.operations);
 }
+
+fn folder_records(id: &str, name: &str, space: &str) -> Vec<Record> {
+    vec![
+        profile_record(&format!("folder:{id}"), "name", json!(name)),
+        profile_record(&format!("folder:{id}"), "space", json!(space)),
+        profile_record(&format!("folder:{id}"), "collapsed", json!(true)),
+    ]
+}
+
+fn discover(app: &mut WindowApp, revision: u64, ids: &[TabId]) {
+    app.update(NativeSnapshot {
+        revision,
+        tabs: ids
+            .iter()
+            .map(|id| Tab {
+                id: *id,
+                title: format!("Terminal {id}"),
+                ..Tab::default()
+            })
+            .collect(),
+        active_tab: ids.first().copied(),
+        metrics: Metrics::default(),
+        focused: true,
+        configuration_epoch: 0,
+    })
+    .unwrap();
+}
+
+fn membership_record(incarnation: &str, id: TabId, folder: &str) -> Record {
+    Record {
+        key: Key {
+            scope: Scope::Session {
+                profile: "default".into(),
+                incarnation: incarnation.into(),
+            },
+            entity: format!("tab:{id}"),
+            field: "membership".into(),
+        },
+        value: Some(json!({"space":"home","manual":true,"pinned":true,"folder":folder})),
+        revision: 1,
+    }
+}
+
+#[test]
+fn folder_catalog_restores_without_a_session_but_membership_requires_verification() {
+    for verified in [false, true] {
+        let mut app = WindowApp::default();
+        if verified {
+            app.set_verified_session(Some("verified".into()));
+        }
+        discover(&mut app, 1, &[1]);
+        let request = app.take_storage_request(Duration::ZERO).unwrap();
+        let mut records = vec![profile_record("catalog", "folder_order", json!(["tools"]))];
+        records.extend(folder_records("tools", "Tools", "home"));
+        records.push(membership_record("verified", 1, "tools"));
+        app.complete_storage(response(&request, records)).unwrap();
+        assert_eq!(app.model().folders[0].name, "Tools");
+        assert!(app.model().folders[0].collapsed);
+        assert_eq!(
+            app.model().tabs[&1].folder_id.as_deref(),
+            verified.then_some("tools")
+        );
+    }
+}
+
+#[test]
+fn delayed_native_discovery_restores_only_matching_session_folder_membership() {
+    let mut app = WindowApp::default();
+    app.set_verified_session(Some("verified".into()));
+    let request = app.take_storage_request(Duration::ZERO).unwrap();
+    let mut records = vec![profile_record("catalog", "folder_order", json!(["tools"]))];
+    records.extend(folder_records("tools", "Tools", "home"));
+    records.extend([
+        membership_record("verified", 1, "tools"),
+        membership_record("old", 2, "tools"),
+    ]);
+    app.complete_storage(response(&request, records)).unwrap();
+    discover(&mut app, 1, &[1, 2]);
+    assert_eq!(app.model().tabs[&1].folder_id.as_deref(), Some("tools"));
+    assert!(app.model().tabs[&2].folder_id.is_none());
+    app.dispatch(Intent::AssignFolder {
+        tab_id: 1,
+        folder_id: None,
+    })
+    .unwrap();
+    discover(&mut app, 2, &[1, 2]);
+    assert!(app.model().tabs[&1].folder_id.is_none());
+}
+
+#[test]
+fn private_folder_edits_persist_catalog_without_live_membership() {
+    let mut app = WindowApp::new("default", true);
+    app.set_verified_session(Some("verified".into()));
+    initial(&mut app);
+    discover(&mut app, 1, &[1]);
+    app.dispatch(Intent::CreateFolder {
+        name: "Tools".into(),
+    })
+    .unwrap();
+    let folder = app.model().folders[0].id.clone();
+    app.dispatch(Intent::AssignFolder {
+        tab_id: 1,
+        folder_id: Some(folder.clone()),
+    })
+    .unwrap();
+    let request = app.take_storage_request(Duration::from_secs(1)).unwrap();
+    assert!(request.operations.iter().any(|operation| matches!(operation, Operation::Put { key, .. } if key.entity == format!("folder:{folder}"))));
+    assert!(request.operations.iter().all(|operation| match operation {
+        Operation::Put { key, .. } | Operation::Delete { key, .. } =>
+            matches!(key.scope, Scope::Profile { .. }),
+        Operation::Read { scope } => matches!(scope, Scope::Profile { .. }),
+    }));
+}
+
+#[test]
+fn concurrent_folder_creation_merges_catalog_and_keeps_local_fields() {
+    let mut app = WindowApp::default();
+    initial(&mut app);
+    app.dispatch(Intent::CreateFolder {
+        name: "Local".into(),
+    })
+    .unwrap();
+    let local = app.model().folders[0].id.clone();
+    app.refresh_storage();
+    let request = app.take_storage_request(Duration::ZERO).unwrap();
+    let mut records = vec![profile_record("catalog", "folder_order", json!(["remote"]))];
+    records.extend(folder_records("remote", "Remote", "home"));
+    app.complete_storage(response(&request, records)).unwrap();
+    assert_eq!(
+        app.model()
+            .folders
+            .iter()
+            .map(|folder| folder.name.as_str())
+            .collect::<Vec<_>>(),
+        ["Local", "Remote"]
+    );
+    let write = app.take_storage_request(Duration::from_secs(1)).unwrap();
+    assert!(write.operations.iter().any(|operation| matches!(operation, Operation::Put { key, value, .. } if key.field == "folder_order" && value == &json!([local, "remote"]))));
+}
+
+#[test]
+fn explicit_folder_deletion_wins_over_a_stale_remote_catalog() {
+    let mut app = WindowApp::default();
+    let request = app.take_storage_request(Duration::ZERO).unwrap();
+    let mut records = vec![profile_record("catalog", "folder_order", json!(["tools"]))];
+    records.extend(folder_records("tools", "Tools", "home"));
+    app.complete_storage(response(&request, records.clone()))
+        .unwrap();
+    app.dispatch(Intent::DeleteFolder("tools".into())).unwrap();
+    app.refresh_storage();
+    let request = app.take_storage_request(Duration::ZERO).unwrap();
+    app.complete_storage(response(&request, records)).unwrap();
+    assert!(app.model().folders.is_empty());
+    let write = app.take_storage_request(Duration::from_secs(1)).unwrap();
+    assert!(write.operations.iter().any(|operation| matches!(operation, Operation::Delete { key, .. } if key.entity == "folder:tools" && key.field == "name")));
+}
+
+#[test]
+fn malformed_folder_catalog_does_not_publish_partial_space_or_settings_changes() {
+    let mut app = WindowApp::default();
+    let request = app.take_storage_request(Duration::ZERO).unwrap();
+    let mut records = vec![
+        profile_record("catalog", "order", json!(["work"])),
+        profile_record("space:work", "name", json!("Work")),
+        profile_record("catalog", "folder_order", json!(["tools", "tools"])),
+        profile_record("settings", "width", json!(350)),
+    ];
+    records.extend(folder_records("tools", "Tools", "work"));
+    assert!(app.complete_storage(response(&request, records)).is_err());
+    assert_eq!(app.model().spaces, [Space::new("home", "Home")]);
+    assert!(app.model().folders.is_empty());
+    assert_eq!(app.model().settings.width, Settings::default().width);
+    assert!(app.storage_pending());
+    let retry = app.take_storage_request(Duration::from_secs(3)).unwrap();
+    app.complete_storage(response(
+        &retry,
+        vec![profile_record("catalog", "folder_order", json!(["tools"]))],
+    ))
+    .unwrap();
+    assert_eq!(app.model().folders[0].name, "Tools");
+    assert_eq!(app.model().spaces[0].id, "work");
+}
+
+#[test]
+fn folder_ids_are_unique_across_window_apps() {
+    let (mut a, mut b) = (WindowApp::default(), WindowApp::default());
+    a.dispatch(Intent::CreateFolder {
+        name: "Tools".into(),
+    })
+    .unwrap();
+    b.dispatch(Intent::CreateFolder {
+        name: "Tools".into(),
+    })
+    .unwrap();
+    assert_ne!(a.model().folders[0].id, b.model().folders[0].id);
+}

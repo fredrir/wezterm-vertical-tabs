@@ -11,6 +11,15 @@ pub type SpaceId = String;
 pub const DEFAULT_SPACE: &str = "home";
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Folder {
+    pub id: String,
+    pub name: String,
+    pub space_id: SpaceId,
+    #[serde(default)]
+    pub collapsed: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Space {
     pub id: SpaceId,
     pub name: String,
@@ -72,6 +81,8 @@ pub struct Tab {
     #[serde(default)]
     pub pinned: bool,
     #[serde(default)]
+    pub folder_id: Option<String>,
+    #[serde(default)]
     pub space_id: SpaceId,
     #[serde(default)]
     pub manual_assignment: bool,
@@ -115,6 +126,23 @@ pub enum Intent {
         id: SpaceId,
         index: usize,
     },
+    CreateFolder {
+        name: String,
+    },
+    RenameFolder {
+        id: String,
+        name: String,
+    },
+    ToggleFolder(String),
+    DeleteFolder(String),
+    AssignFolder {
+        tab_id: TabId,
+        folder_id: Option<String>,
+    },
+    MoveFolder {
+        id: String,
+        index: usize,
+    },
     ActivateTab(TabId),
     ActivateIndex(isize),
     ActivateRelative {
@@ -123,6 +151,7 @@ pub enum Intent {
     },
     ActivateLast,
     NewTab,
+    NewTabInFolder(String),
     CloseTab(TabId),
     CloseOthers(TabId),
     RenameTab {
@@ -161,6 +190,7 @@ pub enum HostCommand {
     Spawn {
         space_id: SpaceId,
         launch: LaunchSpec,
+        folder_id: Option<String>,
     },
     Close(TabId),
     Rename {
@@ -204,6 +234,7 @@ impl From<String> for Error {
 pub struct Model {
     pub profile: String,
     pub spaces: Vec<Space>,
+    pub folders: Vec<Folder>,
     pub templates: Vec<SpaceTemplate>,
     pub tabs: BTreeMap<TabId, Tab>,
     pub selected_space: SpaceId,
@@ -224,6 +255,7 @@ pub struct Model {
     hook_routes: BTreeMap<TabId, Option<SpaceId>>,
     hidden: BTreeSet<TabId>,
     next_space: u64,
+    next_folder: u64,
     projection_revision: u64,
     space_namespace: String,
 }
@@ -238,6 +270,7 @@ impl Model {
         Self {
             profile: profile.into(),
             spaces: vec![Space::new(DEFAULT_SPACE, "Home")],
+            folders: Vec::new(),
             templates: Vec::new(),
             tabs: BTreeMap::new(),
             selected_space: DEFAULT_SPACE.into(),
@@ -258,6 +291,7 @@ impl Model {
             hook_routes: BTreeMap::new(),
             hidden: BTreeSet::new(),
             next_space: 1,
+            next_folder: 1,
             projection_revision: 0,
             space_namespace: String::new(),
         }
@@ -282,6 +316,19 @@ impl Model {
             .iter()
             .filter_map(|id| self.tabs.get(id))
             .collect()
+    }
+    pub fn selected_folders(&self) -> impl Iterator<Item = &Folder> {
+        self.folders
+            .iter()
+            .filter(|folder| folder.space_id == self.selected_space)
+    }
+    /// Collapsing a folder changes its sidebar presentation, never its live tab projection.
+    pub fn folder_tabs<'a>(&'a self, folder_id: &'a str) -> impl Iterator<Item = &'a Tab> {
+        self.order.iter().filter_map(move |id| {
+            self.tabs.get(id).filter(|tab| {
+                tab.folder_id.as_deref() == Some(folder_id) && !self.hidden.contains(id)
+            })
+        })
     }
     pub fn tab_order(&self) -> &[TabId] {
         &self.order
@@ -338,17 +385,32 @@ impl Model {
         Ok(())
     }
     fn rebuild_visible(&mut self) {
+        self.clean_folder_membership();
         self.projection_revision = self.projection_revision.wrapping_add(1);
         self.visible.clear();
-        for pinned in [true, false] {
-            self.visible.extend(self.order.iter().copied().filter(|id| {
-                self.tabs.get(id).is_some_and(|t| {
-                    t.space_id == self.selected_space
-                        && t.pinned == pinned
-                        && !self.hidden.contains(id)
-                })
-            }));
+        let mut grouped: BTreeMap<&str, Vec<TabId>> = BTreeMap::new();
+        let mut normal = Vec::new();
+        for id in &self.order {
+            let Some(tab) = self.tabs.get(id) else {
+                continue;
+            };
+            if tab.space_id != self.selected_space || self.hidden.contains(id) {
+                continue;
+            }
+            if let Some(folder) = tab.folder_id.as_deref() {
+                grouped.entry(folder).or_default().push(*id);
+            } else if tab.pinned {
+                self.visible.push(*id);
+            } else {
+                normal.push(*id);
+            }
         }
+        for folder in &self.folders {
+            if let Some(tabs) = grouped.remove(folder.id.as_str()) {
+                self.visible.extend(tabs);
+            }
+        }
+        self.visible.extend(normal);
         if self
             .selected_tab
             .is_none_or(|id| !self.visible.contains(&id))
@@ -376,6 +438,28 @@ impl Model {
             Ok(())
         } else {
             Err(Error(format!("Unknown space: {id}")))
+        }
+    }
+    fn require_folder(&self, id: &str) -> Result<usize, Error> {
+        self.folders
+            .iter()
+            .position(|folder| folder.id == id)
+            .ok_or_else(|| Error(format!("Unknown folder: {id}")))
+    }
+    fn clean_folder_membership(&mut self) {
+        let folders = self
+            .folders
+            .iter()
+            .map(|folder| (folder.id.as_str(), folder.space_id.as_str()))
+            .collect::<BTreeMap<_, _>>();
+        for tab in self.tabs.values_mut() {
+            if let Some(id) = tab.folder_id.as_deref() {
+                if folders.get(id).copied() == Some(tab.space_id.as_str()) {
+                    tab.pinned = true;
+                } else {
+                    tab.folder_id = None;
+                }
+            }
         }
     }
     fn activate(&mut self, id: TabId) {
@@ -424,6 +508,19 @@ impl Model {
             };
             self.next_space += 1;
             if !self.spaces.iter().any(|s| s.id == id) {
+                return id;
+            }
+        }
+    }
+    fn create_folder_id(&mut self) -> String {
+        loop {
+            let id = if self.space_namespace.is_empty() {
+                format!("folder-{}", self.next_folder)
+            } else {
+                format!("folder-{}-{}", self.space_namespace, self.next_folder)
+            };
+            self.next_folder += 1;
+            if !self.folders.iter().any(|folder| folder.id == id) {
                 return id;
             }
         }
@@ -523,6 +620,7 @@ impl Model {
                 tab.space_id = old.space_id.clone();
                 tab.manual_assignment = old.manual_assignment;
                 tab.pinned = old.pinned;
+                tab.folder_id = old.folder_id.clone();
                 tab.title_override = old.title_override.clone();
                 tab.title_hook = old.title_hook.clone();
                 // Native discovery supplies only domain/cwd. Preserve explicit launch
@@ -577,6 +675,8 @@ impl Model {
             &intent,
             Intent::ActivateTab(_)
                 | Intent::RenameTab { .. }
+                | Intent::RenameFolder { .. }
+                | Intent::ToggleFolder(_)
                 | Intent::SetSetting { .. }
                 | Intent::ResetSetting(_)
                 | Intent::ResetSettings
@@ -650,8 +750,10 @@ impl Model {
                 for tab in self.tabs.values_mut().filter(|t| t.space_id == id) {
                     tab.space_id = fallback.clone();
                     tab.manual_assignment = true;
+                    tab.folder_id = None;
                 }
                 self.spaces.retain(|s| s.id != id);
+                self.folders.retain(|folder| folder.space_id != id);
                 self.last_tabs.remove(&id);
                 if self.selected_space == id {
                     self.select_space(fallback);
@@ -668,8 +770,108 @@ impl Model {
                 self.spaces.insert(index.min(self.spaces.len()), space);
                 out.durable_changed = true;
             }
+            Intent::CreateFolder { name } => {
+                let name = Self::clean_name(name)?;
+                if self.folders.len() >= 256 {
+                    return Err(Error("At most 256 folders are supported".into()));
+                }
+                let id = self.create_folder_id();
+                self.folders.push(Folder {
+                    id,
+                    name,
+                    space_id: self.selected_space.clone(),
+                    collapsed: false,
+                });
+                out.durable_changed = true;
+            }
+            Intent::RenameFolder { id, name } => {
+                let name = Self::clean_name(name)?;
+                let at = self.require_folder(&id)?;
+                if self.folders[at].name == name {
+                    return Ok(out);
+                }
+                self.folders[at].name = name;
+                out.durable_changed = true;
+            }
+            Intent::ToggleFolder(id) => {
+                let at = self.require_folder(&id)?;
+                self.folders[at].collapsed = !self.folders[at].collapsed;
+                out.durable_changed = true;
+            }
+            Intent::DeleteFolder(id) => {
+                let at = self.require_folder(&id)?;
+                self.folders.remove(at);
+                for tab in self.tabs.values_mut() {
+                    if tab.folder_id.as_deref() == Some(&id) {
+                        tab.folder_id = None;
+                    }
+                }
+                out.durable_changed = true;
+            }
+            Intent::AssignFolder { tab_id, folder_id } => {
+                self.require_tab(tab_id)?;
+                let space = folder_id
+                    .as_deref()
+                    .map(|id| {
+                        self.require_folder(id)
+                            .map(|at| self.folders[at].space_id.clone())
+                    })
+                    .transpose()?;
+                let tab = self.tabs.get_mut(&tab_id).unwrap();
+                if tab.folder_id == folder_id {
+                    return Ok(out);
+                }
+                if let Some(space) = space {
+                    tab.space_id = space;
+                    tab.manual_assignment = true;
+                    tab.pinned = true;
+                }
+                tab.folder_id = folder_id;
+                if self.selected_tab == Some(tab_id) && tab.space_id != self.selected_space {
+                    self.select_space(self.selected_space.clone());
+                    if let Some(id) = self.selected_tab {
+                        out.commands.push(HostCommand::Activate(id));
+                    }
+                }
+                out.durable_changed = true;
+            }
+            Intent::MoveFolder { id, index } => {
+                let at = self.require_folder(&id)?;
+                let space = self.folders[at].space_id.clone();
+                let positions = self
+                    .folders
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(at, folder)| (folder.space_id == space).then_some(at))
+                    .collect::<Vec<_>>();
+                let mut folders = positions
+                    .iter()
+                    .map(|at| self.folders[*at].clone())
+                    .collect::<Vec<_>>();
+                let from = folders.iter().position(|folder| folder.id == id).unwrap();
+                let to = index.min(folders.len().saturating_sub(1));
+                if from == to {
+                    return Ok(out);
+                }
+                let folder = folders.remove(from);
+                folders.insert(to, folder);
+                for (at, folder) in positions.into_iter().zip(folders) {
+                    self.folders[at] = folder;
+                }
+                out.durable_changed = true;
+            }
             Intent::ActivateTab(id) => {
                 self.require_tab(id)?;
+                if let Some(folder_id) = self.tabs[&id].folder_id.as_deref()
+                    && let Some(folder) = self
+                        .folders
+                        .iter_mut()
+                        .find(|folder| folder.id == folder_id)
+                    && folder.collapsed
+                {
+                    folder.collapsed = false;
+                    out.durable_changed = true;
+                }
                 self.activate(id);
                 out.commands.push(HostCommand::Activate(id));
             }
@@ -714,6 +916,16 @@ impl Model {
                 out.commands.push(HostCommand::Spawn {
                     space_id: self.selected_space.clone(),
                     launch,
+                    folder_id: None,
+                });
+                return Ok(out);
+            }
+            Intent::NewTabInFolder(id) => {
+                let at = self.require_folder(&id)?;
+                out.commands.push(HostCommand::Spawn {
+                    space_id: self.folders[at].space_id.clone(),
+                    launch: self.default_launch(),
+                    folder_id: Some(id),
                 });
                 return Ok(out);
             }
@@ -743,7 +955,11 @@ impl Model {
             }
             Intent::PinTab { id, pinned } => {
                 self.require_tab(id)?;
-                self.tabs.get_mut(&id).unwrap().pinned = pinned;
+                let tab = self.tabs.get_mut(&id).unwrap();
+                tab.pinned = pinned;
+                if !pinned {
+                    tab.folder_id = None;
+                }
                 out.durable_changed = true;
             }
             Intent::MoveTab { id, index } => {
@@ -752,14 +968,20 @@ impl Model {
                     return Err(Error("Cannot reorder a hidden tab".into()));
                 };
                 let pinned = self.tabs[&id].pinned;
+                let folder = self.tabs[&id].folder_id.clone();
                 let mut visible = self.visible.clone();
                 visible.remove(at);
-                let boundary = visible.iter().take_while(|id| self.tabs[id].pinned).count();
-                let index = if pinned {
-                    index.min(boundary)
-                } else {
-                    index.max(boundary).min(visible.len())
-                };
+                let peers = visible
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(at, id)| {
+                        let tab = &self.tabs[id];
+                        (tab.pinned == pinned && tab.folder_id == folder).then_some(at)
+                    })
+                    .collect::<Vec<_>>();
+                let start = peers.first().copied().unwrap_or(at);
+                let end = peers.last().map_or(start, |at| at + 1);
+                let index = index.clamp(start, end);
                 visible.insert(index, id);
                 let visible_set = self.visible.iter().copied().collect::<BTreeSet<_>>();
                 let mut reordered = visible.iter();
@@ -777,6 +999,9 @@ impl Model {
                 self.require_tab(id)?;
                 self.require_space(&space_id)?;
                 let tab = self.tabs.get_mut(&id).unwrap();
+                if tab.space_id != space_id {
+                    tab.folder_id = None;
+                }
                 tab.space_id = space_id;
                 tab.manual_assignment = true;
                 if self.selected_tab == Some(id) {
@@ -791,6 +1016,7 @@ impl Model {
                 self.require_tab(id)?;
                 let tab = self.tabs.get_mut(&id).unwrap();
                 tab.manual_assignment = false;
+                tab.folder_id = None;
                 tab.space_id = self.spaces[0].id.clone();
                 self.hook_routes.remove(&id);
                 self.route_tab(id);
@@ -806,7 +1032,11 @@ impl Model {
                     } else {
                         self.selected_space.clone()
                     };
-                    out.commands.push(HostCommand::Spawn { space_id, launch });
+                    out.commands.push(HostCommand::Spawn {
+                        space_id,
+                        launch,
+                        folder_id: None,
+                    });
                 }
                 return Ok(out);
             }
@@ -872,15 +1102,19 @@ impl Model {
 
     pub fn default_launch(&self) -> LaunchSpec {
         let selected = self.selected_tab.and_then(|id| self.tabs.get(&id));
+        let domain = self.settings.default_domain.clone().or_else(|| {
+            selected
+                .filter(|tab| !tab.domain.is_empty())
+                .map(|tab| tab.domain.clone())
+        });
+        let cwd = selected
+            .filter(|tab| {
+                !tab.cwd.is_empty() && domain.as_deref().unwrap_or_default() == tab.domain
+            })
+            .map(|tab| tab.cwd.clone());
         LaunchSpec {
-            domain: self.settings.default_domain.clone().or_else(|| {
-                selected
-                    .filter(|t| !t.domain.is_empty())
-                    .map(|t| t.domain.clone())
-            }),
-            cwd: selected
-                .filter(|t| !t.cwd.is_empty())
-                .map(|t| t.cwd.clone()),
+            domain,
+            cwd,
             ..LaunchSpec::default()
         }
     }
@@ -915,17 +1149,38 @@ impl Model {
         manual: bool,
         pinned: bool,
     ) -> Result<bool, Error> {
+        self.restore_tab_membership(id, space, manual, pinned, None)
+    }
+    pub fn restore_tab_membership(
+        &mut self,
+        id: TabId,
+        space: &str,
+        manual: bool,
+        pinned: bool,
+        folder_id: Option<&str>,
+    ) -> Result<bool, Error> {
         self.require_tab(id)?;
         if self.require_space(space).is_err() {
             return Ok(false);
         }
+        let folder_id = folder_id.filter(|id| {
+            self.folders
+                .iter()
+                .any(|folder| folder.id == *id && folder.space_id == space)
+        });
+        let pinned = pinned || folder_id.is_some();
         let tab = self.tabs.get_mut(&id).unwrap();
-        if tab.space_id == space && tab.manual_assignment == manual && tab.pinned == pinned {
+        if tab.space_id == space
+            && tab.manual_assignment == manual
+            && tab.pinned == pinned
+            && tab.folder_id.as_deref() == folder_id
+        {
             return Ok(false);
         }
         tab.space_id = space.into();
         tab.manual_assignment = manual;
         tab.pinned = pinned;
+        tab.folder_id = folder_id.map(str::to_owned);
         self.rebuild_visible();
         self.touch();
         Ok(true)
@@ -1025,11 +1280,37 @@ impl Model {
         }
         self.spaces = spaces;
         self.templates = templates;
+        self.folders
+            .retain(|folder| seen.contains(&folder.space_id));
         if !seen.contains(&self.selected_space) {
             self.selected_space = self.spaces[0].id.clone();
         }
         self.reroute();
         self.touch();
+        Ok(())
+    }
+    /// Validate a complete folder catalog before replacing live folder state.
+    pub fn load_folders(&mut self, folders: Vec<Folder>) -> Result<(), Error> {
+        if folders.len() > 256 {
+            return Err(Error("At most 256 folders are supported".into()));
+        }
+        let mut seen = BTreeSet::new();
+        for folder in &folders {
+            if folder.id.is_empty()
+                || folder.id.len() > 128
+                || folder.id.chars().any(char::is_control)
+                || !seen.insert(&folder.id)
+            {
+                return Err(Error("Invalid or duplicate folder ID".into()));
+            }
+            Self::clean_name(folder.name.clone())?;
+            self.require_space(&folder.space_id)?;
+        }
+        if self.folders != folders {
+            self.folders = folders;
+            self.rebuild_visible();
+            self.touch();
+        }
         Ok(())
     }
     pub fn load_preferences(&mut self, values: BTreeMap<String, Value>) -> Result<(), Error> {

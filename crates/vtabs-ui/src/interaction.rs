@@ -21,7 +21,9 @@ impl SidebarUi {
                     self.caret_deadline = None;
                     self.tooltip_deadline = None;
                     self.drag = None;
-                } else if matches!(self.overlay, Some(Overlay::Form(_))) {
+                } else if (matches!(self.overlay, Some(Overlay::Form(_)))
+                    || (self.settings_page && self.settings_search_focused))
+                {
                     self.reset_caret();
                 }
                 self.dirty = true;
@@ -34,12 +36,24 @@ impl SidebarUi {
                     self.tooltip_deadline = None;
                 } else {
                     self.dirty = true;
-                    if matches!(self.overlay, Some(Overlay::Form(_))) {
+                    if (matches!(self.overlay, Some(Overlay::Form(_)))
+                        || (self.settings_page && self.settings_search_focused))
+                    {
                         self.reset_caret();
                     }
                 }
             }
             UiInput::PointerMove { x, y } => {
+                if self.drag == Some(ElementId::Editor)
+                    && let Some(Overlay::Menu(menu)) = &mut self.overlay
+                    && let Some(search) = &mut menu.search
+                {
+                    search
+                        .editor
+                        .click_column(usize::from(x.saturating_sub(self.editor_rect.x)), true);
+                    self.dirty = true;
+                    return intents;
+                }
                 if self.drag == Some(ElementId::Editor)
                     && let Some(Overlay::Form(form)) = &mut self.overlay
                 {
@@ -49,13 +63,30 @@ impl SidebarUi {
                     self.dirty = true;
                     return intents;
                 }
+                if self
+                    .pointer_origin
+                    .is_some_and(|(px, py)| px.abs_diff(x) + py.abs_diff(y) > 1)
+                    && self.drag.is_some()
+                {
+                    self.dragging = true;
+                }
+                if self.drag == Some(ElementId::SettingsSearch) && self.settings_page {
+                    self.settings_query
+                        .click_column(usize::from(x.saturating_sub(self.editor_rect.x)), true);
+                    self.reset_caret();
+                    self.dirty = true;
+                    return intents;
+                }
                 let hit = self.hit_test(x, y).map(|hit| hit.id.clone());
                 if hit != self.hovered {
                     self.hovered = hit;
                     self.show_tooltip = false;
-                    self.tooltip_deadline =
-                        (self.hovered.is_some() && self.overlay.is_none() && self.window_focused)
-                            .then_some(self.now + Duration::from_millis(600));
+                    self.tooltip_deadline = (self.hovered.is_some()
+                        && self.overlay.is_none()
+                        && self.window_focused
+                        && !self.dragging)
+                        .then_some(self.now + Duration::from_millis(600));
+                    self.start_effect(model);
                     self.dirty = true;
                 }
             }
@@ -72,12 +103,33 @@ impl SidebarUi {
                     self.dismiss();
                     return intents;
                 }
+                self.pointer_origin = Some((x, y));
+                self.dragging = false;
                 match (button, hit) {
                     (MouseButton::Right, Some(id)) => self.context_menu(model, id),
                     (MouseButton::Middle, Some(ElementId::Tab(id))) => {
                         self.close_tab(model, id, &mut intents)
                     }
+                    (MouseButton::Left, Some(ElementId::SettingsSearch)) => {
+                        self.settings_search_focused = true;
+                        self.focused = Some(ElementId::SettingsSearch);
+                        self.settings_query.click_column(
+                            usize::from(x.saturating_sub(self.editor_rect.x)),
+                            modifiers.shift,
+                        );
+                        self.drag = Some(ElementId::SettingsSearch);
+                        self.reset_caret();
+                        self.dirty = true;
+                    }
                     (MouseButton::Left, Some(ElementId::Editor)) => {
+                        if let Some(Overlay::Menu(menu)) = &mut self.overlay
+                            && let Some(search) = &mut menu.search
+                        {
+                            search.editor.click_column(
+                                usize::from(x.saturating_sub(self.editor_rect.x)),
+                                modifiers.shift,
+                            );
+                        }
                         if let Some(Overlay::Form(form)) = &mut self.overlay {
                             form.editor.click_column(
                                 usize::from(x.saturating_sub(self.editor_rect.x)),
@@ -104,16 +156,59 @@ impl SidebarUi {
                 button: MouseButton::Left,
             } => {
                 let down = self.drag.take();
+                self.pointer_origin = None;
+                self.dragging = false;
+                self.dirty = true;
                 let up = self.hit_test(x, y).map(|hit| hit.id.clone());
                 match (down, up) {
                     (Some(from), Some(to)) if from == to => {
                         self.activate_element(model, to, &mut intents)
                     }
                     (Some(ElementId::Tab(id)), Some(ElementId::Tab(target))) => {
-                        if let Some(index) =
-                            model.visible_ids().iter().position(|tab| *tab == target)
-                        {
-                            intents.push(UiIntent::Domain(Intent::MoveTab { id, index }));
+                        if let Some(tab) = model.tabs.get(&target) {
+                            if model
+                                .tabs
+                                .get(&id)
+                                .is_some_and(|from| from.folder_id != tab.folder_id)
+                            {
+                                intents.push(UiIntent::Domain(Intent::AssignFolder {
+                                    tab_id: id,
+                                    folder_id: tab.folder_id.clone(),
+                                }));
+                            }
+                            if model
+                                .tabs
+                                .get(&id)
+                                .is_some_and(|from| from.pinned != tab.pinned)
+                            {
+                                intents.push(UiIntent::Domain(Intent::PinTab {
+                                    id,
+                                    pinned: tab.pinned,
+                                }));
+                            }
+                            if let Some(index) =
+                                model.visible_ids().iter().position(|tab| *tab == target)
+                            {
+                                intents.push(UiIntent::Domain(Intent::MoveTab { id, index }));
+                            }
+                        }
+                    }
+                    (Some(ElementId::Tab(tab_id)), Some(ElementId::Folder(folder_id))) => {
+                        intents.push(UiIntent::Domain(Intent::AssignFolder {
+                            tab_id,
+                            folder_id: Some(folder_id),
+                        }));
+                    }
+                    (Some(ElementId::Tab(id)), Some(ElementId::NewTab)) => {
+                        intents.push(UiIntent::Domain(Intent::AssignFolder {
+                            tab_id: id,
+                            folder_id: None,
+                        }));
+                        intents.push(UiIntent::Domain(Intent::PinTab { id, pinned: false }));
+                    }
+                    (Some(ElementId::Folder(id)), Some(ElementId::Folder(target))) => {
+                        if let Some(index) = model.selected_folders().position(|f| f.id == target) {
+                            intents.push(UiIntent::Domain(Intent::MoveFolder { id, index }));
                         }
                     }
                     (Some(ElementId::Tab(id)), Some(ElementId::Space(space_id))) => {
@@ -136,15 +231,14 @@ impl SidebarUi {
                         Overlay::Menu(menu) => {
                             menu.selected = offset(menu.selected, rows, menu.items.len());
                         }
-                        Overlay::Settings { selected, .. } => {
-                            *selected = offset(*selected, rows, settings::descriptors().len());
-                        }
                         Overlay::Form(_) => {}
                     }
+                } else if self.settings_page && self.page_rect.contains(Position::new(x, y)) {
+                    self.settings_scroll_by(model, rows);
                 } else if self.spaces_rect.contains(Position::new(x, y)) {
                     self.space_scroll = offset(self.space_scroll, rows, model.spaces.len());
                 } else {
-                    self.tab_scroll = offset(self.tab_scroll, rows, model.visible_ids().len());
+                    self.tab_scroll = offset(self.tab_scroll, rows, self.sidebar_rows.len());
                 }
                 self.dirty = true;
             }
@@ -160,6 +254,8 @@ impl SidebarUi {
                     search.editor.insert(&text);
                     filter_menu(menu);
                     self.dirty = true;
+                } else if self.settings_page && self.settings_search_focused {
+                    self.settings_input_text(&text);
                 }
             }
             UiInput::ImePreedit { text, cursor } => {
@@ -172,6 +268,10 @@ impl SidebarUi {
                 {
                     search.editor.set_preedit(&text, cursor);
                     self.dirty = true;
+                } else if self.settings_page && self.settings_search_focused {
+                    self.settings_query.set_preedit(&text, cursor);
+                    self.reset_caret();
+                    self.dirty = true;
                 }
             }
             UiInput::Key { key, modifiers } => self.key(model, key, modifiers, &mut intents),
@@ -180,7 +280,25 @@ impl SidebarUi {
     }
 
     fn key(&mut self, model: &Model, key: Key, modifiers: Modifiers, intents: &mut Vec<UiIntent>) {
+        if self.shortcut(model, &key, modifiers, intents) {
+            return;
+        }
         if let Some(Overlay::Form(form)) = &mut self.overlay {
+            if key == Key::Tab {
+                let order = [ElementId::Editor, ElementId::Submit, ElementId::Cancel];
+                let at = self
+                    .focused
+                    .as_ref()
+                    .and_then(|id| order.iter().position(|x| x == id))
+                    .unwrap_or(0);
+                self.focused = Some(order[(at + if modifiers.shift { 2 } else { 1 }) % 3].clone());
+                self.dirty = true;
+                return;
+            }
+            if key == Key::Enter && self.focused == Some(ElementId::Cancel) {
+                self.back();
+                return;
+            }
             match form.editor.key(&key, modifiers) {
                 EditResult::Submit => self.submit_form(model, intents),
                 EditResult::Cancel => self.back(),
@@ -200,7 +318,16 @@ impl SidebarUi {
         }
         if let Some(Overlay::Menu(menu)) = &mut self.overlay {
             if let Some(search) = &mut menu.search
-                && matches!(key, Key::Character(_) | Key::Backspace | Key::Delete)
+                && matches!(
+                    key,
+                    Key::Character(_)
+                        | Key::Backspace
+                        | Key::Delete
+                        | Key::Left
+                        | Key::Right
+                        | Key::Home
+                        | Key::End
+                )
             {
                 match search.editor.key(&key, modifiers) {
                     EditResult::Changed => {
@@ -245,44 +372,24 @@ impl SidebarUi {
             }
             return;
         }
-        if let Some(Overlay::Settings { selected, .. }) = &mut self.overlay {
-            let descriptors = settings::descriptors();
-            match key {
-                Key::Escape => self.back(),
-                Key::Down | Key::Tab if !modifiers.shift => {
-                    *selected = (*selected + 1) % descriptors.len();
-                    self.dirty = true;
-                }
-                Key::Up | Key::Tab => {
-                    *selected = (*selected + descriptors.len() - 1) % descriptors.len();
-                    self.dirty = true;
-                }
-                Key::Home => {
-                    *selected = 0;
-                    self.dirty = true;
-                }
-                Key::End => {
-                    *selected = descriptors.len() - 1;
-                    self.dirty = true;
-                }
-                Key::PageDown => {
-                    *selected = offset(*selected, 10, descriptors.len());
-                    self.dirty = true;
-                }
-                Key::PageUp => {
-                    *selected = offset(*selected, -10, descriptors.len());
-                    self.dirty = true;
-                }
-                Key::Delete | Key::Backspace => {
-                    let key = descriptors[*selected].key.to_owned();
-                    self.run_action(model, Action::ResetSetting(key), intents);
-                }
-                Key::Enter | Key::Right | Key::Character(' ') => {
-                    let key = descriptors[*selected].key.to_owned();
-                    self.edit_setting(model, &key, intents);
-                }
-                _ => {}
-            }
+        if self.settings_page
+            && !matches!(
+                self.focused,
+                Some(
+                    ElementId::Tab(_)
+                        | ElementId::Space(_)
+                        | ElementId::Folder(_)
+                        | ElementId::NewTab
+                        | ElementId::CreateSpace
+                        | ElementId::CreateFolder
+                        | ElementId::Rail
+                        | ElementId::Refresh
+                        | ElementId::Search
+                        | ElementId::Settings
+                )
+            )
+        {
+            self.settings_key(model, key, modifiers, intents);
             return;
         }
         match key {
@@ -321,6 +428,9 @@ impl SidebarUi {
                     self.run_action(model, Action::RenameSpace(id), intents)
                 }
                 Some(ElementId::Tab(id)) => self.run_action(model, Action::RenameTab(id), intents),
+                Some(ElementId::Folder(id)) => {
+                    self.run_action(model, Action::RenameFolder(id), intents)
+                }
                 _ => {}
             },
             Key::Up | Key::Down => {
@@ -386,15 +496,17 @@ impl SidebarUi {
     }
 
     pub(crate) fn ensure_tab_visible(&mut self, model: &Model, id: TabId) {
-        if let Some(at) = model.visible_ids().iter().position(|tab| *tab == id) {
-            let card =
-                if model.settings.cards && self.tabs_rect.width >= 12 && self.tabs_rect.height >= 4
-                {
-                    if model.settings.show_metadata { 3 } else { 2 }
-                } else {
-                    1
-                };
-            let rows = usize::from(self.tabs_rect.height / card).max(1);
+        let entries = Self::sidebar_entries(model);
+        let target = if let Some(tab) = model.tabs.get(&id)
+            && let Some(folder) = &tab.folder_id
+            && model.folders.iter().any(|f| &f.id == folder && f.collapsed)
+        {
+            SidebarRow::Folder(folder.clone())
+        } else {
+            SidebarRow::Tab(id)
+        };
+        if let Some(at) = entries.iter().position(|row| *row == target) {
+            let rows = usize::from(self.tabs_rect.height / self.row_height(model)).max(1);
             if at < self.tab_scroll {
                 self.tab_scroll = at;
             } else if at >= self.tab_scroll + rows {
@@ -403,8 +515,33 @@ impl SidebarUi {
         }
     }
 
-    fn activate_element(&mut self, model: &Model, id: ElementId, intents: &mut Vec<UiIntent>) {
+    pub(crate) fn activate_element(
+        &mut self,
+        model: &Model,
+        id: ElementId,
+        intents: &mut Vec<UiIntent>,
+    ) {
         match id {
+            ElementId::Search => self.open_tab_navigator(model),
+            ElementId::Refresh => intents.push(UiIntent::Refresh),
+            ElementId::CreateFolder => self.open_create_folder(),
+            ElementId::Folder(id) => intents.push(UiIntent::Domain(Intent::ToggleFolder(id))),
+            ElementId::SettingsCategory(category) => self.settings_select_category(category),
+            ElementId::SettingsSearch => {
+                self.settings_search_focused = true;
+                self.focused = Some(ElementId::SettingsSearch);
+                self.reset_caret();
+                self.dirty = true;
+            }
+            ElementId::CloseSettings => self.close_settings(),
+            ElementId::ResetSettings => self.run_action(
+                model,
+                Action::Confirm {
+                    label: "Reset saved settings?".into(),
+                    action: Box::new(Action::Domain(Intent::ResetSettings)),
+                },
+                intents,
+            ),
             ElementId::CreateSpace => self.open_create_space(),
             ElementId::NewTab => intents.push(UiIntent::Domain(Intent::NewTab)),
             ElementId::Settings => self.open_settings(),
@@ -421,6 +558,9 @@ impl SidebarUi {
                 self.start_effect(model);
             }
             ElementId::Tab(id) => {
+                if self.settings_page {
+                    self.close_settings();
+                }
                 intents.push(UiIntent::Domain(Intent::ActivateTab(id)));
                 self.start_effect(model);
             }
@@ -438,14 +578,17 @@ impl SidebarUi {
                     self.run_action(model, action, intents);
                 }
             }
-            ElementId::Setting(key) => self.edit_setting(model, &key, intents),
+            ElementId::Setting(key) => {
+                self.settings_focus_setting(model, &key);
+                self.edit_setting(model, &key, intents);
+            }
             ElementId::Submit => self.submit_form(model, intents),
             ElementId::Cancel => self.back(),
             ElementId::Editor | ElementId::PrivateInfo => {}
         }
     }
 
-    fn close_tab(&mut self, model: &Model, id: TabId, intents: &mut Vec<UiIntent>) {
+    pub(crate) fn close_tab(&mut self, model: &Model, id: TabId, intents: &mut Vec<UiIntent>) {
         if !model.tabs.contains_key(&id) {
             return;
         }
@@ -503,6 +646,7 @@ impl SidebarUi {
             ),
         ];
         items[3].enabled = model.can_reopen();
+        items.push(MenuItem::new("new-folder", "New folder", Action::NewFolder));
         items.extend(custom_menu(&model.settings.menus, "custom"));
         self.menu("Vertical tabs", items);
     }
@@ -562,8 +706,78 @@ impl SidebarUi {
                     ),
                 ];
                 items[4].enabled = tab.manual_assignment;
+                items.insert(
+                    4,
+                    MenuItem::new("move-folder", "Move to folder ›", Action::MoveToFolder(id)),
+                );
+                let at = model
+                    .visible_ids()
+                    .iter()
+                    .position(|t| *t == id)
+                    .unwrap_or(0);
+                items.push(MenuItem::new(
+                    "move-up",
+                    "Move up",
+                    Action::Domain(Intent::MoveTab {
+                        id,
+                        index: at.saturating_sub(1),
+                    }),
+                ));
+                items.push(MenuItem::new(
+                    "move-down",
+                    "Move down",
+                    Action::Domain(Intent::MoveTab {
+                        id,
+                        index: at.saturating_add(1),
+                    }),
+                ));
                 items.extend(custom_menu(&model.settings.menus, "custom"));
                 self.menu(tab.display_title(), items);
+            }
+            ElementId::Folder(id) => {
+                let Some(folder) = model.folders.iter().find(|f| f.id == id) else {
+                    return;
+                };
+                let index = model
+                    .selected_folders()
+                    .position(|f| f.id == id)
+                    .unwrap_or(0);
+                self.menu(
+                    &folder.name,
+                    vec![
+                        MenuItem::new(
+                            "toggle",
+                            if folder.collapsed {
+                                "Expand"
+                            } else {
+                                "Collapse"
+                            },
+                            Action::Domain(Intent::ToggleFolder(id.clone())),
+                        ),
+                        MenuItem::new("rename", "Rename folder", Action::RenameFolder(id.clone())),
+                        MenuItem::new(
+                            "up",
+                            "Move up",
+                            Action::Domain(Intent::MoveFolder {
+                                id: id.clone(),
+                                index: index.saturating_sub(1),
+                            }),
+                        ),
+                        MenuItem::new(
+                            "down",
+                            "Move down",
+                            Action::Domain(Intent::MoveFolder {
+                                id: id.clone(),
+                                index: index + 1,
+                            }),
+                        ),
+                        MenuItem::new(
+                            "ungroup",
+                            "Ungroup tabs",
+                            Action::Domain(Intent::DeleteFolder(id)),
+                        ),
+                    ],
+                );
             }
             ElementId::Space(id) => {
                 let Some(space) = model.spaces.iter().find(|space| space.id == id) else {
@@ -639,6 +853,36 @@ impl SidebarUi {
                 self.dismiss();
             }
             Action::NewSpace => self.open_create_space(),
+            Action::NewFolder => self.open_create_folder(),
+            Action::RenameFolder(id) => {
+                if let Some(folder) = model.folders.iter().find(|f| f.id == id) {
+                    self.open_form("Rename folder", FormKind::RenameFolder(id), &folder.name);
+                }
+            }
+            Action::MoveToFolder(tab_id) => {
+                let mut items: Vec<_> = model
+                    .selected_folders()
+                    .map(|folder| {
+                        MenuItem::new(
+                            folder.id.clone(),
+                            folder.name.clone(),
+                            Action::Domain(Intent::AssignFolder {
+                                tab_id,
+                                folder_id: Some(folder.id.clone()),
+                            }),
+                        )
+                    })
+                    .collect();
+                items.push(MenuItem::new(
+                    "ungroup",
+                    "Remove from folder",
+                    Action::Domain(Intent::AssignFolder {
+                        tab_id,
+                        folder_id: None,
+                    }),
+                ));
+                self.push_menu("Move to folder", items);
+            }
             Action::RenameSpace(id) => {
                 if let Some(space) = model.spaces.iter().find(|s| s.id == id) {
                     self.open_form("Rename space", FormKind::RenameSpace(id), &space.name);
@@ -757,7 +1001,7 @@ impl SidebarUi {
         }
         self.menu(title, items);
     }
-    fn edit_setting(&mut self, model: &Model, key: &str, intents: &mut Vec<UiIntent>) {
+    pub(crate) fn edit_setting(&mut self, model: &Model, key: &str, intents: &mut Vec<UiIntent>) {
         if model.config_owned.contains(key) {
             return;
         }
@@ -811,6 +1055,19 @@ impl SidebarUi {
         let value = form.editor.text().trim().to_owned();
         let intent: Result<Intent, String> = (|| {
             Ok(match &form.kind {
+                FormKind::CreateFolder => {
+                    valid_name(&value)?;
+                    Intent::CreateFolder {
+                        name: value.clone(),
+                    }
+                }
+                FormKind::RenameFolder(id) => {
+                    valid_name(&value)?;
+                    Intent::RenameFolder {
+                        id: id.clone(),
+                        name: value.clone(),
+                    }
+                }
                 FormKind::CreateSpace => {
                     valid_name(&value)?;
                     Intent::CreateSpace {
