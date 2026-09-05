@@ -2,7 +2,8 @@ local wezterm = require 'wezterm'
 local M = {}
 
 ---@param config table
----@param options? table
+---@param options? NativeTabsOptions
+---@return table
 function M.apply_to_config(config, options)
   -- Mux servers and CLI tools load the same config without a GUI provider.
   if not wezterm.gui then return config end

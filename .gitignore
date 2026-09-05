@@ -8,3 +8,7 @@ __pycache__/
 .claude/team/
 dist/
 .native-completed
+
+.pytest_cache/
+
+.ruff_cache/

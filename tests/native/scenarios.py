@@ -1,21 +1,27 @@
 #!/usr/bin/env python3
-"""Opt-in native GUI scenarios; every launch uses an isolated window and state."""
+"""Native scenarios on an owned headless display and isolated application state."""
 
 from __future__ import annotations
 
 import argparse
 import json
 import os
-from pathlib import Path
 import shutil
+import signal
 import sqlite3
 import subprocess
+import sys
 import tempfile
 import time
 import uuid
+from pathlib import Path
 
+if __package__ in {None, ""}:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-CONFIG = r'''
+from tests.support.headless import HeadlessDisplay
+
+CONFIG = r"""
 local wezterm = require 'wezterm'
 local cfg = wezterm.config_builder()
 local root = os.getenv('WEZ_VTABS_SCENARIO')
@@ -168,12 +174,32 @@ wezterm.on('update-status',function()
   if not started then started=true; tick() end
 end)
 return cfg
-'''
+"""
 
 
 class Probe:
-    def __init__(self, root, gui, helper, domain, ssh_config=None, native=True, capture=False, server=None, chrome=False, initial_size=None, trace_mux=False, hooks=False, effects=False, resize_rounds=1, tls_config=None):
+    def __init__(
+        self,
+        root,
+        gui,
+        helper,
+        domain,
+        ssh_config=None,
+        native=True,
+        capture=False,
+        server=None,
+        chrome=False,
+        initial_size=None,
+        trace_mux=False,
+        hooks=False,
+        effects=False,
+        resize_rounds=1,
+        tls_config=None,
+        display=None,
+    ):
         self.root, self.gui, self.native = root, gui, native
+        self.display = display or HeadlessDisplay(root / "display")
+        self.owns_display = display is None
         self.domain = domain
         self.resize_rounds = resize_rounds
         self.capture_enabled = capture
@@ -184,7 +210,9 @@ class Probe:
         binaries = root / "bin"
         binaries.mkdir()
         shutil.copy2(gui, binaries / gui.name)
-        server = server or gui.with_name("wezterm-mux-server.exe" if os.name == "nt" else "wezterm-mux-server")
+        server = server or gui.with_name(
+            "wezterm-mux-server.exe" if os.name == "nt" else "wezterm-mux-server"
+        )
         if server.is_file():
             shutil.copy2(server, binaries / server.name)
         self.gui = binaries / gui.name
@@ -194,14 +222,33 @@ class Probe:
         for name in ("config", "cache", "data", "state", "runtime"):
             (root / name).mkdir()
         (root / "runtime").chmod(0o700)
-        self.env = {key: value for key, value in os.environ.items() if not key.startswith(("WEZTERM_", "WEZ_VTABS_"))}
-        self.env.update({"XDG_CONFIG_HOME": str(root / "config"), "XDG_CACHE_HOME": str(root / "cache"), "XDG_DATA_HOME": str(root / "data"), "XDG_STATE_HOME": str(root / "state"), "XDG_RUNTIME_DIR": str(root / "runtime"), "WEZ_VTABS_DB": str(root / "state.sqlite"), "WEZ_VTABS_SCENARIO": str(root), "WEZ_VTABS_SCENARIO_ID": self.identity, "WEZ_VTABS_SCENARIO_NATIVE": "1" if native else "0", "WEZ_VTABS_SCENARIO_DOMAIN": domain})
+        self.env = {
+            key: value
+            for key, value in self.display.env.items()
+            if not key.startswith(("WEZTERM_", "WEZ_VTABS_"))
+        }
+        self.env.update(
+            {
+                "XDG_CONFIG_HOME": str(root / "config"),
+                "XDG_CACHE_HOME": str(root / "cache"),
+                "XDG_DATA_HOME": str(root / "data"),
+                "XDG_STATE_HOME": str(root / "state"),
+                "XDG_RUNTIME_DIR": str(root / "runtime"),
+                "WEZ_VTABS_DB": str(root / "state.sqlite"),
+                "WEZ_VTABS_SCENARIO": str(root),
+                "WEZ_VTABS_SCENARIO_ID": self.identity,
+                "WEZ_VTABS_SCENARIO_NATIVE": "1" if native else "0",
+                "WEZ_VTABS_SCENARIO_DOMAIN": domain,
+            }
+        )
         self.env["WEZ_VTABS_PLUGIN"] = str(Path(__file__).resolve().parents[2] / "plugin/init.lua")
         self.env["WEZ_VTABS_SCENARIO_CHROME"] = "1" if chrome else "0"
         self.env["WEZ_VTABS_SCENARIO_HOOKS"] = "1" if hooks else "0"
         self.env["WEZ_VTABS_SCENARIO_EFFECTS"] = "1" if effects else "0"
         if trace_mux:
-            self.env["WEZTERM_LOG"] = "warn,wezterm_client=trace,wezterm_mux_server_impl=trace,wezterm_gui::termwindow::resize=trace"
+            self.env["WEZTERM_LOG"] = (
+                "warn,wezterm_client=trace,wezterm_mux_server_impl=trace,wezterm_gui::termwindow::resize=trace"
+            )
         if initial_size:
             self.env["WEZ_VTABS_SCENARIO_COLS"] = str(initial_size["cols"])
             self.env["WEZ_VTABS_SCENARIO_ROWS"] = str(initial_size["rows"])
@@ -215,13 +262,29 @@ class Probe:
         self.config.write_text(CONFIG, encoding="utf-8")
 
     def start_process(self, args, log, env=None):
+        self.display.assert_live()
+        process_env = dict(env or self.env)
+        process_env.update({"DISPLAY": self.display.env["DISPLAY"], "GDK_BACKEND": "x11"})
+        for key in ("WAYLAND_DISPLAY", "XAUTHORITY", "DBUS_SESSION_BUS_ADDRESS", "SSH_AUTH_SOCK"):
+            process_env.pop(key, None)
         output = (self.root / log).open("wb")
         self.outputs.append(output)
-        process = subprocess.Popen([str(value) for value in args], env=env or self.env, stdin=subprocess.DEVNULL, stdout=output, stderr=subprocess.STDOUT, start_new_session=os.name != "nt")
+        process = subprocess.Popen(
+            [str(value) for value in args],
+            env=process_env,
+            stdin=subprocess.DEVNULL,
+            stdout=output,
+            stderr=subprocess.STDOUT,
+            start_new_session=os.name != "nt",
+        )
         self.processes.append(process)
         return process
 
     def start(self):
+        if self.owns_display:
+            self.display.start()
+        self.display.assert_live()
+        self.env.update({"DISPLAY": self.display.env["DISPLAY"], "GDK_BACKEND": "x11"})
         if self.domain == "unix":
             if os.name == "nt":
                 raise RuntimeError("Unix mux is unavailable on Windows; use local or SSH")
@@ -232,13 +295,29 @@ class Probe:
                 if time.monotonic() > deadline:
                     raise AssertionError("owned Unix mux did not start")
                 time.sleep(0.05)
-        args = [self.gui, "--config-file", self.config, "start", "--always-new-process", "--no-auto-connect", "--class", self.identity, "--workspace", self.identity]
+        args = [
+            self.gui,
+            "--config-file",
+            self.config,
+            "start",
+            "--always-new-process",
+            "--no-auto-connect",
+            "--class",
+            self.identity,
+            "--workspace",
+            self.identity,
+        ]
         if self.domain != "local":
             args += ["--domain", "scenario-" + self.domain]
         self.gui_process = self.start_process(args, "gui.log")
         state = self.wait(lambda state: state.get("tabs"), timeout=25, any_window=True)
         self.window = state["window"]
-        self.wait(lambda state: bool(state.get("tabs")) and (not self.native or state.get("sidebar", {}).get("width", 0) > 0))
+        self.wait(
+            lambda state: (
+                bool(state.get("tabs"))
+                and (not self.native or state.get("sidebar", {}).get("width", 0) > 0)
+            )
+        )
         self.sample_for(0.7)
         return self.latest[self.window]
 
@@ -270,7 +349,9 @@ class Probe:
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             self.read()
-            candidates = list(self.latest.values()) if any_window else [self.latest.get(self.window, {})]
+            candidates = (
+                list(self.latest.values()) if any_window else [self.latest.get(self.window, {})]
+            )
             for state in candidates:
                 if predicate(state):
                     return state
@@ -290,7 +371,13 @@ class Probe:
 
     def send(self, kind, value=None, window=None, **extra):
         self.command_id += 1
-        command = {"id": self.command_id, "window": self.window if window is None else window, "kind": kind, "value": value, **extra}
+        command = {
+            "id": self.command_id,
+            "window": self.window if window is None else window,
+            "kind": kind,
+            "value": value,
+            **extra,
+        }
         pending = self.root / "command.tmp"
         pending.write_text(json.dumps(command), encoding="utf-8")
         pending.replace(self.root / "command.json")
@@ -305,24 +392,32 @@ class Probe:
     def capture(self, name):
         if not self.capture_enabled:
             return
-        import sys
-        if sys.platform != "darwin":
-            return
-        program = '''import CoreGraphics
-import Foundation
-let pid = Int(CommandLine.arguments[1])!
-let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as! [[String: Any]]
-for window in windows {
- if window[kCGWindowOwnerPID as String] as? Int == pid && window[kCGWindowLayer as String] as? Int == 0 {
-  print(window[kCGWindowNumber as String]!); break
- }
-}
-'''
-        result = subprocess.run(["swift", "-e", program, str(self.gui_process.pid)], text=True, capture_output=True, timeout=30, check=True)
-        identifier = result.stdout.strip()
-        if not identifier.isdigit():
-            raise AssertionError("owned GUI capture window missing")
-        subprocess.run(["/usr/sbin/screencapture", "-x", "-o", "-l", identifier, str(self.root / (name + ".png"))], check=True, timeout=10)
+        self.display.assert_live()
+        result = subprocess.run(
+            ["xdotool", "search", "--onlyvisible", "--class", self.identity],
+            env=self.env,
+            text=True,
+            capture_output=True,
+            timeout=10,
+            check=True,
+        )
+        windows = result.stdout.splitlines()
+        if len(windows) != 1:
+            raise AssertionError(f"Expected one owned GUI capture window, found {windows}")
+        subprocess.run(
+            [
+                "import",
+                "-display",
+                self.display.env["DISPLAY"],
+                "-window",
+                windows[0],
+                str(self.root / (name + ".png")),
+            ],
+            env=self.env,
+            check=True,
+            capture_output=True,
+            timeout=10,
+        )
 
     def close(self):
         # Only windows created in this process/workspace receive close actions.
@@ -333,19 +428,37 @@ for window in windows {
             except OSError:
                 pass
         for process in reversed(self.processes):
-            if process.poll() is None:
-                process.terminate()
+            if os.name == "nt":
+                if process.poll() is None:
+                    process.terminate()
+            else:
                 try:
-                    process.wait(timeout=3)
-                except subprocess.TimeoutExpired:
+                    os.killpg(process.pid, signal.SIGTERM)
+                except ProcessLookupError:
+                    pass
+            try:
+                process.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                if os.name == "nt":
                     process.kill()
-                    process.wait(timeout=3)
+            finally:
+                if os.name != "nt":
+                    try:
+                        os.killpg(process.pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+                process.wait(timeout=3)
         for output in self.outputs:
             output.close()
+        if self.owns_display:
+            self.display.close()
 
 
 def pane_shape(state):
-    return [[(pane["left"], pane["top"], pane["cols"], pane["rows"]) for pane in tab["panes"]] for tab in state["tabs"]]
+    return [
+        [(pane["left"], pane["top"], pane["cols"], pane["rows"]) for pane in tab["panes"]]
+        for tab in state["tabs"]
+    ]
 
 
 def geometry_scenarios(probe):
@@ -362,39 +475,77 @@ def geometry_scenarios(probe):
     second = two["tabs"][1]["id"]
     dimensions = two["dimensions"]
     deltas = [0, 60, 120, 200, 300, 240, 140, 40, -80, -160, -80, 0]
-    sizes = [{"width": dimensions["pixel_width"] + delta, "height": dimensions["pixel_height"]} for delta in deltas] * probe.resize_rounds
+    sizes = [
+        {"width": dimensions["pixel_width"] + delta, "height": dimensions["pixel_height"]}
+        for delta in deltas
+    ] * probe.resize_rounds
     start = len(probe.samples)
     command = probe.send("resize_sequence", sizes)
-    probe.wait(lambda state: state.get("command", 0) >= command and state.get("step") == len(sizes), timeout=max(10, len(sizes) * 0.06 + 5))
+    probe.wait(
+        lambda state: state.get("command", 0) >= command and state.get("step") == len(sizes),
+        timeout=max(10, len(sizes) * 0.06 + 5),
+    )
     probe.sample_for(0.35)
-    frames = [state for state in probe.samples[start:] if state["window"] == probe.window and state.get("command", 0) >= command]
-    assert len({state["dimensions"]["pixel_width"] for state in frames}) >= 5, "insufficient resize samples"
+    frames = [
+        state
+        for state in probe.samples[start:]
+        if state["window"] == probe.window and state.get("command", 0) >= command
+    ]
+    assert len({state["dimensions"]["pixel_width"] for state in frames}) >= 5, (
+        "insufficient resize samples"
+    )
     for state in frames:
         tab = next(tab for tab in state["tabs"] if tab["id"] == first)
-        assert [pane["id"] for pane in tab["panes"]] == pane_ids, "resize changed content pane identities"
-        assert all(pane["top"] == 0 for pane in tab["panes"]), "resize rearranged horizontal content splits"
+        assert [pane["id"] for pane in tab["panes"]] == pane_ids, (
+            "resize changed content pane identities"
+        )
+        assert all(pane["top"] == 0 for pane in tab["panes"]), (
+            "resize rearranged horizontal content splits"
+        )
         if probe.native:
             expected_width = state["model"]["settings"]["width"] * state["dimensions"]["dpi"] / 96
-            assert abs(state["sidebar"]["width"] - expected_width) <= 1, "transient sidebar width correction"
-            assert state["content"]["x"] >= state["sidebar"]["x"] + state["sidebar"]["width"] - 1, "content overlaps sidebar"
+            assert abs(state["sidebar"]["width"] - expected_width) <= 1, (
+                "transient sidebar width correction"
+            )
+            assert state["content"]["x"] >= state["sidebar"]["x"] + state["sidebar"]["width"] - 1, (
+                "content overlaps sidebar"
+            )
             sizes_now = {(tab["size"]["cols"], tab["size"]["rows"]) for tab in state["tabs"]}
             assert len(sizes_now) == 1, "background tab has stale content dimensions"
     before = probe.latest[probe.window]
     for index, expected in ((0, first), (1, second), (-1, second), (0, first)):
         requested_at = time.monotonic()
         command = probe.action("activate", index=index)
-        selected = probe.wait(lambda state: state.get("command", 0) >= command and next((tab["id"] for tab in state.get("tabs", []) if tab["active"]), None) == expected)
+        selected = probe.wait(
+            lambda state, command=command, expected=expected: (
+                state.get("command", 0) >= command
+                and next((tab["id"] for tab in state.get("tabs", []) if tab["active"]), None)
+                == expected
+            )
+        )
         if probe.native:
             assert selected["active"] == expected, "native binding and visible projection disagree"
-            assert selected["sidebar"] == before["sidebar"], "native activation changed sidebar geometry"
+            assert selected["sidebar"] == before["sidebar"], (
+                "native activation changed sidebar geometry"
+            )
         selected["activation_observed_seconds"] = selected["observed_at"] - requested_at
     probe.sample_for(0.4)
     final = probe.latest[probe.window]
     observed_steps = {}
     for state in frames:
-        if state.get("step", 0) and state.get("requested") and abs(state["dimensions"]["pixel_width"] - state["requested"]["width"]) <= 1:
+        if (
+            state.get("step", 0)
+            and state.get("requested")
+            and abs(state["dimensions"]["pixel_width"] - state["requested"]["width"]) <= 1
+        ):
             observed_steps[state["step"]] = pane_shape(state)
-    return {"initial_size": split["tabs"][0]["size"], "initial_split": original_shape, "final_split": pane_shape(final)[0], "resize_steps": observed_steps, "frames": len(frames)}
+    return {
+        "initial_size": split["tabs"][0]["size"],
+        "initial_split": original_shape,
+        "final_split": pane_shape(final)[0],
+        "resize_steps": observed_steps,
+        "frames": len(frames),
+    }
 
 
 def feature_scenarios(probe):
@@ -404,21 +555,38 @@ def feature_scenarios(probe):
     probe.intent({"CreateSpace": {"name": "Scenario Work"}})
     empty = probe.wait(lambda state: state.get("model", {}).get("selected_space") != home)
     space = empty["model"]["selected_space"]
-    assert empty["visible"] == [] and empty["active"] is None, "empty space exposes hidden terminal"
-    assert {tab["id"] for tab in empty["tabs"]} == old_tabs, "selecting space spawned or moved content"
+    assert empty["visible"] == [], "empty space exposes hidden terminal"
+    assert empty["active"] is None, "empty space keeps a hidden terminal active"
+    assert {tab["id"] for tab in empty["tabs"]} == old_tabs, (
+        "selecting space spawned or moved content"
+    )
     assert any(item["name"] == "Scenario Work" for item in empty["model"]["spaces"])
     probe.capture("empty-space")
     probe.action("new_tab")
-    created = probe.wait(lambda state: len(state.get("tabs", [])) == len(old_tabs) + 1 and len(state.get("visible", [])) == 1)
+    created = probe.wait(
+        lambda state: (
+            len(state.get("tabs", [])) == len(old_tabs) + 1 and len(state.get("visible", [])) == 1
+        )
+    )
     assert created["active"] == created["visible"][0]
     assert created["model"]["selected_space"] == space
     probe.intent({"SelectSpace": home})
-    probe.wait(lambda state: state.get("model", {}).get("selected_space") == home and len(state.get("visible", [])) == len(old_tabs))
+    probe.wait(
+        lambda state: (
+            state.get("model", {}).get("selected_space") == home
+            and len(state.get("visible", [])) == len(old_tabs)
+        )
+    )
     probe.sample_for(0.6)
     idle = [state for state in probe.sample_for(0.3) if state["window"] == probe.window]
-    assert idle and len({state["model"]["surface_revision"] for state in idle}) == 1, "idle sidebar recomposes"
+    assert idle, "idle sidebar produced no samples"
+    assert len({state["model"]["surface_revision"] for state in idle}) == 1, (
+        "idle sidebar recomposes"
+    )
     if probe.env["WEZ_VTABS_SCENARIO_HOOKS"] == "1":
-        assert all(value > 0 for value in idle[0]["hook_calls"].values()), "configured hook was not exercised"
+        assert all(value > 0 for value in idle[0]["hook_calls"].values()), (
+            "configured hook was not exercised"
+        )
         assert idle[0]["hook_calls"] == idle[-1]["hook_calls"], "idle sidebar reruns Lua hooks"
     probe.intent({"SetSetting": {"key": "width", "value": 300}})
     probe.wait(lambda state: state.get("model", {}).get("settings", {}).get("width") == 300)
@@ -426,8 +594,12 @@ def feature_scenarios(probe):
     rows = []
     while time.monotonic() < deadline:
         try:
-            with sqlite3.connect(f"file:{probe.root / 'state.sqlite'}?mode=ro", uri=True) as connection:
-                rows = connection.execute("SELECT entity,field,value FROM fields WHERE value IS NOT NULL").fetchall()
+            with sqlite3.connect(
+                f"file:{probe.root / 'state.sqlite'}?mode=ro", uri=True
+            ) as connection:
+                rows = connection.execute(
+                    "SELECT entity,field,value FROM fields WHERE value IS NOT NULL"
+                ).fetchall()
             if any(field == "width" and value == "300" for _, field, value in rows):
                 break
         except sqlite3.Error:
@@ -436,32 +608,76 @@ def feature_scenarios(probe):
     else:
         raise AssertionError("settings write did not reach SQLite")
     probe.intent("PrivateWindow")
-    private = probe.wait(lambda state: state.get("model", {}).get("private") is True, any_window=True)
+    private = probe.wait(
+        lambda state: state.get("model", {}).get("private") is True, any_window=True
+    )
     private_window = private["window"]
     private_tab = private["tabs"][0]["id"]
     private_count = len(private["tabs"])
     probe.send("action", {"name": "new_tab"}, window=private_window)
-    private = probe.wait(lambda state: state["window"] == private_window and len(state.get("tabs", [])) == private_count + 1, any_window=True)
+    private = probe.wait(
+        lambda state: (
+            state["window"] == private_window and len(state.get("tabs", [])) == private_count + 1
+        ),
+        any_window=True,
+    )
     probe.send("probe_private_env", window=private_window)
-    probe.wait(lambda state: state["window"] == private_window and state.get("private_env_ok") is True, any_window=True)
-    probe.intent({"RenameTab": {"id": private_tab, "title": "PRIVATE MUST NOT PERSIST"}}, window=private_window)
-    probe.wait(lambda state: state["window"] == private_window and state.get("command", 0) >= probe.command_id, any_window=True)
+    probe.wait(
+        lambda state: state["window"] == private_window and state.get("private_env_ok") is True,
+        any_window=True,
+    )
+    probe.intent(
+        {"RenameTab": {"id": private_tab, "title": "PRIVATE MUST NOT PERSIST"}},
+        window=private_window,
+    )
+    probe.wait(
+        lambda state: (
+            state["window"] == private_window and state.get("command", 0) >= probe.command_id
+        ),
+        any_window=True,
+    )
     probe.intent({"PinTab": {"id": private_tab, "pinned": True}}, window=private_window)
-    probe.wait(lambda state: state["window"] == private_window and state.get("command", 0) >= probe.command_id, any_window=True)
+    probe.wait(
+        lambda state: (
+            state["window"] == private_window and state.get("command", 0) >= probe.command_id
+        ),
+        any_window=True,
+    )
     probe.intent({"CreateSpace": {"name": "Shared catalog edit"}}, window=private_window)
-    probe.wait(lambda state: state["window"] == private_window and any(space["name"] == "Shared catalog edit" for space in state.get("model", {}).get("spaces", [])), any_window=True)
+    probe.wait(
+        lambda state: (
+            state["window"] == private_window
+            and any(
+                space["name"] == "Shared catalog edit"
+                for space in state.get("model", {}).get("spaces", [])
+            )
+        ),
+        any_window=True,
+    )
     deadline = time.monotonic() + 5
     while time.monotonic() < deadline:
         with sqlite3.connect(f"file:{probe.root / 'state.sqlite'}?mode=ro", uri=True) as connection:
-            persisted = connection.execute("SELECT scope,entity,value FROM fields WHERE value IS NOT NULL").fetchall()
-        if any('Shared catalog edit' in value for _, _, value in persisted):
+            persisted = connection.execute(
+                "SELECT scope,entity,value FROM fields WHERE value IS NOT NULL"
+            ).fetchall()
+        if any("Shared catalog edit" in value for _, _, value in persisted):
             break
         probe.sample_for(0.05)
     else:
         raise AssertionError("explicit shared catalog edit was not persisted")
-    assert all("PRIVATE MUST NOT PERSIST" not in value for _, _, value in persisted), "private tab metadata reached SQLite"
-    assert not any(json.loads(scope)["kind"] == "session" and entity == f"tab:{private_tab}" for scope, entity, _ in persisted), "private tab state reached SQLite"
-    return {"empty_space": space, "private_window": private_window, "persisted_fields": len(rows), "idle_samples": len(idle)}
+    assert all("PRIVATE MUST NOT PERSIST" not in value for _, _, value in persisted), (
+        "private tab metadata reached SQLite"
+    )
+    assert not any(
+        json.loads(scope)["kind"] == "session" and entity == f"tab:{private_tab}"
+        for scope, entity, _ in persisted
+    ), "private tab state reached SQLite"
+    return {
+        "empty_space": space,
+        "private_window": private_window,
+        "persisted_fields": len(rows),
+        "idle_samples": len(idle),
+    }
 
 
 def workspace_scenario(probe):
@@ -475,30 +691,61 @@ def workspace_scenario(probe):
     space = state["model"]["selected_space"]
     for tab in tabs:
         command = probe.intent({"AssignTab": {"id": tab, "space_id": space}})
-        probe.wait(lambda state: state.get("command", 0) >= command and tab in state.get("visible", []))
+        probe.wait(
+            lambda state, command=command, tab=tab: (
+                state.get("command", 0) >= command and tab in state.get("visible", [])
+            )
+        )
     command = probe.intent({"PinTab": {"id": tabs[0], "pinned": True}})
     probe.wait(lambda state: state.get("command", 0) >= command)
     probe.action("activate", index=0)
     probe.wait(lambda state: state.get("active") == tabs[0])
     switched_at = time.monotonic()
     probe.action("workspace", workspace=probe.identity + "-other")
-    other = probe.wait(lambda state: state.get("mux_window") != original_mux and state.get("workspace") == probe.identity + "-other" and state.get("observed_at", 0) > switched_at, any_window=True)
+    other = probe.wait(
+        lambda state: (
+            state.get("mux_window") != original_mux
+            and state.get("workspace") == probe.identity + "-other"
+            and state.get("observed_at", 0) > switched_at
+        ),
+        any_window=True,
+    )
     probe.window = other["window"]
     switched_at = time.monotonic()
     probe.action("workspace", workspace=probe.identity)
-    restored = probe.wait(lambda state: state.get("mux_window") == original_mux and state.get("workspace") == probe.identity and state.get("observed_at", 0) > switched_at, any_window=True)
+    restored = probe.wait(
+        lambda state: (
+            state.get("mux_window") == original_mux
+            and state.get("workspace") == probe.identity
+            and state.get("observed_at", 0) > switched_at
+        ),
+        any_window=True,
+    )
     probe.window = restored["window"]
     assert restored["model"]["selected_space"] == space, "workspace switch lost selected space"
     assert set(restored["visible"]) == set(tabs), "workspace switch lost tab membership"
-    assert any(tab["id"] == tabs[0] and tab["pinned"] for tab in restored["model"].get("tabs", [])), "workspace switch lost pin"
+    assert any(
+        tab["id"] == tabs[0] and tab["pinned"] for tab in restored["model"].get("tabs", [])
+    ), "workspace switch lost pin"
     for tab in tabs:
         command = probe.intent({"AssignTab": {"id": tab, "space_id": original_space}})
-        probe.wait(lambda state: state.get("command", 0) >= command)
+        probe.wait(lambda state, command=command: state.get("command", 0) >= command)
     command = probe.intent({"PinTab": {"id": tabs[0], "pinned": False}})
     probe.wait(lambda state: state.get("command", 0) >= command)
     probe.intent({"SelectSpace": original_space})
-    probe.wait(lambda state: state.get("model", {}).get("selected_space") == original_space and len(state.get("visible", [])) == len(tabs))
-    return {"original_window": original_window, "other_window": other["window"], "original_mux": original_mux, "other_mux": other["mux_window"], "retained_space": space}
+    probe.wait(
+        lambda state: (
+            state.get("model", {}).get("selected_space") == original_space
+            and len(state.get("visible", [])) == len(tabs)
+        )
+    )
+    return {
+        "original_window": original_window,
+        "other_window": other["window"],
+        "original_mux": original_mux,
+        "other_mux": other["mux_window"],
+        "retained_space": space,
+    }
 
 
 def edge_scenarios(probe):
@@ -508,42 +755,118 @@ def edge_scenarios(probe):
     initial_shape = pane_shape(initial)
     cell_width = initial["tabs"][0]["size"]["pixel_width"] / initial["tabs"][0]["size"]["cols"]
     probe.action("font_increase")
-    probe.wait(lambda state: state.get("tabs") and state["tabs"][0]["size"]["pixel_width"] / state["tabs"][0]["size"]["cols"] > cell_width)
+    probe.wait(
+        lambda state: (
+            state.get("tabs")
+            and state["tabs"][0]["size"]["pixel_width"] / state["tabs"][0]["size"]["cols"]
+            > cell_width
+        )
+    )
     probe.action("font_reset")
-    probe.wait(lambda state: state.get("tabs") and state["tabs"][0]["size"]["pixel_width"] / state["tabs"][0]["size"]["cols"] == cell_width)
+    probe.wait(
+        lambda state: (
+            state.get("tabs")
+            and state["tabs"][0]["size"]["pixel_width"] / state["tabs"][0]["size"]["cols"]
+            == cell_width
+        )
+    )
     for enabled in (True, False):
         probe.action("fullscreen")
-        state = probe.wait(lambda state: state.get("dimensions", {}).get("is_full_screen") is enabled)
-        assert state["content"]["width"] > 0 and state["content"]["height"] > 0, "fullscreen content dimensions are invalid"
+        state = probe.wait(
+            lambda state, enabled=enabled: (
+                state.get("dimensions", {}).get("is_full_screen") is enabled
+            )
+        )
+        assert state["content"]["width"] > 0, "fullscreen content width is invalid"
+        assert state["content"]["height"] > 0, "fullscreen content height is invalid"
         expected = state["model"]["settings"]["width"] * state["dimensions"]["dpi"] / 96
-        assert abs(state["sidebar"]["width"] - expected) <= 1, "fullscreen changed logical sidebar width"
+        assert abs(state["sidebar"]["width"] - expected) <= 1, (
+            "fullscreen changed logical sidebar width"
+        )
     for enabled in (True, False):
         probe.action("zoom")
-        probe.wait(lambda state: any(tab["active"] and tab["zoomed"] is enabled for tab in state.get("tabs", [])))
-    assert pane_shape(probe.latest[probe.window]) == initial_shape, "font/fullscreen/zoom roundtrip changed split sizing"
+        probe.wait(
+            lambda state, enabled=enabled: any(
+                tab["active"] and tab["zoomed"] is enabled for tab in state.get("tabs", [])
+            )
+        )
+    assert pane_shape(probe.latest[probe.window]) == initial_shape, (
+        "font/fullscreen/zoom roundtrip changed split sizing"
+    )
     probe.intent({"SetSetting": {"key": "side", "value": "right"}})
-    right = probe.wait(lambda state: state.get("model", {}).get("settings", {}).get("side") == "right" and state.get("sidebar", {}).get("x", 0) > 0)
-    assert abs(right["sidebar"]["x"] - right["content"]["x"] - right["content"]["width"]) <= 1, "right sidebar overlaps terminal"
+    right = probe.wait(
+        lambda state: (
+            state.get("model", {}).get("settings", {}).get("side") == "right"
+            and state.get("sidebar", {}).get("x", 0) > 0
+        )
+    )
+    assert abs(right["sidebar"]["x"] - right["content"]["x"] - right["content"]["width"]) <= 1, (
+        "right sidebar overlaps terminal"
+    )
     if probe.env["WEZ_VTABS_SCENARIO_CHROME"] == "1":
-        assert right["sidebar"]["y"] > 0 and right["sidebar"]["y"] == right["content"]["y"], "integrated chrome not reserved"
+        assert right["sidebar"]["y"] > 0, "integrated chrome not reserved"
+        assert right["sidebar"]["y"] == right["content"]["y"], "content and sidebar do not align"
     for rail, expected in (("collapsed", "rail_width"), ("hidden", None), ("expanded", "width")):
         command = probe.intent({"SetSetting": {"key": "rail", "value": rail}})
-        state = probe.wait(lambda state: state.get("command", 0) >= command and state.get("model", {}).get("settings", {}).get("rail") == rail)
-        width = state["model"]["settings"][expected] * state["dimensions"]["dpi"] / 96 if expected else 0
+        state = probe.wait(
+            lambda state, command=command, rail=rail: (
+                state.get("command", 0) >= command
+                and state.get("model", {}).get("settings", {}).get("rail") == rail
+            )
+        )
+        width = (
+            state["model"]["settings"][expected] * state["dimensions"]["dpi"] / 96
+            if expected
+            else 0
+        )
         assert abs(state["sidebar"]["width"] - width) <= 1, "rail reservation is stale"
     command = probe.send("resize", {"width": 150, "height": 120})
-    tiny = probe.wait(lambda state: state.get("command", 0) >= command and state.get("dimensions", {}).get("pixel_width", 9999) < initial_size["pixel_width"])
+    tiny = probe.wait(
+        lambda state: (
+            state.get("command", 0) >= command
+            and state.get("dimensions", {}).get("pixel_width", 9999) < initial_size["pixel_width"]
+        )
+    )
     probe.sample_for(0.25)
     tiny = probe.latest[probe.window]
-    assert tiny["content"]["width"] > 0 and tiny["content"]["height"] >= 0, "tiny resize removes content reservation"
-    assert tiny["sidebar"]["width"] >= 0 and tiny["sidebar"]["x"] + tiny["sidebar"]["width"] <= tiny["dimensions"]["pixel_width"] + 1, "tiny sidebar extends outside window"
-    assert [[pane["id"] for pane in tab["panes"]] for tab in tiny["tabs"]] == pane_ids, "tiny resize changed pane topology"
+    assert tiny["content"]["width"] > 0, "tiny resize removes content width reservation"
+    assert tiny["content"]["height"] >= 0, "tiny resize removes content height reservation"
+    assert tiny["sidebar"]["width"] >= 0, "tiny sidebar has a negative width"
+    assert (
+        tiny["sidebar"]["x"] + tiny["sidebar"]["width"] <= tiny["dimensions"]["pixel_width"] + 1
+    ), "tiny sidebar extends outside window"
+    assert [[pane["id"] for pane in tab["panes"]] for tab in tiny["tabs"]] == pane_ids, (
+        "tiny resize changed pane topology"
+    )
     command = probe.intent({"SetSetting": {"key": "side", "value": "left"}})
-    probe.wait(lambda state: state.get("command", 0) >= command and state.get("model", {}).get("settings", {}).get("side") == "left")
-    command = probe.send("resize", {"width": initial_size["pixel_width"], "height": initial_size["pixel_height"]})
-    restored = probe.wait(lambda state: state.get("command", 0) >= command and state.get("dimensions", {}).get("pixel_width") == initial_size["pixel_width"] and state.get("dimensions", {}).get("pixel_height") == initial_size["pixel_height"])
-    assert [[pane["id"] for pane in tab["panes"]] for tab in restored["tabs"]] == pane_ids, "restoring tiny window changed pane identities"
-    return {"right_x": right["sidebar"]["x"], "chrome_height": right["sidebar"]["y"], "tiny_size": tiny["dimensions"], "tiny_content": tiny["content"], "tiny_terminal": tiny["tabs"][0]["size"], "restored_split": pane_shape(restored), "font_fullscreen_zoom": True}
+    probe.wait(
+        lambda state: (
+            state.get("command", 0) >= command
+            and state.get("model", {}).get("settings", {}).get("side") == "left"
+        )
+    )
+    command = probe.send(
+        "resize", {"width": initial_size["pixel_width"], "height": initial_size["pixel_height"]}
+    )
+    restored = probe.wait(
+        lambda state: (
+            state.get("command", 0) >= command
+            and state.get("dimensions", {}).get("pixel_width") == initial_size["pixel_width"]
+            and state.get("dimensions", {}).get("pixel_height") == initial_size["pixel_height"]
+        )
+    )
+    assert [[pane["id"] for pane in tab["panes"]] for tab in restored["tabs"]] == pane_ids, (
+        "restoring tiny window changed pane identities"
+    )
+    return {
+        "right_x": right["sidebar"]["x"],
+        "chrome_height": right["sidebar"]["y"],
+        "tiny_size": tiny["dimensions"],
+        "tiny_content": tiny["content"],
+        "tiny_terminal": tiny["tabs"][0]["size"],
+        "restored_split": pane_shape(restored),
+        "font_fullscreen_zoom": True,
+    }
 
 
 def stock_tiny_scenario(probe, native_edges):
@@ -551,13 +874,36 @@ def stock_tiny_scenario(probe, native_edges):
     dimensions = initial["dimensions"]
     terminal = initial["tabs"][0]["size"]
     target = native_edges["tiny_terminal"]
-    command = probe.send("resize", {
-        "width": dimensions["pixel_width"] - terminal["pixel_width"] + target["pixel_width"],
-        "height": dimensions["pixel_height"] - terminal["pixel_height"] + target["pixel_height"],
-    })
-    probe.wait(lambda state: state.get("command", 0) >= command and all(tab["size"]["cols"] == target["cols"] and tab["size"]["rows"] == target["rows"] for tab in state.get("tabs", [])))
-    command = probe.send("resize", {"width": dimensions["pixel_width"], "height": dimensions["pixel_height"]})
-    restored = probe.wait(lambda state: state.get("command", 0) >= command and all(tab["size"]["cols"] == terminal["cols"] and tab["size"]["rows"] == terminal["rows"] for tab in state.get("tabs", [])))
+    command = probe.send(
+        "resize",
+        {
+            "width": dimensions["pixel_width"] - terminal["pixel_width"] + target["pixel_width"],
+            "height": dimensions["pixel_height"]
+            - terminal["pixel_height"]
+            + target["pixel_height"],
+        },
+    )
+    probe.wait(
+        lambda state: (
+            state.get("command", 0) >= command
+            and all(
+                tab["size"]["cols"] == target["cols"] and tab["size"]["rows"] == target["rows"]
+                for tab in state.get("tabs", [])
+            )
+        )
+    )
+    command = probe.send(
+        "resize", {"width": dimensions["pixel_width"], "height": dimensions["pixel_height"]}
+    )
+    restored = probe.wait(
+        lambda state: (
+            state.get("command", 0) >= command
+            and all(
+                tab["size"]["cols"] == terminal["cols"] and tab["size"]["rows"] == terminal["rows"]
+                for tab in state.get("tabs", [])
+            )
+        )
+    )
     shape = pane_shape(restored)
     assert shape == native_edges["restored_split"], "tiny-window split rounding differs from stock"
     return shape
@@ -570,17 +916,42 @@ def main():
     parser.add_argument("--mux-server", type=Path)
     parser.add_argument("--baseline-gui", type=Path)
     parser.add_argument("--geometry-only", action="store_true")
-    parser.add_argument("--workspace", action="store_true", help="also check suspended native workspace state")
-    parser.add_argument("--chrome", action="store_true", help="use integrated title controls and nonzero padding")
-    parser.add_argument("--edge-cases", action="store_true", help="check fonts, fullscreen, zoom, right edge, rail states and tiny windows")
-    parser.add_argument("--trace-mux", action="store_true", help="record client/server resize traces")
-    parser.add_argument("--hooks", action="store_true", help="enable all Lua hooks and process routing metadata")
-    parser.add_argument("--effects", action="store_true", help="retain default TachyonFX transitions")
-    parser.add_argument("--resize-rounds", type=int, default=1, help="repeat the dense resize/reversal sequence in one window")
-    parser.add_argument("--capture", action="store_true", help="capture only this runner's macOS GUI window")
+    parser.add_argument(
+        "--workspace", action="store_true", help="also check suspended native workspace state"
+    )
+    parser.add_argument(
+        "--chrome", action="store_true", help="use integrated title controls and nonzero padding"
+    )
+    parser.add_argument(
+        "--edge-cases",
+        action="store_true",
+        help="check fonts, fullscreen, zoom, right edge, rail states and tiny windows",
+    )
+    parser.add_argument(
+        "--trace-mux", action="store_true", help="record client/server resize traces"
+    )
+    parser.add_argument(
+        "--hooks", action="store_true", help="enable all Lua hooks and process routing metadata"
+    )
+    parser.add_argument(
+        "--effects", action="store_true", help="retain default TachyonFX transitions"
+    )
+    parser.add_argument(
+        "--resize-rounds",
+        type=int,
+        default=1,
+        help="repeat the dense resize/reversal sequence in one window",
+    )
+    parser.add_argument(
+        "--capture", action="store_true", help="capture this runner's private X11 window"
+    )
     parser.add_argument("--domain", choices=("local", "unix", "ssh", "tls"), default="local")
-    parser.add_argument("--ssh-config", type=Path, help="SshDomain JSON for a disposable SSH-mux fixture")
-    parser.add_argument("--tls-config", type=Path, help="TlsDomainClient JSON for a disposable TLS-mux fixture")
+    parser.add_argument(
+        "--ssh-config", type=Path, help="SshDomain JSON for a disposable SSH-mux fixture"
+    )
+    parser.add_argument(
+        "--tls-config", type=Path, help="TlsDomainClient JSON for a disposable TLS-mux fixture"
+    )
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
     if not 1 <= args.resize_rounds <= 20:
@@ -591,8 +962,25 @@ def main():
         parser.error("--domain tls requires --tls-config for a disposable test mux")
     output = (args.output or Path(tempfile.mkdtemp(prefix="vtabs-native-scenarios-"))).resolve()
     output.mkdir(parents=True, exist_ok=True)
-    report = {"domain": args.domain, "boundary": "GUI state samples and native actions; OS drag smoothness, GPU presentation and physical key latency require visual/profiling checks"}
-    probe = Probe(output / "native", args.gui.resolve(), args.helper.resolve() if args.helper else None, args.domain, args.ssh_config, capture=args.capture, server=args.mux_server, chrome=args.chrome, trace_mux=args.trace_mux, hooks=args.hooks, effects=args.effects, resize_rounds=args.resize_rounds, tls_config=args.tls_config)
+    report = {
+        "domain": args.domain,
+        "boundary": "GUI state samples and native actions; OS drag smoothness, GPU presentation and physical key latency require visual/profiling checks",
+    }
+    probe = Probe(
+        output / "native",
+        args.gui.resolve(),
+        args.helper.resolve() if args.helper else None,
+        args.domain,
+        args.ssh_config,
+        capture=args.capture,
+        server=args.mux_server,
+        chrome=args.chrome,
+        trace_mux=args.trace_mux,
+        hooks=args.hooks,
+        effects=args.effects,
+        resize_rounds=args.resize_rounds,
+        tls_config=args.tls_config,
+    )
     try:
         report["geometry"] = geometry_scenarios(probe)
         if args.workspace:
@@ -610,13 +998,32 @@ def main():
         (output / "report.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
         print(output)
     if args.baseline_gui:
-        baseline = Probe(output / "stock", args.baseline_gui.resolve(), None, args.domain, args.ssh_config, native=False, capture=args.capture, server=args.mux_server, chrome=args.chrome, initial_size=report["geometry"]["initial_size"], trace_mux=args.trace_mux, resize_rounds=args.resize_rounds, tls_config=args.tls_config)
+        baseline = Probe(
+            output / "stock",
+            args.baseline_gui.resolve(),
+            None,
+            args.domain,
+            args.ssh_config,
+            native=False,
+            capture=args.capture,
+            server=args.mux_server,
+            chrome=args.chrome,
+            initial_size=report["geometry"]["initial_size"],
+            trace_mux=args.trace_mux,
+            resize_rounds=args.resize_rounds,
+            tls_config=args.tls_config,
+        )
         try:
             report["stock_geometry"] = geometry_scenarios(baseline)
-            common = set(report["geometry"]["resize_steps"]) & set(report["stock_geometry"]["resize_steps"])
+            common = set(report["geometry"]["resize_steps"]) & set(
+                report["stock_geometry"]["resize_steps"]
+            )
             assert len(common) >= 5, "insufficient matching native/stock resize samples"
             for step in common:
-                assert report["geometry"]["resize_steps"][step] == report["stock_geometry"]["resize_steps"][step], f"split distribution differs from stock at resize step {step}"
+                assert (
+                    report["geometry"]["resize_steps"][step]
+                    == report["stock_geometry"]["resize_steps"][step]
+                ), f"split distribution differs from stock at resize step {step}"
             if "edges" in report:
                 report["stock_tiny_restored"] = stock_tiny_scenario(baseline, report["edges"])
         finally:

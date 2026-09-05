@@ -1,4 +1,4 @@
-python := if os() == "windows" { "py -3" } else { "python3" }
+python := "uv run --locked python"
 
 _default:
     @just --list --unsorted
@@ -15,9 +15,12 @@ dev *args:
 check:
     @{{python}} scripts/native.py check
 
-test:
-    cargo test --workspace --all-features --locked
-    @{{python}} -m unittest discover -s tests/native -p "test_*.py"
+test *args:
+    uv run --locked pytest -n 2 {{args}}
+
+lint:
+    uv run --locked ruff check scripts tests
+    uv run --locked ruff format --check scripts tests
 
 package *args:
     @{{python}} scripts/native.py package {{args}}

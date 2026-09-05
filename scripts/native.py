@@ -8,7 +8,6 @@ import contextlib
 import hashlib
 import json
 import os
-from pathlib import Path
 import plistlib
 import re
 import shlex
@@ -18,6 +17,7 @@ import sys
 import tempfile
 import time
 import zipfile
+from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 UPSTREAM_URL = "https://github.com/wezterm/wezterm.git"
@@ -26,18 +26,42 @@ PROJECT_BRANCH = "native"
 CAPABILITY = 1
 DAY = 24 * 60 * 60
 BINARIES = ("wezterm-gui", "wezterm", "wezterm-mux-server", "strip-ansi-escapes")
-WINDOWS_RUNTIME = (("conhost", "conpty.dll"), ("conhost", "OpenConsole.exe"),
-                   ("angle", "libEGL.dll"), ("angle", "libGLESv2.dll"))
-SOURCE_ITEMS = ("Cargo.toml", "Cargo.lock", "README.md", "justfile", "crates", "native", "plugin", "docs", "scripts/native.py", "tests/native")
+WINDOWS_RUNTIME = (
+    ("conhost", "conpty.dll"),
+    ("conhost", "OpenConsole.exe"),
+    ("angle", "libEGL.dll"),
+    ("angle", "libGLESv2.dll"),
+)
+SOURCE_ITEMS = (
+    "Cargo.toml",
+    "Cargo.lock",
+    "pyproject.toml",
+    "uv.lock",
+    "README.md",
+    "justfile",
+    "crates",
+    "native",
+    "plugin",
+    "docs",
+    "scripts/native.py",
+    "tests",
+)
 
 
-def run(*args: object, cwd: Path | None = None, capture: bool = False,
-        env: dict[str, str] | None = None) -> str:
+def run(
+    *args: object, cwd: Path | None = None, capture: bool = False, env: dict[str, str] | None = None
+) -> str:
     command = [str(arg) for arg in args]
     if not capture:
         print("+ " + " ".join(command), flush=True)
-    result = subprocess.run(command, cwd=cwd or ROOT, env=env, check=True,
-                            text=True, stdout=subprocess.PIPE if capture else None)
+    result = subprocess.run(
+        command,
+        cwd=cwd or ROOT,
+        env=env,
+        check=True,
+        text=True,
+        stdout=subprocess.PIPE if capture else None,
+    )
     return result.stdout.strip() if capture else ""
 
 
@@ -79,6 +103,7 @@ def locked(path: Path, wait: bool = True):
     with path.open("a+b") as handle:
         if os.name == "nt":
             import msvcrt
+
             if path.stat().st_size == 0:
                 handle.write(b"0")
                 handle.flush()
@@ -93,6 +118,7 @@ def locked(path: Path, wait: bool = True):
                     time.sleep(0.25)
         else:
             import fcntl
+
             mode = fcntl.LOCK_EX | (0 if wait else fcntl.LOCK_NB)
             fcntl.flock(handle.fileno(), mode)
         try:
@@ -111,8 +137,12 @@ def source_files(root: Path):
         if path.is_file():
             yield path
         elif path.is_dir():
-            yield from sorted(child for child in path.rglob("*") if child.is_file()
-                              and not set(child.relative_to(path).parts) & {"target", "__pycache__", ".git"})
+            yield from sorted(
+                child
+                for child in path.rglob("*")
+                if child.is_file()
+                and not set(child.relative_to(path).parts) & {"target", "__pycache__", ".git"}
+            )
 
 
 def source_digest(root: Path) -> str:
@@ -151,7 +181,16 @@ def safe_id(value: str) -> str:
 def refresh(cache: Path) -> tuple[Path, str]:
     upstream = cache / "upstream"
     if not upstream.exists():
-        run("git", "clone", "--filter=blob:none", "--single-branch", "--branch", "main", UPSTREAM_URL, upstream)
+        run(
+            "git",
+            "clone",
+            "--filter=blob:none",
+            "--single-branch",
+            "--branch",
+            "main",
+            UPSTREAM_URL,
+            upstream,
+        )
     origin = run("git", "remote", "get-url", "origin", cwd=upstream, capture=True)
     if origin.rstrip("/").removesuffix(".git") != UPSTREAM_URL.removesuffix(".git"):
         raise RuntimeError(f"unexpected upstream remote: {origin}")
@@ -161,10 +200,15 @@ def refresh(cache: Path) -> tuple[Path, str]:
 
 
 def project_branch(value: str) -> str:
-    if (not isinstance(value, str)
-            or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,127}", value)
-            or ".." in value or value.endswith(("/", "."))
-            or any(not part or part.startswith(".") or part.endswith(".lock") for part in value.split("/"))):
+    if (
+        not isinstance(value, str)
+        or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,127}", value)
+        or ".." in value
+        or value.endswith(("/", "."))
+        or any(
+            not part or part.startswith(".") or part.endswith(".lock") for part in value.split("/")
+        )
+    ):
         raise RuntimeError("invalid project update branch")
     return value
 
@@ -176,7 +220,9 @@ def project_source() -> dict:
         raise RuntimeError("invalid recorded project source")
     if recorded.get("remote", PROJECT_URL) != PROJECT_URL:
         raise RuntimeError("unexpected recorded project source remote")
-    branch = project_branch(os.environ.get("WEZ_VTABS_PROJECT_BRANCH") or recorded.get("branch", PROJECT_BRANCH))
+    branch = project_branch(
+        os.environ.get("WEZ_VTABS_PROJECT_BRANCH") or recorded.get("branch", PROJECT_BRANCH)
+    )
     revision = recorded.get("revision")
     if (ROOT / ".git").exists():
         revision = run("git", "rev-parse", "HEAD", cwd=ROOT, capture=True)
@@ -189,10 +235,21 @@ def refresh_project(cache: Path, branch: str = PROJECT_BRANCH) -> Path:
     ownership = project / ".git" / "wez-vtabs-native.json"
     identity = {"path": str(project.resolve()), "remote": PROJECT_URL, "capability": CAPABILITY}
     if not project.exists():
-        run("git", "clone", "--filter=blob:none", "--single-branch", "--branch", branch, PROJECT_URL, project)
+        run(
+            "git",
+            "clone",
+            "--filter=blob:none",
+            "--single-branch",
+            "--branch",
+            branch,
+            PROJECT_URL,
+            project,
+        )
         write_json(ownership, identity)
     elif read_json(ownership) != identity:
-        raise RuntimeError("refusing to rewrite an unowned project cache; choose an empty WEZ_VTABS_CACHE")
+        raise RuntimeError(
+            "refusing to rewrite an unowned project cache; choose an empty WEZ_VTABS_CACHE"
+        )
     origin = run("git", "remote", "get-url", "origin", cwd=project, capture=True)
     if origin.rstrip("/").removesuffix(".git") != PROJECT_URL.removesuffix(".git"):
         raise RuntimeError("unexpected project cache remote")
@@ -200,8 +257,13 @@ def refresh_project(cache: Path, branch: str = PROJECT_BRANCH) -> Path:
     run("git", "fetch", "--prune", "origin", f"+refs/heads/{branch}:{remote_ref}", cwd=project)
     run("git", "reset", "--hard", remote_ref, cwd=project)
     run("git", "clean", "-ffd", cwd=project)
-    if not all((project / name).is_file() for name in ("Cargo.toml", "crates/vtabs-app/Cargo.toml", "scripts/native.py")) or not list((project / "native/patches").glob("*.patch")):
-        raise RuntimeError(f"project branch {branch} does not contain a complete native implementation")
+    if not all(
+        (project / name).is_file()
+        for name in ("Cargo.toml", "crates/vtabs-app/Cargo.toml", "scripts/native.py")
+    ) or not list((project / "native/patches").glob("*.patch")):
+        raise RuntimeError(
+            f"project branch {branch} does not contain a complete native implementation"
+        )
     return project
 
 
@@ -241,8 +303,26 @@ def prepare(cache: Path, upstream: Path, revision: str) -> Path:
     integration = integration_digest(ROOT)
     prepared = read_json(cache / "prepared.json", {})
     if worktree.exists():
-        common = Path(run("git", "rev-parse", "--path-format=absolute", "--git-common-dir", cwd=worktree, capture=True)).resolve()
-        expected = Path(run("git", "rev-parse", "--path-format=absolute", "--git-common-dir", cwd=upstream, capture=True)).resolve()
+        common = Path(
+            run(
+                "git",
+                "rev-parse",
+                "--path-format=absolute",
+                "--git-common-dir",
+                cwd=worktree,
+                capture=True,
+            )
+        ).resolve()
+        expected = Path(
+            run(
+                "git",
+                "rev-parse",
+                "--path-format=absolute",
+                "--git-common-dir",
+                cwd=upstream,
+                capture=True,
+            )
+        ).resolve()
         if common != expected or worktree.resolve() == upstream.resolve():
             raise RuntimeError("refusing to replace an unowned worktree")
         if prepared.get("upstream") == revision and prepared.get("integration") == integration:
@@ -271,26 +351,76 @@ def build(cache: Path, debug: bool = False) -> dict:
     project = project_source()
     source_id = hashlib.sha256(json.dumps(project, sort_keys=True).encode()).hexdigest()[:8]
     key = f"{revision[:12]}-{fingerprint[:12]}-{source_id}-{target}-{profile}"
-    metadata = {"id": key, "capability": CAPABILITY, "upstream": revision,
-                "source_digest": fingerprint, "target": target, "profile": profile,
-                "project_source": project}
+    metadata = {
+        "id": key,
+        "capability": CAPABILITY,
+        "upstream": revision,
+        "source_digest": fingerprint,
+        "target": target,
+        "profile": profile,
+        "project_source": project,
+    }
     previous = read_json(cache / "build.json", {})
     binaries = upstream / "target" / profile
     extension = ".exe" if os.name == "nt" else ""
     prepared = read_json(cache / "prepared.json", {})
-    if previous.get("id") == key and prepared.get("upstream") == revision and prepared.get("integration") == integration_digest(ROOT) and (cache / "worktree").is_dir() and all((binaries / (name + extension)).is_file() for name in (*BINARIES, "wez-vtabs-store")):
+    if (
+        previous.get("id") == key
+        and prepared.get("upstream") == revision
+        and prepared.get("integration") == integration_digest(ROOT)
+        and (cache / "worktree").is_dir()
+        and all(
+            (binaries / (name + extension)).is_file() for name in (*BINARIES, "wez-vtabs-store")
+        )
+    ):
         print(f"native build current: {key}")
         return previous
     worktree = prepare(cache, upstream, revision)
     env = {**os.environ, "CARGO_TARGET_DIR": str(upstream / "target")}
     flags = [] if debug else ["--release"]
-    run("cargo", "build", *flags, "--locked", "--manifest-path", ROOT / "Cargo.toml", "-p", "vtabs-store", "--features", "sqlite", env=env)
-    run("cargo", "build", *flags, "-p", "wezterm-gui", "-p", "wezterm", "-p", "wezterm-mux-server", "-p", "strip-ansi-escapes", cwd=worktree, env=env)
+    run(
+        "cargo",
+        "build",
+        *flags,
+        "--locked",
+        "--manifest-path",
+        ROOT / "Cargo.toml",
+        "-p",
+        "vtabs-store",
+        "--features",
+        "sqlite",
+        env=env,
+    )
+    run(
+        "cargo",
+        "build",
+        *flags,
+        "-p",
+        "wezterm-gui",
+        "-p",
+        "wezterm",
+        "-p",
+        "wezterm-mux-server",
+        "-p",
+        "strip-ansi-escapes",
+        cwd=worktree,
+        env=env,
+    )
     if os.name == "nt":
         copy_windows_runtime(worktree, (binaries, binaries / "deps"))
     run("cargo", "test", *flags, "-p", "wezterm-gui", "native_", cwd=worktree, env=env)
     run("cargo", "test", *flags, "-p", "wezterm-client", "native_", "--lib", cwd=worktree, env=env)
-    run("cargo", "test", *flags, "-p", "wezterm-input-types", "native_", "--lib", cwd=worktree, env=env)
+    run(
+        "cargo",
+        "test",
+        *flags,
+        "-p",
+        "wezterm-input-types",
+        "native_",
+        "--lib",
+        cwd=worktree,
+        env=env,
+    )
     verify_source(metadata)
     metadata["built_at"] = int(time.time())
     write_json(cache / "build.json", metadata)
@@ -350,11 +480,20 @@ def package(cache: Path, metadata: dict, output: Path) -> Path:
         if os.name == "nt":
             copy_windows_runtime(source, (bindir,))
         else:
-            run("tic", "-xe", "wezterm", "-o", resources / "terminfo", source / "termwiz" / "data" / "wezterm.terminfo")
+            run(
+                "tic",
+                "-xe",
+                "wezterm",
+                "-o",
+                resources / "terminfo",
+                source / "termwiz" / "data" / "wezterm.terminfo",
+            )
         if sys.platform.startswith("linux"):
             shutil.copytree(source / "assets" / "icon", resources / "icons")
             shutil.copy2(source / "assets" / "wezterm.desktop", resources / "wezterm.desktop")
-            shutil.copy2(source / "assets" / "wezterm.appdata.xml", resources / "wezterm.appdata.xml")
+            shutil.copy2(
+                source / "assets" / "wezterm.appdata.xml", resources / "wezterm.appdata.xml"
+            )
         shutil.copytree(ROOT / "plugin", resources / "plugin")
         copy_source(staging / "source")
         if source_digest(staging / "source") != metadata["source_digest"]:
@@ -362,7 +501,10 @@ def package(cache: Path, metadata: dict, output: Path) -> Path:
         write_json(staging / "build.json", metadata)
         # macOS keeps data outside its code-only MacOS directory.
         marker_dir = resources if sys.platform == "darwin" else bindir
-        write_json(marker_dir / "native-bundle.json", {"root": os.path.relpath(staging, marker_dir), "capability": CAPABILITY})
+        write_json(
+            marker_dir / "native-bundle.json",
+            {"root": os.path.relpath(staging, marker_dir), "capability": CAPABILITY},
+        )
         if sys.platform == "darwin":
             run("codesign", "--force", "--deep", "--sign", "-", staging / "WezTerm.app")
             run("codesign", "--verify", "--deep", "--strict", staging / "WezTerm.app")
@@ -389,7 +531,14 @@ def archive_bundle(destination: Path) -> Path:
                 for path in sorted(destination.rglob("*")):
                     archive.write(path, path.relative_to(destination.parent))
         else:
-            temporary = Path(shutil.make_archive(str(staging / "bundle"), "gztar", root_dir=destination.parent, base_dir=destination.name))
+            temporary = Path(
+                shutil.make_archive(
+                    str(staging / "bundle"),
+                    "gztar",
+                    root_dir=destination.parent,
+                    base_dir=destination.name,
+                )
+            )
         os.replace(temporary, archive_path)
     finally:
         shutil.rmtree(staging, ignore_errors=True)
@@ -429,7 +578,9 @@ def desktop_quote(value: str) -> str:
     value = value.replace("%", "%%")
     for character in ("\\", '"', "`", "$"):
         value = value.replace(character, "\\" + character)
-    value = value.replace("\\", "\\\\").replace("\n", "\\n").replace("\r", "\\r").replace("\t", "\\t")
+    value = (
+        value.replace("\\", "\\\\").replace("\n", "\\n").replace("\r", "\\r").replace("\t", "\\t")
+    )
     return '"' + value + '"'
 
 
@@ -442,7 +593,10 @@ def install_entry(root: Path, bundle: Path) -> Path:
         entry.write_text(f'@echo off\n"{python}" "%~dp0native.py" launch -- %*\n', encoding="utf-8")
     else:
         entry = root / "wez-vtabs"
-        entry.write_text(f'#!/bin/sh\nexec {shlex.quote(python)} {shlex.quote(str(launcher))} launch -- "$@"\n', encoding="utf-8")
+        entry.write_text(
+            f'#!/bin/sh\nexec {shlex.quote(python)} {shlex.quote(str(launcher))} launch -- "$@"\n',
+            encoding="utf-8",
+        )
         entry.chmod(0o755)
         if sys.platform == "darwin":
             app = root / "WezTerm Native.app"
@@ -455,13 +609,35 @@ def install_entry(root: Path, bundle: Path) -> Path:
             if icon.is_file():
                 shutil.copy2(icon, contents / "Resources/terminal.icns")
             with (contents / "Info.plist").open("wb") as output:
-                plistlib.dump({"CFBundleExecutable": "launch", "CFBundleIdentifier": "dev.fredrir.wez-vtabs.launcher", "CFBundleName": "WezTerm Native", "CFBundleDisplayName": "WezTerm Native", "CFBundlePackageType": "APPL", "CFBundleVersion": "1", "CFBundleIconFile": "terminal.icns", "NSHighResolutionCapable": True}, output)
+                plistlib.dump(
+                    {
+                        "CFBundleExecutable": "launch",
+                        "CFBundleIdentifier": "dev.fredrir.wez-vtabs.launcher",
+                        "CFBundleName": "WezTerm Native",
+                        "CFBundleDisplayName": "WezTerm Native",
+                        "CFBundlePackageType": "APPL",
+                        "CFBundleVersion": "1",
+                        "CFBundleIconFile": "terminal.icns",
+                        "NSHighResolutionCapable": True,
+                    },
+                    output,
+                )
             entry = app
         else:
             icon = bundle / "share/icons/terminal.png"
             desktop = root / "wez-vtabs.desktop"
-            icon_value = str(icon).replace("\\", "\\\\").replace("\n", "\\n").replace("\r", "\\r").replace("\t", "\\t")
-            desktop.write_text("[Desktop Entry]\nName=WezTerm Native\nType=Application\nTerminal=false\nCategories=System;TerminalEmulator;\nStartupWMClass=org.wezfurlong.wezterm\n" + f"Exec={desktop_quote(python)} {desktop_quote(str(launcher))} launch\nIcon={icon_value}\n", encoding="utf-8")
+            icon_value = (
+                str(icon)
+                .replace("\\", "\\\\")
+                .replace("\n", "\\n")
+                .replace("\r", "\\r")
+                .replace("\t", "\\t")
+            )
+            desktop.write_text(
+                "[Desktop Entry]\nName=WezTerm Native\nType=Application\nTerminal=false\nCategories=System;TerminalEmulator;\nStartupWMClass=org.wezfurlong.wezterm\n"
+                + f"Exec={desktop_quote(python)} {desktop_quote(str(launcher))} launch\nIcon={icon_value}\n",
+                encoding="utf-8",
+            )
             desktop.chmod(0o755)
     return entry
 
@@ -472,7 +648,15 @@ def install(bundle: Path, root: Path, stage_only: bool = False) -> Path:
         raise RuntimeError("native bundle metadata missing or incompatible")
     executable = gui_path(bundle)
     helper = executable.parent / ("wez-vtabs-store.exe" if os.name == "nt" else "wez-vtabs-store")
-    if not all(path.is_file() for path in (executable, helper, bundle / "source" / "Cargo.toml", bundle / "source" / "scripts" / "native.py")):
+    if not all(
+        path.is_file()
+        for path in (
+            executable,
+            helper,
+            bundle / "source" / "Cargo.toml",
+            bundle / "source" / "scripts" / "native.py",
+        )
+    ):
         raise RuntimeError("native bundle incomplete")
     identifier = safe_id(metadata["id"])
     versions = root / "versions"
@@ -533,10 +717,19 @@ def queue_daily_update(bundle: Path, root: Path) -> None:
     script = bundle / "source" / "scripts" / "native.py"
     root.mkdir(parents=True, exist_ok=True)
     with (root / "update.log").open("ab") as output:
-        options = {"creationflags": subprocess.CREATE_NO_WINDOW} if os.name == "nt" else {"start_new_session": True}
-        subprocess.Popen([sys.executable, str(script), "update", "--daily", "--stage-only"],
-                         stdin=subprocess.DEVNULL, stdout=output, stderr=output,
-                         env={**os.environ, "WEZ_VTABS_INSTALL": str(root)}, **options)
+        options = (
+            {"creationflags": subprocess.CREATE_NO_WINDOW}
+            if os.name == "nt"
+            else {"start_new_session": True}
+        )
+        subprocess.Popen(
+            [sys.executable, str(script), "update", "--daily", "--stage-only"],
+            stdin=subprocess.DEVNULL,
+            stdout=output,
+            stderr=output,
+            env={**os.environ, "WEZ_VTABS_INSTALL": str(root)},
+            **options,
+        )
 
 
 def update(cache: Path, root: Path, daily: bool, stage_only: bool, output: Path) -> None:
@@ -554,7 +747,13 @@ def update(cache: Path, root: Path, daily: bool, stage_only: bool, output: Path)
                 if (ROOT.parent / "build.json").is_file() and not source_synced:
                     project = project_source()
                     checkout = refresh_project(cache, project["branch"])
-                    delegate = [sys.executable, str(checkout / "scripts/native.py"), "update", "--output", str(output)]
+                    delegate = [
+                        sys.executable,
+                        str(checkout / "scripts/native.py"),
+                        "update",
+                        "--output",
+                        str(output),
+                    ]
                     if stage_only:
                         delegate.append("--stage-only")
                     state.update(status="project_synced")
@@ -572,19 +771,64 @@ def update(cache: Path, root: Path, daily: bool, stage_only: bool, output: Path)
         # New updater code runs outside both locks; its own update transaction owns
         # build/install. Developer checkouts are never fetched or rewritten.
         try:
-            run(*delegate, env={**os.environ, "WEZ_VTABS_UPDATE_SOURCE_SYNCED": "1", "WEZ_VTABS_PROJECT_BRANCH": project["branch"], "WEZ_VTABS_INSTALL": str(root), "WEZ_VTABS_CACHE": str(cache)})
+            run(
+                *delegate,
+                env={
+                    **os.environ,
+                    "WEZ_VTABS_UPDATE_SOURCE_SYNCED": "1",
+                    "WEZ_VTABS_PROJECT_BRANCH": project["branch"],
+                    "WEZ_VTABS_INSTALL": str(root),
+                    "WEZ_VTABS_CACHE": str(cache),
+                },
+            )
         except BaseException as error:
-            write_json(root / "update.json", {"last_attempt": int(time.time()), "status": "failed", "error": str(error)})
+            write_json(
+                root / "update.json",
+                {"last_attempt": int(time.time()), "status": "failed", "error": str(error)},
+            )
             raise
 
 
 def check() -> None:
+    run("uv", "lock", "--check")
+    run("uv", "run", "--locked", "ruff", "check", "scripts", "tests")
+    run("uv", "run", "--locked", "ruff", "format", "--check", "scripts", "tests")
+    environment = {**os.environ, "CARGO_TARGET_DIR": str(ROOT / "target" / "pytest")}
     run("cargo", "fmt", "--all", "--check")
-    run("cargo", "test", "--workspace", "--all-features", "--locked")
-    run("cargo", "clippy", "--workspace", "--all-targets", "--all-features", "--locked", "--", "-D", "warnings")
-    for format_name, path in (("lua", "plugin/schema.lua"), ("types", "plugin/types.lua"), ("markdown", "docs/options.md")):
-        run("cargo", "run", "--quiet", "--locked", "-p", "vtabs-core", "--bin", "gen-schema", "--", "--check", format_name, path)
-    run(sys.executable, "-m", "unittest", "discover", "-s", str(ROOT / "tests" / "native"), "-p", "test_*.py")
+    run("cargo", "test", "--workspace", "--all-features", "--locked", env=environment)
+    run(
+        "cargo",
+        "clippy",
+        "--workspace",
+        "--all-targets",
+        "--all-features",
+        "--locked",
+        "--",
+        "-D",
+        "warnings",
+        env=environment,
+    )
+    for format_name, path in (
+        ("lua", "plugin/schema.lua"),
+        ("types", "plugin/types.lua"),
+        ("markdown", "docs/options.md"),
+    ):
+        run(
+            "cargo",
+            "run",
+            "--quiet",
+            "--locked",
+            "-p",
+            "vtabs-core",
+            "--bin",
+            "gen-schema",
+            "--",
+            "--check",
+            format_name,
+            path,
+            env=environment,
+        )
+    run("uv", "run", "--locked", "pytest", "-n", "2")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -594,7 +838,20 @@ def main(argv: list[str] | None = None) -> int:
     if managed_launcher:
         ROOT = current_bundle(installed, promote=False) / "source"
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=("prepare", "build", "dev", "check", "package", "install", "update", "launch", "doctor"))
+    parser.add_argument(
+        "command",
+        choices=(
+            "prepare",
+            "build",
+            "dev",
+            "check",
+            "package",
+            "install",
+            "update",
+            "launch",
+            "doctor",
+        ),
+    )
     parser.add_argument("--debug", action="store_true")
     parser.add_argument("--daily", action="store_true")
     parser.add_argument("--stage-only", action="store_true")
@@ -606,17 +863,34 @@ def main(argv: list[str] | None = None) -> int:
     if gui_args and args.command not in ("dev", "launch"):
         parser.error("unexpected arguments: " + " ".join(gui_args))
     cache = cache_root()
-    root = installed if managed_launcher and not os.environ.get("WEZ_VTABS_INSTALL") else install_root()
+    root = (
+        installed
+        if managed_launcher and not os.environ.get("WEZ_VTABS_INSTALL")
+        else install_root()
+    )
     if args.command == "check":
         check()
     elif args.command == "doctor":
         for command in ("git", "cargo", "rustc"):
             run(command, "--version")
-        print(json.dumps({"cache": str(cache), "install": str(root), "build": read_json(cache / "build.json"), "update": read_json(root / "update.json")}, indent=2))
+        print(
+            json.dumps(
+                {
+                    "cache": str(cache),
+                    "install": str(root),
+                    "build": read_json(cache / "build.json"),
+                    "update": read_json(root / "update.json"),
+                },
+                indent=2,
+            )
+        )
     elif args.command == "launch":
         bundle = current_bundle(root)
         queue_daily_update(bundle, root)
-        return subprocess.call([str(gui_path(bundle)), *(gui_args or ["start"])], env={**os.environ, "WEZ_VTABS_BUNDLE": str(bundle)})
+        return subprocess.call(
+            [str(gui_path(bundle)), *(gui_args or ["start"])],
+            env={**os.environ, "WEZ_VTABS_BUNDLE": str(bundle)},
+        )
     elif args.command == "update":
         update(cache, root, args.daily, args.stage_only, args.output or cache / "bundles")
     elif args.command == "install" and args.bundle:
@@ -633,7 +907,10 @@ def main(argv: list[str] | None = None) -> int:
                 if args.command == "install":
                     install(bundle, root, args.stage_only)
         if args.command == "dev":
-            return subprocess.call([str(gui_path(bundle)), *(gui_args or ["start", "--always-new-process"])], env={**os.environ, "WEZ_VTABS_BUNDLE": str(bundle)})
+            return subprocess.call(
+                [str(gui_path(bundle)), *(gui_args or ["start", "--always-new-process"])],
+                env={**os.environ, "WEZ_VTABS_BUNDLE": str(bundle)},
+            )
     return 0
 
 
@@ -642,4 +919,4 @@ if __name__ == "__main__":
         raise SystemExit(main())
     except (OSError, RuntimeError, subprocess.CalledProcessError) as error:
         print(f"native: {error}", file=sys.stderr)
-        raise SystemExit(1)
+        raise SystemExit(1) from None

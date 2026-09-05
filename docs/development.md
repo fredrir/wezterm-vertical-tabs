@@ -2,7 +2,7 @@
 
 | Name | Value |
 | --- | --- |
-| Toolchain | Stable Rust, Git, Python 3.10+, platform C/C++ build tools |
+| Toolchain | Stable Rust, Git, Python 3.10+ for builds; uv and Python 3.12+ for tests; platform C/C++ tools |
 | Upstream | Latest `wezterm/wezterm` `main`; resolved on every build |
 | GUI | WezTerm renderer with the native patch series and project Rust application |
 | UI | Retained Ratatui text, native rounded geometry and finite TachyonFX effects |
@@ -20,13 +20,13 @@ just update
 just doctor
 ```
 
-On Windows, recipes use `py -3`. The direct entry point is `python3 scripts/native.py` (`py -3 scripts/native.py` on Windows).
+Recipes use `uv run --locked python` on every platform. Direct builds also support `python3 scripts/native.py` (`py -3 scripts/native.py` on Windows).
 
 | Command | Value |
 | --- | --- |
 | `just build` | Fetch main, check/apply ordered patches, stage adapter, build, run integrated native adapter/host tests |
 | `just dev` | Build and launch a separate GUI process |
-| `just check` | Rust format/tests/Clippy, generated Lua contracts, native tooling tests |
+| `just check` | Rust format/tests/Clippy, generated Lua contracts, Ruff and pytest behavior tests |
 | `just generate` | Generate `plugin/schema.lua`, `plugin/types.lua` and `docs/options.md` from Rust |
 | `just package` | Native platform bundle and `.zip`/`.tar.gz` in `dist/` |
 | `just install` | Install an immutable bundle and managed launch entry |
@@ -48,7 +48,7 @@ On Windows, recipes use `py -3`. The direct entry point is `python3 scripts/nati
 | `native/patches` | Generic native layout, surfaces, input and navigation hooks |
 | `plugin` | Optional Lua configuration and generated contracts |
 | `scripts/native.py` | Cross-platform build, package, install and update entry point |
-| `tests/native` | Tooling contracts and opt-in native GUI scenarios |
+| `tests` | uv-managed pytest, production process boundaries and isolated native scenarios |
 
 `vtabs-store` has no default features. The GUI links protocol types only; the `sqlite` feature builds the helper.
 
@@ -84,53 +84,64 @@ Launch checks run asynchronously, at most daily. Installed updates fetch the rec
 
 Install platform dependencies using the selected upstream checkout's `get-deps` instructions. The workflow uses upstream `get-deps` on macOS/Linux and the Windows MSVC toolchain. See [WezTerm source builds](https://wezterm.org/install/source.html).
 
-**GUI verification**
+**Test suite**
 
 ```sh
-python3 tests/native/scenarios.py \
-  --gui /path/to/wezterm-gui \
-  --helper /path/to/wez-vtabs-store \
-  --baseline-gui /path/to/same-main-stock/wezterm-gui \
-  --workspace --chrome --edge-cases
-
-python3 tests/native/scenarios.py \
-  --gui /path/to/wezterm-gui \
-  --helper /path/to/wez-vtabs-store \
-  --domain unix
-
-python3 tests/native/scenarios.py \
-  --gui /path/to/wezterm-gui \
-  --helper /path/to/wez-vtabs-store \
-  --domain ssh --ssh-config /path/to/disposable-ssh-domain.json
-
-python3 tests/native/ssh_fixture.py --wezterm /path/to/wezterm -- \
-  --gui /path/to/wezterm-gui --helper /path/to/wez-vtabs-store \
-  --workspace --hooks --effects --resize-rounds 3
-
-python3 tests/native/moves.py --gui /path/to/wezterm-gui \
-  --domain unix --external --output /tmp/vtabs-moves
+uv sync --locked
+uv run --locked pytest -n 2
+uv run --locked ruff check scripts tests
+uv run --locked ruff format --check scripts tests
+uv run --locked pytest -n 2 --run-luals
+uv run --locked pytest -n 2 tests/integration --run-native --run-container \
+  --native-bin-dir /path/to/native/bin
 ```
 
 | Check | Value |
 | --- | --- |
-| Isolation | Unique workspace/window class, copied executable, separate XDG paths and SQLite DB |
-| Geometry | Resize/reversal samples, fixed sidebar reservation, background-tab dimensions |
-| Splits | Pane identities, topology, exact sizing comparison with stock at equivalent viewport |
-| Native actions | Indexed and negative activation using native WezTerm actions |
-| Features | Empty spaces, new tabs, idle surface reuse, durable settings, private-state exclusion and native private-tab environment |
-| SSH fixture | JSON `SshDomain` configuration for a disposable test mux; ordinary host authentication applies |
-| Localhost SSH helper | POSIX host with `sshd`/OpenSSH; temporary unprivileged server, keys and mux; no user SSH configuration changes |
-| Move regression | `moves.py`: local split or Unix single-pane move; `--external` uses a second Unix mux client. Checks ownership, remote resizing, Reopen and process survival; helper/server/CLI default to GUI siblings |
-| Artifacts | `report.json`, `samples.jsonl`, GUI/mux logs and fixture configuration |
-| `--geometry-only` | Restrict the run to geometry and native navigation |
-| `--workspace` | Switch native workspaces out/back and verify selected space, membership and pins |
-| `--chrome` | Integrated title controls and nonzero terminal padding |
-| `--edge-cases` | Font size, fullscreen, pane zoom, right sidebar, rail reservations and tiny windows |
-| `--trace-mux` | Client/server and GUI resize traces; tracing changes timing |
-| `--hooks --effects` | All semantic hooks, process routing metadata and default finite transitions; verify idle cache reuse |
-| `--resize-rounds 5` | Five dense resize/reversal rounds in the same GUI window |
-| `--capture` | Capture only the fixture's macOS window; requires OS screen-capture access |
-| Measurement boundary | GUI state sampling; GPU presentation, physical key latency, OS drag, DPI/IME and visual quality need native profiling/manual checks |
+| Default suite | Tooling, production Rust schema/storage processes, headless Lua plugin boundary and CLI PTYs |
+| Python tools | pytest, pytest-asyncio, pytest-xdist, Ruff, tui-test; exact versions in `uv.lock` |
+| Worker count | `-n 2`; each test receives separate state and temporary files |
+| Rust binaries | Cached project-only build coordinated across workers; `--rust-bin-dir PATH` uses supplied `gen-schema` and `wez-vtabs-store` |
+| Lua | `lua` or `luajit`; executes `plugin/init.lua` through its public configuration boundary |
+| LuaCATS | `--run-luals`; requires `lua-language-server`; valid and invalid public option examples |
+| Native binaries | `--run-native --native-bin-dir PATH`; prebuilt GUI, CLI, mux server and storage helper; no implicit WezTerm build |
+| Native display | Linux Xvfb and Openbox owned by the fixture; inherited desktop/session endpoints removed |
+| Mouse and screenshots | xdotool and ImageMagick; only the owned headless display |
+| SSH mux | `--run-container`; loopback-only container, temporary keys, owned mux, Podman or Docker |
+| PTY | tui-test drives real CLI processes; the native group also exercises an isolated installed `wez-vtabs` launcher |
+| Startup/render/shutdown | Local and Unix mux native sessions with visible content, sidebar rendering and clean shutdown; TLS tab lifecycle |
+| Desktop | No suite or native scenario opens a GUI on the user's desktop |
+
+**Extended native scenarios**
+
+```sh
+uv run --locked python -m tests.native.scenarios \
+  --gui /path/to/wezterm-gui --helper /path/to/wez-vtabs-store \
+  --workspace --chrome --edge-cases --hooks --effects --capture
+
+uv run --locked python -m tests.native.scenarios \
+  --gui /path/to/wezterm-gui --domain unix
+
+uv run --locked python -m tests.native.ui_scenarios \
+  --gui /path/to/wezterm-gui --helper /path/to/wez-vtabs-store \
+  --output /tmp/vtabs-ui
+
+uv run --locked python tests/native/tls_fixture.py --wezterm /path/to/wezterm -- \
+  --gui /path/to/wezterm-gui --helper /path/to/wez-vtabs-store --workspace --effects
+```
+
+| Scenario | Value |
+| --- | --- |
+| Geometry | Resize/reversal, stable reservation, background tab dimensions and split identities |
+| Navigation | Native indexed/negative activation, folders, spaces, drag/reorder and sidebar modes |
+| Settings | Dedicated page, filtering, centered editors and preserved terminal geometry |
+| Clipboard | Real OS copy/paste in tab search, settings search and color editor; passive pointer movement |
+| TLS | Temporary CA and certificates, mutual authentication and hostname verification |
+| Artifacts | JSON report, sampled geometry, GUI/mux logs and owned-window screenshots |
+| `--capture` | Capture only the fixture's private X11 window |
+| `--baseline-gui PATH` | Compare split sizing with stock at the same viewport |
+| `--trace-mux` | Additional transport/layout traces; changes timing |
+| Performance boundary | CPU/render samples exclude GPU completion and physical display latency |
 
 **Storage diagnostics**
 
@@ -140,20 +151,3 @@ python3 tests/native/moves.py --gui /path/to/wezterm-gui \
 | `WEZ_VTABS_DB` | Explicit SQLite path; defaults to the platform local-data directory under `wez-vtabs/state.sqlite` |
 
 Requests and responses are versioned and bounded. Field revisions reject stale writes atomically; tombstones retain revisions. Session-scoped live state requires a verified incarnation. Private live-tab state is excluded; explicit catalog/settings edits remain shared and durable. Database work never runs in the resize or native activation path.
-
-**TLS and physical input fixtures**
-
-```sh
-python3 tests/native/tls_fixture.py --wezterm /path/to/wezterm -- \
-  --gui /path/to/wezterm-gui --helper /path/to/wez-vtabs-store \
-  --workspace --effects
-
-python3 tests/native/ui_scenarios.py --gui /path/to/wezterm-gui \
-  --helper /path/to/wez-vtabs-store --output /tmp/vtabs-ui
-```
-
-| Name | Value |
-| --- | --- |
-| TLS fixture | Temporary CA, server and user certificates; mutual authentication and hostname verification |
-| Linux UI fixture | Isolated Xvfb display, Openbox, xdotool and ImageMagick; real keyboard, click, drag and screenshot checks |
-| UI artifacts | Sidebar, settings, search and tooltip screenshots; JSON report and isolated logs |
