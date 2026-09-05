@@ -35,7 +35,13 @@ def client_context(
     return context
 
 
-def connect(root: Path, context: ssl.SSLContext, hostname: str = "localhost"):
+def connect(
+    root: Path,
+    context: ssl.SSLContext,
+    hostname: str = "localhost",
+    *,
+    capture_client_errors: bool = False,
+):
     server = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     server.load_cert_chain(str(root / "server.pem"), str(root / "server.key"))
     server.load_verify_locations(cafile=str(root / "ca.pem"))
@@ -67,7 +73,11 @@ def connect(root: Path, context: ssl.SSLContext, hostname: str = "localhost"):
                     secure.sendall(b"ping")
                     received = secure.recv(8)
             return received, result.result(timeout=3)
-        except (ConnectionResetError, BrokenPipeError) as error:
+        except (ssl.SSLError, ConnectionResetError, BrokenPipeError) as error:
+            if capture_client_errors:
+                return error, result.result(timeout=3)
+            if isinstance(error, ssl.SSLError):
+                raise
             rejection = result.result(timeout=3)
             if isinstance(rejection, ssl.SSLError):
                 raise rejection from error
@@ -113,11 +123,22 @@ async def test_connection_rejects_an_untrusted_server(certificates: Path):
         await asyncio.to_thread(connect, certificates, client_context(certificates, trusted=False))
 
 
-async def test_server_requires_a_client_certificate(certificates: Path):
-    with pytest.raises(ssl.SSLError):
-        await asyncio.to_thread(
-            connect, certificates, client_context(certificates, authenticated=False)
-        )
+@pytest.mark.parametrize("version", [ssl.TLSVersion.TLSv1_2, ssl.TLSVersion.TLSv1_3])
+async def test_server_requires_a_client_certificate(certificates: Path, version: ssl.TLSVersion):
+    context = client_context(certificates, authenticated=False)
+    context.minimum_version = context.maximum_version = version
+    response, rejection = await asyncio.to_thread(
+        connect, certificates, context, capture_client_errors=True
+    )
+    # TLS 1.3 may finish the client handshake before the server's rejection arrives.
+    # An EOF is valid only when the server independently rejected the missing identity.
+    assert isinstance(rejection, ssl.SSLError), (
+        f"server accepted an unauthenticated peer: {rejection!r}"
+    )
+    assert rejection.reason == "PEER_DID_NOT_RETURN_A_CERTIFICATE"
+    assert response == b"" or isinstance(
+        response, (ssl.SSLError, ConnectionResetError, BrokenPipeError)
+    ), f"unauthenticated client received application data: {response!r}"
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX private key permissions")
