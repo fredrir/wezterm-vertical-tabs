@@ -113,7 +113,7 @@ fn run() -> Result<(), String> {
             std::fs::write(&args[2], content).map_err(|e| e.to_string())?;
         } else {
             let actual = std::fs::read_to_string(&args[2]).map_err(|e| e.to_string())?;
-            if actual != content {
+            if actual.replace("\r\n", "\n") != content {
                 return Err(format!(
                     "{} is stale; regenerate it with gen-schema --write {} {}",
                     args[2], args[1], args[2]

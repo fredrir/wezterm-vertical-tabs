@@ -3,60 +3,71 @@
 | Name | Value |
 | --- | --- |
 | Date | 2026-09-05 |
-| Host | Apple M5 Pro, macOS arm64, release builds |
-| Upstream tested | `d4f5c4878a7f72b3fa53ff963a1fea790810d31a`; diagnostic observation, builds resolve latest main |
-| Renderer | Actual WezTerm GUI; Ratatui 0.30.2, TachyonFX 0.25.1, upstream Termwiz |
-| Reference | Stock GUI from the same upstream source, equivalent content viewport |
-| Project checks | 80 Rust tests, format, Clippy, generated Lua/schema/docs checks |
-| Integration checks | 20 GUI adapter/host tests, 3 mux topology race tests, 15 build/install/update tests |
+| Runtime host | Linux x86_64, AMD Ryzen 7 9800X3D, release builds |
+| Display | Isolated Xvfb display with Openbox and software rendering |
+| Upstream tested | `e019f1b11e9902a771aabc1a8661cc59731b95c0`; builds resolve latest main |
+| Renderer | Actual WezTerm GUI, retained Ratatui text, native rounded geometry and TachyonFX |
+| Project checks | Rust tests, format, Clippy, generated Lua/schema/docs checks and Python tooling tests |
+| Native checks | GUI adapter/host, mux topology races and platform decoration defaults |
 
 | Session | Resize steps | GUI state samples | Result |
 | --- | ---: | ---: | --- |
-| Local | 12 | 287 | Passed |
-| Unix mux | 60 | 457 | Passed |
-| SSH mux | 36 | 376 | Passed; isolated localhost SSH server and keys |
+| Local | 12 | 270 | Passed |
+| Unix mux | 12 | 271 | Passed |
+| SSH mux | 12 | 272 | Passed; isolated localhost SSH server and keys |
+| TLS mux | 12 | 274 | Passed; certificate and hostname verification, mutual authentication |
 
 | Check | Result |
 | --- | --- |
-| Dense resize/reversal | Sidebar reservation and foreground/background tab sizes remain coherent during sequence sampling |
-| Split integrity | Pane identities and topology preserved; sizes match stock at equivalent content dimensions |
-| Extreme shrinking | Stock and native share minimum-cell rounding and per-split minimum widths; a 49/50 split can restore as 50/49 after clamping to minimum content width |
-| Native navigation | Existing indexed/negative tab actions use visible tabs; no replacement keybindings |
-| Spaces | Empty space, native new tab, assignment, workspace out/back with retained selection and pins |
-| Layout edges | Left/right, expanded/collapsed/hidden rail, padding, integrated controls, tiny windows; font/fullscreen/zoom round trips checked in all three session types |
-| Hooks/effects | All five semantic hooks and finite TachyonFX transitions enabled |
-| Idle | Surface revision and hook counts unchanged after transitions finish |
-| Persistence | Settings/catalog durable; private live state excluded; native private-tab environment applied |
-| Hidden/collapsed modals | Native navigator and semantic forms temporarily use expanded space; Escape restores the preference. Actual hidden-navigator GUI run preserves split and background-tab geometry |
-| Installed macOS bundle | Strict signature verification; managed launcher in a quoted custom path; bundled SQLite helper; default Rust UI without Lua; native OpenGL/CGL |
-| Native tab moves | Local split and remote single-pane moves preserve panes and pins. Remote destination resizing is checked against server geometry; actual close/Reopen remains functional |
-| External pane moves | A second Unix mux CLI client moves the pane; GUI ownership converges without a duplicate owner or false Reopen entry, and the moved process survives closing its source window |
-| Transport | No GUI or mux transport errors in the completed runs |
-| Isolation | Separate fixture executables, configuration, database, workspaces and SSH credentials |
+| Resize/reversal | Sidebar reservation and foreground/background tab sizes remain coherent |
+| Split integrity | Pane identities and topology preserved throughout resize and sidebar visibility changes |
+| Spaces | Empty space, native new tab, assignment and workspace out/back with retained selection and pins |
+| Layout edges | Left/right, expanded/collapsed/hidden rail, integrated chrome and tiny windows |
+| Native presentation | Font-size, fullscreen and pane-zoom round trips passed in all four session types |
+| Hooks/effects | All five semantic hooks and finite transitions enabled; idle surface revision and hook counts stabilize |
+| Persistence | Settings/catalog durable, concurrent edits merged, private live state excluded and private-tab environment applied |
+| Local tab moves | Whole split tree, workspace and pin preserved; native close/Reopen remains functional |
+| External Unix moves | Second mux client moves a pane; GUI ownership converges without duplicate ownership or false Reopen entry |
+| Moved process | Destination geometry updates and process survives closing the source window |
+| TLS authentication | Trusted client succeeds; wrong hostname, untrusted CA and missing client certificate fail |
+| Isolation | Separate executables, configuration, database, workspaces, display and transport credentials |
 
-Native sidebar CPU timings below include mixed warm/cold frames from each main window. They exclude GPU completion, display presentation and physical input latency. Samples differ by scenario; these are observations, not portable performance thresholds.
+| Physical UI fixture | Result |
+| --- | --- |
+| Keyboard | New tab, folder, settings, search, sidebar toggle, Escape and editor submission passed |
+| Mouse | New tab, activation, folder expand/collapse, tab reorder, tab-to-folder drag, settings and tooltip hover passed |
+| Terminal input | No UI shortcut leakage; ordinary shell input and Ctrl+C preserved |
+| Settings page | Sidebar remains available; opening and closing preserve terminal and split geometry |
+| Screenshots | Sidebar, settings, filtered settings, search and tooltip captured from the actual GUI |
+| Focus/editor regressions | Selection, clipboard, grapheme boundaries, IME geometry, keyboard button activation and overlay dismissal covered by deterministic tests |
+| Rendering regressions | Rounded border rings, retained text, centered controls and atlas-generation cache invalidation covered by native tests |
 
-| Session | Paint samples | Compose + convert p50 / p95 / p99 | Native paint p50 / p95 / p99 |
+Observed GUI CPU time during the 12-step resize sequence is below. Each sample represents a distinct native paint count; startup and subsequent feature scenarios are excluded. These measurements include software rendering work on the fixture host, exclude GPU completion and display presentation, and are not input-latency or portable performance guarantees.
+
+| Session | Paint samples | GUI frame CPU p50 | GUI frame CPU p95 |
 | --- | ---: | ---: | ---: |
-| Local | 81 | 17 / 125 / 164 µs | 62 / 641 / 1,342 µs |
-| Unix mux | 184 | 10 / 87 / 114 µs | 45 / 511 / 874 µs |
-| SSH mux | 143 | 10 / 93 / 113 µs | 46 / 695 / 1,330 µs |
+| Local | 23 | 584 µs | 988 µs |
+| Unix mux | 24 | 600 µs | 889 µs |
+| SSH mux | 24 | 585 µs | 811 µs |
+| TLS mux | 24 | 570 µs | 1,014 µs |
 
-| Cause addressed | Implementation |
+| Implementation | Value |
 | --- | --- |
-| Competing size corrections | One native viewport reservation and ordinary WezTerm content resizing |
-| Remote resize feedback | Coalesced topology snapshots wait for resize acknowledgements and reject superseded results; accepted snapshots do not echo resize RPCs |
-| Delayed sidebar snapping | Immediate bounds and complete staged surfaces; no settling timer |
-| Unexpected pane movement | Sidebar has no pane identity; presentation never changes split topology |
-| Stale tab geometry | Window-owned reservation; background tabs and new tabs use current content dimensions |
-| Repeated composition | Retained native rows and quads; unchanged terminal output reuses the sidebar |
+| Viewport | One window-owned native reservation; sidebar has no pane identity |
+| Remote resize | Coalesced topology snapshots wait for acknowledgements and reject superseded results |
+| Composition | Retained rows and quads; unchanged output reuses the sidebar |
+| Primitive cache | Shape generation participates in cache invalidation after atlas rebuilds |
+| Scheduling | Finite animation deadlines; storage work remains independent of focused-window painting |
+| Storage | Asynchronous bounded helper protocol; no SQLite work in resize or activation paths |
 
-| Remaining validation | Boundary |
+| Verification boundary | Value |
 | --- | --- |
-| Linux/Windows runtime | Build/package workflow provided; those operating systems were unavailable for this implementation session |
-| SSH coverage | Real SSH transport on localhost; no Windows GUI or cross-host network-latency run |
-| Display behavior | OS drag smoothness, visible flashes, GPU timings and input-to-display latency require capture/profiling |
-| Input/rendering | Physical IME, monitor/DPI transitions, fallback fonts and screenshot inspection remain manual checks; Unicode conversion, caret geometry and clipping have deterministic tests |
-| macOS capture | Fixture-window capture was unavailable; no visual result is inferred from geometry samples |
+| macOS/Windows runtime | Cross-platform build workflow provided; native interaction and screenshots in this run were collected on Linux |
+| macOS controls | Platform decoration defaults and header reservations tested; physical traffic-button hit targets require a macOS session |
+| SSH/TLS coverage | Real localhost transports; cross-host latency and disconnection behavior require network profiling |
+| Display behavior | OS drag smoothness, GPU frame pacing and input-to-display latency require native capture/profiling |
+| Input/rendering | Physical IME, monitor/DPI transitions and platform font fallback require device checks |
+| Live restoration | Folder catalogs and settings persist; live tab membership needs a verified mux incarnation unavailable in the current upstream integration |
+| Remote split moves | Unsupported by upstream's pane-move API; remote single-pane moves supported |
 
-Reproduce with the commands in [Development](development.md). Scenario output contains `report.json`, `samples.jsonl` and isolated GUI/mux logs.
+Reproduce with [Development](development.md). Fixtures produce `report.json`, sampled geometry and isolated GUI/mux logs. The physical UI fixture also produces screenshots.

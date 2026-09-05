@@ -238,7 +238,7 @@ def scenarios(probe: Probe, gui: GuiInput):
     probe.wait(lambda state: ids[3] in state.get("visible", [])
                and ids[2] in state.get("visible", [])
                and state["visible"].index(ids[3]) < state["visible"].index(ids[2]))
-    gui.click("CreateFolder")
+    gui.key("ctrl+shift+g")
     probe.wait(lambda state: gui.hit(state, "Editor") is not None)
     gui.text("Project")
     gui.key("Return")
@@ -311,7 +311,7 @@ def scenarios(probe: Probe, gui: GuiInput):
         time.sleep(.02)
     assert terminal_keys.read_text() == "VTABS_TERMINAL_KEYS_OK\n"
     return {"tabs": ids, "folder": folder, "spaces": [home, work],
-            "keyboard": ["Ctrl+Shift+T", "Ctrl+Shift+Comma", "Ctrl+Shift+K", "Ctrl+Shift+B", "Super+Comma", "Escape"],
+            "keyboard": ["Ctrl+Shift+T", "Ctrl+Shift+G", "Ctrl+Shift+Comma", "Ctrl+Shift+K", "Ctrl+Shift+B", "Super+Comma", "Escape"],
             "mouse": ["new tab", "tab activation", "folder child activation", "folder collapse and expand", "tab reorder", "drag tab into folder", "settings", "tooltip hover"],
             "settings_preserve_geometry": True, "terminal_input_leaked_bytes": len(leaked),
             "errors": errors,
