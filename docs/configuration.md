@@ -1,11 +1,11 @@
 # Configuration
 
-The Rust application works with its defaults. Lua configuration is optional.
+The Rust application works with its defaults. Lua configuration is optional. Set the module path below to `plugin/init.lua` in the local native-branch checkout.
 
 ```lua
 local wezterm = require 'wezterm'
 local config = wezterm.config_builder()
-local vtabs = wezterm.plugin.require 'https://github.com/fredrir/wezterm-vertical-tabs'
+local vtabs = dofile('/absolute/path/to/wezterm-vertical-tabs/plugin/init.lua')
 
 vtabs.apply_to_config(config, {
   settings = {
@@ -58,11 +58,11 @@ return config
 | Keyboard preference | Disable `keyboard_shortcuts` to use custom Lua bindings |
 | Terminal Control keys | Ordinary Control shortcuts remain available to the shell |
 | Settings | Content page beside the sidebar; closing it returns to the running terminal |
-| Search | Filters tabs in the selected space; arrow keys select results, Enter activates |
+| Search | Filters tabs in the selected space; Up/Down select results, Left/Right edit the query, Enter activates |
 | Folders | Create with the plus below search; rename, collapse, reorder, add a tab or ungroup from the context menu |
 | Tab grouping | Drag onto a folder, or use the tab context menu |
 | Reordering | Drag tabs, folders and spaces; context menus provide Move up / Move down |
-| Ungrouping | Drop onto New Tab or use Remove from folder; processes remain running |
+| Ungrouping | Drop onto New Tab to ungroup and unpin; Remove from folder keeps the pin; processes remain running |
 | Pinned order | Pinned tabs and folders precede New Tab; ordinary tabs follow |
 | Space assignment | Drop a tab on a bottom space control or use Move to space |
 | Folder persistence | Catalog, names and collapse state persist; live membership follows the session boundary in [Boundaries](limitations.md) |

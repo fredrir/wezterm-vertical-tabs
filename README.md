@@ -14,11 +14,11 @@ Native vertical tabs with rounded window framing, folders, spaces and a dedicate
 ```sh
 git clone --branch native https://github.com/fredrir/wezterm-vertical-tabs.git
 cd wezterm-vertical-tabs
-just install
-just launch
+python3 scripts/native.py install
+python3 scripts/native.py launch
 ```
 
-Requires Git, stable Rust, Python 3.10+, and the platform dependencies for [building WezTerm](https://wezterm.org/install/source.html). The managed launch entry builds updates asynchronously and selects completed bundles between launches.
+On Windows, use `py -3` in place of `python3`. Requires Git, stable Rust, Python 3.10+, and the platform dependencies for [building WezTerm](https://wezterm.org/install/source.html). The managed launch entry builds updates asynchronously and selects completed bundles between launches.
 
 | Reference | Value |
 | --- | --- |

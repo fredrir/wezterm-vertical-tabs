@@ -132,7 +132,7 @@ index 6f00f347..b9dc3288 100644
          let mut dimensions = Dimensions {
              pixel_width: (terminal_size.pixel_width + padding_left + padding_right) as usize,
 diff --git a/wezterm-gui/src/termwindow/native_ui.rs b/wezterm-gui/src/termwindow/native_ui.rs
-index 9dfe7d55..645b9673 100644
+index 9dfe7d55..7cc84a32 100644
 --- a/wezterm-gui/src/termwindow/native_ui.rs
 +++ b/wezterm-gui/src/termwindow/native_ui.rs
 @@ -1,10 +1,11 @@
@@ -253,7 +253,7 @@ index 9dfe7d55..645b9673 100644
  #[derive(Clone, Copy, Debug, Default, PartialEq)]
  pub struct Bounds {
      pub x: f32,
-@@ -45,6 +144,37 @@ pub struct Geometry {
+@@ -45,6 +144,54 @@ pub struct Geometry {
      pub cell_width: f32,
      pub cell_height: f32,
      pub dpi: f32,
@@ -279,6 +279,23 @@ index 9dfe7d55..645b9673 100644
 +        }
 +    }
 +}
++fn native_sidebar_header_inset(
++    integrated: bool,
++    sidebar_width: f32,
++    cell_width: f32,
++    traffic_inset: f32,
++) -> Option<f32> {
++    if !integrated {
++        return None;
++    }
++    let cell_width = cell_width.max(1.);
++    let columns = (sidebar_width / cell_width).floor().max(0.);
++    let inner = (columns - if columns >= 8. { 2. } else { 0. }).max(0.);
++    let reserved = (traffic_inset / cell_width).ceil();
++    // Match the sidebar's horizontal padding and four-cell toggle hit target.
++    // Narrow left rails put their controls below AppKit's traffic buttons.
++    (inner > 0. && reserved + inner.min(4.) <= inner).then_some(traffic_inset)
++}
 +/// A rounded shape in cell coordinates relative to `Geometry::ui_bounds`.
 +#[derive(Clone, Copy, Debug, PartialEq)]
 +pub struct RoundedSurface {
@@ -291,7 +308,7 @@ index 9dfe7d55..645b9673 100644
  }
  #[derive(Clone, Debug)]
  pub struct TabInfo {
-@@ -82,6 +212,7 @@ pub enum Navigation {
+@@ -82,6 +229,7 @@ pub enum Navigation {
      Navigator,
  }
  pub enum Input<'a> {
@@ -299,7 +316,7 @@ index 9dfe7d55..645b9673 100644
      Key(&'a KeyEvent),
      Mouse(&'a MouseEvent, Geometry),
      Composition(&'a DeadKeyStatus),
-@@ -120,6 +251,15 @@ pub trait Provider {
+@@ -120,6 +268,15 @@ pub trait Provider {
      fn commands(&mut self) -> Vec<Command>;
      fn render(&mut self, geometry: Geometry, now: Instant);
      fn surface(&self) -> &Surface;
@@ -315,7 +332,7 @@ index 9dfe7d55..645b9673 100644
      fn deadline(&self) -> Option<Instant>;
      fn caret(&self) -> Option<(usize, usize)>;
      fn keyboard_focus(&self) -> bool;
-@@ -191,8 +331,45 @@ impl PaintStats {
+@@ -191,8 +348,45 @@ impl PaintStats {
          result
      }
  }
@@ -361,7 +378,7 @@ index 9dfe7d55..645b9673 100644
      quads: HeapQuadAllocator,
      origin: (f32, f32),
  }
-@@ -200,8 +377,9 @@ fn native_caret_rect(
+@@ -200,8 +394,9 @@ fn native_caret_rect(
      geometry: Geometry,
      offset: (f32, f32),
      caret: (usize, usize),
@@ -372,7 +389,7 @@ index 9dfe7d55..645b9673 100644
      if bounds.width <= 0.
          || bounds.height <= 0.
          || geometry.cell_width <= 0.
-@@ -246,20 +424,20 @@ mod native_geometry_tests {
+@@ -246,20 +441,20 @@ mod native_geometry_tests {
              cell_height: 18.5,
              ..Geometry::default()
          };
@@ -398,7 +415,7 @@ index 9dfe7d55..645b9673 100644
          let geometry = Geometry {
              sidebar: Bounds {
                  width: 20.,
-@@ -270,7 +448,111 @@ mod native_geometry_tests {
+@@ -270,7 +465,166 @@ mod native_geometry_tests {
              cell_height: 10.,
              ..Geometry::default()
          };
@@ -500,6 +517,61 @@ index 9dfe7d55..645b9673 100644
 +        ));
 +    }
 +    #[test]
++    fn native_compact_macos_left_rail_retains_a_clickable_expand_button() {
++        use vtabs_app::{core, ui};
++        for dpi in [72., 144.] {
++            let cell_width = 8. * dpi / 72.;
++            let width = 40. * dpi / 96.;
++            let traffic = 80. * dpi / 96.;
++            let inset = native_sidebar_header_inset(true, width, cell_width, traffic);
++            assert_eq!(inset, None);
++            let columns = (width / cell_width).floor() as u16;
++            let mut model = core::Model::default();
++            model.settings.rail = core::RailMode::Collapsed;
++            let mut sidebar = ui::SidebarUi::new();
++            sidebar.set_layout(columns, 0);
++            sidebar.render(&model, ui::Rect::new(0, 0, columns, 24), Duration::ZERO);
++            assert_eq!(
++                sidebar.hit_test(0, 0).map(|hit| &hit.id),
++                Some(&ui::ElementId::Rail)
++            );
++            sidebar.event(
++                &model,
++                ui::UiInput::PointerDown {
++                    x: 0,
++                    y: 0,
++                    button: ui::MouseButton::Left,
++                    modifiers: ui::Modifiers::default(),
++                },
++            );
++            let actions = sidebar.event(
++                &model,
++                ui::UiInput::PointerUp {
++                    x: 0,
++                    y: 0,
++                    button: ui::MouseButton::Left,
++                },
++            );
++            assert!(actions.iter().any(|action| matches!(
++                action,
++                ui::UiIntent::Domain(core::Intent::SetRail(core::RailMode::Expanded))
++            )));
++            assert_eq!(
++                native_sidebar_header_inset(true, 256. * dpi / 96., cell_width, traffic),
++                Some(traffic)
++            );
++            assert_eq!(
++                native_sidebar_header_inset(true, width, cell_width, 0.),
++                Some(0.)
++            );
++            assert_eq!(
++                native_sidebar_header_inset(true, 0., cell_width, traffic),
++                None
++            );
++        }
++        assert_eq!(native_sidebar_header_inset(false, 256., 8., 80.), None);
++    }
++    #[test]
 +    fn native_frame_rounding_never_exceeds_reserved_padding() {
 +        for dpi in [72., 96., 120., 144., 192., 288.] {
 +            let gutter = TermWindow::native_frame_gutter_impl(dpi);
@@ -511,7 +583,7 @@ index 9dfe7d55..645b9673 100644
      }
  }
  pub struct NativeUi {
-@@ -286,7 +568,10 @@ pub struct NativeUi {
+@@ -286,7 +640,10 @@ pub struct NativeUi {
      bound: bool,
      initialized: bool,
      cache: Vec<RowCache>,
@@ -523,7 +595,7 @@ index 9dfe7d55..645b9673 100644
      chrome: Option<ComputedElement>,
      chrome_items: Vec<UIItem>,
      chrome_key: (usize, usize, usize, usize, usize, bool),
-@@ -295,6 +580,10 @@ pub struct NativeUi {
+@@ -295,6 +652,10 @@ pub struct NativeUi {
      metadata_schedule: Option<(Duration, usize)>,
      metadata_token: u64,
      metadata_processes: HashMap<TabId, String>,
@@ -534,7 +606,7 @@ index 9dfe7d55..645b9673 100644
  }
  impl NativeUi {
      pub fn new(window_id: usize) -> Self {
-@@ -323,7 +612,10 @@ impl NativeUi {
+@@ -323,7 +684,10 @@ impl NativeUi {
              bound: false,
              initialized,
              cache: Vec::new(),
@@ -546,7 +618,7 @@ index 9dfe7d55..645b9673 100644
              chrome: None,
              chrome_items: Vec::new(),
              chrome_key: (0, 0, 0, 0, 0, false),
-@@ -332,6 +624,10 @@ impl NativeUi {
+@@ -332,6 +696,10 @@ impl NativeUi {
              metadata_schedule: None,
              metadata_token: 0,
              metadata_processes: HashMap::new(),
@@ -557,7 +629,7 @@ index 9dfe7d55..645b9673 100644
          }
      }
      pub fn cancel_metadata_refresh(&mut self) {
-@@ -340,6 +636,7 @@ impl NativeUi {
+@@ -340,6 +708,7 @@ impl NativeUi {
          self.metadata_token = 0;
      }
      pub fn shutdown(mut self) {
@@ -565,7 +637,7 @@ index 9dfe7d55..645b9673 100644
          self.cancel_metadata_refresh();
          let activity = mux::activity::Activity::new();
          promise::spawn::spawn(async move {
-@@ -476,6 +773,65 @@ impl TermWindow {
+@@ -476,6 +845,65 @@ impl TermWindow {
      pub fn native_last_frame_us(&self) -> u64 {
          self.last_frame_duration.as_micros() as u64
      }
@@ -631,7 +703,7 @@ index 9dfe7d55..645b9673 100644
      pub fn native_reserved_width(&self) -> f32 {
          let request = self
              .native_ui
-@@ -497,8 +853,9 @@ impl TermWindow {
+@@ -497,8 +925,9 @@ impl TermWindow {
              .dimensions
              .pixel_width
              .saturating_sub((border.left + border.right).get()) as f32
@@ -643,7 +715,7 @@ index 9dfe7d55..645b9673 100644
          (request.width * self.dimensions.dpi as f32 / 96.)
              .round()
              .clamp(
-@@ -520,6 +877,19 @@ impl TermWindow {
+@@ -520,6 +949,19 @@ impl TermWindow {
      pub fn native_right_width(&self) -> f32 {
          self.native_reserved_width() - self.native_left_width()
      }
@@ -663,7 +735,7 @@ index 9dfe7d55..645b9673 100644
      pub fn native_titlebar_height(&self) -> f32 {
          Self::native_titlebar_height_impl(
              &self.config,
-@@ -577,12 +947,16 @@ impl TermWindow {
+@@ -577,12 +1019,16 @@ impl TermWindow {
          let metrics = crate::utilsprites::RenderMetrics::with_font_metrics(&font.metrics());
          let colors = ElementColors {
              border: BorderColor::default(),
@@ -684,7 +756,7 @@ index 9dfe7d55..645b9673 100644
              .into(),
              text: if self.focused.is_some() {
                  self.config.window_frame.active_titlebar_fg
-@@ -715,8 +1089,17 @@ impl TermWindow {
+@@ -715,8 +1161,17 @@ impl TermWindow {
              return false;
          }
          self.current_mouse_event = Some(event.clone());
@@ -704,42 +776,48 @@ index 9dfe7d55..645b9673 100644
          let action = item
              .as_ref()
              .and_then(|item| match &item.item_type {
-@@ -776,6 +1159,7 @@ impl TermWindow {
+@@ -776,6 +1231,17 @@ impl TermWindow {
                  - top)
                  .max(0.),
          };
-+        let integrated = self.native_integrated_macos();
++        let header_inset = native_sidebar_header_inset(
++            self.native_integrated_macos(),
++            width,
++            self.render_metrics.cell_size.width as f32,
++            if self.native_right_width() > 0. {
++                0.
++            } else {
++                80. * self.dimensions.dpi as f32 / 96.
++            },
++        );
++        let inline_header = header_inset.is_some();
          Geometry {
              sidebar: Bounds {
                  x: if self.native_right_width() > 0. {
-@@ -783,14 +1167,24 @@ impl TermWindow {
+@@ -783,14 +1249,20 @@ impl TermWindow {
                  } else {
                      border.left.get() as f32
                  },
 -                y: content.y,
-+                y: if integrated {
++                y: if inline_header {
 +                    border.top.get() as f32
 +                } else {
 +                    content.y
 +                },
                  width,
 -                height: content.height,
-+                height: content.height + if integrated { top } else { 0. },
++                height: content.height + if inline_header { top } else { 0. },
              },
              content,
              cell_width: self.render_metrics.cell_size.width as f32,
              cell_height: self.render_metrics.cell_size.height as f32,
              dpi: self.dimensions.dpi as f32,
-+            header_inset: if integrated && self.native_right_width() == 0. {
-+                80. * self.dimensions.dpi as f32 / 96.
-+            } else {
-+                0.
-+            },
-+            header_height: if integrated { top } else { 0. },
++            header_inset: header_inset.unwrap_or(0.),
++            header_height: if inline_header { top } else { 0. },
          }
      }
      pub fn native_empty(&self) -> bool {
-@@ -799,10 +1193,13 @@ impl TermWindow {
+@@ -799,10 +1271,13 @@ impl TermWindow {
              .map_or(false, |ui| !ui.dirty && ui.projection.active.is_none())
      }
      pub fn native_content_hidden(&self) -> bool {
@@ -757,7 +835,7 @@ index 9dfe7d55..645b9673 100644
      }
      pub fn native_bell(&mut self, pane_id: usize) {
          if let Some((_, window, tab)) = Mux::get().resolve_pane_id(pane_id) {
-@@ -971,6 +1368,7 @@ impl TermWindow {
+@@ -971,6 +1446,7 @@ impl TermWindow {
          self.native_ui = Some(ui);
          self.native_commands(commands);
          self.native_schedule_metadata_refresh();
@@ -765,7 +843,7 @@ index 9dfe7d55..645b9673 100644
          if old_reservation != (self.native_reserved_width(), self.native_left_width()) {
              if let Some(window) = self.window.clone() {
                  self.apply_dimensions(&self.dimensions.clone(), None, &window);
-@@ -1009,6 +1407,7 @@ impl TermWindow {
+@@ -1009,6 +1485,7 @@ impl TermWindow {
          } else if let Some(ui) = self.native_suspended.get_mut(&window_id) {
              ui.provider.message(message);
              ui.needs_commit = true;
@@ -773,7 +851,7 @@ index 9dfe7d55..645b9673 100644
          }
      }
      pub fn native_message(&mut self, message: serde_json::Value) {
-@@ -1043,6 +1442,7 @@ impl TermWindow {
+@@ -1043,6 +1520,7 @@ impl TermWindow {
          let geometry = self.native_geometry();
          let consumed = self.native_ui.as_mut().map_or(false, |ui| {
              // Input uses the same complete surface and hit regions as the next paint.
@@ -781,7 +859,7 @@ index 9dfe7d55..645b9673 100644
              ui.provider.render(geometry, Instant::now());
              let consumed = ui.provider.input(input);
              ui.needs_commit |= consumed;
-@@ -1216,6 +1616,259 @@ impl TermWindow {
+@@ -1216,6 +1694,259 @@ impl TermWindow {
              }
          }
      }
@@ -1041,7 +1119,7 @@ index 9dfe7d55..645b9673 100644
      pub fn paint_native_ui(&mut self, layers: &mut TripleLayerQuadAllocator) -> anyhow::Result<()> {
          let geometry = self.native_geometry();
          let Some(mut ui) = self.native_ui.take() else {
-@@ -1227,15 +1880,17 @@ impl TermWindow {
+@@ -1227,15 +1958,17 @@ impl TermWindow {
              if let Some(chrome) = &ui.chrome {
                  self.render_element(chrome, self.render_state.as_ref().unwrap(), None)?;
              }
@@ -1062,7 +1140,7 @@ index 9dfe7d55..645b9673 100644
              );
              let grid_width = surface.columns as f32 * geometry.cell_width;
              let key = (
-@@ -1244,6 +1899,7 @@ impl TermWindow {
+@@ -1244,6 +1977,7 @@ impl TermWindow {
                  self.config.generation(),
                  geometry.cell_width as usize,
                  geometry.cell_height as usize,
@@ -1070,7 +1148,7 @@ index 9dfe7d55..645b9673 100644
              );
              if ui.cache_key != key {
                  ui.cache.clear();
-@@ -1254,37 +1910,119 @@ impl TermWindow {
+@@ -1254,37 +1988,136 @@ impl TermWindow {
              let gl_state = self.render_state.as_ref().unwrap();
              let white_space = gl_state.util_sprites.white_space.texture_coords();
              let filled_box = gl_state.util_sprites.filled_box.texture_coords();
@@ -1099,6 +1177,23 @@ index 9dfe7d55..645b9673 100644
 -                    .unwrap_or(palette.background.to_linear()),
 +                })
 +                .unwrap_or(palette.background.to_linear());
++            if self.native_integrated_macos() {
++                let border = self.get_os_border();
++                self.filled_rectangle(
++                    layers,
++                    0,
++                    euclid::rect(
++                        border.left.get() as f32,
++                        border.top.get() as f32,
++                        self.dimensions
++                            .pixel_width
++                            .saturating_sub((border.left + border.right).get())
++                            as f32,
++                        self.native_titlebar_height(),
++                    ),
++                    background,
++                )?;
++            }
 +            self.paint_native_frame(layers, geometry.content, background)?;
 +            self.filled_rectangle(
 +                layers,
@@ -1210,7 +1305,7 @@ index 9dfe7d55..645b9673 100644
                              pixel_width: grid_width,
                              stable_line_idx: None,
                              line,
-@@ -1326,10 +2064,15 @@ impl TermWindow {
+@@ -1326,10 +2159,15 @@ impl TermWindow {
                          },
                          &mut TripleLayerQuadAllocator::Heap(&mut quads),
                      )?;
@@ -1226,7 +1321,7 @@ index 9dfe7d55..645b9673 100644
                          quads,
                          origin,
                      };
-@@ -1348,19 +2091,26 @@ impl TermWindow {
+@@ -1348,19 +2186,26 @@ impl TermWindow {
                      ),
                      surface.opacity,
                      (
@@ -1260,7 +1355,7 @@ index 9dfe7d55..645b9673 100644
                          window.set_text_cursor_position(rect);
                      }
                  }
-@@ -1371,6 +2121,7 @@ impl TermWindow {
+@@ -1371,6 +2216,7 @@ impl TermWindow {
              Ok(())
          })();
          self.native_ui = Some(ui);

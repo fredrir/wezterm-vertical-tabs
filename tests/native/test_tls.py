@@ -9,6 +9,7 @@ import ssl
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 
 SPEC = importlib.util.spec_from_file_location("tls_fixture", Path(__file__).with_name("tls_fixture.py"))
@@ -69,8 +70,6 @@ class TlsFixtureTests(unittest.TestCase):
                 if isinstance(rejection, ssl.SSLError):
                     raise rejection from error
                 raise
-            finally:
-                result.result(timeout=3)
 
     def test_mutual_tls_authenticates_the_expected_client(self):
         response, certificate = self.connect(self.client())
@@ -80,6 +79,21 @@ class TlsFixtureTests(unittest.TestCase):
     def test_connection_rejects_the_wrong_server_hostname(self):
         with self.assertRaises(ssl.SSLCertVerificationError):
             self.connect(self.client(), "wrong.invalid")
+
+    def test_peer_reset_does_not_mask_client_certificate_verification(self):
+        wrap_socket = ssl.SSLContext.wrap_socket
+
+        def wrap(context, *args, **kwargs):
+            try:
+                return wrap_socket(context, *args, **kwargs)
+            except ssl.SSLError as error:
+                if kwargs.get("server_side"):
+                    raise ConnectionResetError(10054, "Peer closed the connection") from error
+                raise
+
+        with patch.object(ssl.SSLContext, "wrap_socket", wrap):
+            with self.assertRaises(ssl.SSLCertVerificationError):
+                self.connect(self.client(), "wrong.invalid")
 
     def test_connection_rejects_an_untrusted_server(self):
         with self.assertRaises(ssl.SSLCertVerificationError):
