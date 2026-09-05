@@ -71,6 +71,13 @@ impl SidebarUi {
             label,
             style.bg(fill),
         );
+        let tooltip = if cfg!(target_os = "macos") {
+            tooltip
+        } else {
+            tooltip
+                .replace("Cmd+Shift+", "Ctrl+Shift+")
+                .replace("Cmd+", "Ctrl+Shift+")
+        };
         self.hit(id, rect, tooltip);
     }
 
@@ -195,6 +202,7 @@ impl SidebarUi {
         let search_y = inner.y + toolbar_height;
         let search_height = if area.height >= 12 { 3 } else { 1 };
         let search = Rect::new(inner.x, search_y, inner.width, search_height);
+        self.search_rect = search;
         self.rounded(
             search,
             self.theme.card,
@@ -266,7 +274,10 @@ impl SidebarUi {
             inner.width,
             footer_y.saturating_sub(tabs_y),
         );
-        self.sidebar_rows = Self::sidebar_entries(model);
+        if self.sidebar_revision != Some(model.revision) {
+            self.sidebar_rows = Self::sidebar_entries(model);
+            self.sidebar_revision = Some(model.revision);
+        }
         let row_height = self.row_height(model);
         let capacity = usize::from(self.tabs_rect.height / row_height).max(1);
         if self.reveal_selection {

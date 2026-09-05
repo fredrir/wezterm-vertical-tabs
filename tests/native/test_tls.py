@@ -64,6 +64,11 @@ class TlsFixtureTests(unittest.TestCase):
                         secure.sendall(b"ping")
                         received = secure.recv(8)
                 return received, result.result(timeout=3)
+            except (ConnectionResetError, BrokenPipeError) as error:
+                rejection = result.result(timeout=3)
+                if isinstance(rejection, ssl.SSLError):
+                    raise rejection from error
+                raise
             finally:
                 result.result(timeout=3)
 

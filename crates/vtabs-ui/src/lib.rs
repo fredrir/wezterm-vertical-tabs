@@ -198,7 +198,9 @@ pub struct SidebarUi {
     settings_search_focused: bool,
     page_rect: Rect,
     sidebar_rect: Rect,
+    search_rect: Rect,
     sidebar_rows: Vec<SidebarRow>,
+    sidebar_revision: Option<u64>,
     pointer_origin: Option<(u16, u16)>,
     dragging: bool,
     hits: Vec<HitRegion>,
@@ -278,7 +280,9 @@ impl SidebarUi {
             settings_search_focused: false,
             page_rect: Rect::default(),
             sidebar_rect: Rect::default(),
+            search_rect: Rect::default(),
             sidebar_rows: Vec::new(),
+            sidebar_revision: None,
             pointer_origin: None,
             dragging: false,
             hits: Vec::new(),
@@ -460,8 +464,9 @@ impl SidebarUi {
                 u32::from(model.settings.animation_ms),
             ));
             self.effect_area = self
-                .focused
+                .hovered
                 .as_ref()
+                .or(self.focused.as_ref())
                 .and_then(|id| self.hits.iter().find(|h| &h.id == id))
                 .map(|h| h.rect);
         }
@@ -499,6 +504,9 @@ impl SidebarUi {
         self.dismiss();
         self.focused = None;
     }
+    pub fn has_overlay(&self) -> bool {
+        self.overlay.is_some()
+    }
     pub fn content_page(&self) -> bool {
         self.settings_page
     }
@@ -520,6 +528,7 @@ impl SidebarUi {
     }
     fn open_overlay(&mut self, overlay: Overlay) {
         self.cancel_effects();
+        self.caret_deadline = None;
         if self.overlay.is_none() && self.overlay_stack.is_empty() {
             self.restore_focus = self.focused.clone();
         }

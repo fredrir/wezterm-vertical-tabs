@@ -117,10 +117,11 @@ class ToolingTests(unittest.TestCase):
         project = self.root / "cache/project"
         with patch.object(native, "ROOT", source), patch.object(native, "refresh_project", return_value=project) as refresh, patch.object(native, "run") as run, patch.object(native, "build") as build, patch.dict(os.environ, {"WEZ_VTABS_UPDATE_SOURCE_SYNCED": "0"}):
             native.update(self.root / "cache", self.root / "install", True, True, self.root / "bundles")
-        refresh.assert_called_once_with(self.root / "cache")
+        refresh.assert_called_once_with(self.root / "cache", "native")
         build.assert_not_called()
         self.assertIn(str(project / "scripts/native.py"), run.call_args.args)
         self.assertEqual(run.call_args.kwargs["env"]["WEZ_VTABS_UPDATE_SOURCE_SYNCED"], "1")
+        self.assertEqual(run.call_args.kwargs["env"]["WEZ_VTABS_PROJECT_BRANCH"], "native")
         self.assertTrue((source.parent / "build.json").is_file())
 
     def test_project_refresh_refuses_an_existing_unowned_checkout(self):
@@ -134,6 +135,91 @@ class ToolingTests(unittest.TestCase):
                 native.refresh_project(cache)
             run.assert_not_called()
         self.assertEqual(sentinel.read_text(encoding="utf-8"), "user edits")
+
+    def test_installed_update_preserves_the_recorded_project_branch(self):
+        source = self.root / "versions/current/source"
+        source.mkdir(parents=True)
+        native.write_json(source.parent / "build.json", {
+            "capability": 1,
+            "project_source": {"remote": native.PROJECT_URL, "branch": "release/native", "revision": "a" * 40},
+        })
+        project = self.root / "cache/project"
+        with patch.object(native, "ROOT", source), patch.object(native, "refresh_project", return_value=project) as refresh, patch.object(native, "run") as run, patch.dict(os.environ, {"WEZ_VTABS_UPDATE_SOURCE_SYNCED": "0", "WEZ_VTABS_PROJECT_BRANCH": ""}):
+            native.update(self.root / "cache", self.root / "install", False, True, self.root / "bundles")
+        refresh.assert_called_once_with(self.root / "cache", "release/native")
+        self.assertEqual(run.call_args.kwargs["env"]["WEZ_VTABS_PROJECT_BRANCH"], "release/native")
+
+    def test_project_source_records_explicit_branch_and_current_revision(self):
+        project = self.root / "project"
+        (project / ".git").mkdir(parents=True)
+        with patch.object(native, "ROOT", project), patch.object(native, "run", return_value="b" * 40), patch.dict(os.environ, {"WEZ_VTABS_PROJECT_BRANCH": "release/native"}):
+            self.assertEqual(native.project_source(), {"remote": native.PROJECT_URL, "branch": "release/native", "revision": "b" * 40})
+
+    def test_project_branch_rejects_revision_expressions_and_unsafe_refs(self):
+        for branch in ("", "--upload-pack=bad", "../main", "native^{commit}", "a..b", "a.lock", "a//b", "a/.b", "a/", "a.", "a b", "a\\b"):
+            with self.subTest(branch=branch), patch.object(native, "run") as run:
+                with self.assertRaisesRegex(RuntimeError, "invalid project update branch"):
+                    native.refresh_project(self.root / "cache", branch)
+                run.assert_not_called()
+
+    def test_project_refresh_switches_an_owned_legacy_cache_with_an_explicit_refspec(self):
+        cache = self.root / "cache"
+        project = cache / "project"
+        (project / ".git").mkdir(parents=True)
+        native.write_json(project / ".git/wez-vtabs-native.json", {
+            "path": str(project.resolve()), "remote": native.PROJECT_URL, "capability": native.CAPABILITY,
+        })
+        for name in ("Cargo.toml", "crates/vtabs-app/Cargo.toml", "scripts/native.py", "native/patches/0001-native.patch"):
+            path = project / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("source", encoding="utf-8")
+        with patch.object(native, "run", return_value=native.PROJECT_URL) as run:
+            self.assertEqual(native.refresh_project(cache, "release/native"), project)
+        run.assert_any_call("git", "fetch", "--prune", "origin", "+refs/heads/release/native:refs/remotes/origin/release/native", cwd=project)
+        run.assert_any_call("git", "reset", "--hard", "refs/remotes/origin/release/native", cwd=project)
+        self.assertFalse(any("origin/main" in str(call) for call in run.call_args_list))
+
+    def test_project_source_rejects_an_unexpected_recorded_remote(self):
+        source = self.root / "source"
+        source.mkdir()
+        native.write_json(source.parent / "build.json", {
+            "project_source": {"remote": "https://example.com/project.git", "branch": "native"},
+        })
+        with patch.object(native, "ROOT", source):
+            with self.assertRaisesRegex(RuntimeError, "unexpected recorded project source"):
+                native.project_source()
+
+    def test_legacy_single_branch_cache_fetches_native_source_from_real_git_repository(self):
+        repository = self.root / "upstream"
+        repository.mkdir()
+
+        def git(*arguments, cwd=repository):
+            return subprocess.check_output(["git", *arguments], cwd=cwd, text=True, stderr=subprocess.STDOUT)
+
+        git("init", "--initial-branch=main")
+        (repository / "README.md").write_text("Legacy source", encoding="utf-8")
+        git("add", ".")
+        git("-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-m", "Legacy source")
+        git("switch", "-c", "native")
+        for name in ("Cargo.toml", "crates/vtabs-app/Cargo.toml", "scripts/native.py", "native/patches/0001-native.patch"):
+            path = repository / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("Native source", encoding="utf-8")
+        git("add", ".")
+        git("-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-m", "Native source")
+        expected = git("rev-parse", "HEAD").strip()
+        cache = self.root / "cache"
+        cache.mkdir()
+        project = cache / "project"
+        git("clone", "--single-branch", "--branch", "main", str(repository), str(project))
+        remote = str(repository)
+        native.write_json(project / ".git/wez-vtabs-native.json", {
+            "path": str(project.resolve()), "remote": remote, "capability": native.CAPABILITY,
+        })
+        with patch.object(native, "PROJECT_URL", remote):
+            self.assertEqual(native.refresh_project(cache), project)
+        self.assertEqual(git("rev-parse", "HEAD", cwd=project).strip(), expected)
+        self.assertTrue((project / "crates/vtabs-app/Cargo.toml").is_file())
 
     def test_source_digest_ignores_build_outputs_and_tracks_source(self):
         root = self.root / "source"

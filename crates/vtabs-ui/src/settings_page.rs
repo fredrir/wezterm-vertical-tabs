@@ -95,6 +95,13 @@ impl SidebarUi {
             return;
         }
         self.page_rect = area;
+        let spacious = area.height >= 24;
+        let area = if spacious && area.width >= 48 {
+            self.rounded(area, self.theme.background, self.theme.background);
+            Rect::new(area.x + 1, area.y + 1, area.width - 2, area.height - 2)
+        } else {
+            area
+        };
         self.rounded(area, self.theme.background, self.theme.border);
         let margin = if area.width >= 72 {
             4
@@ -157,6 +164,9 @@ impl SidebarUi {
             let search = Rect::new(inner.x, y, inner.width, height.min(bottom - y));
             self.compose_settings_search(search);
             y = search.bottom();
+            if spacious && bottom.saturating_sub(y) > 9 {
+                y += 1;
+            }
         }
         if y + 2 < bottom && inner.width >= 7 {
             let reserve = (row_height(area) + 1).min(bottom.saturating_sub(y + 1));
@@ -166,6 +176,9 @@ impl SidebarUi {
                 inner.width,
                 bottom - y - reserve,
             ));
+            if spacious && bottom.saturating_sub(y) > 9 {
+                y += 1;
+            }
         }
         let list = Rect::new(
             inner.x,

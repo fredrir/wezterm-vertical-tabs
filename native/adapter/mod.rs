@@ -303,24 +303,30 @@ impl Provider for Adapter {
         let tabs = snapshot
             .tabs
             .into_iter()
-            .map(|tab| core::Tab {
-                id: tab.id as u64,
-                title: tab.title,
-                cwd: tab.cwd.clone(),
-                domain: tab.domain.clone(),
-                process: tab.process,
-                remote: tab.remote,
-                unread: tab.unread,
-                bell: tab.bell,
-                icon: tab.user_vars.get("icon").cloned().unwrap_or_default(),
-                launch: Some(core::LaunchSpec {
-                    domain: Some(tab.domain.clone()),
-                    cwd: (!tab.cwd.is_empty()).then_some(tab.cwd.clone()),
+            .map(|tab| {
+                let launch = mux::Mux::get()
+                    .get_domain_by_name(&tab.domain)
+                    .filter(|domain| domain.spawnable())
+                    .map(|_| core::LaunchSpec {
+                        domain: Some(tab.domain.clone()),
+                        cwd: (!tab.cwd.is_empty()).then_some(tab.cwd.clone()),
+                        ..Default::default()
+                    });
+                core::Tab {
+                    id: tab.id as u64,
+                    title: tab.title,
+                    cwd: tab.cwd.clone(),
+                    domain: tab.domain.clone(),
+                    process: tab.process,
+                    remote: tab.remote,
+                    unread: tab.unread,
+                    bell: tab.bell,
+                    icon: tab.user_vars.get("icon").cloned().unwrap_or_default(),
+                    launch,
+                    host: tab.user_vars.get("hostname").cloned().unwrap_or(tab.host),
+                    user: tab.user_vars.get("username").cloned().unwrap_or(tab.user),
                     ..Default::default()
-                }),
-                host: tab.user_vars.get("hostname").cloned().unwrap_or(tab.host),
-                user: tab.user_vars.get("username").cloned().unwrap_or(tab.user),
-                ..Default::default()
+                }
             })
             .collect::<Vec<_>>();
         let changed = tabs
@@ -450,7 +456,40 @@ impl Provider for Adapter {
     }
     fn input(&mut self, input: Input<'_>) -> bool {
         match input {
+            Input::RawKey(key) => {
+                let mods = modifiers(key.modifiers);
+                let Some(code) = shortcut_key(&key.key, mods) else {
+                    return false;
+                };
+                if !self.app.model().settings.keyboard_shortcuts || !ui::is_shortcut(&code, mods) {
+                    return false;
+                }
+                if key.key_is_down {
+                    self.ui_input(ui::UiInput::Key {
+                        key: code,
+                        modifiers: mods,
+                    });
+                }
+                true
+            }
             Input::Key(key) => {
+                let mods = modifiers(key.raw.as_ref().map_or(key.modifiers, |raw| raw.modifiers));
+                if self.app.model().settings.keyboard_shortcuts {
+                    if let Some(code) =
+                        shortcut_key(&key.key, mods).filter(|code| ui::is_shortcut(code, mods))
+                    {
+                        if key.key_is_down {
+                            self.ui_input(ui::UiInput::Key {
+                                key: code,
+                                modifiers: mods,
+                            });
+                        }
+                        return true;
+                    }
+                }
+                if !key.key_is_down {
+                    return self.keyboard_focus();
+                }
                 if let KeyCode::Composed(text) = &key.key {
                     if !self.keyboard_focus() {
                         return false;
@@ -477,7 +516,8 @@ impl Provider for Adapter {
                     KeyCode::Function(10) => ui::Key::F10,
                     _ => return self.keyboard_focus(),
                 };
-                let shortcut = ui::is_shortcut(&code, modifiers(key.modifiers));
+                let shortcut = self.app.model().settings.keyboard_shortcuts
+                    && ui::is_shortcut(&code, modifiers(key.modifiers));
                 if !self.keyboard_focus() && !shortcut {
                     return false;
                 }
@@ -507,6 +547,11 @@ impl Provider for Adapter {
                     if matches!(event.kind, MouseEventKind::Press(_)) {
                         self.app.ui_mut().release_focus();
                         self.input_epoch = self.input_epoch.wrapping_add(1);
+                    } else if matches!(event.kind, MouseEventKind::Move) {
+                        self.ui_input(ui::UiInput::PointerMove {
+                            x: u16::MAX,
+                            y: u16::MAX,
+                        });
                     }
                     return false;
                 }
@@ -526,6 +571,14 @@ impl Provider for Adapter {
                 } else {
                     (u16::MAX, u16::MAX)
                 };
+                if geometry.header_height > 0.
+                    && (event.coords.y as f32) < bounds.y + geometry.header_height
+                    && !self.pointer_captured
+                    && !self.app.ui().has_overlay()
+                    && self.app.ui().hit_test(x, y).is_none()
+                {
+                    return false;
+                }
                 let mods = modifiers(event.modifiers);
                 let input = match event.kind {
                     MouseEventKind::Press(button) => {
@@ -570,6 +623,9 @@ impl Provider for Adapter {
                 true
             }
             Input::Focus(focused) => {
+                if !focused {
+                    self.pointer_captured = false;
+                }
                 self.input_epoch = self.input_epoch.wrapping_add(1);
                 self.app.set_focus(focused);
                 if focused {
@@ -735,8 +791,25 @@ impl Provider for Adapter {
                             border_width: if shape.fill == shape.border { 0. } else { 1. },
                         }),
                 );
+            if let Some(cursor) = frame.cursor {
+                self.primitives.push(RoundedSurface {
+                    bounds: Bounds {
+                        x: cursor.x as f32,
+                        y: cursor.y as f32,
+                        width: 0.12,
+                        height: 1.,
+                    },
+                    radius: 0.,
+                    fill: linear_color(self.app.ui().theme.accent),
+                    border: linear_color(self.app.ui().theme.accent),
+                    border_width: 0.,
+                });
+            }
         }
         self.storage();
+    }
+    fn background(&self) -> Option<window::color::LinearRgba> {
+        ui::Theme::parse_color(&self.app.model().settings.background).map(linear_color)
     }
     fn content_page(&self) -> bool {
         self.app.ui().content_page()
@@ -925,7 +998,7 @@ mod native_modal_tests {
                 let title = match action {
                     "settings" => "Settings",
                     "create_space" => "Create space",
-                    _ => "Filter:",
+                    _ => "⌕",
                 };
                 assert!(text.contains(title), "modal was not composed: {}", text);
                 let escape = window::KeyEvent {
@@ -957,5 +1030,168 @@ fn linear_color(color: ratatui::style::Color) -> window::color::LinearRgba {
             window::color::SrgbaTuple::from((r, g, b)).to_linear()
         }
         _ => window::color::LinearRgba(0., 0., 0., 0.),
+    }
+}
+
+fn shortcut_key(key: &KeyCode, mods: ui::Modifiers) -> Option<ui::Key> {
+    Some(match key {
+        KeyCode::Physical(code) => return shortcut_key(&code.to_key_code(), mods),
+        KeyCode::Char('\t') => ui::Key::Tab,
+        KeyCode::Char(c) => {
+            let c = if mods.control && ('\u{1}'..='\u{1a}').contains(c) {
+                char::from(*c as u8 + b'a' - 1)
+            } else {
+                *c
+            };
+            let c = if mods.shift {
+                match c {
+                    '<' => ',',
+                    '!' => '1',
+                    '@' => '2',
+                    '#' => '3',
+                    '$' => '4',
+                    '%' => '5',
+                    '^' => '6',
+                    '&' => '7',
+                    '*' => '8',
+                    '(' => '9',
+                    _ => c,
+                }
+            } else {
+                c
+            };
+            ui::Key::Character(c)
+        }
+        KeyCode::LeftArrow => ui::Key::Left,
+        KeyCode::RightArrow => ui::Key::Right,
+        _ => return None,
+    })
+}
+
+#[cfg(test)]
+mod native_input_tests {
+    use super::*;
+
+    fn raw(key: KeyCode, mods: window::Modifiers, down: bool) -> window::RawKeyEvent {
+        window::RawKeyEvent {
+            key,
+            modifiers: mods,
+            leds: Default::default(),
+            phys_code: None,
+            raw_code: 0,
+            #[cfg(windows)]
+            scan_code: 0,
+            repeat_count: 1,
+            key_is_down: down,
+            handled: window::Handled::new(),
+        }
+    }
+    fn geometry() -> Geometry {
+        Geometry {
+            sidebar: Bounds {
+                x: 0.,
+                y: 0.,
+                width: 256.,
+                height: 480.,
+            },
+            content: Bounds {
+                x: 256.,
+                y: 0.,
+                width: 800.,
+                height: 480.,
+            },
+            cell_width: 8.,
+            cell_height: 20.,
+            dpi: 96.,
+            ..Geometry::default()
+        }
+    }
+    #[test]
+    fn native_shortcuts_precede_bindings_and_do_not_fire_on_release() {
+        config::designate_this_as_the_main_thread();
+        let mut adapter = Adapter::new(9841);
+        let mods = if cfg!(target_os = "macos") {
+            window::Modifiers::SUPER
+        } else {
+            window::Modifiers::CTRL | window::Modifiers::SHIFT
+        };
+        assert!(!adapter.keyboard_focus());
+        assert!(adapter.input(Input::RawKey(&raw(KeyCode::Char(','), mods, true))));
+        assert!(adapter.content_page());
+        assert!(adapter.input(Input::RawKey(&raw(KeyCode::Char(','), mods, false))));
+        assert!(adapter.content_page());
+        adapter.render(geometry(), Instant::now());
+        assert_eq!(adapter.surface.columns, 132);
+        assert_eq!(adapter.reservation().width, 256.);
+        assert!(adapter.input(Input::RawKey(&raw(KeyCode::Char(','), mods, true))));
+        assert!(!adapter.content_page());
+        assert!(!adapter.input(Input::RawKey(&raw(
+            KeyCode::Char('t'),
+            window::Modifiers::CTRL,
+            true
+        ))));
+    }
+    #[test]
+    fn native_shifted_and_control_encoded_keys_resolve_shortcuts() {
+        let mods = ui::Modifiers {
+            control: true,
+            shift: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            shortcut_key(&KeyCode::Char('<'), mods),
+            Some(ui::Key::Character(','))
+        );
+        assert_eq!(
+            shortcut_key(&KeyCode::Char('!'), mods),
+            Some(ui::Key::Character('1'))
+        );
+        assert_eq!(
+            shortcut_key(&KeyCode::Char('\u{7}'), mods),
+            Some(ui::Key::Character('g'))
+        );
+        assert_eq!(shortcut_key(&KeyCode::Char('\t'), mods), Some(ui::Key::Tab));
+    }
+    #[test]
+    fn native_composed_release_does_not_duplicate_text_and_caret_is_visible() {
+        config::designate_this_as_the_main_thread();
+        let mut adapter = Adapter::new(9842);
+        adapter.app.ui_mut().open_create_space();
+        let key = window::KeyEvent {
+            key: KeyCode::Composed("Hello".into()),
+            modifiers: window::Modifiers::NONE,
+            leds: Default::default(),
+            repeat_count: 1,
+            key_is_down: true,
+            raw: None,
+            #[cfg(windows)]
+            win32_uni_char: None,
+        };
+        assert!(adapter.input(Input::Key(&key)));
+        let mut release = key.clone();
+        release.key_is_down = false;
+        assert!(adapter.input(Input::Key(&release)));
+        adapter.render(geometry(), Instant::now());
+        let text = adapter
+            .app
+            .buffer()
+            .content
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+        assert!(text.contains("Hello"));
+        assert!(!text.contains("HelloHello"));
+        assert!(adapter
+            .primitives
+            .iter()
+            .any(|shape| shape.bounds.width == 0.12));
+        adapter.pointer_captured = true;
+        adapter.input(Input::Focus(false));
+        assert!(!adapter.pointer_captured);
+        adapter.render(geometry(), Instant::now());
+        assert!(!adapter
+            .primitives
+            .iter()
+            .any(|shape| shape.bounds.width == 0.12));
     }
 }

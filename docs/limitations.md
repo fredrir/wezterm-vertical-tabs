@@ -8,14 +8,14 @@
 | Lua changes | Configuration and semantic hooks reload without recompiling Rust |
 | Updates | Managed launcher selects completed immutable bundles between launches |
 | Runtime tools | Python, Git, Rust and platform build dependencies required for source updates |
-| Rendering | Cell-based Ratatui UI; native transforms move whole surfaces in pixels |
+| Rendering | Retained Ratatui text with native rounded surfaces and window framing |
 | Animation | TachyonFX modifies cells; it is not a GPU shader language |
-| Live restoration | Current upstream integration cannot verify a persistent mux incarnation; discovered tabs are rerouted after GUI restart/reconnect. Catalog/settings persist; in-GUI workspace switches retain selection, assignments and pins |
+| Live restoration | Current upstream integration cannot verify a persistent mux incarnation; discovered tabs are rerouted after GUI restart/reconnect. Folder catalogs/settings persist; in-GUI workspace switches retain selection, assignments and pins |
 | Tab tearoff | Local moves preserve the whole split tree. Remote single-pane tabs can move; remote split-tab moves are rejected because upstream only exposes pane moves |
 | Reopen | Launch metadata only; does not recover a dead process's execution state |
 | Multiple GUI clients | Normal upstream shared-mux focus and resize semantics still apply |
 | Remote servers | Compatible upstream mux servers; no remote SQLite helper required |
-| Windows | Local and SSH mux; Unix-domain mux only where upstream supports it |
+| Windows | Local, SSH and TLS mux; Unix-domain mux only where upstream supports it |
 | GUI scenario samples | State/geometry/CPU instrumentation; not physical input-to-display or display frame pacing |
 | macOS capture | Opt-in fixture-window screenshots require available OS screen-capture access |
 

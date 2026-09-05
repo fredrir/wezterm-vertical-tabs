@@ -1,8 +1,8 @@
 diff --git a/wezterm-gui/src/quad.rs b/wezterm-gui/src/quad.rs
-index de365918..d054c063 100644
+index de365918..4d78b14d 100644
 --- a/wezterm-gui/src/quad.rs
 +++ b/wezterm-gui/src/quad.rs
-@@ -322,6 +322,10 @@ impl std::fmt::Debug for HeapQuadAllocator {
+@@ -322,6 +322,29 @@ impl std::fmt::Debug for HeapQuadAllocator {
  }
  
  impl HeapQuadAllocator {
@@ -10,13 +10,64 @@ index de365918..d054c063 100644
 +        self.layer0.retain(|quad| quad.has_color != IS_SOLID_COLOR);
 +    }
 +
++    pub fn offset_glyphs_in_ranges(&mut self, ranges: &[(f32, f32)], dy: f32) {
++        if ranges.is_empty() || !dy.is_finite() || dy == 0. {
++            return;
++        }
++        for quads in [&mut self.layer0, &mut self.layer1, &mut self.layer2] {
++            for quad in quads {
++                if quad.has_color == IS_SOLID_COLOR || quad.has_color == IS_BG_IMAGE {
++                    continue;
++                }
++                let center = (quad.position.0 + quad.position.2) / 2.;
++                // Nested button and drag-target surfaces can overlap the same glyph.
++                if ranges.iter().any(|(left, right)| center >= *left && center < *right) {
++                    quad.position.1 += dy;
++                    quad.position.3 += dy;
++                }
++            }
++        }
++    }
++
      pub fn apply_transformed(&self, other: &mut TripleLayerQuadAllocator,
          offset: (f32, f32), opacity: f32, clip: (f32, f32, f32, f32)) {
          for (layer, quads) in [(0, &self.layer0), (1, &self.layer1), (2, &self.layer2)] {
-@@ -440,6 +444,22 @@ mod native_transform_tests {
+@@ -440,6 +463,54 @@ mod native_transform_tests {
          quad.set_has_color(true);
      }
  
++    #[test]
++    fn native_glyph_centering_offsets_once_and_preserves_other_vertex_data() {
++        let mut source = HeapQuadAllocator::default();
++        for layer in 0..3 { glyph(&mut source, layer); }
++        let originals = [source.layer0[0].to_vertices(), source.layer1[0].to_vertices(), source.layer2[0].to_vertices()];
++        let mut background = source.allocate(0).unwrap();
++        background.set_is_background();
++        background.set_position(-30., -20., 50., 60.);
++        source.offset_glyphs_in_ranges(&[(0., 20.), (5., 25.), (10., 30.)], 11.);
++        for (layer, original) in [&source.layer0, &source.layer1, &source.layer2].iter().zip(originals) {
++            let actual = layer[0].to_vertices();
++            for (actual, mut expected) in actual.iter().zip(original) {
++                expected.position[1] += 11.;
++                assert_eq!(bytemuck::bytes_of(actual), bytemuck::bytes_of(&expected));
++            }
++        }
++        assert_eq!(source.layer0[1].position, (-30., -20., 50., 60.));
++    }
++
++    #[test]
++    fn native_glyph_centering_respects_half_open_ranges_and_invalid_offsets() {
++        let mut source = HeapQuadAllocator::default();
++        glyph(&mut source, 1);
++        let original = source.layer1[0].position;
++        // The glyph center is 10; touching only the right edge is outside.
++        source.offset_glyphs_in_ranges(&[(-10., 10.), (11., 30.)], 11.);
++        source.offset_glyphs_in_ranges(&[(0., 30.)], f32::NAN);
++        assert_eq!(source.layer1[0].position, original);
++        source.offset_glyphs_in_ranges(&[(10., 20.)], 11.);
++        assert_eq!(source.layer1[0].position, (-30., -9., 50., 71.));
++    }
++
 +    #[test]
 +    fn native_rounded_surfaces_preserve_glyphs_and_decorations() {
 +        let mut source = HeapQuadAllocator::default();
@@ -36,6 +87,22 @@ index de365918..d054c063 100644
      #[test]
      fn native_transform_clips_all_edges_and_preserves_texture_scale() {
          let mut source = HeapQuadAllocator::default();
+diff --git a/wezterm-gui/src/termwindow/keyevent.rs b/wezterm-gui/src/termwindow/keyevent.rs
+index 9e5fc113..e86bd787 100644
+--- a/wezterm-gui/src/termwindow/keyevent.rs
++++ b/wezterm-gui/src/termwindow/keyevent.rs
+@@ -428,6 +428,11 @@ impl super::TermWindow {
+     }
+ 
+     pub fn raw_key_event_impl(&mut self, key: RawKeyEvent, context: &dyn WindowOps) {
++        // Native accelerators must run before terminal key bindings consume the raw event.
++        if self.native_input(crate::termwindow::native_ui::Input::RawKey(&key)) {
++            key.set_handled();
++            return;
++        }
+         if self.native_ui.as_ref().map_or(false, |ui| ui.provider.keyboard_focus()) { return; }
+         // The leader key is a kind of modal modifier key.
+         // It is allowed to be active for up to the leader timeout duration,
 diff --git a/wezterm-gui/src/termwindow/mod.rs b/wezterm-gui/src/termwindow/mod.rs
 index 6f00f347..b9dc3288 100644
 --- a/wezterm-gui/src/termwindow/mod.rs
@@ -65,7 +132,7 @@ index 6f00f347..b9dc3288 100644
          let mut dimensions = Dimensions {
              pixel_width: (terminal_size.pixel_width + padding_left + padding_right) as usize,
 diff --git a/wezterm-gui/src/termwindow/native_ui.rs b/wezterm-gui/src/termwindow/native_ui.rs
-index 9dfe7d55..280bed45 100644
+index 9dfe7d55..3631024c 100644
 --- a/wezterm-gui/src/termwindow/native_ui.rs
 +++ b/wezterm-gui/src/termwindow/native_ui.rs
 @@ -1,10 +1,11 @@
@@ -81,11 +148,55 @@ index 9dfe7d55..280bed45 100644
  use crate::termwindow::render::RenderScreenLineParams;
  use crate::termwindow::{TermWindow, TermWindowNotif, UIItem, UIItemType};
  use config::keyassignment::SpawnCommand;
-@@ -20,6 +21,60 @@ use wezterm_term::color::ColorAttribute;
+@@ -20,6 +21,104 @@ use wezterm_term::color::ColorAttribute;
  use window::color::LinearRgba;
  use window::{DeadKeyStatus, KeyEvent, MouseEvent, Window, WindowOps};
  
-+use crate::customglyph::{BlockAlpha, BlockCoord, Poly, PolyCommand, PolyStyle};
++use crate::customglyph::{BlockAlpha, BlockCoord, LineScale, Poly, PolyCommand, PolyStyle};
++const STROKE_TOP_LEFT: &[Poly] = &[Poly {
++    path: &[PolyCommand::Oval {
++        center: (BlockCoord::One, BlockCoord::One),
++        radiuses: (
++            BlockCoord::FracWithOffset(1, 1, LineScale::Div(-2)),
++            BlockCoord::FracWithOffset(1, 1, LineScale::Div(-2)),
++        ),
++    }],
++    intensity: BlockAlpha::Full,
++    style: PolyStyle::Outline,
++}];
++const STROKE_TOP_RIGHT: &[Poly] = &[Poly {
++    path: &[PolyCommand::Oval {
++        center: (BlockCoord::Zero, BlockCoord::One),
++        radiuses: (
++            BlockCoord::FracWithOffset(1, 1, LineScale::Div(-2)),
++            BlockCoord::FracWithOffset(1, 1, LineScale::Div(-2)),
++        ),
++    }],
++    intensity: BlockAlpha::Full,
++    style: PolyStyle::Outline,
++}];
++const STROKE_BOTTOM_LEFT: &[Poly] = &[Poly {
++    path: &[PolyCommand::Oval {
++        center: (BlockCoord::One, BlockCoord::Zero),
++        radiuses: (
++            BlockCoord::FracWithOffset(1, 1, LineScale::Div(-2)),
++            BlockCoord::FracWithOffset(1, 1, LineScale::Div(-2)),
++        ),
++    }],
++    intensity: BlockAlpha::Full,
++    style: PolyStyle::Outline,
++}];
++const STROKE_BOTTOM_RIGHT: &[Poly] = &[Poly {
++    path: &[PolyCommand::Oval {
++        center: (BlockCoord::Zero, BlockCoord::Zero),
++        radiuses: (
++            BlockCoord::FracWithOffset(1, 1, LineScale::Div(-2)),
++            BlockCoord::FracWithOffset(1, 1, LineScale::Div(-2)),
++        ),
++    }],
++    intensity: BlockAlpha::Full,
++    style: PolyStyle::Outline,
++}];
 +const FRAME_TOP_LEFT: &[Poly] = &[Poly {
 +    path: &[
 +        PolyCommand::MoveTo(BlockCoord::Zero, BlockCoord::Zero),
@@ -142,7 +253,7 @@ index 9dfe7d55..280bed45 100644
  #[derive(Clone, Copy, Debug, Default, PartialEq)]
  pub struct Bounds {
      pub x: f32,
-@@ -45,6 +100,37 @@ pub struct Geometry {
+@@ -45,6 +144,37 @@ pub struct Geometry {
      pub cell_width: f32,
      pub cell_height: f32,
      pub dpi: f32,
@@ -180,10 +291,21 @@ index 9dfe7d55..280bed45 100644
  }
  #[derive(Clone, Debug)]
  pub struct TabInfo {
-@@ -120,6 +206,12 @@ pub trait Provider {
+@@ -82,6 +212,7 @@ pub enum Navigation {
+     Navigator,
+ }
+ pub enum Input<'a> {
++    RawKey(&'a window::RawKeyEvent),
+     Key(&'a KeyEvent),
+     Mouse(&'a MouseEvent, Geometry),
+     Composition(&'a DeadKeyStatus),
+@@ -120,6 +251,15 @@ pub trait Provider {
      fn commands(&mut self) -> Vec<Command>;
      fn render(&mut self, geometry: Geometry, now: Instant);
      fn surface(&self) -> &Surface;
++    fn background(&self) -> Option<LinearRgba> {
++        None
++    }
 +    fn content_page(&self) -> bool {
 +        false
 +    }
@@ -193,7 +315,21 @@ index 9dfe7d55..280bed45 100644
      fn deadline(&self) -> Option<Instant>;
      fn caret(&self) -> Option<(usize, usize)>;
      fn keyboard_focus(&self) -> bool;
-@@ -200,8 +292,9 @@ fn native_caret_rect(
+@@ -191,8 +331,13 @@ impl PaintStats {
+         result
+     }
+ }
++struct PrimitiveCache {
++    surface: RoundedSurface,
++    quads: HeapQuadAllocator,
++}
+ struct RowCache {
+     line: Rc<Line>,
++    centered_ranges: Vec<(f32, f32)>,
+     quads: HeapQuadAllocator,
+     origin: (f32, f32),
+ }
+@@ -200,8 +345,9 @@ fn native_caret_rect(
      geometry: Geometry,
      offset: (f32, f32),
      caret: (usize, usize),
@@ -204,7 +340,7 @@ index 9dfe7d55..280bed45 100644
      if bounds.width <= 0.
          || bounds.height <= 0.
          || geometry.cell_width <= 0.
-@@ -246,20 +339,20 @@ mod native_geometry_tests {
+@@ -246,20 +392,20 @@ mod native_geometry_tests {
              cell_height: 18.5,
              ..Geometry::default()
          };
@@ -230,7 +366,7 @@ index 9dfe7d55..280bed45 100644
          let geometry = Geometry {
              sidebar: Bounds {
                  width: 20.,
-@@ -270,7 +363,75 @@ mod native_geometry_tests {
+@@ -270,7 +416,75 @@ mod native_geometry_tests {
              cell_height: 10.,
              ..Geometry::default()
          };
@@ -307,16 +443,19 @@ index 9dfe7d55..280bed45 100644
      }
  }
  pub struct NativeUi {
-@@ -286,7 +447,7 @@ pub struct NativeUi {
+@@ -286,7 +500,10 @@ pub struct NativeUi {
      bound: bool,
      initialized: bool,
      cache: Vec<RowCache>,
 -    cache_key: (usize, usize, usize, usize, usize),
++    primitive_cache: Vec<PrimitiveCache>,
++    centered_ranges: Vec<Vec<(f32, f32)>>,
++    primitive_cache_key: (usize, usize, u32, u32, u32, u32, u32),
 +    cache_key: (usize, usize, usize, usize, usize, bool),
      chrome: Option<ComputedElement>,
      chrome_items: Vec<UIItem>,
      chrome_key: (usize, usize, usize, usize, usize, bool),
-@@ -295,6 +456,10 @@ pub struct NativeUi {
+@@ -295,6 +512,10 @@ pub struct NativeUi {
      metadata_schedule: Option<(Duration, usize)>,
      metadata_token: u64,
      metadata_processes: HashMap<TabId, String>,
@@ -327,16 +466,19 @@ index 9dfe7d55..280bed45 100644
  }
  impl NativeUi {
      pub fn new(window_id: usize) -> Self {
-@@ -323,7 +488,7 @@ impl NativeUi {
+@@ -323,7 +544,10 @@ impl NativeUi {
              bound: false,
              initialized,
              cache: Vec::new(),
 -            cache_key: (0, 0, 0, 0, 0),
++            primitive_cache: Vec::new(),
++            centered_ranges: Vec::new(),
++            primitive_cache_key: (0, 0, 0, 0, 0, 0, 0),
 +            cache_key: (0, 0, 0, 0, 0, false),
              chrome: None,
              chrome_items: Vec::new(),
              chrome_key: (0, 0, 0, 0, 0, false),
-@@ -332,6 +497,10 @@ impl NativeUi {
+@@ -332,6 +556,10 @@ impl NativeUi {
              metadata_schedule: None,
              metadata_token: 0,
              metadata_processes: HashMap::new(),
@@ -347,7 +489,7 @@ index 9dfe7d55..280bed45 100644
          }
      }
      pub fn cancel_metadata_refresh(&mut self) {
-@@ -340,6 +509,7 @@ impl NativeUi {
+@@ -340,6 +568,7 @@ impl NativeUi {
          self.metadata_token = 0;
      }
      pub fn shutdown(mut self) {
@@ -355,7 +497,7 @@ index 9dfe7d55..280bed45 100644
          self.cancel_metadata_refresh();
          let activity = mux::activity::Activity::new();
          promise::spawn::spawn(async move {
-@@ -476,6 +646,65 @@ impl TermWindow {
+@@ -476,6 +705,65 @@ impl TermWindow {
      pub fn native_last_frame_us(&self) -> u64 {
          self.last_frame_duration.as_micros() as u64
      }
@@ -421,7 +563,7 @@ index 9dfe7d55..280bed45 100644
      pub fn native_reserved_width(&self) -> f32 {
          let request = self
              .native_ui
-@@ -497,8 +726,9 @@ impl TermWindow {
+@@ -497,8 +785,9 @@ impl TermWindow {
              .dimensions
              .pixel_width
              .saturating_sub((border.left + border.right).get()) as f32
@@ -433,7 +575,7 @@ index 9dfe7d55..280bed45 100644
          (request.width * self.dimensions.dpi as f32 / 96.)
              .round()
              .clamp(
-@@ -520,6 +750,19 @@ impl TermWindow {
+@@ -520,6 +809,19 @@ impl TermWindow {
      pub fn native_right_width(&self) -> f32 {
          self.native_reserved_width() - self.native_left_width()
      }
@@ -453,7 +595,7 @@ index 9dfe7d55..280bed45 100644
      pub fn native_titlebar_height(&self) -> f32 {
          Self::native_titlebar_height_impl(
              &self.config,
-@@ -577,12 +820,16 @@ impl TermWindow {
+@@ -577,12 +879,16 @@ impl TermWindow {
          let metrics = crate::utilsprites::RenderMetrics::with_font_metrics(&font.metrics());
          let colors = ElementColors {
              border: BorderColor::default(),
@@ -474,7 +616,7 @@ index 9dfe7d55..280bed45 100644
              .into(),
              text: if self.focused.is_some() {
                  self.config.window_frame.active_titlebar_fg
-@@ -715,8 +962,17 @@ impl TermWindow {
+@@ -715,8 +1021,17 @@ impl TermWindow {
              return false;
          }
          self.current_mouse_event = Some(event.clone());
@@ -494,7 +636,7 @@ index 9dfe7d55..280bed45 100644
          let action = item
              .as_ref()
              .and_then(|item| match &item.item_type {
-@@ -776,6 +1032,7 @@ impl TermWindow {
+@@ -776,6 +1091,7 @@ impl TermWindow {
                  - top)
                  .max(0.),
          };
@@ -502,7 +644,7 @@ index 9dfe7d55..280bed45 100644
          Geometry {
              sidebar: Bounds {
                  x: if self.native_right_width() > 0. {
-@@ -783,14 +1040,24 @@ impl TermWindow {
+@@ -783,14 +1099,24 @@ impl TermWindow {
                  } else {
                      border.left.get() as f32
                  },
@@ -520,7 +662,7 @@ index 9dfe7d55..280bed45 100644
              cell_width: self.render_metrics.cell_size.width as f32,
              cell_height: self.render_metrics.cell_size.height as f32,
              dpi: self.dimensions.dpi as f32,
-+            header_inset: if integrated {
++            header_inset: if integrated && self.native_right_width() == 0. {
 +                80. * self.dimensions.dpi as f32 / 96.
 +            } else {
 +                0.
@@ -529,7 +671,7 @@ index 9dfe7d55..280bed45 100644
          }
      }
      pub fn native_empty(&self) -> bool {
-@@ -799,10 +1066,13 @@ impl TermWindow {
+@@ -799,10 +1125,13 @@ impl TermWindow {
              .map_or(false, |ui| !ui.dirty && ui.projection.active.is_none())
      }
      pub fn native_content_hidden(&self) -> bool {
@@ -547,7 +689,7 @@ index 9dfe7d55..280bed45 100644
      }
      pub fn native_bell(&mut self, pane_id: usize) {
          if let Some((_, window, tab)) = Mux::get().resolve_pane_id(pane_id) {
-@@ -971,6 +1241,7 @@ impl TermWindow {
+@@ -971,6 +1300,7 @@ impl TermWindow {
          self.native_ui = Some(ui);
          self.native_commands(commands);
          self.native_schedule_metadata_refresh();
@@ -555,7 +697,7 @@ index 9dfe7d55..280bed45 100644
          if old_reservation != (self.native_reserved_width(), self.native_left_width()) {
              if let Some(window) = self.window.clone() {
                  self.apply_dimensions(&self.dimensions.clone(), None, &window);
-@@ -1009,6 +1280,7 @@ impl TermWindow {
+@@ -1009,6 +1339,7 @@ impl TermWindow {
          } else if let Some(ui) = self.native_suspended.get_mut(&window_id) {
              ui.provider.message(message);
              ui.needs_commit = true;
@@ -563,7 +705,7 @@ index 9dfe7d55..280bed45 100644
          }
      }
      pub fn native_message(&mut self, message: serde_json::Value) {
-@@ -1043,6 +1315,7 @@ impl TermWindow {
+@@ -1043,6 +1374,7 @@ impl TermWindow {
          let geometry = self.native_geometry();
          let consumed = self.native_ui.as_mut().map_or(false, |ui| {
              // Input uses the same complete surface and hit regions as the next paint.
@@ -571,7 +713,7 @@ index 9dfe7d55..280bed45 100644
              ui.provider.render(geometry, Instant::now());
              let consumed = ui.provider.input(input);
              ui.needs_commit |= consumed;
-@@ -1216,6 +1489,192 @@ impl TermWindow {
+@@ -1216,6 +1548,259 @@ impl TermWindow {
              }
          }
      }
@@ -601,11 +743,17 @@ index 9dfe7d55..280bed45 100644
 +        }
 +        let radius = radius.max(0.).min(rect.width / 2.).min(rect.height / 2.);
 +        let stroke = border_width
++            .round()
 +            .max(0.)
 +            .min(rect.width / 2.)
 +            .min(rect.height / 2.);
++        let stroke = if radius >= 1. {
++            stroke.min(radius)
++        } else {
++            stroke
++        };
 +        if stroke > 0. && border.tuple().3 > 0. {
-+            self.paint_native_rounded_fill(layers, rect, radius, border)?;
++            self.paint_native_rounded_border(layers, rect, radius, border, stroke)?;
 +            let inner = Bounds {
 +                x: rect.x + stroke,
 +                y: rect.y + stroke,
@@ -616,6 +764,67 @@ index 9dfe7d55..280bed45 100644
 +        } else {
 +            self.paint_native_rounded_fill(layers, rect, radius, fill)
 +        }
++    }
++    fn paint_native_rounded_border(
++        &self,
++        layers: &mut TripleLayerQuadAllocator,
++        rect: Bounds,
++        radius: f32,
++        color: LinearRgba,
++        stroke: f32,
++    ) -> anyhow::Result<()> {
++        // A real outline preserves the destination beneath transparent drag targets.
++        let extent = if radius >= 1. { radius } else { 0. };
++        let vertical_inset = extent.max(stroke);
++        for (x, y, width, height) in [
++            (rect.x + extent, rect.y, rect.width - extent * 2., stroke),
++            (
++                rect.x + extent,
++                rect.y + rect.height - stroke,
++                rect.width - extent * 2.,
++                stroke,
++            ),
++            (
++                rect.x,
++                rect.y + vertical_inset,
++                stroke,
++                rect.height - vertical_inset * 2.,
++            ),
++            (
++                rect.x + rect.width - stroke,
++                rect.y + vertical_inset,
++                stroke,
++                rect.height - vertical_inset * 2.,
++            ),
++        ] {
++            if width > 0. && height > 0. {
++                self.filled_rectangle(layers, 0, euclid::rect(x, y, width, height), color)?;
++            }
++        }
++        if radius >= 1. {
++            for (x, y, corner) in [
++                (rect.x, rect.y, STROKE_TOP_LEFT),
++                (rect.x + rect.width - radius, rect.y, STROKE_TOP_RIGHT),
++                (rect.x, rect.y + rect.height - radius, STROKE_BOTTOM_LEFT),
++                (
++                    rect.x + rect.width - radius,
++                    rect.y + rect.height - radius,
++                    STROKE_BOTTOM_RIGHT,
++                ),
++            ] {
++                self.poly_quad(
++                    layers,
++                    0,
++                    euclid::point2(x, y),
++                    corner,
++                    stroke.round().max(1.) as isize,
++                    euclid::size2(radius, radius),
++                    color,
++                )?
++                .set_grayscale();
++            }
++        }
++        Ok(())
 +    }
 +    fn paint_native_rounded_fill(
 +        &self,
@@ -764,7 +973,7 @@ index 9dfe7d55..280bed45 100644
      pub fn paint_native_ui(&mut self, layers: &mut TripleLayerQuadAllocator) -> anyhow::Result<()> {
          let geometry = self.native_geometry();
          let Some(mut ui) = self.native_ui.take() else {
-@@ -1227,15 +1686,17 @@ impl TermWindow {
+@@ -1227,15 +1812,17 @@ impl TermWindow {
              if let Some(chrome) = &ui.chrome {
                  self.render_element(chrome, self.render_state.as_ref().unwrap(), None)?;
              }
@@ -785,7 +994,7 @@ index 9dfe7d55..280bed45 100644
              );
              let grid_width = surface.columns as f32 * geometry.cell_width;
              let key = (
-@@ -1244,6 +1705,7 @@ impl TermWindow {
+@@ -1244,6 +1831,7 @@ impl TermWindow {
                  self.config.generation(),
                  geometry.cell_width as usize,
                  geometry.cell_height as usize,
@@ -793,23 +1002,13 @@ index 9dfe7d55..280bed45 100644
              );
              if ui.cache_key != key {
                  ui.cache.clear();
-@@ -1254,25 +1716,47 @@ impl TermWindow {
+@@ -1254,37 +1842,120 @@ impl TermWindow {
              let gl_state = self.render_state.as_ref().unwrap();
              let white_space = gl_state.util_sprites.white_space.texture_coords();
              let filled_box = gl_state.util_sprites.filled_box.texture_coords();
-+            let background = surface
-+                .rows
-+                .first()
-+                .and_then(|line| {
-+                    line.visible_cells()
-+                        .next()
-+                        .map(|cell| palette.resolve_bg(cell.attrs().background()).to_linear())
-+                })
-+                .unwrap_or(palette.background.to_linear());
-+            self.paint_native_frame(layers, geometry.content, background)?;
-             self.filled_rectangle(
-                 layers,
-                 0,
+-            self.filled_rectangle(
+-                layers,
+-                0,
 -                euclid::rect(
 -                    geometry.sidebar.x,
 -                    geometry.sidebar.y,
@@ -820,43 +1019,120 @@ index 9dfe7d55..280bed45 100644
 -                    .rows
 -                    .first()
 -                    .and_then(|line| {
--                        line.visible_cells()
--                            .next()
--                            .map(|cell| palette.resolve_bg(cell.attrs().background()).to_linear())
--                    })
++            let background = ui
++                .provider
++                .background()
++                .or_else(|| {
++                    surface.rows.first().and_then(|line| {
+                         line.visible_cells()
+                             .next()
+                             .map(|cell| palette.resolve_bg(cell.attrs().background()).to_linear())
+                     })
 -                    .unwrap_or(palette.background.to_linear()),
++                })
++                .unwrap_or(palette.background.to_linear());
++            self.paint_native_frame(layers, geometry.content, background)?;
++            self.filled_rectangle(
++                layers,
++                0,
 +                euclid::rect(bounds.x, bounds.y, bounds.width, bounds.height),
 +                background,
              )?;
-+            let mut primitives = HeapQuadAllocator::default();
-+            for primitive in ui.provider.primitives() {
-+                let rect = Bounds {
-+                    x: bounds.x + primitive.bounds.x * geometry.cell_width,
-+                    y: bounds.y + primitive.bounds.y * geometry.cell_height,
-+                    width: primitive.bounds.width * geometry.cell_width,
-+                    height: primitive.bounds.height * geometry.cell_height,
-+                };
-+                let scale = geometry.dpi / 96.;
-+                self.paint_native_surface(
-+                    &mut TripleLayerQuadAllocator::Heap(&mut primitives),
-+                    rect,
-+                    primitive.radius * scale,
-+                    primitive.fill,
-+                    primitive.border,
-+                    primitive.border_width * scale,
-+                )?;
+-            for (y, line) in surface.rows.iter().enumerate() {
++            let primitive_key = (
++                self.dimensions.pixel_width,
++                self.dimensions.pixel_height,
++                geometry.cell_width.to_bits(),
++                geometry.cell_height.to_bits(),
++                geometry.dpi.to_bits(),
++                bounds.x.to_bits(),
++                bounds.y.to_bits(),
++            );
++            let recenter = ui.primitive_cache_key != primitive_key
++                || ui.centered_ranges.len() != surface.rows.len()
++                || ui.primitive_cache.len() != ui.provider.primitives().len()
++                || ui
++                    .primitive_cache
++                    .iter()
++                    .zip(ui.provider.primitives())
++                    .any(|(cached, next)| cached.surface.bounds != next.bounds);
++            if recenter {
++                ui.centered_ranges.resize_with(surface.rows.len(), Vec::new);
++                for ranges in &mut ui.centered_ranges {
++                    ranges.clear();
++                }
++                for primitive in ui.provider.primitives() {
++                    let rect = primitive.bounds;
++                    if rect.height != 2. || rect.y < 0. || rect.y.fract() != 0. {
++                        continue;
++                    }
++                    if let Some(ranges) = ui.centered_ranges.get_mut(rect.y as usize) {
++                        ranges.push((
++                            origin.0 + rect.x * geometry.cell_width,
++                            origin.0 + (rect.x + rect.width) * geometry.cell_width,
++                        ));
++                    }
++                }
 +            }
++            if ui.primitive_cache_key != primitive_key {
++                ui.primitive_cache.clear();
++                ui.primitive_cache_key = primitive_key;
++            }
++            ui.primitive_cache.truncate(ui.provider.primitives().len());
 +            let clip = (
 +                bounds.x - self.dimensions.pixel_width as f32 / 2.,
 +                bounds.y - self.dimensions.pixel_height as f32 / 2.,
 +                bounds.x + bounds.width - self.dimensions.pixel_width as f32 / 2.,
 +                bounds.y + bounds.height - self.dimensions.pixel_height as f32 / 2.,
 +            );
-+            primitives.apply_transformed(layers, surface.offset, surface.opacity, clip);
-             for (y, line) in surface.rows.iter().enumerate() {
++            for (index, primitive) in ui.provider.primitives().iter().enumerate() {
                  if ui
-                     .cache
-@@ -1283,8 +1767,8 @@ impl TermWindow {
+-                    .cache
+-                    .get(y)
+-                    .map_or(true, |cached| !Rc::ptr_eq(&cached.line, line))
++                    .primitive_cache
++                    .get(index)
++                    .is_none_or(|cached| cached.surface != *primitive)
+                 {
++                    let rect = Bounds {
++                        x: bounds.x + primitive.bounds.x * geometry.cell_width,
++                        y: bounds.y + primitive.bounds.y * geometry.cell_height,
++                        width: primitive.bounds.width * geometry.cell_width,
++                        height: primitive.bounds.height * geometry.cell_height,
++                    };
++                    let scale = geometry.dpi / 96.;
++                    let mut quads = HeapQuadAllocator::default();
++                    self.paint_native_surface(
++                        &mut TripleLayerQuadAllocator::Heap(&mut quads),
++                        rect,
++                        primitive.radius * scale,
++                        primitive.fill,
++                        primitive.border,
++                        primitive.border_width * scale,
++                    )?;
++                    let cached = PrimitiveCache {
++                        surface: *primitive,
++                        quads,
++                    };
++                    if index < ui.primitive_cache.len() {
++                        ui.primitive_cache[index] = cached;
++                    } else {
++                        ui.primitive_cache.push(cached);
++                    }
++                }
++                ui.primitive_cache[index].quads.apply_transformed(
++                    layers,
++                    surface.offset,
++                    surface.opacity,
++                    clip,
++                );
++            }
++            for (y, line) in surface.rows.iter().enumerate() {
++                let centered_ranges = &ui.centered_ranges[y];
++                if ui.cache.get(y).map_or(true, |cached| {
++                    !Rc::ptr_eq(&cached.line, line) || cached.centered_ranges != *centered_ranges
++                }) {
+                     let shape_start = Instant::now();
                      let mut quads = HeapQuadAllocator::default();
                      self.render_screen_line(
                          RenderScreenLineParams {
@@ -867,17 +1143,23 @@ index 9dfe7d55..280bed45 100644
                              pixel_width: grid_width,
                              stable_line_idx: None,
                              line,
-@@ -1326,6 +1810,9 @@ impl TermWindow {
+@@ -1326,10 +1997,15 @@ impl TermWindow {
                          },
                          &mut TripleLayerQuadAllocator::Heap(&mut quads),
                      )?;
 +                    if rounded {
 +                        quads.remove_solid_backgrounds();
++                        quads.offset_glyphs_in_ranges(centered_ranges, geometry.cell_height / 2.);
 +                    }
                      shaped += shape_start.elapsed().as_micros() as u64;
                      ui.stats.rows_shaped += 1;
                      let cached = RowCache {
-@@ -1348,19 +1835,22 @@ impl TermWindow {
+                         line: Rc::clone(line),
++                        centered_ranges: centered_ranges.clone(),
+                         quads,
+                         origin,
+                     };
+@@ -1348,19 +2024,26 @@ impl TermWindow {
                      ),
                      surface.opacity,
                      (
@@ -898,16 +1180,20 @@ index 9dfe7d55..280bed45 100644
              if ui.provider.keyboard_focus() {
                  if let (Some(window), Some(caret)) = (&self.window, ui.provider.caret()) {
 -                    if let Some(rect) = native_caret_rect(geometry, surface.offset, caret) {
-+                    if let Some(rect) = native_caret_rect(
-+                        geometry,
-+                        surface.offset,
-+                        caret,
-+                        ui.provider.content_page(),
-+                    ) {
++                    let mut offset = surface.offset;
++                    let x = origin.0 + (caret.0 as f32 + 0.5) * geometry.cell_width;
++                    if ui.centered_ranges.get(caret.1).is_some_and(|ranges| {
++                        ranges.iter().any(|(left, right)| x >= *left && x < *right)
++                    }) {
++                        offset.1 += geometry.cell_height / 2.;
++                    }
++                    if let Some(rect) =
++                        native_caret_rect(geometry, offset, caret, ui.provider.content_page())
++                    {
                          window.set_text_cursor_position(rect);
                      }
                  }
-@@ -1371,6 +1861,7 @@ impl TermWindow {
+@@ -1371,6 +2054,7 @@ impl TermWindow {
              Ok(())
          })();
          self.native_ui = Some(ui);
@@ -1023,6 +1309,65 @@ index a4e8ded5..4e2c976d 100644
              },
 -        )
 +        ) + self.native_frame_gutter() as usize
+     }
+ }
+ 
+diff --git a/wezterm-input-types/src/lib.rs b/wezterm-input-types/src/lib.rs
+index f5673f60..01a2fc8f 100644
+--- a/wezterm-input-types/src/lib.rs
++++ b/wezterm-input-types/src/lib.rs
+@@ -2122,7 +2122,53 @@ impl TryFrom<String> for WindowDecorations {
+ 
+ impl Default for WindowDecorations {
+     fn default() -> Self {
+-        WindowDecorations::TITLE | WindowDecorations::RESIZE
++        #[cfg(target_os = "macos")]
++        {
++            Self::INTEGRATED_BUTTONS | Self::RESIZE
++        }
++        #[cfg(not(target_os = "macos"))]
++        {
++            Self::TITLE | Self::RESIZE
++        }
++    }
++}
++
++#[cfg(test)]
++mod native_window_decoration_tests {
++    use super::WindowDecorations;
++
++    #[test]
++    fn native_default_window_controls_match_the_platform() {
++        let decorations = WindowDecorations::default();
++        assert!(decorations.contains(WindowDecorations::RESIZE));
++        assert_eq!(
++            decorations.contains(WindowDecorations::INTEGRATED_BUTTONS),
++            cfg!(target_os = "macos")
++        );
++        assert_eq!(
++            decorations.contains(WindowDecorations::TITLE),
++            !cfg!(target_os = "macos")
++        );
++    }
++
++    #[test]
++    fn native_window_control_defaults_preserve_explicit_configuration() {
++        for (value, expected) in [
++            ("NONE", WindowDecorations::NONE),
++            (
++                "TITLE|RESIZE",
++                WindowDecorations::TITLE | WindowDecorations::RESIZE,
++            ),
++            (
++                "INTEGRATED_BUTTONS|RESIZE",
++                WindowDecorations::INTEGRATED_BUTTONS | WindowDecorations::RESIZE,
++            ),
++        ] {
++            assert_eq!(
++                WindowDecorations::try_from(value.to_owned()).unwrap(),
++                expected
++            );
++        }
      }
  }
  

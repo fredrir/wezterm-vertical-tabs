@@ -19,6 +19,7 @@
 ---@field muted? string Secondary text foreground
 ---@field selected_background? string Selected card background
 ---@field private_accent? string Private window accent
+---@field keyboard_shortcuts? boolean Enable native tab, search, settings and sidebar shortcuts
 ---@field reopen_limit? integer Maximum in-memory launch intents
 ---@field default_domain? string? Spawn domain used in an empty space; null retains the host default
 ---@field private_env? table<string, string> Environment additions for explicitly created private windows

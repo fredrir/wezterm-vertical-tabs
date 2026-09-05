@@ -3,7 +3,7 @@ use ratatui::{
     layout::Position,
     style::{Modifier, Style},
     text::Line,
-    widgets::{Block, BorderType, Borders, Clear, Paragraph, Widget, Wrap},
+    widgets::{Block, Clear, Paragraph, Widget, Wrap},
 };
 use std::time::Duration;
 use unicode_segmentation::UnicodeSegmentation;
@@ -231,7 +231,9 @@ impl SidebarUi {
         self.dirty = false;
         self.frame_revision = self.frame_revision.wrapping_add(1);
         let editor = match &self.overlay {
-            Some(Overlay::Form(form)) => Some(&form.editor),
+            Some(Overlay::Form(form)) if self.focused == Some(ElementId::Editor) => {
+                Some(&form.editor)
+            }
             Some(Overlay::Menu(menu)) => menu.search.as_ref().map(|search| &search.editor),
             _ if self.settings_page && self.settings_search_focused => Some(&self.settings_query),
             _ => None,
@@ -370,6 +372,13 @@ impl SidebarUi {
     }
 
     fn compose_overlay(&mut self, _model: &Model, area: Rect, overlay: &mut Overlay) {
+        let searching = matches!(
+            overlay,
+            Overlay::Menu(Menu {
+                search: Some(_),
+                ..
+            })
+        );
         let width = area.width.min(64);
         let desired_height = match overlay {
             Overlay::Menu(menu) => menu
@@ -377,35 +386,69 @@ impl SidebarUi {
                 .as_ref()
                 .map_or(menu.items.len(), |search| search.all_items.len())
                 .max(1)
-                .saturating_add(2)
+                .saturating_add(if searching { 4 } else { 2 })
                 .min(usize::from(u16::MAX)) as u16,
             Overlay::Form(_) => 7,
         };
         let height = area.height.min(desired_height);
-        let rect = Rect::new(
-            area.x + (area.width - width) / 2,
-            area.y + (area.height - height) / 2,
-            width,
-            height,
-        );
+        let rect = if searching && !self.settings_page && !self.search_rect.is_empty() {
+            Rect::new(
+                self.search_rect.x,
+                self.search_rect.y,
+                self.search_rect.width,
+                height.min(area.bottom().saturating_sub(self.search_rect.y)),
+            )
+        } else {
+            Rect::new(
+                area.x + (area.width - width) / 2,
+                area.y + (area.height - height) / 2,
+                width,
+                height,
+            )
+        };
         self.overlay_rect = rect;
         Clear.render(rect, &mut self.staging);
         self.rounded(rect, self.theme.background, self.theme.border);
         let framed = rect.width >= 4 && rect.height >= 3;
+        let search_header = searching && rect.height >= 5;
         let inner = if framed {
-            Rect::new(rect.x + 1, rect.y + 1, rect.width - 2, rect.height - 2)
+            Rect::new(
+                rect.x + 1,
+                rect.y + if search_header { 3 } else { 1 },
+                rect.width - 2,
+                rect.height - if search_header { 4 } else { 2 },
+            )
         } else {
             rect
         };
         match overlay {
             Overlay::Menu(menu) => {
                 if framed {
-                    let title = if let Some(search) = &mut menu.search {
-                        let width = rect.width.saturating_sub(10);
-                        self.editor_rect =
-                            Rect::new((rect.x + 9).min(rect.right()), rect.y, width, 1);
-                        self.hit(ElementId::Editor, self.editor_rect, "Search tabs");
-                        search.editor.keep_cursor_visible(usize::from(width));
+                    let title = Rect::new(
+                        rect.x + 1,
+                        rect.y + u16::from(search_header),
+                        rect.width.saturating_sub(2),
+                        1,
+                    );
+                    if let Some(search) = &mut menu.search {
+                        self.rounded(
+                            Rect::new(
+                                rect.x,
+                                rect.y,
+                                rect.width,
+                                if search_header { 3 } else { 1 },
+                            ),
+                            self.theme.card,
+                            self.theme.accent,
+                        );
+                        let label = if title.width >= 12 { "⌕ " } else { "" };
+                        let label_width = label.width() as u16;
+                        let edit =
+                            Rect::new(title.x + label_width, title.y, title.width - label_width, 1);
+                        self.editor_rect = edit;
+                        self.write(title, label, self.theme.muted());
+                        self.hit(ElementId::Editor, edit, "Search tabs");
+                        search.editor.keep_cursor_visible(usize::from(edit.width));
                         let mut col = 0;
                         let text: String = search
                             .editor
@@ -417,27 +460,23 @@ impl SidebarUi {
                                 start >= search.editor.scroll_columns
                             })
                             .collect();
-                        if self.window_focused && width > 0 {
+                        self.write(edit, text, self.theme.base().bg(self.theme.card));
+                        self.compose_editor_marks(&search.editor, edit);
+                        if self.window_focused && edit.width > 0 {
                             self.cursor = Some(Position::new(
                                 self.editor_rect.x
                                     + search
                                         .editor
                                         .cursor_columns()
                                         .saturating_sub(search.editor.scroll_columns)
-                                        .min(usize::from(width - 1))
+                                        .min(usize::from(edit.width - 1))
                                         as u16,
-                                rect.y,
+                                edit.y,
                             ));
                         }
-                        format!("Filter: {text}")
                     } else {
-                        menu.title.clone()
-                    };
-                    self.write(
-                        Rect::new(rect.x + 1, rect.y, rect.width.saturating_sub(2), 1),
-                        display_text(&title),
-                        self.theme.accent(),
-                    );
+                        self.write(title, display_text(&menu.title), self.theme.accent());
+                    }
                 }
                 if menu.items.is_empty() && inner.height > 0 {
                     self.write(
@@ -506,6 +545,7 @@ impl SidebarUi {
                 );
                 let input_y = inner.y + u16::from(inner.height > 1);
                 let edit = Rect::new(inner.x, input_y, inner.width, 1);
+                let editing = self.focused == Some(ElementId::Editor);
                 self.editor_rect = edit;
                 form.editor.keep_cursor_visible(usize::from(edit.width));
                 let text = form.editor.display_text();
@@ -518,43 +558,21 @@ impl SidebarUi {
                         start >= form.editor.scroll_columns
                     })
                     .collect();
-                self.rounded(edit, self.theme.selected, self.theme.border);
+                self.rounded(
+                    edit,
+                    self.theme.selected,
+                    if editing {
+                        self.theme.accent
+                    } else {
+                        self.theme.border
+                    },
+                );
                 self.write(edit, display, self.theme.base().bg(self.theme.selected));
                 self.hit(ElementId::Editor, edit, "Text entry");
-                if let Some(selection) = form.editor.selection_columns() {
-                    let start = selection
-                        .start
-                        .saturating_sub(form.editor.scroll_columns)
-                        .min(usize::from(edit.width)) as u16;
-                    let end = selection
-                        .end
-                        .saturating_sub(form.editor.scroll_columns)
-                        .min(usize::from(edit.width)) as u16;
-                    for x in edit.x + start..edit.x + end {
-                        self.staging[(x, edit.y)].set_style(
-                            Style::default()
-                                .fg(self.theme.background)
-                                .bg(self.theme.accent),
-                        );
-                    }
+                if editing {
+                    self.compose_editor_marks(&form.editor, edit);
                 }
-                if !form.editor.preedit().is_empty() {
-                    // IME preedit is differentiated; native composition still owns candidates.
-                    let range = form.editor.preedit_columns();
-                    let start = range
-                        .start
-                        .saturating_sub(form.editor.scroll_columns)
-                        .min(usize::from(edit.width)) as u16;
-                    let end = range
-                        .end
-                        .saturating_sub(form.editor.scroll_columns)
-                        .min(usize::from(edit.width)) as u16;
-                    for x in edit.x + start..edit.x + end {
-                        self.staging[(x, edit.y)]
-                            .set_style(Style::default().add_modifier(Modifier::UNDERLINED));
-                    }
-                }
-                if self.caret_visible && self.window_focused && edit.width > 0 {
+                if editing && self.caret_visible && self.window_focused && edit.width > 0 {
                     let x = edit.x
                         + form
                             .editor
@@ -568,7 +586,7 @@ impl SidebarUi {
                         Rect::new(inner.x, input_y + 1, inner.width, 1),
                         form.error
                             .clone()
-                            .unwrap_or_else(|| "Enter saves · Esc cancels".into()),
+                            .unwrap_or_else(|| "Enter saves   Esc cancels".into()),
                         if form.error.is_some() {
                             self.theme.base().fg(self.theme.danger)
                         } else {
@@ -578,15 +596,75 @@ impl SidebarUi {
                 }
                 if inner.height > 3 {
                     let row = inner.bottom() - 1;
-                    let save = Rect::new(inner.x, row, inner.width.min(8), 1);
-                    let cancel =
-                        Rect::new(save.right(), row, inner.width.saturating_sub(save.width), 1);
-                    self.write(save, "[ Save ]", self.theme.accent());
-                    self.hit(ElementId::Submit, save, "Save");
-                    self.write(cancel, " Cancel", self.theme.muted());
-                    self.hit(ElementId::Cancel, cancel, "Cancel");
+                    let button_width = (inner.width / 2).clamp(1, 8);
+                    let save = Rect::new(inner.x, row, inner.width.min(button_width), 1);
+                    let gap = u16::from(inner.width > save.width + 1);
+                    let cancel = Rect::new(
+                        save.right() + gap,
+                        row,
+                        inner.width.saturating_sub(save.width + gap).min(8),
+                        1,
+                    );
+                    for (id, button, label) in [
+                        (ElementId::Submit, save, " Save"),
+                        (ElementId::Cancel, cancel, " Cancel"),
+                    ] {
+                        let focused = self.focused.as_ref() == Some(&id);
+                        let fill = if focused || self.hovered.as_ref() == Some(&id) {
+                            self.theme.selected
+                        } else {
+                            self.theme.card
+                        };
+                        self.rounded(
+                            button,
+                            fill,
+                            if focused {
+                                self.theme.accent
+                            } else {
+                                self.theme.border
+                            },
+                        );
+                        self.write(button, label, self.item_style(&id, false).bg(fill));
+                        self.hit(id, button, label.trim());
+                    }
                 }
             }
+        }
+    }
+
+    fn compose_editor_marks(&mut self, editor: &TextEditor, rect: Rect) {
+        let visible_columns = |range: std::ops::Range<usize>| {
+            let start = range
+                .start
+                .saturating_sub(editor.scroll_columns)
+                .min(usize::from(rect.width)) as u16;
+            let end = range
+                .end
+                .saturating_sub(editor.scroll_columns)
+                .min(usize::from(rect.width)) as u16;
+            rect.x + start..rect.x + end
+        };
+        if let Some(selection) = editor.selection_columns() {
+            let columns = visible_columns(selection);
+            if !columns.is_empty() {
+                self.rounded_surfaces.push(RoundedSurface {
+                    rect: Rect::new(columns.start, rect.y, columns.end - columns.start, 1),
+                    fill: self.theme.accent,
+                    border: self.theme.accent,
+                    radius: 2.0,
+                });
+                for x in columns {
+                    self.staging[(x, rect.y)].set_style(
+                        Style::default()
+                            .fg(self.theme.background)
+                            .bg(self.theme.accent),
+                    );
+                }
+            }
+        }
+        for x in visible_columns(editor.preedit_columns()) {
+            self.staging[(x, rect.y)]
+                .set_style(Style::default().add_modifier(Modifier::UNDERLINED));
         }
     }
 
@@ -607,7 +685,10 @@ impl SidebarUi {
         if natural_width == 0 {
             return;
         }
-        let width = natural_width.min(42).min(usize::from(area.width - 2)).max(1);
+        let width = natural_width
+            .min(42)
+            .min(usize::from(area.width - 2))
+            .max(1);
         let mut lines = 0usize;
         for line in &text {
             lines += 1;
@@ -638,14 +719,18 @@ impl SidebarUi {
         Clear.render(rect, &mut self.staging);
         self.rounded(rect, self.theme.card, self.theme.border);
         let content = Rect::new(rect.x + 1, rect.y + 1, rect.width - 2, rect.height - 2);
-        let text = text.into_iter().enumerate().map(|(index, line)| {
-            let style = if index == 0 {
-                self.theme.base()
-            } else {
-                self.theme.muted()
-            };
-            Line::styled(line, style.bg(self.theme.card))
-        }).collect::<Vec<_>>();
+        let text = text
+            .into_iter()
+            .enumerate()
+            .map(|(index, line)| {
+                let style = if index == 0 {
+                    self.theme.base()
+                } else {
+                    self.theme.muted()
+                };
+                Line::styled(line, style.bg(self.theme.card))
+            })
+            .collect::<Vec<_>>();
         Paragraph::new(text)
             .style(self.theme.base().bg(self.theme.card))
             .wrap(Wrap { trim: true })

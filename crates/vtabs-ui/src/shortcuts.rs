@@ -29,7 +29,7 @@ impl SidebarUi {
         mods: Modifiers,
         intents: &mut Vec<UiIntent>,
     ) -> bool {
-        if !is_shortcut(key, mods) {
+        if !model.settings.keyboard_shortcuts || !is_shortcut(key, mods) {
             return false;
         }
         match key {

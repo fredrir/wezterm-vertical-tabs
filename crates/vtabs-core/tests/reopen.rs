@@ -60,3 +60,28 @@ fn failed_unacknowledged_move_does_not_suppress_a_later_actual_close() {
         matches!(&result.commands[..], [HostCommand::Spawn { launch, .. }] if launch.args == ["1"])
     );
 }
+
+#[test]
+fn transient_connection_tabs_do_not_replace_actual_close_history() {
+    let mut model = model();
+    model
+        .reconcile(vec![tab(2), tab(3)], Some(2), true)
+        .unwrap();
+    let connection = Tab {
+        id: 99,
+        title: "Connecting".into(),
+        launch: None,
+        ..Tab::default()
+    };
+    model
+        .reconcile(vec![tab(2), tab(3), connection], Some(99), true)
+        .unwrap();
+    model
+        .reconcile(vec![tab(2), tab(3)], Some(2), true)
+        .unwrap();
+    let result = model.dispatch(Intent::Reopen).unwrap();
+    assert!(
+        matches!(&result.commands[..], [HostCommand::Spawn { launch, .. }] if launch.args == ["1"])
+    );
+    assert!(!model.can_reopen());
+}

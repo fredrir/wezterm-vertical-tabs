@@ -1,18 +1,18 @@
 # WezTerm vertical tabs
 
-Native vertical tabs with Rust, Ratatui and TachyonFX, rendered by WezTerm's existing renderer.
+Native vertical tabs with rounded window framing, folders, spaces and a dedicated settings page, rendered by WezTerm.
 
 | Name | Value |
 | --- | --- |
 | Build | Latest WezTerm `main` plus a compact native patch series |
 | Platforms | macOS, Linux, Windows |
-| Sessions | Local, Unix mux where supported, SSH mux |
+| Sessions | Local, Unix mux where supported, SSH mux, mutually authenticated TLS mux |
 | State | Project-owned SQLite helper on the GUI machine |
 | Configuration | Rust defaults; optional Lua styling and semantic hooks |
 | Navigation | Native WezTerm tab actions follow the selected space's visible tabs |
 
 ```sh
-git clone https://github.com/fredrir/wezterm-vertical-tabs.git
+git clone --branch native https://github.com/fredrir/wezterm-vertical-tabs.git
 cd wezterm-vertical-tabs
 just install
 just launch

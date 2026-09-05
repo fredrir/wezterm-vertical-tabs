@@ -15,18 +15,6 @@ vtabs.apply_to_config(config, {
   },
 })
 
-config.keys = {}
-for i = 1, 9 do
-  table.insert(config.keys, {
-    key = tostring(i), mods = 'SUPER',
-    action = wezterm.action.ActivateTab(i - 1),
-  })
-end
-
--- Optional project actions.
-table.insert(config.keys, {
-  key = ',', mods = 'SUPER', action = vtabs.action('settings'),
-})
 return config
 ```
 
@@ -43,6 +31,42 @@ return config
 | Raw mux identities | CLI/mux tab IDs retain upstream meaning |
 | Sidebar width | Logical pixels; clamped against available native content area |
 | Side/rail | `left`/`right`; `expanded`/`collapsed`/`hidden` |
+
+**Keyboard and mouse**
+
+| Action | macOS | Linux / Windows |
+| --- | --- | --- |
+| Settings page | `Cmd+,` | `Ctrl+Shift+,` |
+| New tab | `Cmd+T` | `Ctrl+Shift+T` |
+| Search tabs | `Cmd+K` | `Ctrl+Shift+K` |
+| Toggle sidebar | `Cmd+B` | `Ctrl+Shift+B` |
+| Close tab or settings | `Cmd+W` | `Ctrl+Shift+W` |
+| New folder | `Cmd+Shift+G` | `Ctrl+Shift+G` |
+| Refresh configuration | `Cmd+Shift+R` | `Ctrl+Shift+R` |
+| Restore closed tab | `Cmd+Shift+T` | Sidebar context menu |
+| Tab 1 through 8 / last | `Cmd+1..9` | `Ctrl+Shift+1..9` |
+| Next / previous tab | `Ctrl+Tab` / `Ctrl+Shift+Tab` | Same |
+| Previous / next space | `Ctrl+Alt+Left` / `Ctrl+Alt+Right` | Same |
+| Search settings | `Cmd+F` in settings | `Ctrl+F` in settings |
+| Traverse controls | `Tab` / `Shift+Tab` | Same |
+| Rename focused tab, folder or space | `F2` | Same |
+| Context menu | Right click / `F10` | Same |
+| Dismiss menu or page | `Escape` | Same |
+
+| Name | Value |
+| --- | --- |
+| Keyboard preference | Disable `keyboard_shortcuts` to use custom Lua bindings |
+| Terminal Control keys | Ordinary Control shortcuts remain available to the shell |
+| Settings | Content page beside the sidebar; closing it returns to the running terminal |
+| Search | Filters tabs in the selected space; arrow keys select results, Enter activates |
+| Folders | Create with the plus below search; rename, collapse, reorder, add a tab or ungroup from the context menu |
+| Tab grouping | Drag onto a folder, or use the tab context menu |
+| Reordering | Drag tabs, folders and spaces; context menus provide Move up / Move down |
+| Ungrouping | Drop onto New Tab or use Remove from folder; processes remain running |
+| Pinned order | Pinned tabs and folders precede New Tab; ordinary tabs follow |
+| Space assignment | Drop a tab on a bottom space control or use Move to space |
+| Folder persistence | Catalog, names and collapse state persist; live membership follows the session boundary in [Boundaries](limitations.md) |
+| Motion | Finite hover/selection transitions; `reduced_motion` disables animation |
 
 **Spaces and routing**
 
@@ -69,8 +93,8 @@ vtabs.apply_to_config(config, {
 
 | Name | Value |
 | --- | --- |
-| Catalog | All spaces, including empty spaces; scrollable with an accessible `(+)` |
-| `(+)` | Create a space; distinct from New tab |
+| Catalog | All spaces, including empty spaces; scrollable at the bottom of the sidebar |
+| Bottom `+` | Create a space; distinct from New tab |
 | Empty space | Keeps other tabs running; no automatic shell creation |
 | Manual assignment | Tab context menu; Return to auto resumes routing |
 | Rules | A space matches any rule; fields within one rule must all match |
@@ -99,6 +123,10 @@ vtabs.apply_to_config(config, {
 | `{ AssignTab = { id = tab_id, space_id = 'work' } }` | Manually assign a tab |
 | `{ ReturnToAuto = tab_id }` | Resume automatic routing |
 | `{ PinTab = { id = tab_id, pinned = true } }` | Pin a tab |
+| `{ CreateFolder = { name = 'Project' } }` | Create a folder in the selected space |
+| `{ AssignFolder = { tab_id = tab_id, folder_id = folder_id } }` | Group and pin a tab |
+| `{ NewTabInFolder = folder_id }` | Spawn a tab inside a folder |
+| `{ DeleteFolder = folder_id }` | Ungroup tabs without closing them |
 | `{ SetSetting = { key = 'width', value = 300 } }` | Set an editable preference |
 | `{ SetRail = 'collapsed' }` | Change rail mode |
 | `'PrivateWindow'` | Create a private window |
@@ -139,7 +167,7 @@ vtabs.apply_to_config(config, {
 | `routing` | Existing space ID or `nil` |
 | `filter` | Boolean visibility |
 | `theme` | Window callback; validated theme-color overrides |
-| `footer` | Window callback; newline string, up to 16 string rows, or `nil` |
+| `footer` | Window callback; string; first line shown above spaces, or `nil` |
 | Scheduling | Semantic metadata changes; cached results, no frame-time callbacks |
 | Stale results | Discarded after superseding host/model/configuration changes |
 | Failure | Valid state retained; two-second batch deadline; warnings deduplicated per configuration epoch |

@@ -22,6 +22,7 @@ import zipfile
 ROOT = Path(__file__).resolve().parents[1]
 UPSTREAM_URL = "https://github.com/wezterm/wezterm.git"
 PROJECT_URL = "https://github.com/fredrir/wezterm-vertical-tabs.git"
+PROJECT_BRANCH = "native"
 CAPABILITY = 1
 DAY = 24 * 60 * 60
 BINARIES = ("wezterm-gui", "wezterm", "wezterm-mux-server", "strip-ansi-escapes")
@@ -157,23 +158,48 @@ def refresh(cache: Path) -> tuple[Path, str]:
     return upstream, revision
 
 
-def refresh_project(cache: Path) -> Path:
+def project_branch(value: str) -> str:
+    if (not isinstance(value, str)
+            or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,127}", value)
+            or ".." in value or value.endswith(("/", "."))
+            or any(not part or part.startswith(".") or part.endswith(".lock") for part in value.split("/"))):
+        raise RuntimeError("invalid project update branch")
+    return value
+
+
+def project_source() -> dict:
+    metadata = read_json(ROOT.parent / "build.json", {})
+    recorded = metadata.get("project_source", {}) if isinstance(metadata, dict) else {}
+    if not isinstance(recorded, dict):
+        raise RuntimeError("invalid recorded project source")
+    if recorded.get("remote", PROJECT_URL) != PROJECT_URL:
+        raise RuntimeError("unexpected recorded project source remote")
+    branch = project_branch(os.environ.get("WEZ_VTABS_PROJECT_BRANCH") or recorded.get("branch", PROJECT_BRANCH))
+    revision = recorded.get("revision")
+    if (ROOT / ".git").exists():
+        revision = run("git", "rev-parse", "HEAD", cwd=ROOT, capture=True)
+    return {"remote": PROJECT_URL, "branch": branch, "revision": revision}
+
+
+def refresh_project(cache: Path, branch: str = PROJECT_BRANCH) -> Path:
+    branch = project_branch(branch)
     project = cache / "project"
     ownership = project / ".git" / "wez-vtabs-native.json"
     identity = {"path": str(project.resolve()), "remote": PROJECT_URL, "capability": CAPABILITY}
     if not project.exists():
-        run("git", "clone", "--filter=blob:none", "--single-branch", "--branch", "main", PROJECT_URL, project)
+        run("git", "clone", "--filter=blob:none", "--single-branch", "--branch", branch, PROJECT_URL, project)
         write_json(ownership, identity)
     elif read_json(ownership) != identity:
         raise RuntimeError("refusing to rewrite an unowned project cache; choose an empty WEZ_VTABS_CACHE")
     origin = run("git", "remote", "get-url", "origin", cwd=project, capture=True)
     if origin.rstrip("/").removesuffix(".git") != PROJECT_URL.removesuffix(".git"):
         raise RuntimeError("unexpected project cache remote")
-    run("git", "fetch", "--prune", "origin", "main", cwd=project)
-    run("git", "reset", "--hard", "origin/main", cwd=project)
+    remote_ref = f"refs/remotes/origin/{branch}"
+    run("git", "fetch", "--prune", "origin", f"+refs/heads/{branch}:{remote_ref}", cwd=project)
+    run("git", "reset", "--hard", remote_ref, cwd=project)
     run("git", "clean", "-ffd", cwd=project)
     if not all((project / name).is_file() for name in ("Cargo.toml", "crates/vtabs-app/Cargo.toml", "scripts/native.py")) or not list((project / "native/patches").glob("*.patch")):
-        raise RuntimeError("project main does not contain a complete native implementation")
+        raise RuntimeError(f"project branch {branch} does not contain a complete native implementation")
     return project
 
 
@@ -240,9 +266,12 @@ def build(cache: Path, debug: bool = False) -> dict:
     fingerprint = source_digest(ROOT)
     target = target_triple()
     profile = "debug" if debug else "release"
-    key = f"{revision[:12]}-{fingerprint[:12]}-{target}-{profile}"
+    project = project_source()
+    source_id = hashlib.sha256(json.dumps(project, sort_keys=True).encode()).hexdigest()[:8]
+    key = f"{revision[:12]}-{fingerprint[:12]}-{source_id}-{target}-{profile}"
     metadata = {"id": key, "capability": CAPABILITY, "upstream": revision,
-                "source_digest": fingerprint, "target": target, "profile": profile}
+                "source_digest": fingerprint, "target": target, "profile": profile,
+                "project_source": project}
     previous = read_json(cache / "build.json", {})
     binaries = upstream / "target" / profile
     extension = ".exe" if os.name == "nt" else ""
@@ -257,6 +286,7 @@ def build(cache: Path, debug: bool = False) -> dict:
     run("cargo", "build", *flags, "-p", "wezterm-gui", "-p", "wezterm", "-p", "wezterm-mux-server", "-p", "strip-ansi-escapes", cwd=worktree, env=env)
     run("cargo", "test", *flags, "-p", "wezterm-gui", "native_", cwd=worktree, env=env)
     run("cargo", "test", *flags, "-p", "wezterm-client", "native_", "--lib", cwd=worktree, env=env)
+    run("cargo", "test", *flags, "-p", "wezterm-input-types", "native_", "--lib", cwd=worktree, env=env)
     verify_source(metadata)
     metadata["built_at"] = int(time.time())
     write_json(cache / "build.json", metadata)
@@ -500,6 +530,7 @@ def queue_daily_update(bundle: Path, root: Path) -> None:
 
 def update(cache: Path, root: Path, daily: bool, stage_only: bool, output: Path) -> None:
     delegate = None
+    project = None
     source_synced = os.environ.get("WEZ_VTABS_UPDATE_SOURCE_SYNCED") == "1"
     with locked(root / "update.lock"):
         state = read_json(root / "update.json", {})
@@ -510,8 +541,9 @@ def update(cache: Path, root: Path, daily: bool, stage_only: bool, output: Path)
         try:
             with locked(cache / "build.lock"):
                 if (ROOT.parent / "build.json").is_file() and not source_synced:
-                    project = refresh_project(cache)
-                    delegate = [sys.executable, str(project / "scripts/native.py"), "update", "--output", str(output)]
+                    project = project_source()
+                    checkout = refresh_project(cache, project["branch"])
+                    delegate = [sys.executable, str(checkout / "scripts/native.py"), "update", "--output", str(output)]
                     if stage_only:
                         delegate.append("--stage-only")
                     state.update(status="project_synced")
@@ -529,7 +561,7 @@ def update(cache: Path, root: Path, daily: bool, stage_only: bool, output: Path)
         # New updater code runs outside both locks; its own update transaction owns
         # build/install. Developer checkouts are never fetched or rewritten.
         try:
-            run(*delegate, env={**os.environ, "WEZ_VTABS_UPDATE_SOURCE_SYNCED": "1", "WEZ_VTABS_INSTALL": str(root), "WEZ_VTABS_CACHE": str(cache)})
+            run(*delegate, env={**os.environ, "WEZ_VTABS_UPDATE_SOURCE_SYNCED": "1", "WEZ_VTABS_PROJECT_BRANCH": project["branch"], "WEZ_VTABS_INSTALL": str(root), "WEZ_VTABS_CACHE": str(cache)})
         except BaseException as error:
             write_json(root / "update.json", {"last_attempt": int(time.time()), "status": "failed", "error": str(error)})
             raise

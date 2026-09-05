@@ -386,3 +386,130 @@ fn folder_ids_are_unique_across_window_apps() {
     .unwrap();
     assert_ne!(a.model().folders[0].id, b.model().folders[0].id);
 }
+
+fn acknowledge_write(app: &mut WindowApp, request: &Request) {
+    let records = request
+        .operations
+        .iter()
+        .filter_map(|operation| match operation {
+            Operation::Put { key, value, .. } => Some(Record {
+                key: key.clone(),
+                value: Some(value.clone()),
+                revision: 1,
+            }),
+            Operation::Delete { key, .. } => Some(Record {
+                key: key.clone(),
+                value: None,
+                revision: 1,
+            }),
+            Operation::Read { .. } => None,
+        })
+        .collect();
+    app.complete_storage(response(request, records)).unwrap();
+}
+
+#[test]
+fn acknowledged_local_folder_edits_do_not_hide_later_remote_catalog_changes() {
+    let mut app = WindowApp::default();
+    initial(&mut app);
+    app.dispatch(Intent::CreateFolder {
+        name: "Local".into(),
+    })
+    .unwrap();
+    let local = app.model().folders[0].id.clone();
+    let write = app.take_storage_request(Duration::from_secs(1)).unwrap();
+    acknowledge_write(&mut app, &write);
+    app.refresh_storage();
+    let read = app.take_storage_request(Duration::from_secs(1)).unwrap();
+    let mut records = vec![profile_record(
+        "catalog",
+        "folder_order",
+        json!([local, "remote"]),
+    )];
+    records.extend(folder_records("remote", "Remote", "home"));
+    records.push(profile_record(
+        &format!("folder:{local}"),
+        "name",
+        json!("Renamed remotely"),
+    ));
+    app.complete_storage(response(&read, records)).unwrap();
+    assert_eq!(
+        app.model()
+            .folders
+            .iter()
+            .map(|folder| folder.name.as_str())
+            .collect::<Vec<_>>(),
+        ["Renamed remotely", "Remote"]
+    );
+}
+
+#[test]
+fn acknowledging_an_older_write_preserves_edits_made_while_it_was_running() {
+    let mut app = WindowApp::default();
+    initial(&mut app);
+    app.dispatch(Intent::CreateFolder {
+        name: "First".into(),
+    })
+    .unwrap();
+    let local = app.model().folders[0].id.clone();
+    let write = app.take_storage_request(Duration::from_secs(1)).unwrap();
+    app.dispatch(Intent::RenameFolder {
+        id: local.clone(),
+        name: "Later local edit".into(),
+    })
+    .unwrap();
+    acknowledge_write(&mut app, &write);
+    app.refresh_storage();
+    let read = app.take_storage_request(Duration::from_secs(1)).unwrap();
+    app.complete_storage(response(
+        &read,
+        vec![profile_record(
+            &format!("folder:{local}"),
+            "name",
+            json!("First"),
+        )],
+    ))
+    .unwrap();
+    assert_eq!(app.model().folders[0].name, "Later local edit");
+    let write = app.take_storage_request(Duration::from_secs(2)).unwrap();
+    assert!(write.operations.iter().any(|operation| matches!(operation, Operation::Put { key, value, .. } if key.entity == format!("folder:{local}") && key.field == "name" && value == &json!("Later local edit"))));
+}
+
+#[test]
+fn remote_folder_deletion_survives_a_concurrent_local_reorder() {
+    let mut app = WindowApp::default();
+    let read = app.take_storage_request(Duration::ZERO).unwrap();
+    let mut records = vec![profile_record(
+        "catalog",
+        "folder_order",
+        json!(["first", "second"]),
+    )];
+    records.extend(folder_records("first", "First", "home"));
+    records.extend(folder_records("second", "Second", "home"));
+    app.complete_storage(response(&read, records)).unwrap();
+    app.dispatch(Intent::MoveFolder {
+        id: "second".into(),
+        index: 0,
+    })
+    .unwrap();
+    app.refresh_storage();
+    let read = app.take_storage_request(Duration::ZERO).unwrap();
+    let mut deleted = profile_record("folder:first", "name", json!(null));
+    deleted.value = None;
+    app.complete_storage(response(
+        &read,
+        vec![
+            profile_record("catalog", "folder_order", json!(["second"])),
+            deleted,
+        ],
+    ))
+    .unwrap();
+    assert_eq!(
+        app.model()
+            .folders
+            .iter()
+            .map(|folder| folder.id.as_str())
+            .collect::<Vec<_>>(),
+        ["second"]
+    );
+}

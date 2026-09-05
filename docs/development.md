@@ -5,7 +5,7 @@
 | Toolchain | Stable Rust, Git, Python 3.10+, platform C/C++ build tools |
 | Upstream | Latest `wezterm/wezterm` `main`; resolved on every build |
 | GUI | WezTerm renderer with the native patch series and project Rust application |
-| UI | Ratatui buffers and TachyonFX effects |
+| UI | Retained Ratatui text, native rounded geometry and finite TachyonFX effects |
 | Persistence | `wez-vtabs-store`; bundled SQLite, asynchronous bounded JSON requests |
 | Lua | Optional configuration, generated schema/types, semantic hooks |
 
@@ -66,7 +66,7 @@ cargo run --quiet --locked -p vtabs-core --bin gen-schema -- json
 | `WEZ_VTABS_INSTALL` | `$XDG_DATA_HOME/wez-vtabs-native`, `~/.local/share/wez-vtabs-native`, or `%LOCALAPPDATA%/wez-vtabs-native` |
 | `cache/upstream` | Tool-owned upstream clone and Cargo target cache |
 | `cache/worktree` | Disposable patched checkout; replaced by prepare/build |
-| `cache/project` | Installed updater's separate project-main checkout; an ownership marker is required before replacement |
+| `cache/project` | Installed updater's separate native-branch checkout; an ownership marker is required before replacement |
 | `cache/build.json` | Diagnostic source/upstream hashes and target |
 | `install/versions` | Immutable bundles; running processes keep their files |
 | `install/active.json` | Selected installed bundle |
@@ -80,7 +80,7 @@ cargo run --quiet --locked -p vtabs-core --bin gen-schema -- json
 
 Use the managed launch entry for updates between launches. Versioned application paths identify a particular build. Installed bundles contain their project source; native rebuilds require the toolchain. Rust changes require rebuilding; Lua configuration reloads normally.
 
-Launch checks run asynchronously, at most daily. Installed updates fetch project main into a separate cache, then build against latest WezTerm main. A completed update becomes a separate version. Apply/build failures are recorded; no revision fallback or automatic patch rewriting occurs. Source-checkout commands build the current project files. The small three-OS workflow checks project changes and daily upstream changes.
+Launch checks run asynchronously, at most daily. Installed updates fetch the recorded project branch (native by default) into a separate cache, then build against latest WezTerm main. A completed update becomes a separate version. Apply/build failures are recorded; no revision fallback or automatic patch rewriting occurs. Source-checkout commands build the current project files. The small three-OS workflow checks project changes and daily upstream changes.
 
 Install platform dependencies using the selected upstream checkout's `get-deps` instructions. The workflow uses upstream `get-deps` on macOS/Linux and the Windows MSVC toolchain. See [WezTerm source builds](https://wezterm.org/install/source.html).
 
@@ -140,3 +140,20 @@ python3 tests/native/moves.py --gui /path/to/wezterm-gui \
 | `WEZ_VTABS_DB` | Explicit SQLite path; defaults to the platform local-data directory under `wez-vtabs/state.sqlite` |
 
 Requests and responses are versioned and bounded. Field revisions reject stale writes atomically; tombstones retain revisions. Session-scoped live state requires a verified incarnation. Private live-tab state is excluded; explicit catalog/settings edits remain shared and durable. Database work never runs in the resize or native activation path.
+
+**TLS and physical input fixtures**
+
+```sh
+python3 tests/native/tls_fixture.py --wezterm /path/to/wezterm -- \
+  --gui /path/to/wezterm-gui --helper /path/to/wez-vtabs-store \
+  --workspace --effects
+
+python3 tests/native/ui_scenarios.py --gui /path/to/wezterm-gui \
+  --helper /path/to/wez-vtabs-store --output /tmp/vtabs-ui
+```
+
+| Name | Value |
+| --- | --- |
+| TLS fixture | Temporary CA, server and user certificates; mutual authentication and hostname verification |
+| Linux UI fixture | Isolated Xvfb display, Openbox, xdotool and ImageMagick; real keyboard, click, drag and screenshot checks |
+| UI artifacts | Sidebar, settings, search and tooltip screenshots; JSON report and isolated logs |

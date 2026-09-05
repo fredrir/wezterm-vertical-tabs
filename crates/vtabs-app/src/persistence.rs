@@ -311,6 +311,21 @@ impl Persistence {
                 ) && let (Some(local), Some(remote)) = (local.as_array(), remote.as_array())
                 {
                     let mut order = local.clone();
+                    order.retain(|value| {
+                        let Some(id) = value.as_str() else {
+                            return true;
+                        };
+                        let name = Key {
+                            scope: self.profile.clone(),
+                            entity: format!("{prefix}:{id}"),
+                            field: "name".into(),
+                        };
+                        !self
+                            .known
+                            .get(&name)
+                            .is_some_and(|record| record.value.is_none())
+                            || matches!(self.dirty.get(&name), Some(Some(_)))
+                    });
                     for id in remote.iter().filter_map(Value::as_str) {
                         let deleted = self.dirty.get(&Key {
                             scope: self.profile.clone(),
@@ -350,6 +365,7 @@ impl Persistence {
                 };
                 if self.dirty.get(&key) == Some(&written) {
                     self.dirty.remove(&key);
+                    self.touched.remove(&key);
                 }
             }
             false

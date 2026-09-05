@@ -20,6 +20,7 @@
 | `muted` | `"#a1afa8"` | Hex color `#RRGGBB`. Secondary text foreground |
 | `selected_background` | `"#34483f"` | Hex color `#RRGGBB`. Selected card background |
 | `private_accent` | `"#cba6f7"` | Hex color `#RRGGBB`. Private window accent |
+| `keyboard_shortcuts` | `true` | Boolean. Enable native tab, search, settings and sidebar shortcuts |
 | `reopen_limit` | `20` | Integer 0–100. Maximum in-memory launch intents |
 | `default_domain` | `null` | String or null. Spawn domain used in an empty space; null retains the host default |
 | `private_env` | `{"HISTFILE":"","VTABS_PRIVATE":"1","fish_private_mode":"1"}` | Object. Environment additions for explicitly created private windows |
