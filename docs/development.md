@@ -1,16 +1,17 @@
 # Development
 
-| Name        | Value                                                                                          |
-| ----------- | ---------------------------------------------------------------------------------------------- |
-| Toolchain   | Stable Rust, Git and platform C/C++ tools; uv/Python 3.12+ for tests |
-| Upstream    | `main` resolved once; `--upstream SHA` pins; `dev` reuses the cached revision                                       |
-| GUI         | WezTerm renderer with the native patch series and project Rust application                     |
-| UI          | Retained Ratatui text, native rounded geometry and finite TachyonFX effects                    |
-| Persistence | `wez-vtabs-store`; bundled SQLite, asynchronous bounded JSON requests                          |
-| Lua         | Optional configuration, generated schema/types, semantic hooks                                 |
+| Name        | Value                                                                         |
+| ----------- | ----------------------------------------------------------------------------- |
+| Toolchain   | Stable Rust, Git and platform C/C++ tools; uv/Python 3.12+ for tests          |
+| Upstream    | `main` resolved once; `--upstream SHA` pins; `dev` reuses the cached revision |
+| GUI         | WezTerm renderer with the native patch series and project Rust application    |
+| UI          | Retained Ratatui text, native rounded geometry and finite TachyonFX effects   |
+| Persistence | `wez-vtabs-store`; bundled SQLite, asynchronous bounded JSON requests         |
+| Lua         | Optional configuration, generated schema/types, semantic hooks                |
 
 ```sh
 just check
+just bench
 just build
 just dev
 just package
@@ -29,6 +30,7 @@ Recipes invoke `cargo xtask`. Installed launch entries invoke the bundled Rust b
 | `just dev` | Cached upstream, incremental `iterate` profile, runtime bundle without archive |
 | `just dev --watch` | Debounced Rust/adapter/plugin changes; separate owned GUI process |
 | `just check` | Rust format/tests/Clippy, schema contracts, Ruff and pytest |
+| `just bench` | Release timings and Rust allocation counts; [measurement boundaries](performance.md) |
 | `just test tools -- -k install` | Focused pytest suite; extra arguments after `--` |
 | `just generate` | Generate Lua schema/types and option documentation |
 | `just generate --check` | Verify generated artifacts |
@@ -61,10 +63,10 @@ Recipes invoke `cargo xtask`. Installed launch entries invoke the bundled Rust b
 | `native/adapter`     | Private WezTerm API integration                                                |
 | `native/patches`     | Generic native layout, surfaces, input and navigation hooks                    |
 | `plugin`             | Optional Lua configuration and generated contracts                             |
-| `tools/src` | Rust CLI, process runner, source/build state, packaging and updates |
-| `tools/tests` | Rust-specific unit contracts |
-| `tests/tools` | pytest/tui-test tooling behavior through the compiled CLI |
-| `scripts/native.py` | Temporary forwarding shim for previously installed Python updaters |
+| `tools/src`          | Rust CLI, process runner, source/build state, packaging and updates            |
+| `tools/tests`        | Rust-specific unit contracts                                                   |
+| `tests/tools`        | pytest/tui-test tooling behavior through the compiled CLI                      |
+| `scripts/native.py`  | Temporary forwarding shim for previously installed Python updaters             |
 | `tests`              | uv-managed pytest, production process boundaries and isolated native scenarios |
 
 `vtabs-store` has no default features. The GUI links protocol types only; the `sqlite` feature builds the helper.
@@ -77,26 +79,26 @@ cargo run --quiet --locked -p vtabs-core --bin gen-schema -- json
 
 **Build state and installation**
 
-| Name                   | Value                                                                                                      |
-| ---------------------- | ---------------------------------------------------------------------------------------------------------- |
-| `WEZ_VTABS_CACHE`      | `$XDG_CACHE_HOME/wez-vtabs-native`, `~/.cache/wez-vtabs-native`, or `%LOCALAPPDATA%/wez-vtabs-native`      |
-| `WEZ_VTABS_INSTALL`    | `$XDG_DATA_HOME/wez-vtabs-native`, `~/.local/share/wez-vtabs-native`, or `%LOCALAPPDATA%/wez-vtabs-native` |
-| `cache/upstream`       | Tool-owned upstream clone and Cargo target cache                                                           |
-| `cache/worktree`       | Owned patched checkout; adapter changes synchronize in place                                                     |
-| `cache/project`        | Installed updater's separate native-branch checkout; an ownership marker is required before replacement    |
-| `cache/build.json`     | Separate source/compile/validation identities, toolchain/configuration and Cargo artifact paths                                                               |
-| `install/versions`     | Immutable bundles; running processes keep their files                                                      |
-| `install/active.json`  | Selected installed bundle                                                                                  |
-| `install/pending.json` | Completed update selected by the next managed launch                                                       |
-| `install/update.json`  | Last update attempt and result                                                                             |
-| `install/update.log`   | Background build output                                                                                    |
-| `cache/runs/ID/run.json` | Invocation, resolved revisions/locks, configuration, command logs and timings |
-| `cache/runs/ID/source` | Project source snapshot for reproduction |
-| `install/previous.json` | Previous active version for rollback |
-| `install/wez-vtabs-launcher` | Stable dispatcher; versioned Rust tools own launch/update behavior |
-| macOS launch entry     | `install/WezTerm Native.app`                                                                               |
-| Linux launch entry     | `install/wez-vtabs` and `install/wez-vtabs.desktop`                                                        |
-| Windows launch entry   | `install/wez-vtabs.cmd`                                                                                    |
+| Name                         | Value                                                                                                      |
+| ---------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| `WEZ_VTABS_CACHE`            | `$XDG_CACHE_HOME/wez-vtabs-native`, `~/.cache/wez-vtabs-native`, or `%LOCALAPPDATA%/wez-vtabs-native`      |
+| `WEZ_VTABS_INSTALL`          | `$XDG_DATA_HOME/wez-vtabs-native`, `~/.local/share/wez-vtabs-native`, or `%LOCALAPPDATA%/wez-vtabs-native` |
+| `cache/upstream`             | Tool-owned upstream clone and Cargo target cache                                                           |
+| `cache/worktree`             | Owned patched checkout; adapter changes synchronize in place                                               |
+| `cache/project`              | Installed updater's separate native-branch checkout; an ownership marker is required before replacement    |
+| `cache/build.json`           | Separate source/compile/validation identities, toolchain/configuration and Cargo artifact paths            |
+| `install/versions`           | Immutable bundles; running processes keep their files                                                      |
+| `install/active.json`        | Selected installed bundle                                                                                  |
+| `install/pending.json`       | Completed update selected by the next managed launch                                                       |
+| `install/update.json`        | Last update attempt and result                                                                             |
+| `install/update.log`         | Background build output                                                                                    |
+| `cache/runs/ID/run.json`     | Invocation, resolved revisions/locks, configuration, command logs and timings                              |
+| `cache/runs/ID/source`       | Project source snapshot for reproduction                                                                   |
+| `install/previous.json`      | Previous active version for rollback                                                                       |
+| `install/wez-vtabs-launcher` | Stable dispatcher; versioned Rust tools own launch/update behavior                                         |
+| macOS launch entry           | `install/WezTerm Native.app`                                                                               |
+| Linux launch entry           | `install/wez-vtabs` and `install/wez-vtabs.desktop`                                                        |
+| Windows launch entry         | `install/wez-vtabs.cmd`                                                                                    |
 
 Use the managed launch entry for updates between launches. Versioned application paths identify a particular build. Installed bundles contain their project source; native rebuilds require the toolchain. Rust changes require rebuilding; Lua configuration reloads normally.
 
@@ -113,27 +115,27 @@ just repro /path/to/run/run.json --execute
 just repro /path/to/run/run.json --execute --project-root /path/to/checkout
 ```
 
-| Name | Value |
-| --- | --- |
-| Inspection | Prints invocation, commands, selected source and configuration |
-| Execution | Separate `cache/reproductions/ID` source/cache/install; pinned recorded upstream |
-| Build inputs | Source snapshot, project revision, resolved Cargo locks, compiler/configuration identity |
-| Compatibility | Replay rejects incompatible compiler/target/profile/configuration inputs |
-| Logs | Per-command stdout/stderr paths, exit status, elapsed milliseconds |
-| CI | Failed/cancelled jobs upload reports and snapshots on all three platforms |
-| Scope | Prepare/deps/build/check/test/package/generate/patch operations; install/launch inspection only |
+| Name          | Value                                                                                           |
+| ------------- | ----------------------------------------------------------------------------------------------- |
+| Inspection    | Prints invocation, commands, selected source and configuration                                  |
+| Execution     | Separate `cache/reproductions/ID` source/cache/install; pinned recorded upstream                |
+| Build inputs  | Source snapshot, project revision, resolved Cargo locks, compiler/configuration identity        |
+| Compatibility | Replay rejects incompatible compiler/target/profile/configuration inputs                        |
+| Logs          | Per-command stdout/stderr paths, exit status, elapsed milliseconds                              |
+| CI            | Failed/cancelled jobs upload reports and snapshots on all three platforms                       |
+| Scope         | Prepare/deps/build/check/test/package/generate/patch operations; install/launch inspection only |
 
 **Prebuilt releases**
 
 `just package` writes an adjacent `*.manifest.json`. Publish it beside its archive, then use `just update --manifest URL`. CI uploads both as artifacts; no release is published by local commands.
 
-| Manifest field | Value |
-| --- | --- |
-| `schema_version` | `1` |
-| `id`, `target`, `source_digest`, `upstream` | Exact bundle identity and source/upstream hashes |
-| `project_source` | Recorded remote, branch and exact project revision |
-| `archive` | Sibling archive filename or HTTPS URL |
-| `sha256`, `size` | Archive integrity; extracted contents verified again |
+| Manifest field                              | Value                                                |
+| ------------------------------------------- | ---------------------------------------------------- |
+| `schema_version`                            | `1`                                                  |
+| `id`, `target`, `source_digest`, `upstream` | Exact bundle identity and source/upstream hashes     |
+| `project_source`                            | Recorded remote, branch and exact project revision   |
+| `archive`                                   | Sibling archive filename or HTTPS URL                |
+| `sha256`, `size`                            | Archive integrity; extracted contents verified again |
 
 **Test suite**
 
@@ -147,22 +149,22 @@ uv run --locked pytest -n 2 tests/integration --run-native --run-container \
   --native-bin-dir=/path/to/native/bin
 ```
 
-| Check                   | Value                                                                                                                        |
-| ----------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
-| Default suite           | Tooling, production Rust schema/storage processes, headless Lua plugin boundary and CLI PTYs                                 |
-| Python tools            | pytest, pytest-asyncio, pytest-xdist, Ruff, tui-test; exact versions in `uv.lock`                                            |
-| Worker count            | `-n 2`; each test receives separate state and temporary files                                                                |
-| Tools binary | `--tools-bin=PATH`; built once under `target/pytest`, coordinated across workers |
-| Rust binaries           | Cached project-only build coordinated across workers; `--rust-bin-dir=PATH` uses supplied `gen-schema` and `wez-vtabs-store` |
-| Lua                     | `lua` or `luajit`; executes `plugin/init.lua` through its public configuration boundary                                      |
-| LuaCATS                 | `--run-luals`; requires `lua-language-server`; valid and invalid public option examples                                      |
-| Native binaries         | `--run-native --native-bin-dir=PATH`; prebuilt GUI, CLI, mux server and storage helper; focused CLI suites use recorded Cargo artifacts when no directory is supplied            |
-| Native display          | Linux Xvfb and Openbox owned by the fixture; inherited desktop/session endpoints removed                                     |
-| Mouse and screenshots   | xdotool and ImageMagick; only the owned headless display                                                                     |
-| SSH mux                 | `--run-container`; loopback-only container, temporary keys, owned mux, Podman or Docker                                      |
-| PTY                     | tui-test drives real CLI processes; the native group also exercises an isolated installed `wez-vtabs` launcher               |
-| Startup/render/shutdown | Local and Unix mux native sessions with visible content, sidebar rendering and clean shutdown; TLS tab lifecycle             |
-| Desktop                 | No suite or native scenario opens a GUI on the user's desktop                                                                |
+| Check                   | Value                                                                                                                                                                 |
+| ----------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Default suite           | Tooling, production Rust schema/storage processes, headless Lua plugin boundary and CLI PTYs                                                                          |
+| Python tools            | pytest, pytest-asyncio, pytest-xdist, Ruff, tui-test; exact versions in `uv.lock`                                                                                     |
+| Worker count            | `-n 2`; each test receives separate state and temporary files                                                                                                         |
+| Tools binary            | `--tools-bin=PATH`; built once under `target/pytest`, coordinated across workers                                                                                      |
+| Rust binaries           | Cached project-only build coordinated across workers; `--rust-bin-dir=PATH` uses supplied `gen-schema` and `wez-vtabs-store`                                          |
+| Lua                     | `lua` or `luajit`; executes `plugin/init.lua` through its public configuration boundary                                                                               |
+| LuaCATS                 | `--run-luals`; requires `lua-language-server`; valid and invalid public option examples                                                                               |
+| Native binaries         | `--run-native --native-bin-dir=PATH`; prebuilt GUI, CLI, mux server and storage helper; focused CLI suites use recorded Cargo artifacts when no directory is supplied |
+| Native display          | Linux Xvfb and Openbox owned by the fixture; inherited desktop/session endpoints removed                                                                              |
+| Mouse and screenshots   | xdotool and ImageMagick; only the owned headless display                                                                                                              |
+| SSH mux                 | `--run-container`; loopback-only container, temporary keys, owned mux, Podman or Docker                                                                               |
+| PTY                     | tui-test drives real CLI processes; the native group also exercises an isolated installed `wez-vtabs` launcher                                                        |
+| Startup/render/shutdown | Local and Unix mux native sessions with visible content, sidebar rendering and clean shutdown; TLS tab lifecycle                                                      |
+| Desktop                 | No suite or native scenario opens a GUI on the user's desktop                                                                                                         |
 
 **Extended native scenarios**
 

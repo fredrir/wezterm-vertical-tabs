@@ -1255,6 +1255,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "vtabs-bench"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "vtabs-core",
+ "vtabs-store",
+ "vtabs-ui",
+]
+
+[[package]]
 name = "vtabs-core"
 version = "0.1.0"
 dependencies = [

@@ -247,10 +247,10 @@ pub struct RoundedSurface {
     pub inset: f32,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SidebarRow {
-    Tab(TabId),
-    Folder(String),
+    Tab { id: TabId, number: usize },
+    Folder { index: usize, count: usize },
     NewTab,
 }
 

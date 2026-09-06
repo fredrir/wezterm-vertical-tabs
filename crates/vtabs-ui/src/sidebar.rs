@@ -4,6 +4,7 @@ use ratatui::{
     style::{Color, Style},
     widgets::{Block, Widget},
 };
+use std::collections::HashMap;
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 use vtabs_core::{Model, RailMode};
@@ -130,50 +131,69 @@ impl SidebarUi {
         self.hit(id, rect, platform_tooltip(tooltip));
     }
 
-    pub(crate) fn sidebar_entries(model: &Model) -> Vec<SidebarRow> {
-        let mut rows = Vec::with_capacity(model.visible_ids().len() + model.folders.len() + 1);
-        rows.extend(
+    pub(crate) fn ensure_sidebar_entries(&mut self, model: &Model) {
+        if self.sidebar_revision == Some(model.revision) {
+            return;
+        }
+        self.sidebar_rows.clear();
+        self.sidebar_rows
+            .reserve(model.visible_ids().len() + model.folders.len() + 1);
+        let mut folders = HashMap::with_capacity(model.selected_folders().count());
+        folders.extend(
             model
-                .visible_ids()
-                .iter()
-                .filter(|id| {
-                    model
-                        .tabs
-                        .get(id)
-                        .is_some_and(|t| t.pinned && t.folder_id.is_none())
-                })
-                .map(|id| SidebarRow::Tab(*id)),
+                .selected_folders()
+                .map(|folder| (folder.id.as_str(), (0usize, 0..0))),
         );
-        for folder in model
-            .folders
-            .iter()
-            .filter(|f| f.space_id == model.selected_space)
-        {
-            rows.push(SidebarRow::Folder(folder.id.clone()));
-            if !folder.collapsed {
-                rows.extend(
-                    model
-                        .visible_ids()
-                        .iter()
-                        .filter(|id| {
-                            model
-                                .tabs
-                                .get(id)
-                                .is_some_and(|t| t.folder_id.as_ref() == Some(&folder.id))
-                        })
-                        .map(|id| SidebarRow::Tab(*id)),
-                );
+        for tab in model.tabs.values() {
+            if let Some(folder) = tab.folder_id.as_deref().and_then(|id| folders.get_mut(id)) {
+                folder.0 += 1;
             }
         }
-        rows.push(SidebarRow::NewTab);
-        rows.extend(
+        for (index, id) in model.visible_ids().iter().enumerate() {
+            let Some(tab) = model.tabs.get(id) else {
+                continue;
+            };
+            let row = SidebarRow::Tab {
+                id: *id,
+                number: index + 1,
+            };
+            if tab.pinned && tab.folder_id.is_none() {
+                self.sidebar_rows.push(row);
+            }
+            if let Some((_, range)) = tab.folder_id.as_deref().and_then(|id| folders.get_mut(id)) {
+                // The model's visible projection keeps each folder's members contiguous.
+                if range.start == range.end {
+                    range.start = index;
+                }
+                range.end = index + 1;
+            }
+        }
+        for (index, folder) in model.folders.iter().enumerate() {
+            if folder.space_id != model.selected_space {
+                continue;
+            }
+            let (count, range) = folders.remove(folder.id.as_str()).unwrap_or_default();
+            self.sidebar_rows.push(SidebarRow::Folder { index, count });
+            if !folder.collapsed {
+                self.sidebar_rows.extend(range.map(|index| SidebarRow::Tab {
+                    id: model.visible_ids()[index],
+                    number: index + 1,
+                }));
+            }
+        }
+        self.sidebar_rows.push(SidebarRow::NewTab);
+        self.sidebar_rows.extend(
             model
                 .visible_ids()
                 .iter()
-                .filter(|id| model.tabs.get(id).is_some_and(|t| !t.pinned))
-                .map(|id| SidebarRow::Tab(*id)),
+                .enumerate()
+                .filter(|(_, id)| model.tabs.get(id).is_some_and(|tab| !tab.pinned))
+                .map(|(index, id)| SidebarRow::Tab {
+                    id: *id,
+                    number: index + 1,
+                }),
         );
-        rows
+        self.sidebar_revision = Some(model.revision);
     }
 
     pub(crate) fn row_height(&self, model: &Model) -> u16 {
@@ -334,10 +354,7 @@ impl SidebarUi {
             inner.width,
             footer_y.saturating_sub(tabs_y),
         );
-        if self.sidebar_revision != Some(model.revision) {
-            self.sidebar_rows = Self::sidebar_entries(model);
-            self.sidebar_revision = Some(model.revision);
-        }
+        self.ensure_sidebar_entries(model);
         let row_height = self.row_height(model);
         let capacity = usize::from(self.tabs_rect.height / row_height).max(1);
         if self.reveal_selection {
@@ -349,14 +366,10 @@ impl SidebarUi {
         self.tab_scroll = self
             .tab_scroll
             .min(self.sidebar_rows.len().saturating_sub(capacity));
-        let entries: Vec<_> = self
-            .sidebar_rows
-            .iter()
-            .skip(self.tab_scroll)
-            .take(capacity)
-            .cloned()
-            .collect();
-        for (index, entry) in entries.into_iter().enumerate() {
+        let end = (self.tab_scroll + capacity).min(self.sidebar_rows.len());
+        for at in self.tab_scroll..end {
+            let index = at - self.tab_scroll;
+            let entry = self.sidebar_rows[at];
             let rect = Rect::new(
                 inner.x,
                 tabs_y + index as u16 * row_height,
@@ -378,17 +391,12 @@ impl SidebarUi {
                     "New tab  Cmd+T".into(),
                     false,
                 ),
-                SidebarRow::Folder(id) => {
-                    let Some(folder) = model.folders.iter().find(|f| f.id == id) else {
+                SidebarRow::Folder { index, count } => {
+                    let Some(folder) = model.folders.get(index) else {
                         continue;
                     };
-                    let count = model
-                        .tabs
-                        .values()
-                        .filter(|t| t.folder_id.as_ref() == Some(&id))
-                        .count();
                     self.button(
-                        ElementId::Folder(id),
+                        ElementId::Folder(folder.id.clone()),
                         rect,
                         format!(
                             " {} ▱ {}  {}",
@@ -403,7 +411,7 @@ impl SidebarUi {
                         false,
                     );
                 }
-                SidebarRow::Tab(id) => {
+                SidebarRow::Tab { id, number } => {
                     let Some(tab) = model.tabs.get(&id) else {
                         continue;
                     };
@@ -421,12 +429,6 @@ impl SidebarUi {
                     } else {
                         "›_".into()
                     };
-                    let number = model
-                        .visible_ids()
-                        .iter()
-                        .position(|t| *t == id)
-                        .unwrap_or(0)
-                        + 1;
                     let label = if compact {
                         format!(" {number}")
                     } else {
@@ -625,6 +627,110 @@ mod tests {
         (rect.x..rect.right())
             .map(|x| ui.buffer[(x, y)].symbol())
             .collect()
+    }
+
+    #[test]
+    fn sidebar_cache_preserves_order_numbers_hidden_counts_and_collapsed_reveal() {
+        let mut model = Model::default();
+        model
+            .reconcile(
+                (1..=6)
+                    .map(|id| Tab {
+                        id,
+                        ..Tab::default()
+                    })
+                    .collect(),
+                Some(1),
+                true,
+            )
+            .unwrap();
+        for name in ["Applications", "Services", "Empty"] {
+            model
+                .dispatch(Intent::CreateFolder { name: name.into() })
+                .unwrap();
+        }
+        let applications = model.folders[0].id.clone();
+        let services = model.folders[1].id.clone();
+        for (tab_id, folder_id) in [(6, &applications), (2, &applications), (3, &services)] {
+            model
+                .dispatch(Intent::AssignFolder {
+                    tab_id,
+                    folder_id: Some(folder_id.clone()),
+                })
+                .unwrap();
+        }
+        model
+            .dispatch(Intent::PinTab {
+                id: 4,
+                pinned: true,
+            })
+            .unwrap();
+        let mut ui = SidebarUi::new();
+        ui.ensure_sidebar_entries(&model);
+        assert_eq!(
+            ui.sidebar_rows,
+            [
+                SidebarRow::Tab { id: 4, number: 1 },
+                SidebarRow::Folder { index: 0, count: 2 },
+                SidebarRow::Tab { id: 2, number: 2 },
+                SidebarRow::Tab { id: 6, number: 3 },
+                SidebarRow::Folder { index: 1, count: 1 },
+                SidebarRow::Tab { id: 3, number: 4 },
+                SidebarRow::Folder { index: 2, count: 0 },
+                SidebarRow::NewTab,
+                SidebarRow::Tab { id: 1, number: 5 },
+                SidebarRow::Tab { id: 5, number: 6 },
+            ]
+        );
+        model.apply_filter_hook(6, false).unwrap();
+        ui.ensure_sidebar_entries(&model);
+        assert_eq!(
+            ui.sidebar_rows,
+            [
+                SidebarRow::Tab { id: 4, number: 1 },
+                SidebarRow::Folder { index: 0, count: 2 },
+                SidebarRow::Tab { id: 2, number: 2 },
+                SidebarRow::Folder { index: 1, count: 1 },
+                SidebarRow::Tab { id: 3, number: 3 },
+                SidebarRow::Folder { index: 2, count: 0 },
+                SidebarRow::NewTab,
+                SidebarRow::Tab { id: 1, number: 4 },
+                SidebarRow::Tab { id: 5, number: 5 },
+            ]
+        );
+        let allocation = ui.sidebar_rows.as_ptr();
+        model
+            .dispatch(Intent::ToggleFolder(services.clone()))
+            .unwrap();
+        ui.tabs_rect = Rect::new(0, 0, 20, 2);
+        ui.ensure_tab_visible(&model, 3);
+        assert_eq!(ui.tab_scroll, 2);
+        assert_eq!(ui.sidebar_rows.as_ptr(), allocation);
+        assert!(
+            !ui.sidebar_rows
+                .iter()
+                .any(|row| matches!(row, SidebarRow::Tab { id: 3, .. }))
+        );
+        model.apply_filter_hook(2, false).unwrap();
+        model
+            .dispatch(Intent::MoveFolder {
+                id: services,
+                index: 0,
+            })
+            .unwrap();
+        ui.ensure_sidebar_entries(&model);
+        assert_eq!(
+            ui.sidebar_rows,
+            [
+                SidebarRow::Tab { id: 4, number: 1 },
+                SidebarRow::Folder { index: 0, count: 1 },
+                SidebarRow::Folder { index: 1, count: 2 },
+                SidebarRow::Folder { index: 2, count: 0 },
+                SidebarRow::NewTab,
+                SidebarRow::Tab { id: 1, number: 3 },
+                SidebarRow::Tab { id: 5, number: 4 },
+            ]
+        );
     }
 
     #[test]

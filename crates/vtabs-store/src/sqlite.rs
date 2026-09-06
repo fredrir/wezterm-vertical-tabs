@@ -1,6 +1,6 @@
 use crate::*;
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
-use std::{path::Path, time::Duration};
+use std::{io, path::Path, time::Duration};
 
 const SCHEMA_VERSION: u32 = 1;
 
@@ -28,7 +28,7 @@ fn valid_component(value: &str) -> Result<(), StoreError> {
     Ok(())
 }
 
-fn scope_id(scope: &Scope) -> Result<String, StoreError> {
+fn validate_scope(scope: &Scope) -> Result<(), StoreError> {
     match scope {
         Scope::Profile { profile } => valid_component(profile)?,
         Scope::Session {
@@ -39,8 +39,32 @@ fn scope_id(scope: &Scope) -> Result<String, StoreError> {
             valid_component(incarnation)?;
         }
     }
+    Ok(())
+}
+
+fn scope_id(scope: &Scope) -> Result<String, StoreError> {
     serde_json::to_string(scope)
         .map_err(|error| StoreError::new(ErrorCode::InvalidRequest, error.to_string()))
+}
+
+#[derive(Default)]
+struct JsonSize(usize);
+
+impl io::Write for JsonSize {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        self.0 += bytes.len();
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+fn serialized_size(value: &impl Serialize) -> serde_json::Result<usize> {
+    let mut size = JsonSize::default();
+    serde_json::to_writer(&mut size, value)?;
+    Ok(size.0)
 }
 
 fn validate(request: &Request) -> Result<(), StoreError> {
@@ -56,14 +80,13 @@ fn validate(request: &Request) -> Result<(), StoreError> {
     for operation in &request.operations {
         let key = match operation {
             Operation::Read { scope } => {
-                scope_id(scope)?;
+                validate_scope(scope)?;
                 continue;
             }
             Operation::Put { key, value, .. } => {
-                if serde_json::to_vec(value)
-                    .map_err(|error| StoreError::new(ErrorCode::InvalidRequest, error.to_string()))?
-                    .len()
-                    > MAX_VALUE_BYTES
+                if serialized_size(value).map_err(|error| {
+                    StoreError::new(ErrorCode::InvalidRequest, error.to_string())
+                })? > MAX_VALUE_BYTES
                 {
                     return Err(StoreError::new(ErrorCode::Limit, "value too large"));
                 }
@@ -77,7 +100,7 @@ fn validate(request: &Request) -> Result<(), StoreError> {
                 "private writes are disabled",
             ));
         }
-        scope_id(&key.scope)?;
+        validate_scope(&key.scope)?;
         valid_component(&key.entity)?;
         valid_component(&key.field)?;
     }
@@ -92,6 +115,19 @@ pub fn open(path: &Path) -> Result<Connection, StoreError> {
     connection
         .pragma_update(None, "foreign_keys", true)
         .map_err(database)?;
+    let version: u32 = connection
+        .pragma_query_value(None, "user_version", |row| row.get(0))
+        .map_err(database)?;
+    match version {
+        SCHEMA_VERSION => return Ok(connection),
+        0 => {}
+        _ => {
+            return Err(StoreError::new(
+                ErrorCode::NewerSchema,
+                "database schema is newer than this helper",
+            ));
+        }
+    }
     let transaction = connection
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(database)?;
@@ -134,30 +170,33 @@ fn write(
     revision: u64,
 ) -> Result<Record, StoreError> {
     let scope = scope_id(&key.scope)?;
-    let actual_revision: u64 = transaction
-        .query_row(
-            "SELECT revision FROM fields WHERE scope=?1 AND entity=?2 AND field=?3",
-            params![scope, key.entity, key.field],
-            |row| row_revision(row, 0),
-        )
-        .optional()
-        .map_err(database)?
-        .unwrap_or(0);
-    if expected_revision.is_some_and(|expected| expected != actual_revision) {
-        return Err(StoreError {
-            code: ErrorCode::Conflict,
-            message: "field revision changed".into(),
-            key: Some(Box::new(key.clone())),
-            actual_revision: Some(actual_revision),
-        });
+    if let Some(expected_revision) = expected_revision {
+        let actual_revision: u64 = transaction
+            .prepare_cached("SELECT revision FROM fields WHERE scope=?1 AND entity=?2 AND field=?3")
+            .map_err(database)?
+            .query_row(params![scope, key.entity, key.field], |row| {
+                row_revision(row, 0)
+            })
+            .optional()
+            .map_err(database)?
+            .unwrap_or(0);
+        if expected_revision != actual_revision {
+            return Err(StoreError {
+                code: ErrorCode::Conflict,
+                message: "field revision changed".into(),
+                key: Some(Box::new(key.clone())),
+                actual_revision: Some(actual_revision),
+            });
+        }
     }
     let serialized = value
         .map(serde_json::to_string)
         .transpose()
         .map_err(|error| StoreError::new(ErrorCode::InvalidRequest, error.to_string()))?;
-    transaction.execute(
+    transaction.prepare_cached(
         "INSERT INTO fields (scope,entity,field,value,revision) VALUES (?1,?2,?3,?4,?5)
-         ON CONFLICT(scope,entity,field) DO UPDATE SET value=excluded.value,revision=excluded.revision",
+         ON CONFLICT(scope,entity,field) DO UPDATE SET value=excluded.value,revision=excluded.revision"
+    ).map_err(database)?.execute(
         params![scope, key.entity, key.field, serialized, revision as i64],
     ).map_err(database)?;
     Ok(Record {
@@ -172,31 +211,36 @@ fn append_record(
     bytes: &mut usize,
     record: Record,
 ) -> Result<(), StoreError> {
-    *bytes += serde_json::to_vec(&record)
+    let record_bytes = serialized_size(&record)
         .map_err(|error| StoreError::new(ErrorCode::Database, error.to_string()))?
-        .len()
-        + 1;
-    if records.len() >= MAX_RECORDS || *bytes > MAX_RESPONSE_BYTES {
+        + usize::from(!records.is_empty());
+    if records.len() >= MAX_RECORDS || *bytes + record_bytes > MAX_RESPONSE_BYTES {
         return Err(StoreError::new(ErrorCode::Limit, "response too large"));
     }
+    *bytes += record_bytes;
     records.push(record);
     Ok(())
 }
 
 pub fn execute(connection: &mut Connection, request: &Request) -> Result<Response, StoreError> {
     validate(request)?;
-    let transaction = connection
-        .transaction_with_behavior(TransactionBehavior::Immediate)
-        .map_err(database)?;
-    let previous_revision: u64 = transaction
-        .query_row("SELECT revision FROM metadata WHERE id=1", [], |row| {
-            row_revision(row, 0)
-        })
-        .map_err(database)?;
     let has_writes = request
         .operations
         .iter()
         .any(|operation| !matches!(operation, Operation::Read { .. }));
+    let behavior = if has_writes {
+        TransactionBehavior::Immediate
+    } else {
+        TransactionBehavior::Deferred
+    };
+    let transaction = connection
+        .transaction_with_behavior(behavior)
+        .map_err(database)?;
+    let previous_revision: u64 = transaction
+        .prepare_cached("SELECT revision FROM metadata WHERE id=1")
+        .map_err(database)?
+        .query_row([], |row| row_revision(row, 0))
+        .map_err(database)?;
     let revision = if has_writes {
         previous_revision
             .checked_add(1)
@@ -205,13 +249,20 @@ pub fn execute(connection: &mut Connection, request: &Request) -> Result<Respons
     } else {
         previous_revision
     };
-    let mut records = Vec::new();
-    let mut record_bytes = 0;
+    let mut response = Response {
+        version: PROTOCOL_VERSION,
+        request_id: request.request_id,
+        revision,
+        records: Vec::new(),
+        error: None,
+    };
+    let mut record_bytes = serialized_size(&response)
+        .map_err(|error| StoreError::new(ErrorCode::Database, error.to_string()))?;
     for operation in &request.operations {
         match operation {
             Operation::Read { scope } => {
                 let scope_text = scope_id(scope)?;
-                let mut statement = transaction.prepare("SELECT entity,field,value,revision FROM fields WHERE scope=?1 ORDER BY entity,field LIMIT ?2").map_err(database)?;
+                let mut statement = transaction.prepare_cached("SELECT entity,field,value,revision FROM fields WHERE scope=?1 ORDER BY entity,field LIMIT ?2").map_err(database)?;
                 let rows = statement
                     .query_map(params![scope_text, (MAX_RECORDS + 1) as i64], |row| {
                         Ok((
@@ -229,7 +280,7 @@ pub fn execute(connection: &mut Connection, request: &Request) -> Result<Respons
                         .transpose()
                         .map_err(|error| StoreError::new(ErrorCode::Database, error.to_string()))?;
                     append_record(
-                        &mut records,
+                        &mut response.records,
                         &mut record_bytes,
                         Record {
                             key: Key {
@@ -248,7 +299,7 @@ pub fn execute(connection: &mut Connection, request: &Request) -> Result<Respons
                 value,
                 expected_revision,
             } => append_record(
-                &mut records,
+                &mut response.records,
                 &mut record_bytes,
                 write(&transaction, key, Some(value), *expected_revision, revision)?,
             )?,
@@ -256,32 +307,17 @@ pub fn execute(connection: &mut Connection, request: &Request) -> Result<Respons
                 key,
                 expected_revision,
             } => append_record(
-                &mut records,
+                &mut response.records,
                 &mut record_bytes,
                 write(&transaction, key, None, *expected_revision, revision)?,
             )?,
         }
     }
-    let response = Response {
-        version: PROTOCOL_VERSION,
-        request_id: request.request_id,
-        revision,
-        records,
-        error: None,
-    };
-    if serde_json::to_vec(&response)
-        .map_err(|error| StoreError::new(ErrorCode::Database, error.to_string()))?
-        .len()
-        > MAX_RESPONSE_BYTES
-    {
-        return Err(StoreError::new(ErrorCode::Limit, "response too large"));
-    }
     if has_writes {
         transaction
-            .execute(
-                "UPDATE metadata SET revision=?1 WHERE id=1",
-                [revision as i64],
-            )
+            .prepare_cached("UPDATE metadata SET revision=?1 WHERE id=1")
+            .map_err(database)?
+            .execute([revision as i64])
             .map_err(database)?;
     }
     transaction.commit().map_err(database)?;

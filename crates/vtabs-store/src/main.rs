@@ -1,5 +1,5 @@
 use std::{
-    io::{self, Read, Write},
+    io::{self, BufWriter, Read, Write},
     path::PathBuf,
 };
 use vtabs_store::{ErrorCode, MAX_REQUEST_BYTES, Request, Response, StoreError};
@@ -51,8 +51,11 @@ fn run() -> Response {
 fn main() {
     let response = run();
     let stdout = io::stdout();
-    let mut output = stdout.lock();
-    if serde_json::to_writer(&mut output, &response).is_err() || writeln!(output).is_err() {
+    let mut output = BufWriter::new(stdout.lock());
+    if serde_json::to_writer(&mut output, &response).is_err()
+        || writeln!(output).is_err()
+        || output.flush().is_err()
+    {
         std::process::exit(2);
     }
     if response.error.is_some() {

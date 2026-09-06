@@ -1,5 +1,5 @@
 [workspace]
-members  = ["crates/vtabs-core", "crates/vtabs-ui", "crates/vtabs-app", "crates/vtabs-store", "tools"]
+members  = ["crates/vtabs-core", "crates/vtabs-ui", "crates/vtabs-app", "crates/vtabs-store", "crates/vtabs-bench", "tools"]
 resolver = "2"
 
 [workspace.package]

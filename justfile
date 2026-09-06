@@ -21,6 +21,10 @@ check *args:
 test *args:
     @{{tool}} test {{args}}
 
+# Release timings and allocation counts for core, UI and storage workloads.
+bench *args:
+    cargo run --release --locked -p vtabs-bench -- {{args}}
+
 lint:
     uv run --locked ruff check scripts tests
     uv run --locked ruff format --check scripts tests

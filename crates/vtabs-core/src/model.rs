@@ -100,6 +100,28 @@ impl Tab {
             .or(self.title_hook.as_deref())
             .unwrap_or(&self.title)
     }
+
+    fn reconcile_host_metadata(&mut self, incoming: Self) -> bool {
+        let mut changed = false;
+        macro_rules! update {
+            ($($field:ident),+ $(,)?) => {
+                $(if self.$field != incoming.$field {
+                    self.$field = incoming.$field;
+                    changed = true;
+                })+
+            };
+        }
+        update!(
+            id, title, icon, cwd, domain, host, user, process, remote, unread, bell
+        );
+        // Membership and title overrides belong to the application. Native discovery
+        // supplies only domain/cwd; retain captured launch arguments and environment.
+        if self.launch.is_none() && incoming.launch.is_some() {
+            self.launch = incoming.launch;
+            changed = true;
+        }
+        changed
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -525,12 +547,12 @@ impl Model {
             }
         }
     }
-    fn route_tab(&mut self, id: TabId) {
+    fn route_tab(&mut self, id: TabId) -> bool {
         let Some(tab) = self.tabs.get(&id) else {
-            return;
+            return false;
         };
         if tab.manual_assignment && self.spaces.iter().any(|s| s.id == tab.space_id) {
-            return;
+            return false;
         }
         let route = self
             .hook_routes
@@ -559,7 +581,13 @@ impl Model {
             }
             self.spaces.push(space);
         }
-        self.tabs.get_mut(&id).unwrap().space_id = selected;
+        let tab = self.tabs.get_mut(&id).unwrap();
+        if tab.space_id == selected {
+            false
+        } else {
+            tab.space_id = selected;
+            true
+        }
     }
 
     /// Reconcile a complete native topology. Only a changed native active ID follows a space.
@@ -570,77 +598,76 @@ impl Model {
         active: Option<TabId>,
         follow_active: bool,
     ) -> Result<bool, Error> {
+        let topology_changed = !incoming
+            .iter()
+            .map(|tab| tab.id)
+            .eq(self.order.iter().copied());
         let mut ids = BTreeSet::new();
-        for tab in &incoming {
-            if !ids.insert(tab.id) {
-                return Err(Error("Duplicate host tab identity".into()));
+        if topology_changed {
+            for tab in &incoming {
+                if !ids.insert(tab.id) {
+                    return Err(Error("Duplicate host tab identity".into()));
+                }
             }
         }
         let before = self.revision;
-        let removed = self
-            .order
-            .iter()
-            .copied()
-            .filter(|id| !ids.contains(id))
-            .collect::<Vec<_>>();
         let old_selected = self.selected_tab;
-        let old_position = self
-            .visible
-            .iter()
-            .position(|id| Some(*id) == old_selected)
-            .unwrap_or(0);
-        let mut changed = !removed.is_empty();
-        for id in removed {
-            let departed = self.departed.remove(&id);
-            if let Some(tab) = self.tabs.remove(&id)
-                && !self.private
-                && !departed
-                && let Some(launch) = tab.launch
-            {
-                self.reopened.push_front((id, tab.space_id, launch));
+        let old_position = if topology_changed {
+            self.visible
+                .iter()
+                .position(|id| Some(*id) == old_selected)
+                .unwrap_or(0)
+        } else {
+            0
+        };
+        let mut changed = topology_changed;
+        let mut projection_changed = topology_changed;
+        if topology_changed {
+            let mut removed = false;
+            for id in self.order.iter().copied().filter(|id| !ids.contains(id)) {
+                removed = true;
+                let departed = self.departed.remove(&id);
+                if let Some(tab) = self.tabs.remove(&id)
+                    && !self.private
+                    && !departed
+                    && let Some(launch) = tab.launch
+                {
+                    self.reopened.push_front((id, tab.space_id, launch));
+                }
+                self.hook_routes.remove(&id);
+                self.hidden.remove(&id);
             }
-            self.hook_routes.remove(&id);
-            self.hidden.remove(&id);
-            self.mru.retain(|v| *v != id);
-            self.last_tabs.retain(|_, v| *v != id);
+            if removed {
+                self.mru.retain(|id| ids.contains(id));
+                self.last_tabs.retain(|_, id| ids.contains(id));
+            }
+            self.order.clear();
+            self.order.extend(incoming.iter().map(|tab| tab.id));
         }
         self.reopened
             .truncate(usize::from(self.settings.reopen_limit));
-        let native_order = incoming.iter().map(|t| t.id).collect::<Vec<_>>();
-        if native_order != self.order {
-            self.order = native_order;
-            changed = true;
-        }
         for mut tab in incoming {
             if Some(tab.id) == self.selected_tab {
                 tab.unread = false;
                 tab.bell = false;
             }
-            if let Some(old) = self.tabs.get(&tab.id) {
-                tab.space_id = old.space_id.clone();
-                tab.manual_assignment = old.manual_assignment;
-                tab.pinned = old.pinned;
-                tab.folder_id = old.folder_id.clone();
-                tab.title_override = old.title_override.clone();
-                tab.title_hook = old.title_hook.clone();
-                // Native discovery supplies only domain/cwd. Preserve explicit launch
-                // arguments/environment captured at creation for accurate reopen intent.
-                if old.launch.is_some() {
-                    tab.launch = old.launch.clone();
-                }
-                if old == &tab {
+            let id = tab.id;
+            if let Some(old) = self.tabs.get_mut(&id) {
+                if !old.reconcile_host_metadata(tab) {
                     continue;
                 }
-                self.hook_routes.remove(&tab.id);
-            } else if tab.space_id.is_empty() {
-                tab.space_id = self.selected_space.clone();
+                self.hook_routes.remove(&id);
+            } else {
+                if tab.space_id.is_empty() {
+                    tab.space_id = self.selected_space.clone();
+                }
+                self.tabs.insert(id, tab);
+                projection_changed = true;
             }
-            let id = tab.id;
-            self.tabs.insert(id, tab);
-            self.route_tab(id);
+            projection_changed |= self.route_tab(id);
             changed = true;
         }
-        if changed {
+        if projection_changed {
             self.rebuild_visible();
         }
         let selected_closed = old_selected.is_some_and(|id| !self.tabs.contains_key(&id));

@@ -9,7 +9,7 @@ use std::{
     },
     time::{SystemTime, UNIX_EPOCH},
 };
-use vtabs_store::{ErrorCode, Key, Operation, Request, Scope, sqlite};
+use vtabs_store::{ErrorCode, Key, Operation, Record, Request, Response, Scope, sqlite};
 
 struct Database(PathBuf);
 static NEXT_DATABASE: AtomicU64 = AtomicU64::new(0);
@@ -155,6 +155,61 @@ fn concurrent_windows_merge_independent_fields_and_reject_same_field_staleness()
     )
     .unwrap_err();
     assert_eq!(stale.code, ErrorCode::Conflict);
+}
+
+#[test]
+fn readers_open_and_read_committed_data_while_a_writer_is_pending() {
+    let db = Database::new();
+    let mut writer = sqlite::open(&db.0).unwrap();
+    sqlite::execute(
+        &mut writer,
+        &Request::new(1, vec![put("name", "committed", Some(0))]),
+    )
+    .unwrap();
+    let pending = writer
+        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+        .unwrap();
+    pending
+        .execute("UPDATE fields SET value='\"pending\"'", [])
+        .unwrap();
+
+    let mut reader = sqlite::open(&db.0).unwrap();
+    reader.busy_timeout(std::time::Duration::ZERO).unwrap();
+    let read = sqlite::execute(
+        &mut reader,
+        &Request::new(
+            2,
+            vec![Operation::Read {
+                scope: Scope::profile("default"),
+            }],
+        ),
+    )
+    .unwrap();
+    assert_eq!(read.revision, 1);
+    assert_eq!(read.records[0].value, Some(json!("committed")));
+    pending.rollback().unwrap();
+}
+
+#[test]
+fn concurrent_openers_migrate_a_fresh_database_once() {
+    let db = Database::new();
+    let barrier = Arc::new(Barrier::new(4));
+    let handles: Vec<_> = (0..4)
+        .map(|_| {
+            let path = db.0.clone();
+            let barrier = barrier.clone();
+            std::thread::spawn(move || {
+                barrier.wait();
+                let mut connection = sqlite::open(&path).unwrap();
+                sqlite::execute(&mut connection, &Request::new(1, vec![]))
+                    .unwrap()
+                    .revision
+            })
+        })
+        .collect();
+    for handle in handles {
+        assert_eq!(handle.join().unwrap(), 0);
+    }
 }
 
 #[test]
@@ -334,4 +389,76 @@ fn oversized_read_rolls_back_earlier_writes_in_the_batch() {
         )
         .unwrap();
     assert_eq!(absent, 0);
+}
+
+#[test]
+fn exact_wire_limit_accepts_escaped_unicode_and_rolls_back_one_extra_byte() {
+    let db = Database::new();
+    let mut connection = sqlite::open(&db.0).unwrap();
+    let mut response = Response {
+        version: vtabs_store::PROTOCOL_VERSION,
+        request_id: u64::MAX,
+        revision: 1,
+        records: (0..64)
+            .map(|index| Record {
+                key: Key {
+                    scope: Scope::Session {
+                        profile: "profile-\"\\\n-é".into(),
+                        incarnation: "session-🙂".into(),
+                    },
+                    entity: "entity-\t-雪".into(),
+                    field: format!("field-{index:02}-\"\\\n-é"),
+                },
+                value: Some(if index < 63 {
+                    json!("x".repeat(vtabs_store::MAX_VALUE_BYTES - 2))
+                } else {
+                    json!("\"\\\u{0}\n-é🙂")
+                }),
+                revision: 1,
+            })
+            .collect(),
+        error: None,
+    };
+    let padding = vtabs_store::MAX_RESPONSE_BYTES - serde_json::to_vec(&response).unwrap().len();
+    let last = response.records.last_mut().unwrap();
+    let value = last.value.as_ref().unwrap().as_str().unwrap().to_owned() + &"x".repeat(padding);
+    last.value = Some(json!(value));
+    assert_eq!(
+        serde_json::to_vec(&response).unwrap().len(),
+        vtabs_store::MAX_RESPONSE_BYTES
+    );
+    let mut request = Request::new(
+        response.request_id,
+        response
+            .records
+            .iter()
+            .map(|record| Operation::Put {
+                key: record.key.clone(),
+                value: record.value.clone().unwrap(),
+                expected_revision: None,
+            })
+            .collect(),
+    );
+    let actual = sqlite::execute(&mut connection, &request).unwrap();
+    assert_eq!(actual, response);
+
+    let Operation::Put { value, .. } = request.operations.last_mut().unwrap() else {
+        unreachable!()
+    };
+    *value = json!(value.as_str().unwrap().to_owned() + "x");
+    assert_eq!(
+        sqlite::execute(&mut connection, &request).unwrap_err().code,
+        ErrorCode::Limit
+    );
+    let read = sqlite::execute(
+        &mut connection,
+        &Request::new(
+            response.request_id,
+            vec![Operation::Read {
+                scope: response.records[0].key.scope.clone(),
+            }],
+        ),
+    )
+    .unwrap();
+    assert_eq!(read, response);
 }

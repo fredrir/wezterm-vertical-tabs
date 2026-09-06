@@ -392,6 +392,131 @@ fn resize_cancels_surface_motion_and_cell_effect_together() {
 }
 
 #[test]
+fn surface_motion_reuses_composition_and_preserves_editor_metadata_through_completion() {
+    let model = model();
+    let area = Rect::new(0, 0, 32, 24);
+    let mut ui = SidebarUi::new();
+    let mut reference = SidebarUi::new();
+    for ui in [&mut ui, &mut reference] {
+        ui.open_create_space();
+        draw(ui, &model, 0);
+        ui.event(&model, UiInput::Text("漢字".into()));
+        ui.event(
+            &model,
+            UiInput::ImePreedit {
+                text: "かな".into(),
+                cursor: Some(3),
+            },
+        );
+        ui.transition_surface(-1.0, 0.0, Duration::ZERO, Duration::from_millis(800));
+        draw(ui, &model, 0);
+    }
+    for millis in [8, 64, 600, 608, 800] {
+        let allocation = ui.buffer().content.as_ptr();
+        let hits: Vec<_> = ui
+            .hit_regions()
+            .iter()
+            .map(|hit| (hit.id.clone(), hit.rect, hit.tooltip.clone()))
+            .collect();
+        let surfaces: Vec<_> = ui
+            .rounded_surfaces()
+            .iter()
+            .map(|surface| {
+                (
+                    surface.rect,
+                    surface.fill,
+                    surface.border,
+                    surface.radius,
+                    surface.inset,
+                )
+            })
+            .collect();
+        reference.invalidate();
+        let expected = reference
+            .render(&model, area, Duration::from_millis(millis))
+            .unwrap();
+        let actual = ui
+            .render(&model, area, Duration::from_millis(millis))
+            .unwrap();
+        assert_eq!(ui.buffer(), reference.buffer());
+        assert_eq!(actual.revision, expected.revision);
+        assert_eq!(actual.changed_cells, expected.changed_cells);
+        assert_eq!(actual.dirty_rows, expected.dirty_rows);
+        assert_eq!(actual.cursor, expected.cursor);
+        assert_eq!(actual.ime_rect, expected.ime_rect);
+        assert_eq!(actual.transform, expected.transform);
+        assert!(!actual.resized);
+        assert!(actual.ime_rect.is_some());
+        if millis != 600 {
+            assert_eq!(ui.buffer().content.as_ptr(), allocation);
+            assert_eq!(
+                ui.hit_regions()
+                    .iter()
+                    .map(|hit| (hit.id.clone(), hit.rect, hit.tooltip.clone()))
+                    .collect::<Vec<_>>(),
+                hits
+            );
+            assert_eq!(
+                ui.rounded_surfaces()
+                    .iter()
+                    .map(|surface| (
+                        surface.rect,
+                        surface.fill,
+                        surface.border,
+                        surface.radius,
+                        surface.inset
+                    ))
+                    .collect::<Vec<_>>(),
+                surfaces
+            );
+            assert!(actual.changed_cells.is_empty());
+        }
+        if millis >= 600 {
+            assert!(actual.cursor.is_none());
+        }
+    }
+    assert!(!ui.has_animation());
+    assert_eq!(ui.next_deadline(), Some(Duration::from_millis(1200)));
+    assert!(
+        ui.render(&model, area, Duration::from_millis(801))
+            .is_none()
+    );
+}
+
+#[test]
+fn surface_motion_after_cell_effect_matches_full_composition() {
+    let mut model = model();
+    model.settings.animation_ms = 80;
+    let area = Rect::new(0, 0, 32, 24);
+    let mut ui = SidebarUi::new();
+    let mut reference = SidebarUi::new();
+    for ui in [&mut ui, &mut reference] {
+        draw(ui, &model, 0);
+        click(ui, &model, &ElementId::Tab(20));
+        ui.transition_surface(-1.0, 0.0, Duration::ZERO, Duration::from_millis(160));
+        draw(ui, &model, 0);
+    }
+    for millis in (8..=160).step_by(8) {
+        reference.invalidate();
+        let expected = reference
+            .render(&model, area, Duration::from_millis(millis))
+            .unwrap();
+        let actual = ui
+            .render(&model, area, Duration::from_millis(millis))
+            .unwrap();
+        assert_eq!(ui.buffer(), reference.buffer());
+        assert_eq!(actual.changed_cells, expected.changed_cells);
+        assert_eq!(actual.transform, expected.transform);
+    }
+    assert!(!ui.has_animation());
+    assert_eq!(ui.next_deadline(), None);
+    assert!(
+        ui.render(&model, area, Duration::from_millis(168))
+            .is_none()
+    );
+}
+
+#[test]
 fn editor_ime_caret_remains_reported_when_blink_hides_cursor() {
     let mut ui = SidebarUi::new();
     let model = model();

@@ -110,8 +110,11 @@ impl SidebarUi {
             self.show_tooltip = self.hovered.is_some();
             self.dirty = true;
         }
-        if !self.dirty && self.effect.is_none() && self.motion.is_none() {
-            return None;
+        if !self.dirty && self.effect.is_none() {
+            return self
+                .motion
+                .is_some()
+                .then(|| self.finish_frame(false, Vec::new(), Vec::new(), now));
         }
         self.staging.resize(area);
         self.staging.reset();
@@ -189,6 +192,34 @@ impl SidebarUi {
                 self.effect_area = None;
             }
         }
+        let changed_cells = if resized {
+            (area.y..area.bottom())
+                .flat_map(|y| (area.x..area.right()).map(move |x| (x, y)))
+                .collect()
+        } else {
+            self.buffer
+                .diff_iter(&self.staging)
+                .map(|(x, y, _)| (x, y))
+                .collect::<Vec<_>>()
+        };
+        let mut dirty_rows = Vec::new();
+        for &(_, y) in &changed_cells {
+            if dirty_rows.last() != Some(&y) {
+                dirty_rows.push(y);
+            }
+        }
+        std::mem::swap(&mut self.buffer, &mut self.staging);
+        self.dirty = false;
+        Some(self.finish_frame(resized, changed_cells, dirty_rows, now))
+    }
+
+    fn finish_frame(
+        &mut self,
+        resized: bool,
+        changed_cells: Vec<(u16, u16)>,
+        dirty_rows: Vec<u16>,
+        now: Duration,
+    ) -> FrameUpdate {
         let mut transform = SurfaceTransform {
             translate_x: 0.0,
             opacity: 1.0,
@@ -203,26 +234,7 @@ impl SidebarUi {
                 self.motion = None;
             }
         }
-        let changed_cells = if resized {
-            (area.y..area.bottom())
-                .flat_map(|y| (area.x..area.right()).map(move |x| (x, y)))
-                .collect()
-        } else {
-            self.buffer
-                .diff(&self.staging)
-                .into_iter()
-                .map(|(x, y, _)| (x, y))
-                .collect::<Vec<_>>()
-        };
-        let mut dirty_rows = Vec::new();
-        for &(_, y) in &changed_cells {
-            if dirty_rows.last() != Some(&y) {
-                dirty_rows.push(y);
-            }
-        }
-        std::mem::swap(&mut self.buffer, &mut self.staging);
         self.last_frame = now;
-        self.dirty = false;
         self.frame_revision = self.frame_revision.wrapping_add(1);
         let editor = match &self.overlay {
             Some(Overlay::Form(form)) if self.focused == Some(ElementId::Editor) => {
@@ -244,7 +256,7 @@ impl SidebarUi {
                 1,
             )
         });
-        Some(FrameUpdate {
+        FrameUpdate {
             revision: self.frame_revision,
             resized,
             changed_cells,
@@ -252,7 +264,7 @@ impl SidebarUi {
             cursor: self.cursor,
             ime_rect,
             transform,
-        })
+        }
     }
 
     fn update_theme(&mut self, model: &Model) {

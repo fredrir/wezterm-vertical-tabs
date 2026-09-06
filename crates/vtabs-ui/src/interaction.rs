@@ -641,16 +641,22 @@ impl SidebarUi {
     }
 
     pub(crate) fn ensure_tab_visible(&mut self, model: &Model, id: TabId) {
-        let entries = Self::sidebar_entries(model);
-        let target = if let Some(tab) = model.tabs.get(&id)
+        self.ensure_sidebar_entries(model);
+        let collapsed_folder = if let Some(tab) = model.tabs.get(&id)
             && let Some(folder) = &tab.folder_id
-            && model.folders.iter().any(|f| &f.id == folder && f.collapsed)
         {
-            SidebarRow::Folder(folder.clone())
+            model
+                .folders
+                .iter()
+                .position(|f| &f.id == folder && f.collapsed)
         } else {
-            SidebarRow::Tab(id)
+            None
         };
-        if let Some(at) = entries.iter().position(|row| *row == target) {
+        if let Some(at) = self.sidebar_rows.iter().position(|row| match row {
+            SidebarRow::Folder { index, .. } => collapsed_folder == Some(*index),
+            SidebarRow::Tab { id: tab, .. } => collapsed_folder.is_none() && *tab == id,
+            SidebarRow::NewTab => false,
+        }) {
             let rows = usize::from(self.tabs_rect.height / self.row_height(model)).max(1);
             if at < self.tab_scroll {
                 self.tab_scroll = at;
