@@ -34,7 +34,6 @@ const SOURCE_ITEMS: &[&str] = &[
     "plugin",
     "docs",
     "tools",
-    "scripts/native.py",
     "tests",
 ];
 const IGNORED: &[&str] = &[

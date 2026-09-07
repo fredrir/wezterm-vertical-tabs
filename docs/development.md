@@ -23,34 +23,34 @@ just doctor
 
 Recipes invoke `cargo xtask`. Installed launch entries invoke the bundled Rust binary directly.
 
-| Command | Value |
-| --- | --- |
-| `just deps --upstream SHA` | Run selected upstream system dependency installer |
-| `just build --upstream SHA --timings` | Exact upstream, Cargo freshness, native validation, command timings |
-| `just dev` | Cached upstream, incremental `iterate` profile, runtime bundle without archive |
-| `just dev --watch` | Debounced Rust/adapter/plugin changes; separate owned GUI process |
-| `just check` | Rust format/tests/Clippy, schema contracts, Ruff and pytest |
-| `just bench` | Release timings and Rust allocation counts; [measurement boundaries](performance.md) |
-| `just test tools -- -k install` | Focused pytest suite; extra arguments after `--` |
-| `just generate` | Generate Lua schema/types and option documentation |
-| `just generate --check` | Verify generated artifacts |
-| `just package` | Verified bundle, ZIP/tar.gz archive and release manifest in `dist/` |
-| `just package --bundle PATH` | Verify and archive an existing bundle |
-| `just install --bundle PATH` | Verify and install an immutable local bundle |
-| `just launch -- start --always-new-process` | Promote completed pending version and forward GUI arguments |
-| `just update --check` | Resolve update availability without compiling or installing |
-| `just update --manifest PATH_OR_HTTPS_URL` | Download/copy a verified prebuilt release |
-| `just status` / `just versions` | Active, pending, previous and installed versions |
-| `just rollback [ID]` | Select a verified installed version; default previous |
-| `just plan dev --json` | Inputs and execution decisions without fetch/build |
-| `just doctor --for check` | Required tool versions and state health |
-| `just patch check --upstream SHA` | Check ordered patches in an isolated worktree |
-| `just cache inspect` | Owned run/bundle sizes and retention decisions |
-| `just cache gc --dry-run --keep 5` | Preview pruning; active/pending/running bundles protected |
-| `--offline` | No Git/network fetching; Cargo and uv offline |
-| `--profile NAME` / `--debug` | Explicit Cargo profile / development profile |
-| `--jobs N` | Cargo job limit and pytest worker count |
-| `--json` / `--explain` / `--timings` | Machine output / decisions / command durations |
+| Command                                     | Value                                                                                |
+| ------------------------------------------- | ------------------------------------------------------------------------------------ |
+| `just deps --upstream SHA`                  | Run selected upstream system dependency installer                                    |
+| `just build --upstream SHA --timings`       | Exact upstream, Cargo freshness, native validation, command timings                  |
+| `just dev`                                  | Cached upstream, incremental `iterate` profile, runtime bundle without archive       |
+| `just dev --watch`                          | Debounced Rust/adapter/plugin changes; separate owned GUI process                    |
+| `just check`                                | Rust format/tests/Clippy, schema contracts, Ruff and pytest                          |
+| `just bench`                                | Release timings and Rust allocation counts; [measurement boundaries](performance.md) |
+| `just test tools -- -k install`             | Focused pytest suite; extra arguments after `--`                                     |
+| `just generate`                             | Generate Lua schema/types and option documentation                                   |
+| `just generate --check`                     | Verify generated artifacts                                                           |
+| `just package`                              | Verified bundle, ZIP/tar.gz archive and release manifest in `dist/`                  |
+| `just package --bundle PATH`                | Verify and archive an existing bundle                                                |
+| `just install --bundle PATH`                | Verify and install an immutable local bundle                                         |
+| `just launch -- start --always-new-process` | Promote completed pending version and forward GUI arguments                          |
+| `just update --check`                       | Resolve update availability without compiling or installing                          |
+| `just update --manifest PATH_OR_HTTPS_URL`  | Download/copy a verified prebuilt release                                            |
+| `just status` / `just versions`             | Active, pending, previous and installed versions                                     |
+| `just rollback [ID]`                        | Select a verified installed version; default previous                                |
+| `just plan dev --json`                      | Inputs and execution decisions without fetch/build                                   |
+| `just doctor --for check`                   | Required tool versions and state health                                              |
+| `just patch check --upstream SHA`           | Check ordered patches in an isolated worktree                                        |
+| `just cache inspect`                        | Owned run/bundle sizes and retention decisions                                       |
+| `just cache gc --dry-run --keep 5`          | Preview pruning; active/pending/running bundles protected                            |
+| `--offline`                                 | No Git/network fetching; Cargo and uv offline                                        |
+| `--profile NAME` / `--debug`                | Explicit Cargo profile / development profile                                         |
+| `--jobs N`                                  | Cargo job limit and pytest worker count                                              |
+| `--json` / `--explain` / `--timings`        | Machine output / decisions / command durations                                       |
 
 **Source boundaries**
 
@@ -66,7 +66,6 @@ Recipes invoke `cargo xtask`. Installed launch entries invoke the bundled Rust b
 | `tools/src`          | Rust CLI, process runner, source/build state, packaging and updates            |
 | `tools/tests`        | Rust-specific unit contracts                                                   |
 | `tests/tools`        | pytest/tui-test tooling behavior through the compiled CLI                      |
-| `scripts/native.py`  | Temporary forwarding shim for previously installed Python updaters             |
 | `tests`              | uv-managed pytest, production process boundaries and isolated native scenarios |
 
 `vtabs-store` has no default features. The GUI links protocol types only; the `sqlite` feature builds the helper.
