@@ -3,7 +3,8 @@
 | Name        | Value                                                                         |
 | ----------- | ----------------------------------------------------------------------------- |
 | Toolchain   | Stable Rust, Git and platform C/C++ tools; uv/Python 3.12+ for tests          |
-| Upstream    | `main` resolved once; `--upstream SHA` pins; `dev` reuses the cached revision |
+| Upstream    | `main` resolved once; `--upstream SHA` pins; `dev`/`deploy` reuse the last build |
+| Tooling     | `cargo xtask` uses the `xtask` profile: optimized hashing, incremental rebuilds |
 | GUI         | WezTerm renderer with the native patch series and project Rust application    |
 | UI          | Retained Ratatui text, native rounded geometry and finite TachyonFX effects   |
 | Persistence | `wez-vtabs-store`; bundled SQLite, asynchronous bounded JSON requests         |
@@ -39,6 +40,7 @@ Recipes invoke `cargo xtask`. Installed launch entries invoke the bundled Rust b
 | `just package --bundle PATH`                | Verify and archive an existing bundle                                                |
 | `just install --bundle PATH`                | Verify and install an immutable local bundle                                         |
 | `just deploy`                               | Build, install and replace the desktop app; `--app PATH`, `--bin DIR`, `--no-app`    |
+| `just deploy --upstream main`               | Deploy against the newest upstream; plain `deploy` reuses the last built revision    |
 | `just deploy --bundle PATH --offline`       | Deploy an existing verified bundle without fetching upstream                         |
 | `just launch -- start --always-new-process` | Promote completed pending version and forward GUI arguments                          |
 | `just update --check`                       | Resolve update availability without compiling or installing                          |

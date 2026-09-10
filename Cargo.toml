@@ -26,3 +26,11 @@ opt-level = 1
 debug = "line-tables-only"
 incremental = true
 lto = "off"
+
+# Tooling: optimized hashing and archiving, incremental rebuilds when tools/ changes.
+[profile.xtask]
+inherits      = "release"
+lto           = "off"
+codegen-units = 16
+incremental   = true
+strip         = "none"

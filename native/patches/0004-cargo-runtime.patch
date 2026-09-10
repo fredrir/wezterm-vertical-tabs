@@ -48,5 +48,6 @@ diff --git a/wezterm-gui/build.rs b/wezterm-gui/build.rs
 +        let build_target_dir = executable_output_dir();
 +        std::fs::create_dir_all(&build_target_dir).unwrap();
          let dest_plist = build_target_dir.join("Info.plist");
-         println!("cargo:rerun-if-changed=assets/macos/WezTerm.app/Contents/Info.plist");
+-        println!("cargo:rerun-if-changed=assets/macos/WezTerm.app/Contents/Info.plist");
++        println!("cargo:rerun-if-changed=../assets/macos/WezTerm.app/Contents/Info.plist");
  

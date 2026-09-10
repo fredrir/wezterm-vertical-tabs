@@ -53,6 +53,8 @@ impl Targets {
 }
 
 pub fn deploy(ctx: &Context, existing: Option<&Path>, targets: &Targets) -> Result<Value> {
+    let pinned = pin_upstream(ctx)?;
+    let ctx = pinned.as_ref().unwrap_or(ctx);
     let bundle = match existing {
         Some(path) => path.to_path_buf(),
         None => {
@@ -74,7 +76,22 @@ pub fn deploy(ctx: &Context, existing: Option<&Path>, targets: &Targets) -> Resu
     Ok(json!({
         "installed": installed,
         "app": app,
+        "upstream": {"revision": ctx.upstream, "pinned": pinned.is_some()},
         "next": "Quit and reopen WezTerm to run this version",
+    }))
+}
+
+/// Plugin changes should not pull a newer WezTerm and its full rebuild along; only an
+/// explicit `--upstream` moves past the revision the last build used.
+fn pin_upstream(ctx: &Context) -> Result<Option<Context>> {
+    if ctx.upstream.is_some() {
+        return Ok(None);
+    }
+    let previous: Option<crate::state::BuildMetadata> =
+        crate::state::read_json(&ctx.cache.join("build.json"))?;
+    Ok(previous.map(|previous| Context {
+        upstream: Some(previous.upstream),
+        ..ctx.clone()
     }))
 }
 
