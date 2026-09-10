@@ -163,7 +163,7 @@ pub fn status(root: &Path) -> Result<Value> {
     }))
 }
 
-fn atomic_text(path: &Path, text: &str, executable: bool) -> Result<()> {
+pub(crate) fn atomic_text(path: &Path, text: &str, executable: bool) -> Result<()> {
     use std::io::Write;
     fs::create_dir_all(path.parent().context("launcher parent missing")?)?;
     let mut temporary = tempfile::NamedTempFile::new_in(path.parent().unwrap())?;
@@ -195,9 +195,29 @@ fn desktop_quote(value: &str) -> String {
     )
 }
 
+pub(crate) fn dispatcher(root: &Path) -> Result<PathBuf> {
+    Ok(root
+        .canonicalize()?
+        .join(bundle::executable_name("wez-vtabs-launcher")))
+}
+
+pub(crate) fn desktop_entry(name: &str, dispatcher: &Path, bundle: &Path, extra: &str) -> String {
+    let icon = bundle
+        .join("share/icons/terminal.png")
+        .to_string_lossy()
+        .replace('\\', "\\\\")
+        .replace('\n', "\\n")
+        .replace('\r', "\\r")
+        .replace('\t', "\\t");
+    format!(
+        "[Desktop Entry]\nName={name}\nType=Application\nTerminal=false\nCategories=System;TerminalEmulator;\nStartupWMClass=org.wezfurlong.wezterm\nExec={} launch\nIcon={icon}\n{extra}",
+        desktop_quote(&dispatcher.to_string_lossy())
+    )
+}
+
 fn install_entry(root: &Path, bundle: &Path) -> Result<()> {
     let root = root.canonicalize()?;
-    let dispatcher = root.join(bundle::executable_name("wez-vtabs-launcher"));
+    let dispatcher = dispatcher(&root)?;
     if !dispatcher.exists() {
         let temporary = tempfile::NamedTempFile::new_in(&root)?;
         fs::copy(bundle::tool_path(bundle), temporary.path())?;
@@ -251,19 +271,9 @@ fn install_entry(root: &Path, bundle: &Path) -> Result<()> {
                 false,
             )?;
         } else {
-            let icon = bundle
-                .join("share/icons/terminal.png")
-                .to_string_lossy()
-                .replace('\\', "\\\\")
-                .replace('\n', "\\n")
-                .replace('\r', "\\r")
-                .replace('\t', "\\t");
             atomic_text(
                 &root.join("wez-vtabs.desktop"),
-                &format!(
-                    "[Desktop Entry]\nName=WezTerm Native\nType=Application\nTerminal=false\nCategories=System;TerminalEmulator;\nStartupWMClass=org.wezfurlong.wezterm\nExec={} launch\nIcon={icon}\n",
-                    desktop_quote(&dispatcher.to_string_lossy())
-                ),
+                &desktop_entry("WezTerm Native", &dispatcher, bundle, ""),
                 true,
             )?;
         }

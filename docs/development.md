@@ -38,7 +38,7 @@ Recipes invoke `cargo xtask`. Installed launch entries invoke the bundled Rust b
 | `just package`                              | Verified bundle, ZIP/tar.gz archive and release manifest in `dist/`                  |
 | `just package --bundle PATH`                | Verify and archive an existing bundle                                                |
 | `just install --bundle PATH`                | Verify and install an immutable local bundle                                         |
-| `just deploy`                               | Build, install and replace `/Applications/WezTerm.app`; `--app PATH`, `--no-app`     |
+| `just deploy`                               | Build, install and replace the desktop app; `--app PATH`, `--bin DIR`, `--no-app`    |
 | `just deploy --bundle PATH --offline`       | Deploy an existing verified bundle without fetching upstream                         |
 | `just launch -- start --always-new-process` | Promote completed pending version and forward GUI arguments                          |
 | `just update --check`                       | Resolve update availability without compiling or installing                          |
@@ -100,6 +100,7 @@ cargo run --quiet --locked -p vtabs-core --bin gen-schema -- json
 | `install/wez-vtabs-launcher` | Stable dispatcher; versioned Rust tools own launch/update behavior                                         |
 | macOS launch entry           | `install/WezTerm Native.app`                                                                               |
 | macOS application            | `just deploy` copies the active `WezTerm.app`; a replaced foreign app moves to `install/replaced`          |
+| Linux deploy                 | `~/.local/share/applications/org.wezfurlong.wezterm.desktop` and `~/.local/bin/wezterm{,-gui}` links       |
 | Linux launch entry           | `install/wez-vtabs` and `install/wez-vtabs.desktop`                                                        |
 | Windows launch entry         | `install/wez-vtabs.cmd`                                                                                    |
 

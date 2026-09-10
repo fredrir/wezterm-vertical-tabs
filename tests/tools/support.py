@@ -65,7 +65,7 @@ def create_bundle(
         '[package]\nname = "vtabs-tools"\nversion = "0.1.0"\n', encoding="utf-8"
     )
     shutil.copy2(tools_binary, binaries / executable_name("wez-vtabs"))
-    for executable in ("wezterm-gui", "wez-vtabs-store"):
+    for executable in ("wezterm-gui", "wezterm", "wez-vtabs-store"):
         destination = binaries / executable_name(executable)
         if native_binaries is not None:
             shutil.copy2(native_binaries[executable], destination)

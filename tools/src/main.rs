@@ -24,6 +24,16 @@ fn home() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("."))
 }
 
+fn data_home() -> PathBuf {
+    std::env::var_os(if cfg!(windows) {
+        "LOCALAPPDATA"
+    } else {
+        "XDG_DATA_HOME"
+    })
+    .map(PathBuf::from)
+    .unwrap_or_else(|| home().join(".local/share"))
+}
+
 fn absolute(path: PathBuf) -> Result<PathBuf> {
     let path = if path == Path::new("~") {
         home()
@@ -74,16 +84,7 @@ fn context(cli: &Cli) -> Result<Context> {
         cli.install_root
             .clone()
             .or_else(|| managed.map(|(_, install)| install))
-            .unwrap_or_else(|| {
-                std::env::var_os(if cfg!(windows) {
-                    "LOCALAPPDATA"
-                } else {
-                    "XDG_DATA_HOME"
-                })
-                .map(PathBuf::from)
-                .unwrap_or_else(|| home().join(".local/share"))
-                .join("wez-vtabs-native")
-            }),
+            .unwrap_or_else(|| data_home().join("wez-vtabs-native")),
     )?;
     let runner = process::Runner::new(
         &cache,
@@ -203,6 +204,7 @@ fn dispatch(ctx: &Context, cli: &Cli) -> Result<(Value, i32)> {
         Commands::Deploy {
             bundle: existing,
             app,
+            bin,
             no_app,
         } => {
             let _lock = if existing.is_none() {
@@ -210,12 +212,8 @@ fn dispatch(ctx: &Context, cli: &Cli) -> Result<(Value, i32)> {
             } else {
                 None
             };
-            let app = if *no_app {
-                None
-            } else {
-                app.clone().or_else(deploy::default_app)
-            };
-            deploy::deploy(ctx, existing.as_deref(), app.as_deref())?
+            let targets = deploy::Targets::resolve(app.clone(), bin.clone(), *no_app);
+            deploy::deploy(ctx, existing.as_deref(), &targets)?
         }
         Commands::Update {
             daily,

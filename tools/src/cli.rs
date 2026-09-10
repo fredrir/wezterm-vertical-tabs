@@ -83,9 +83,12 @@ pub enum Commands {
     Deploy {
         #[arg(long)]
         bundle: Option<PathBuf>,
-        /// Application to replace; macOS defaults to /Applications/WezTerm.app.
+        /// macOS application bundle or Linux desktop entry to replace.
         #[arg(long, conflicts_with = "no_app")]
         app: Option<PathBuf>,
+        /// Linux directory for the wezterm and wezterm-gui links; default ~/.local/bin.
+        #[arg(long, conflicts_with = "no_app")]
+        bin: Option<PathBuf>,
         /// Install only; keep the desktop application as it is.
         #[arg(long)]
         no_app: bool,
