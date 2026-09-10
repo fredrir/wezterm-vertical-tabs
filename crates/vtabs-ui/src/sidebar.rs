@@ -68,7 +68,8 @@ impl SidebarUi {
         );
         let mut style = self.item_style(&id, selected);
         let hovered = self.hovered.as_ref() == Some(&id)
-            || matches!((&id, &self.hovered), (ElementId::Tab(tab), Some(ElementId::CloseTab(close))) if tab == close);
+            || matches!((&id, &self.hovered), (ElementId::Tab(tab), Some(ElementId::CloseTab(close))) if tab == close)
+            || (id == ElementId::SettingsTab && self.hovered == Some(ElementId::CloseSettingsTab));
         let focused = self.focused.as_ref() == Some(&id);
         let visual = if icon {
             icon_rect(rect, label.trim())
@@ -111,14 +112,17 @@ impl SidebarUi {
         if id == ElementId::NewTab && !hovered && !focused {
             style = style.fg(self.theme.muted);
         }
-        let centered =
-            icon || rect.width < 12 && matches!(id, ElementId::Tab(_) | ElementId::NewTab);
+        let row = matches!(
+            id,
+            ElementId::Tab(_) | ElementId::NewTab | ElementId::SettingsTab
+        );
+        let centered = icon || rect.width < 12 && row;
         let label = if centered {
             Line::from(label.trim().to_owned()).alignment(Alignment::Center)
         } else {
             Line::from(label)
         };
-        let text_y = if matches!(id, ElementId::Tab(_)) && rect.height >= 3 {
+        let text_y = if row && rect.height >= 3 {
             rect.y
         } else {
             rect.y + rect.height.saturating_sub(1) / 2
@@ -131,8 +135,28 @@ impl SidebarUi {
         self.hit(id, rect, platform_tooltip(tooltip));
     }
 
+    fn close_control(&mut self, id: ElementId, row: Rect, fill: Color, tooltip: &str) {
+        let close = Rect::new(
+            row.right().saturating_sub(3),
+            row.y,
+            row.width.min(3),
+            row.height,
+        );
+        for x in close.x..close.right() {
+            self.staging[(x, close.y)]
+                .set_symbol(" ")
+                .set_style(Style::default().bg(fill));
+        }
+        self.write(
+            Rect::new(close.x, close.y, close.width, 1),
+            Line::from("×").alignment(Alignment::Center),
+            self.item_style(&id, false).bg(fill),
+        );
+        self.hit(id, close, platform_tooltip(tooltip.into()));
+    }
+
     pub(crate) fn ensure_sidebar_entries(&mut self, model: &Model) {
-        if self.sidebar_revision == Some(model.revision) {
+        if self.sidebar_revision == Some((model.revision, self.settings_tab)) {
             return;
         }
         self.sidebar_rows.clear();
@@ -193,7 +217,10 @@ impl SidebarUi {
                     number: index + 1,
                 }),
         );
-        self.sidebar_revision = Some(model.revision);
+        if self.settings_tab {
+            self.sidebar_rows.push(SidebarRow::Settings);
+        }
+        self.sidebar_revision = Some((model.revision, self.settings_tab));
     }
 
     pub(crate) fn row_height(&self, model: &Model) -> u16 {
@@ -363,6 +390,16 @@ impl SidebarUi {
             }
             self.reveal_selection = false;
         }
+        if self.reveal_settings {
+            if let Some(at) = self
+                .sidebar_rows
+                .iter()
+                .position(|row| *row == SidebarRow::Settings)
+            {
+                self.reveal_row(model, at);
+            }
+            self.reveal_settings = false;
+        }
         self.tab_scroll = self
             .tab_scroll
             .min(self.sidebar_rows.len().saturating_sub(capacity));
@@ -391,6 +428,42 @@ impl SidebarUi {
                     "New tab  Cmd+T".into(),
                     false,
                 ),
+                SidebarRow::Settings => {
+                    let selected = self.settings_page;
+                    self.button(
+                        ElementId::SettingsTab,
+                        rect,
+                        if compact {
+                            " ⚙".into()
+                        } else {
+                            " ⚙ Settings".into()
+                        },
+                        "Settings".into(),
+                        selected,
+                    );
+                    let hovered = self.hovered == Some(ElementId::SettingsTab)
+                        || self.hovered == Some(ElementId::CloseSettingsTab);
+                    if model.settings.show_close
+                        && !compact
+                        && (selected
+                            || hovered
+                            || self.focused == Some(ElementId::CloseSettingsTab))
+                    {
+                        let fill = if selected {
+                            self.theme.selected
+                        } else if hovered {
+                            self.theme.card
+                        } else {
+                            self.theme.background
+                        };
+                        self.close_control(
+                            ElementId::CloseSettingsTab,
+                            rect,
+                            fill,
+                            "Close settings  Cmd+W",
+                        );
+                    }
+                }
                 SidebarRow::Folder { index, count } => {
                     let Some(folder) = model.folders.get(index) else {
                         continue;
@@ -468,24 +541,7 @@ impl SidebarUi {
                             self.theme.background
                         };
                     if close_visible {
-                        let close = Rect::new(
-                            rect.right().saturating_sub(3),
-                            rect.y,
-                            rect.width.min(3),
-                            rect.height,
-                        );
-                        let close_id = ElementId::CloseTab(id);
-                        for x in close.x..close.right() {
-                            self.staging[(x, close.y)]
-                                .set_symbol(" ")
-                                .set_style(Style::default().bg(fill));
-                        }
-                        self.write(
-                            Rect::new(close.x, close.y, close.width, 1),
-                            Line::from("×").alignment(Alignment::Center),
-                            self.item_style(&close_id, false).bg(fill),
-                        );
-                        self.hit(close_id, close, platform_tooltip("Close tab  Cmd+W".into()));
+                        self.close_control(ElementId::CloseTab(id), rect, fill, "Close tab  Cmd+W");
                     }
                     if row_height >= 3 {
                         self.write(

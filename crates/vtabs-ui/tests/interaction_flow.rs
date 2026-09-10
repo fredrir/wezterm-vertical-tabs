@@ -737,3 +737,80 @@ fn settings_context_menu_restores_search_focus_for_keyboard_cut_and_async_paste(
             .any(|hit| hit.id == ElementId::Setting("width".into()))
     );
 }
+
+#[test]
+fn closing_a_tab_defers_the_running_process_check_to_the_host() {
+    use vtabs_ui::NativeUiAction;
+    let mut model = model();
+    let mut ui = SidebarUi::new();
+    draw(&mut ui, &model);
+    assert!(matches!(
+        click(&mut ui, &model, &ElementId::CloseTab(10)).as_slice(),
+        [UiIntent::Native(NativeUiAction::CloseTab(10))]
+    ));
+    assert!(!ui.has_overlay());
+    draw(&mut ui, &model);
+    context(&mut ui, &model, &ElementId::Tab(20));
+    draw(&mut ui, &model);
+    assert!(matches!(
+        click(&mut ui, &model, &ElementId::Menu("close".into())).as_slice(),
+        [UiIntent::Native(NativeUiAction::CloseTab(20))]
+    ));
+    assert!(!ui.has_overlay());
+    draw(&mut ui, &model);
+    focus(&mut ui, &model, &ElementId::Tab(30));
+    assert!(matches!(
+        key(&mut ui, &model, Key::Delete).as_slice(),
+        [UiIntent::Native(NativeUiAction::CloseTab(30))]
+    ));
+    assert!(matches!(
+        command(&mut ui, &model, 'w').as_slice(),
+        [UiIntent::Native(NativeUiAction::CloseTab(10))]
+    ));
+
+    model.settings.confirm_close = false;
+    model.revision += 1;
+    draw(&mut ui, &model);
+    assert!(matches!(
+        click(&mut ui, &model, &ElementId::CloseTab(10)).as_slice(),
+        [UiIntent::Domain(Intent::CloseTab(10))]
+    ));
+}
+
+#[test]
+fn host_close_prompt_names_the_process_and_defaults_to_closing() {
+    let model = model();
+    let mut ui = SidebarUi::new();
+    draw(&mut ui, &model);
+    ui.confirm_close_tab(10, "vim");
+    assert!(ui.is_modal());
+    draw(&mut ui, &model);
+    let text: String = ui
+        .buffer()
+        .content
+        .iter()
+        .map(|cell| cell.symbol())
+        .collect();
+    assert!(text.contains("vim is still running"), "{text}");
+    assert!(
+        hit(&ui, &ElementId::Menu("confirm".into())).y
+            < hit(&ui, &ElementId::Menu("cancel".into())).y
+    );
+    assert!(matches!(
+        key(&mut ui, &model, Key::Enter).as_slice(),
+        [UiIntent::Domain(Intent::CloseTab(10))]
+    ));
+    assert!(!ui.is_modal());
+
+    ui.confirm_close_tab(20, "");
+    draw(&mut ui, &model);
+    let text: String = ui
+        .buffer()
+        .content
+        .iter()
+        .map(|cell| cell.symbol())
+        .collect();
+    assert!(text.contains("Close this tab?"), "{text}");
+    assert!(key(&mut ui, &model, Key::Escape).is_empty());
+    assert!(!ui.is_modal());
+}

@@ -88,10 +88,9 @@ pub fn check(ctx: &Context) -> Result<()> {
         let lint = scope.spawn(|| -> Result<()> {
             ctx.runner.run(uv(ctx).args(["lock", "--check"]))?;
             ctx.runner
-                .run(uv(ctx).args(["run", "--locked", "ruff", "check", "scripts", "tests"]))?;
-            ctx.runner.run(uv(ctx).args([
-                "run", "--locked", "ruff", "format", "--check", "scripts", "tests",
-            ]))
+                .run(uv(ctx).args(["run", "--locked", "ruff", "check", "tests"]))?;
+            ctx.runner
+                .run(uv(ctx).args(["run", "--locked", "ruff", "format", "--check", "tests"]))
         });
         let fmt = scope.spawn(|| ctx.runner.run(cargo(ctx).args(["fmt", "--all", "--check"])));
         (lint.join(), fmt.join())

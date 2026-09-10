@@ -144,6 +144,9 @@ impl SidebarUi {
                 }
                 self.pointer_origin = Some((x, y));
                 self.dragging = false;
+                if button == MouseButton::Right && self.overlay.is_none() {
+                    self.set_anchor(x, y);
+                }
                 match (button, hit) {
                     (MouseButton::Right, Some(id)) => self.context_menu(model, id),
                     (MouseButton::Middle, Some(ElementId::Tab(id))) => {
@@ -206,7 +209,13 @@ impl SidebarUi {
                 let up = self.hit_test(x, y).map(|hit| hit.id.clone());
                 match (down, up) {
                     (Some(from), Some(to)) if from == to => {
-                        self.activate_element(model, to, &mut intents)
+                        if self.overlay.is_none() {
+                            self.set_anchor(x, y);
+                        }
+                        self.activate_element(model, to, &mut intents);
+                        if self.overlay.is_none() {
+                            self.anchor = None;
+                        }
                     }
                     (Some(ElementId::Tab(id)), Some(ElementId::Tab(target))) => {
                         if let Some(tab) = model.tabs.get(&target) {
@@ -359,6 +368,7 @@ impl SidebarUi {
             } else {
                 ElementId::SettingsSearch
             };
+            self.anchor_focused(&target);
             self.context_menu(model, target);
             return;
         }
@@ -496,6 +506,8 @@ impl SidebarUi {
                         | ElementId::Refresh
                         | ElementId::Search
                         | ElementId::Settings
+                        | ElementId::SettingsTab
+                        | ElementId::CloseSettingsTab
                 )
             )
         {
@@ -528,6 +540,7 @@ impl SidebarUi {
             }
             Key::F10 => {
                 if let Some(id) = self.focused.clone() {
+                    self.anchor_focused(&id);
                     self.context_menu(model, id);
                 } else {
                     self.root_menu(model);
@@ -597,11 +610,11 @@ impl SidebarUi {
                     RailMode::Expanded
                 }))),
             },
-            Key::Delete => {
-                if let Some(ElementId::Tab(id)) = self.focused.clone() {
-                    self.close_tab(model, id, intents);
-                }
-            }
+            Key::Delete => match self.focused.clone() {
+                Some(ElementId::Tab(id)) => self.close_tab(model, id, intents),
+                Some(ElementId::SettingsTab) => self.close_settings(),
+                _ => {}
+            },
             Key::Escape => {
                 self.focused = None;
                 self.cancel_effects();
@@ -655,15 +668,46 @@ impl SidebarUi {
         if let Some(at) = self.sidebar_rows.iter().position(|row| match row {
             SidebarRow::Folder { index, .. } => collapsed_folder == Some(*index),
             SidebarRow::Tab { id: tab, .. } => collapsed_folder.is_none() && *tab == id,
-            SidebarRow::NewTab => false,
+            SidebarRow::NewTab | SidebarRow::Settings => false,
         }) {
-            let rows = usize::from(self.tabs_rect.height / self.row_height(model)).max(1);
-            if at < self.tab_scroll {
-                self.tab_scroll = at;
-            } else if at >= self.tab_scroll + rows {
-                self.tab_scroll = at + 1 - rows;
-            }
+            self.reveal_row(model, at);
         }
+    }
+
+    pub(crate) fn reveal_row(&mut self, model: &Model, at: usize) {
+        let rows = usize::from(self.tabs_rect.height / self.row_height(model)).max(1);
+        if at < self.tab_scroll {
+            self.tab_scroll = at;
+        } else if at >= self.tab_scroll + rows {
+            self.tab_scroll = at + 1 - rows;
+        }
+    }
+
+    fn set_anchor(&mut self, x: u16, y: u16) {
+        self.anchor = Some(Position::new(
+            x.saturating_sub(self.sidebar_rect.x),
+            y.saturating_sub(self.sidebar_rect.y),
+        ));
+    }
+
+    fn anchor_focused(&mut self, id: &ElementId) {
+        if let Some(rect) = self
+            .hits
+            .iter()
+            .find(|hit| &hit.id == id)
+            .map(|hit| hit.rect)
+        {
+            self.set_anchor(rect.x, rect.bottom().saturating_sub(1));
+        }
+    }
+
+    pub(crate) fn anchor_position(&self) -> Option<Position> {
+        self.anchor.map(|anchor| {
+            Position::new(
+                self.sidebar_rect.x.saturating_add(anchor.x),
+                self.sidebar_rect.y.saturating_add(anchor.y),
+            )
+        })
     }
 
     pub(crate) fn activate_element(
@@ -694,8 +738,12 @@ impl SidebarUi {
                 intents,
             ),
             ElementId::CreateSpace => self.open_create_space(),
-            ElementId::NewTab => intents.push(UiIntent::Domain(Intent::NewTab)),
-            ElementId::Settings => self.open_settings(),
+            ElementId::NewTab => {
+                self.hide_settings();
+                intents.push(UiIntent::Domain(Intent::NewTab));
+            }
+            ElementId::Settings | ElementId::SettingsTab => self.open_settings(),
+            ElementId::CloseSettingsTab => self.close_settings(),
             ElementId::Rail => intents.push(UiIntent::Domain(Intent::SetRail(
                 if model.settings.rail == RailMode::Expanded {
                     RailMode::Collapsed
@@ -709,9 +757,7 @@ impl SidebarUi {
                 self.start_effect(model);
             }
             ElementId::Tab(id) => {
-                if self.settings_page {
-                    self.close_settings();
-                }
+                self.hide_settings();
                 intents.push(UiIntent::Domain(Intent::ActivateTab(id)));
                 self.start_effect(model);
             }
@@ -739,22 +785,16 @@ impl SidebarUi {
         }
     }
 
+    /// Only a tab with a running process prompts; the host owns that fact.
     pub(crate) fn close_tab(&mut self, model: &Model, id: TabId, intents: &mut Vec<UiIntent>) {
         if !model.tabs.contains_key(&id) {
             return;
         }
-        let action = Action::Domain(Intent::CloseTab(id));
         if model.settings.confirm_close {
-            self.run_action(
-                model,
-                Action::Confirm {
-                    label: "Close this tab?".into(),
-                    action: Box::new(action),
-                },
-                intents,
-            );
+            intents.push(UiIntent::Native(NativeUiAction::CloseTab(id)));
+            self.dismiss();
         } else {
-            self.run_action(model, action, intents);
+            self.run_action(model, Action::Domain(Intent::CloseTab(id)), intents);
         }
     }
     fn menu(&mut self, title: impl Into<String>, items: Vec<MenuItem>) {
@@ -851,7 +891,6 @@ impl SidebarUi {
                 let Some(tab) = model.tabs.get(&id) else {
                     return;
                 };
-                let close = Action::Domain(Intent::CloseTab(id));
                 let others = Action::Domain(Intent::CloseOthers(id));
                 let mut items = vec![
                     MenuItem::new(
@@ -887,18 +926,7 @@ impl SidebarUi {
                             action: Box::new(others),
                         },
                     ),
-                    MenuItem::new(
-                        "close",
-                        "Close",
-                        if model.settings.confirm_close {
-                            Action::Confirm {
-                                label: "Close this tab?".into(),
-                                action: Box::new(close),
-                            }
-                        } else {
-                            close
-                        },
-                    ),
+                    MenuItem::new("close", "Close", Action::CloseTab(id)),
                 ];
                 items[4].enabled = tab.manual_assignment;
                 items.insert(
@@ -1042,6 +1070,10 @@ impl SidebarUi {
                 }
                 self.menu(key, items);
             }
+            ElementId::SettingsTab | ElementId::CloseSettingsTab => self.menu(
+                "Settings",
+                vec![MenuItem::new("close", "Close", Action::CloseSettings)],
+            ),
             _ if self.overlay.is_none() => self.root_menu(model),
             _ => {}
         }
@@ -1199,7 +1231,9 @@ impl SidebarUi {
                     );
                 }
             }
+            Action::CloseTab(id) => self.close_tab(model, id, intents),
             Action::Settings => self.open_settings(),
+            Action::CloseSettings => self.close_settings(),
             Action::EditSetting(key) => self.edit_setting(model, &key, intents),
             Action::ResetSetting(key) => {
                 if !model.config_owned.contains(&key) {
@@ -1223,14 +1257,14 @@ impl SidebarUi {
             Action::Confirm { label, action } => self.push_menu(
                 label,
                 vec![
-                    MenuItem::new("cancel", "Cancel", Action::Close),
                     MenuItem::new("confirm", "Confirm", *action),
+                    MenuItem::new("cancel", "Cancel", Action::Close),
                 ],
             ),
             Action::Close => self.back(),
         }
     }
-    fn push_menu(&mut self, title: impl Into<String>, items: Vec<MenuItem>) {
+    pub(crate) fn push_menu(&mut self, title: impl Into<String>, items: Vec<MenuItem>) {
         if let Some(overlay) = self.overlay.take() {
             self.overlay_stack.push(overlay);
         }

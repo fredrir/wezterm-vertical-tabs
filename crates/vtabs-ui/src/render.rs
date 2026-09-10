@@ -122,6 +122,7 @@ impl SidebarUi {
         self.rounded_surfaces.clear();
         self.cursor = None;
         self.editor_rect = Rect::default();
+        self.search_rect = Rect::default();
         Block::default()
             .style(self.theme.base())
             .render(area, &mut self.staging);
@@ -383,7 +384,6 @@ impl SidebarUi {
                 ..
             })
         );
-        let width = area.width.min(64);
         let desired_height = match overlay {
             Overlay::Menu(menu) => menu
                 .search
@@ -394,13 +394,17 @@ impl SidebarUi {
                 .min(usize::from(u16::MAX)) as u16,
             Overlay::Form(_) => 7,
         };
-        let height = area.height.min(desired_height);
-        let rect = Rect::new(
-            area.x + (area.width - width) / 2,
-            area.y + (area.height - height) / 2,
-            width,
-            height,
-        );
+        let rect = match overlay {
+            Overlay::Form(_) => centered(area, 64, desired_height),
+            Overlay::Menu(_) if searching => match self.search_field(area) {
+                Some(field) => dropdown(area, field, desired_height),
+                None => centered(area, 64, desired_height),
+            },
+            Overlay::Menu(menu) => match self.anchor_position() {
+                Some(anchor) => anchored(area, anchor, menu_width(menu), desired_height),
+                None => centered(area, menu_width(menu), desired_height),
+            },
+        };
         self.overlay_rect = rect;
         Clear.render(rect, &mut self.staging);
         self.rounded(rect, self.theme.background, self.theme.border);
@@ -701,9 +705,9 @@ impl SidebarUi {
         }
         let height = (lines + 2).min(usize::from(area.height)) as u16;
         let width = width as u16 + 2;
-        let rect = Rect::new(
-            area.x + (area.width - width) / 2,
-            area.y + (area.height - height) / 2,
+        let rect = anchored(
+            area,
+            Position::new(hit.rect.x, hit.rect.bottom().saturating_sub(1)),
             width,
             height,
         );
@@ -727,6 +731,61 @@ impl SidebarUi {
             .wrap(Wrap { trim: true })
             .render(content, &mut self.staging);
     }
+}
+
+impl SidebarUi {
+    /// The sidebar search bar composed in this frame, when it has room for a dropdown.
+    fn search_field(&self, area: Rect) -> Option<Rect> {
+        (!self.search_rect.is_empty() && area.contains(self.search_rect.as_position()))
+            .then_some(self.search_rect)
+    }
+}
+
+fn centered(area: Rect, width: u16, height: u16) -> Rect {
+    let width = width.min(area.width);
+    let height = height.min(area.height);
+    Rect::new(
+        area.x + (area.width - width) / 2,
+        area.y + (area.height - height) / 2,
+        width,
+        height,
+    )
+}
+
+/// Opens below the anchor row, flips above it when the bottom edge is closer, and stays in the area.
+fn anchored(area: Rect, anchor: Position, width: u16, height: u16) -> Rect {
+    let width = width.min(area.width);
+    let height = height.min(area.height);
+    let x = anchor.x.clamp(area.x, area.right() - width);
+    let anchor_y = anchor.y.clamp(area.y, area.bottom() - 1);
+    let below = anchor_y + 1;
+    let y = if below + height <= area.bottom() {
+        below
+    } else if anchor_y >= area.y + height {
+        anchor_y - height
+    } else {
+        area.bottom() - height
+    };
+    Rect::new(x, y, width, height)
+}
+
+/// Results drop down from the search bar, which the field row covers exactly.
+fn dropdown(area: Rect, field: Rect, height: u16) -> Rect {
+    let width = field.width.max(34).min(area.width);
+    let x = field.x.clamp(area.x, area.right() - width);
+    let y = field.y.clamp(area.y, area.bottom() - 1);
+    Rect::new(x, y, width, height.min(area.bottom() - y))
+}
+
+fn menu_width(menu: &Menu) -> u16 {
+    let rows = menu
+        .items
+        .iter()
+        .map(|item| display_text(&item.label).width() + item.hint.width() + 5);
+    rows.chain(std::iter::once(display_text(&menu.title).width() + 2))
+        .max()
+        .unwrap_or(0)
+        .clamp(20, 56) as u16
 }
 
 fn action_exists(model: &Model, action: &Action) -> bool {

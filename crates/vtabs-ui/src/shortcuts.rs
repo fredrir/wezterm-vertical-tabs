@@ -42,7 +42,6 @@ impl SidebarUi {
             }
             Key::Character('k' | 'K') => self.open_tab_navigator(model),
             Key::Character('b' | 'B') => {
-                self.close_settings();
                 intents.push(UiIntent::Domain(Intent::SetRail(
                     if model.settings.rail == RailMode::Expanded {
                         RailMode::Collapsed
@@ -52,7 +51,7 @@ impl SidebarUi {
                 )));
             }
             Key::Character('t' | 'T') => {
-                self.close_settings();
+                self.hide_settings();
                 intents.push(UiIntent::Domain(if mods.shift && mods.super_key {
                     Intent::Reopen
                 } else {
@@ -69,7 +68,7 @@ impl SidebarUi {
             Key::Character('g' | 'G') => self.open_create_folder(),
             Key::Character('r' | 'R') => intents.push(UiIntent::Refresh),
             Key::Character(c @ '1'..='9') => {
-                self.close_settings();
+                self.hide_settings();
                 intents.push(UiIntent::Domain(Intent::ActivateIndex(if *c == '9' {
                     -1
                 } else {
@@ -77,7 +76,7 @@ impl SidebarUi {
                 })));
             }
             Key::Tab => {
-                self.close_settings();
+                self.hide_settings();
                 intents.push(UiIntent::Domain(Intent::ActivateRelative {
                     delta: if mods.shift { -1 } else { 1 },
                     wrap: true,

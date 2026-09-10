@@ -104,7 +104,7 @@ return {
       ["label"] = "Close controls",
     },
     {
-      ["description"] = "Confirm destructive UI close actions",
+      ["description"] = "Confirm closing a tab with a running process",
       ["group"] = "behavior",
       ["key"] = "confirm_close",
       ["kind"] = "bool",

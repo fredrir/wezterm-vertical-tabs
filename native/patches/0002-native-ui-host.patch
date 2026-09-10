@@ -346,7 +346,7 @@ new file mode 100644
 index 00000000..9dfe7d55
 --- /dev/null
 +++ b/wezterm-gui/src/termwindow/native_ui.rs
-@@ -0,0 +1,1376 @@
+@@ -0,0 +1,1407 @@
 +//! Window-owned native surfaces. Product state lives in the registered provider.
 +use crate::quad::{HeapQuadAllocator, TripleLayerQuadAllocator};
 +use crate::tabbar::TabBarItem;
@@ -459,6 +459,9 @@ index 00000000..9dfe7d55
 +    fn reservation(&self) -> Reservation;
 +    fn metadata_interval(&self) -> Option<Duration> {
 +        None
++    }
++    fn text_input_active(&self) -> bool {
++        false
 +    }
 +    fn bind(&mut self, window: Window);
 +    fn snapshot(&mut self, snapshot: Snapshot);
@@ -1407,6 +1410,34 @@ index 00000000..9dfe7d55
 +            }
 +        }
 +        consumed
++    }
++    /// macOS menu key equivalents run clipboard assignments without any key event.
++    pub fn native_clipboard_assignment(&mut self, assignment: &config::keyassignment::KeyAssignment) -> bool {
++        use config::keyassignment::KeyAssignment::{CopyTo, PasteFrom};
++        let key = match assignment {
++            CopyTo(_) => 'c',
++            PasteFrom(_) => 'v',
++            _ => return false,
++        };
++        if !self.native_ui.as_ref().map_or(false, |ui| ui.provider.text_input_active()) {
++            return false;
++        }
++        let modifiers = if cfg!(target_os = "macos") {
++            window::Modifiers::SUPER
++        } else {
++            window::Modifiers::CTRL
++        };
++        let event = KeyEvent {
++            key: window::KeyCode::Char(key),
++            modifiers,
++            leds: Default::default(),
++            repeat_count: 1,
++            key_is_down: true,
++            raw: None,
++            #[cfg(windows)]
++            win32_uni_char: None,
++        };
++        self.native_input(Input::Key(&event))
 +    }
 +    fn native_commands(&mut self, commands: Vec<Command>) {
 +        for command in commands {

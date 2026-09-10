@@ -16,6 +16,7 @@ just build
 just dev
 just package
 just install
+just deploy
 just launch
 just update
 just doctor
@@ -37,6 +38,8 @@ Recipes invoke `cargo xtask`. Installed launch entries invoke the bundled Rust b
 | `just package`                              | Verified bundle, ZIP/tar.gz archive and release manifest in `dist/`                  |
 | `just package --bundle PATH`                | Verify and archive an existing bundle                                                |
 | `just install --bundle PATH`                | Verify and install an immutable local bundle                                         |
+| `just deploy`                               | Build, install and replace `/Applications/WezTerm.app`; `--app PATH`, `--no-app`     |
+| `just deploy --bundle PATH --offline`       | Deploy an existing verified bundle without fetching upstream                         |
 | `just launch -- start --always-new-process` | Promote completed pending version and forward GUI arguments                          |
 | `just update --check`                       | Resolve update availability without compiling or installing                          |
 | `just update --manifest PATH_OR_HTTPS_URL`  | Download/copy a verified prebuilt release                                            |
@@ -96,6 +99,7 @@ cargo run --quiet --locked -p vtabs-core --bin gen-schema -- json
 | `install/previous.json`      | Previous active version for rollback                                                                       |
 | `install/wez-vtabs-launcher` | Stable dispatcher; versioned Rust tools own launch/update behavior                                         |
 | macOS launch entry           | `install/WezTerm Native.app`                                                                               |
+| macOS application            | `just deploy` copies the active `WezTerm.app`; a replaced foreign app moves to `install/replaced`          |
 | Linux launch entry           | `install/wez-vtabs` and `install/wez-vtabs.desktop`                                                        |
 | Windows launch entry         | `install/wez-vtabs.cmd`                                                                                    |
 
@@ -141,8 +145,8 @@ just repro /path/to/run/run.json --execute --project-root /path/to/checkout
 ```sh
 uv sync --locked
 uv run --locked pytest -n 2
-uv run --locked ruff check scripts tests
-uv run --locked ruff format --check scripts tests
+uv run --locked ruff check 
+uv run --locked ruff format --check 
 uv run --locked pytest -n 2 --run-luals
 uv run --locked pytest -n 2 tests/integration --run-native --run-container \
   --native-bin-dir=/path/to/native/bin

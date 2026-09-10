@@ -610,8 +610,7 @@ pub fn build(ctx: &Context) -> Result<BuildMetadata> {
             "Cargo did not produce required binary: {name}"
         );
     }
-    // Bind immutable bundles and cached validation to the actual outputs. Cargo
-    // build scripts may consume system inputs beyond our configuration list.
+    // Bind immutable bundles and cached validation to the actual outputs.
     let artifact_hashes = artifacts
         .iter()
         .map(|(name, path)| crate::bundle::hash_file(path).map(|digest| (name.clone(), digest)))

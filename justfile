@@ -26,14 +26,18 @@ bench *args:
     cargo run --release --locked -p vtabs-bench -- {{args}}
 
 lint:
-    uv run --locked ruff check scripts tests
-    uv run --locked ruff format --check scripts tests
+    uv run --locked ruff check
+    uv run --locked ruff format --check
 
 package *args:
     @{{tool}} package {{args}}
 
 install *args:
     @{{tool}} install {{args}}
+
+# Build, install and replace /Applications/WezTerm.app with the active version.
+deploy *args:
+    @{{tool}} deploy {{args}}
 
 update *args:
     @{{tool}} update {{args}}

@@ -51,6 +51,8 @@ pub enum Command {
     Host(HostCommand),
     SetClipboard(String),
     RequestClipboard,
+    /// Close directly when the tab is idle; otherwise call `SidebarUi::confirm_close_tab`.
+    ConfirmClose(TabId),
 }
 #[derive(Clone, Debug, Default)]
 pub struct Update {
@@ -429,6 +431,11 @@ impl WindowApp {
                     update
                         .commands
                         .push(Command::Host(HostCommand::MoveTabToNewWindow(id)));
+                }
+                UiIntent::Native(NativeUiAction::CloseTab(id)) => {
+                    if self.model.tabs.contains_key(&id) {
+                        update.commands.push(Command::ConfirmClose(id));
+                    }
                 }
             }
         }

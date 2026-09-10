@@ -24,7 +24,7 @@
 | Mouse               | Tab activation, folder expand/collapse, tab reorder and folder assignment                                                           |
 | Keyboard            | Settings, search, tab creation, folders, sidebar toggle, Escape, field editing and terminal Control keys                            |
 | Clipboard           | Real OS copy/paste in tab search, settings search and color editor; scoped context menus preserve drafts                            |
-| Transient surfaces  | Centered launchers/tooltips, stable sidebar geometry, retained terminal pixels outside popovers                                     |
+| Transient surfaces  | Anchored launcher, menus and tooltips, centered editors, stable sidebar geometry, retained terminal pixels outside popovers         |
 | Rendering           | Rounded frame on all four content edges, compact search, centered icon hover, atlas invalidation and row-cache reuse                |
 | Scheduling          | Idle composition and semantic hook counts stabilize; animations have finite deadlines                                               |
 

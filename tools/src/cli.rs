@@ -79,6 +79,17 @@ pub enum Commands {
         #[arg(long)]
         stage_only: bool,
     },
+    /// Build, install and replace the desktop application with the active version.
+    Deploy {
+        #[arg(long)]
+        bundle: Option<PathBuf>,
+        /// Application to replace; macOS defaults to /Applications/WezTerm.app.
+        #[arg(long, conflicts_with = "no_app")]
+        app: Option<PathBuf>,
+        /// Install only; keep the desktop application as it is.
+        #[arg(long)]
+        no_app: bool,
+    },
     /// Resolve updates or install a completed source/prebuilt update.
     Update {
         #[arg(long)]

@@ -32,6 +32,8 @@ pub enum ElementId {
     CreateSpace,
     NewTab,
     Settings,
+    SettingsTab,
+    CloseSettingsTab,
     Rail,
     Space(SpaceId),
     Tab(TabId),
@@ -55,6 +57,8 @@ pub enum NativeUiAction {
     /// Custom menu actions remain semantic; the adapter resolves a registered Lua action.
     Custom(String),
     MoveTabToNewWindow(TabId),
+    /// The host closes an idle tab directly and asks `confirm_close_tab` for a busy one.
+    CloseTab(TabId),
 }
 
 #[derive(Clone, Debug)]
@@ -98,7 +102,9 @@ enum Action {
     DeleteSpace(SpaceId),
     RenameTab(TabId),
     MoveTab(TabId),
+    CloseTab(TabId),
     Settings,
+    CloseSettings,
     EditSetting(String),
     ResetSetting(String),
     EditorCommand { key: Key, target: ElementId },
@@ -192,6 +198,8 @@ pub struct SidebarUi {
     sidebar_columns: Option<u16>,
     header_inset: u16,
     settings_page: bool,
+    settings_tab: bool,
+    reveal_settings: bool,
     settings_category: String,
     settings_query: TextEditor,
     settings_selected: usize,
@@ -201,7 +209,10 @@ pub struct SidebarUi {
     sidebar_rect: Rect,
     search_rect: Rect,
     sidebar_rows: Vec<SidebarRow>,
-    sidebar_revision: Option<u64>,
+    sidebar_revision: Option<(u64, bool)>,
+    /// Sidebar-relative origin for the next context menu; sidebar placement changes
+    /// between the sidebar-only grid and the window viewport.
+    anchor: Option<Position>,
     pointer_origin: Option<(u16, u16)>,
     dragging: bool,
     hits: Vec<HitRegion>,
@@ -252,6 +263,7 @@ enum SidebarRow {
     Tab { id: TabId, number: usize },
     Folder { index: usize, count: usize },
     NewTab,
+    Settings,
 }
 
 pub type Ui = SidebarUi;
@@ -275,6 +287,8 @@ impl SidebarUi {
             sidebar_columns: None,
             header_inset: 0,
             settings_page: false,
+            settings_tab: false,
+            reveal_settings: false,
             settings_category: "all".into(),
             settings_query: TextEditor::default(),
             settings_selected: 0,
@@ -285,6 +299,7 @@ impl SidebarUi {
             search_rect: Rect::default(),
             sidebar_rows: Vec::new(),
             sidebar_revision: None,
+            anchor: None,
             pointer_origin: None,
             dragging: false,
             hits: Vec::new(),
@@ -343,9 +358,25 @@ impl SidebarUi {
     }
     /// Call when native content receives focus; this does not mark the OS window unfocused.
     pub fn release_focus(&mut self) {
-        self.close_settings();
+        self.hide_settings();
         self.focused = None;
         self.drag = None;
+    }
+    /// The host found a running process; the prompt names it when known.
+    pub fn confirm_close_tab(&mut self, id: TabId, process: &str) {
+        let label = if process.is_empty() {
+            "Close this tab?".to_owned()
+        } else {
+            format!("{process} is still running. Close this tab?")
+        };
+        self.dismiss();
+        self.push_menu(
+            label,
+            vec![
+                MenuItem::new("confirm", "Close", Action::Domain(Intent::CloseTab(id))),
+                MenuItem::new("cancel", "Cancel", Action::Close),
+            ],
+        );
     }
     pub fn open_tab_navigator(&mut self, model: &Model) {
         let mut items: Vec<_> = model
@@ -495,6 +526,7 @@ impl SidebarUi {
         self.overlay = None;
         self.pending_form = None;
         self.overlay_stack.clear();
+        self.anchor = None;
         self.focused = self.restore_focus.take();
         self.caret_deadline = None;
         self.show_tooltip = false;
@@ -502,14 +534,25 @@ impl SidebarUi {
         self.cancel_effects();
         self.dirty = true;
     }
+    /// Settings behave like a tab: the row stays listed while another tab is active.
     pub fn open_settings(&mut self) {
         self.dismiss();
         self.settings_page = true;
+        self.reveal_settings = !self.settings_tab;
+        self.settings_tab = true;
         self.settings_search_focused = false;
         self.dirty = true;
     }
+    pub fn hide_settings(&mut self) {
+        if self.settings_page {
+            self.settings_page = false;
+            self.settings_search_focused = false;
+            self.dirty = true;
+        }
+    }
     pub fn close_settings(&mut self) {
         self.settings_page = false;
+        self.settings_tab = false;
         self.settings_search_focused = false;
         self.dismiss();
         self.focused = None;
@@ -521,7 +564,7 @@ impl SidebarUi {
         self.settings_page
     }
     /// Transient UI uses the window viewport while the terminal remains visible. Reserve
-    /// that viewport while a tooltip is pending so its first visible frame is centered.
+    /// that viewport while a tooltip is pending so it can extend past the sidebar edge.
     pub fn overlay_surface(&self) -> bool {
         self.overlay.is_some() || self.show_tooltip || self.tooltip_deadline.is_some()
     }

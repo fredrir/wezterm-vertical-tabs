@@ -57,8 +57,8 @@ return config
 | --------------------- | ----------------------------------------------------------------------------------------------------------------------- |
 | Keyboard preference   | Disable `keyboard_shortcuts` to use custom Lua bindings                                                                 |
 | Terminal Control keys | Ordinary Control shortcuts remain available to the shell                                                                |
-| Settings              | Content page beside the sidebar; closing it returns to the running terminal                                             |
-| Search                | Filters tabs in the selected space; Up/Down select results, Left/Right edit the query, Enter activates                  |
+| Settings              | Own tab with a gear icon; stays listed while other tabs are active until closed with ×, `Cmd+W` or Escape               |
+| Search                | Results drop down from the search bar; Up/Down select results, Left/Right edit the query, Enter activates               |
 | Folders               | Create with the plus below search; rename, collapse, reorder, add a tab or ungroup from the context menu                |
 | Tab grouping          | Drag onto a folder, or use the tab context menu                                                                         |
 | Reordering            | Drag tabs, folders and spaces; context menus provide Move up / Move down                                                |
@@ -67,6 +67,8 @@ return config
 | Space assignment      | Drop a tab on a bottom space control or use Move to space                                                               |
 | Folder persistence    | Catalog, names and collapse state persist; live membership follows the session boundary in [Boundaries](limitations.md) |
 | Motion                | Finite hover/selection transitions; `reduced_motion` disables animation                                                 |
+| Closing tabs          | Idle tabs close at once; a running process prompts with Close preselected (`confirm_close`, upstream skip list, remote) |
+| Menus and prompts     | Context menus open under the pointer or focused control; confirmations preselect the confirming action                  |
 
 **Spaces and routing**
 
@@ -188,6 +190,6 @@ Use [development.md](development.md) for installation, build/update commands and
 | ---------- | ------------------------------------------------------------------------------------------- |
 | Palette    | Dark blue background `#192231`, accent `#a9c7f5`; saved and explicit colors retain priority |
 | Frame      | Sidebar background surrounds rounded terminal content on every edge                         |
-| Search     | Compact sidebar trigger; launcher and tooltips centered across the window                   |
+| Search     | Compact sidebar trigger; launcher drops down from it, tooltips open below their control     |
 | Icons      | Active foreground color; subtle centered hover surface                                      |
-| Clipboard  | Cmd/Ctrl+A, C, X and V in editors; Ctrl+Shift variants supported                            |
+| Clipboard  | Cmd/Ctrl+A, C, X and V in editors, including macOS Edit menu equivalents; Ctrl+Shift too    |

@@ -312,3 +312,57 @@ fn native_close_restores_visible_successor_as_explicit_id_command() {
     assert_eq!(app.model().selected_space, "home");
     assert_eq!(app.projection().active, None);
 }
+
+#[test]
+fn close_requests_ask_the_host_only_while_confirmation_is_enabled() {
+    let mut app = app();
+    app.render(Duration::ZERO);
+    let close = |app: &WindowApp| {
+        app.ui()
+            .hit_regions()
+            .iter()
+            .find(|hit| hit.id == ui::ElementId::CloseTab(1))
+            .unwrap()
+            .rect
+    };
+    let rect = close(&app);
+    let press = ui::UiInput::PointerDown {
+        x: rect.x,
+        y: rect.y,
+        button: ui::MouseButton::Left,
+        modifiers: ui::Modifiers::default(),
+    };
+    let release = ui::UiInput::PointerUp {
+        x: rect.x,
+        y: rect.y,
+        button: ui::MouseButton::Left,
+    };
+    app.input(press.clone()).unwrap();
+    assert_eq!(
+        app.input(release.clone()).unwrap().commands,
+        vec![Command::ConfirmClose(1)]
+    );
+    assert!(app.model().tabs.contains_key(&1));
+
+    app.apply_config(BTreeMap::from([("confirm_close".into(), json!(false))]), 0)
+        .unwrap();
+    app.render(Duration::from_millis(1));
+    let rect = close(&app);
+    app.input(ui::UiInput::PointerDown {
+        x: rect.x,
+        y: rect.y,
+        button: ui::MouseButton::Left,
+        modifiers: ui::Modifiers::default(),
+    })
+    .unwrap();
+    assert_eq!(
+        app.input(ui::UiInput::PointerUp {
+            x: rect.x,
+            y: rect.y,
+            button: ui::MouseButton::Left,
+        })
+        .unwrap()
+        .commands,
+        vec![Command::Host(HostCommand::Close(1))]
+    );
+}

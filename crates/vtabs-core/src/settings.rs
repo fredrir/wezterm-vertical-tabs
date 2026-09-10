@@ -197,7 +197,7 @@ pub const DESCRIPTORS: &[SettingDescriptor] = &[
         label: "Confirm close",
         group: "behavior",
         kind: SettingKind::Bool,
-        description: "Confirm destructive UI close actions",
+        description: "Confirm closing a tab with a running process",
     },
     SettingDescriptor {
         key: "accent",

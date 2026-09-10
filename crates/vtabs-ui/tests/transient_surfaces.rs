@@ -44,8 +44,16 @@ fn dialog_rect(ui: &SidebarUi) -> Rect {
         .rect
 }
 
+fn hit(ui: &SidebarUi, id: &ElementId) -> Rect {
+    ui.hit_regions()
+        .iter()
+        .find(|hit| &hit.id == id)
+        .unwrap_or_else(|| panic!("missing {id:?}"))
+        .rect
+}
+
 #[test]
-fn launcher_centers_in_window_without_expanding_either_sidebar() {
+fn launcher_drops_down_from_the_search_bar_without_expanding_either_sidebar() {
     let area = Rect::new(3, 5, 100, 32);
     for side in [Side::Left, Side::Right] {
         for (rail, columns) in [
@@ -59,21 +67,91 @@ fn launcher_centers_in_window_without_expanding_either_sidebar() {
             let tabs = model.visible_ids().to_vec();
             let mut ui = SidebarUi::new();
             ui.set_layout(columns, 0);
+            ui.render(&model, area, Duration::ZERO);
+            let search = (rail != RailMode::Hidden).then(|| hit(&ui, &ElementId::Search));
             ui.open_tab_navigator(&model);
             assert!(ui.overlay_surface());
             assert!(!ui.content_page());
             assert!(!ui.needs_expanded_space());
-            ui.render(&model, area, Duration::ZERO);
-            assert_centered(dialog_rect(&ui), area);
+            ui.render(&model, area, Duration::from_millis(1));
             assert_eq!(model.settings.rail, rail);
             assert_eq!(model.visible_ids(), tabs);
-            let editor = ui
-                .hit_regions()
-                .iter()
-                .find(|hit| hit.id == ElementId::Editor)
-                .unwrap();
-            assert!(editor.rect.x > area.x + columns.min(4));
+            let field = hit(&ui, &ElementId::Editor);
+            assert_eq!(field.intersection(area), field);
+            match search {
+                Some(search) => {
+                    assert_eq!(field.y, search.y);
+                    assert!(field.width >= search.width.max(34));
+                    assert_eq!(field.x, search.x.min(area.right() - field.width));
+                }
+                None => assert_centered(dialog_rect(&ui), area),
+            }
         }
+    }
+}
+
+#[test]
+fn context_menu_opens_below_the_pointer_and_stays_inside_the_window() {
+    let window = Rect::new(0, 0, 100, 32);
+    for side in [Side::Left, Side::Right] {
+        let mut model = model();
+        model.settings.side = side;
+        let mut ui = SidebarUi::new();
+        ui.set_layout(28, 0);
+        // Right-clicks arrive on the sidebar-only grid; the menu composes on the viewport.
+        let rail = Rect::new(0, 0, 28, 32);
+        ui.render(&model, rail, Duration::ZERO);
+        let tab = hit(&ui, &ElementId::Tab(7));
+        let click = (tab.x + 2, tab.y);
+        ui.event(
+            &model,
+            UiInput::PointerDown {
+                x: click.0,
+                y: click.1,
+                button: MouseButton::Right,
+                modifiers: Modifiers::default(),
+            },
+        );
+        ui.render(&model, window, Duration::from_millis(1));
+        let sidebar_x = if side == Side::Right {
+            window.right() - 28
+        } else {
+            0
+        };
+        let first = hit(&ui, &ElementId::Menu("activate".into()));
+        assert_eq!(first.y, click.1 + 2);
+        // The frame starts at the pointer column unless the menu would leave the window.
+        let frame_x = (sidebar_x + click.0).min(window.right() - (first.width + 2));
+        assert_eq!(first.x, frame_x + 1);
+        assert!(first.width < 60);
+        assert!(
+            ui.hit_regions()
+                .iter()
+                .all(|hit| hit.rect.intersection(window) == hit.rect)
+        );
+        ui.dismiss();
+
+        ui.render(&model, rail, Duration::from_millis(2));
+        let space = hit(&ui, &ElementId::Space(model.selected_space.clone()));
+        ui.event(
+            &model,
+            UiInput::PointerDown {
+                x: space.x,
+                y: space.bottom() - 1,
+                button: MouseButton::Right,
+                modifiers: Modifiers::default(),
+            },
+        );
+        ui.render(&model, window, Duration::from_millis(3));
+        let menu: Vec<_> = ui
+            .hit_regions()
+            .iter()
+            .filter(|hit| matches!(hit.id, ElementId::Menu(_)))
+            .map(|hit| hit.rect)
+            .collect();
+        assert!(!menu.is_empty());
+        assert!(menu.iter().all(|rect| rect.bottom() < space.bottom()));
+        assert!(menu.iter().all(|rect| rect.intersection(window) == *rect));
     }
 }
 
@@ -155,25 +233,28 @@ fn edit_dialog_centers_across_window_and_returns_to_settings_page() {
 }
 
 #[test]
-fn tooltip_centers_in_window_without_stealing_keyboard_or_pointer_targets() {
+fn tooltip_opens_below_the_hovered_control_without_stealing_keyboard_or_pointer_targets() {
     let model = model();
     let mut ui = SidebarUi::new();
     ui.set_layout(28, 0);
     ui.render(&model, Rect::new(0, 0, 28, 32), Duration::ZERO);
-    let hit = ui
-        .hit_regions()
-        .iter()
-        .find(|hit| hit.id == ElementId::Settings)
-        .unwrap()
-        .rect;
-    ui.event(&model, UiInput::PointerMove { x: hit.x, y: hit.y });
+    let settings = hit(&ui, &ElementId::Settings);
+    ui.event(
+        &model,
+        UiInput::PointerMove {
+            x: settings.x,
+            y: settings.y,
+        },
+    );
     assert!(ui.overlay_surface());
     assert!(!ui.is_modal());
     assert!(!ui.has_focus());
     let area = Rect::new(0, 0, 100, 32);
     let frame = ui.render(&model, area, Duration::from_millis(601)).unwrap();
     let tooltip = ui.rounded_surfaces().last().unwrap().rect;
-    assert_centered(tooltip, area);
+    assert_eq!(tooltip.y, settings.bottom());
+    assert_eq!(tooltip.x, settings.x);
+    assert_eq!(tooltip.intersection(area), tooltip);
     assert!(frame.cursor.is_none());
     assert!(frame.ime_rect.is_none());
     assert!(

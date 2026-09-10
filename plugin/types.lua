@@ -12,7 +12,7 @@
 ---@field show_indices? boolean Visible native tab indices
 ---@field show_metadata? boolean Show current directory and domain
 ---@field show_close? boolean Show close controls
----@field confirm_close? boolean Confirm destructive UI close actions
+---@field confirm_close? boolean Confirm closing a tab with a running process
 ---@field accent? string Default accent color
 ---@field background? string Surface background
 ---@field foreground? string Text foreground

@@ -130,6 +130,10 @@ impl Adapter {
                 self.app.ui_mut().invalidate();
             }
             app::Command::SetClipboard(text) => self.commands.push(Command::Clipboard(text)),
+            app::Command::ConfirmClose(id) => match running_process(id) {
+                Some(process) => self.app.ui_mut().confirm_close_tab(id, &process),
+                None => self.dispatch(core::Intent::CloseTab(id)),
+            },
             app::Command::RequestClipboard => {
                 self.pending_paste = Some(PendingPaste {
                     token: self.input_epoch,
@@ -1182,6 +1186,28 @@ impl Provider for Adapter {
     fn keyboard_focus(&self) -> bool {
         self.app.is_modal() || (self.reservation().width > 0. && self.app.ui().focused().is_some())
     }
+    fn text_input_active(&self) -> bool {
+        self.app.ui().text_input_active()
+    }
+}
+
+/// Upstream close policy: `skip_close_confirmation_for_processes_named`, the
+/// `mux-is-process-stateful` hook and remote panes. Empty when the tab is idle or gone.
+fn running_process(id: core::TabId) -> Option<String> {
+    let tab = mux::Mux::try_get()?.get_tab(id as usize)?;
+    if tab.can_close_without_prompting(mux::pane::CloseReason::Tab) {
+        return None;
+    }
+    let name = tab
+        .get_active_pane()
+        .and_then(|pane| pane.get_foreground_process_name(mux::pane::CachePolicy::AllowStale))
+        .unwrap_or_default();
+    Some(
+        std::path::Path::new(&name)
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_default(),
+    )
 }
 
 fn spawn(launch: core::LaunchSpec) -> config::keyassignment::SpawnCommand {
@@ -1302,6 +1328,77 @@ mod native_modal_tests {
     use super::*;
 
     #[test]
+    fn confirm_close_closes_a_tab_the_mux_does_not_report_busy_without_prompting() {
+        // The process-wide mux is shared with other tests; an absent or unknown tab is idle.
+        config::designate_this_as_the_main_thread();
+        let mut adapter = Adapter::new(9860);
+        adapter
+            .app
+            .update(app::NativeSnapshot {
+                revision: 1,
+                tabs: vec![core::Tab {
+                    id: 1,
+                    title: "Shell".into(),
+                    ..Default::default()
+                }],
+                active_tab: Some(1),
+                metrics: app::Metrics::default(),
+                focused: true,
+                configuration_epoch: 0,
+            })
+            .unwrap();
+        adapter.render(
+            Geometry {
+                sidebar: Bounds {
+                    x: 0.,
+                    y: 0.,
+                    width: 256.,
+                    height: 480.,
+                },
+                content: Bounds {
+                    x: 256.,
+                    y: 0.,
+                    width: 800.,
+                    height: 480.,
+                },
+                cell_width: 8.,
+                cell_height: 20.,
+                dpi: 96.,
+                ..Geometry::default()
+            },
+            Instant::now(),
+        );
+        let close = adapter
+            .app
+            .ui()
+            .hit_regions()
+            .iter()
+            .find(|hit| hit.id == ui::ElementId::CloseTab(1))
+            .expect("selected tab shows its close control")
+            .rect;
+        for input in [
+            ui::UiInput::PointerDown {
+                x: close.x,
+                y: close.y,
+                button: ui::MouseButton::Left,
+                modifiers: ui::Modifiers::default(),
+            },
+            ui::UiInput::PointerUp {
+                x: close.x,
+                y: close.y,
+                button: ui::MouseButton::Left,
+            },
+        ] {
+            adapter.ui_input(input);
+        }
+        assert!(!adapter.app.ui().has_overlay());
+        assert!(matches!(
+            adapter.commands().as_slice(),
+            [Command::Close(1, false)]
+        ));
+    }
+
+    #[test]
     fn native_form_completion_publishes_settled_grid_and_pointer_origin() {
         config::designate_this_as_the_main_thread();
         for right in [false, true] {
@@ -1400,10 +1497,23 @@ mod native_modal_tests {
                 assert_eq!(inspected["grid"]["y"], 0.);
                 assert_eq!(inspected["grid"]["columns"], adapter.surface.columns);
                 if action != "settings" {
-                    let caret = adapter
-                        .caret()
-                        .expect("centered editor has an IME rectangle");
-                    assert!(caret.0 > (original / 8.) as usize);
+                    let caret = adapter.caret().expect("editor has an IME rectangle");
+                    let editor = adapter
+                        .app
+                        .ui()
+                        .hit_regions()
+                        .iter()
+                        .find(|hit| hit.id == ui::ElementId::Editor)
+                        .expect("editor hit region")
+                        .rect;
+                    assert!(editor.contains(ratatui::layout::Position::new(
+                        caret.0 as u16,
+                        caret.1 as u16
+                    )));
+                    // Dialogs center on the window; the launcher drops down from the rail.
+                    if action == "create_space" {
+                        assert!(caret.0 > (original / 8.) as usize);
+                    }
                 }
                 assert!(!adapter.surface.rows.is_empty());
                 assert_eq!(adapter.surface.offset, (0., 0.));

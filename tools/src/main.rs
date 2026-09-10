@@ -2,6 +2,7 @@ mod build;
 mod bundle;
 mod check;
 mod cli;
+mod deploy;
 mod diagnostics;
 mod install;
 mod process;
@@ -199,6 +200,23 @@ fn dispatch(ctx: &Context, cli: &Cli) -> Result<(Value, i32)> {
             };
             json!({"installed":install::install(ctx,&path,*stage_only)?,"staged":stage_only})
         }
+        Commands::Deploy {
+            bundle: existing,
+            app,
+            no_app,
+        } => {
+            let _lock = if existing.is_none() {
+                Some(Lock::acquire(&ctx.cache.join("build.lock"))?)
+            } else {
+                None
+            };
+            let app = if *no_app {
+                None
+            } else {
+                app.clone().or_else(deploy::default_app)
+            };
+            deploy::deploy(ctx, existing.as_deref(), app.as_deref())?
+        }
         Commands::Update {
             daily,
             stage_only,
@@ -275,6 +293,7 @@ fn execute() -> Result<i32> {
                 cli.command,
                 Commands::Build
                     | Commands::Package { .. }
+                    | Commands::Deploy { .. }
                     | Commands::Dev { .. }
                     | Commands::Prepare
             )

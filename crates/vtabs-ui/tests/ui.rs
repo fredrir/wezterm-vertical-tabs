@@ -611,8 +611,21 @@ fn nonempty_space_deletion_requires_explicit_destination_and_confirmation() {
     draw(&mut ui, &model, 2);
     assert!(click(&mut ui, &model, &ElementId::Menu("work".into())).is_empty());
     draw(&mut ui, &model, 3);
+    let confirm = ui
+        .hit_regions()
+        .iter()
+        .find(|hit| hit.id == ElementId::Menu("confirm".into()))
+        .unwrap()
+        .rect;
+    let cancel = ui
+        .hit_regions()
+        .iter()
+        .find(|hit| hit.id == ElementId::Menu("cancel".into()))
+        .unwrap()
+        .rect;
+    assert!(confirm.y < cancel.y);
     assert_eq!(
-        domain(click(&mut ui, &model, &ElementId::Menu("confirm".into()))),
+        domain(ui.event(&model, UiInput::key(Key::Enter))),
         vec![Intent::DeleteSpace {
             id: "home".into(),
             destination: Some("work".into())

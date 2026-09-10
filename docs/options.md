@@ -13,7 +13,7 @@
 | `show_indices`        | `false`                                                       | Boolean. Visible native tab indices                                                |
 | `show_metadata`       | `false`                                                       | Boolean. Show current directory and domain                                         |
 | `show_close`          | `true`                                                        | Boolean. Show close controls                                                       |
-| `confirm_close`       | `true`                                                        | Boolean. Confirm destructive UI close actions                                      |
+| `confirm_close`       | `true`                                                        | Boolean. Confirm closing a tab with a running process                              |
 | `accent`              | `"#a9c7f5"`                                                   | Hex color `#RRGGBB`. Default accent color                                          |
 | `background`          | `"#192231"`                                                   | Hex color `#RRGGBB`. Surface background                                            |
 | `foreground`          | `"#e1e7f0"`                                                   | Hex color `#RRGGBB`. Text foreground                                               |

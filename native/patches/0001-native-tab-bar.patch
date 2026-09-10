@@ -958,11 +958,12 @@ index d0f0ff97..6f00f347 100644
      }
  
      pub fn perform_key_assignment(
-@@ -2586,6 +2473,16 @@ impl TermWindow {
+@@ -2586,6 +2473,17 @@ impl TermWindow {
          assignment: &KeyAssignment,
      ) -> anyhow::Result<PerformAssignmentResult> {
          use KeyAssignment::*;
 +        self.native_sync();
++        if self.native_clipboard_assignment(assignment) { return Ok(PerformAssignmentResult::Handled); }
 +        if self.native_empty() && !matches!(assignment,
 +            ActivateTab(_) | ActivateTabRelative(_) | ActivateTabRelativeNoWrap(_) | ActivateLastTab
 +            | SpawnTab(_) | SpawnWindow | SpawnCommandInNewTab(_) | SpawnCommandInNewWindow(_)
@@ -975,7 +976,7 @@ index d0f0ff97..6f00f347 100644
  
          if let Some(modal) = self.get_modal() {
              if modal.perform_assignment(assignment, self) {
-@@ -3041,6 +2938,7 @@ impl TermWindow {
+@@ -3041,6 +2939,7 @@ impl TermWindow {
                              size,
                              Some(src_window_id),
                              term_config,
@@ -983,7 +984,7 @@ index d0f0ff97..6f00f347 100644
                          )
                          .await
                          {
-@@ -3210,6 +3108,7 @@ impl TermWindow {
+@@ -3210,6 +3109,7 @@ impl TermWindow {
          }
      }
      fn close_current_pane(&mut self, confirm: bool) {
@@ -991,7 +992,7 @@ index d0f0ff97..6f00f347 100644
          let mux_window_id = self.mux_window_id;
          let mux = Mux::get();
          let tab = match mux.get_active_tab_for_window(mux_window_id) {
-@@ -3250,9 +3149,11 @@ impl TermWindow {
+@@ -3250,9 +3150,11 @@ impl TermWindow {
  
          let tab_id = tab.tab_id();
          if confirm && !tab.can_close_without_prompting(CloseReason::Tab) {
@@ -1005,7 +1006,7 @@ index d0f0ff97..6f00f347 100644
  
              let window = self.window.clone().unwrap();
              let (overlay, future) = start_overlay(self, &tab, move |tab_id, term| {
-@@ -3266,6 +3167,7 @@ impl TermWindow {
+@@ -3266,6 +3168,7 @@ impl TermWindow {
      }
  
      fn close_current_tab(&mut self, confirm: bool) {
@@ -1013,7 +1014,7 @@ index d0f0ff97..6f00f347 100644
          let mux = Mux::get();
          let tab = match mux.get_active_tab_for_window(self.mux_window_id) {
              Some(tab) => tab,
-@@ -3420,6 +3322,7 @@ impl TermWindow {
+@@ -3420,6 +3323,7 @@ impl TermWindow {
      }
  
      fn get_splits(&mut self) -> Vec<PositionedSplit> {
@@ -1021,7 +1022,7 @@ index d0f0ff97..6f00f347 100644
          let mux = Mux::get();
          let tab = match mux.get_active_tab_for_window(self.mux_window_id) {
              Some(tab) => tab,
-@@ -3456,35 +3359,18 @@ impl TermWindow {
+@@ -3456,35 +3360,18 @@ impl TermWindow {
  
      fn get_tab_information(&mut self) -> Vec<TabInformation> {
          let mux = Mux::get();
@@ -1068,7 +1069,7 @@ index d0f0ff97..6f00f347 100644
      }
  
      fn get_pane_information(&self) -> Vec<PaneInformation> {
-@@ -3528,6 +3414,7 @@ impl TermWindow {
+@@ -3528,6 +3415,7 @@ impl TermWindow {
      }
  
      fn get_panes_to_render(&self) -> Vec<PositionedPane> {
@@ -1076,7 +1077,7 @@ index d0f0ff97..6f00f347 100644
          let mux = Mux::get();
          let tab = match mux.get_active_tab_for_window(self.mux_window_id) {
              Some(tab) => tab,
-@@ -3620,6 +3507,10 @@ impl TermWindow {
+@@ -3620,6 +3508,10 @@ impl TermWindow {
  
  impl Drop for TermWindow {
      fn drop(&mut self) {

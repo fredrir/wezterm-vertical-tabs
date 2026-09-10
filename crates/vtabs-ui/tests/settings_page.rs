@@ -290,3 +290,122 @@ fn compact_categories_remain_reachable_by_mouse() {
         );
     }
 }
+
+fn model_with_tabs() -> Model {
+    let mut model = Model::default();
+    model
+        .reconcile(
+            [(1, "Shell"), (2, "Editor")]
+                .into_iter()
+                .map(|(id, title)| vtabs_core::Tab {
+                    id,
+                    title: title.into(),
+                    ..vtabs_core::Tab::default()
+                })
+                .collect(),
+            Some(1),
+            true,
+        )
+        .unwrap();
+    model
+}
+
+fn has(ui: &SidebarUi, id: ElementId) -> bool {
+    ui.hit_regions().iter().any(|hit| hit.id == id)
+}
+
+#[test]
+fn settings_stay_listed_as_a_tab_until_closed() {
+    let model = model_with_tabs();
+    let mut ui = SidebarUi::new();
+    ui.set_layout(28, 0);
+    draw(&mut ui, &model);
+    assert!(!has(&ui, ElementId::SettingsTab));
+    ui.open_settings();
+    draw(&mut ui, &model);
+    assert!(ui.content_page());
+    let row = ui
+        .hit_regions()
+        .iter()
+        .find(|hit| hit.id == ElementId::SettingsTab)
+        .unwrap();
+    assert!(row.rect.right() <= 28);
+    assert!(
+        row.rect.y
+            > ui.hit_regions()
+                .iter()
+                .find(|hit| hit.id == ElementId::Tab(2))
+                .unwrap()
+                .rect
+                .y
+    );
+    let text: String = (row.rect.x..row.rect.right())
+        .map(|x| ui.buffer()[(x, row.rect.y)].symbol())
+        .collect();
+    assert!(text.contains("⚙ Settings"), "{text}");
+    assert!(has(&ui, ElementId::CloseSettingsTab));
+
+    let intents = click(&mut ui, &model, ElementId::Tab(2));
+    assert!(matches!(
+        intents.as_slice(),
+        [UiIntent::Domain(Intent::ActivateTab(2))]
+    ));
+    assert!(!ui.content_page());
+    assert!(!ui.is_modal());
+    draw(&mut ui, &model);
+    assert!(has(&ui, ElementId::SettingsTab));
+    assert!(!has(&ui, ElementId::SettingsSearch));
+
+    click(&mut ui, &model, ElementId::SettingsTab);
+    draw(&mut ui, &model);
+    assert!(ui.content_page());
+    assert!(has(&ui, ElementId::SettingsSearch));
+
+    click(&mut ui, &model, ElementId::CloseSettingsTab);
+    draw(&mut ui, &model);
+    assert!(!ui.content_page());
+    assert!(!has(&ui, ElementId::SettingsTab));
+}
+
+#[test]
+fn keyboard_paths_hide_or_close_the_settings_tab() {
+    let model = model_with_tabs();
+    let mut ui = SidebarUi::new();
+    ui.set_layout(28, 0);
+    let command = |ui: &mut SidebarUi, character: char| {
+        ui.event(
+            &model,
+            UiInput::Key {
+                key: Key::Character(character),
+                modifiers: Modifiers {
+                    super_key: true,
+                    ..Modifiers::default()
+                },
+            },
+        )
+    };
+    command(&mut ui, ',');
+    draw(&mut ui, &model);
+    assert!(ui.content_page());
+    assert!(matches!(
+        command(&mut ui, '2').as_slice(),
+        [UiIntent::Domain(Intent::ActivateIndex(1))]
+    ));
+    assert!(!ui.content_page());
+    draw(&mut ui, &model);
+    assert!(has(&ui, ElementId::SettingsTab));
+    command(&mut ui, ',');
+    draw(&mut ui, &model);
+    assert!(ui.content_page());
+    assert!(matches!(
+        command(&mut ui, 'b').as_slice(),
+        [UiIntent::Domain(Intent::SetRail(
+            vtabs_core::RailMode::Collapsed
+        ))]
+    ));
+    assert!(ui.content_page());
+    assert!(command(&mut ui, 'w').is_empty());
+    assert!(!ui.content_page());
+    draw(&mut ui, &model);
+    assert!(!has(&ui, ElementId::SettingsTab));
+}
