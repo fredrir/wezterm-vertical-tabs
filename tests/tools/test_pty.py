@@ -23,7 +23,7 @@ async def test_public_management_cli_in_a_pty(
             str(tools_binary),
             *arguments,
             cols=140,
-            rows=40,
+            rows=60,
             cwd=str(tmp_path),
             env={"DISPLAY": "", "WAYLAND_DISPLAY": "", **isolated_env},
             wait_ready=False,

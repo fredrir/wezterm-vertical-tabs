@@ -93,7 +93,8 @@ def test_deploy_shadows_the_packaged_desktop_entry_and_cli_once(
         assert (bin_dir / name).resolve() == installed(tools_sandbox, "second", name).resolve()
     assert (replaced / "wezterm").read_text() == "stock cli"
     assert sorted(path.name for path in bin_dir.iterdir()) == ["wezterm", "wezterm-gui"]
-    assert [path.name for path in entry.parent.iterdir()] == ["org.wezfurlong.wezterm.desktop"]
+    # update-desktop-database may add its cache beside the entry; no retired copies remain.
+    assert not [path.name for path in entry.parent.iterdir() if ".retired-" in path.name]
 
 
 def test_deploy_without_an_application_only_installs(tools_sandbox, bundle_factory):
