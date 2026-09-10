@@ -51,7 +51,7 @@ Recipes invoke `cargo xtask`. Installed launch entries invoke the bundled Rust b
 | `just doctor --for check`                   | Required tool versions and state health                                              |
 | `just patch check --upstream SHA`           | Check ordered patches in an isolated worktree                                        |
 | `just cache inspect`                        | Owned run/bundle sizes and retention decisions                                       |
-| `just cache gc --dry-run --keep 5`          | Preview pruning; active/pending/running bundles protected                            |
+| `just cache gc --dry-run --keep 5`          | Preview pruning of runs, bundles and versions; active/pending/previous/running kept  |
 | `--offline`                                 | No Git/network fetching; Cargo and uv offline                                        |
 | `--profile NAME` / `--debug`                | Explicit Cargo profile / development profile                                         |
 | `--jobs N`                                  | Cargo job limit and pytest worker count                                              |
@@ -91,7 +91,7 @@ cargo run --quiet --locked -p vtabs-core --bin gen-schema -- json
 | `cache/worktree`             | Owned patched checkout; adapter changes synchronize in place                                               |
 | `cache/project`              | Installed updater's separate native-branch checkout; an ownership marker is required before replacement    |
 | `cache/build.json`           | Separate source/compile/validation identities, toolchain/configuration and Cargo artifact paths            |
-| `install/versions`           | Immutable bundles; running processes keep their files                                                      |
+| `install/versions`           | Immutable bundles; install/deploy/update keep active, pending, previous and running versions only          |
 | `install/active.json`        | Selected installed bundle                                                                                  |
 | `install/pending.json`       | Completed update selected by the next managed launch                                                       |
 | `install/update.json`        | Last update attempt and result                                                                             |

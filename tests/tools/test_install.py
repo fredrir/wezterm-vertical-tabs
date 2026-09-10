@@ -193,3 +193,36 @@ def test_offline_launch_suppresses_both_updaters_and_reaches_the_application(
     assert not (tools_sandbox.install / "update.log").exists()
     assert not (tools_sandbox.install / "update.json").exists()
     assert not (tools_sandbox.cache / "project").exists()
+
+
+def test_install_prunes_versions_beyond_active_previous_pending_and_running(
+    tools_sandbox, bundle_factory
+):
+    for name in ("first", "second", "third"):
+        tools_sandbox.run("install", "--bundle", bundle_factory(name))
+    versions = tools_sandbox.install / "versions"
+
+    assert sorted(path.name for path in versions.iterdir()) == ["second", "third"]
+    assert state(tools_sandbox.install, "previous")["id"] == "second"
+
+    if os.name != "nt":
+        import fcntl
+
+        leases = tools_sandbox.install / "leases"
+        leases.mkdir(exist_ok=True)
+        with open(leases / "second.lock", "w") as running:
+            fcntl.flock(running, fcntl.LOCK_EX)
+            tools_sandbox.run("install", "--bundle", bundle_factory("fourth"))
+            tools_sandbox.run("install", "--bundle", bundle_factory("fifth"), "--stage-only")
+            assert sorted(path.name for path in versions.iterdir()) == [
+                "fifth",
+                "fourth",
+                "second",
+                "third",
+            ]
+        # Activating sixth supersedes the pending fifth; fourth becomes the rollback target.
+        result = tools_sandbox.json("install", "--bundle", bundle_factory("sixth"))
+        assert sorted(path.name for path in versions.iterdir()) == ["fourth", "sixth"]
+        removed = {os.path.basename(path) for path in result["pruned"]["removed"]}
+        assert removed >= {"second", "third", "fifth"}
+        assert not (leases / "second.lock").exists()

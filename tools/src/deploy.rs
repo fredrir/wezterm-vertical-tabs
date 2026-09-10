@@ -8,7 +8,7 @@ use anyhow::{Context as _, Result, ensure};
 use serde_json::{Value, json};
 
 use crate::process::CommandSpec;
-use crate::state::Context;
+use crate::state::{Context, Lock};
 use crate::{build, bundle, install};
 
 const DESKTOP_MARKER: &str = "X-WezVtabs-Install=";
@@ -52,7 +52,12 @@ impl Targets {
     }
 }
 
-pub fn deploy(ctx: &Context, existing: Option<&Path>, targets: &Targets) -> Result<Value> {
+pub fn deploy(
+    ctx: &Context,
+    existing: Option<&Path>,
+    targets: &Targets,
+    build_lock: Option<&Lock>,
+) -> Result<Value> {
     let pinned = pin_upstream(ctx)?;
     let ctx = pinned.as_ref().unwrap_or(ctx);
     let bundle = match existing {
@@ -63,6 +68,7 @@ pub fn deploy(ctx: &Context, existing: Option<&Path>, targets: &Targets) -> Resu
         }
     };
     let installed = install::install(ctx, &bundle, false)?;
+    let pruned = crate::diagnostics::prune(ctx, build_lock)?;
     let app = match &targets.app {
         Some(app) if cfg!(target_os = "macos") => Some(place_app(ctx, &installed, app)?),
         Some(entry) => Some(place_desktop(
@@ -77,6 +83,7 @@ pub fn deploy(ctx: &Context, existing: Option<&Path>, targets: &Targets) -> Resu
         "installed": installed,
         "app": app,
         "upstream": {"revision": ctx.upstream, "pinned": pinned.is_some()},
+        "pruned": pruned,
         "next": "Quit and reopen WezTerm to run this version",
     }))
 }

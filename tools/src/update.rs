@@ -259,6 +259,7 @@ pub fn update(
                 } else {
                     let installed =
                         install_release(ctx, location, &release, temporary.path(), stage_only)?;
+                    state["pruned"] = crate::diagnostics::prune(ctx, None)?;
                     state["status"] = json!("ready");
                     state["bundle"] = json!(installed);
                     state["staged"] = json!(stage_only);
@@ -377,6 +378,7 @@ pub fn update(
                 let metadata = crate::build::build(ctx)?;
                 let bundle = bundle::package(ctx, &metadata, output, false)?;
                 let installed = crate::install::install(ctx, &bundle, stage_only)?;
+                state["pruned"] = crate::diagnostics::prune(ctx, Some(&_build_lock))?;
                 state["status"] = json!("ready");
                 state["id"] = json!(metadata.id);
                 state["bundle"] = json!(installed);

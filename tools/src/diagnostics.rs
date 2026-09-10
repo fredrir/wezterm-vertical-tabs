@@ -158,23 +158,89 @@ fn tree_size(path: &Path) -> Result<u64> {
     Ok(size)
 }
 
-pub fn cache(ctx: &Context, gc: bool, dry_run: bool, keep: usize) -> Result<Value> {
+#[derive(Clone, Copy, Debug)]
+pub struct Retention {
+    pub runs: usize,
+    pub bundles: usize,
+    pub versions: usize,
+}
+
+impl Retention {
+    /// Kept beyond the protected set: active, pending, previous and running versions,
+    /// active/pending bundles and the current run.
+    pub const AUTOMATIC: Self = Self {
+        runs: 10,
+        bundles: 0,
+        versions: 0,
+    };
+
+    pub fn uniform(keep: usize) -> Self {
+        Self {
+            runs: keep,
+            bundles: keep,
+            versions: keep,
+        }
+    }
+}
+
+/// Runs after every install so versions never accumulate; a caller holding the build
+/// lock passes it instead of deadlocking on a second acquisition.
+pub fn prune(ctx: &Context, build_lock: Option<&Lock>) -> Result<Value> {
+    let _lock = match build_lock {
+        Some(_) => None,
+        None => Some(Lock::acquire(&ctx.cache.join("build.lock"))?),
+    };
+    let report = collect(ctx, true, false, Retention::AUTOMATIC)?;
+    let removed = report["entries"]
+        .as_array()
+        .map(|entries| {
+            entries
+                .iter()
+                .filter(|entry| entry["action"] == "removed")
+                .cloned()
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    Ok(json!({
+        "removed": removed.iter().map(|entry| entry["path"].clone()).collect::<Vec<_>>(),
+        "freed_bytes": removed.iter().filter_map(|entry| entry["bytes"].as_u64()).sum::<u64>(),
+    }))
+}
+
+pub fn cache(ctx: &Context, gc: bool, dry_run: bool, retention: Retention) -> Result<Value> {
     let _lock = if gc {
         Some(Lock::acquire(&ctx.cache.join("build.lock"))?)
     } else {
         None
     };
-    let mut protected = BTreeSet::new();
-    for name in ["active.json", "pending.json"] {
-        if let Some(value) = read_json::<Value>(&ctx.install.join(name))?
+    collect(ctx, gc, dry_run, retention)
+}
+
+fn collect(ctx: &Context, gc: bool, dry_run: bool, retention: Retention) -> Result<Value> {
+    let mut protected_bundles = BTreeSet::new();
+    let mut protected_versions = BTreeSet::new();
+    for name in ["active", "pending", "previous"] {
+        if let Some(value) = read_json::<Value>(&ctx.install.join(format!("{name}.json")))?
             && let Some(id) = value["id"].as_str()
         {
-            protected.insert(format!("wez-vtabs-native-{id}"));
+            protected_versions.insert(id.to_owned());
+            if name != "previous" {
+                protected_bundles.insert(format!("wez-vtabs-native-{id}"));
+            }
         }
     }
+    let versions = ctx.install.join("versions");
+    let _install_lock = if gc && versions.is_dir() {
+        Some(Lock::acquire(&ctx.install.join("install.lock"))?)
+    } else {
+        None
+    };
     let mut entries = Vec::new();
-    for category in ["runs", "bundles"] {
-        let directory = ctx.cache.join(category);
+    for (category, directory, keep) in [
+        ("runs", ctx.cache.join("runs"), retention.runs),
+        ("bundles", ctx.cache.join("bundles"), retention.bundles),
+        ("versions", versions, retention.versions),
+    ] {
         if !directory.is_dir() {
             continue;
         }
@@ -190,24 +256,37 @@ pub fn cache(ctx: &Context, gc: bool, dry_run: bool, keep: usize) -> Result<Valu
         let mut retained = 0;
         for child in children {
             let path = child.path();
-            if child.file_type()?.is_symlink() || !child.file_type()?.is_dir() {
-                continue;
-            }
-            let marker = if category == "runs" {
-                "run.json"
-            } else {
-                "build.json"
-            };
-            if !path.join(marker).is_file() {
-                continue;
-            }
             let name = child.file_name().to_string_lossy().into_owned();
+            if child.file_type()?.is_symlink()
+                || !child.file_type()?.is_dir()
+                || name.starts_with('.')
+            {
+                continue;
+            }
+            let marker = match category {
+                "runs" => Some("run.json"),
+                "bundles" => Some("build.json"),
+                // Incomplete versions are leftovers too; only the pointers decide.
+                _ => None,
+            };
+            if marker.is_some_and(|marker| !path.join(marker).is_file()) {
+                continue;
+            }
+            if category == "versions" && crate::state::safe_id(&name).is_err() {
+                continue;
+            }
             let active = path == ctx.runner.directory()
-                || protected.contains(&name)
+                || (category == "bundles" && protected_bundles.contains(&name))
+                || (category == "versions" && protected_versions.contains(&name))
                 || (category == "runs"
-                    && read_json::<RunReport>(&path.join(marker))?
+                    && read_json::<RunReport>(&path.join("run.json"))?
                         .is_some_and(|report| report.status == "running"));
-            let lease = Lock::try_acquire(&ctx.cache.join("leases").join(format!("{name}.lock")))?;
+            let lease_path = if category == "versions" {
+                ctx.install.join("leases").join(format!("{name}.lock"))
+            } else {
+                ctx.cache.join("leases").join(format!("{name}.lock"))
+            };
+            let lease = Lock::try_acquire(&lease_path)?;
             let install_lease = if category == "bundles" {
                 if let Some(metadata) = read_json::<BuildMetadata>(&path.join("build.json"))? {
                     crate::state::safe_id(&metadata.id)?;
@@ -229,7 +308,7 @@ pub fn cache(ctx: &Context, gc: bool, dry_run: bool, keep: usize) -> Result<Valu
                 retained += 1;
             }
             let bytes = tree_size(&path)?;
-            entries.push(json!({"path":path,"bytes":bytes,"protected":protected,"action":if remove {if dry_run {"would_remove"}else{"removed"}}else{"keep"}}));
+            entries.push(json!({"category":category,"path":path,"bytes":bytes,"protected":protected,"action":if remove {if dry_run {"would_remove"}else{"removed"}}else{"keep"}}));
             if remove && !dry_run {
                 fs::remove_dir_all(&path)?;
                 if category == "bundles" {
@@ -247,10 +326,12 @@ pub fn cache(ctx: &Context, gc: bool, dry_run: bool, keep: usize) -> Result<Valu
                         }
                     }
                 }
+                drop(lease);
+                let _ = fs::remove_file(&lease_path);
             }
         }
     }
-    Ok(json!({"cache":ctx.cache,"dry_run":dry_run,"entries":entries}))
+    Ok(json!({"cache":ctx.cache,"install":ctx.install,"dry_run":dry_run,"entries":entries}))
 }
 
 pub fn reproduce(ctx: &Context, path: &Path, execute: bool, explicit_root: bool) -> Result<Value> {

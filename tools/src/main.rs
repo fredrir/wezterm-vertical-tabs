@@ -199,7 +199,8 @@ fn dispatch(ctx: &Context, cli: &Cli) -> Result<(Value, i32)> {
                 let metadata = build::build(ctx)?;
                 bundle::package(ctx, &metadata, &ctx.cache.join("bundles"), false)?
             };
-            json!({"installed":install::install(ctx,&path,*stage_only)?,"staged":stage_only})
+            let installed = install::install(ctx, &path, *stage_only)?;
+            json!({"installed":installed,"staged":stage_only,"pruned":diagnostics::prune(ctx,_lock.as_ref())?})
         }
         Commands::Deploy {
             bundle: existing,
@@ -213,7 +214,7 @@ fn dispatch(ctx: &Context, cli: &Cli) -> Result<(Value, i32)> {
                 None
             };
             let targets = deploy::Targets::resolve(app.clone(), bin.clone(), *no_app);
-            deploy::deploy(ctx, existing.as_deref(), &targets)?
+            deploy::deploy(ctx, existing.as_deref(), &targets, _lock.as_ref())?
         }
         Commands::Update {
             daily,
@@ -245,9 +246,11 @@ fn dispatch(ctx: &Context, cli: &Cli) -> Result<(Value, i32)> {
             json!({"active":install::rollback(&ctx.install,id.as_deref())?})
         }
         Commands::Cache { command } => match command {
-            cli::CacheCommand::Inspect => diagnostics::cache(ctx, false, true, 5)?,
+            cli::CacheCommand::Inspect => {
+                diagnostics::cache(ctx, false, true, diagnostics::Retention::uniform(5))?
+            }
             cli::CacheCommand::Gc { dry_run, keep } => {
-                diagnostics::cache(ctx, true, *dry_run, *keep)?
+                diagnostics::cache(ctx, true, *dry_run, diagnostics::Retention::uniform(*keep))?
             }
         },
         Commands::Patch {
