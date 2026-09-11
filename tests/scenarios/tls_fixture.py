@@ -173,7 +173,8 @@ class LocalTlsMux:
         env = {
             key: value
             for key, value in os.environ.items()
-            if not key.startswith(("WEZTERM_", "WEZ_VTABS_"))
+            if not key.startswith(("WEZTERM_", "WEZ_VTABS_", "TMUX"))
+            and key not in {"ZDOTDIR", "ENV", "BASH_ENV", "HWIRE_SESSION"}
         }
         for name in ("config", "cache", "data", "state", "runtime"):
             directory = self.root / name

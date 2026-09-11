@@ -104,7 +104,7 @@ cargo run --quiet --locked -p vtabs-core --bin gen-schema -- json
 | `install/wez-vtabs-launcher` | Stable dispatcher; versioned Rust tools own launch/update behavior                                   |
 | MacOS launch entry           | `install/WezTerm VTabs.app`                                                                          |
 | MacOS application            | `just deploy` copies the active `WezTerm.app`; a replaced foreign app moves to `install/replaced`    |
-| Linux deploy                 | `~/.local/share/applications/org.wezfurlong.wezterm.desktop` and `~/.local/bin/wezterm{,-gui}` links |
+| Linux deploy                 | `~/.local/share/applications/org.wezfurlong.wezterm.desktop` and `~/.local/bin/wezterm{,-gui,-mux-server}` links |
 | Linux launch entry           | `install/wez-vtabs` and `install/wez-vtabs.desktop`                                                  |
 | Windows launch entry         | `install/wez-vtabs.cmd`                                                                              |
 

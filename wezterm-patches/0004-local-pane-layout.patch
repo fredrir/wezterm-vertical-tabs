@@ -1,0 +1,517 @@
+diff --git a/config/src/tls.rs b/config/src/tls.rs
+--- a/config/src/tls.rs
++++ b/config/src/tls.rs
+@@ -76,6 +76,11 @@
+     #[dynamic(default)]
+     pub connect_automatically: bool,
+ 
++    /// Keep layouts on this mux and spawn independent remote shells.
++    /// Existing remote tabs and windows are not imported.
++    #[dynamic(default)]
++    pub local_pane_layout: bool,
++
+     #[dynamic(default = "default_read_timeout")]
+     pub read_timeout: Duration,
+ 
+diff --git a/lua-api-crates/mux/src/lib.rs b/lua-api-crates/mux/src/lib.rs
+--- a/lua-api-crates/mux/src/lib.rs
++++ b/lua-api-crates/mux/src/lib.rs
+@@ -30,6 +30,7 @@
+ 
+ pub fn register(lua: &Lua) -> anyhow::Result<()> {
+     let mux_mod = get_or_create_sub_module(lua, "mux")?;
++    mux_mod.set("supports_local_pane_layout", true)?;
+ 
+     mux_mod.set(
+         "get_active_workspace",
+diff --git a/mux/src/domain.rs b/mux/src/domain.rs
+--- a/mux/src/domain.rs
++++ b/mux/src/domain.rs
+@@ -78,67 +78,7 @@
+         pane_id: PaneId,
+         split_request: SplitRequest,
+     ) -> anyhow::Result<Arc<dyn Pane>> {
+-        let mux = Mux::get();
+-        let tab = match mux.get_tab(tab) {
+-            Some(t) => t,
+-            None => anyhow::bail!("Invalid tab id {}", tab),
+-        };
+-
+-        let pane_index = match tab
+-            .iter_panes_ignoring_zoom()
+-            .iter()
+-            .find(|p| p.pane.pane_id() == pane_id)
+-        {
+-            Some(p) => p.index,
+-            None => anyhow::bail!("invalid pane id {}", pane_id),
+-        };
+-
+-        let split_size = match tab.compute_split_size(pane_index, split_request) {
+-            Some(s) => s,
+-            None => anyhow::bail!("invalid pane index {}", pane_index),
+-        };
+-
+-        let pane = match source {
+-            SplitSource::Spawn {
+-                command,
+-                command_dir,
+-            } => {
+-                self.spawn_pane(split_size.second, command, command_dir)
+-                    .await?
+-            }
+-            SplitSource::MovePane(src_pane_id) => {
+-                let (_domain, _window, src_tab) = mux
+-                    .resolve_pane_id(src_pane_id)
+-                    .ok_or_else(|| anyhow::anyhow!("pane {} not found", src_pane_id))?;
+-                let src_tab = match mux.get_tab(src_tab) {
+-                    Some(t) => t,
+-                    None => anyhow::bail!("Invalid tab id {}", src_tab),
+-                };
+-
+-                let pane = src_tab.remove_pane(src_pane_id).ok_or_else(|| {
+-                    anyhow::anyhow!("pane {} not found in its containing tab!?", src_pane_id)
+-                })?;
+-
+-                if src_tab.is_dead() {
+-                    mux.remove_tab(src_tab.tab_id());
+-                }
+-
+-                pane
+-            }
+-        };
+-
+-        // pane_index may have changed if src_pane was also in the same tab
+-        let final_pane_index = match tab
+-            .iter_panes_ignoring_zoom()
+-            .iter()
+-            .find(|p| p.pane.pane_id() == pane_id)
+-        {
+-            Some(p) => p.index,
+-            None => anyhow::bail!("invalid pane id {}", pane_id),
+-        };
+-
+-        tab.split_and_insert(final_pane_index, split_request, Arc::clone(&pane))?;
+-        Ok(pane)
++        split_pane_locally(self, source, tab, pane_id, split_request).await
+     }
+ 
+     async fn spawn_pane(
+@@ -730,3 +670,80 @@
+         DomainState::Attached
+     }
+ }
++
++/// Change a locally owned split tree, even when the process lives in a client domain.
++pub async fn split_pane_locally<D: Domain + ?Sized>(
++    domain: &D,
++    source: SplitSource,
++    tab: TabId,
++    pane_id: PaneId,
++    split_request: SplitRequest,
++) -> anyhow::Result<Arc<dyn Pane>> {
++    let mux = Mux::get();
++    let tab = match mux.get_tab(tab) {
++        Some(t) => t,
++        None => anyhow::bail!("Invalid tab id {}", tab),
++    };
++
++    let pane_index = match tab
++        .iter_panes_ignoring_zoom()
++        .iter()
++        .find(|p| p.pane.pane_id() == pane_id)
++    {
++        Some(p) => p.index,
++        None => anyhow::bail!("invalid pane id {}", pane_id),
++    };
++
++    let split_size = match tab.compute_split_size(pane_index, split_request) {
++        Some(s) => s,
++        None => anyhow::bail!("invalid pane index {}", pane_index),
++    };
++
++    let spawned = matches!(source, SplitSource::Spawn { .. });
++    let pane = match source {
++        SplitSource::Spawn {
++            command,
++            command_dir,
++        } => {
++            domain
++                .spawn_pane(split_size.second, command, command_dir)
++                .await?
++        }
++        SplitSource::MovePane(src_pane_id) => {
++            let (_domain, _window, src_tab) = mux
++                .resolve_pane_id(src_pane_id)
++                .ok_or_else(|| anyhow::anyhow!("pane {} not found", src_pane_id))?;
++            let src_tab = match mux.get_tab(src_tab) {
++                Some(t) => t,
++                None => anyhow::bail!("Invalid tab id {}", src_tab),
++            };
++
++            let pane = src_tab.remove_pane(src_pane_id).ok_or_else(|| {
++                anyhow::anyhow!("pane {} not found in its containing tab!?", src_pane_id)
++            })?;
++
++            if src_tab.is_dead() {
++                mux.remove_tab(src_tab.tab_id());
++            }
++
++            pane
++        }
++    };
++
++    // pane_index may have changed if src_pane was also in the same tab
++    let result = tab
++        .iter_panes_ignoring_zoom()
++        .iter()
++        .find(|p| p.pane.pane_id() == pane_id)
++        .ok_or_else(|| anyhow::anyhow!("invalid pane id {}", pane_id))
++        .and_then(|position| {
++            tab.split_and_insert(position.index, split_request, Arc::clone(&pane))
++        });
++    if let Err(error) = result {
++        if spawned {
++            mux.remove_pane(pane.pane_id());
++        }
++        return Err(error);
++    }
++    Ok(pane)
++}
+diff --git a/wezterm/src/cli/split_pane.rs b/wezterm/src/cli/split_pane.rs
+--- a/wezterm/src/cli/split_pane.rs
++++ b/wezterm/src/cli/split_pane.rs
+@@ -13,6 +13,10 @@
+     /// environment variable WEZTERM_PANE.
+     #[arg(long)]
+     pane_id: Option<PaneId>,
++
++    /// Spawn in this domain while retaining the target pane's tab.
++    #[arg(long, conflicts_with = "move_pane_id")]
++    domain_name: Option<String>,
+ 
+     /// Equivalent to `--right`. If neither this nor any other direction
+     /// is specified, the default is equivalent to `--bottom`.
+@@ -96,7 +100,10 @@
+             .split_pane(codec::SplitPane {
+                 pane_id,
+                 split_request,
+-                domain: config::keyassignment::SpawnTabDomain::CurrentPaneDomain,
++                domain: self.domain_name.map_or(
++                    config::keyassignment::SpawnTabDomain::CurrentPaneDomain,
++                    config::keyassignment::SpawnTabDomain::DomainName,
++                ),
+                 command: if self.prog.is_empty() {
+                     None
+                 } else {
+diff --git a/wezterm-client/src/client.rs b/wezterm-client/src/client.rs
+--- a/wezterm-client/src/client.rs
++++ b/wezterm-client/src/client.rs
+@@ -146,6 +146,7 @@
+     // topology; we need to re-sync.
+     let local_pane_id = match client_domain.remote_to_local_pane_id(pane_id) {
+         Some(p) => p,
++        None if client_domain.local_pane_layout() => return Ok(()),
+         None => {
+             log::debug!("got {decoded:?}, pane not found locally, resync");
+             client_domain.resync().await?;
+diff --git a/wezterm-client/src/domain.rs b/wezterm-client/src/domain.rs
+--- a/wezterm-client/src/domain.rs
++++ b/wezterm-client/src/domain.rs
+@@ -27,6 +27,7 @@
+     remote_to_local_pane: Mutex<HashMap<PaneId, PaneId>>,
+     pub focused_remote_pane_id: Mutex<Option<PaneId>>,
+     pub(crate) topology: crate::topology::TopologySync,
++    local_pane_layout: bool,
+ }
+ 
+ impl ClientInner {
+@@ -184,6 +185,10 @@
+ }
+ 
+ impl ClientDomainConfig {
++    fn local_pane_layout(&self) -> bool {
++        matches!(self, Self::Tls(tls) if tls.local_pane_layout)
++    }
++
+     pub fn name(&self) -> &str {
+         match self {
+             ClientDomainConfig::Unix(unix) => &unix.name,
+@@ -237,6 +242,7 @@
+         client: Client,
+         local_echo_threshold_ms: Option<u64>,
+         overlay_lag_indicator: bool,
++        local_pane_layout: bool,
+     ) -> Self {
+         Self {
+             client,
+@@ -248,6 +254,7 @@
+             remote_to_local_pane: Mutex::new(HashMap::new()),
+             focused_remote_pane_id: Mutex::new(None),
+             topology: crate::topology::TopologySync::default(),
++            local_pane_layout,
+         }
+     }
+ }
+@@ -256,6 +263,7 @@
+     config: ClientDomainConfig,
+     label: String,
+     inner: Mutex<Option<Arc<ClientInner>>>,
++    attaching: smol::lock::Mutex<()>,
+     local_domain_id: DomainId,
+ }
+ 
+@@ -278,6 +286,10 @@
+         Some(c) => c,
+         None => return false,
+     };
++
++    if client_domain.local_pane_layout() {
++        return true;
++    }
+ 
+     match notif {
+         MuxNotification::ActiveWorkspaceChanged(_client_id) => {
+@@ -398,6 +410,10 @@
+ }
+ 
+ impl ClientDomain {
++    pub(crate) fn local_pane_layout(&self) -> bool {
++        self.config.local_pane_layout()
++    }
++
+     pub fn new(config: ClientDomainConfig) -> Self {
+         let local_domain_id = alloc_domain_id();
+         let label = config.label();
+@@ -406,6 +422,7 @@
+             config,
+             label,
+             inner: Mutex::new(None),
++            attaching: smol::lock::Mutex::new(()),
+             local_domain_id,
+         }
+     }
+@@ -526,6 +543,44 @@
+         panes: ListPanesResponse,
+         mut primary_window_id: Option<WindowId>,
+     ) -> anyhow::Result<()> {
++        if inner.local_pane_layout {
++            // The local mux owns layout. Refresh identities without importing or
++            // reparenting remote tabs, including tabs from a reverse connection.
++            let mut present = HashSet::new();
++            for tabroot in panes.tabs {
++                let mut cursor = tabroot.into_tree().cursor();
++                loop {
++                    if let Some(entry) = cursor.leaf_mut() {
++                        present.insert(entry.pane_id);
++                        if let Some(pane) = inner
++                            .remote_to_local_pane_id(entry.pane_id)
++                            .and_then(|id| Mux::get().get_pane(id))
++                        {
++                            if let Some(pane) = pane.downcast_ref::<ClientPane>() {
++                                pane.update_remote_tab_id(entry.tab_id);
++                            }
++                        }
++                    }
++                    match cursor.preorder_next() {
++                        Ok(next) => cursor = next,
++                        Err(_) => break,
++                    }
++                }
++            }
++            let mux = Mux::get();
++            for pane in mux.iter_panes() {
++                if pane.domain_id() == inner.local_domain_id {
++                    if let Some(client) = pane.downcast_ref::<ClientPane>() {
++                        if !present.contains(&client.remote_pane_id()) {
++                            client.ignore_next_kill();
++                            mux.remove_pane(pane.pane_id());
++                        }
++                    }
++                }
++            }
++            inner.expire_stale_mappings();
++            return Ok(());
++        }
+         let _applying = inner.topology.applying();
+         let mux = Mux::get();
+         log::debug!(
+@@ -787,6 +842,7 @@
+             client,
+             threshold,
+             overlay_lag_indicator,
++            domain.config.local_pane_layout(),
+         ));
+         *domain.inner.lock().unwrap() = Some(Arc::clone(&inner));
+ 
+@@ -812,11 +868,38 @@
+ 
+     async fn spawn_pane(
+         &self,
+-        _size: TerminalSize,
+-        _command: Option<CommandBuilder>,
+-        _command_dir: Option<String>,
++        size: TerminalSize,
++        command: Option<CommandBuilder>,
++        command_dir: Option<String>,
+     ) -> anyhow::Result<Arc<dyn Pane>> {
+-        anyhow::bail!("spawn_pane not implemented for ClientDomain")
++        anyhow::ensure!(
++            self.config.local_pane_layout(),
++            "client domain requires local_pane_layout"
++        );
++        let inner = self
++            .inner()
++            .ok_or_else(|| anyhow!("domain is not attached"))?;
++        let _serial = inner.topology.serial.lock().await;
++        let result = inner
++            .client
++            .spawn_v2(SpawnV2 {
++                domain: SpawnTabDomain::DefaultDomain,
++                window_id: None,
++                size,
++                command,
++                command_dir,
++                workspace: Mux::get().active_workspace(),
++            })
++            .await?;
++        let pane: Arc<dyn Pane> = Arc::new(ClientPane::new(
++            &inner,
++            result.tab_id,
++            result.pane_id,
++            size,
++            "wezterm",
++        ));
++        Mux::get().add_pane(&pane)?;
++        Ok(pane)
+     }
+ 
+     /// Forward the request to the remote; we need to translate the local ids
+@@ -828,6 +911,9 @@
+         window_id: Option<WindowId>,
+         workspace_for_new_window: Option<String>,
+     ) -> anyhow::Result<Option<(Arc<Tab>, WindowId)>> {
++        if self.config.local_pane_layout() {
++            return Ok(None);
++        }
+         let inner = self
+             .inner()
+             .ok_or_else(|| anyhow!("domain is not attached"))?;
+@@ -880,9 +966,20 @@
+         command_dir: Option<String>,
+         window: WindowId,
+     ) -> anyhow::Result<Arc<Tab>> {
++        if self.config.local_pane_layout() {
++            let pane = self.spawn_pane(size, command, command_dir).await?;
++            let tab = Arc::new(Tab::new(&size));
++            tab.assign_pane(&pane);
++            let mux = Mux::get();
++            mux.add_tab_no_panes(&tab);
++            mux.add_tab_to_window(&tab, window)?;
++            return Ok(tab);
++        }
+         let inner = self
+             .inner()
+             .ok_or_else(|| anyhow!("domain is not attached"))?;
++
++        let _serial = inner.topology.serial.lock().await;
+ 
+         let workspace = Mux::get().active_workspace();
+ 
+@@ -926,15 +1023,16 @@
+         pane_id: PaneId,
+         split_request: SplitRequest,
+     ) -> anyhow::Result<Arc<dyn Pane>> {
++        if self.config.local_pane_layout() {
++            return mux::domain::split_pane_locally(self, source, tab_id, pane_id, split_request)
++                .await;
++        }
+         let inner = self
+             .inner()
+             .ok_or_else(|| anyhow!("domain is not attached"))?;
+ 
+         let mux = Mux::get();
+ 
+-        let tab = mux
+-            .get_tab(tab_id)
+-            .ok_or_else(|| anyhow!("tab_id {} is invalid", tab_id))?;
+         let local_pane = mux
+             .get_pane(pane_id)
+             .ok_or_else(|| anyhow!("pane_id {} is invalid", pane_id))?;
+@@ -947,9 +1045,22 @@
+                 command,
+                 command_dir,
+             } => (command, command_dir, None),
+-            SplitSource::MovePane(move_pane_id) => (None, None, Some(move_pane_id)),
++            SplitSource::MovePane(move_pane_id) => {
++                let moved = mux
++                    .get_pane(move_pane_id)
++                    .ok_or_else(|| anyhow!("pane {move_pane_id} is invalid"))?;
++                anyhow::ensure!(
++                    moved.domain_id() == self.domain_id(),
++                    "cannot move panes across client domains"
++                );
++                let moved = moved
++                    .downcast_ref::<ClientPane>()
++                    .ok_or_else(|| anyhow!("pane {move_pane_id} is not a ClientPane"))?;
++                (None, None, Some(moved.remote_pane_id))
++            }
+         };
+ 
++        let serial = inner.topology.serial.lock().await;
+         let result = inner
+             .client
+             .split_pane(SplitPane {
+@@ -962,32 +1073,16 @@
+             })
+             .await?;
+ 
+-        let pane: Arc<dyn Pane> = Arc::new(ClientPane::new(
+-            &inner,
+-            result.tab_id,
+-            result.pane_id,
+-            result.size,
+-            "wezterm",
+-        ));
+-
+-        let pane_index = match tab
+-            .iter_panes()
+-            .iter()
+-            .find(|p| p.pane.pane_id() == pane_id)
+-        {
+-            Some(p) => p.index,
+-            None => anyhow::bail!("invalid pane id {}", pane_id),
+-        };
+-
+-        tab.split_and_insert(pane_index, split_request, Arc::clone(&pane))
+-            .ok();
+-
+-        mux.add_pane(&pane)?;
+-
+-        Ok(pane)
++        drop(serial);
++        self.resync().await?;
++        inner
++            .remote_to_local_pane_id(result.pane_id)
++            .and_then(|id| mux.get_pane(id))
++            .ok_or_else(|| anyhow!("remote pane {} missing after split", result.pane_id))
+     }
+ 
+     async fn attach(&self, window_id: Option<WindowId>) -> anyhow::Result<()> {
++        let _attaching = self.attaching.lock().await;
+         if self.state() == DomainState::Attached {
+             // Already attached
+             return Ok(());
+diff --git a/wezterm-client/src/pane/clientpane.rs b/wezterm-client/src/pane/clientpane.rs
+--- a/wezterm-client/src/pane/clientpane.rs
++++ b/wezterm-client/src/pane/clientpane.rs
+@@ -273,6 +273,10 @@
+ 
+         let mut map: BTreeMap<Value, Value> = BTreeMap::new();
+         map.insert(
++            Value::String("remote_pane_id".to_string()),
++            Value::U64(self.remote_pane_id as u64),
++        );
++        map.insert(
+             Value::String("is_tardy".to_string()),
+             Value::Bool(inner.is_tardy()),
+         );

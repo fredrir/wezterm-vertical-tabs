@@ -20,3 +20,16 @@
 | MacOS capture        | Opt-in fixture-window screenshots require available OS screen-capture access                                                                                                                                                          |
 
 Private windows exclude live-tab persistence and reopen history. Catalog/settings changes are explicit shared edits. The sidebar never acquires a pane identity or changes split topology.
+
+## TLS panes in local layouts
+
+| Name | Value |
+| --- | --- |
+| `tls_clients[].local_pane_layout` | `false`; set `true` on the mux that owns the displayed split tree |
+| Attachment | Fresh remote shells; existing remote tabs/windows are not imported |
+| Ownership | Local tabs and splits; each remote shell has an independent backing tab |
+| CLI | `wezterm cli split-pane --pane-id ID --domain-name DOMAIN` |
+| Lua capability | `wezterm.mux.supports_local_pane_layout` |
+| Client-pane metadata | `pane:get_metadata().remote_pane_id`; ID on the immediately connected mux |
+| Activation | Updated GUI/CLI and owning mux server; restart required for existing domains |
+| Reattachment | Live TLS reconnects retain panes; detaching the domain or restarting the owning mux does not import old backing tabs |

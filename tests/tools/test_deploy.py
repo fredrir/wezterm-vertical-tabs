@@ -73,12 +73,13 @@ def test_deploy_shadows_the_packaged_desktop_entry_and_cli_once(
         replaced / "org.wezfurlong.wezterm.desktop"
     ).read_text() == "[Desktop Entry]\nName=Stock\n"
     assert (replaced / "wezterm").read_text() == "stock cli"
-    for name in ("wezterm", "wezterm-gui"):
+    for name in ("wezterm", "wezterm-gui", "wezterm-mux-server"):
         link = bin_dir / name
         assert link.is_symlink()
         assert link.resolve() == installed(tools_sandbox, "first", name).resolve()
     assert [link["replaced"] for link in result["app"]["links"]] == [
         {"kind": "foreign", "preserved": str(replaced / "wezterm")},
+        None,
         None,
     ]
 
@@ -89,10 +90,14 @@ def test_deploy_shadows_the_packaged_desktop_entry_and_cli_once(
     assert state(tools_sandbox.install, "active")["id"] == "second"
     assert result["app"]["replaced"]["kind"] == "previous"
     assert all(link["replaced"] == {"kind": "previous"} for link in result["app"]["links"])
-    for name in ("wezterm", "wezterm-gui"):
+    for name in ("wezterm", "wezterm-gui", "wezterm-mux-server"):
         assert (bin_dir / name).resolve() == installed(tools_sandbox, "second", name).resolve()
     assert (replaced / "wezterm").read_text() == "stock cli"
-    assert sorted(path.name for path in bin_dir.iterdir()) == ["wezterm", "wezterm-gui"]
+    assert sorted(path.name for path in bin_dir.iterdir()) == [
+        "wezterm",
+        "wezterm-gui",
+        "wezterm-mux-server",
+    ]
     # update-desktop-database may add its cache beside the entry; no retired copies remain.
     assert not [path.name for path in entry.parent.iterdir() if ".retired-" in path.name]
 
