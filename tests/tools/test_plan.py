@@ -15,7 +15,9 @@ pytestmark = pytest.mark.rust
         ("tests/tools/test_example.py", "def test_example(): pass\n", False, True),
         ("tools/src/main.rs", "fn main() {}\n", False, True),
         ("src/app/src/lib.rs", "pub fn changed() {}\n", True, True),
-        ("src/adapter/storage.rs", "pub fn changed() {}\n", True, True),
+        ("src/adapter/src/storage.rs", "pub fn changed() {}\n", True, True),
+        ("src/adapter/tests/storage.rs", "#[test]\nfn changed() {}\n", False, True),
+        ("src/adapter/Cargo.toml", '[dependencies]\nexample = "1"\n', True, True),
     ],
 )
 def test_plan_separates_build_validation_and_bundle_inputs(

@@ -59,19 +59,21 @@ Recipes invoke `cargo xtask`. Installed launch entries invoke the bundled Rust b
 
 **Source boundaries**
 
-| Path              | Value                                                                   |
-| ----------------- | ----------------------------------------------------------------------- |
-| `src/core`        | Domain state, spaces, routing, action policy, settings schema           |
-| `src/ui`          | Ratatui composition, TachyonFX, input, menus and forms                  |
-| `src/app`         | Per-window coordination, dirty scheduling, asynchronous ports           |
-| `src/store`       | Storage protocol and SQLite helper                                      |
-| `src/bench`       | Core, UI and storage benchmarks                                         |
-| `src/adapter`     | Private WezTerm API integration                                         |
-| `wezterm-patches` | Generic layout, surfaces, input and navigation hooks                    |
-| `plugin`          | Optional Lua configuration and generated contracts                      |
-| `tools/src`       | Rust CLI, process runner, source/build state, packaging and updates     |
-| `tests/tools`     | pytest/tui-test tooling behavior through the compiled CLI               |
-| `tests`           | uv-managed pytest, production process boundaries and isolated scenarios |
+| Path                     | Value                                                                     |
+| ------------------------ | ------------------------------------------------------------------------- |
+| `src/core`               | Domain state, spaces, routing, action policy, settings schema             |
+| `src/ui`                 | Ratatui composition, TachyonFX, input, menus and forms                    |
+| `src/app`                | Per-window coordination, dirty scheduling, asynchronous ports             |
+| `src/store`              | Storage protocol and SQLite helper                                        |
+| `src/bench`              | Core, UI and storage benchmarks                                           |
+| `src/adapter/src`        | Private WezTerm API integration; entry point `lib.rs`                     |
+| `src/adapter/tests`      | Unit modules compiled inside `wezterm-gui`; run with `just build`         |
+| `src/adapter/Cargo.toml` | `vtabs-adapter` source package; dependencies merged into the GUI manifest |
+| `wezterm-patches`        | Generic layout, surfaces, input and navigation hooks                      |
+| `plugin`                 | Optional Lua configuration and generated contracts                        |
+| `tools/src`              | Rust CLI, process runner, source/build state, packaging and updates       |
+| `tests/tools`            | pytest/tui-test tooling behavior through the compiled CLI                 |
+| `tests`                  | uv-managed pytest, production process boundaries and isolated scenarios   |
 
 `vtabs-store` has no default features. The GUI links protocol types only; the `sqlite` feature builds the helper.
 

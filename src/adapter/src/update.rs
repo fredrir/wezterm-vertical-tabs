@@ -20,10 +20,7 @@ fn updater() -> anyhow::Result<Option<(PathBuf, PathBuf, PathBuf)>> {
     }
     let marker: serde_json::Value = serde_json::from_slice(&std::fs::read(marker)?)?;
     anyhow::ensure!(marker["capability"] == 1, "bundle contract mismatch");
-    anyhow::ensure!(
-        marker["updater_protocol"] == 1,
-        "updater protocol mismatch"
-    );
+    anyhow::ensure!(marker["updater_protocol"] == 1, "updater protocol mismatch");
     let relative = marker["root"]
         .as_str()
         .ok_or_else(|| anyhow::anyhow!("bundle root missing"))?;

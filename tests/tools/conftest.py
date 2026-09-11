@@ -98,8 +98,19 @@ def tools_sandbox(tools_binary: Path, isolated_env: dict[str, str], tmp_path: Pa
             f'[package]\nname = "{name}"\nversion = "0.1.0"\n',
         )
         write_file(root, f"src/{directory}/src/lib.rs", "pub fn fixture() {}\n")
-    write_file(root, "src/adapter/mod.rs", "mod storage;\n")
-    write_file(root, "src/adapter/storage.rs", "pub fn fixture() {}\n")
+    write_file(
+        root,
+        "src/adapter/Cargo.toml",
+        '[package]\nname = "vtabs-adapter"\nversion = "0.1.0"\n'
+        "[dependencies]\n"
+        'vtabs-app = { path = "../app", default-features = false }\n'
+        'vtabs-store = { path = "../store", default-features = false }\n'
+        'ratatui = { version = "0.30.2", default-features = false }\n'
+        'unicode-width = "0.2"\n',
+    )
+    write_file(root, "src/adapter/tests/storage.rs", "#[test]\nfn storage() {}\n")
+    write_file(root, "src/adapter/src/lib.rs", "mod storage;\n")
+    write_file(root, "src/adapter/src/storage.rs", "pub fn fixture() {}\n")
     write_file(root, "plugin/init.lua", "return {}\n")
     write_file(root, "README.md", "Fixture project\n")
     git(root, "init", "--quiet", "--initial-branch=dev")

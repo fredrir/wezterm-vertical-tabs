@@ -13,7 +13,7 @@ use crate::state::{self, BuildMetadata, Context, ProjectSource};
 pub const UPSTREAM_URL: &str = "https://github.com/wezterm/wezterm.git";
 pub const PROJECT_URL: &str = "https://github.com/fredrir/wezterm-vertical-tabs.git";
 pub const PROJECT_BRANCH: &str = "dev";
-const PREPARATION_VERSION: u32 = 2;
+const PREPARATION_VERSION: u32 = 3;
 const SOURCE_ITEMS: &[&str] = &[
     "Cargo.toml",
     "Cargo.lock",
@@ -149,7 +149,6 @@ pub fn compile_digest(root: &Path) -> Result<String> {
                 || relative == Path::new("rust-toolchain")
                 || relative == Path::new("rust-toolchain.toml")
                 || relative.starts_with(".cargo")
-                || relative.starts_with("src/adapter")
                 || relative.starts_with("wezterm-patches")
             {
                 return true;
@@ -652,7 +651,7 @@ fn copy_changed(source: &Path, destination: &Path) -> Result<()> {
     Ok(())
 }
 
-fn sync_directory(source: &Path, destination: &Path, skip_module: bool) -> Result<()> {
+fn sync_directory(source: &Path, destination: &Path) -> Result<()> {
     if fs::symlink_metadata(destination).is_ok_and(|v| v.file_type().is_symlink()) {
         fs::remove_file(destination)?;
     }
@@ -661,7 +660,7 @@ fn sync_directory(source: &Path, destination: &Path, skip_module: bool) -> Resul
     for entry in fs::read_dir(source)? {
         let entry = entry?;
         let name = entry.file_name();
-        if (skip_module && name == "mod.rs") || IGNORED.iter().any(|v| name == *v) {
+        if IGNORED.iter().any(|v| name == *v) {
             continue;
         }
         expected.insert(name.clone());
@@ -674,7 +673,7 @@ fn sync_directory(source: &Path, destination: &Path, skip_module: bool) -> Resul
             if target.is_file() {
                 fs::remove_file(&target)?;
             }
-            sync_directory(&entry.path(), &target, false)?;
+            sync_directory(&entry.path(), &target)?;
         } else {
             if target.is_dir() {
                 fs::remove_dir_all(&target)?;
@@ -698,12 +697,18 @@ fn sync_directory(source: &Path, destination: &Path, skip_module: bool) -> Resul
 pub fn stage_adapter(root: &Path, worktree: &Path) -> Result<()> {
     let adapter = root.join("src/adapter");
     ensure!(
-        adapter.join("mod.rs").is_file(),
-        "src/adapter/mod.rs missing"
+        adapter.join("src/lib.rs").is_file(),
+        "src/adapter/src/lib.rs missing"
     );
     let gui = worktree.join("wezterm-gui");
-    copy_changed(&adapter.join("mod.rs"), &gui.join("src/vtabs.rs"))?;
-    sync_directory(&adapter, &gui.join("src/vtabs"), true)?;
+    let adapter_manifest = fs::read_to_string(adapter.join("Cargo.toml"))?
+        .parse::<toml_edit::DocumentMut>()
+        .context("parse adapter manifest")?;
+    let additions = adapter_manifest
+        .get("dependencies")
+        .and_then(toml_edit::Item::as_table)
+        .context("adapter dependency section missing")?;
+    sync_directory(&adapter, &gui.join("src/vtabs"))?;
     let manifest = gui.join("Cargo.toml");
     let original = fs::read_to_string(&manifest)?;
     let mut document = original
@@ -713,25 +718,14 @@ pub fn stage_adapter(root: &Path, worktree: &Path) -> Result<()> {
         .get_mut("dependencies")
         .and_then(toml_edit::Item::as_table_mut)
         .context("WezTerm GUI dependency section changed")?;
-    for (name, directory) in [("vtabs-app", "app"), ("vtabs-store", "store")] {
-        let mut dependency = toml_edit::InlineTable::new();
-        dependency.insert(
-            "path",
-            root.join("src")
-                .join(directory)
-                .to_string_lossy()
-                .to_string()
-                .into(),
-        );
-        dependency.insert("default-features", false.into());
-        dependencies[name] = toml_edit::value(dependency);
-    }
-    let mut ratatui = toml_edit::InlineTable::new();
-    ratatui.insert("version", "0.30.2".into());
-    ratatui.insert("default-features", false.into());
-    dependencies["ratatui"] = toml_edit::value(ratatui);
-    if !dependencies.contains_key("unicode-width") {
-        dependencies["unicode-width"] = toml_edit::value("0.2");
+    for (name, value) in additions.iter() {
+        let mut dependency = value.clone();
+        if let Some(relative) = dependency.get("path").and_then(toml_edit::Item::as_str) {
+            let path = fs::canonicalize(adapter.join(relative))
+                .with_context(|| format!("resolve adapter dependency {name}"))?;
+            dependency["path"] = toml_edit::value(path.to_string_lossy().to_string());
+        }
+        dependencies.insert(name, dependency);
     }
     let updated = document.to_string();
     if updated != original {

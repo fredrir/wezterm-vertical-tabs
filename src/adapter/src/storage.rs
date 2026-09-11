@@ -3,7 +3,7 @@ use smol::io::{AsyncReadExt, AsyncWriteExt};
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::time::Duration;
-use vtabs_store::{Request, Response, MAX_REQUEST_BYTES, MAX_RESPONSE_BYTES, PROTOCOL_VERSION};
+use vtabs_store::{MAX_REQUEST_BYTES, MAX_RESPONSE_BYTES, PROTOCOL_VERSION, Request, Response};
 use window::WindowOps;
 
 fn paths() -> anyhow::Result<(PathBuf, PathBuf)> {
@@ -139,9 +139,8 @@ pub fn request(window: window::Window, request: Request, mux_window_id: usize) {
                         let profile = profile.clone();
                         gui.window
                             .notify(TermWindowNotif::Apply(Box::new(move |other| {
-                                other.vtabs_message(
-                                    serde_json::json!({"refresh_profile": profile}),
-                                );
+                                other
+                                    .vtabs_message(serde_json::json!({"refresh_profile": profile}));
                             })));
                     }
                 }

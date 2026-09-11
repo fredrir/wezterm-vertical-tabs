@@ -1,5 +1,7 @@
 [workspace]
 members  = ["src/core", "src/ui", "src/app", "src/store", "src/bench", "tools"]
+# Adapter sources and unit tests compile inside wezterm-gui.
+exclude = ["src/adapter"]
 resolver = "2"
 
 [workspace.package]

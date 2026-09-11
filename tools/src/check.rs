@@ -92,7 +92,16 @@ pub fn check(ctx: &Context) -> Result<()> {
             ctx.runner
                 .run(uv(ctx).args(["run", "--locked", "ruff", "format", "--check", "tests"]))
         });
-        let fmt = scope.spawn(|| ctx.runner.run(cargo(ctx).args(["fmt", "--all", "--check"])));
+        let fmt = scope.spawn(|| -> Result<()> {
+            ctx.runner
+                .run(cargo(ctx).args(["fmt", "--all", "--check"]))?;
+            ctx.runner.run(cargo(ctx).args([
+                "fmt",
+                "--manifest-path",
+                "src/adapter/Cargo.toml",
+                "--check",
+            ]))
+        });
         (lint.join(), fmt.join())
     });
     results

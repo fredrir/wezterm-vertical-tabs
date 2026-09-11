@@ -1,0 +1,16 @@
+# Compiled as a wezterm-gui module; dependencies below extend the host manifest.
+[package]
+name = "vtabs-adapter"
+version = "0.1.0"
+edition = "2024"
+publish = false
+autotests = false
+
+[package.metadata.wezterm]
+host = "wezterm-gui"
+
+[dependencies]
+vtabs-app = { path = "../app", default-features = false }
+vtabs-store = { path = "../store", default-features = false }
+ratatui = { version = "0.30.2", default-features = false }
+unicode-width = "0.2"

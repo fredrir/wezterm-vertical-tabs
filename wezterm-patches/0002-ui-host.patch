@@ -116,10 +116,11 @@ diff --git a/wezterm-gui/src/main.rs b/wezterm-gui/src/main.rs
 index 5e7ca47b..3610fccf 100644
 --- a/wezterm-gui/src/main.rs
 +++ b/wezterm-gui/src/main.rs
-@@ -52,6 +52,7 @@ mod shapecache;
+@@ -52,6 +52,8 @@ mod shapecache;
  mod spawn;
  mod stats;
  mod tabbar;
++#[path = "vtabs/src/lib.rs"]
 +mod vtabs;
  mod termwindow;
  mod unicode_names;

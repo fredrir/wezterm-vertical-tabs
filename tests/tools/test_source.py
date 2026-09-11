@@ -25,7 +25,15 @@ def test_prepare_applies_ordered_patches_and_wires_project_dependencies(
     assert "vtabs-app" in manifest
     assert "vtabs-store" in manifest
     assert manifest.count("termwiz") == 1
-    assert (checkout / "wezterm-gui/src/vtabs/storage.rs").read_text() == ("pub fn fixture() {}\n")
+    assert (checkout / "wezterm-gui/src/vtabs/src/storage.rs").read_text() == (
+        "pub fn fixture() {}\n"
+    )
+    adapter = checkout / "wezterm-gui/src/vtabs"
+    assert (adapter / "src/lib.rs").is_file()
+    assert (adapter / "tests/storage.rs").read_text() == "#[test]\nfn storage() {}\n"
+    assert (adapter / "Cargo.toml").read_text() == (
+        tools_sandbox.root / "src/adapter/Cargo.toml"
+    ).read_text()
     prepared = json.loads((tools_sandbox.cache / "prepared.json").read_text())
     assert prepared["upstream"] == revision
 
@@ -42,7 +50,7 @@ def test_prepare_stops_at_first_incompatible_patch_and_records_failure(
     assert result.returncode != 0
     assert (tools_sandbox.cache / "worktree/patch-target.txt").read_text() == "first\n"
     assert not (tools_sandbox.cache / "prepared.json").exists()
-    assert not (tools_sandbox.cache / "worktree/wezterm-gui/src/vtabs.rs").exists()
+    assert not (tools_sandbox.cache / "worktree/wezterm-gui/src/vtabs/src/lib.rs").exists()
     assert "0002-second.patch" in result.stdout + result.stderr
     reports = list((tools_sandbox.cache / "runs").glob("*/run.json"))
     assert len(reports) == 1
@@ -71,24 +79,33 @@ def test_prepare_stops_at_first_incompatible_patch_and_records_failure(
 
 def test_adapter_sync_reuses_checkout_and_removes_deleted_modules(tools_sandbox, local_upstream):
     _, revision = local_upstream
-    write_file(tools_sandbox.root, "src/adapter/obsolete/nested.rs", "pub fn obsolete() {}\n")
+    write_file(tools_sandbox.root, "src/adapter/src/obsolete/nested.rs", "pub fn obsolete() {}\n")
     tools_sandbox.run("--upstream", revision, "prepare")
     checkout = tools_sandbox.cache / "worktree"
     sentinel = write_file(checkout, "keep-checkout.txt", "existing checkout\n")
-    module = checkout / "wezterm-gui/src/vtabs/storage.rs"
+    module = checkout / "wezterm-gui/src/vtabs/src/storage.rs"
     previous_mtime = module.stat().st_mtime_ns
-    removed = tools_sandbox.root / "src/adapter/obsolete/nested.rs"
+    test_module = checkout / "wezterm-gui/src/vtabs/tests/storage.rs"
+    previous_test_mtime = test_module.stat().st_mtime_ns
+    removed = tools_sandbox.root / "src/adapter/src/obsolete/nested.rs"
     removed.unlink()
     removed.parent.rmdir()
-    write_file(tools_sandbox.root, "src/adapter/new_module.rs", "pub fn added() {}\n")
+    write_file(tools_sandbox.root, "src/adapter/src/new_module.rs", "pub fn added() {}\n")
 
+    adapter_manifest = tools_sandbox.root / "src/adapter/Cargo.toml"
+    adapter_manifest.write_text(
+        adapter_manifest.read_text()
+        + 'fixture-dependency = { version = "1", features = ["extra"] }\n'
+    )
     tools_sandbox.run("--upstream", revision, "--offline", "prepare")
 
     assert sentinel.read_text() == "existing checkout\n"
     assert module.stat().st_mtime_ns == previous_mtime
+    assert test_module.stat().st_mtime_ns == previous_test_mtime
     assert not (module.parent / "obsolete").exists()
     assert (module.parent / "new_module.rs").is_file()
     dependencies = tomllib.loads((checkout / "wezterm-gui/Cargo.toml").read_text())["dependencies"]
+    assert dependencies["fixture-dependency"] == {"version": "1", "features": ["extra"]}
     for name, directory in (("vtabs-app", "app"), ("vtabs-store", "store")):
         assert dependencies[name] == {
             "path": str(tools_sandbox.root / "src" / directory),
