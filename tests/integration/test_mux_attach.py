@@ -256,7 +256,7 @@ def test_shared_client_removal_does_not_resize_an_unaffected_sibling(mux_pair):
         prior = {p["pane_id"] for p in local.panes()}
         replacement = int(remote("split-pane", "--pane-id", source))
         remote("kill-pane", "--pane-id", source)
-        wait_for(lambda: len(p := local.panes()) == 3 and {v["pane_id"] for v in p} != prior)
+        wait_for(lambda prior=prior: len(p := local.panes()) == 3 and {v["pane_id"] for v in p} != prior)
         source = replacement
         panes = json.loads(remote("list", "--format", "json"))
         assert geometry(next(p for p in panes if p["pane_id"] == sibling)) == expected
