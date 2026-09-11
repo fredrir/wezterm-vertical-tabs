@@ -3,6 +3,7 @@
 import json
 import os
 import sys
+import tomllib
 
 import pytest
 
@@ -24,9 +25,7 @@ def test_prepare_applies_ordered_patches_and_wires_project_dependencies(
     assert "vtabs-app" in manifest
     assert "vtabs-store" in manifest
     assert manifest.count("termwiz") == 1
-    assert (checkout / "wezterm-gui/src/native_vtabs/storage.rs").read_text() == (
-        "pub fn fixture() {}\n"
-    )
+    assert (checkout / "wezterm-gui/src/vtabs/storage.rs").read_text() == ("pub fn fixture() {}\n")
     prepared = json.loads((tools_sandbox.cache / "prepared.json").read_text())
     assert prepared["upstream"] == revision
 
@@ -35,7 +34,7 @@ def test_prepare_stops_at_first_incompatible_patch_and_records_failure(
     tools_sandbox, local_upstream
 ):
     _, revision = local_upstream
-    patch = tools_sandbox.root / "native/patches/0002-second.patch"
+    patch = tools_sandbox.root / "wezterm-patches/0002-second.patch"
     patch.write_text(patch.read_text().replace("-first", "-unexpected upstream contents"))
 
     result = tools_sandbox.run("--upstream", revision, "prepare", check=False)
@@ -43,7 +42,7 @@ def test_prepare_stops_at_first_incompatible_patch_and_records_failure(
     assert result.returncode != 0
     assert (tools_sandbox.cache / "worktree/patch-target.txt").read_text() == "first\n"
     assert not (tools_sandbox.cache / "prepared.json").exists()
-    assert not (tools_sandbox.cache / "worktree/wezterm-gui/src/native_vtabs.rs").exists()
+    assert not (tools_sandbox.cache / "worktree/wezterm-gui/src/vtabs.rs").exists()
     assert "0002-second.patch" in result.stdout + result.stderr
     reports = list((tools_sandbox.cache / "runs").glob("*/run.json"))
     assert len(reports) == 1
@@ -72,16 +71,16 @@ def test_prepare_stops_at_first_incompatible_patch_and_records_failure(
 
 def test_adapter_sync_reuses_checkout_and_removes_deleted_modules(tools_sandbox, local_upstream):
     _, revision = local_upstream
-    write_file(tools_sandbox.root, "native/adapter/obsolete/nested.rs", "pub fn obsolete() {}\n")
+    write_file(tools_sandbox.root, "src/adapter/obsolete/nested.rs", "pub fn obsolete() {}\n")
     tools_sandbox.run("--upstream", revision, "prepare")
     checkout = tools_sandbox.cache / "worktree"
     sentinel = write_file(checkout, "keep-checkout.txt", "existing checkout\n")
-    module = checkout / "wezterm-gui/src/native_vtabs/storage.rs"
+    module = checkout / "wezterm-gui/src/vtabs/storage.rs"
     previous_mtime = module.stat().st_mtime_ns
-    removed = tools_sandbox.root / "native/adapter/obsolete/nested.rs"
+    removed = tools_sandbox.root / "src/adapter/obsolete/nested.rs"
     removed.unlink()
     removed.parent.rmdir()
-    write_file(tools_sandbox.root, "native/adapter/new_module.rs", "pub fn added() {}\n")
+    write_file(tools_sandbox.root, "src/adapter/new_module.rs", "pub fn added() {}\n")
 
     tools_sandbox.run("--upstream", revision, "--offline", "prepare")
 
@@ -89,7 +88,12 @@ def test_adapter_sync_reuses_checkout_and_removes_deleted_modules(tools_sandbox,
     assert module.stat().st_mtime_ns == previous_mtime
     assert not (module.parent / "obsolete").exists()
     assert (module.parent / "new_module.rs").is_file()
-    assert (checkout / "wezterm-gui/Cargo.toml").read_text().count("vtabs-app") == 2
+    dependencies = tomllib.loads((checkout / "wezterm-gui/Cargo.toml").read_text())["dependencies"]
+    for name, directory in (("vtabs-app", "app"), ("vtabs-store", "store")):
+        assert dependencies[name] == {
+            "path": str(tools_sandbox.root / "src" / directory),
+            "default-features": False,
+        }
 
 
 def test_pinned_revision_can_prepare_offline_after_upstream_moves(tools_sandbox, local_upstream):
@@ -165,7 +169,7 @@ def test_offline_preparation_disables_even_explicitly_allowed_submodule_transpor
     git(upstream, "clone", str(upstream), str(checkout))
     write_file(
         checkout,
-        ".git/wez-vtabs-native.json",
+        ".git/wez-vtabs.json",
         json.dumps({"path": str(checkout.resolve()), "remote": str(upstream), "capability": 1}),
     )
     tools_sandbox.env["GIT_ALLOW_PROTOCOL"] = "ext"
@@ -191,7 +195,7 @@ def test_offline_patch_changes_reuse_cached_submodule_objects(
     tools_sandbox.env["GIT_ALLOW_PROTOCOL"] = "file"
     tools_sandbox.run("--upstream", revision, "prepare")
     module.rename(module.with_name("unavailable-module"))
-    patch = tools_sandbox.root / "native/patches/0002-second.patch"
+    patch = tools_sandbox.root / "wezterm-patches/0002-second.patch"
     patch.write_text(patch.read_text().replace("+second", "+changed second"))
 
     tools_sandbox.run("--offline", "--upstream", revision, "prepare")

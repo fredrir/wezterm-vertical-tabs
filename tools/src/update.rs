@@ -304,7 +304,7 @@ pub fn update(
                 }
                 ensure!(
                     checkout.join("tools/Cargo.toml").is_file(),
-                    "updated project has no Rust tooling; choose a compatible native branch"
+                    "updated project has no Rust tooling; choose a compatible branch"
                 );
                 // A revision-specific output prevents overwriting a running
                 // updater executable on Windows during a later update.

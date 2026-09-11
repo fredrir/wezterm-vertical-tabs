@@ -95,8 +95,7 @@ pub fn current_bundle(root: &Path, promote: bool) -> Result<PathBuf> {
         );
         activate(root, &pending)?;
     }
-    let active =
-        pointer(root, "active")?.context("native bundle not installed; run just install")?;
+    let active = pointer(root, "active")?.context("bundle not installed; run just install")?;
     let bundle = root.join("versions").join(&active.id);
     // Hashing the complete source distribution on every launch would delay
     // startup. Installation and promotion verify it; launch checks essentials.
@@ -240,7 +239,7 @@ fn install_entry(root: &Path, bundle: &Path) -> Result<()> {
         );
         atomic_text(&root.join("wez-vtabs"), &script, true)?;
         if cfg!(target_os = "macos") {
-            let contents = root.join("WezTerm Native.app/Contents");
+            let contents = root.join("WezTerm VTabs.app/Contents");
             fs::create_dir_all(contents.join("Resources"))?;
             atomic_text(&contents.join("MacOS/launch"), &script, true)?;
             let icon = bundle.join("WezTerm.app/Contents/Resources/terminal.icns");
@@ -251,8 +250,8 @@ fn install_entry(root: &Path, bundle: &Path) -> Result<()> {
             for (key, value) in [
                 ("CFBundleExecutable", "launch"),
                 ("CFBundleIdentifier", "dev.fredrir.wez-vtabs.launcher"),
-                ("CFBundleName", "WezTerm Native"),
-                ("CFBundleDisplayName", "WezTerm Native"),
+                ("CFBundleName", "WezTerm VTabs"),
+                ("CFBundleDisplayName", "WezTerm VTabs"),
                 ("CFBundlePackageType", "APPL"),
                 ("CFBundleVersion", "1"),
                 ("CFBundleIconFile", "terminal.icns"),
@@ -273,7 +272,7 @@ fn install_entry(root: &Path, bundle: &Path) -> Result<()> {
         } else {
             atomic_text(
                 &root.join("wez-vtabs.desktop"),
-                &desktop_entry("WezTerm Native", &dispatcher, bundle, ""),
+                &desktop_entry("WezTerm VTabs", &dispatcher, bundle, ""),
                 true,
             )?;
         }
@@ -300,13 +299,12 @@ pub fn managed_context(executable: &Path) -> Result<Option<(PathBuf, PathBuf)>> 
     } else {
         directory.to_path_buf()
     };
-    let Some(marker) = state::read_json::<Value>(&marker_directory.join("native-bundle.json"))?
-    else {
+    let Some(marker) = state::read_json::<Value>(&marker_directory.join("bundle.json"))? else {
         return Ok(None);
     };
     ensure!(
         marker["capability"] == 1 && marker["updater_protocol"] == 1,
-        "native bundle contract mismatch"
+        "bundle contract mismatch"
     );
     let bundle = marker_directory
         .join(marker["root"].as_str().context("bundle root missing")?)

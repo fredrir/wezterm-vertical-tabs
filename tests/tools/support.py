@@ -54,7 +54,7 @@ def create_bundle(
     name: str,
     tools_binary: Path,
     target: str,
-    native_binaries: dict[str, Path] | None = None,
+    wezterm_binaries: dict[str, Path] | None = None,
 ) -> Path:
     binaries = binary_dir(bundle)
     binaries.mkdir(parents=True)
@@ -62,13 +62,13 @@ def create_bundle(
     (source / "tools").mkdir(parents=True)
     (source / "Cargo.toml").write_text('[workspace]\nmembers = ["tools"]\n', encoding="utf-8")
     (source / "tools/Cargo.toml").write_text(
-        '[package]\nname = "vtabs-tools"\nversion = "0.1.0"\n', encoding="utf-8"
+        '[package]\nname = "tools"\nversion = "0.1.0"\n', encoding="utf-8"
     )
     shutil.copy2(tools_binary, binaries / executable_name("wez-vtabs"))
     for executable in ("wezterm-gui", "wezterm", "wez-vtabs-store"):
         destination = binaries / executable_name(executable)
-        if native_binaries is not None:
-            shutil.copy2(native_binaries[executable], destination)
+        if wezterm_binaries is not None:
+            shutil.copy2(wezterm_binaries[executable], destination)
         elif os.name == "nt":
             shutil.copy2(tools_binary, destination)
         else:
@@ -87,7 +87,7 @@ def create_bundle(
     )
     marker_dir = bundle / "WezTerm.app/Contents/Resources" if sys.platform == "darwin" else binaries
     marker_dir.mkdir(parents=True, exist_ok=True)
-    (marker_dir / "native-bundle.json").write_text(
+    (marker_dir / "bundle.json").write_text(
         json.dumps(
             {
                 "root": os.path.relpath(bundle, marker_dir),

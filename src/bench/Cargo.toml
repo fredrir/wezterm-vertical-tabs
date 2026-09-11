@@ -1,0 +1,11 @@
+[package]
+name              = "vtabs-bench"
+version.workspace = true
+edition.workspace = true
+publish           = false
+
+[dependencies]
+vtabs-core = { path = "../core" }
+vtabs-ui = { path = "../ui" }
+vtabs-store = { path = "../store", features = ["sqlite"] }
+serde_json.workspace = true

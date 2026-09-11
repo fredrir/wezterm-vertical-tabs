@@ -36,7 +36,7 @@ def test_deploy_preserves_a_foreign_application_once_and_refreshes_its_own_copie
     assert (preserved / "Contents/Info.plist").read_text() == "stock"
     gui = app / "Contents/MacOS" / executable_name("wezterm-gui")
     assert gui.read_bytes() == installed(tools_sandbox, "first", "wezterm-gui").read_bytes()
-    assert (app / "Contents/Resources/native-bundle.json").is_file()
+    assert (app / "Contents/Resources/bundle.json").is_file()
 
     result = tools_sandbox.json("deploy", "--bundle", bundle_factory("second"), "--app", app)
 

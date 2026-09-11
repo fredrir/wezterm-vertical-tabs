@@ -174,11 +174,8 @@ fn inventory(root: &Path) -> Result<BTreeMap<String, FileDigest>> {
 
 fn metadata(bundle: &Path) -> Result<BuildMetadata> {
     let metadata: BuildMetadata =
-        state::read_json(&bundle.join("build.json"))?.context("native bundle metadata missing")?;
-    ensure!(
-        metadata.capability == 1,
-        "native bundle metadata incompatible"
-    );
+        state::read_json(&bundle.join("build.json"))?.context("bundle metadata missing")?;
+    ensure!(metadata.capability == 1, "bundle metadata incompatible");
     state::safe_id(&metadata.id)?;
     ensure!(
         metadata.target == env!("WEZ_VTABS_TARGET"),
@@ -230,7 +227,7 @@ pub fn verify(bundle: &Path) -> Result<BuildMetadata> {
     ] {
         ensure!(
             required.is_file(),
-            "native bundle incomplete: {}",
+            "bundle incomplete: {}",
             required.display()
         );
     }
@@ -327,7 +324,7 @@ pub fn package(
 ) -> Result<PathBuf> {
     let _stage = ctx.runner.stage("bundle");
     crate::source::verify_source(&ctx.root, metadata)?;
-    let name = format!("wez-vtabs-native-{}", state::safe_id(&metadata.id)?);
+    let name = format!("wez-vtabs-{}", state::safe_id(&metadata.id)?);
     fs::create_dir_all(output)?;
     let destination = output.join(name);
     if destination.exists() {
@@ -433,7 +430,7 @@ pub fn package(
         (&bindir, "..", "bin/wez-vtabs")
     };
     state::write_json(
-        &marker_dir.join("native-bundle.json"),
+        &marker_dir.join("bundle.json"),
         &serde_json::json!({"root":relative_root,"capability":1,"updater_protocol":1,"tool":relative_tool}),
     )?;
     if cfg!(target_os = "macos") {

@@ -18,7 +18,7 @@ def test_repro_preserves_failed_source_revision_configuration_and_logs(
     tools_sandbox, local_upstream
 ):
     _, revision = local_upstream
-    patch = tools_sandbox.root / "native/patches/0002-second.patch"
+    patch = tools_sandbox.root / "wezterm-patches/0002-second.patch"
     patch.write_text(patch.read_text().replace("-first", "-incompatible"))
     tools_sandbox.env["RUSTFLAGS"] = "-C debuginfo=1"
     tools_sandbox.env["UNRELATED_SECRET_TOKEN"] = "must-not-be-recorded"
@@ -28,7 +28,7 @@ def test_repro_preserves_failed_source_revision_configuration_and_logs(
     report = json.loads(report_path.read_text())
     snapshot = report_path.parent / "source"
     assert report["metadata"]["source_snapshot"] == "source"
-    assert (snapshot / "native/patches/0002-second.patch").read_text() == patch.read_text()
+    assert (snapshot / "wezterm-patches/0002-second.patch").read_text() == patch.read_text()
     assert report["configuration"]["RUSTFLAGS"] == "-C debuginfo=1"
     assert "UNRELATED_SECRET_TOKEN" not in report["configuration"]
     assert "must-not-be-recorded" not in report_path.read_text()
@@ -82,7 +82,7 @@ def test_cache_gc_dry_run_preserves_active_pending_leased_and_unowned_paths(
     bundles.mkdir(parents=True)
     paths = {}
     for name in ("active", "pending", "running", "expired"):
-        paths[name] = bundles / f"wez-vtabs-native-{name}"
+        paths[name] = bundles / f"wez-vtabs-{name}"
         shutil.copytree(bundle_factory(name), paths[name])
     tools_sandbox.install.mkdir()
     for name in ("active", "pending"):
@@ -94,7 +94,7 @@ def test_cache_gc_dry_run_preserves_active_pending_leased_and_unowned_paths(
     ]
     for path in archives:
         path.write_text("archive fixture\n")
-    lease = tools_sandbox.cache / "leases/wez-vtabs-native-running.lock"
+    lease = tools_sandbox.cache / "leases/wez-vtabs-running.lock"
     lease.parent.mkdir()
     with FileLock(lease):
         preview = tools_sandbox.json("cache", "gc", "--dry-run", "--keep", "0")
@@ -146,7 +146,7 @@ def test_doctor_launch_reports_missing_install_without_development_tools(tools_s
     )
 
 
-def test_native_replay_rebuilds_recorded_revision_and_remaps_only_fixture_paths(
+def test_replay_rebuilds_recorded_revision_and_remaps_only_fixture_paths(
     tools_sandbox, local_upstream, recording_cargo, tmp_path
 ):
     _, revision = local_upstream
@@ -160,15 +160,15 @@ def test_native_replay_rebuilds_recorded_revision_and_remaps_only_fixture_paths(
         f"#!{sys.executable}\nimport json, sys\n"
         f"with open({str(uv_calls)!r}, 'a') as stream:\n"
         "    stream.write(json.dumps(sys.argv[1:]) + '\\n')\n"
-        "print('fixture native test failure', file=sys.stderr)\nraise SystemExit(51)\n"
+        "print('fixture test failure', file=sys.stderr)\nraise SystemExit(51)\n"
     )
     uv.chmod(0o755)
     original_output = tmp_path / "original-test-output"
     failed = tools_sandbox.run(
         "test",
-        "native",
+        "gui",
         "--",
-        f"--native-bin-dir={original_binaries}",
+        f"--wezterm-bin-dir={original_binaries}",
         f"--basetemp={original_output}",
         "-k",
         "literal and not another",
@@ -184,7 +184,7 @@ def test_native_replay_rebuilds_recorded_revision_and_remaps_only_fixture_paths(
     result = tools_sandbox.run("repro", report, "--execute", check=False)
 
     assert result.returncode != 0
-    assert "fixture native test failure" in result.stderr
+    assert "fixture test failure" in result.stderr
     calls = [json.loads(line) for line in uv_calls.read_text().splitlines()]
     assert len(calls) == 2
     replayed = calls[1]
@@ -193,9 +193,9 @@ def test_native_replay_rebuilds_recorded_revision_and_remaps_only_fixture_paths(
     assert "--cache" not in replayed
     assert "--upstream" not in replayed
     new_binaries = next(
-        arg.removeprefix("--native-bin-dir=")
+        arg.removeprefix("--wezterm-bin-dir=")
         for arg in replayed
-        if arg.startswith("--native-bin-dir=")
+        if arg.startswith("--wezterm-bin-dir=")
     )
     new_output = next(
         arg.removeprefix("--basetemp=") for arg in replayed if arg.startswith("--basetemp=")
@@ -221,7 +221,7 @@ def test_offline_replay_uses_owned_cached_objects_after_origin_becomes_unavailab
     revision = commit(upstream, "Upstream with replay submodule")
     tools_sandbox.env["GIT_ALLOW_PROTOCOL"] = "file"
     tools_sandbox.run("--upstream", revision, "prepare")
-    patch = tools_sandbox.root / "native/patches/0002-second.patch"
+    patch = tools_sandbox.root / "wezterm-patches/0002-second.patch"
     patch.write_text(patch.read_text().replace("-first", "-incompatible"))
     failed = tools_sandbox.run("--offline", "--upstream", revision, "prepare", check=False)
     assert failed.returncode != 0

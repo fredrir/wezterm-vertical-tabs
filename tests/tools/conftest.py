@@ -90,19 +90,19 @@ def tools_sandbox(tools_binary: Path, isolated_env: dict[str, str], tmp_path: Pa
     root.mkdir()
     write_file(root, "Cargo.toml", '[workspace]\nmembers = []\nresolver = "2"\n')
     write_file(root, "Cargo.lock", "version = 4\n")
-    write_file(root, "tools/Cargo.toml", '[package]\nname = "vtabs-tools"\nversion = "0.1.0"\n')
-    for name in ("vtabs-app", "vtabs-store"):
+    write_file(root, "tools/Cargo.toml", '[package]\nname = "tools"\nversion = "0.1.0"\n')
+    for name, directory in (("vtabs-app", "app"), ("vtabs-store", "store")):
         write_file(
             root,
-            f"crates/{name}/Cargo.toml",
+            f"src/{directory}/Cargo.toml",
             f'[package]\nname = "{name}"\nversion = "0.1.0"\n',
         )
-        write_file(root, f"crates/{name}/src/lib.rs", "pub fn fixture() {}\n")
-    write_file(root, "native/adapter/mod.rs", "mod storage;\n")
-    write_file(root, "native/adapter/storage.rs", "pub fn fixture() {}\n")
+        write_file(root, f"src/{directory}/src/lib.rs", "pub fn fixture() {}\n")
+    write_file(root, "src/adapter/mod.rs", "mod storage;\n")
+    write_file(root, "src/adapter/storage.rs", "pub fn fixture() {}\n")
     write_file(root, "plugin/init.lua", "return {}\n")
     write_file(root, "README.md", "Fixture project\n")
-    git(root, "init", "--quiet", "--initial-branch=native")
+    git(root, "init", "--quiet", "--initial-branch=dev")
     commit(root)
     return ToolSandbox(
         binary=tools_binary,
@@ -148,7 +148,7 @@ def local_upstream(tools_sandbox: ToolSandbox, tmp_path: Path) -> tuple[Path, st
     ):
         write_file(
             tools_sandbox.root,
-            f"native/patches/{name}",
+            f"wezterm-patches/{name}",
             "diff --git a/patch-target.txt b/patch-target.txt\n"
             "--- a/patch-target.txt\n+++ b/patch-target.txt\n@@ -1 +1 @@\n"
             f"-{before}\n+{after}\n",

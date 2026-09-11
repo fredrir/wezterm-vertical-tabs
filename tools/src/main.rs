@@ -63,9 +63,7 @@ fn context(cli: &Cli) -> Result<Context> {
         .or_else(|| managed.as_ref().map(|(source, _)| source.clone()))
         .or_else(|| {
             cwd.ancestors()
-                .find(|path| {
-                    path.join("tools/Cargo.toml").is_file() && path.join("crates").is_dir()
-                })
+                .find(|path| path.join("tools/Cargo.toml").is_file() && path.join("src").is_dir())
                 .map(Path::to_path_buf)
         })
         .unwrap_or_else(|| cwd.clone());
@@ -78,13 +76,13 @@ fn context(cli: &Cli) -> Result<Context> {
         })
         .map(PathBuf::from)
         .unwrap_or_else(|| home().join(".cache"))
-        .join("wez-vtabs-native")
+        .join("wez-vtabs")
     }))?;
     let install = absolute(
         cli.install_root
             .clone()
             .or_else(|| managed.map(|(_, install)| install))
-            .unwrap_or_else(|| data_home().join("wez-vtabs-native")),
+            .unwrap_or_else(|| data_home().join("wez-vtabs")),
     )?;
     let runner = process::Runner::new(
         &cache,

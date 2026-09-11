@@ -130,16 +130,16 @@ fn pytest(ctx: &Context, suite: Suite, args: &[String], binaries: Option<PathBuf
         Suite::Tools => command.arg("tests/tools"),
         Suite::Rust => command.arg("tests/rust"),
         Suite::Lua => command.arg("tests/integration/test_lua.py"),
-        Suite::Native => command.args(["tests/integration", "--run-native"]),
+        Suite::Gui => command.args(["tests/integration", "--run-gui"]),
         Suite::Ssh => command.args([
             "tests/integration/test_container_ssh.py",
             "--run-container",
-            "--run-native",
+            "--run-gui",
         ]),
         Suite::Tls => command.args([
-            "tests/native/test_tls.py",
-            "tests/integration/test_native.py",
-            "--run-native",
+            "tests/scenarios/test_tls.py",
+            "tests/integration/test_gui.py",
+            "--run-gui",
             "-k",
             "tls",
         ]),
@@ -160,8 +160,8 @@ pub fn test(ctx: &Context, suite: Suite, args: &[String]) -> Result<()> {
             cargo(ctx).args(["test", "--workspace", "--all-features"]),
         ))?;
     }
-    if matches!(suite, Suite::Native | Suite::Ssh | Suite::Tls) {
-        if !args.iter().any(|arg| arg.starts_with("--native-bin-dir"))
+    if matches!(suite, Suite::Gui | Suite::Ssh | Suite::Tls) {
+        if !args.iter().any(|arg| arg.starts_with("--wezterm-bin-dir"))
             && let Some(metadata) = crate::state::read_json::<crate::state::BuildMetadata>(
                 &ctx.cache.join("build.json"),
             )?
@@ -170,19 +170,19 @@ pub fn test(ctx: &Context, suite: Suite, args: &[String]) -> Result<()> {
                 .get("wezterm-gui")
                 .and_then(|path| path.parent())
         {
-            args.push(format!("--native-bin-dir={}", directory.display()));
+            args.push(format!("--wezterm-bin-dir={}", directory.display()));
         }
         ensure!(
-            args.iter().any(|arg| arg.starts_with("--native-bin-dir")),
-            "native suite requires -- --native-bin-dir=PATH"
+            args.iter().any(|arg| arg.starts_with("--wezterm-bin-dir")),
+            "suite requires -- --wezterm-bin-dir=PATH"
         );
         let requested = args
             .iter()
-            .find_map(|arg| arg.strip_prefix("--native-bin-dir="))
+            .find_map(|arg| arg.strip_prefix("--wezterm-bin-dir="))
             .map(PathBuf::from)
             .or_else(|| {
                 args.windows(2)
-                    .find(|args| args[0] == "--native-bin-dir")
+                    .find(|args| args[0] == "--wezterm-bin-dir")
                     .map(|args| PathBuf::from(&args[1]))
             });
         if let Some(metadata) =

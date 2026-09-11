@@ -41,7 +41,7 @@ return {
       ["label"] = "Rail width",
     },
     {
-      ["description"] = "Native sidebar edge",
+      ["description"] = "Sidebar edge",
       ["group"] = "layout",
       ["key"] = "side",
       ["kind"] = { ["choice"] = { "left", "right" } },
@@ -83,7 +83,7 @@ return {
       ["label"] = "Cards",
     },
     {
-      ["description"] = "Visible native tab indices",
+      ["description"] = "Visible tab indices",
       ["group"] = "appearance",
       ["key"] = "show_indices",
       ["kind"] = "bool",
@@ -153,7 +153,7 @@ return {
       ["label"] = "Private accent",
     },
     {
-      ["description"] = "Enable native tab, search, settings and sidebar shortcuts",
+      ["description"] = "Enable tab, search, settings and sidebar shortcuts",
       ["group"] = "behavior",
       ["key"] = "keyboard_shortcuts",
       ["kind"] = "bool",

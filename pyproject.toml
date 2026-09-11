@@ -31,5 +31,5 @@ markers = [
   "lua: behavior exercised through the public Lua plugin interface",
   "luals: Lua language-server contract validation requiring --run-luals",
   "container: isolated container integration requiring --run-container",
-  "native: prebuilt native integration requiring --run-native",
+  "gui: prebuilt integration requiring --run-gui",
 ]

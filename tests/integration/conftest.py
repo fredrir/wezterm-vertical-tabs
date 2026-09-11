@@ -1,4 +1,4 @@
-"""Explicit native binaries and private display ownership for integration tests."""
+"""Explicit binaries and private display ownership for integration tests."""
 
 import os
 from pathlib import Path
@@ -9,14 +9,10 @@ from tests.support.headless import HeadlessDisplay
 
 
 @pytest.fixture(scope="session")
-def native_binaries(pytestconfig):
-    directory = pytestconfig.getoption("--native-bin-dir") or os.environ.get(
-        "VTABS_TEST_NATIVE_BIN"
-    )
+def wezterm_binaries(pytestconfig):
+    directory = pytestconfig.getoption("--wezterm-bin-dir") or os.environ.get("VTABS_TEST_BIN")
     if not directory:
-        pytest.fail(
-            "native tests require --native-bin-dir or VTABS_TEST_NATIVE_BIN; they never build WezTerm"
-        )
+        pytest.fail("tests require --wezterm-bin-dir or VTABS_TEST_BIN; they never build WezTerm")
     directory = Path(directory).resolve()
     suffix = ".exe" if os.name == "nt" else ""
     binaries = {
@@ -30,7 +26,7 @@ def native_binaries(pytestconfig):
     }
     missing = [str(path) for path in binaries.values() if not path.is_file()]
     if missing:
-        pytest.fail("missing prebuilt native binaries: " + ", ".join(missing))
+        pytest.fail("missing prebuilt binaries: " + ", ".join(missing))
     return binaries
 
 

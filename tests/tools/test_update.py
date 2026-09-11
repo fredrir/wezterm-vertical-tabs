@@ -15,7 +15,7 @@ from tests.tools.support import write_manifest
 pytestmark = pytest.mark.rust
 
 
-def use_installed_source(tools_sandbox, bundle_factory, branch="native", remote=None):
+def use_installed_source(tools_sandbox, bundle_factory, branch="dev", remote=None):
     bundle = bundle_factory("installed-source")
     metadata = json.loads((bundle / "build.json").read_text())
     metadata["project_source"] = {
@@ -45,24 +45,24 @@ def test_installed_update_preserves_recorded_branch_and_refreshes_legacy_single_
 ):
     repository = tools_sandbox.root
     git(repository, "branch", "main")
-    git(repository, "switch", "-c", "release/native")
-    expected = commit(repository, "Native implementation on release branch")
+    git(repository, "switch", "-c", "release/dev")
+    expected = commit(repository, "implementation on release branch")
     checkout = tools_sandbox.cache / "project"
     checkout.parent.mkdir(parents=True)
     git(repository, "clone", "--single-branch", "--branch", "main", str(repository), str(checkout))
     write_file(
         checkout,
-        ".git/wez-vtabs-native.json",
+        ".git/wez-vtabs.json",
         json.dumps({"path": str(checkout.resolve()), "remote": str(repository), "capability": 1}),
     )
-    use_installed_source(tools_sandbox, bundle_factory, branch="release/native")
+    use_installed_source(tools_sandbox, bundle_factory, branch="release/dev")
 
     result = tools_sandbox.run("update", "--stage-only", check=False)
 
     assert result.returncode != 0
     assert "fixture compiler failure" in result.stderr
     assert git(checkout, "rev-parse", "HEAD") == expected
-    assert (checkout / "native/patches/0001-first.patch").is_file()
+    assert (checkout / "wezterm-patches/0001-first.patch").is_file()
     commands = [json.loads(line) for line in failing_cargo.read_text().splitlines()]
     assert commands
     assert any("tools/Cargo.toml" in " ".join(arguments) for arguments in commands)
@@ -76,7 +76,7 @@ def test_installed_update_preserves_recorded_branch_and_refreshes_legacy_single_
     [
         "--upload-pack=bad",
         "../main",
-        "native^{commit}",
+        "dev^{commit}",
         "a..b",
         "a.lock",
         "a//b",
@@ -119,7 +119,7 @@ def test_verified_prebuilt_update_installs_offline_without_compilation(
         upstream="a" * 40,
         project_source={
             "remote": tools_sandbox.env["WEZ_VTABS_PROJECT_URL"],
-            "branch": "native",
+            "branch": "dev",
             "revision": git(tools_sandbox.root, "rev-parse", "HEAD"),
         },
     )
@@ -171,7 +171,7 @@ def test_prebuilt_update_rejects_archive_paths_that_escape_extraction(
                 "upstream": "a" * 40,
                 "project_source": {
                     "remote": tools_sandbox.env["WEZ_VTABS_PROJECT_URL"],
-                    "branch": "native",
+                    "branch": "dev",
                     "revision": git(tools_sandbox.root, "rev-parse", "HEAD"),
                 },
                 "archive": archive_path.name,

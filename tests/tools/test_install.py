@@ -160,7 +160,7 @@ def test_custom_install_launcher_remembers_root_without_environment(
     output = json.loads(result.stdout)
     assert output["arguments"] == ["--literal", "a b $()"]
     assert output["bundle"] == str(tools_sandbox.install / "versions/custom")
-    assert not (tools_sandbox.install / "native.py").exists()
+    assert not (tools_sandbox.install / "manager.py").exists()
 
 
 def test_daily_update_is_skipped_after_a_recent_failed_attempt(tools_sandbox):

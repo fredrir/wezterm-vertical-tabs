@@ -124,7 +124,7 @@ fn place_app(ctx: &Context, installed: &Path, app: &Path) -> Result<Value> {
                 .cwd(&ctx.root),
         )?;
     }
-    let owned = app.join("Contents/Resources/native-bundle.json").is_file();
+    let owned = app.join("Contents/Resources/bundle.json").is_file();
     let retired = retire(ctx, &app, owned)?;
     if let Err(error) = fs::rename(&staged, &app) {
         if let Some(retired) = &retired {

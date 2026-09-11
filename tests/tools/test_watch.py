@@ -99,13 +99,13 @@ def test_watch_restages_resources_and_retains_current_gui_when_compilation_fails
 
             failure = recording_cargo.parent / "fail-build"
             failure.touch()
-            write_file(tools_sandbox.root, "crates/vtabs-app/src/lib.rs", "pub fn broken() {}\n")
+            write_file(tools_sandbox.root, "src/app/src/lib.rs", "pub fn broken() {}\n")
             wait_until(lambda: "fixture watch compiler failure" in log.read_text(), log)
             assert alive(current_pid)
             assert len(started()) == 2
 
             failure.unlink()
-            write_file(tools_sandbox.root, "crates/vtabs-app/src/lib.rs", "pub fn repaired() {}\n")
+            write_file(tools_sandbox.root, "src/app/src/lib.rs", "pub fn repaired() {}\n")
             wait_until(lambda: len(started()) == 3, log)
             assert not alive(current_pid)
             assert alive(started()[2]["pid"])

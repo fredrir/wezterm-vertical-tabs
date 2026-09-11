@@ -102,7 +102,7 @@ def test_package_assembles_platform_runtime_assets_tool_and_reproducible_source(
         bundle / "WezTerm.app/Contents/Resources" if sys.platform == "darwin" else bundle / "share"
     )
     marker_dir = resources if sys.platform == "darwin" else binaries
-    marker = json.loads((marker_dir / "native-bundle.json").read_text())
+    marker = json.loads((marker_dir / "bundle.json").read_text())
     assert (marker_dir / marker["root"]).resolve() == bundle.resolve()
     assert bundle / marker["tool"] == binaries / executable_name("wez-vtabs")
     assert (resources / "licenses/WezTerm-LICENSE.md").is_file()

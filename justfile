@@ -6,7 +6,7 @@ _default:
 deps *args:
     @{{tool}} deps {{args}}
 
-# Resolve upstream once, compile and validate native binaries.
+# Resolve upstream once, compile and validate binaries.
 build *args:
     @{{tool}} build {{args}}
 
@@ -17,7 +17,7 @@ dev *args:
 check *args:
     @{{tool}} check {{args}}
 
-# Select all/tools/rust/lua/native/ssh/tls; pytest arguments follow --.
+# Select all/tools/rust/lua/gui/ssh/tls; pytest arguments follow --.
 test *args:
     @{{tool}} test {{args}}
 

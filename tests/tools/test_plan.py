@@ -14,8 +14,8 @@ pytestmark = pytest.mark.rust
         ("docs/guide.md", "New guide\n", False, False),
         ("tests/tools/test_example.py", "def test_example(): pass\n", False, True),
         ("tools/src/main.rs", "fn main() {}\n", False, True),
-        ("crates/vtabs-app/src/lib.rs", "pub fn changed() {}\n", True, True),
-        ("native/adapter/storage.rs", "pub fn changed() {}\n", True, True),
+        ("src/app/src/lib.rs", "pub fn changed() {}\n", True, True),
+        ("src/adapter/storage.rs", "pub fn changed() {}\n", True, True),
     ],
 )
 def test_plan_separates_build_validation_and_bundle_inputs(
@@ -36,7 +36,7 @@ def test_plan_separates_build_validation_and_bundle_inputs(
 def test_plan_ignores_generated_files_without_hiding_test_fixtures(tools_sandbox):
     before = tools_sandbox.json("plan")["inputs"]
     for name in (
-        "crates/vtabs-app/target/generated.rs",
+        "src/app/target/generated.rs",
         "tests/__pycache__/conftest.pyc",
         "tools/target/debug/wez-vtabs",
         "tests/.pytest_cache/state",

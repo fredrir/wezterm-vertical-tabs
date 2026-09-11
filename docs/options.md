@@ -4,13 +4,13 @@
 | --------------------- | ------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
 | `width`               | `256`                                                         | Integer 32–1024. Expanded width in logical pixels                                  |
 | `rail_width`          | `40`                                                          | Integer 16–128. Collapsed width in logical pixels                                  |
-| `side`                | `"left"`                                                      | `left`, `right`. Native sidebar edge                                               |
+| `side`                | `"left"`                                                      | `left`, `right`. Sidebar edge                                                      |
 | `rail`                | `"expanded"`                                                  | `expanded`, `collapsed`, `hidden`. Sidebar visibility                              |
 | `animations`          | `true`                                                        | Boolean. Enable finite visual transitions                                          |
 | `reduced_motion`      | `false`                                                       | Boolean. Suppress transitions                                                      |
 | `animation_ms`        | `140`                                                         | Integer 0–1000. Transition duration in milliseconds                                |
 | `cards`               | `true`                                                        | Boolean. Use cards instead of compact rows                                         |
-| `show_indices`        | `false`                                                       | Boolean. Visible native tab indices                                                |
+| `show_indices`        | `false`                                                       | Boolean. Visible tab indices                                                       |
 | `show_metadata`       | `false`                                                       | Boolean. Show current directory and domain                                         |
 | `show_close`          | `true`                                                        | Boolean. Show close controls                                                       |
 | `confirm_close`       | `true`                                                        | Boolean. Confirm closing a tab with a running process                              |
@@ -20,7 +20,7 @@
 | `muted`               | `"#98a8be"`                                                   | Hex color `#RRGGBB`. Secondary text foreground                                     |
 | `selected_background` | `"#34485f"`                                                   | Hex color `#RRGGBB`. Selected card background                                      |
 | `private_accent`      | `"#cba6f7"`                                                   | Hex color `#RRGGBB`. Private window accent                                         |
-| `keyboard_shortcuts`  | `true`                                                        | Boolean. Enable native tab, search, settings and sidebar shortcuts                 |
+| `keyboard_shortcuts`  | `true`                                                        | Boolean. Enable tab, search, settings and sidebar shortcuts                        |
 | `reopen_limit`        | `20`                                                          | Integer 0–100. Maximum in-memory launch intents                                    |
 | `default_domain`      | `null`                                                        | String or null. Spawn domain used in an empty space; null retains the host default |
 | `private_env`         | `{"HISTFILE":"","VTABS_PRIVATE":"1","fish_private_mode":"1"}` | Object. Environment additions for explicitly created private windows               |

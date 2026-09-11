@@ -38,7 +38,7 @@ pub fn plan(ctx: &Context, operation: &str) -> Result<Value> {
     } else {
         steps.push(json!({"name":"prepare","action":"check","reason":"compare upstream, ordered patches and adapter inputs separately"}));
         if operation != "prepare" {
-            steps.push(json!({"name":"compile","action":"check","reason":if compile_changed{"Rust/native inputs changed or no previous build; Cargo checks required compilation"}else{"Rust/native inputs unchanged; Cargo checks toolchain and dependency freshness"}}));
+            steps.push(json!({"name":"compile","action":"check","reason":if compile_changed{"Rust/inputs changed or no previous build; Cargo checks required compilation"}else{"Rust/inputs unchanged; Cargo checks toolchain and dependency freshness"}}));
             steps.push(json!({"name":"validate","action":if validation_changed{"run"}else{"check"},"reason":if validation_changed{"validation inputs changed or no previous build"}else{"reuse only if compiled artifact hashes also match"}}));
         }
         if operation == "package" || operation == "dev" {
@@ -225,7 +225,7 @@ fn collect(ctx: &Context, gc: bool, dry_run: bool, retention: Retention) -> Resu
         {
             protected_versions.insert(id.to_owned());
             if name != "previous" {
-                protected_bundles.insert(format!("wez-vtabs-native-{id}"));
+                protected_bundles.insert(format!("wez-vtabs-{id}"));
             }
         }
     }
@@ -458,7 +458,7 @@ pub fn reproduce(ctx: &Context, path: &Path, execute: bool, explicit_root: bool)
                     | crate::cli::Commands::Package { .. }
                     | crate::cli::Commands::Patch { .. }
                     | crate::cli::Commands::Test {
-                        suite: crate::cli::Suite::Native
+                        suite: crate::cli::Suite::Gui
                             | crate::cli::Suite::Ssh
                             | crate::cli::Suite::Tls,
                         ..
@@ -498,7 +498,7 @@ pub fn reproduce(ctx: &Context, path: &Path, execute: bool, explicit_root: bool)
         if matches!(
             parsed.command,
             crate::cli::Commands::Test {
-                suite: crate::cli::Suite::Native | crate::cli::Suite::Ssh | crate::cli::Suite::Tls,
+                suite: crate::cli::Suite::Gui | crate::cli::Suite::Ssh | crate::cli::Suite::Tls,
                 ..
             }
         ) {
@@ -506,7 +506,7 @@ pub fn reproduce(ctx: &Context, path: &Path, execute: bool, explicit_root: bool)
                 report
                     .metadata
                     .get("build")
-                    .context("native reproduction build metadata missing")?
+                    .context("reproduction build metadata missing")?
                     .clone(),
             )?;
             let build = base.clone().args([
@@ -531,11 +531,11 @@ pub fn reproduce(ctx: &Context, path: &Path, execute: bool, explicit_root: bool)
                     skip = false;
                     continue;
                 }
-                if arg == "--native-bin-dir" || arg == "--basetemp" {
+                if arg == "--wezterm-bin-dir" || arg == "--basetemp" {
                     skip = true;
                     continue;
                 }
-                if arg.starts_with("--native-bin-dir=") || arg.starts_with("--basetemp=") {
+                if arg.starts_with("--wezterm-bin-dir=") || arg.starts_with("--basetemp=") {
                     continue;
                 }
                 remapped.push(arg);
@@ -543,7 +543,7 @@ pub fn reproduce(ctx: &Context, path: &Path, execute: bool, explicit_root: bool)
             if !remapped.iter().any(|arg| arg == "--") {
                 remapped.push("--".into());
             }
-            remapped.push(format!("--native-bin-dir={}", binaries.display()));
+            remapped.push(format!("--wezterm-bin-dir={}", binaries.display()));
             remapped.push(format!(
                 "--basetemp={}",
                 replay.join("test-artifacts").display()

@@ -12,11 +12,11 @@ from tests.tools.support import create_bundle
 
 
 @pytest.fixture
-def managed_launcher(native_binaries, tools_binary, rust_host, isolated_env, tmp_path):
+def managed_launcher(wezterm_binaries, tools_binary, rust_host, isolated_env, tmp_path):
     if sys.platform != "linux":
         pytest.skip("managed PTY launcher fixture currently targets Linux bundles")
     bundle = create_bundle(
-        tmp_path / "bundle", "pty-fixture", tools_binary, rust_host, native_binaries
+        tmp_path / "bundle", "pty-fixture", tools_binary, rust_host, wezterm_binaries
     )
     install = tmp_path / "installed"
     env = {
@@ -41,7 +41,7 @@ def managed_launcher(native_binaries, tools_binary, rust_host, isolated_env, tmp
     return install / "wez-vtabs", env
 
 
-@pytest.mark.native
+@pytest.mark.gui
 @pytest.mark.pty
 @pytest.mark.asyncio
 @pytest.mark.parametrize(

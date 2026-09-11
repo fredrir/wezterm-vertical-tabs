@@ -11,12 +11,12 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:
-    group = parser.getgroup("native behavior tests")
+    group = parser.getgroup("behavior tests")
     group.addoption("--run-container", action="store_true", help="Run isolated container scenarios")
     group.addoption(
-        "--run-native",
+        "--run-gui",
         action="store_true",
-        help="Run prebuilt native integration scenarios",
+        help="Run prebuilt integration scenarios",
     )
     group.addoption(
         "--run-luals",
@@ -29,9 +29,9 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         help="Use production Rust binaries from this directory",
     )
     group.addoption(
-        "--native-bin-dir",
+        "--wezterm-bin-dir",
         type=Path,
-        help="Use prebuilt native WezTerm binaries from this directory",
+        help="Use prebuilt WezTerm binaries from this directory",
     )
     group.addoption(
         "--tools-bin",
@@ -43,7 +43,7 @@ def pytest_addoption(parser: pytest.Parser) -> None:
 def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
     for marker, option in (
         ("container", "--run-container"),
-        ("native", "--run-native"),
+        ("gui", "--run-gui"),
         ("luals", "--run-luals"),
     ):
         if not config.getoption(option):
@@ -74,8 +74,8 @@ def isolated_env(tmp_path: Path) -> dict[str, str]:
         variable = "XDG_RUNTIME_DIR" if name == "runtime" else f"XDG_{name.upper()}_HOME"
         environment[variable] = str(path)
     environment.update(
-        WEZ_VTABS_CACHE=str(root / "native-cache"),
-        WEZ_VTABS_INSTALL=str(root / "native-install"),
+        WEZ_VTABS_CACHE=str(root / "vtabs-cache"),
+        WEZ_VTABS_INSTALL=str(root / "vtabs-install"),
         PYTHONUTF8="1",
     )
     return environment

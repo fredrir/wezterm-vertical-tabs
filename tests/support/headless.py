@@ -1,4 +1,4 @@
-"""Owned X11 displays for native tests, with no access to the user's desktop."""
+"""Owned X11 displays for tests, with no access to the user's desktop."""
 
 from __future__ import annotations
 
@@ -42,20 +42,20 @@ class HeadlessDisplay:
 
     def assert_live(self) -> None:
         if not self.owned or not self.env.get("DISPLAY"):
-            raise RuntimeError("native tests require a live, owned HeadlessDisplay")
+            raise RuntimeError("tests require a live, owned HeadlessDisplay")
 
     def start(self) -> HeadlessDisplay:
         if self.owned:
             return self
         if sys.platform != "linux":
-            raise RuntimeError("headless native tests require Linux with Xvfb and Openbox")
+            raise RuntimeError("headless tests require Linux with Xvfb and Openbox")
         xvfb, openbox, xdotool = (
             shutil.which("Xvfb"),
             shutil.which("openbox"),
             shutil.which("xdotool"),
         )
         if not xvfb or not openbox or not xdotool:
-            raise RuntimeError("install Xvfb, Openbox, and xdotool to run isolated native tests")
+            raise RuntimeError("install Xvfb, Openbox, and xdotool to run isolated tests")
         self.root.mkdir(mode=0o700, parents=True, exist_ok=True)
         runtime = self.root / "runtime"
         runtime.mkdir(mode=0o700, exist_ok=True)

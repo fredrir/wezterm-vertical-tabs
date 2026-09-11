@@ -1,6 +1,6 @@
 # Configuration
 
-The Rust application works with its defaults. Lua configuration is optional. Set the module path below to `plugin/init.lua` in the local native-branch checkout.
+The Rust application works with its defaults. Lua configuration is optional. Set the module path below to `plugin/init.lua` in the local dev-branch checkout.
 
 ```lua
 local wezterm = require 'wezterm'
@@ -27,9 +27,9 @@ return config
 | `hooks`               | Optional semantic callbacks                                                  |
 | Precedence            | Rust defaults → persisted settings → explicit Lua overrides                  |
 | Config-owned settings | Identified in the settings UI; edits do not overwrite explicit Lua values    |
-| Native actions        | Indexed, relative, negative-index and MRU navigation follow visible tabs     |
+| Actions               | Indexed, relative, negative-index and MRU navigation follow visible tabs     |
 | Raw mux identities    | CLI/mux tab IDs retain upstream meaning                                      |
-| Sidebar width         | Logical pixels; clamped against available native content area                |
+| Sidebar width         | Logical pixels; clamped against available content area                       |
 | Side/rail             | `left`/`right`; `expanded`/`collapsed`/`hidden`                              |
 
 **Keyboard and mouse**
@@ -134,7 +134,7 @@ vtabs.apply_to_config(config, {
 | `'PrivateWindow'`                                               | Create a private window                |
 | `'Reopen'`                                                      | Reopen an available launch description |
 
-The full typed action set is `Intent` in `crates/vtabs-core/src/model.rs`. Native pane/split actions remain ordinary WezTerm actions.
+The full typed action set is `Intent` in `src/core/src/model.rs`. Pane/split actions remain ordinary WezTerm actions.
 
 **Hooks**
 
@@ -174,15 +174,15 @@ vtabs.apply_to_config(config, {
 | Stale results         | Discarded after superseding host/model/configuration changes                                     |
 | Failure               | Valid state retained; two-second batch deadline; warnings deduplicated per configuration epoch   |
 
-**Native API**
+**API**
 
-| Name                                           | Value                                                                               |
-| ---------------------------------------------- | ----------------------------------------------------------------------------------- |
-| `wezterm.native_tabs.capability`               | Current integration contract marker                                                 |
-| `wezterm.native_tabs.schema`                   | Rust settings schema                                                                |
-| `wezterm.native_tabs.configure(options)`       | Validated configuration update                                                      |
-| `wezterm.native_tabs.dispatch(window, action)` | Semantic action on one GUI window                                                   |
-| `wezterm.native_tabs.inspect(window)`          | Async diagnostic projection, geometry, model summary and native CPU timing counters |
+| Name                                     | Value                                                                        |
+| ---------------------------------------- | ---------------------------------------------------------------------------- |
+| `wezterm.vtabs.capability`               | Current integration contract marker                                          |
+| `wezterm.vtabs.schema`                   | Rust settings schema                                                         |
+| `wezterm.vtabs.configure(options)`       | Validated configuration update                                               |
+| `wezterm.vtabs.dispatch(window, action)` | Semantic action on one GUI window                                            |
+| `wezterm.vtabs.inspect(window)`          | Async diagnostic projection, geometry, model summary and CPU timing counters |
 
 Use [development.md](development.md) for installation, build/update commands and GUI verification. Storage boundaries are documented in [protocol.md](protocol.md).
 

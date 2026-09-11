@@ -1,0 +1,11 @@
+[package]
+name              = "vtabs-app"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+vtabs-core           = { path = "../core" }
+vtabs-ui             = { path = "../ui" }
+vtabs-store          = { path = "../store", default-features = false }
+serde.workspace      = true
+serde_json.workspace = true

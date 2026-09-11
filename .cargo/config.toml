@@ -1,2 +1,2 @@
 [alias]
-xtask = "run --quiet --locked --profile xtask --package vtabs-tools --bin wez-vtabs --"
+xtask = "run --quiet --locked --profile xtask --package tools --bin wez-vtabs --"

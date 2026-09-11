@@ -5,7 +5,7 @@ use std::path::PathBuf;
 #[command(
     name = "wez-vtabs",
     version,
-    about = "Build, validate and manage native WezTerm bundles"
+    about = "Build, validate and manage WezTerm bundles"
 )]
 pub struct Cli {
     #[arg(long, global = true, env = "WEZ_VTABS_ROOT")]
@@ -36,11 +36,11 @@ pub struct Cli {
 
 #[derive(Debug, Subcommand)]
 pub enum Commands {
-    /// Resolve upstream and synchronize the native checkout.
+    /// Resolve upstream and synchronize the checkout.
     Prepare,
     /// Run the selected upstream system dependency installer.
     Deps,
-    /// Compile and validate native binaries.
+    /// Compile and validate binaries.
     Build,
     /// Build an iteration bundle and launch a separate GUI.
     Dev {
@@ -160,7 +160,7 @@ pub enum Suite {
     Tools,
     Rust,
     Lua,
-    Native,
+    Gui,
     Ssh,
     Tls,
 }

@@ -12,7 +12,7 @@ use crate::state::{self, BuildMetadata, Context, ProjectSource};
 
 pub const UPSTREAM_URL: &str = "https://github.com/wezterm/wezterm.git";
 pub const PROJECT_URL: &str = "https://github.com/fredrir/wezterm-vertical-tabs.git";
-pub const PROJECT_BRANCH: &str = "native";
+pub const PROJECT_BRANCH: &str = "dev";
 const PREPARATION_VERSION: u32 = 2;
 const SOURCE_ITEMS: &[&str] = &[
     "Cargo.toml",
@@ -29,8 +29,8 @@ const SOURCE_ITEMS: &[&str] = &[
     ".github",
     "README.md",
     "justfile",
-    "crates",
-    "native",
+    "src",
+    "wezterm-patches",
     "plugin",
     "docs",
     "tools",
@@ -149,12 +149,12 @@ pub fn compile_digest(root: &Path) -> Result<String> {
                 || relative == Path::new("rust-toolchain")
                 || relative == Path::new("rust-toolchain.toml")
                 || relative.starts_with(".cargo")
-                || relative.starts_with("native/adapter")
-                || relative.starts_with("native/patches")
+                || relative.starts_with("src/adapter")
+                || relative.starts_with("wezterm-patches")
             {
                 return true;
             }
-            relative.starts_with("crates")
+            relative.starts_with("src")
                 && !relative.components().any(|part| {
                     matches!(
                         part.as_os_str().to_str(),
@@ -177,8 +177,8 @@ pub fn validation_digest(root: &Path) -> Result<String> {
             let relative = path
                 .strip_prefix(root)
                 .expect("source file belongs to root");
-            relative.starts_with("crates")
-                || relative.starts_with("native")
+            relative.starts_with("src")
+                || relative.starts_with("wezterm-patches")
                 || relative.starts_with("tests")
                 || relative.starts_with("plugin")
                 || relative.starts_with("tools")
@@ -256,7 +256,7 @@ fn verify_worktree(ctx: &Context, upstream: &Path, worktree: &Path) -> Result<()
 
 fn write_ownership(path: &Path, remote: &str) -> Result<()> {
     state::write_json(
-        &path.join(".git/wez-vtabs-native.json"),
+        &path.join(".git/wez-vtabs.json"),
         &Ownership {
             path: fs::canonicalize(path)?,
             remote: remote.into(),
@@ -266,7 +266,7 @@ fn write_ownership(path: &Path, remote: &str) -> Result<()> {
 }
 
 fn verify_ownership(path: &Path, remote: &str) -> Result<bool> {
-    let ownership: Option<Ownership> = state::read_json(&path.join(".git/wez-vtabs-native.json"))?;
+    let ownership: Option<Ownership> = state::read_json(&path.join(".git/wez-vtabs.json"))?;
     match ownership {
         Some(ownership) => {
             ensure!(
@@ -621,26 +621,22 @@ pub fn refresh_project(ctx: &Context, branch: &str) -> Result<PathBuf> {
     ctx.runner
         .run(git(ctx, &checkout).args(["clean", "-ffd"]))?;
     ensure!(
-        [
-            "Cargo.toml",
-            "crates/vtabs-app/Cargo.toml",
-            "tools/Cargo.toml"
-        ]
-        .iter()
-        .all(|name| checkout.join(name).is_file())
+        ["Cargo.toml", "src/app/Cargo.toml", "tools/Cargo.toml"]
+            .iter()
+            .all(|name| checkout.join(name).is_file())
             && !patches(&checkout)?.is_empty(),
-        "project branch {branch} does not contain a complete native implementation"
+        "project branch {branch} does not contain a complete implementation"
     );
     Ok(checkout)
 }
 
 fn patches(root: &Path) -> Result<Vec<PathBuf>> {
-    let mut patches = fs::read_dir(root.join("native/patches"))?
+    let mut patches = fs::read_dir(root.join("wezterm-patches"))?
         .map(|entry| entry.map(|entry| entry.path()))
         .collect::<std::io::Result<Vec<_>>>()?;
     patches.retain(|path| path.is_file() && path.extension().is_some_and(|v| v == "patch"));
     patches.sort();
-    ensure!(!patches.is_empty(), "native patches missing");
+    ensure!(!patches.is_empty(), "patches missing");
     Ok(patches)
 }
 
@@ -700,14 +696,14 @@ fn sync_directory(source: &Path, destination: &Path, skip_module: bool) -> Resul
 }
 
 pub fn stage_adapter(root: &Path, worktree: &Path) -> Result<()> {
-    let adapter = root.join("native/adapter");
+    let adapter = root.join("src/adapter");
     ensure!(
         adapter.join("mod.rs").is_file(),
-        "native/adapter/mod.rs missing"
+        "src/adapter/mod.rs missing"
     );
     let gui = worktree.join("wezterm-gui");
-    copy_changed(&adapter.join("mod.rs"), &gui.join("src/native_vtabs.rs"))?;
-    sync_directory(&adapter, &gui.join("src/native_vtabs"), true)?;
+    copy_changed(&adapter.join("mod.rs"), &gui.join("src/vtabs.rs"))?;
+    sync_directory(&adapter, &gui.join("src/vtabs"), true)?;
     let manifest = gui.join("Cargo.toml");
     let original = fs::read_to_string(&manifest)?;
     let mut document = original
@@ -717,12 +713,12 @@ pub fn stage_adapter(root: &Path, worktree: &Path) -> Result<()> {
         .get_mut("dependencies")
         .and_then(toml_edit::Item::as_table_mut)
         .context("WezTerm GUI dependency section changed")?;
-    for name in ["vtabs-app", "vtabs-store"] {
+    for (name, directory) in [("vtabs-app", "app"), ("vtabs-store", "store")] {
         let mut dependency = toml_edit::InlineTable::new();
         dependency.insert(
             "path",
-            root.join("crates")
-                .join(name)
+            root.join("src")
+                .join(directory)
                 .to_string_lossy()
                 .to_string()
                 .into(),
@@ -769,7 +765,7 @@ pub fn prepare(ctx: &Context, resolved: &ResolvedSource) -> Result<PathBuf> {
     let patch_digest = digest_paths(&ctx.root, &patch_files)?;
     let adapter_files = source_files(&ctx.root)?
         .into_iter()
-        .filter(|v| v.starts_with(ctx.root.join("native/adapter")))
+        .filter(|v| v.starts_with(ctx.root.join("src/adapter")))
         .collect::<Vec<_>>();
     let adapter_digest = digest_paths(&ctx.root, &adapter_files)?;
     // Legacy preparation records use a single integration digest and require
@@ -822,7 +818,7 @@ pub fn prepare(ctx: &Context, resolved: &ResolvedSource) -> Result<PathBuf> {
         };
         ctx.runner.run(submodules).with_context(|| if ctx.offline {
             "required submodule revision is unavailable offline; prepare this revision online once"
-        } else { "initialize native upstream submodules" })?;
+        } else { "initialize upstream submodules" })?;
         for patch in &patch_files {
             ctx.runner
                 .run(git(ctx, &worktree).args(["apply", "--check"]).arg(patch))?;

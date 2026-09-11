@@ -148,7 +148,7 @@ fn requested_target(ctx: &Context, worktree: &Path) -> Result<Option<String>> {
         ensure!(!target.is_empty(), "CARGO_BUILD_TARGET must not be empty");
         return Ok(Some(target));
     }
-    // Read the effective native workspace target. Passing it explicitly keeps
+    // Read the effective workspace target. Passing it explicitly keeps
     // the project store helper on the same target as the application.
     for directory in worktree.ancestors().chain(ctx.root.ancestors()) {
         let old = directory.join(".cargo/config");
@@ -160,7 +160,7 @@ fn requested_target(ctx: &Context, worktree: &Path) -> Result<Option<String>> {
                 return target
                     .as_str()
                     .map(|v| Some(v.to_owned()))
-                    .context("native builds require one Cargo build.target triple");
+                    .context("builds require one Cargo build.target triple");
             }
         }
     }
@@ -183,7 +183,7 @@ fn requested_target(ctx: &Context, worktree: &Path) -> Result<Option<String>> {
                 return target
                     .as_str()
                     .map(|v| Some(v.to_owned()))
-                    .context("native builds require one Cargo build.target triple");
+                    .context("builds require one Cargo build.target triple");
             }
         }
     }
@@ -351,7 +351,7 @@ fn worktree_digest(ctx: &Context, worktree: &Path) -> Result<String> {
     )?))
 }
 
-fn native_validation(
+fn validate_wezterm(
     ctx: &Context,
     worktree: &Path,
     target_dir: &Path,
@@ -371,7 +371,7 @@ fn native_validation(
         if library {
             command = command.arg("--lib");
         }
-        let result = ctx.runner.run(command.arg("native_"));
+        let result = ctx.runner.run(command.arg("vtabs"));
         preserve_cargo_timings(ctx, target_dir)?;
         result?;
     }
@@ -546,7 +546,7 @@ pub fn build(ctx: &Context) -> Result<BuildMetadata> {
         target
             .bytes()
             .all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b)),
-        "native bundle target must be a Rust target triple"
+        "bundle target must be a Rust target triple"
     );
     let profile = if ctx.profile == "debug" {
         "dev"
@@ -621,7 +621,7 @@ pub fn build(ctx: &Context) -> Result<BuildMetadata> {
     {
         let binaries = artifacts["wezterm-gui"]
             .parent()
-            .context("native executable parent missing")?;
+            .context("executable parent missing")?;
         crate::bundle::copy_windows_runtime(
             &worktree,
             &[binaries.to_path_buf(), binaries.join("deps")],
@@ -652,11 +652,11 @@ pub fn build(ctx: &Context) -> Result<BuildMetadata> {
     {
         if ctx.explain {
             eprintln!(
-                "native tests: reuse successful validation for unchanged compilation and test inputs"
+                "tests: reuse successful validation for unchanged compilation and test inputs"
             );
         }
     } else {
-        native_validation(ctx, &worktree, &target_dir, requested.as_deref())?;
+        validate_wezterm(ctx, &worktree, &target_dir, requested.as_deref())?;
     }
     let mut metadata = BuildMetadata {
         id: String::new(),

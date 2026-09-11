@@ -2,27 +2,27 @@
 
 import pytest
 
-from tests.native.scenarios import Probe
+from tests.scenarios.scenarios import Probe
 from tests.support.container_mux import ContainerSshMux
 
 
 @pytest.mark.container
-@pytest.mark.native
+@pytest.mark.gui
 def test_container_ssh_mux_domain(
-    native_binaries, project_root, isolated_env, headless_display, tmp_path
+    wezterm_binaries, project_root, isolated_env, headless_display, tmp_path
 ):
-    fixture = ContainerSshMux(tmp_path / "container", native_binaries, project_root, isolated_env)
+    fixture = ContainerSshMux(tmp_path / "container", wezterm_binaries, project_root, isolated_env)
     probe = None
     try:
         domain = fixture.start()
         fixture.reject_unknown_key()
         probe = Probe(
             tmp_path / "ssh",
-            native_binaries["wezterm-gui"],
-            native_binaries["wez-vtabs-store"],
+            wezterm_binaries["wezterm-gui"],
+            wezterm_binaries["wez-vtabs-store"],
             "ssh",
             ssh_config=domain,
-            server=native_binaries["wezterm-mux-server"],
+            server=wezterm_binaries["wezterm-mux-server"],
             display=headless_display,
         )
         initial = probe.start()

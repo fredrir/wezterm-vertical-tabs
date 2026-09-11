@@ -1,1 +1,1 @@
-"""Isolated behavior tests for the native tab application and its public tools."""
+"""Isolated behavior tests for the tab application and its public tools."""

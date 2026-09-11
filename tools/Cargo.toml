@@ -1,5 +1,5 @@
 [package]
-name = "vtabs-tools"
+name = "tools"
 version.workspace = true
 edition.workspace = true
 publish = false

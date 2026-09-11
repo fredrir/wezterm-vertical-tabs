@@ -174,7 +174,7 @@ class ContainerSshMux:
                 base = f"docker.io/library/{distribution}:{release['VERSION_ID']}"
             else:
                 raise RuntimeError(
-                    "set VTABS_TEST_SSH_BASE to an Arch, Debian, or Ubuntu image compatible with the native binaries"
+                    "set VTABS_TEST_SSH_BASE to an Arch, Debian, or Ubuntu image compatible with the binaries"
                 )
         digest = hashlib.sha256(
             base.encode()
