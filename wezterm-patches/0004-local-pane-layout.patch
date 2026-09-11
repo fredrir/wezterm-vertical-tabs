@@ -221,7 +221,7 @@ diff --git a/wezterm-client/src/domain.rs b/wezterm-client/src/domain.rs
      remote_to_local_pane: Mutex<HashMap<PaneId, PaneId>>,
      pub focused_remote_pane_id: Mutex<Option<PaneId>>,
      pub(crate) topology: crate::topology::TopologySync,
-+    local_pane_layout: bool,
++    pub(crate) local_pane_layout: bool,
  }
  
  impl ClientInner {
@@ -504,7 +504,18 @@ diff --git a/wezterm-client/src/domain.rs b/wezterm-client/src/domain.rs
 diff --git a/wezterm-client/src/pane/clientpane.rs b/wezterm-client/src/pane/clientpane.rs
 --- a/wezterm-client/src/pane/clientpane.rs
 +++ b/wezterm-client/src/pane/clientpane.rs
-@@ -273,6 +273,10 @@
+@@ -218,6 +218,10 @@
+             Pdu::PaneRemoved(PaneRemoved { pane_id }) => {
+                 log::trace!("remote pane {} has been removed", pane_id);
+                 self.renderable.lock().inner.borrow_mut().dead = true;
++                // A shared client is pruning a server-owned tree. Its temporary
++                // expansion must not resize surviving remote panes before resync.
++                let _applying = (!self.client.local_pane_layout)
++                    .then(|| self.client.topology.applying());
+                 let mux = Mux::get();
+                 mux.prune_dead_windows();
+ 
+@@ -273,6 +277,10 @@
  
          let mut map: BTreeMap<Value, Value> = BTreeMap::new();
          map.insert(

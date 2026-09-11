@@ -238,3 +238,25 @@ def test_failed_remote_connection_preserves_the_source(mux_pair):
     assert source in {p["pane_id"] for p in after}
     assert geometry(next(p for p in after if p["pane_id"] == source)) == geometry(before[0])
     assert json.loads(remote("list", "--format", "json")) == []
+
+
+def test_shared_client_removal_does_not_resize_an_unaffected_sibling(mux_pair):
+    local, remote = mux_pair
+    source = int(remote("spawn", "--new-window"))
+    sibling = int(remote("split-pane", "--pane-id", source, "--right"))
+    expected = geometry(
+        next(p for p in json.loads(remote("list", "--format", "json")) if p["pane_id"] == sibling)
+    )
+    local.cli("spawn", "--new-window", "--domain-name", "shared")
+    wait_for(lambda: len(local.panes()) == 3)
+
+    # Remote notifications can reach a shared client before its replacement
+    # tree. Pruning the old proxy must not send its interim expansion upstream.
+    for _ in range(6):
+        prior = {p["pane_id"] for p in local.panes()}
+        replacement = int(remote("split-pane", "--pane-id", source))
+        remote("kill-pane", "--pane-id", source)
+        wait_for(lambda: len(p := local.panes()) == 3 and {v["pane_id"] for v in p} != prior)
+        source = replacement
+        panes = json.loads(remote("list", "--format", "json"))
+        assert geometry(next(p for p in panes if p["pane_id"] == sibling)) == expected
