@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+host="$1"
+dist="dist/ubuntu-26.04"
+remote_bin="/home/ubuntu/.local/bin"
+
+just build --ubuntu --26
+
+ssh "$host" mkdir -p "$remote_bin"
+
+for bin in wezterm wezterm-gui wezterm-mux-server wez-vtabs wez-vtabs-store wez-vtabs-launcher strip-ansi-escapes; do
+  if [[ -f "$dist/$bin" ]]; then
+    scp "$dist/$bin" "$host:$remote_bin/${bin}.tmp"
+    ssh "$host" sh -s -- "$remote_bin/${bin}.tmp" "$remote_bin/${bin}" <<'REMOTE'
+mv -f "$1" "$2" && chmod +x "$2"
+REMOTE
+  fi
+done
