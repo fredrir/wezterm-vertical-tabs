@@ -425,7 +425,3 @@ if ! test_cmd 'rustc'; then
   echo "Please see https://wezterm.org/install/source.html for installation instructions"
   exit 1
 fi
-
-if ! ./ci/check-rust-version.sh; then
-  exit 1
-fi
