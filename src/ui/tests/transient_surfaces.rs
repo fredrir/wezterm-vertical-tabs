@@ -1,6 +1,6 @@
+use super::*;
 use std::time::Duration;
 use vtabs_core::{Intent, Model, RailMode, Side, Tab};
-use super::*;
 
 fn model() -> Model {
     let mut model = Model::default();

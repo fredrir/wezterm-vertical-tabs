@@ -222,10 +222,10 @@ index aad21a54..b4dc9c9f 100644
              .detach();
              inner.update_last_send();
 diff --git a/wezterm-gui/src/frontend.rs b/wezterm-gui/src/frontend.rs
-index 4fc2285b..49af800c 100644
+index 04c84260..5e970c46 100644
 --- a/wezterm-gui/src/frontend.rs
 +++ b/wezterm-gui/src/frontend.rs
-@@ -284,7 +284,7 @@ impl GuiFrontEnd {
+@@ -301,7 +301,7 @@ impl GuiFrontEnd {
                          config.initial_size(dpi as u32, crate::cell_pixel_dims(&config, dpi).ok());
                      let term_config = Arc::new(config::TermConfig::with_config(config));
  
@@ -235,7 +235,7 @@ index 4fc2285b..49af800c 100644
  
                  match action {
 diff --git a/wezterm-gui/src/overlay/launcher.rs b/wezterm-gui/src/overlay/launcher.rs
-index d2cbd982..04308280 100644
+index d2cbd982..bf869553 100644
 --- a/wezterm-gui/src/overlay/launcher.rs
 +++ b/wezterm-gui/src/overlay/launcher.rs
 @@ -33,11 +33,12 @@ pub use config::keyassignment::LauncherFlags;
@@ -378,7 +378,7 @@ index d2cbd982..04308280 100644
              self.window.notify(TermWindowNotif::PerformAssignment {
                  pane_id: self.pane_id,
 diff --git a/wezterm-gui/src/spawn.rs b/wezterm-gui/src/spawn.rs
-index 28b9db9a..955a4585 100644
+index 28b9db9a..7c940d23 100644
 --- a/wezterm-gui/src/spawn.rs
 +++ b/wezterm-gui/src/spawn.rs
 @@ -23,14 +23,16 @@ pub fn spawn_command_impl(
@@ -427,7 +427,7 @@ index 28b9db9a..955a4585 100644
              // Otherwise, we'll pick them up when we later respond to
              // the new window being created.
 diff --git a/wezterm-gui/src/termwindow/mod.rs b/wezterm-gui/src/termwindow/mod.rs
-index d0f0ff97..6f00f347 100644
+index 27567d9d..ddb4c5bc 100644
 --- a/wezterm-gui/src/termwindow/mod.rs
 +++ b/wezterm-gui/src/termwindow/mod.rs
 @@ -1,5 +1,6 @@
@@ -437,7 +437,7 @@ index d0f0ff97..6f00f347 100644
  use super::renderstate::*;
  use super::utilsprites::RenderMetrics;
  use crate::colorease::ColorEase;
-@@ -28,7 +29,7 @@ use crate::termwindow::render::{
+@@ -29,7 +30,7 @@ use crate::termwindow::render::{
  use crate::termwindow::webgpu::WebGpuState;
  use ::wezterm_term::input::{ClickPosition, MouseButton as TMB};
  use ::window::*;
@@ -446,7 +446,7 @@ index d0f0ff97..6f00f347 100644
  use config::keyassignment::{
      Confirmation, KeyAssignment, LauncherActionArgs, PaneDirection, Pattern, PromptInputLine,
      QuickSelectArguments, RotationDirection, SpawnCommand, SplitSize,
-@@ -390,6 +391,8 @@ pub struct TermWindow {
+@@ -391,6 +392,8 @@ pub struct TermWindow {
      leader_is_down: Option<std::time::Instant>,
      dead_key_status: DeadKeyStatus,
      key_table_state: KeyTableState,
@@ -455,7 +455,7 @@ index d0f0ff97..6f00f347 100644
      show_tab_bar: bool,
      show_scroll_bar: bool,
      tab_bar: TabBarState,
-@@ -590,6 +593,8 @@ impl TermWindow {
+@@ -591,6 +594,8 @@ impl TermWindow {
          let dpi = config.dpi.unwrap_or_else(|| ::window::default_dpi()) as usize;
          let fontconfig = Rc::new(FontConfiguration::new(Some(config.clone()), dpi)?);
  
@@ -464,7 +464,7 @@ index d0f0ff97..6f00f347 100644
          let mux = Mux::get();
          let size = match mux.get_active_tab_for_window(mux_window_id) {
              Some(tab) => tab.get_size(),
-@@ -606,7 +611,9 @@ impl TermWindow {
+@@ -607,7 +612,9 @@ impl TermWindow {
  
          // Initially we have only a single tab, so take that into account
          // for the tab bar state.
@@ -475,7 +475,7 @@ index d0f0ff97..6f00f347 100644
          let tab_bar_height = if show_tab_bar {
              Self::tab_bar_pixel_height_impl(&config, &fontconfig, &render_metrics)? as usize
          } else {
-@@ -643,14 +650,17 @@ impl TermWindow {
+@@ -644,14 +651,17 @@ impl TermWindow {
              pixel_max: terminal_size.pixel_width as f32,
              pixel_cell: render_metrics.cell_size.width as f32,
          };
@@ -496,7 +496,7 @@ index d0f0ff97..6f00f347 100644
          let padding_bottom = config.window_padding.bottom.evaluate_as_pixels(v_context) as usize;
  
          let mut dimensions = Dimensions {
-@@ -712,6 +722,8 @@ impl TermWindow {
+@@ -713,6 +723,8 @@ impl TermWindow {
              input_map: InputMap::new(&config),
              leader_is_down: None,
              dead_key_status: DeadKeyStatus::None,
@@ -505,7 +505,7 @@ index d0f0ff97..6f00f347 100644
              show_tab_bar,
              show_scroll_bar: config.enable_scroll_bar,
              tab_bar: TabBarState::default(),
-@@ -888,6 +900,16 @@ impl TermWindow {
+@@ -890,6 +902,16 @@ impl TermWindow {
              myself.load_os_parameters();
              window.show();
              myself.subscribe_to_pane_updates();
@@ -522,7 +522,7 @@ index d0f0ff97..6f00f347 100644
              myself.emit_window_event("window-config-reloaded", None);
              myself.emit_status_event();
          }
-@@ -944,6 +966,7 @@ impl TermWindow {
+@@ -945,6 +967,7 @@ impl TermWindow {
              }
              WindowEvent::FocusChanged(focused) => {
                  self.focus_changed(focused, window);
@@ -530,7 +530,7 @@ index d0f0ff97..6f00f347 100644
                  Ok(true)
              }
              WindowEvent::MouseEvent(event) => {
-@@ -995,6 +1008,7 @@ impl TermWindow {
+@@ -996,6 +1019,7 @@ impl TermWindow {
                  } else {
                      log::trace!("DeadKeyStatus now: {:?}", status);
                  }
@@ -538,7 +538,7 @@ index d0f0ff97..6f00f347 100644
                  self.dead_key_status = status;
                  self.update_title();
                  // Ensure that we repaint so that any composing
-@@ -1198,7 +1212,11 @@ impl TermWindow {
+@@ -1199,7 +1223,11 @@ impl TermWindow {
              TermWindowNotif::CancelOverlayForTab { tab_id, pane_id } => {
                  self.cancel_overlay_for_tab(tab_id, pane_id);
              }
@@ -551,7 +551,7 @@ index d0f0ff97..6f00f347 100644
                  MuxNotification::Alert {
                      alert: Alert::SetUserVar { name, value },
                      pane_id,
-@@ -1243,6 +1261,7 @@ impl TermWindow {
+@@ -1244,6 +1272,7 @@ impl TermWindow {
                          AudibleBell::Disabled => {}
                      }
  
@@ -559,7 +559,7 @@ index d0f0ff97..6f00f347 100644
                      log::trace!("Ding! (this is the bell) in pane {}", pane_id);
                      self.emit_window_event("bell", Some(pane_id));
  
-@@ -1254,36 +1273,10 @@ impl TermWindow {
+@@ -1255,36 +1284,10 @@ impl TermWindow {
                      alert: Alert::ToastNotification { .. },
                      ..
                  } => {}
@@ -600,7 +600,7 @@ index d0f0ff97..6f00f347 100644
                  }
                  MuxNotification::PaneOutput(pane_id) => {
                      self.mux_pane_output_event(pane_id);
-@@ -1292,8 +1285,8 @@ impl TermWindow {
+@@ -1293,8 +1296,8 @@ impl TermWindow {
                      window.invalidate();
                      self.update_title_post_status();
                  }
@@ -611,7 +611,7 @@ index d0f0ff97..6f00f347 100644
                  }
                  MuxNotification::AssignClipboard { .. } => {
                      // Handled by frontend
-@@ -1305,10 +1298,7 @@ impl TermWindow {
+@@ -1306,10 +1309,7 @@ impl TermWindow {
                      // Also handled by clientpane
                      self.update_title_post_status();
                  }
@@ -623,7 +623,7 @@ index d0f0ff97..6f00f347 100644
                  MuxNotification::TabTitleChanged { .. } => {
                      self.update_title_post_status();
                  }
-@@ -1319,7 +1309,8 @@ impl TermWindow {
+@@ -1320,7 +1320,8 @@ impl TermWindow {
                  | MuxNotification::ActiveWorkspaceChanged(_)
                  | MuxNotification::Empty
                  | MuxNotification::WindowCreated(_) => {}
@@ -633,7 +633,7 @@ index d0f0ff97..6f00f347 100644
              TermWindowNotif::EmitStatusUpdate => {
                  self.emit_status_event();
              }
-@@ -1337,6 +1328,14 @@ impl TermWindow {
+@@ -1338,6 +1339,14 @@ impl TermWindow {
                  func(self);
              }
              TermWindowNotif::SwitchToMuxWindow(mux_window_id) => {
@@ -648,7 +648,7 @@ index d0f0ff97..6f00f347 100644
                  self.mux_window_id = mux_window_id;
                  *self.mux_window_id_for_subscriptions.lock().unwrap() = mux_window_id;
  
-@@ -1345,12 +1344,11 @@ impl TermWindow {
+@@ -1346,12 +1355,11 @@ impl TermWindow {
                  self.invalidate_fancy_tab_bar();
                  self.invalidate_modal();
  
@@ -666,7 +666,7 @@ index d0f0ff97..6f00f347 100644
                  self.update_title();
                  window.invalidate();
              }
-@@ -1742,6 +1740,8 @@ impl TermWindow {
+@@ -1743,6 +1751,8 @@ impl TermWindow {
              }
          };
          self.config = config.clone();
@@ -675,7 +675,7 @@ index d0f0ff97..6f00f347 100644
          self.palette.take();
  
          let mux = Mux::get();
-@@ -1750,9 +1750,9 @@ impl TermWindow {
+@@ -1751,9 +1761,9 @@ impl TermWindow {
              _ => return,
          };
          if window.count_tabs() == 1 {
@@ -687,7 +687,7 @@ index d0f0ff97..6f00f347 100644
          }
          *self.cursor_blink_state.borrow_mut() = ColorEase::new(
              config.cursor_blink_rate,
-@@ -1969,46 +1969,49 @@ impl TermWindow {
+@@ -1970,46 +1980,49 @@ impl TermWindow {
          let active_tab = tabs.iter().find(|t| t.is_active).cloned();
          let active_pane = panes.iter().find(|p| p.is_active).cloned();
  
@@ -773,7 +773,7 @@ index d0f0ff97..6f00f347 100644
          }
  
          let tabs_count = window.count_tabs();
-@@ -2074,11 +2077,7 @@ impl TermWindow {
+@@ -2075,11 +2088,7 @@ impl TermWindow {
          if let Some(window) = self.window.as_ref() {
              window.set_title(&title);
  
@@ -786,7 +786,7 @@ index d0f0ff97..6f00f347 100644
  
              // If the number of tabs changed and caused the tab bar to
              // hide/show, then we'll need to resize things.  It is simplest
-@@ -2177,101 +2176,19 @@ impl TermWindow {
+@@ -2178,101 +2187,19 @@ impl TermWindow {
      }
  
      fn activate_tab(&mut self, tab_idx: isize) -> anyhow::Result<()> {
@@ -892,7 +892,7 @@ index d0f0ff97..6f00f347 100644
      }
  
      fn show_input_selector(&mut self, args: &config::keyassignment::InputSelector) {
-@@ -2368,20 +2285,7 @@ impl TermWindow {
+@@ -2369,20 +2296,7 @@ impl TermWindow {
      }
  
      fn show_tab_navigator(&mut self) {
@@ -914,7 +914,7 @@ index d0f0ff97..6f00f347 100644
      }
  
      fn show_launcher(&mut self) {
-@@ -2402,6 +2306,7 @@ impl TermWindow {
+@@ -2403,6 +2317,7 @@ impl TermWindow {
  
      fn show_launcher_impl(&mut self, args: LauncherActionArgs, initial_choice_idx: usize) {
          let mux_window_id = self.mux_window_id;
@@ -922,7 +922,7 @@ index d0f0ff97..6f00f347 100644
          let window = self.window.as_ref().unwrap().clone();
  
          let mux = Mux::get();
-@@ -2440,6 +2345,7 @@ impl TermWindow {
+@@ -2441,6 +2356,7 @@ impl TermWindow {
                  &title,
                  flags,
                  mux_window_id,
@@ -930,7 +930,7 @@ index d0f0ff97..6f00f347 100644
                  pane_id,
                  domain_id_of_current_pane,
                  &help_text,
-@@ -2558,26 +2464,7 @@ impl TermWindow {
+@@ -2559,26 +2475,7 @@ impl TermWindow {
      }
  
      fn move_tab_relative(&mut self, delta: isize) -> anyhow::Result<()> {
@@ -958,7 +958,7 @@ index d0f0ff97..6f00f347 100644
      }
  
      pub fn perform_key_assignment(
-@@ -2586,6 +2473,17 @@ impl TermWindow {
+@@ -2587,6 +2484,17 @@ impl TermWindow {
          assignment: &KeyAssignment,
      ) -> anyhow::Result<PerformAssignmentResult> {
          use KeyAssignment::*;
@@ -976,7 +976,7 @@ index d0f0ff97..6f00f347 100644
  
          if let Some(modal) = self.get_modal() {
              if modal.perform_assignment(assignment, self) {
-@@ -3041,6 +2939,7 @@ impl TermWindow {
+@@ -3042,6 +2950,7 @@ impl TermWindow {
                              size,
                              Some(src_window_id),
                              term_config,
@@ -984,7 +984,7 @@ index d0f0ff97..6f00f347 100644
                          )
                          .await
                          {
-@@ -3210,6 +3109,7 @@ impl TermWindow {
+@@ -3211,6 +3120,7 @@ impl TermWindow {
          }
      }
      fn close_current_pane(&mut self, confirm: bool) {
@@ -992,7 +992,7 @@ index d0f0ff97..6f00f347 100644
          let mux_window_id = self.mux_window_id;
          let mux = Mux::get();
          let tab = match mux.get_active_tab_for_window(mux_window_id) {
-@@ -3250,9 +3150,11 @@ impl TermWindow {
+@@ -3251,9 +3161,11 @@ impl TermWindow {
  
          let tab_id = tab.tab_id();
          if confirm && !tab.can_close_without_prompting(CloseReason::Tab) {
@@ -1006,7 +1006,7 @@ index d0f0ff97..6f00f347 100644
  
              let window = self.window.clone().unwrap();
              let (overlay, future) = start_overlay(self, &tab, move |tab_id, term| {
-@@ -3266,6 +3168,7 @@ impl TermWindow {
+@@ -3267,6 +3179,7 @@ impl TermWindow {
      }
  
      fn close_current_tab(&mut self, confirm: bool) {
@@ -1014,7 +1014,7 @@ index d0f0ff97..6f00f347 100644
          let mux = Mux::get();
          let tab = match mux.get_active_tab_for_window(self.mux_window_id) {
              Some(tab) => tab,
-@@ -3420,6 +3323,7 @@ impl TermWindow {
+@@ -3421,6 +3334,7 @@ impl TermWindow {
      }
  
      fn get_splits(&mut self) -> Vec<PositionedSplit> {
@@ -1022,7 +1022,7 @@ index d0f0ff97..6f00f347 100644
          let mux = Mux::get();
          let tab = match mux.get_active_tab_for_window(self.mux_window_id) {
              Some(tab) => tab,
-@@ -3456,35 +3360,18 @@ impl TermWindow {
+@@ -3457,35 +3371,18 @@ impl TermWindow {
  
      fn get_tab_information(&mut self) -> Vec<TabInformation> {
          let mux = Mux::get();
@@ -1069,7 +1069,7 @@ index d0f0ff97..6f00f347 100644
      }
  
      fn get_pane_information(&self) -> Vec<PaneInformation> {
-@@ -3528,6 +3415,7 @@ impl TermWindow {
+@@ -3529,6 +3426,7 @@ impl TermWindow {
      }
  
      fn get_panes_to_render(&self) -> Vec<PositionedPane> {
@@ -1077,7 +1077,7 @@ index d0f0ff97..6f00f347 100644
          let mux = Mux::get();
          let tab = match mux.get_active_tab_for_window(self.mux_window_id) {
              Some(tab) => tab,
-@@ -3620,6 +3508,10 @@ impl TermWindow {
+@@ -3621,6 +3519,10 @@ impl TermWindow {
  
  impl Drop for TermWindow {
      fn drop(&mut self) {
@@ -1089,7 +1089,7 @@ index d0f0ff97..6f00f347 100644
          // (will actually unsubscribe on the next notif from mux)
          self.mux_subscription_dead.store(true, Ordering::Relaxed);
 diff --git a/wezterm-gui/src/termwindow/render/mod.rs b/wezterm-gui/src/termwindow/render/mod.rs
-index af722551..af33daee 100644
+index 1cb777d7..0da7dec6 100644
 --- a/wezterm-gui/src/termwindow/render/mod.rs
 +++ b/wezterm-gui/src/termwindow/render/mod.rs
 @@ -356,7 +356,7 @@ impl crate::TermWindow {
@@ -1119,7 +1119,7 @@ index af722551..af33daee 100644
  
      fn resolve_lock_glyph(
 diff --git a/wezterm-gui/src/termwindow/render/pane.rs b/wezterm-gui/src/termwindow/render/pane.rs
-index 4af46389..349ef0b1 100644
+index 4af46389..30cc54d8 100644
 --- a/wezterm-gui/src/termwindow/render/pane.rs
 +++ b/wezterm-gui/src/termwindow/render/pane.rs
 @@ -111,8 +111,8 @@ impl crate::TermWindow {
@@ -1203,7 +1203,7 @@ index 4af46389..349ef0b1 100644
                  (pos.width as f32 * cell_width) + width_delta
              },
 diff --git a/wezterm-gui/src/termwindow/resize.rs b/wezterm-gui/src/termwindow/resize.rs
-index 86de9b8b..a4e8ded5 100644
+index 86de9b8b..919fe5dd 100644
 --- a/wezterm-gui/src/termwindow/resize.rs
 +++ b/wezterm-gui/src/termwindow/resize.rs
 @@ -195,11 +195,11 @@ impl super::TermWindow {
@@ -1284,7 +1284,7 @@ index 86de9b8b..a4e8ded5 100644
                  + padding_top
                  + padding_bottom) as usize
 diff --git a/wezterm-gui/src/termwindow/spawn.rs b/wezterm-gui/src/termwindow/spawn.rs
-index 1395afc3..3bccb5b5 100644
+index 1395afc3..c0afe4b6 100644
 --- a/wezterm-gui/src/termwindow/spawn.rs
 +++ b/wezterm-gui/src/termwindow/spawn.rs
 @@ -4,7 +4,7 @@ use config::TermConfig;
@@ -1320,10 +1320,10 @@ index 1395afc3..3bccb5b5 100644
  
 diff --git a/wezterm-client/src/topology.rs b/wezterm-client/src/topology.rs
 new file mode 100644
-index 00000000..afaf9801
+index 00000000..f3a9a24b
 --- /dev/null
 +++ b/wezterm-client/src/topology.rs
-@@ -0,0 +1,135 @@
+@@ -0,0 +1,93 @@
 +//! Order topology snapshots after local resize acknowledgements.
 +use std::sync::{Arc, Mutex};
 +use std::task::{Poll, Waker};
@@ -1415,47 +1415,53 @@ index 00000000..afaf9801
 +}
 +
 +#[cfg(test)]
-+mod vtabs_topology_tests {
-+    use super::*;
-+    use futures::{pin_mut, FutureExt};
++#[path = "../tests/vtabs/topology.rs"]
++mod vtabs_topology_tests;
+diff --git a/wezterm-client/tests/vtabs/topology.rs b/wezterm-client/tests/vtabs/topology.rs
+new file mode 100644
+index 00000000..0a245802
+--- /dev/null
++++ b/wezterm-client/tests/vtabs/topology.rs
+@@ -0,0 +1,42 @@
++use super::*;
++use futures::{pin_mut, FutureExt};
 +
-+    #[test]
-+    fn split_snapshot_waits_for_every_pane_resize_ack() {
-+        let sync = TopologySync::default();
-+        let left = sync.begin_resize().unwrap();
-+        let right = sync.begin_resize().unwrap();
-+        let ready = sync.ready();
-+        pin_mut!(ready);
-+        assert!(ready.as_mut().now_or_never().is_none());
-+        drop(left);
-+        assert!(ready.as_mut().now_or_never().is_none());
-+        drop(right);
-+        let (epoch, _) = ready.now_or_never().unwrap();
-+        assert!(sync.accepts(epoch));
-+    }
-+    #[test]
-+    fn snapshot_captured_before_new_resize_is_rejected_even_after_ack() {
-+        let sync = TopologySync::default();
-+        let (old_epoch, _) = sync.ready().now_or_never().unwrap();
-+        let resize = sync.begin_resize().unwrap();
-+        assert!(!sync.accepts(old_epoch));
-+        drop(resize);
-+        assert!(!sync.accepts(old_epoch));
-+        let (current_epoch, _) = sync.ready().now_or_never().unwrap();
-+        assert!(sync.accepts(current_epoch));
-+    }
-+    #[test]
-+    fn remote_snapshot_does_not_echo_resizes_and_notifications_coalesce() {
-+        let sync = TopologySync::default();
-+        let first = sync.request();
-+        let second = sync.request();
-+        let (_, included) = sync.ready().now_or_never().unwrap();
-+        let applying = sync.applying();
-+        assert!(sync.begin_resize().is_none());
-+        drop(applying);
-+        assert!(sync.finish(included));
-+        assert!(sync.completed(first) && sync.completed(second));
-+        assert!(!sync.completed(sync.request()));
-+        assert!(sync.begin_resize().is_some());
-+    }
++#[test]
++fn split_snapshot_waits_for_every_pane_resize_ack() {
++    let sync = TopologySync::default();
++    let left = sync.begin_resize().unwrap();
++    let right = sync.begin_resize().unwrap();
++    let ready = sync.ready();
++    pin_mut!(ready);
++    assert!(ready.as_mut().now_or_never().is_none());
++    drop(left);
++    assert!(ready.as_mut().now_or_never().is_none());
++    drop(right);
++    let (epoch, _) = ready.now_or_never().unwrap();
++    assert!(sync.accepts(epoch));
++}
++#[test]
++fn snapshot_captured_before_new_resize_is_rejected_even_after_ack() {
++    let sync = TopologySync::default();
++    let (old_epoch, _) = sync.ready().now_or_never().unwrap();
++    let resize = sync.begin_resize().unwrap();
++    assert!(!sync.accepts(old_epoch));
++    drop(resize);
++    assert!(!sync.accepts(old_epoch));
++    let (current_epoch, _) = sync.ready().now_or_never().unwrap();
++    assert!(sync.accepts(current_epoch));
++}
++#[test]
++fn remote_snapshot_does_not_echo_resizes_and_notifications_coalesce() {
++    let sync = TopologySync::default();
++    let first = sync.request();
++    let second = sync.request();
++    let (_, included) = sync.ready().now_or_never().unwrap();
++    let applying = sync.applying();
++    assert!(sync.begin_resize().is_none());
++    drop(applying);
++    assert!(sync.finish(included));
++    assert!(sync.completed(first) && sync.completed(second));
++    assert!(!sync.completed(sync.request()));
++    assert!(sync.begin_resize().is_some());
 +}

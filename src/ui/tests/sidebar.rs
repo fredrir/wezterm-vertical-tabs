@@ -154,9 +154,9 @@ fn metadata_keeps_the_tab_title_and_close_control_readable() {
 fn compact_footer_keeps_the_selected_space_beside_new_space() {
     let mut model = Model::default();
     model.settings.rail = RailMode::Collapsed;
-    model.spaces.extend(
-        (0..8).map(|index| Space::new(format!("space-{index}"), format!("Space {index}"))),
-    );
+    model
+        .spaces
+        .extend((0..8).map(|index| Space::new(format!("space-{index}"), format!("Space {index}"))));
     let mut ui = SidebarUi::new();
     let area = Rect::new(0, 0, 6, 24);
     ui.render(&model, area, Duration::ZERO);

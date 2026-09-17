@@ -1,6 +1,6 @@
+use super::*;
 use serde_json::json;
 use std::collections::BTreeMap;
-use super::*;
 
 fn tab(id: u64) -> Tab {
     Tab {

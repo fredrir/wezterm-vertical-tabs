@@ -1,5 +1,5 @@
-use serde_json::json;
 use super::*;
+use serde_json::json;
 
 fn tab(id: TabId) -> Tab {
     Tab {

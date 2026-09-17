@@ -1,6 +1,6 @@
+use super::*;
 use std::time::Duration;
 use vtabs_core::{Intent, Model};
-use super::*;
 
 fn draw(ui: &mut SidebarUi, model: &Model) {
     ui.render(model, Rect::new(0, 0, 104, 36), Duration::ZERO);

@@ -1,6 +1,6 @@
+use super::{core::*, store::*, *};
 use serde_json::json;
 use std::time::Duration;
-use super::{core::*, store::*, *};
 
 fn response(request: &Request, records: Vec<Record>) -> Response {
     Response {

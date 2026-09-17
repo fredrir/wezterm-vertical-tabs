@@ -1,3 +1,4 @@
+use super::{ErrorCode, Key, Operation, Record, Request, Response, Scope, sqlite};
 use serde_json::json;
 use std::{
     path::PathBuf,
@@ -7,7 +8,6 @@ use std::{
     },
     time::{SystemTime, UNIX_EPOCH},
 };
-use super::{ErrorCode, Key, Operation, Record, Request, Response, Scope, sqlite};
 
 struct Database(PathBuf);
 static NEXT_DATABASE: AtomicU64 = AtomicU64::new(0);

@@ -66,6 +66,7 @@ Recipes invoke `cargo xtask`. Installed launch entries invoke the bundled Rust b
 | `src/app`                | Per-window coordination, dirty scheduling, asynchronous ports             |
 | `src/store`              | Storage protocol and SQLite helper                                        |
 | `src/bench`              | Core, UI and storage benchmarks                                           |
+| `src/*/tests`            | Bodies outside src; `autotests = false` and `#[cfg(test)] #[path]` wiring |
 | `src/adapter/src`        | Private WezTerm API integration; entry point `lib.rs`                     |
 | `src/adapter/tests`      | Unit modules compiled inside `wezterm-gui`; run with `just build`         |
 | `src/adapter/Cargo.toml` | `vtabs-adapter` source package; dependencies merged into the GUI manifest |
@@ -85,28 +86,28 @@ cargo run --quiet --locked -p vtabs-core --bin gen-schema -- json
 
 **Build state and installation**
 
-| Name                         | Value                                                                                                |
-| ---------------------------- | ---------------------------------------------------------------------------------------------------- |
-| `WEZ_VTABS_CACHE`            | `$XDG_CACHE_HOME/wez-vtabs`, `~/.cache/wez-vtabs`, or `%LOCALAPPDATA%/wez-vtabs`                     |
-| `WEZ_VTABS_INSTALL`          | `$XDG_DATA_HOME/wez-vtabs`, `~/.local/share/wez-vtabs`, or `%LOCALAPPDATA%/wez-vtabs`                |
-| `cache/upstream`             | Tool-owned upstream clone and Cargo target cache                                                     |
-| `cache/worktree`             | Owned patched checkout; adapter changes synchronize in place                                         |
-| `cache/project`              | Installed updater's separate dev-branch checkout; an ownership marker is required before replacement |
-| `cache/build.json`           | Separate source/compile/validation identities, toolchain/configuration and Cargo artifact paths      |
-| `install/versions`           | Immutable bundles; install/deploy/update keep active, pending, previous and running versions only    |
-| `install/active.json`        | Selected installed bundle                                                                            |
-| `install/pending.json`       | Completed update selected by the next managed launch                                                 |
-| `install/update.json`        | Last update attempt and result                                                                       |
-| `install/update.log`         | Background build output                                                                              |
-| `cache/runs/ID/run.json`     | Invocation, resolved revisions/locks, configuration, command logs and timings                        |
-| `cache/runs/ID/source`       | Project source snapshot for reproduction                                                             |
-| `install/previous.json`      | Previous active version for rollback                                                                 |
-| `install/wez-vtabs-launcher` | Stable dispatcher; versioned Rust tools own launch/update behavior                                   |
-| MacOS launch entry           | `install/WezTerm VTabs.app`                                                                          |
-| MacOS application            | `just deploy` copies the active `WezTerm.app`; a replaced foreign app moves to `install/replaced`    |
+| Name                         | Value                                                                                                            |
+| ---------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| `WEZ_VTABS_CACHE`            | `$XDG_CACHE_HOME/wez-vtabs`, `~/.cache/wez-vtabs`, or `%LOCALAPPDATA%/wez-vtabs`                                 |
+| `WEZ_VTABS_INSTALL`          | `$XDG_DATA_HOME/wez-vtabs`, `~/.local/share/wez-vtabs`, or `%LOCALAPPDATA%/wez-vtabs`                            |
+| `cache/upstream`             | Tool-owned upstream clone and Cargo target cache                                                                 |
+| `cache/worktree`             | Owned patched checkout; adapter changes synchronize in place                                                     |
+| `cache/project`              | Installed updater's separate dev-branch checkout; an ownership marker is required before replacement             |
+| `cache/build.json`           | Separate source/compile/validation identities, toolchain/configuration and Cargo artifact paths                  |
+| `install/versions`           | Immutable bundles; install/deploy/update keep active, pending, previous and running versions only                |
+| `install/active.json`        | Selected installed bundle                                                                                        |
+| `install/pending.json`       | Completed update selected by the next managed launch                                                             |
+| `install/update.json`        | Last update attempt and result                                                                                   |
+| `install/update.log`         | Background build output                                                                                          |
+| `cache/runs/ID/run.json`     | Invocation, resolved revisions/locks, configuration, command logs and timings                                    |
+| `cache/runs/ID/source`       | Project source snapshot for reproduction                                                                         |
+| `install/previous.json`      | Previous active version for rollback                                                                             |
+| `install/wez-vtabs-launcher` | Stable dispatcher; versioned Rust tools own launch/update behavior                                               |
+| MacOS launch entry           | `install/WezTerm VTabs.app`                                                                                      |
+| MacOS application            | `just deploy` copies the active `WezTerm.app`; a replaced foreign app moves to `install/replaced`                |
 | Linux deploy                 | `~/.local/share/applications/org.wezfurlong.wezterm.desktop` and `~/.local/bin/wezterm{,-gui,-mux-server}` links |
-| Linux launch entry           | `install/wez-vtabs` and `install/wez-vtabs.desktop`                                                  |
-| Windows launch entry         | `install/wez-vtabs.cmd`                                                                              |
+| Linux launch entry           | `install/wez-vtabs` and `install/wez-vtabs.desktop`                                                              |
+| Windows launch entry         | `install/wez-vtabs.cmd`                                                                                          |
 
 Use the managed launch entry for updates between launches. Versioned application paths identify a particular build. Installed bundles contain their project source; rebuilds require the toolchain. Rust changes require rebuilding; Lua configuration reloads normally.
 
@@ -173,6 +174,12 @@ uv run --locked pytest -n 2 tests/integration --run-gui --run-container \
 | PTY                     | tui-test drives real CLI processes; the group also exercises an isolated installed `wez-vtabs` launcher                                                             |
 | Startup/render/shutdown | Local and Unix mux sessions with visible content, sidebar rendering and clean shutdown; TLS tab lifecycle                                                           |
 | Desktop                 | No suite or scenario opens a GUI on the user's desktop                                                                                                              |
+
+| Rust layer       | Value                                                                     |
+| ---------------- | ------------------------------------------------------------------------- |
+| Unit modules     | `cargo test --workspace --all-features`; bodies in `src/<crate>/tests`    |
+| Process boundary | `schema.rs` and `helper.rs` `[[test]]` targets; need `CARGO_BIN_EXE_*`    |
+| Patched WezTerm  | `wezterm-patches` place `<crate>/tests/vtabs/*.rs`; run with `just build` |
 
 **Extended GUI scenarios**
 

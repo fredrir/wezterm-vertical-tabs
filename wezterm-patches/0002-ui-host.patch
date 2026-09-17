@@ -113,7 +113,7 @@ index bffc5213..8b774de0 100644
  
      #[allow(dead_code)]
 diff --git a/wezterm-gui/src/main.rs b/wezterm-gui/src/main.rs
-index 5e7ca47b..3610fccf 100644
+index 5e7ca47b..1adb1cb9 100644
 --- a/wezterm-gui/src/main.rs
 +++ b/wezterm-gui/src/main.rs
 @@ -52,6 +52,8 @@ mod shapecache;
@@ -126,7 +126,7 @@ index 5e7ca47b..3610fccf 100644
  mod unicode_names;
  mod uniforms;
 diff --git a/wezterm-gui/src/quad.rs b/wezterm-gui/src/quad.rs
-index d51f8978..de365918 100644
+index d51f8978..99ebe6d7 100644
 --- a/wezterm-gui/src/quad.rs
 +++ b/wezterm-gui/src/quad.rs
 @@ -322,6 +322,26 @@ impl std::fmt::Debug for HeapQuadAllocator {
@@ -156,111 +156,117 @@ index d51f8978..de365918 100644
      pub fn apply_to(&self, other: &mut TripleLayerQuadAllocator) -> anyhow::Result<()> {
          let start = std::time::Instant::now();
          for (layer_num, quads) in [(0, &self.layer0), (1, &self.layer1), (2, &self.layer2)] {
-@@ -401,3 +421,102 @@ fn size() {
+@@ -401,3 +421,7 @@ fn size() {
      assert_eq!(std::mem::size_of::<Vertex>() * VERTICES_PER_CELL, 272);
      assert_eq!(std::mem::size_of::<BoxedQuad>(), 84);
  }
 +
 +#[cfg(test)]
-+mod vtabs_transform_tests {
-+    use super::*;
++#[path = "../tests/vtabs/quad.rs"]
++mod vtabs_transform_tests;
+diff --git a/wezterm-gui/tests/vtabs/quad.rs b/wezterm-gui/tests/vtabs/quad.rs
+new file mode 100644
+index 00000000..10d38ecd
+--- /dev/null
++++ b/wezterm-gui/tests/vtabs/quad.rs
+@@ -0,0 +1,95 @@
++use super::*;
 +
-+    fn close(actual: f32, expected: f32) {
-+        assert!((actual - expected).abs() < 0.000_01, "{} != {}", actual, expected);
++fn close(actual: f32, expected: f32) {
++    assert!((actual - expected).abs() < 0.000_01, "{} != {}", actual, expected);
++}
++
++fn glyph(source: &mut HeapQuadAllocator, layer: usize) {
++    let mut quad = source.allocate(layer).unwrap();
++    quad.set_position(-30., -20., 50., 60.);
++    quad.set_texture_discrete(0.1, 0.9, 0.2, 1.);
++    quad.set_fg_color(LinearRgba::with_components(0.2, 0.3, 0.4, 0.8));
++    quad.set_alt_color_and_mix_value(LinearRgba::with_components(0.6, 0.5, 0.4, 0.4), 0.75);
++    quad.set_hsv(Some(HsbTransform { hue: 0.8, saturation: 0.7, brightness: 0.6 }));
++    quad.set_has_color(true);
++}
++
++#[test]
++fn vtabs_transform_clips_all_edges_and_preserves_texture_scale() {
++    let mut source = HeapQuadAllocator::default();
++    glyph(&mut source, 1);
++    let original = source.layer1[0].to_vertices();
++    let mut output = HeapQuadAllocator::default();
++    source.apply_transformed(&mut TripleLayerQuadAllocator::Heap(&mut output),
++        (10., 5.), 0.25, (0., 5., 40., 45.));
++    assert!(output.layer0.is_empty() && output.layer2.is_empty());
++    assert_eq!(output.layer1.len(), 1);
++    let vertices = output.layer1[0].to_vertices();
++    // The translated 80×80 glyph loses 20 pixels from each edge. Its
++    // texture must crop to the central half without stretching the glyph.
++    for (vertex, (position, texture)) in vertices.iter().zip([
++        ([0., 5.], [0.3, 0.4]), ([40., 5.], [0.7, 0.4]),
++        ([0., 45.], [0.3, 0.8]), ([40., 45.], [0.7, 0.8]),
++    ]) {
++        assert_eq!(vertex.position, position);
++        close(vertex.tex[0], texture[0]); close(vertex.tex[1], texture[1]);
++        close(vertex.fg_color[3], 0.2); close(vertex.alt_color[3], 0.1);
++        assert_eq!(&vertex.fg_color[..3], &original[0].fg_color[..3]);
++        assert_eq!(&vertex.alt_color[..3], &original[0].alt_color[..3]);
++        assert_eq!(vertex.hsv, original[0].hsv);
++        assert_eq!(vertex.has_color, IS_COLOR_EMOJI);
++        assert_eq!(vertex.mix_value, 0.75);
 +    }
++    // Published cache contents remain reusable for later resize/effect frames.
++    assert_eq!(bytemuck::cast_slice::<Vertex, u8>(&original),
++        bytemuck::cast_slice::<Vertex, u8>(&source.layer1[0].to_vertices()));
++}
 +
-+    fn glyph(source: &mut HeapQuadAllocator, layer: usize) {
-+        let mut quad = source.allocate(layer).unwrap();
-+        quad.set_position(-30., -20., 50., 60.);
-+        quad.set_texture_discrete(0.1, 0.9, 0.2, 1.);
-+        quad.set_fg_color(LinearRgba::with_components(0.2, 0.3, 0.4, 0.8));
-+        quad.set_alt_color_and_mix_value(LinearRgba::with_components(0.6, 0.5, 0.4, 0.4), 0.75);
-+        quad.set_hsv(Some(HsbTransform { hue: 0.8, saturation: 0.7, brightness: 0.6 }));
-+        quad.set_has_color(true);
-+    }
-+
-+    #[test]
-+    fn vtabs_transform_clips_all_edges_and_preserves_texture_scale() {
-+        let mut source = HeapQuadAllocator::default();
-+        glyph(&mut source, 1);
-+        let original = source.layer1[0].to_vertices();
++#[test]
++fn vtabs_transform_reuses_all_layers_without_cumulative_translation_or_opacity() {
++    let mut source = HeapQuadAllocator::default();
++    for layer in 0..3 { glyph(&mut source, layer); }
++    for (offset, opacity) in [((0., 0.), 1.), ((17.5, -8.25), 0.5), ((-25., 40.), 0.)] {
 +        let mut output = HeapQuadAllocator::default();
 +        source.apply_transformed(&mut TripleLayerQuadAllocator::Heap(&mut output),
-+            (10., 5.), 0.25, (0., 5., 40., 45.));
-+        assert!(output.layer0.is_empty() && output.layer2.is_empty());
-+        assert_eq!(output.layer1.len(), 1);
-+        let vertices = output.layer1[0].to_vertices();
-+        // The translated 80×80 glyph loses 20 pixels from each edge. Its
-+        // texture must crop to the central half without stretching the glyph.
-+        for (vertex, (position, texture)) in vertices.iter().zip([
-+            ([0., 5.], [0.3, 0.4]), ([40., 5.], [0.7, 0.4]),
-+            ([0., 45.], [0.3, 0.8]), ([40., 45.], [0.7, 0.8]),
-+        ]) {
-+            assert_eq!(vertex.position, position);
-+            close(vertex.tex[0], texture[0]); close(vertex.tex[1], texture[1]);
-+            close(vertex.fg_color[3], 0.2); close(vertex.alt_color[3], 0.1);
-+            assert_eq!(&vertex.fg_color[..3], &original[0].fg_color[..3]);
-+            assert_eq!(&vertex.alt_color[..3], &original[0].alt_color[..3]);
-+            assert_eq!(vertex.hsv, original[0].hsv);
-+            assert_eq!(vertex.has_color, IS_COLOR_EMOJI);
-+            assert_eq!(vertex.mix_value, 0.75);
-+        }
-+        // Published cache contents remain reusable for later resize/effect frames.
-+        assert_eq!(bytemuck::cast_slice::<Vertex, u8>(&original),
-+            bytemuck::cast_slice::<Vertex, u8>(&source.layer1[0].to_vertices()));
-+    }
-+
-+    #[test]
-+    fn vtabs_transform_reuses_all_layers_without_cumulative_translation_or_opacity() {
-+        let mut source = HeapQuadAllocator::default();
-+        for layer in 0..3 { glyph(&mut source, layer); }
-+        for (offset, opacity) in [((0., 0.), 1.), ((17.5, -8.25), 0.5), ((-25., 40.), 0.)] {
-+            let mut output = HeapQuadAllocator::default();
-+            source.apply_transformed(&mut TripleLayerQuadAllocator::Heap(&mut output),
-+                offset, opacity, (-1000., -1000., 1000., 1000.));
-+            for layer in [&output.layer0, &output.layer1, &output.layer2] {
-+                assert_eq!(layer.len(), 1);
-+                let vertices = layer[0].to_vertices();
-+                for (actual, original) in vertices.iter().zip(source.layer0[0].to_vertices()) {
-+                    close(actual.position[0], original.position[0] + offset.0);
-+                    close(actual.position[1], original.position[1] + offset.1);
-+                    close(actual.tex[0], original.tex[0]); close(actual.tex[1], original.tex[1]);
-+                    close(actual.fg_color[3], original.fg_color[3] * opacity);
-+                    close(actual.alt_color[3], original.alt_color[3] * opacity);
-+                }
++            offset, opacity, (-1000., -1000., 1000., 1000.));
++        for layer in [&output.layer0, &output.layer1, &output.layer2] {
++            assert_eq!(layer.len(), 1);
++            let vertices = layer[0].to_vertices();
++            for (actual, original) in vertices.iter().zip(source.layer0[0].to_vertices()) {
++                close(actual.position[0], original.position[0] + offset.0);
++                close(actual.position[1], original.position[1] + offset.1);
++                close(actual.tex[0], original.tex[0]); close(actual.tex[1], original.tex[1]);
++                close(actual.fg_color[3], original.fg_color[3] * opacity);
++                close(actual.alt_color[3], original.alt_color[3] * opacity);
 +            }
 +        }
 +    }
++}
 +
-+    #[test]
-+    fn vtabs_transform_drops_outside_edge_touching_and_degenerate_quads() {
-+        let mut source = HeapQuadAllocator::default();
-+        for (left, top, right, bottom) in [
-+            (-20., 0., -1., 10.), (-10., 0., 0., 10.), (10., 0., 20., 10.),
-+            (0., -10., 10., 0.), (0., 10., 10., 20.), (2., 2., 2., 8.), (2., 2., 8., 2.),
-+        ] {
-+            source.allocate(0).unwrap().set_position(left, top, right, bottom);
-+        }
-+        let mut output = HeapQuadAllocator::default();
-+        source.apply_transformed(&mut TripleLayerQuadAllocator::Heap(&mut output),
-+            (0., 0.), 1., (0., 0., 10., 10.));
-+        assert!(output.layer0.is_empty());
-+
-+        // Cropping also preserves reversed atlas axes and fractional bounds.
-+        let mut quad = source.allocate(2).unwrap();
-+        quad.set_position(-0.5, -0.5, 1.5, 1.5);
-+        quad.set_texture_discrete(1., 0., 0.75, 0.25);
-+        source.apply_transformed(&mut TripleLayerQuadAllocator::Heap(&mut output),
-+            (0., 0.), 1., (0., 0., 1., 1.));
-+        assert!(output.layer0.is_empty());
-+        assert_eq!(output.layer2.len(), 1);
-+        let clipped = &output.layer2[0];
-+        assert_eq!(clipped.position, (0., 0., 1., 1.));
-+        assert_eq!(clipped.tex, (0.75, 0.25, 0.625, 0.375));
++#[test]
++fn vtabs_transform_drops_outside_edge_touching_and_degenerate_quads() {
++    let mut source = HeapQuadAllocator::default();
++    for (left, top, right, bottom) in [
++        (-20., 0., -1., 10.), (-10., 0., 0., 10.), (10., 0., 20., 10.),
++        (0., -10., 10., 0.), (0., 10., 10., 20.), (2., 2., 2., 8.), (2., 2., 8., 2.),
++    ] {
++        source.allocate(0).unwrap().set_position(left, top, right, bottom);
 +    }
++    let mut output = HeapQuadAllocator::default();
++    source.apply_transformed(&mut TripleLayerQuadAllocator::Heap(&mut output),
++        (0., 0.), 1., (0., 0., 10., 10.));
++    assert!(output.layer0.is_empty());
++
++    // Cropping also preserves reversed atlas axes and fractional bounds.
++    let mut quad = source.allocate(2).unwrap();
++    quad.set_position(-0.5, -0.5, 1.5, 1.5);
++    quad.set_texture_discrete(1., 0., 0.75, 0.25);
++    source.apply_transformed(&mut TripleLayerQuadAllocator::Heap(&mut output),
++        (0., 0.), 1., (0., 0., 1., 1.));
++    assert!(output.layer0.is_empty());
++    assert_eq!(output.layer2.len(), 1);
++    let clipped = &output.layer2[0];
++    assert_eq!(clipped.position, (0., 0., 1., 1.));
++    assert_eq!(clipped.tex, (0.75, 0.25, 0.625, 0.375));
 +}
 diff --git a/wezterm-gui/src/scripting/mod.rs b/wezterm-gui/src/scripting/mod.rs
-index 7188ca21..5289129b 100644
+index 7188ca21..008a0ee0 100644
 --- a/wezterm-gui/src/scripting/mod.rs
 +++ b/wezterm-gui/src/scripting/mod.rs
 @@ -16,6 +16,7 @@ fn luaerr(err: anyhow::Error) -> mlua::Error {
@@ -272,7 +278,7 @@ index 7188ca21..5289129b 100644
  
      window_mod.set(
 diff --git a/wezterm-gui/src/termwindow/keyevent.rs b/wezterm-gui/src/termwindow/keyevent.rs
-index d6690807..9e5fc113 100644
+index d6690807..85cb38e2 100644
 --- a/wezterm-gui/src/termwindow/keyevent.rs
 +++ b/wezterm-gui/src/termwindow/keyevent.rs
 @@ -428,6 +428,7 @@ impl super::TermWindow {
@@ -301,7 +307,7 @@ index d6690807..9e5fc113 100644
          // any key table rules. Therefore, we should pop all `until_unknown`
          // entries from the stack.
 diff --git a/wezterm-gui/src/termwindow/mouseevent.rs b/wezterm-gui/src/termwindow/mouseevent.rs
-index f7fefd06..2a21edcf 100644
+index f7fefd06..87a86f65 100644
 --- a/wezterm-gui/src/termwindow/mouseevent.rs
 +++ b/wezterm-gui/src/termwindow/mouseevent.rs
 @@ -60,6 +60,7 @@ impl super::TermWindow {
@@ -313,7 +319,7 @@ index f7fefd06..2a21edcf 100644
              Some(pane) => pane,
              None => return,
 diff --git a/wezterm-gui/src/termwindow/render/paint.rs b/wezterm-gui/src/termwindow/render/paint.rs
-index 3136f28e..1e640a56 100644
+index 3136f28e..01e6ace3 100644
 --- a/wezterm-gui/src/termwindow/render/paint.rs
 +++ b/wezterm-gui/src/termwindow/render/paint.rs
 @@ -134,7 +134,7 @@ impl crate::TermWindow {
@@ -344,10 +350,10 @@ index 3136f28e..1e640a56 100644
          drop(layers);
 diff --git a/wezterm-gui/src/termwindow/ui_host.rs b/wezterm-gui/src/termwindow/ui_host.rs
 new file mode 100644
-index 00000000..9dfe7d55
+index 00000000..02fc4c64
 --- /dev/null
 +++ b/wezterm-gui/src/termwindow/ui_host.rs
-@@ -0,0 +1,1407 @@
+@@ -0,0 +1,1367 @@
 +//! Window-owned surfaces. Product state lives in the registered provider.
 +use crate::quad::{HeapQuadAllocator, TripleLayerQuadAllocator};
 +use crate::tabbar::TabBarItem;
@@ -584,48 +590,8 @@ index 00000000..9dfe7d55
 +    ))
 +}
 +#[cfg(test)]
-+mod vtabs_geometry_tests {
-+    use super::*;
-+    #[test]
-+    fn vtabs_caret_follows_the_painted_transform_and_sidebar_origin() {
-+        let geometry = Geometry {
-+            sidebar: Bounds {
-+                x: 640.,
-+                y: 56.,
-+                width: 240.,
-+                height: 400.,
-+            },
-+            cell_width: 9.5,
-+            cell_height: 18.5,
-+            ..Geometry::default()
-+        };
-+        let rect = vtabs_caret_rect(geometry, (-12.5, 3.), (4, 2)).unwrap();
-+        assert_eq!(
-+            rect,
-+            window::Rect::new(window::Point::new(665, 96), window::Size::new(10, 19))
-+        );
-+        let clipped = vtabs_caret_rect(geometry, (-5., 0.), (0, 0)).unwrap();
-+        assert_eq!(clipped.origin.x, 640);
-+        assert_eq!(clipped.size.width, 5);
-+        assert!(vtabs_caret_rect(geometry, (-20., 0.), (0, 0)).is_none());
-+        assert!(vtabs_caret_rect(geometry, (0., 500.), (0, 0)).is_none());
-+    }
-+    #[test]
-+    fn vtabs_caret_rejects_hidden_or_invalid_geometry() {
-+        assert!(vtabs_caret_rect(Geometry::default(), (0., 0.), (0, 0)).is_none());
-+        let geometry = Geometry {
-+            sidebar: Bounds {
-+                width: 20.,
-+                height: 20.,
-+                ..Bounds::default()
-+            },
-+            cell_width: 10.,
-+            cell_height: 10.,
-+            ..Geometry::default()
-+        };
-+        assert!(vtabs_caret_rect(geometry, (f32::NAN, 0.), (0, 0)).is_none());
-+    }
-+}
++#[path = "../../tests/vtabs/ui_host.rs"]
++mod vtabs_geometry_tests;
 +pub struct UiHost {
 +    pub provider: Box<dyn Provider>,
 +    pub projection: Projection,
@@ -1754,4 +1720,50 @@ index 00000000..9dfe7d55
 +        self.ui_host = Some(ui);
 +        result
 +    }
++}
+diff --git a/wezterm-gui/tests/vtabs/ui_host.rs b/wezterm-gui/tests/vtabs/ui_host.rs
+new file mode 100644
+index 00000000..8e96d79a
+--- /dev/null
++++ b/wezterm-gui/tests/vtabs/ui_host.rs
+@@ -0,0 +1,40 @@
++use super::*;
++#[test]
++fn vtabs_caret_follows_the_painted_transform_and_sidebar_origin() {
++    let geometry = Geometry {
++        sidebar: Bounds {
++            x: 640.,
++            y: 56.,
++            width: 240.,
++            height: 400.,
++        },
++        cell_width: 9.5,
++        cell_height: 18.5,
++        ..Geometry::default()
++    };
++    let rect = vtabs_caret_rect(geometry, (-12.5, 3.), (4, 2)).unwrap();
++    assert_eq!(
++        rect,
++        window::Rect::new(window::Point::new(665, 96), window::Size::new(10, 19))
++    );
++    let clipped = vtabs_caret_rect(geometry, (-5., 0.), (0, 0)).unwrap();
++    assert_eq!(clipped.origin.x, 640);
++    assert_eq!(clipped.size.width, 5);
++    assert!(vtabs_caret_rect(geometry, (-20., 0.), (0, 0)).is_none());
++    assert!(vtabs_caret_rect(geometry, (0., 500.), (0, 0)).is_none());
++}
++#[test]
++fn vtabs_caret_rejects_hidden_or_invalid_geometry() {
++    assert!(vtabs_caret_rect(Geometry::default(), (0., 0.), (0, 0)).is_none());
++    let geometry = Geometry {
++        sidebar: Bounds {
++            width: 20.,
++            height: 20.,
++            ..Bounds::default()
++        },
++        cell_width: 10.,
++        cell_height: 10.,
++        ..Geometry::default()
++    };
++    assert!(vtabs_caret_rect(geometry, (f32::NAN, 0.), (0, 0)).is_none());
 +}

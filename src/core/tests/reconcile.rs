@@ -1,5 +1,5 @@
-use std::collections::BTreeMap;
 use super::*;
+use std::collections::BTreeMap;
 
 fn host_tab(id: TabId) -> Tab {
     Tab {

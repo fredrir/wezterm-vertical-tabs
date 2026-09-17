@@ -1,6 +1,6 @@
+use super::{core::*, store::*, *};
 use serde_json::json;
 use std::{collections::BTreeMap, time::Duration};
-use super::{core::*, store::*, *};
 
 fn snapshot(id: u64) -> HostSnapshot {
     HostSnapshot {

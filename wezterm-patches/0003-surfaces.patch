@@ -1,5 +1,5 @@
 diff --git a/wezterm-gui/src/quad.rs b/wezterm-gui/src/quad.rs
-index de365918..5d5ea24e 100644
+index 99ebe6d7..51636fc0 100644
 --- a/wezterm-gui/src/quad.rs
 +++ b/wezterm-gui/src/quad.rs
 @@ -322,6 +322,29 @@ impl std::fmt::Debug for HeapQuadAllocator {
@@ -32,76 +32,80 @@ index de365918..5d5ea24e 100644
      pub fn apply_transformed(&self, other: &mut TripleLayerQuadAllocator,
          offset: (f32, f32), opacity: f32, clip: (f32, f32, f32, f32)) {
          for (layer, quads) in [(0, &self.layer0), (1, &self.layer1), (2, &self.layer2)] {
-@@ -440,6 +463,67 @@ mod vtabs_transform_tests {
-         quad.set_has_color(true);
-     }
+diff --git a/wezterm-gui/tests/vtabs/quad.rs b/wezterm-gui/tests/vtabs/quad.rs
+index 10d38ecd..f4d85d4a 100644
+--- a/wezterm-gui/tests/vtabs/quad.rs
++++ b/wezterm-gui/tests/vtabs/quad.rs
+@@ -14,6 +14,67 @@ fn glyph(source: &mut HeapQuadAllocator, layer: usize) {
+     quad.set_has_color(true);
+ }
  
-+    #[test]
-+    fn vtabs_glyph_centering_offsets_once_and_preserves_other_vertex_data() {
-+        let mut source = HeapQuadAllocator::default();
-+        for layer in 0..3 { glyph(&mut source, layer); }
-+        let originals = [source.layer0[0].to_vertices(), source.layer1[0].to_vertices(), source.layer2[0].to_vertices()];
-+        let mut background = source.allocate(0).unwrap();
-+        background.set_is_background();
-+        background.set_position(-30., -20., 50., 60.);
-+        source.offset_glyphs_in_ranges(&[(0., 20.), (5., 25.), (10., 30.)], 0., 11.);
-+        for (layer, original) in [&source.layer0, &source.layer1, &source.layer2].iter().zip(originals) {
-+            let actual = layer[0].to_vertices();
-+            for (actual, mut expected) in actual.iter().zip(original) {
-+                expected.position[1] += 11.;
-+                assert_eq!(bytemuck::bytes_of(actual), bytemuck::bytes_of(&expected));
-+            }
++#[test]
++fn vtabs_glyph_centering_offsets_once_and_preserves_other_vertex_data() {
++    let mut source = HeapQuadAllocator::default();
++    for layer in 0..3 { glyph(&mut source, layer); }
++    let originals = [source.layer0[0].to_vertices(), source.layer1[0].to_vertices(), source.layer2[0].to_vertices()];
++    let mut background = source.allocate(0).unwrap();
++    background.set_is_background();
++    background.set_position(-30., -20., 50., 60.);
++    source.offset_glyphs_in_ranges(&[(0., 20.), (5., 25.), (10., 30.)], 0., 11.);
++    for (layer, original) in [&source.layer0, &source.layer1, &source.layer2].iter().zip(originals) {
++        let actual = layer[0].to_vertices();
++        for (actual, mut expected) in actual.iter().zip(original) {
++            expected.position[1] += 11.;
++            assert_eq!(bytemuck::bytes_of(actual), bytemuck::bytes_of(&expected));
 +        }
-+        assert_eq!(source.layer0[1].position, (-30., -20., 50., 60.));
 +    }
++    assert_eq!(source.layer0[1].position, (-30., -20., 50., 60.));
++}
 +
-+    #[test]
-+    fn vtabs_glyph_centering_respects_half_open_ranges_and_invalid_offsets() {
++#[test]
++fn vtabs_glyph_centering_respects_half_open_ranges_and_invalid_offsets() {
++    let mut source = HeapQuadAllocator::default();
++    glyph(&mut source, 1);
++    let original = source.layer1[0].position;
++    // The glyph center is 10; touching only the right edge is outside.
++    source.offset_glyphs_in_ranges(&[(-10., 10.), (11., 30.)], 0., 11.);
++    source.offset_glyphs_in_ranges(&[(0., 30.)], 0., f32::NAN);
++    assert_eq!(source.layer1[0].position, original);
++    source.offset_glyphs_in_ranges(&[(10., 20.)], 0., 11.);
++    assert_eq!(source.layer1[0].position, (-30., -9., 50., 71.));
++}
++
++#[test]
++fn vtabs_local_centering_ranges_position_glyphs_at_any_window_origin() {
++    let ranges = [(0., 20.)];
++    for origin in [-601., -600.5, -600., 0., 300.] {
 +        let mut source = HeapQuadAllocator::default();
 +        glyph(&mut source, 1);
-+        let original = source.layer1[0].position;
-+        // The glyph center is 10; touching only the right edge is outside.
-+        source.offset_glyphs_in_ranges(&[(-10., 10.), (11., 30.)], 0., 11.);
-+        source.offset_glyphs_in_ranges(&[(0., 30.)], 0., f32::NAN);
-+        assert_eq!(source.layer1[0].position, original);
-+        source.offset_glyphs_in_ranges(&[(10., 20.)], 0., 11.);
-+        assert_eq!(source.layer1[0].position, (-30., -9., 50., 71.));
++        source.layer1[0].position.0 += origin;
++        source.layer1[0].position.2 += origin;
++        source.offset_glyphs_in_ranges(&ranges, origin, 11.);
++        assert_eq!(source.layer1[0].position, (-30. + origin, -9., 50. + origin, 71.));
 +    }
++}
 +
-+    #[test]
-+    fn vtabs_local_centering_ranges_position_glyphs_at_any_window_origin() {
-+        let ranges = [(0., 20.)];
-+        for origin in [-601., -600.5, -600., 0., 300.] {
-+            let mut source = HeapQuadAllocator::default();
-+            glyph(&mut source, 1);
-+            source.layer1[0].position.0 += origin;
-+            source.layer1[0].position.2 += origin;
-+            source.offset_glyphs_in_ranges(&ranges, origin, 11.);
-+            assert_eq!(source.layer1[0].position, (-30. + origin, -9., 50. + origin, 71.));
-+        }
-+    }
++#[test]
++fn vtabs_rounded_surfaces_preserve_glyphs_and_decorations() {
++    let mut source = HeapQuadAllocator::default();
++    for layer in 0..3 { glyph(&mut source, layer); }
++    let mut background = source.allocate(0).unwrap();
++    background.set_is_background();
++    background.set_position(0., 0., 100., 100.);
++    source.remove_solid_backgrounds();
++    assert_eq!(source.layer0.len(), 1);
++    assert_eq!(source.layer1.len(), 1);
++    assert_eq!(source.layer2.len(), 1);
++    assert_eq!(source.layer0[0].has_color, IS_COLOR_EMOJI);
++    source.remove_solid_backgrounds();
++    assert_eq!(source.layer0.len(), 1);
++}
 +
-+    #[test]
-+    fn vtabs_rounded_surfaces_preserve_glyphs_and_decorations() {
-+        let mut source = HeapQuadAllocator::default();
-+        for layer in 0..3 { glyph(&mut source, layer); }
-+        let mut background = source.allocate(0).unwrap();
-+        background.set_is_background();
-+        background.set_position(0., 0., 100., 100.);
-+        source.remove_solid_backgrounds();
-+        assert_eq!(source.layer0.len(), 1);
-+        assert_eq!(source.layer1.len(), 1);
-+        assert_eq!(source.layer2.len(), 1);
-+        assert_eq!(source.layer0[0].has_color, IS_COLOR_EMOJI);
-+        source.remove_solid_backgrounds();
-+        assert_eq!(source.layer0.len(), 1);
-+    }
-+
-     #[test]
-     fn vtabs_transform_clips_all_edges_and_preserves_texture_scale() {
-         let mut source = HeapQuadAllocator::default();
+ #[test]
+ fn vtabs_transform_clips_all_edges_and_preserves_texture_scale() {
+     let mut source = HeapQuadAllocator::default();
 diff --git a/wezterm-gui/src/termwindow/keyevent.rs b/wezterm-gui/src/termwindow/keyevent.rs
-index 9e5fc113..e86bd787 100644
+index 85cb38e2..0502132a 100644
 --- a/wezterm-gui/src/termwindow/keyevent.rs
 +++ b/wezterm-gui/src/termwindow/keyevent.rs
 @@ -428,6 +428,11 @@ impl super::TermWindow {
@@ -117,10 +121,10 @@ index 9e5fc113..e86bd787 100644
          // The leader key is a kind of modal modifier key.
          // It is allowed to be active for up to the leader timeout duration,
 diff --git a/wezterm-gui/src/termwindow/mod.rs b/wezterm-gui/src/termwindow/mod.rs
-index 6f00f347..b9dc3288 100644
+index ddb4c5bc..cc91b4ff 100644
 --- a/wezterm-gui/src/termwindow/mod.rs
 +++ b/wezterm-gui/src/termwindow/mod.rs
-@@ -650,18 +650,19 @@ impl TermWindow {
+@@ -651,18 +651,19 @@ impl TermWindow {
              pixel_max: terminal_size.pixel_width as f32,
              pixel_cell: render_metrics.cell_size.width as f32,
          };
@@ -145,7 +149,7 @@ index 6f00f347..b9dc3288 100644
          let mut dimensions = Dimensions {
              pixel_width: (terminal_size.pixel_width + padding_left + padding_right) as usize,
 diff --git a/wezterm-gui/src/termwindow/mouseevent.rs b/wezterm-gui/src/termwindow/mouseevent.rs
-index 2a21edcf..b949e40c 100644
+index 87a86f65..e3a3c69f 100644
 --- a/wezterm-gui/src/termwindow/mouseevent.rs
 +++ b/wezterm-gui/src/termwindow/mouseevent.rs
 @@ -60,7 +60,13 @@ impl super::TermWindow {
@@ -188,7 +192,7 @@ index 2a21edcf..b949e40c 100644
              self.min_scroll_bar_height() as usize,
          );
 diff --git a/wezterm-gui/src/termwindow/ui_host.rs b/wezterm-gui/src/termwindow/ui_host.rs
-index 9dfe7d55..826a922e 100644
+index 02fc4c64..9009dea5 100644
 --- a/wezterm-gui/src/termwindow/ui_host.rs
 +++ b/wezterm-gui/src/termwindow/ui_host.rs
 @@ -1,10 +1,11 @@
@@ -388,7 +392,7 @@ index 9dfe7d55..826a922e 100644
      Key(&'a KeyEvent),
      Mouse(&'a MouseEvent, Geometry),
      Composition(&'a DeadKeyStatus),
-@@ -120,6 +284,18 @@ pub trait Provider {
+@@ -123,6 +287,18 @@ pub trait Provider {
      fn commands(&mut self) -> Vec<Command>;
      fn render(&mut self, geometry: Geometry, now: Instant);
      fn surface(&self) -> &Surface;
@@ -407,7 +411,7 @@ index 9dfe7d55..826a922e 100644
      fn deadline(&self) -> Option<Instant>;
      fn caret(&self) -> Option<(usize, usize)>;
      fn keyboard_focus(&self) -> bool;
-@@ -191,17 +367,158 @@ impl PaintStats {
+@@ -194,17 +370,158 @@ impl PaintStats {
          result
      }
  }
@@ -567,377 +571,7 @@ index 9dfe7d55..826a922e 100644
      if bounds.width <= 0.
          || bounds.height <= 0.
          || geometry.cell_width <= 0.
-@@ -246,20 +563,20 @@ mod vtabs_geometry_tests {
-             cell_height: 18.5,
-             ..Geometry::default()
-         };
--        let rect = vtabs_caret_rect(geometry, (-12.5, 3.), (4, 2)).unwrap();
-+        let rect = vtabs_caret_rect(geometry, (-12.5, 3.), (4, 2), false).unwrap();
-         assert_eq!(
-             rect,
-             window::Rect::new(window::Point::new(665, 96), window::Size::new(10, 19))
-         );
--        let clipped = vtabs_caret_rect(geometry, (-5., 0.), (0, 0)).unwrap();
-+        let clipped = vtabs_caret_rect(geometry, (-5., 0.), (0, 0), false).unwrap();
-         assert_eq!(clipped.origin.x, 640);
-         assert_eq!(clipped.size.width, 5);
--        assert!(vtabs_caret_rect(geometry, (-20., 0.), (0, 0)).is_none());
--        assert!(vtabs_caret_rect(geometry, (0., 500.), (0, 0)).is_none());
-+        assert!(vtabs_caret_rect(geometry, (-20., 0.), (0, 0), false).is_none());
-+        assert!(vtabs_caret_rect(geometry, (0., 500.), (0, 0), false).is_none());
-     }
-     #[test]
-     fn vtabs_caret_rejects_hidden_or_invalid_geometry() {
--        assert!(vtabs_caret_rect(Geometry::default(), (0., 0.), (0, 0)).is_none());
-+        assert!(vtabs_caret_rect(Geometry::default(), (0., 0.), (0, 0), false).is_none());
-         let geometry = Geometry {
-             sidebar: Bounds {
-                 width: 20.,
-@@ -270,7 +587,342 @@ mod vtabs_geometry_tests {
-             cell_height: 10.,
-             ..Geometry::default()
-         };
--        assert!(vtabs_caret_rect(geometry, (f32::NAN, 0.), (0, 0)).is_none());
-+        assert!(vtabs_caret_rect(geometry, (f32::NAN, 0.), (0, 0), false).is_none());
-+    }
-+    #[test]
-+    fn vtabs_page_bounds_and_caret_cover_either_sidebar_position() {
-+        for (sidebar_x, content_x) in [(8., 248.), (648., 8.)] {
-+            let geometry = Geometry {
-+                sidebar: Bounds {
-+                    x: sidebar_x,
-+                    y: 8.,
-+                    width: 240.,
-+                    height: 600.,
-+                },
-+                content: Bounds {
-+                    x: content_x,
-+                    y: 48.,
-+                    width: 640.,
-+                    height: 560.,
-+                },
-+                cell_width: 10.,
-+                cell_height: 20.,
-+                ..Geometry::default()
-+            };
-+            assert_eq!(geometry.ui_bounds(false), geometry.sidebar);
-+            assert_eq!(
-+                geometry.ui_bounds(true),
-+                Bounds {
-+                    x: 8.,
-+                    y: 8.,
-+                    width: 880.,
-+                    height: 600.
-+                }
-+            );
-+            let caret = vtabs_caret_rect(geometry, (0., 0.), (40, 2), true).unwrap();
-+            assert_eq!(caret.origin, window::Point::new(408, 48));
-+            assert!(vtabs_caret_rect(geometry, (0., 0.), (40, 2), false).is_none());
-+        }
-+    }
-+    #[test]
-+    fn vtabs_page_with_hidden_sidebar_retains_content_bounds() {
-+        let geometry = Geometry {
-+            sidebar: Bounds {
-+                x: 8.,
-+                y: 48.,
-+                width: 0.,
-+                height: 400.,
-+            },
-+            content: Bounds {
-+                x: 8.,
-+                y: 48.,
-+                width: 800.,
-+                height: 400.,
-+            },
-+            cell_width: 10.,
-+            cell_height: 20.,
-+            ..Geometry::default()
-+        };
-+        assert_eq!(geometry.ui_bounds(true), geometry.content);
-+        assert!(vtabs_caret_rect(geometry, (0., 0.), (79, 19), true).is_some());
-+        assert!(vtabs_caret_rect(geometry, (0., 0.), (80, 19), true).is_none());
-+    }
-+    #[test]
-+    fn vtabs_primitive_cache_drops_atlas_uvs_without_a_geometry_change() {
-+        let geometry = Geometry {
-+            cell_width: 10.,
-+            cell_height: 20.,
-+            dpi: 96.,
-+            ..Geometry::default()
-+        };
-+        let bounds = Bounds {
-+            width: 240.,
-+            height: 600.,
-+            ..Bounds::default()
-+        };
-+        let key = vtabs_primitive_key(3, 1200, 800, geometry, bounds);
-+        let mut prior = key;
-+        let mut cache = vec![PrimitiveCache {
-+            surface: RoundedSurface {
-+                bounds,
-+                radius: 8.,
-+                inset: 0.,
-+                fill: LinearRgba::TRANSPARENT,
-+                border: LinearRgba::TRANSPARENT,
-+                border_width: 1.,
-+            },
-+            quads: HeapQuadAllocator::default(),
-+        }];
-+        assert!(!invalidate_vtabs_primitives(&mut cache, &mut prior, key));
-+        assert_eq!(cache.len(), 1);
-+        let next_atlas = vtabs_primitive_key(4, 1200, 800, geometry, bounds);
-+        assert!(invalidate_vtabs_primitives(
-+            &mut cache, &mut prior, next_atlas
-+        ));
-+        assert!(cache.is_empty());
-+        assert!(!invalidate_vtabs_primitives(
-+            &mut cache, &mut prior, next_atlas
-+        ));
-+    }
-+    #[test]
-+    fn vtabs_compact_macos_left_rail_retains_a_clickable_expand_button() {
-+        use vtabs_app::{core, ui};
-+        for dpi in [72., 144.] {
-+            let cell_width = 8. * dpi / 72.;
-+            let width = 40. * dpi / 96.;
-+            let traffic = 80. * dpi / 96.;
-+            let inset = vtabs_sidebar_header_inset(true, width, cell_width, traffic);
-+            assert_eq!(inset, None);
-+            let columns = (width / cell_width).floor() as u16;
-+            let mut model = core::Model::default();
-+            model.settings.rail = core::RailMode::Collapsed;
-+            let mut sidebar = ui::SidebarUi::new();
-+            sidebar.set_layout(columns, 0);
-+            sidebar.render(&model, ui::Rect::new(0, 0, columns, 24), Duration::ZERO);
-+            assert_eq!(
-+                sidebar.hit_test(0, 0).map(|hit| &hit.id),
-+                Some(&ui::ElementId::Rail)
-+            );
-+            sidebar.event(
-+                &model,
-+                ui::UiInput::PointerDown {
-+                    x: 0,
-+                    y: 0,
-+                    button: ui::MouseButton::Left,
-+                    modifiers: ui::Modifiers::default(),
-+                },
-+            );
-+            let actions = sidebar.event(
-+                &model,
-+                ui::UiInput::PointerUp {
-+                    x: 0,
-+                    y: 0,
-+                    button: ui::MouseButton::Left,
-+                },
-+            );
-+            assert!(actions.iter().any(|action| matches!(
-+                action,
-+                ui::UiIntent::Domain(core::Intent::SetRail(core::RailMode::Expanded))
-+            )));
-+            assert_eq!(
-+                vtabs_sidebar_header_inset(true, 256. * dpi / 96., cell_width, traffic),
-+                Some(traffic)
-+            );
-+            assert_eq!(
-+                vtabs_sidebar_header_inset(true, width, cell_width, 0.),
-+                Some(0.)
-+            );
-+            assert_eq!(
-+                vtabs_sidebar_header_inset(true, 0., cell_width, traffic),
-+                None
-+            );
-+        }
-+        assert_eq!(vtabs_sidebar_header_inset(false, 256., 8., 80.), None);
-+    }
-+    #[test]
-+    fn vtabs_frame_covers_every_edge_without_reaching_terminal_cells() {
-+        for dpi in [72., 96., 144., 192.] {
-+            for (x, y, width, height) in [(256., 28., 960., 640.), (2., 38., 640., 480.)] {
-+                let content = Bounds {
-+                    x,
-+                    y,
-+                    width,
-+                    height,
-+                };
-+                let frame = vtabs_frame_geometry(content, dpi).unwrap();
-+                let gutter = TermWindow::vtabs_frame_gutter_impl(dpi);
-+                let terminal = Bounds {
-+                    x: x + gutter,
-+                    y: y + gutter,
-+                    width: width - 2. * gutter,
-+                    height: height - 2. * gutter,
-+                };
-+                for (px, py) in [
-+                    (x + width / 2., y + 0.5),
-+                    (x + width / 2., y + height - 0.5),
-+                    (x + 0.5, y + height / 2.),
-+                    (x + width - 0.5, y + height / 2.),
-+                ] {
-+                    assert!(frame.strips.iter().any(|strip| strip.contains(px, py)));
-+                }
-+                for rect in frame.strips {
-+                    assert!(rect.x >= content.x && rect.y >= content.y);
-+                    assert!(rect.x + rect.width <= content.x + content.width);
-+                    assert!(rect.y + rect.height <= content.y + content.height);
-+                    assert!(
-+                        rect.x + rect.width <= terminal.x
-+                            || rect.x >= terminal.x + terminal.width
-+                            || rect.y + rect.height <= terminal.y
-+                            || rect.y >= terminal.y + terminal.height
-+                    );
-+                }
-+                let edge = frame.strips[0].height;
-+                assert_eq!(edge + frame.radius, gutter);
-+            }
-+        }
-+        assert!(vtabs_frame_geometry(Bounds::default(), 96.).is_none());
-+        assert!(vtabs_frame_geometry(
-+            Bounds {
-+                width: 10.,
-+                height: 10.,
-+                ..Bounds::default()
-+            },
-+            f32::NAN
-+        )
-+        .is_none());
-+    }
-+    #[test]
-+    fn vtabs_transient_overlay_surface_does_not_fill_terminal_background() {
-+        for (sidebar_x, content_x) in [(0., 256.), (800., 0.)] {
-+            let geometry = Geometry {
-+                sidebar: Bounds {
-+                    x: sidebar_x,
-+                    y: 28.,
-+                    width: 256.,
-+                    height: 640.,
-+                },
-+                content: Bounds {
-+                    x: content_x,
-+                    y: 28.,
-+                    width: 800.,
-+                    height: 640.,
-+                },
-+                cell_width: 10.,
-+                cell_height: 20.,
-+                ..Geometry::default()
-+            };
-+            assert_eq!(geometry.ui_bounds(true).width, 1056.);
-+            assert_eq!(vtabs_background_bounds(geometry, false), geometry.sidebar);
-+            assert_eq!(
-+                vtabs_background_bounds(geometry, true),
-+                geometry.ui_bounds(true)
-+            );
-+            assert!(vtabs_caret_rect(geometry, (0., 0.), (52, 15), true).is_some());
-+            assert_eq!(geometry.sidebar.width, 256.);
-+            assert_eq!(geometry.content.width, 800.);
-+        }
-+    }
-+    #[test]
-+    fn vtabs_centered_row_cache_survives_pixel_origin_changes() {
-+        let bounds = Bounds {
-+            x: 2.,
-+            y: 0.,
-+            width: 4.,
-+            height: 2.,
-+        };
-+        let line = Rc::new(Line::with_width(26, 1));
-+        let (_, range) = vtabs_centered_range(bounds, 10.).unwrap();
-+        let cached = RowCache {
-+            line: Rc::clone(&line),
-+            centered_ranges: vec![range],
-+            quads: HeapQuadAllocator::default(),
-+            origin: (-600., -400.),
-+        };
-+        for width in [1200., 1201., 1202., 1199.] {
-+            let origin = (-width / 2., -400.);
-+            let (_, range) = vtabs_centered_range(bounds, 10.).unwrap();
-+            assert!(cached.matches(&line, &[range]));
-+            // Repositioning retained quads applies this delta without reshaping the row.
-+            assert_eq!(cached.origin.0 + (origin.0 - cached.origin.0), origin.0);
-+        }
-+        let mut moved = bounds;
-+        moved.x += 1.;
-+        let (_, moved_range) = vtabs_centered_range(moved, 10.).unwrap();
-+        assert!(!cached.matches(&line, &[moved_range]));
-+        assert!(!cached.matches(&Rc::new(Line::with_width(26, 2)), &[range]));
-+    }
-+    #[test]
-+    fn vtabs_full_window_grid_keeps_fractional_right_rail_anchored() {
-+        for cell_width in [7., 10., 13., 19.] {
-+            for sidebar_width in [48., 256., 384.] {
-+                let geometry = Geometry {
-+                    sidebar: Bounds {
-+                        x: 1124.,
-+                        y: 28.,
-+                        width: sidebar_width,
-+                        height: 640.,
-+                    },
-+                    content: Bounds {
-+                        x: 0.,
-+                        y: 28.,
-+                        width: 1124.,
-+                        height: 640.,
-+                    },
-+                    cell_width,
-+                    cell_height: 22.,
-+                    ..Geometry::default()
-+                };
-+                let columns = (geometry.ui_bounds(true).width / cell_width).floor() as usize;
-+                let rail_columns = (sidebar_width / cell_width).floor() as usize;
-+                let rail_start = columns - rail_columns;
-+                let offset = geometry.grid_offset(true, columns);
-+                let expanded_origin = geometry.ui_bounds(true).x + offset.0;
-+                assert_eq!(
-+                    expanded_origin + rail_start as f32 * cell_width,
-+                    geometry.sidebar.x
-+                );
-+                let pointer_x = geometry.sidebar.x + cell_width * 1.5;
-+                assert_eq!(
-+                    ((pointer_x - expanded_origin) / cell_width).floor() as usize,
-+                    rail_start + 1,
-+                );
-+                assert_eq!(geometry.grid_offset(false, rail_columns), (0., 0.));
-+            }
-+        }
-+    }
-+    #[test]
-+    fn vtabs_icon_visual_insets_keep_hit_bounds_and_center_unchanged() {
-+        let hit = Bounds {
-+            x: 10.,
-+            y: 20.,
-+            width: 40.,
-+            height: 44.,
-+        };
-+        let visual = vtabs_inset_bounds(hit, 5.);
-+        assert_eq!(
-+            visual,
-+            Bounds {
-+                x: 15.,
-+                y: 27.,
-+                width: 30.,
-+                height: 30.
-+            }
-+        );
-+        assert_eq!(visual.x + visual.width / 2., hit.x + hit.width / 2.);
-+        assert_eq!(visual.y + visual.height / 2., hit.y + hit.height / 2.);
-+        assert!(hit.contains(11., 21.) && !visual.contains(11., 21.));
-+        assert_eq!(vtabs_inset_bounds(hit, f32::NAN), hit);
-+        assert_eq!(vtabs_inset_bounds(hit, 100.).width, 0.);
-+    }
-+    #[test]
-+    fn vtabs_frame_rounding_never_exceeds_reserved_padding() {
-+        for dpi in [72., 96., 120., 144., 192., 288.] {
-+            let gutter = TermWindow::vtabs_frame_gutter_impl(dpi);
-+            let edge = (8. * dpi / 96.).round();
-+            let radius = (gutter - edge).max(0.);
-+            assert_eq!(edge + radius, gutter);
-+            assert!(edge >= 6. && radius >= 9.);
-+        }
-     }
- }
- pub struct UiHost {
-@@ -286,7 +938,10 @@ pub struct UiHost {
+@@ -249,7 +566,10 @@ pub struct UiHost {
      bound: bool,
      initialized: bool,
      cache: Vec<RowCache>,
@@ -949,7 +583,7 @@ index 9dfe7d55..826a922e 100644
      chrome: Option<ComputedElement>,
      chrome_items: Vec<UIItem>,
      chrome_key: (usize, usize, usize, usize, usize, bool),
-@@ -295,6 +950,10 @@ pub struct UiHost {
+@@ -258,6 +578,10 @@ pub struct UiHost {
      metadata_schedule: Option<(Duration, usize)>,
      metadata_token: u64,
      metadata_processes: HashMap<TabId, String>,
@@ -960,7 +594,7 @@ index 9dfe7d55..826a922e 100644
  }
  impl UiHost {
      pub fn new(window_id: usize) -> Self {
-@@ -323,7 +982,10 @@ impl UiHost {
+@@ -286,7 +610,10 @@ impl UiHost {
              bound: false,
              initialized,
              cache: Vec::new(),
@@ -972,7 +606,7 @@ index 9dfe7d55..826a922e 100644
              chrome: None,
              chrome_items: Vec::new(),
              chrome_key: (0, 0, 0, 0, 0, false),
-@@ -332,6 +994,10 @@ impl UiHost {
+@@ -295,6 +622,10 @@ impl UiHost {
              metadata_schedule: None,
              metadata_token: 0,
              metadata_processes: HashMap::new(),
@@ -983,7 +617,7 @@ index 9dfe7d55..826a922e 100644
          }
      }
      pub fn cancel_metadata_refresh(&mut self) {
-@@ -340,6 +1006,7 @@ impl UiHost {
+@@ -303,6 +634,7 @@ impl UiHost {
          self.metadata_token = 0;
      }
      pub fn shutdown(mut self) {
@@ -991,7 +625,7 @@ index 9dfe7d55..826a922e 100644
          self.cancel_metadata_refresh();
          let activity = mux::activity::Activity::new();
          promise::spawn::spawn(async move {
-@@ -476,6 +1143,65 @@ impl TermWindow {
+@@ -439,6 +771,65 @@ impl TermWindow {
      pub fn vtabs_last_frame_us(&self) -> u64 {
          self.last_frame_duration.as_micros() as u64
      }
@@ -1057,7 +691,7 @@ index 9dfe7d55..826a922e 100644
      pub fn vtabs_reserved_width(&self) -> f32 {
          let request = self
              .ui_host
-@@ -497,8 +1223,9 @@ impl TermWindow {
+@@ -460,8 +851,9 @@ impl TermWindow {
              .dimensions
              .pixel_width
              .saturating_sub((border.left + border.right).get()) as f32
@@ -1069,7 +703,7 @@ index 9dfe7d55..826a922e 100644
          (request.width * self.dimensions.dpi as f32 / 96.)
              .round()
              .clamp(
-@@ -520,6 +1247,19 @@ impl TermWindow {
+@@ -483,6 +875,19 @@ impl TermWindow {
      pub fn vtabs_right_width(&self) -> f32 {
          self.vtabs_reserved_width() - self.vtabs_left_width()
      }
@@ -1089,7 +723,7 @@ index 9dfe7d55..826a922e 100644
      pub fn vtabs_titlebar_height(&self) -> f32 {
          Self::vtabs_titlebar_height_impl(
              &self.config,
-@@ -577,12 +1317,16 @@ impl TermWindow {
+@@ -540,12 +945,16 @@ impl TermWindow {
          let metrics = crate::utilsprites::RenderMetrics::with_font_metrics(&font.metrics());
          let colors = ElementColors {
              border: BorderColor::default(),
@@ -1110,7 +744,7 @@ index 9dfe7d55..826a922e 100644
              .into(),
              text: if self.focused.is_some() {
                  self.config.window_frame.active_titlebar_fg
-@@ -715,8 +1459,17 @@ impl TermWindow {
+@@ -678,8 +1087,17 @@ impl TermWindow {
              return false;
          }
          self.current_mouse_event = Some(event.clone());
@@ -1130,7 +764,7 @@ index 9dfe7d55..826a922e 100644
          let action = item
              .as_ref()
              .and_then(|item| match &item.item_type {
-@@ -776,6 +1529,17 @@ impl TermWindow {
+@@ -739,6 +1157,17 @@ impl TermWindow {
                  - top)
                  .max(0.),
          };
@@ -1148,7 +782,7 @@ index 9dfe7d55..826a922e 100644
          Geometry {
              sidebar: Bounds {
                  x: if self.vtabs_right_width() > 0. {
-@@ -783,14 +1547,20 @@ impl TermWindow {
+@@ -746,14 +1175,20 @@ impl TermWindow {
                  } else {
                      border.left.get() as f32
                  },
@@ -1171,7 +805,7 @@ index 9dfe7d55..826a922e 100644
          }
      }
      pub fn vtabs_empty(&self) -> bool {
-@@ -799,10 +1569,13 @@ impl TermWindow {
+@@ -762,10 +1197,13 @@ impl TermWindow {
              .map_or(false, |ui| !ui.dirty && ui.projection.active.is_none())
      }
      pub fn vtabs_content_hidden(&self) -> bool {
@@ -1189,7 +823,7 @@ index 9dfe7d55..826a922e 100644
      }
      pub fn vtabs_bell(&mut self, pane_id: usize) {
          if let Some((_, window, tab)) = Mux::get().resolve_pane_id(pane_id) {
-@@ -971,6 +1744,7 @@ impl TermWindow {
+@@ -934,6 +1372,7 @@ impl TermWindow {
          self.ui_host = Some(ui);
          self.vtabs_commands(commands);
          self.vtabs_schedule_metadata_refresh();
@@ -1197,7 +831,7 @@ index 9dfe7d55..826a922e 100644
          if old_reservation != (self.vtabs_reserved_width(), self.vtabs_left_width()) {
              if let Some(window) = self.window.clone() {
                  self.apply_dimensions(&self.dimensions.clone(), None, &window);
-@@ -1009,6 +1783,7 @@ impl TermWindow {
+@@ -972,6 +1411,7 @@ impl TermWindow {
          } else if let Some(ui) = self.vtabs_suspended.get_mut(&window_id) {
              ui.provider.message(message);
              ui.needs_commit = true;
@@ -1205,7 +839,7 @@ index 9dfe7d55..826a922e 100644
          }
      }
      pub fn vtabs_message(&mut self, message: serde_json::Value) {
-@@ -1043,6 +1818,7 @@ impl TermWindow {
+@@ -1006,6 +1446,7 @@ impl TermWindow {
          let geometry = self.vtabs_geometry();
          let consumed = self.ui_host.as_mut().map_or(false, |ui| {
              // Input uses the same complete surface and hit regions as the next paint.
@@ -1213,7 +847,7 @@ index 9dfe7d55..826a922e 100644
              ui.provider.render(geometry, Instant::now());
              let consumed = ui.provider.input(input);
              ui.needs_commit |= consumed;
-@@ -1198,16 +1974,16 @@ impl TermWindow {
+@@ -1189,16 +1630,16 @@ impl TermWindow {
                      let window_id = self.mux_window_id;
                      if let Some(window) = self.window.clone() {
                          promise::spawn::spawn(async move {
@@ -1239,7 +873,7 @@ index 9dfe7d55..826a922e 100644
                          })
                          .detach();
                      }
-@@ -1216,8 +1992,235 @@ impl TermWindow {
+@@ -1207,8 +1648,235 @@ impl TermWindow {
              }
          }
      }
@@ -1476,7 +1110,7 @@ index 9dfe7d55..826a922e 100644
          let Some(mut ui) = self.ui_host.take() else {
              return Ok(());
          };
-@@ -1227,15 +2230,19 @@ impl TermWindow {
+@@ -1218,15 +1886,19 @@ impl TermWindow {
              if let Some(chrome) = &ui.chrome {
                  self.render_element(chrome, self.render_state.as_ref().unwrap(), None)?;
              }
@@ -1499,7 +1133,7 @@ index 9dfe7d55..826a922e 100644
              );
              let grid_width = surface.columns as f32 * geometry.cell_width;
              let key = (
-@@ -1244,6 +2251,7 @@ impl TermWindow {
+@@ -1235,6 +1907,7 @@ impl TermWindow {
                  self.config.generation(),
                  geometry.cell_width as usize,
                  geometry.cell_height as usize,
@@ -1507,7 +1141,7 @@ index 9dfe7d55..826a922e 100644
              );
              if ui.cache_key != key {
                  ui.cache.clear();
-@@ -1254,37 +2262,141 @@ impl TermWindow {
+@@ -1245,37 +1918,141 @@ impl TermWindow {
              let gl_state = self.render_state.as_ref().unwrap();
              let white_space = gl_state.util_sprites.white_space.texture_coords();
              let filled_box = gl_state.util_sprites.filled_box.texture_coords();
@@ -1665,7 +1299,7 @@ index 9dfe7d55..826a922e 100644
                              pixel_width: grid_width,
                              stable_line_idx: None,
                              line,
-@@ -1326,10 +2438,19 @@ impl TermWindow {
+@@ -1317,10 +2094,19 @@ impl TermWindow {
                          },
                          &mut TripleLayerQuadAllocator::Heap(&mut quads),
                      )?;
@@ -1685,7 +1319,7 @@ index 9dfe7d55..826a922e 100644
                          quads,
                          origin,
                      };
-@@ -1348,19 +2469,29 @@ impl TermWindow {
+@@ -1339,19 +2125,29 @@ impl TermWindow {
                      ),
                      surface.opacity,
                      (
@@ -1722,7 +1356,7 @@ index 9dfe7d55..826a922e 100644
                          window.set_text_cursor_position(rect);
                      }
                  }
-@@ -1371,6 +2502,7 @@ impl TermWindow {
+@@ -1362,6 +2158,7 @@ impl TermWindow {
              Ok(())
          })();
          self.ui_host = Some(ui);
@@ -1730,8 +1364,380 @@ index 9dfe7d55..826a922e 100644
          result
      }
  }
+diff --git a/wezterm-gui/tests/vtabs/ui_host.rs b/wezterm-gui/tests/vtabs/ui_host.rs
+index 8e96d79a..cef0093e 100644
+--- a/wezterm-gui/tests/vtabs/ui_host.rs
++++ b/wezterm-gui/tests/vtabs/ui_host.rs
+@@ -12,20 +12,20 @@ fn vtabs_caret_follows_the_painted_transform_and_sidebar_origin() {
+         cell_height: 18.5,
+         ..Geometry::default()
+     };
+-    let rect = vtabs_caret_rect(geometry, (-12.5, 3.), (4, 2)).unwrap();
++    let rect = vtabs_caret_rect(geometry, (-12.5, 3.), (4, 2), false).unwrap();
+     assert_eq!(
+         rect,
+         window::Rect::new(window::Point::new(665, 96), window::Size::new(10, 19))
+     );
+-    let clipped = vtabs_caret_rect(geometry, (-5., 0.), (0, 0)).unwrap();
++    let clipped = vtabs_caret_rect(geometry, (-5., 0.), (0, 0), false).unwrap();
+     assert_eq!(clipped.origin.x, 640);
+     assert_eq!(clipped.size.width, 5);
+-    assert!(vtabs_caret_rect(geometry, (-20., 0.), (0, 0)).is_none());
+-    assert!(vtabs_caret_rect(geometry, (0., 500.), (0, 0)).is_none());
++    assert!(vtabs_caret_rect(geometry, (-20., 0.), (0, 0), false).is_none());
++    assert!(vtabs_caret_rect(geometry, (0., 500.), (0, 0), false).is_none());
+ }
+ #[test]
+ fn vtabs_caret_rejects_hidden_or_invalid_geometry() {
+-    assert!(vtabs_caret_rect(Geometry::default(), (0., 0.), (0, 0)).is_none());
++    assert!(vtabs_caret_rect(Geometry::default(), (0., 0.), (0, 0), false).is_none());
+     let geometry = Geometry {
+         sidebar: Bounds {
+             width: 20.,
+@@ -36,5 +36,340 @@ fn vtabs_caret_rejects_hidden_or_invalid_geometry() {
+         cell_height: 10.,
+         ..Geometry::default()
+     };
+-    assert!(vtabs_caret_rect(geometry, (f32::NAN, 0.), (0, 0)).is_none());
++    assert!(vtabs_caret_rect(geometry, (f32::NAN, 0.), (0, 0), false).is_none());
++}
++#[test]
++fn vtabs_page_bounds_and_caret_cover_either_sidebar_position() {
++    for (sidebar_x, content_x) in [(8., 248.), (648., 8.)] {
++        let geometry = Geometry {
++            sidebar: Bounds {
++                x: sidebar_x,
++                y: 8.,
++                width: 240.,
++                height: 600.,
++            },
++            content: Bounds {
++                x: content_x,
++                y: 48.,
++                width: 640.,
++                height: 560.,
++            },
++            cell_width: 10.,
++            cell_height: 20.,
++            ..Geometry::default()
++        };
++        assert_eq!(geometry.ui_bounds(false), geometry.sidebar);
++        assert_eq!(
++            geometry.ui_bounds(true),
++            Bounds {
++                x: 8.,
++                y: 8.,
++                width: 880.,
++                height: 600.
++            }
++        );
++        let caret = vtabs_caret_rect(geometry, (0., 0.), (40, 2), true).unwrap();
++        assert_eq!(caret.origin, window::Point::new(408, 48));
++        assert!(vtabs_caret_rect(geometry, (0., 0.), (40, 2), false).is_none());
++    }
++}
++#[test]
++fn vtabs_page_with_hidden_sidebar_retains_content_bounds() {
++    let geometry = Geometry {
++        sidebar: Bounds {
++            x: 8.,
++            y: 48.,
++            width: 0.,
++            height: 400.,
++        },
++        content: Bounds {
++            x: 8.,
++            y: 48.,
++            width: 800.,
++            height: 400.,
++        },
++        cell_width: 10.,
++        cell_height: 20.,
++        ..Geometry::default()
++    };
++    assert_eq!(geometry.ui_bounds(true), geometry.content);
++    assert!(vtabs_caret_rect(geometry, (0., 0.), (79, 19), true).is_some());
++    assert!(vtabs_caret_rect(geometry, (0., 0.), (80, 19), true).is_none());
++}
++#[test]
++fn vtabs_primitive_cache_drops_atlas_uvs_without_a_geometry_change() {
++    let geometry = Geometry {
++        cell_width: 10.,
++        cell_height: 20.,
++        dpi: 96.,
++        ..Geometry::default()
++    };
++    let bounds = Bounds {
++        width: 240.,
++        height: 600.,
++        ..Bounds::default()
++    };
++    let key = vtabs_primitive_key(3, 1200, 800, geometry, bounds);
++    let mut prior = key;
++    let mut cache = vec![PrimitiveCache {
++        surface: RoundedSurface {
++            bounds,
++            radius: 8.,
++            inset: 0.,
++            fill: LinearRgba::TRANSPARENT,
++            border: LinearRgba::TRANSPARENT,
++            border_width: 1.,
++        },
++        quads: HeapQuadAllocator::default(),
++    }];
++    assert!(!invalidate_vtabs_primitives(&mut cache, &mut prior, key));
++    assert_eq!(cache.len(), 1);
++    let next_atlas = vtabs_primitive_key(4, 1200, 800, geometry, bounds);
++    assert!(invalidate_vtabs_primitives(
++        &mut cache, &mut prior, next_atlas
++    ));
++    assert!(cache.is_empty());
++    assert!(!invalidate_vtabs_primitives(
++        &mut cache, &mut prior, next_atlas
++    ));
++}
++#[test]
++fn vtabs_compact_macos_left_rail_retains_a_clickable_expand_button() {
++    use vtabs_app::{core, ui};
++    for dpi in [72., 144.] {
++        let cell_width = 8. * dpi / 72.;
++        let width = 40. * dpi / 96.;
++        let traffic = 80. * dpi / 96.;
++        let inset = vtabs_sidebar_header_inset(true, width, cell_width, traffic);
++        assert_eq!(inset, None);
++        let columns = (width / cell_width).floor() as u16;
++        let mut model = core::Model::default();
++        model.settings.rail = core::RailMode::Collapsed;
++        let mut sidebar = ui::SidebarUi::new();
++        sidebar.set_layout(columns, 0);
++        sidebar.render(&model, ui::Rect::new(0, 0, columns, 24), Duration::ZERO);
++        assert_eq!(
++            sidebar.hit_test(0, 0).map(|hit| &hit.id),
++            Some(&ui::ElementId::Rail)
++        );
++        sidebar.event(
++            &model,
++            ui::UiInput::PointerDown {
++                x: 0,
++                y: 0,
++                button: ui::MouseButton::Left,
++                modifiers: ui::Modifiers::default(),
++            },
++        );
++        let actions = sidebar.event(
++            &model,
++            ui::UiInput::PointerUp {
++                x: 0,
++                y: 0,
++                button: ui::MouseButton::Left,
++            },
++        );
++        assert!(actions.iter().any(|action| matches!(
++            action,
++            ui::UiIntent::Domain(core::Intent::SetRail(core::RailMode::Expanded))
++        )));
++        assert_eq!(
++            vtabs_sidebar_header_inset(true, 256. * dpi / 96., cell_width, traffic),
++            Some(traffic)
++        );
++        assert_eq!(
++            vtabs_sidebar_header_inset(true, width, cell_width, 0.),
++            Some(0.)
++        );
++        assert_eq!(
++            vtabs_sidebar_header_inset(true, 0., cell_width, traffic),
++            None
++        );
++    }
++    assert_eq!(vtabs_sidebar_header_inset(false, 256., 8., 80.), None);
++}
++#[test]
++fn vtabs_frame_covers_every_edge_without_reaching_terminal_cells() {
++    for dpi in [72., 96., 144., 192.] {
++        for (x, y, width, height) in [(256., 28., 960., 640.), (2., 38., 640., 480.)] {
++            let content = Bounds {
++                x,
++                y,
++                width,
++                height,
++            };
++            let frame = vtabs_frame_geometry(content, dpi).unwrap();
++            let gutter = TermWindow::vtabs_frame_gutter_impl(dpi);
++            let terminal = Bounds {
++                x: x + gutter,
++                y: y + gutter,
++                width: width - 2. * gutter,
++                height: height - 2. * gutter,
++            };
++            for (px, py) in [
++                (x + width / 2., y + 0.5),
++                (x + width / 2., y + height - 0.5),
++                (x + 0.5, y + height / 2.),
++                (x + width - 0.5, y + height / 2.),
++            ] {
++                assert!(frame.strips.iter().any(|strip| strip.contains(px, py)));
++            }
++            for rect in frame.strips {
++                assert!(rect.x >= content.x && rect.y >= content.y);
++                assert!(rect.x + rect.width <= content.x + content.width);
++                assert!(rect.y + rect.height <= content.y + content.height);
++                assert!(
++                    rect.x + rect.width <= terminal.x
++                        || rect.x >= terminal.x + terminal.width
++                        || rect.y + rect.height <= terminal.y
++                        || rect.y >= terminal.y + terminal.height
++                );
++            }
++            let edge = frame.strips[0].height;
++            assert_eq!(edge + frame.radius, gutter);
++        }
++    }
++    assert!(vtabs_frame_geometry(Bounds::default(), 96.).is_none());
++    assert!(vtabs_frame_geometry(
++        Bounds {
++            width: 10.,
++            height: 10.,
++            ..Bounds::default()
++        },
++        f32::NAN
++    )
++    .is_none());
++}
++#[test]
++fn vtabs_transient_overlay_surface_does_not_fill_terminal_background() {
++    for (sidebar_x, content_x) in [(0., 256.), (800., 0.)] {
++        let geometry = Geometry {
++            sidebar: Bounds {
++                x: sidebar_x,
++                y: 28.,
++                width: 256.,
++                height: 640.,
++            },
++            content: Bounds {
++                x: content_x,
++                y: 28.,
++                width: 800.,
++                height: 640.,
++            },
++            cell_width: 10.,
++            cell_height: 20.,
++            ..Geometry::default()
++        };
++        assert_eq!(geometry.ui_bounds(true).width, 1056.);
++        assert_eq!(vtabs_background_bounds(geometry, false), geometry.sidebar);
++        assert_eq!(
++            vtabs_background_bounds(geometry, true),
++            geometry.ui_bounds(true)
++        );
++        assert!(vtabs_caret_rect(geometry, (0., 0.), (52, 15), true).is_some());
++        assert_eq!(geometry.sidebar.width, 256.);
++        assert_eq!(geometry.content.width, 800.);
++    }
++}
++#[test]
++fn vtabs_centered_row_cache_survives_pixel_origin_changes() {
++    let bounds = Bounds {
++        x: 2.,
++        y: 0.,
++        width: 4.,
++        height: 2.,
++    };
++    let line = Rc::new(Line::with_width(26, 1));
++    let (_, range) = vtabs_centered_range(bounds, 10.).unwrap();
++    let cached = RowCache {
++        line: Rc::clone(&line),
++        centered_ranges: vec![range],
++        quads: HeapQuadAllocator::default(),
++        origin: (-600., -400.),
++    };
++    for width in [1200., 1201., 1202., 1199.] {
++        let origin = (-width / 2., -400.);
++        let (_, range) = vtabs_centered_range(bounds, 10.).unwrap();
++        assert!(cached.matches(&line, &[range]));
++        // Repositioning retained quads applies this delta without reshaping the row.
++        assert_eq!(cached.origin.0 + (origin.0 - cached.origin.0), origin.0);
++    }
++    let mut moved = bounds;
++    moved.x += 1.;
++    let (_, moved_range) = vtabs_centered_range(moved, 10.).unwrap();
++    assert!(!cached.matches(&line, &[moved_range]));
++    assert!(!cached.matches(&Rc::new(Line::with_width(26, 2)), &[range]));
++}
++#[test]
++fn vtabs_full_window_grid_keeps_fractional_right_rail_anchored() {
++    for cell_width in [7., 10., 13., 19.] {
++        for sidebar_width in [48., 256., 384.] {
++            let geometry = Geometry {
++                sidebar: Bounds {
++                    x: 1124.,
++                    y: 28.,
++                    width: sidebar_width,
++                    height: 640.,
++                },
++                content: Bounds {
++                    x: 0.,
++                    y: 28.,
++                    width: 1124.,
++                    height: 640.,
++                },
++                cell_width,
++                cell_height: 22.,
++                ..Geometry::default()
++            };
++            let columns = (geometry.ui_bounds(true).width / cell_width).floor() as usize;
++            let rail_columns = (sidebar_width / cell_width).floor() as usize;
++            let rail_start = columns - rail_columns;
++            let offset = geometry.grid_offset(true, columns);
++            let expanded_origin = geometry.ui_bounds(true).x + offset.0;
++            assert_eq!(
++                expanded_origin + rail_start as f32 * cell_width,
++                geometry.sidebar.x
++            );
++            let pointer_x = geometry.sidebar.x + cell_width * 1.5;
++            assert_eq!(
++                ((pointer_x - expanded_origin) / cell_width).floor() as usize,
++                rail_start + 1,
++            );
++            assert_eq!(geometry.grid_offset(false, rail_columns), (0., 0.));
++        }
++    }
++}
++#[test]
++fn vtabs_icon_visual_insets_keep_hit_bounds_and_center_unchanged() {
++    let hit = Bounds {
++        x: 10.,
++        y: 20.,
++        width: 40.,
++        height: 44.,
++    };
++    let visual = vtabs_inset_bounds(hit, 5.);
++    assert_eq!(
++        visual,
++        Bounds {
++            x: 15.,
++            y: 27.,
++            width: 30.,
++            height: 30.
++        }
++    );
++    assert_eq!(visual.x + visual.width / 2., hit.x + hit.width / 2.);
++    assert_eq!(visual.y + visual.height / 2., hit.y + hit.height / 2.);
++    assert!(hit.contains(11., 21.) && !visual.contains(11., 21.));
++    assert_eq!(vtabs_inset_bounds(hit, f32::NAN), hit);
++    assert_eq!(vtabs_inset_bounds(hit, 100.).width, 0.);
++}
++#[test]
++fn vtabs_frame_rounding_never_exceeds_reserved_padding() {
++    for dpi in [72., 96., 120., 144., 192., 288.] {
++        let gutter = TermWindow::vtabs_frame_gutter_impl(dpi);
++        let edge = (8. * dpi / 96.).round();
++        let radius = (gutter - edge).max(0.);
++        assert_eq!(edge + radius, gutter);
++        assert!(edge >= 6. && radius >= 9.);
++    }
+ }
 diff --git a/wezterm-gui/src/termwindow/render/mod.rs b/wezterm-gui/src/termwindow/render/mod.rs
-index af33daee..67f42684 100644
+index 0da7dec6..efe6e324 100644
 --- a/wezterm-gui/src/termwindow/render/mod.rs
 +++ b/wezterm-gui/src/termwindow/render/mod.rs
 @@ -363,10 +363,12 @@ impl crate::TermWindow {
@@ -1765,7 +1771,7 @@ index af33daee..67f42684 100644
  
      fn resolve_lock_glyph(
 diff --git a/wezterm-gui/src/termwindow/render/paint.rs b/wezterm-gui/src/termwindow/render/paint.rs
-index 1e640a56..a9084ad4 100644
+index 01e6ace3..5f13d318 100644
 --- a/wezterm-gui/src/termwindow/render/paint.rs
 +++ b/wezterm-gui/src/termwindow/render/paint.rs
 @@ -134,7 +134,9 @@ impl crate::TermWindow {
@@ -1801,7 +1807,7 @@ index 1e640a56..a9084ad4 100644
          self.paint_window_borders(&mut layers)
              .context("paint_window_borders")?;
 diff --git a/wezterm-gui/src/termwindow/render/pane.rs b/wezterm-gui/src/termwindow/render/pane.rs
-index 349ef0b1..d93435c0 100644
+index 30cc54d8..6ff2b551 100644
 --- a/wezterm-gui/src/termwindow/render/pane.rs
 +++ b/wezterm-gui/src/termwindow/render/pane.rs
 @@ -112,7 +112,9 @@ impl crate::TermWindow {
@@ -1878,7 +1884,7 @@ index 349ef0b1..d93435c0 100644
          } else {
              (
 diff --git a/wezterm-gui/src/termwindow/resize.rs b/wezterm-gui/src/termwindow/resize.rs
-index a4e8ded5..4e2c976d 100644
+index 919fe5dd..f0ab8218 100644
 --- a/wezterm-gui/src/termwindow/resize.rs
 +++ b/wezterm-gui/src/termwindow/resize.rs
 @@ -195,11 +195,11 @@ impl super::TermWindow {
@@ -1942,10 +1948,10 @@ index a4e8ded5..4e2c976d 100644
  }
  
 diff --git a/wezterm-input-types/src/lib.rs b/wezterm-input-types/src/lib.rs
-index f5673f60..01a2fc8f 100644
+index f5673f60..c34a8ac9 100644
 --- a/wezterm-input-types/src/lib.rs
 +++ b/wezterm-input-types/src/lib.rs
-@@ -2122,7 +2122,53 @@ impl TryFrom<String> for WindowDecorations {
+@@ -2122,10 +2122,21 @@ impl TryFrom<String> for WindowDecorations {
  
  impl Default for WindowDecorations {
      fn default() -> Self {
@@ -1958,45 +1964,54 @@ index f5673f60..01a2fc8f 100644
 +        {
 +            Self::TITLE | Self::RESIZE
 +        }
-+    }
-+}
-+
-+#[cfg(test)]
-+mod vtabs_window_decoration_tests {
-+    use super::WindowDecorations;
-+
-+    #[test]
-+    fn vtabs_default_window_controls_match_the_platform() {
-+        let decorations = WindowDecorations::default();
-+        assert!(decorations.contains(WindowDecorations::RESIZE));
-+        assert_eq!(
-+            decorations.contains(WindowDecorations::INTEGRATED_BUTTONS),
-+            cfg!(target_os = "macos")
-+        );
-+        assert_eq!(
-+            decorations.contains(WindowDecorations::TITLE),
-+            !cfg!(target_os = "macos")
-+        );
-+    }
-+
-+    #[test]
-+    fn vtabs_window_control_defaults_preserve_explicit_configuration() {
-+        for (value, expected) in [
-+            ("NONE", WindowDecorations::NONE),
-+            (
-+                "TITLE|RESIZE",
-+                WindowDecorations::TITLE | WindowDecorations::RESIZE,
-+            ),
-+            (
-+                "INTEGRATED_BUTTONS|RESIZE",
-+                WindowDecorations::INTEGRATED_BUTTONS | WindowDecorations::RESIZE,
-+            ),
-+        ] {
-+            assert_eq!(
-+                WindowDecorations::try_from(value.to_owned()).unwrap(),
-+                expected
-+            );
-+        }
      }
  }
  
++#[cfg(test)]
++#[path = "../tests/vtabs/window_decoration.rs"]
++mod vtabs_window_decoration_tests;
++
+ #[derive(Debug, FromDynamic, ToDynamic, PartialEq, Eq, Clone, Copy)]
+ pub enum IntegratedTitleButton {
+     Hide,
+diff --git a/wezterm-input-types/tests/vtabs/window_decoration.rs b/wezterm-input-types/tests/vtabs/window_decoration.rs
+new file mode 100644
+index 00000000..4889f892
+--- /dev/null
++++ b/wezterm-input-types/tests/vtabs/window_decoration.rs
+@@ -0,0 +1,35 @@
++use super::WindowDecorations;
++
++#[test]
++fn vtabs_default_window_controls_match_the_platform() {
++    let decorations = WindowDecorations::default();
++    assert!(decorations.contains(WindowDecorations::RESIZE));
++    assert_eq!(
++        decorations.contains(WindowDecorations::INTEGRATED_BUTTONS),
++        cfg!(target_os = "macos")
++    );
++    assert_eq!(
++        decorations.contains(WindowDecorations::TITLE),
++        !cfg!(target_os = "macos")
++    );
++}
++
++#[test]
++fn vtabs_window_control_defaults_preserve_explicit_configuration() {
++    for (value, expected) in [
++        ("NONE", WindowDecorations::NONE),
++        (
++            "TITLE|RESIZE",
++            WindowDecorations::TITLE | WindowDecorations::RESIZE,
++        ),
++        (
++            "INTEGRATED_BUTTONS|RESIZE",
++            WindowDecorations::INTEGRATED_BUTTONS | WindowDecorations::RESIZE,
++        ),
++    ] {
++        assert_eq!(
++            WindowDecorations::try_from(value.to_owned()).unwrap(),
++            expected
++        );
++    }
++}
