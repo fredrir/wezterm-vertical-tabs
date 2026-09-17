@@ -44,9 +44,13 @@ pub enum Commands {
     Build(BuildArgs),
     /// Build an iteration bundle and launch a separate GUI.
     Dev {
-        #[arg(long)]
+        /// Watch source files and hot-reload changes (default: true)
+        #[arg(long, num_args = 0..=1, default_value = "true", default_missing_value = "true")]
         watch: bool,
-        #[arg(long, default_value_t = 250)]
+        /// Disable watch mode and launch the GUI once
+        #[arg(long)]
+        no_watch: bool,
+        #[arg(long, default_value_t = 150)]
         debounce_ms: u64,
         #[arg(last = true)]
         args: Vec<String>,

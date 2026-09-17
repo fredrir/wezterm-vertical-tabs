@@ -18,6 +18,7 @@ pub const BINARIES: &[&str] = &[
 ];
 
 fn cargo(ctx: &Context, cwd: &Path, target_dir: &Path, command: &str) -> CommandSpec {
+    let is_dev = (ctx.profile == "iterate" || ctx.profile == "dev") && !ctx.explain;
     let mut spec = CommandSpec::new("cargo")
         .arg(command)
         .cwd(cwd)
@@ -29,7 +30,11 @@ fn cargo(ctx: &Context, cwd: &Path, target_dir: &Path, command: &str) -> Command
             } else {
                 &ctx.profile
             },
-        ]);
+        ])
+        .deverbose(is_dev);
+    if is_dev {
+        spec = spec.arg("--color=always");
+    }
     if ctx.offline {
         spec = spec.arg("--offline").env("CARGO_NET_OFFLINE", "true");
     }
@@ -430,7 +435,10 @@ fn bundle_id(metadata: &BuildMetadata) -> Result<String> {
 pub fn restage(ctx: &Context, previous: &BuildMetadata) -> Result<Option<BuildMetadata>> {
     let _stage = ctx.runner.stage("restage");
     let source_digest = source::source_digest(&ctx.root)?;
-    snapshot(ctx, &source_digest)?;
+    let is_dev = ctx.profile == "iterate" || ctx.profile == "dev";
+    if !is_dev {
+        snapshot(ctx, &source_digest)?;
+    }
     let profile = if ctx.profile == "debug" {
         "dev"
     } else {
@@ -455,39 +463,48 @@ pub fn restage(ctx: &Context, previous: &BuildMetadata) -> Result<Option<BuildMe
     {
         return Ok(None);
     }
-    for (key, program, argument, cwd) in [
-        (
-            "rustc",
-            std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into()),
-            "-vV",
-            &worktree,
-        ),
-        ("cargo", "cargo".into(), "-V", &worktree),
-        (
-            "project_rustc",
-            std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into()),
-            "-vV",
-            &ctx.root,
-        ),
-        ("project_cargo", "cargo".into(), "-V", &ctx.root),
-    ] {
-        if previous.configuration[key].as_str()
-            != Some(
-                &ctx.runner
-                    .capture(CommandSpec::new(program).arg(argument).cwd(cwd))?,
-            )
-        {
-            return Ok(None);
+    let is_dev = ctx.profile == "iterate" || ctx.profile == "dev";
+    if !is_dev {
+        for (key, program, argument, cwd) in [
+            (
+                "rustc",
+                std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into()),
+                "-vV",
+                &worktree,
+            ),
+            ("cargo", "cargo".into(), "-V", &worktree),
+            (
+                "project_rustc",
+                std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into()),
+                "-vV",
+                &ctx.root,
+            ),
+            ("project_cargo", "cargo".into(), "-V", &ctx.root),
+        ] {
+            if previous.configuration[key].as_str()
+                != Some(
+                    &ctx.runner
+                        .capture(CommandSpec::new(program).arg(argument).cwd(cwd))?,
+                )
+            {
+                return Ok(None);
+            }
         }
-    }
-    for name in BINARIES {
-        let Some(path) = previous.artifacts.get(*name).filter(|path| path.is_file()) else {
-            return Ok(None);
-        };
-        if previous.configuration["artifact_sha256"][*name].as_str()
-            != Some(&crate::bundle::hash_file(path)?)
-        {
-            return Ok(None);
+        for name in BINARIES {
+            let Some(path) = previous.artifacts.get(*name).filter(|path| path.is_file()) else {
+                return Ok(None);
+            };
+            if previous.configuration["artifact_sha256"][*name].as_str()
+                != Some(&crate::bundle::hash_file(path)?)
+            {
+                return Ok(None);
+            }
+        }
+    } else {
+        for name in BINARIES {
+            if !previous.artifacts.get(*name).is_some_and(|p| p.is_file()) {
+                return Ok(None);
+            }
         }
     }
     let mut metadata = previous.clone();
@@ -501,6 +518,25 @@ pub fn restage(ctx: &Context, previous: &BuildMetadata) -> Result<Option<BuildMe
     Ok(Some(metadata))
 }
 
+fn store_sources_newer(store_dir: &Path, store_bin: &Path) -> Result<bool> {
+    let Ok(bin_meta) = store_bin.metadata() else {
+        return Ok(true);
+    };
+    let Ok(bin_time) = bin_meta.modified() else {
+        return Ok(true);
+    };
+    for entry in walkdir::WalkDir::new(store_dir).into_iter().flatten() {
+        if entry.file_type().is_file()
+            && let Ok(meta) = entry.metadata()
+            && let Ok(mtime) = meta.modified()
+            && mtime > bin_time
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 pub fn build(ctx: &Context) -> Result<BuildMetadata> {
     ensure!(
         !ctx.profile.is_empty()
@@ -512,7 +548,10 @@ pub fn build(ctx: &Context) -> Result<BuildMetadata> {
     );
     let fingerprint_stage = ctx.runner.stage("fingerprint");
     let source_digest = source::source_digest(&ctx.root)?;
-    snapshot(ctx, &source_digest)?;
+    let is_dev = ctx.profile == "iterate" || ctx.profile == "dev";
+    if !is_dev {
+        snapshot(ctx, &source_digest)?;
+    }
     let compile_inputs = source::compile_digest(&ctx.root)?;
     let validation_inputs = source::validation_digest(&ctx.root)?;
     drop(fingerprint_stage);
@@ -567,32 +606,62 @@ pub fn build(ctx: &Context) -> Result<BuildMetadata> {
     }
     let previous: Option<BuildMetadata> = state::read_json(&ctx.cache.join("build.json"))?;
     let mut artifacts = BTreeMap::new();
+    let is_dev = ctx.profile == "iterate" || ctx.profile == "dev";
+    let profile_dir = if let Some(target) = &requested {
+        target_dir.join(target).join(profile)
+    } else {
+        target_dir.join(profile)
+    };
+    if is_dev {
+        for name in BINARIES {
+            let exe = profile_dir.join(crate::bundle::executable_name(name));
+            if exe.is_file() {
+                artifacts.insert(name.to_string(), exe);
+            }
+        }
+    }
 
     // Cargo is the authority for freshness, including build-script dependencies
     // and toolchain/config changes that a project-only fingerprint cannot see.
     let compile_stage = ctx.runner.stage("compile");
-    let mut helper = cargo(ctx, &ctx.root, &target_dir, "build")
-        .args([
-            "--locked",
-            "--message-format=json-render-diagnostics",
-            "--manifest-path",
-        ])
-        .arg(ctx.root.join("Cargo.toml"))
-        .args(["-p", "vtabs-store", "--features", "sqlite"]);
-    if let Some(target) = &requested {
-        helper = helper.args(["--target", target]);
+    let need_store_build = !is_dev
+        || !artifacts.contains_key("wez-vtabs-store")
+        || store_sources_newer(&ctx.root.join("src/store"), &artifacts["wez-vtabs-store"]).unwrap_or(true);
+    if need_store_build {
+        let mut helper = cargo(ctx, &ctx.root, &target_dir, "build")
+            .args([
+                "--locked",
+                "--message-format=json-render-diagnostics",
+                "--manifest-path",
+            ])
+            .arg(ctx.root.join("Cargo.toml"))
+            .args(["-p", "vtabs-store", "--features", "sqlite"]);
+        if let Some(target) = &requested {
+            helper = helper.args(["--target", target]);
+        }
+        let helper_output = ctx.runner.capture(helper);
+        preserve_cargo_timings(ctx, &target_dir)?;
+        let helper_str = helper_output?;
+        print_warnings(&helper_str);
+        collect_artifacts(&helper_str, &mut artifacts)?;
     }
-    let helper_output = ctx.runner.capture(helper);
-    preserve_cargo_timings(ctx, &target_dir)?;
-    collect_artifacts(&helper_output?, &mut artifacts)?;
 
     let mut application =
         cargo(ctx, &worktree, &target_dir, "build").arg("--message-format=json-render-diagnostics");
     if replay.is_some() {
         application = application.arg("--locked");
     }
-    for package in &BINARIES[..4] {
-        application = application.args(["-p", package]);
+    if is_dev {
+        application = application.args(["-p", "wezterm-gui"]);
+        for package in &BINARIES[..4] {
+            if *package != "wezterm-gui" && !artifacts.contains_key(*package) {
+                application = application.args(["-p", package]);
+            }
+        }
+    } else {
+        for package in &BINARIES[..4] {
+            application = application.args(["-p", package]);
+        }
     }
     if let Some(target) = &requested {
         application = application.args(["--target", target]);
@@ -603,7 +672,9 @@ pub fn build(ctx: &Context) -> Result<BuildMetadata> {
     preserve_cargo_timings(ctx, &target_dir)?;
     configuration["locks"] = capture_locks(ctx, &worktree)?;
     ctx.runner.metadata("build_configuration", &configuration)?;
-    collect_artifacts(&output?, &mut artifacts)?;
+    let app_str = output?;
+    print_warnings(&app_str);
+    collect_artifacts(&app_str, &mut artifacts)?;
     for name in BINARIES {
         ensure!(
             artifacts.contains_key(*name),
@@ -611,10 +682,17 @@ pub fn build(ctx: &Context) -> Result<BuildMetadata> {
         );
     }
     // Bind immutable bundles and cached validation to the actual outputs.
-    let artifact_hashes = artifacts
-        .iter()
-        .map(|(name, path)| crate::bundle::hash_file(path).map(|digest| (name.clone(), digest)))
-        .collect::<Result<BTreeMap<_, _>>>()?;
+    let artifact_hashes = if is_dev {
+        artifacts
+            .keys()
+            .map(|name| (name.clone(), String::new()))
+            .collect::<BTreeMap<_, _>>()
+    } else {
+        artifacts
+            .iter()
+            .map(|(name, path)| crate::bundle::hash_file(path).map(|digest| (name.clone(), digest)))
+            .collect::<Result<BTreeMap<_, _>>>()?
+    };
     configuration["artifact_sha256"] = serde_json::to_value(artifact_hashes)?;
 
     #[cfg(windows)]
@@ -646,7 +724,11 @@ pub fn build(ctx: &Context) -> Result<BuildMetadata> {
     let validation_digest = state::hash_bytes(&serde_json::to_vec(&json!({
         "compile":compile_digest,"validation":validation_inputs,
     }))?);
-    if previous
+    if is_dev {
+        if ctx.explain {
+            eprintln!("tests: skip validation tests during dev profile iteration");
+        }
+    } else if previous
         .as_ref()
         .is_some_and(|v| v.validation_digest == validation_digest)
     {
@@ -682,4 +764,23 @@ pub fn build(ctx: &Context) -> Result<BuildMetadata> {
         .metadata("build", &serde_json::to_value(&metadata)?)?;
     state::write_json(&ctx.cache.join("build.json"), &metadata)?;
     Ok(metadata)
+}
+
+fn print_warnings(output: &str) {
+    for line in output.lines() {
+        if let Ok(value) = serde_json::from_str::<serde_json::Value>(line)
+            && value.get("reason").and_then(|v| v.as_str()) == Some("compiler-message")
+                && value
+                    .get("message")
+                    .and_then(|m| m.get("level"))
+                    .and_then(|l| l.as_str())
+                    == Some("warning")
+                    && let Some(rendered) = value
+                        .get("message")
+                        .and_then(|m| m.get("rendered"))
+                        .and_then(|r| r.as_str())
+                    {
+                        eprint!("{rendered}");
+                    }
+    }
 }

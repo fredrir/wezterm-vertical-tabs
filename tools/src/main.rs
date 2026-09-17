@@ -154,10 +154,12 @@ fn dispatch(ctx: &Context, cli: &Cli) -> Result<(Value, i32)> {
         }
         Commands::Dev {
             watch,
+            no_watch,
             debounce_ms,
             args,
         } => {
-            return watch::dev(ctx, *watch, *debounce_ms, args)
+            let effective_watch = *watch && !*no_watch;
+            return watch::dev(ctx, effective_watch, *debounce_ms, args)
                 .map(|status| (json!({"status":status}), status));
         }
         Commands::Check => {

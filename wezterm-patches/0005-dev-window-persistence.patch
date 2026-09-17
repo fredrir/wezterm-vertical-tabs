@@ -1,0 +1,17 @@
+diff --git a/window/src/os/macos/window.rs b/window/src/os/macos/window.rs
+index 1193d398..e07da23f 100644
+--- a/window/src/os/macos/window.rs
++++ b/window/src/os/macos/window.rs
+@@ -604,6 +604,12 @@ impl Window {
+             window.setTitle_(*nsstring(&name));
+             window.setAcceptsMouseMovedEvents_(YES);
+ 
++            if std::env::var_os("WEZ_VTABS_DEV").is_some() {
++                let autosave_name = *nsstring("vtabs-dev");
++                let _: bool = msg_send![*window, setFrameUsingName: autosave_name];
++                let _: bool = msg_send![*window, setFrameAutosaveName: autosave_name];
++            }
++
+             let view = WindowView::init_with_frame(&inner, rect)?;
+             view.setAutoresizingMask_(NSViewHeightSizable | NSViewWidthSizable);
+ 

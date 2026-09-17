@@ -267,9 +267,9 @@ impl SidebarUi {
                         1,
                     ),
                     if inner.width >= 66 {
-                        "↑↓ browse   Enter edits   Delete resets   Esc closes"
+                        "↑↓   [E]nter   [D]elete   [Esc]"
                     } else {
-                        "↑↓ browse   Esc closes"
+                        "↑↓   Esc"
                     },
                     self.theme.muted(),
                 );

@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::ffi::{OsStr, OsString};
 use std::fs::{self, File};
-use std::io::{Read, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{
@@ -23,6 +23,7 @@ pub struct CommandSpec {
     pub cwd: PathBuf,
     pub env: BTreeMap<OsString, OsString>,
     pub timeout: Option<Duration>,
+    pub deverbose: bool,
 }
 
 impl CommandSpec {
@@ -33,6 +34,7 @@ impl CommandSpec {
             cwd: std::env::current_dir().unwrap_or_default(),
             env: BTreeMap::new(),
             timeout: None,
+            deverbose: false,
         }
     }
     pub fn arg(mut self, arg: impl AsRef<OsStr>) -> Self {
@@ -54,6 +56,10 @@ impl CommandSpec {
     }
     pub fn timeout(mut self, duration: Duration) -> Self {
         self.timeout = Some(duration);
+        self
+    }
+    pub fn deverbose(mut self, enabled: bool) -> Self {
+        self.deverbose = enabled;
         self
     }
 }
@@ -274,7 +280,7 @@ impl Runner {
         };
         self.0.report.lock().unwrap().commands.push(record.clone());
         self.save()?;
-        let result = (|| -> Result<(std::process::ExitStatus, String)> {
+        let result = (|| -> Result<(std::process::ExitStatus, String, String)> {
             let stdout_file = File::create(self.0.dir.join(stdout_path))?;
             let stderr_file = File::create(self.0.dir.join(stderr_path))?;
             let mut command = Command::new(&spec.program);
@@ -300,8 +306,9 @@ impl Runner {
                 .with_context(|| format!("start: {}", spec.program.to_string_lossy()))?;
             let stdout = child.stdout.take().context("stdout missing")?;
             let stderr = child.stderr.take().context("stderr missing")?;
-            let out = std::thread::spawn(move || pump(stdout, stdout_file, !capture, capture));
-            let err = std::thread::spawn(move || pump(stderr, stderr_file, true, false));
+            let deverbose = spec.deverbose;
+            let out = std::thread::spawn(move || pump(stdout, stdout_file, !capture, capture, false));
+            let err = std::thread::spawn(move || pump(stderr, stderr_file, true, true, deverbose));
             let mut interrupted = None;
             let status = loop {
                 if let Some(status) = child.try_wait()? {
@@ -368,19 +375,21 @@ impl Runner {
             let output = out
                 .join()
                 .map_err(|_| anyhow::anyhow!("stdout worker failed"))??;
-            err.join()
+            let err_bytes = err
+                .join()
                 .map_err(|_| anyhow::anyhow!("stderr worker failed"))??;
             if let Some(reason) = interrupted {
                 bail!("{reason}");
             }
             Ok((
                 status,
-                String::from_utf8(output).context("command output is not UTF-8")?,
+                String::from_utf8_lossy(&output).into_owned(),
+                String::from_utf8_lossy(&err_bytes).into_owned(),
             ))
         })();
         record.duration_ms = start.elapsed().as_millis() as u64;
         match &result {
-            Ok((status, _)) => {
+            Ok((status, _, _)) => {
                 record.status = status.code();
                 if !status.success() {
                     record.error = Some(format!("exit: {status}"));
@@ -398,12 +407,20 @@ impl Runner {
             *pending = record;
         }
         self.save()?;
-        let (status, output) = result?;
-        ensure!(
-            status.success(),
-            "command failed ({status}): {}",
-            spec.program.to_string_lossy()
-        );
+        let (status, output, stderr_output) = result?;
+        if !status.success() {
+            if let Some(diagnostics) = format_compiler_diagnostics(&output) {
+                bail!("{diagnostics}");
+            }
+            let err_trimmed = stderr_output.trim();
+            if !err_trimmed.is_empty() {
+                bail!("{err_trimmed}");
+            }
+            bail!(
+                "command failed ({status}): {}",
+                spec.program.to_string_lossy()
+            );
+        }
         Ok(output.trim_end_matches(['\r', '\n']).into())
     }
 
@@ -413,22 +430,72 @@ impl Runner {
     }
 }
 
-fn pump(mut input: impl Read, mut file: File, display: bool, capture: bool) -> Result<Vec<u8>> {
+fn pump(
+    input: impl Read,
+    mut file: File,
+    display: bool,
+    capture: bool,
+    filter_noise: bool,
+) -> Result<Vec<u8>> {
+    let mut reader = BufReader::new(input);
+    let mut line = Vec::new();
     let mut output = Vec::new();
-    let mut buffer = [0u8; 8192];
     loop {
-        let count = input.read(&mut buffer)?;
+        line.clear();
+        let count = reader.read_until(b'\n', &mut line)?;
         if count == 0 {
             break;
         }
-        file.write_all(&buffer[..count])?;
+        file.write_all(&line)?;
         if capture {
-            output.extend_from_slice(&buffer[..count]);
+            output.extend_from_slice(&line);
         }
         if display {
-            let _ = std::io::stderr().write_all(&buffer[..count]);
+            let is_noise = filter_noise
+                && (line.starts_with(b"   Compiling ")
+                    || line.starts_with(b"   Downloading ")
+                    || line.starts_with(b"   Downloaded ")
+                    || line.starts_with(b"   Checking ")
+                    || line.starts_with(b"   Fresh "));
+            if !is_noise {
+                let _ = std::io::stderr().write_all(&line);
+            }
         }
     }
     file.flush()?;
     Ok(output)
+}
+
+pub fn format_compiler_diagnostics(output: &str) -> Option<String> {
+    let mut errors = Vec::new();
+    let mut others = Vec::new();
+    for line in output.lines() {
+        if let Ok(value) = serde_json::from_str::<serde_json::Value>(line)
+            && value.get("reason").and_then(|v| v.as_str()) == Some("compiler-message")
+                && let Some(rendered) = value
+                    .get("message")
+                    .and_then(|m| m.get("rendered"))
+                    .and_then(|r| r.as_str())
+                {
+                    let level = value
+                        .get("message")
+                        .and_then(|m| m.get("level"))
+                        .and_then(|l| l.as_str());
+                    let trimmed = rendered.trim_end();
+                    if !trimmed.is_empty() {
+                        if level == Some("error") {
+                            errors.push(trimmed.to_string());
+                        } else {
+                            others.push(trimmed.to_string());
+                        }
+                    }
+                }
+    }
+    if !errors.is_empty() {
+        Some(errors.join("\n\n"))
+    } else if !others.is_empty() {
+        Some(others.join("\n\n"))
+    } else {
+        None
+    }
 }

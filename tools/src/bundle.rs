@@ -22,6 +22,10 @@ const BINARIES: &[&str] = &[
     "wez-vtabs-store",
 ];
 
+const DEV_ICNS: &[u8] = include_bytes!("../assets/terminal-dev.icns");
+const DEV_ICO: &[u8] = include_bytes!("../assets/terminal-dev.ico");
+const DEV_PNG: &[u8] = include_bytes!("../assets/terminal-dev.png");
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct FileDigest {
@@ -267,8 +271,13 @@ pub fn copy_tree(source: &Path, destination: &Path) -> Result<()> {
 
 fn copy_file(source: &Path, destination: &Path) -> Result<()> {
     fs::create_dir_all(destination.parent().context("file parent missing")?)?;
-    fs::copy(source, destination)
-        .with_context(|| format!("copy {} to {}", source.display(), destination.display()))?;
+    if destination.exists() {
+        let _ = fs::remove_file(destination);
+    }
+    if fs::hard_link(source, destination).is_err() {
+        fs::copy(source, destination)
+            .with_context(|| format!("copy {} to {}", source.display(), destination.display()))?;
+    }
     Ok(())
 }
 
@@ -347,6 +356,7 @@ pub fn package(
     let source = ctx.cache.join("worktree");
     let runtime_copy = ctx.runner.stage("copy-runtime");
     let bindir = binary_dir(bundle);
+    let is_dev = ctx.profile == "iterate" || ctx.profile == "dev";
     let resources = if cfg!(target_os = "macos") {
         let app = bundle.join("WezTerm.app");
         copy_tree(&source.join("assets/macos/WezTerm.app"), &app)?;
@@ -359,6 +369,20 @@ pub fn package(
             {
                 fs::remove_file(entry.path())?;
             }
+        }
+        if is_dev {
+            let plist_path = app.join("Contents/Info.plist");
+            if plist_path.is_file()
+                && let Ok(mut val) = plist::Value::from_file(&plist_path)
+            {
+                if let Some(dict) = val.as_dictionary_mut() {
+                    dict.insert("CFBundleName".into(), plist::Value::String("WezTerm Dev".into()));
+                    dict.insert("CFBundleDisplayName".into(), plist::Value::String("WezTerm (Dev)".into()));
+                    dict.insert("CFBundleIdentifier".into(), plist::Value::String("com.github.wez.wezterm.dev".into()));
+                }
+                let _ = val.to_file_xml(&plist_path);
+            }
+            let _ = fs::write(app.join("Contents/Resources/terminal.icns"), DEV_ICNS);
         }
         app.join("Contents/Resources")
     } else {
@@ -384,7 +408,9 @@ pub fn package(
             .with_context(|| format!("missing build artifact: {name}"))?;
         let target = bindir.join(executable_name(name));
         copy_file(artifact, &target)?;
-        if let Some(expected) = metadata.configuration["artifact_sha256"][*name].as_str() {
+        if let Some(expected) = metadata.configuration["artifact_sha256"][*name].as_str()
+            && !expected.is_empty()
+        {
             ensure!(
                 hash_file(&target)? == expected,
                 "build artifact changed while packaging: {name}"
@@ -395,19 +421,36 @@ pub fn package(
     shell_assets(&source, bundle, &resources)?;
     if cfg!(windows) {
         copy_windows_runtime(&source, std::slice::from_ref(&bindir))?;
+        if is_dev {
+            let _ = fs::write(bindir.join("terminal.ico"), DEV_ICO);
+        }
     } else {
-        ctx.runner.run(
-            CommandSpec::new("tic")
-                .args(["-xe", "wezterm", "-o"])
-                .arg(resources.join("terminfo"))
-                .arg(source.join("termwiz/data/wezterm.terminfo"))
-                .cwd(&ctx.root),
-        )?;
+        let terminfo_dest = resources.join("terminfo");
+        let cached_terminfo = ctx.cache.join("terminfo");
+        if cached_terminfo.is_dir() {
+            copy_tree(&cached_terminfo, &terminfo_dest)?;
+        } else {
+            ctx.runner.run(
+                CommandSpec::new("tic")
+                    .args(["-xe", "wezterm", "-o"])
+                    .arg(&terminfo_dest)
+                    .arg(source.join("termwiz/data/wezterm.terminfo"))
+                    .cwd(&ctx.root),
+            )?;
+            let _ = copy_tree(&terminfo_dest, &cached_terminfo);
+        }
     }
     if cfg!(target_os = "linux") {
         copy_tree(&source.join("assets/icon"), &resources.join("icons"))?;
         for name in ["wezterm.desktop", "wezterm.appdata.xml"] {
             copy_file(&source.join("assets").join(name), &resources.join(name))?;
+        }
+        if is_dev {
+            let desktop_path = resources.join("wezterm.desktop");
+            if let Ok(content) = fs::read_to_string(&desktop_path) {
+                let _ = fs::write(&desktop_path, content.replace("Name=WezTerm", "Name=WezTerm Dev"));
+            }
+            let _ = fs::write(resources.join("icons/terminal.png"), DEV_PNG);
         }
     }
     copy_tree(&ctx.root.join("plugin"), &resources.join("plugin"))?;
@@ -433,7 +476,8 @@ pub fn package(
         &marker_dir.join("bundle.json"),
         &serde_json::json!({"root":relative_root,"capability":1,"updater_protocol":1,"tool":relative_tool}),
     )?;
-    if cfg!(target_os = "macos") {
+    let is_dev = ctx.profile == "iterate" || ctx.profile == "dev";
+    if cfg!(target_os = "macos") && !is_dev {
         let _stage = ctx.runner.stage("sign");
         ctx.runner.run(
             CommandSpec::new("codesign")
@@ -451,7 +495,9 @@ pub fn package(
     {
         let _stage = ctx.runner.stage("bundle-checksums");
         write_manifest(bundle)?;
-        verify(bundle)?;
+        if !is_dev {
+            verify(bundle)?;
+        }
     }
     fs::rename(bundle, &destination)?;
     if archive {

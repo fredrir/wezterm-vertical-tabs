@@ -389,12 +389,16 @@ pub fn resolve(ctx: &Context) -> Result<ResolvedSource> {
         }
     } else {
         if !ctx.offline && !cloned {
-            ctx.runner.run(git(ctx, &upstream).args([
-                "fetch",
-                "--prune",
-                "origin",
-                "+refs/heads/main:refs/remotes/origin/main",
-            ]))?;
+            let is_dev = ctx.profile == "iterate" || ctx.profile == "dev";
+            let has_local = resolve_commit(ctx, &upstream, "refs/remotes/origin/main").is_ok();
+            if !is_dev || !has_local {
+                ctx.runner.run(git(ctx, &upstream).args([
+                    "fetch",
+                    "--prune",
+                    "origin",
+                    "+refs/heads/main:refs/remotes/origin/main",
+                ]))?;
+            }
         }
         resolve_commit(ctx, &upstream, "refs/remotes/origin/main")?
     };
