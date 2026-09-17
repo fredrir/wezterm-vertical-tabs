@@ -1,4 +1,4 @@
-"""Fresh TLS shells retain the caller's local split tree."""
+"""Fresh TLS and proxied unix-domain shells retain the caller's local split tree."""
 
 import concurrent.futures
 import json
@@ -17,18 +17,19 @@ pytestmark = pytest.mark.gui
 
 
 class MuxServer:
-    def __init__(self, root, binaries, environment, clients):
+    def __init__(self, root, binaries, environment, clients, unix_domains=()):
         self.root, self.binaries = root, binaries
         root.mkdir()
         self.socket = root / "mux.sock"
         self.config = root / "mux.lua"
+        own = {"name": "fixture", "socket_path": str(self.socket), "no_serve_automatically": True}
         self.config.write_text(
             "local wezterm = require 'wezterm'\nreturn {"
             "check_for_updates=false,automatically_reload_config=false,"
             "default_prog={'/bin/sh'},initial_cols=120,initial_rows=40,"
-            "unix_domains={{name='fixture',socket_path="
-            + json.dumps(str(self.socket))
-            + ",no_serve_automatically=true}},tls_clients=wezterm.json_parse([=["
+            "unix_domains=wezterm.json_parse([=["
+            + json.dumps([own, *unix_domains])
+            + "]=]),tls_clients=wezterm.json_parse([=["
             + json.dumps(clients)
             + "]=])}\n"
         )
@@ -114,7 +115,19 @@ def mux_pair(wezterm_binaries, isolated_env):
                     }
                 )
             clients.append({**clients[0], "name": "offline", "remote_address": "127.0.0.1:1"})
-            local = MuxServer(root / "local", wezterm_binaries, isolated_env, clients)
+            # Stands in for `ssh -T HOST wezterm cli proxy`.
+            proxy = [
+                "/usr/bin/env",
+                f"WEZTERM_UNIX_SOCKET={remote.root / 'mux.sock'}",
+                str(wezterm_binaries["wezterm"]),
+                "--config-file",
+                str(remote.config),
+                "cli",
+                "--no-auto-start",
+                "proxy",
+            ]
+            proxied = {"name": "proxied", "proxy_command": proxy, "local_pane_layout": True}
+            local = MuxServer(root / "local", wezterm_binaries, isolated_env, clients, [proxied])
 
             def remote_cli(*args):
                 return subprocess.run(
@@ -190,6 +203,41 @@ def test_tls_replacement_preserves_siblings_and_closes_independently(mux_pair):
     panes = wait_for(lambda: len(p := local.panes()) == 2 and p)
     assert {p["pane_id"] for p in panes} == {returned, sibling}
     assert geometry(next(p for p in panes if p["pane_id"] == returned)) == geometry(before_return)
+
+
+def test_unix_proxy_replacement_preserves_siblings_and_closes_independently(mux_pair):
+    local, remote = mux_pair
+    left = int(local.cli("spawn", "--new-window"))
+    right = int(local.cli("split-pane", "--pane-id", left, "--right"))
+    before = {p["pane_id"]: p for p in local.panes()}
+    fresh = int(local.cli("split-pane", "--pane-id", right, "--domain-name", "proxied"))
+    local.cli("kill-pane", "--pane-id", right)
+    panes = wait_for(lambda: len(p := local.panes()) == 2 and p)
+    assert {p["tab_id"] for p in panes} == {before[left]["tab_id"]}
+    assert geometry(next(p for p in panes if p["pane_id"] == left)) == geometry(before[left])
+    wait_for(
+        lambda: (
+            geometry(next(p for p in local.panes() if p["pane_id"] == fresh))
+            == geometry(before[right])
+        )
+    )
+    assert len(json.loads(remote("list", "--format", "json"))) == 1
+
+    # A second proxied shell reuses the attachment instead of importing the first.
+    second = int(local.cli("split-pane", "--pane-id", left, "--domain-name", "proxied"))
+    panes = wait_for(lambda: len(p := local.panes()) == 3 and p)
+    assert {p["pane_id"] for p in panes} == {left, fresh, second}
+    assert len(json.loads(remote("list", "--format", "json"))) == 2
+
+    local.cli("kill-pane", "--pane-id", fresh)
+    panes = wait_for(lambda: len(p := local.panes()) == 2 and p)
+    assert {p["pane_id"] for p in panes} == {left, second}
+    wait_for(lambda: len(json.loads(remote("list", "--format", "json"))) == 1)
+
+    # The proxied domain is not served, so local shells keep the served socket.
+    command = ("/bin/sh", "-c", 'echo "<$WEZTERM_UNIX_SOCKET>"; exec sleep 30')
+    probe = int(local.cli("spawn", "--new-window", "--", *command))
+    wait_for(lambda: f"<{local.socket}>" in local.cli("get-text", "--pane-id", probe))
 
 
 def test_shared_mux_concurrent_spawns_do_not_duplicate_proxies(mux_pair):
