@@ -1,5 +1,3 @@
-#![cfg(feature = "sqlite")]
-
 use serde_json::json;
 use std::{
     path::PathBuf,
@@ -9,7 +7,7 @@ use std::{
     },
     time::{SystemTime, UNIX_EPOCH},
 };
-use vtabs_store::{ErrorCode, Key, Operation, Record, Request, Response, Scope, sqlite};
+use super::{ErrorCode, Key, Operation, Record, Request, Response, Scope, sqlite};
 
 struct Database(PathBuf);
 static NEXT_DATABASE: AtomicU64 = AtomicU64::new(0);
@@ -312,7 +310,7 @@ fn limits_fail_before_any_operation_is_committed() {
         1,
         vec![
             put("name", "valid", None),
-            put("icon", &"x".repeat(vtabs_store::MAX_VALUE_BYTES), None),
+            put("icon", &"x".repeat(super::MAX_VALUE_BYTES), None),
         ],
     );
     assert_eq!(
@@ -334,19 +332,19 @@ fn limits_fail_before_any_operation_is_committed() {
 
 #[test]
 fn json_null_is_distinct_from_a_tombstone_over_the_wire() {
-    let null = vtabs_store::Record {
+    let null = super::Record {
         key: key("accent"),
         value: Some(serde_json::Value::Null),
         revision: 1,
     };
-    let tombstone = vtabs_store::Record {
+    let tombstone = super::Record {
         key: key("accent"),
         value: None,
         revision: 2,
     };
     for record in [null, tombstone] {
         let encoded = serde_json::to_vec(&record).unwrap();
-        let decoded: vtabs_store::Record = serde_json::from_slice(&encoded).unwrap();
+        let decoded: super::Record = serde_json::from_slice(&encoded).unwrap();
         assert_eq!(decoded, record);
     }
 }
@@ -355,7 +353,7 @@ fn json_null_is_distinct_from_a_tombstone_over_the_wire() {
 fn oversized_read_rolls_back_earlier_writes_in_the_batch() {
     let db = Database::new();
     let mut connection = sqlite::open(&db.0).unwrap();
-    let value = "x".repeat(vtabs_store::MAX_VALUE_BYTES - 2);
+    let value = "x".repeat(super::MAX_VALUE_BYTES - 2);
     for batch in 0..5 {
         let writes = (0..16)
             .map(|index| put(&format!("large-{}", batch * 16 + index), &value, Some(0)))
@@ -396,7 +394,7 @@ fn exact_wire_limit_accepts_escaped_unicode_and_rolls_back_one_extra_byte() {
     let db = Database::new();
     let mut connection = sqlite::open(&db.0).unwrap();
     let mut response = Response {
-        version: vtabs_store::PROTOCOL_VERSION,
+        version: super::PROTOCOL_VERSION,
         request_id: u64::MAX,
         revision: 1,
         records: (0..64)
@@ -410,7 +408,7 @@ fn exact_wire_limit_accepts_escaped_unicode_and_rolls_back_one_extra_byte() {
                     field: format!("field-{index:02}-\"\\\n-é"),
                 },
                 value: Some(if index < 63 {
-                    json!("x".repeat(vtabs_store::MAX_VALUE_BYTES - 2))
+                    json!("x".repeat(super::MAX_VALUE_BYTES - 2))
                 } else {
                     json!("\"\\\u{0}\n-é🙂")
                 }),
@@ -419,13 +417,13 @@ fn exact_wire_limit_accepts_escaped_unicode_and_rolls_back_one_extra_byte() {
             .collect(),
         error: None,
     };
-    let padding = vtabs_store::MAX_RESPONSE_BYTES - serde_json::to_vec(&response).unwrap().len();
+    let padding = super::MAX_RESPONSE_BYTES - serde_json::to_vec(&response).unwrap().len();
     let last = response.records.last_mut().unwrap();
     let value = last.value.as_ref().unwrap().as_str().unwrap().to_owned() + &"x".repeat(padding);
     last.value = Some(json!(value));
     assert_eq!(
         serde_json::to_vec(&response).unwrap().len(),
-        vtabs_store::MAX_RESPONSE_BYTES
+        super::MAX_RESPONSE_BYTES
     );
     let mut request = Request::new(
         response.request_id,

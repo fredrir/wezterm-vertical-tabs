@@ -1,6 +1,6 @@
 use serde_json::json;
 use std::collections::BTreeMap;
-use vtabs_core::*;
+use super::*;
 
 fn tab(id: u64) -> Tab {
     Tab {

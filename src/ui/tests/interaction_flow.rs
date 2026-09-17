@@ -1,6 +1,6 @@
 use std::time::Duration;
 use vtabs_core::{Intent, Model, Space, Tab};
-use vtabs_ui::{ElementId, Key, Modifiers, MouseButton, Rect, SidebarUi, UiInput, UiIntent};
+use super::*;
 
 fn model() -> Model {
     let mut model = Model::default();
@@ -740,7 +740,7 @@ fn settings_context_menu_restores_search_focus_for_keyboard_cut_and_async_paste(
 
 #[test]
 fn closing_a_tab_defers_the_running_process_check_to_the_host() {
-    use vtabs_ui::HostAction;
+    use crate::HostAction;
     let mut model = model();
     let mut ui = SidebarUi::new();
     draw(&mut ui, &model);

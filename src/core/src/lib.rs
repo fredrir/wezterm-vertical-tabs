@@ -6,3 +6,23 @@ pub mod settings;
 pub use model::*;
 pub use routing::{MatchField, RoutingRule, SpaceTemplate};
 pub use settings::{RailMode, SettingDescriptor, SettingKind, Settings, Side};
+
+#[cfg(test)]
+#[path = "../tests/folders.rs"]
+mod folders_tests;
+
+#[cfg(test)]
+#[path = "../tests/invariants.rs"]
+mod invariants_tests;
+
+#[cfg(test)]
+#[path = "../tests/projection.rs"]
+mod projection_tests;
+
+#[cfg(test)]
+#[path = "../tests/reconcile.rs"]
+mod reconcile_tests;
+
+#[cfg(test)]
+#[path = "../tests/reopen.rs"]
+mod reopen_tests;

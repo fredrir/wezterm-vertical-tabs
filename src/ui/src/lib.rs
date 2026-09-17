@@ -13,6 +13,26 @@ pub use ratatui::{buffer::Buffer, layout::Rect};
 pub use shortcuts::is_shortcut;
 pub use theme::Theme;
 
+#[cfg(test)]
+#[path = "../tests/input.rs"]
+mod input_tests;
+
+#[cfg(test)]
+#[path = "../tests/interaction_flow.rs"]
+mod interaction_flow_tests;
+
+#[cfg(test)]
+#[path = "../tests/settings_page.rs"]
+mod settings_page_tests;
+
+#[cfg(test)]
+#[path = "../tests/transient_surfaces.rs"]
+mod transient_surfaces_tests;
+
+#[cfg(test)]
+#[path = "../tests/ui.rs"]
+mod ui_tests;
+
 use ratatui::layout::Position;
 use std::time::Duration;
 use tachyonfx::{Effect, fx};

@@ -1,4 +1,4 @@
-use vtabs_core::*;
+use super::*;
 
 fn tab(id: TabId) -> Tab {
     Tab {

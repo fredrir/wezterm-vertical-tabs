@@ -1,5 +1,5 @@
 use std::collections::BTreeMap;
-use vtabs_core::*;
+use super::*;
 
 fn host_tab(id: TabId) -> Tab {
     Tab {

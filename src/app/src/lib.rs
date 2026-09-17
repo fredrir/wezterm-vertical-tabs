@@ -874,3 +874,19 @@ fn validate_metrics(metrics: Metrics) -> Result<(), Error> {
         Ok(())
     }
 }
+
+#[cfg(test)]
+#[path = "../tests/folders.rs"]
+mod folders_tests;
+
+#[cfg(test)]
+#[path = "../tests/lifecycle.rs"]
+mod lifecycle_tests;
+
+#[cfg(test)]
+#[path = "../tests/persistence.rs"]
+mod persistence_tests;
+
+#[cfg(test)]
+#[path = "../tests/transfer.rs"]
+mod transfer_tests;

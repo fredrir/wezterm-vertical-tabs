@@ -1,6 +1,6 @@
 use serde_json::json;
 use std::{collections::BTreeMap, time::Duration};
-use vtabs_app::{core::*, store::*, *};
+use super::{core::*, store::*, *};
 
 fn snapshot(id: u64) -> HostSnapshot {
     HostSnapshot {

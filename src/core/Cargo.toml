@@ -2,6 +2,11 @@
 name              = "vtabs-core"
 version.workspace = true
 edition.workspace = true
+autotests         = false
+
+[[test]]
+name = "schema"
+path = "tests/schema.rs"
 
 [dependencies]
 serde.workspace      = true

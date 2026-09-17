@@ -1,4 +1,4 @@
-use vtabs_core::*;
+use super::*;
 fn model() -> Model {
     let mut model = Model::default();
     model

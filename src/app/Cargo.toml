@@ -2,6 +2,7 @@
 name              = "vtabs-app"
 version.workspace = true
 edition.workspace = true
+autotests         = false
 
 [dependencies]
 vtabs-core           = { path = "../core" }

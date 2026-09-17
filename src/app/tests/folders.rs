@@ -1,4 +1,4 @@
-use vtabs_app::{core::*, *};
+use super::{core::*, *};
 
 fn discover(app: &mut WindowApp, revision: u64, active: TabId) {
     app.update(HostSnapshot {

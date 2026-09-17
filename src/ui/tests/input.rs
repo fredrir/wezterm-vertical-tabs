@@ -1,4 +1,4 @@
-use vtabs_ui::{EditResult, Key, Modifiers, TextEditor};
+use super::*;
 
 #[test]
 fn grapheme_editing_never_splits_combining_emoji_or_cjk() {

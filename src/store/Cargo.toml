@@ -2,6 +2,7 @@
 name              = "vtabs-store"
 version.workspace = true
 edition.workspace = true
+autotests         = false
 
 [features]
 default = []
@@ -15,4 +16,9 @@ rusqlite             = { version = "0.40.2", features = ["bundled"], optional = 
 [[bin]]
 name              = "wez-vtabs-store"
 path              = "src/main.rs"
+required-features = ["sqlite"]
+
+[[test]]
+name              = "helper"
+path              = "tests/helper.rs"
 required-features = ["sqlite"]

@@ -156,3 +156,7 @@ impl Response {
 
 #[cfg(feature = "sqlite")]
 pub mod sqlite;
+
+#[cfg(all(test, feature = "sqlite"))]
+#[path = "../tests/transactions.rs"]
+mod transactions_tests;

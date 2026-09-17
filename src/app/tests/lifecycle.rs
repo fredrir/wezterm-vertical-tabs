@@ -1,6 +1,6 @@
 use serde_json::json;
 use std::{collections::BTreeMap, time::Duration};
-use vtabs_app::{
+use super::{
     core::*,
     store::{self, Operation, Record, Request, Response},
     *,

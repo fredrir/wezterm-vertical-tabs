@@ -1,6 +1,6 @@
 use std::time::Duration;
 use vtabs_core::{Intent, Model, Space, Tab};
-use vtabs_ui::{ElementId, Key, Modifiers, MouseButton, Rect, SidebarUi, UiInput, UiIntent};
+use super::*;
 
 fn model() -> Model {
     let mut model = Model::default();

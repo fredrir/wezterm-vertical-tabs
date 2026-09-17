@@ -1,5 +1,5 @@
 use serde_json::json;
-use vtabs_core::*;
+use super::*;
 
 fn tab(id: TabId) -> Tab {
     Tab {
