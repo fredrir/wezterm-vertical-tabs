@@ -412,7 +412,7 @@ pub fn reproduce(ctx: &Context, path: &Path, execute: bool, explicit_root: bool)
         ensure!(
             matches!(
                 parsed.command,
-                crate::cli::Commands::Build
+                crate::cli::Commands::Build(..)
                     | crate::cli::Commands::Prepare
                     | crate::cli::Commands::Deps
                     | crate::cli::Commands::Check
@@ -453,7 +453,7 @@ pub fn reproduce(ctx: &Context, path: &Path, execute: bool, explicit_root: bool)
         if parsed.offline
             && matches!(
                 parsed.command,
-                crate::cli::Commands::Build
+                crate::cli::Commands::Build(..)
                     | crate::cli::Commands::Prepare
                     | crate::cli::Commands::Package { .. }
                     | crate::cli::Commands::Patch { .. }

@@ -6,7 +6,7 @@ _default:
 deps *args:
     @{{tool}} deps {{args}}
 
-# Resolve upstream once, compile and validate binaries.
+# Compile and validate binaries (locally or containerized via e.g. --ubuntu --26, --debian).
 build *args:
     @{{tool}} build {{args}}
 

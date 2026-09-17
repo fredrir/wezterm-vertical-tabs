@@ -2,6 +2,7 @@ mod build;
 mod bundle;
 mod check;
 mod cli;
+mod container;
 mod deploy;
 mod diagnostics;
 mod install;
@@ -128,9 +129,13 @@ fn dispatch(ctx: &Context, cli: &Cli) -> Result<(Value, i32)> {
             let path = source::prepare(ctx, &resolved)?;
             json!({"upstream":resolved.revision,"worktree":path})
         }
-        Commands::Build => {
+        Commands::Build(build_args) => {
             let _lock = Lock::acquire(&ctx.cache.join("build.lock"))?;
-            serde_json::to_value(build::build(ctx)?)?
+            if let Some(target_os) = build_args.resolve_target_os()? {
+                serde_json::to_value(container::build(ctx, build_args, &target_os)?)?
+            } else {
+                serde_json::to_value(build::build(ctx)?)?
+            }
         }
         Commands::Deps => {
             let _lock = Lock::acquire(&ctx.cache.join("build.lock"))?;
@@ -290,13 +295,19 @@ fn execute() -> Result<i32> {
         if cli.explain
             && matches!(
                 cli.command,
-                Commands::Build
+                Commands::Build(..)
                     | Commands::Package { .. }
                     | Commands::Deploy { .. }
                     | Commands::Dev { .. }
                     | Commands::Prepare
             )
         {
+            if let Commands::Build(ref build_args) = cli.command
+                && let Some(target_os) = build_args.resolve_target_os()?
+            {
+                let plan = container::plan(&ctx, build_args, &target_os)?;
+                return Ok((plan, 0));
+            }
             eprintln!(
                 "{}",
                 serde_json::to_string_pretty(&diagnostics::plan(&ctx, "build")?)?
