@@ -35,7 +35,7 @@ package *args:
 install *args:
     @{{tool}} install {{args}}
 
-# Build, install and replace /Applications/WezTerm.app; link the CLI into ~/.local/bin.
+# Build, install and replace /Applications/WezTerm.app; link the bundled binaries into ~/.local/bin.
 deploy *args:
     @{{tool}} deploy {{args}}
 

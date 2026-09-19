@@ -12,9 +12,15 @@ use crate::state::{Context, Lock};
 use crate::{build, bundle, install};
 
 const DESKTOP_MARKER: &str = "X-WezVtabs-Install=";
-const LINKS: [&str; 3] = ["wezterm", "wezterm-gui", "wezterm-mux-server"];
+const LINKS: [&str; 6] = [
+    "wezterm",
+    "wezterm-gui",
+    "wezterm-mux-server",
+    "wez-vtabs",
+    "wez-vtabs-store",
+    "strip-ansi-escapes",
+];
 
-/// macOS replaces an application bundle, Linux shadows the system desktop entry; both link the CLI.
 pub struct Targets {
     pub app: Option<PathBuf>,
     pub bin: Option<PathBuf>,

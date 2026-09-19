@@ -1,6 +1,7 @@
 """Desktop application replacement through the production CLI."""
 
 import json
+import subprocess
 import sys
 
 import pytest
@@ -8,6 +9,15 @@ import pytest
 from tests.tools.support import binary_dir, executable_name
 
 pytestmark = pytest.mark.rust
+
+LINKED_BINARIES = (
+    "wezterm",
+    "wezterm-gui",
+    "wezterm-mux-server",
+    "wez-vtabs",
+    "wez-vtabs-store",
+    "strip-ansi-escapes",
+)
 
 
 @pytest.fixture
@@ -80,14 +90,13 @@ def test_deploy_shadows_the_packaged_desktop_entry_and_cli_once(
         replaced / "org.wezfurlong.wezterm.desktop"
     ).read_text() == "[Desktop Entry]\nName=Stock\n"
     assert (replaced / "wezterm").read_text() == "stock cli"
-    for name in ("wezterm", "wezterm-gui", "wezterm-mux-server"):
+    for name in LINKED_BINARIES:
         link = bin_dir / name
         assert link.is_symlink()
         assert link.resolve() == installed(sandbox_home, "first", name).resolve()
     assert [link["replaced"] for link in result["links"]] == [
         {"kind": "foreign", "preserved": str(replaced / "wezterm")},
-        None,
-        None,
+        *[None] * (len(LINKED_BINARIES) - 1),
     ]
 
     result = sandbox_home.json(
@@ -97,20 +106,16 @@ def test_deploy_shadows_the_packaged_desktop_entry_and_cli_once(
     assert state(sandbox_home.install, "active")["id"] == "second"
     assert result["app"]["replaced"]["kind"] == "previous"
     assert all(link["replaced"] == {"kind": "previous"} for link in result["links"])
-    for name in ("wezterm", "wezterm-gui", "wezterm-mux-server"):
+    for name in LINKED_BINARIES:
         assert (bin_dir / name).resolve() == installed(sandbox_home, "second", name).resolve()
     assert (replaced / "wezterm").read_text() == "stock cli"
-    assert sorted(path.name for path in bin_dir.iterdir()) == [
-        "wezterm",
-        "wezterm-gui",
-        "wezterm-mux-server",
-    ]
+    assert sorted(path.name for path in bin_dir.iterdir()) == sorted(LINKED_BINARIES)
     # update-desktop-database may add its cache beside the entry; no retired copies remain.
     assert not [path.name for path in entry.parent.iterdir() if ".retired-" in path.name]
 
 
 @pytest.mark.skipif(sys.platform != "darwin", reason="macOS application bundle placement")
-def test_deploy_links_the_cli_into_the_default_user_directory(
+def test_deploy_links_every_binary_into_the_default_user_directory(
     sandbox_home, bundle_factory, tmp_path
 ):
     app = tmp_path / "Applications/WezTerm.app"
@@ -118,11 +123,21 @@ def test_deploy_links_the_cli_into_the_default_user_directory(
 
     result = sandbox_home.json("deploy", "--bundle", bundle_factory("first"), "--app", app)
 
-    for name in ("wezterm", "wezterm-gui", "wezterm-mux-server"):
+    for name in LINKED_BINARIES:
         link = tmp_path / "home/.local/bin" / name
         assert link.is_symlink()
         assert link.resolve() == installed(sandbox_home, "first", name).resolve()
-    assert [link["replaced"] for link in result["links"]] == [None, None, None]
+    assert [link["replaced"] for link in result["links"]] == [None] * len(LINKED_BINARIES)
+    version = subprocess.run(
+        [str(tmp_path / "home/.local/bin/wez-vtabs"), "--version"],
+        env=sandbox_home.env,
+        text=True,
+        capture_output=True,
+        timeout=20,
+        check=False,
+    )
+    assert version.returncode == 0, version.stderr
+    assert version.stdout.startswith("wez-vtabs ")
 
 
 def test_deploy_without_an_application_only_installs(tools_sandbox, bundle_factory):

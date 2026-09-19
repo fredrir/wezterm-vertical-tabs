@@ -90,7 +90,7 @@ pub enum Commands {
         /// macOS application bundle or Linux desktop entry to replace.
         #[arg(long, conflicts_with = "no_app")]
         app: Option<PathBuf>,
-        /// Directory for the wezterm, wezterm-gui and wezterm-mux-server links; default ~/.local/bin.
+        /// Directory for the bundled binary links; default ~/.local/bin.
         #[arg(long, conflicts_with = "no_app")]
         bin: Option<PathBuf>,
         /// Install only; keep the desktop application as it is.
