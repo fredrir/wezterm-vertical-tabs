@@ -7,6 +7,7 @@ mod deploy;
 mod diagnostics;
 mod install;
 mod process;
+mod sign;
 mod source;
 mod state;
 mod update;

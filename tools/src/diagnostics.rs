@@ -87,7 +87,7 @@ pub fn doctor(ctx: &Context, operation: &str) -> Result<Value> {
             programs.push("tic");
         }
         if matches!(operation, "package" | "update") && cfg!(target_os = "macos") {
-            programs.push("codesign");
+            programs.extend(["codesign", "security"]);
         }
         for program in programs {
             let path = std::env::var_os("PATH").and_then(|paths| {

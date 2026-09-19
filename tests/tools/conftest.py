@@ -242,9 +242,22 @@ def recording_cargo(tools_sandbox: ToolSandbox, tmp_path: Path) -> Path:
         encoding="utf-8",
     )
     command.chmod(0o755)
-    for name in ("tic", "codesign"):
+    stubs = {
+        "tic": "",
+        "codesign": (
+            "import json, sys\n"
+            f"with open({str(directory / 'codesign.jsonl')!r}, 'a', encoding='utf-8') as stream:\n"
+            "    stream.write(json.dumps(sys.argv[1:]) + '\\n')\n"
+        ),
+        "security": (
+            "import pathlib\n"
+            f"identities = pathlib.Path({str(directory / 'identities.txt')!r})\n"
+            "if identities.exists(): print(identities.read_text(), end='')\n"
+        ),
+    }
+    for name, body in stubs.items():
         tool = directory / name
-        tool.write_text(f"#!{sys.executable}\nraise SystemExit(0)\n", encoding="utf-8")
+        tool.write_text(f"#!{sys.executable}\n{body}raise SystemExit(0)\n", encoding="utf-8")
         tool.chmod(0o755)
     tools_sandbox.env["PATH"] = str(directory) + os.pathsep + tools_sandbox.env["PATH"]
     return log

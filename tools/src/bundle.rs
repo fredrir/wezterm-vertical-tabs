@@ -479,18 +479,7 @@ pub fn package(
     let is_dev = ctx.profile == "iterate" || ctx.profile == "dev";
     if cfg!(target_os = "macos") && !is_dev {
         let _stage = ctx.runner.stage("sign");
-        ctx.runner.run(
-            CommandSpec::new("codesign")
-                .args(["--force", "--deep", "--sign", "-"])
-                .arg(bundle.join("WezTerm.app"))
-                .cwd(&ctx.root),
-        )?;
-        ctx.runner.run(
-            CommandSpec::new("codesign")
-                .args(["--verify", "--deep", "--strict"])
-                .arg(bundle.join("WezTerm.app"))
-                .cwd(&ctx.root),
-        )?;
+        crate::sign::sign_app(ctx, &bundle.join("WezTerm.app"))?;
     }
     {
         let _stage = ctx.runner.stage("bundle-checksums");
