@@ -14,7 +14,7 @@ use crate::{build, bundle, install};
 const DESKTOP_MARKER: &str = "X-WezVtabs-Install=";
 const LINKS: [&str; 3] = ["wezterm", "wezterm-gui", "wezterm-mux-server"];
 
-/// macOS replaces an application bundle; Linux shadows the system desktop entry and CLI.
+/// macOS replaces an application bundle, Linux shadows the system desktop entry; both link the CLI.
 pub struct Targets {
     pub app: Option<PathBuf>,
     pub bin: Option<PathBuf>,
@@ -30,7 +30,7 @@ impl Targets {
         } else if cfg!(target_os = "macos") {
             Self {
                 app: app.or_else(|| Some(PathBuf::from("/Applications/WezTerm.app"))),
-                bin: None,
+                bin: bin.or_else(|| Some(crate::home().join(".local/bin"))),
             }
         } else if cfg!(target_os = "linux") {
             Self {
@@ -69,19 +69,22 @@ pub fn deploy(
     };
     let installed = install::install(ctx, &bundle, false)?;
     let pruned = crate::diagnostics::prune(ctx, build_lock)?;
+    if targets.bin.is_some() {
+        ensure_binaries(&installed)?;
+    }
     let app = match &targets.app {
         Some(app) if cfg!(target_os = "macos") => Some(place_app(ctx, &installed, app)?),
-        Some(entry) => Some(place_desktop(
-            ctx,
-            &installed,
-            entry,
-            targets.bin.as_deref(),
-        )?),
+        Some(entry) => Some(place_desktop(ctx, &installed, entry)?),
         None => None,
+    };
+    let links = match targets.bin.as_deref() {
+        Some(bin) => place_links(ctx, &installed, bin)?,
+        None => Vec::new(),
     };
     Ok(json!({
         "installed": installed,
         "app": app,
+        "links": links,
         "upstream": {"revision": ctx.upstream, "pinned": pinned.is_some()},
         "pruned": pruned,
         "next": "Quit and reopen WezTerm to run this version",
@@ -143,22 +146,9 @@ fn place_app(ctx: &Context, installed: &Path, app: &Path) -> Result<Value> {
     Ok(json!({"path": app, "replaced": finish(retired)?}))
 }
 
-/// A user desktop entry with the system entry's name takes XDG precedence in launchers;
-/// `~/.local/bin` links put the matching CLI ahead of a packaged one on PATH.
-fn place_desktop(
-    ctx: &Context,
-    installed: &Path,
-    entry: &Path,
-    bin: Option<&Path>,
-) -> Result<Value> {
+/// A user desktop entry with the system entry's name takes XDG precedence in launchers.
+fn place_desktop(ctx: &Context, installed: &Path, entry: &Path) -> Result<Value> {
     let _stage = ctx.runner.stage("deploy-desktop");
-    let binaries = bundle::binary_dir(installed);
-    for name in LINKS {
-        ensure!(
-            binaries.join(bundle::executable_name(name)).is_file(),
-            "installed version has no {name} binary"
-        );
-    }
     let entry = absolute(entry)?;
     let dispatcher = install::dispatcher(&ctx.install)?;
     let marker = format!("{DESKTOP_MARKER}{}\n", ctx.install.display());
@@ -170,24 +160,40 @@ fn place_desktop(
         true,
     )?;
     let replaced = finish(retired)?;
-    let mut links = Vec::new();
-    if let Some(bin) = bin {
-        fs::create_dir_all(bin)?;
-        let bin = bin.canonicalize()?;
-        for name in LINKS {
-            let link = bin.join(bundle::executable_name(name));
-            let target = binaries.join(bundle::executable_name(name));
-            let owned = fs::read_link(&link).is_ok_and(|current| current.starts_with(&ctx.install));
-            let retired = retire(ctx, &link, owned)?;
-            symlink(&target, &link)?;
-            links.push(json!({"path": link, "target": target, "replaced": finish(retired)?}));
-        }
-    }
     // Launchers that index a cache pick the entry up sooner; absence is not an error.
     let _ = std::process::Command::new("update-desktop-database")
         .arg(entry.parent().unwrap())
         .status();
-    Ok(json!({"path": entry, "replaced": replaced, "links": links}))
+    Ok(json!({"path": entry, "replaced": replaced}))
+}
+
+/// A link earlier on PATH shadows a packaged CLI on both macOS and Linux.
+fn place_links(ctx: &Context, installed: &Path, bin: &Path) -> Result<Vec<Value>> {
+    let _stage = ctx.runner.stage("deploy-links");
+    let binaries = bundle::binary_dir(installed);
+    fs::create_dir_all(bin)?;
+    let bin = bin.canonicalize()?;
+    let mut links = Vec::new();
+    for name in LINKS {
+        let link = bin.join(bundle::executable_name(name));
+        let target = binaries.join(bundle::executable_name(name));
+        let owned = fs::read_link(&link).is_ok_and(|current| current.starts_with(&ctx.install));
+        let retired = retire(ctx, &link, owned)?;
+        symlink(&target, &link)?;
+        links.push(json!({"path": link, "target": target, "replaced": finish(retired)?}));
+    }
+    Ok(links)
+}
+
+fn ensure_binaries(installed: &Path) -> Result<()> {
+    let binaries = bundle::binary_dir(installed);
+    for name in LINKS {
+        ensure!(
+            binaries.join(bundle::executable_name(name)).is_file(),
+            "installed version has no {name} binary"
+        );
+    }
+    Ok(())
 }
 
 struct Retired {
