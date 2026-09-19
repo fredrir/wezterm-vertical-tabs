@@ -556,27 +556,6 @@ impl SidebarUi {
                 }
                 _ => {}
             },
-            Key::Up | Key::Down => {
-                let delta = if key == Key::Up { -1 } else { 1 };
-                if matches!(self.focused, Some(ElementId::Space(_))) {
-                    self.navigate_space(model, delta, intents);
-                } else {
-                    let at = model
-                        .selected_tab
-                        .and_then(|id| model.visible_ids().iter().position(|tab| *tab == id))
-                        .unwrap_or(0);
-                    if let Some(id) =
-                        model
-                            .visible_ids()
-                            .get(offset(at, delta, model.visible_ids().len()))
-                    {
-                        self.focused = Some(ElementId::Tab(*id));
-                        intents.push(UiIntent::Domain(Intent::ActivateTab(*id)));
-                        self.ensure_tab_visible(model, *id);
-                    }
-                }
-                self.dirty = true;
-            }
             Key::PageUp => {
                 self.tab_scroll = self.tab_scroll.saturating_sub(10);
                 self.dirty = true;
@@ -593,23 +572,6 @@ impl SidebarUi {
                 self.tab_scroll = self.sidebar_rows.len();
                 self.dirty = true;
             }
-            Key::Left | Key::Right => match self.focused.clone() {
-                Some(ElementId::Folder(id)) => {
-                    if let Some(folder) = model.folders.iter().find(|folder| folder.id == id)
-                        && folder.collapsed == (key == Key::Right)
-                    {
-                        intents.push(UiIntent::Domain(Intent::ToggleFolder(id)));
-                    }
-                }
-                Some(ElementId::Space(_)) => {
-                    self.navigate_space(model, if key == Key::Left { -1 } else { 1 }, intents);
-                }
-                _ => intents.push(UiIntent::Domain(Intent::SetRail(if key == Key::Left {
-                    RailMode::Collapsed
-                } else {
-                    RailMode::Expanded
-                }))),
-            },
             Key::Delete => match self.focused.clone() {
                 Some(ElementId::Tab(id)) => self.close_tab(model, id, intents),
                 Some(ElementId::SettingsTab) => self.close_settings(),
@@ -623,34 +585,6 @@ impl SidebarUi {
             Key::Character('+') => self.open_create_space(),
             _ => {}
         }
-    }
-
-    fn navigate_space(&mut self, model: &Model, delta: i32, intents: &mut Vec<UiIntent>) {
-        let Some(ElementId::Space(id)) = &self.focused else {
-            return;
-        };
-        let Some(at) = model.spaces.iter().position(|space| &space.id == id) else {
-            return;
-        };
-        let index = offset(at, delta, model.spaces.len());
-        if index == at {
-            return;
-        }
-        let id = model.spaces[index].id.clone();
-        self.focused = Some(ElementId::Space(id.clone()));
-        intents.push(UiIntent::Domain(Intent::SelectSpace(id)));
-        let slots = self
-            .hits
-            .iter()
-            .filter(|hit| matches!(hit.id, ElementId::Space(_)))
-            .count()
-            .max(1);
-        if index < self.space_scroll {
-            self.space_scroll = index;
-        } else if index >= self.space_scroll + slots {
-            self.space_scroll = index + 1 - slots;
-        }
-        self.dirty = true;
     }
 
     pub(crate) fn ensure_tab_visible(&mut self, model: &Model, id: TabId) {

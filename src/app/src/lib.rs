@@ -198,6 +198,9 @@ impl WindowApp {
             self.ui.invalidate();
         }
     }
+    pub fn set_home(&mut self, home: Option<String>) {
+        self.model.set_home(home);
+    }
     pub fn export_transfer(&self, id: TabId) -> Result<WindowTransfer, Error> {
         let tab = self
             .model

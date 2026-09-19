@@ -16,6 +16,10 @@ mod folders_tests;
 mod invariants_tests;
 
 #[cfg(test)]
+#[path = "../tests/location.rs"]
+mod location_tests;
+
+#[cfg(test)]
 #[path = "../tests/projection.rs"]
 mod projection_tests;
 

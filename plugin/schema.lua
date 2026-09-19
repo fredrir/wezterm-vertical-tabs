@@ -20,7 +20,7 @@ return {
     ["reopen_limit"] = 20,
     ["selected_background"] = "#34485f",
     ["show_close"] = true,
-    ["show_indices"] = false,
+    ["show_indexes"] = true,
     ["show_metadata"] = false,
     ["side"] = "left",
     ["width"] = 256,
@@ -85,12 +85,12 @@ return {
     {
       ["description"] = "Visible tab indices",
       ["group"] = "appearance",
-      ["key"] = "show_indices",
+      ["key"] = "show_indexes",
       ["kind"] = "bool",
       ["label"] = "Tab numbers",
     },
     {
-      ["description"] = "Show current directory and domain",
+      ["description"] = "Show the session domain",
       ["group"] = "appearance",
       ["key"] = "show_metadata",
       ["kind"] = "bool",

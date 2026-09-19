@@ -489,32 +489,22 @@ impl SidebarUi {
                         continue;
                     };
                     let selected = model.selected_tab == Some(id) && !self.settings_page;
-                    let icon = if !tab.icon.is_empty() {
-                        display_text(&tab.icon)
-                    } else if tab.bell {
-                        "!".into()
-                    } else if tab.unread {
-                        "●".into()
-                    } else if tab.pinned {
-                        "◇".into()
-                    } else if tab.remote {
-                        "↗".into()
-                    } else {
-                        "›_".into()
-                    };
+                    let name = tab
+                        .custom_title()
+                        .map(str::to_owned)
+                        .or_else(|| tab.location(model.home.as_deref()));
                     let label = if compact {
                         format!(" {number}")
                     } else {
+                        let text = match (model.settings.show_indexes, name) {
+                            (true, Some(name)) => format!("{number:>2} {}", display_text(&name)),
+                            (true, None) => format!("{number:>2}"),
+                            (false, Some(name)) => display_text(&name),
+                            (false, None) => String::new(),
+                        };
                         format!(
-                            "{}{} {}{}",
-                            if tab.folder_id.is_some() { "   " } else { " " },
-                            icon,
-                            if model.settings.show_indices {
-                                format!("{number} ")
-                            } else {
-                                String::new()
-                            },
-                            display_text(tab.display_title())
+                            "{}{text}",
+                            if tab.folder_id.is_some() { "   " } else { " " }
                         )
                     };
                     self.button(
@@ -551,7 +541,7 @@ impl SidebarUi {
                                 rect.width.saturating_sub(if close_visible { 5 } else { 4 }),
                                 1,
                             ),
-                            format!("{}  {}", display_text(&tab.cwd), display_text(&tab.domain)),
+                            display_text(&tab.domain),
                             self.theme.secondary_on(fill),
                         );
                     }

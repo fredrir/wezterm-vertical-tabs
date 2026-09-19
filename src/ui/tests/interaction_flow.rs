@@ -102,14 +102,6 @@ fn focus(ui: &mut SidebarUi, model: &Model, id: &ElementId) {
     panic!("Target was unreachable by Tab: {id:?}");
 }
 
-fn apply(model: &mut Model, intents: Vec<UiIntent>) {
-    for intent in intents {
-        if let UiIntent::Domain(intent) = intent {
-            model.dispatch(intent).unwrap();
-        }
-    }
-}
-
 fn results(ui: &SidebarUi) -> usize {
     ui.hit_regions()
         .iter()
@@ -312,7 +304,7 @@ fn search_pointer_selection_is_visible_and_escape_cancels_ime_first() {
 }
 
 #[test]
-fn folder_and_space_arrows_follow_the_focused_control() {
+fn sidebar_arrows_are_inert_while_activation_still_follows_the_focused_control() {
     let mut model = model();
     model
         .dispatch(Intent::CreateFolder {
@@ -320,32 +312,38 @@ fn folder_and_space_arrows_follow_the_focused_control() {
         })
         .unwrap();
     let folder = model.folders[0].id.clone();
+    let space_id = model.spaces[0].id.clone();
+    let space = ElementId::Space(space_id.clone());
     let mut ui = SidebarUi::new();
     draw(&mut ui, &model);
+    for id in [
+        ElementId::Folder(folder.clone()),
+        space.clone(),
+        ElementId::Tab(10),
+        ElementId::Rail,
+    ] {
+        focus(&mut ui, &model, &id);
+        for arrow in [Key::Up, Key::Down, Key::Left, Key::Right] {
+            assert!(key(&mut ui, &model, arrow).is_empty());
+            assert_eq!(ui.focused(), Some(&id));
+        }
+    }
     focus(&mut ui, &model, &ElementId::Folder(folder.clone()));
-    let collapse = key(&mut ui, &model, Key::Left);
     assert!(
-        matches!(collapse.as_slice(), [UiIntent::Domain(Intent::ToggleFolder(id))] if id == &folder)
+        matches!(key(&mut ui, &model, Key::Enter).as_slice(), [UiIntent::Domain(Intent::ToggleFolder(id))] if id == &folder)
     );
-    apply(&mut model, collapse);
-    draw(&mut ui, &model);
-    assert!(key(&mut ui, &model, Key::Left).is_empty());
-    let expand = key(&mut ui, &model, Key::Right);
-    assert!(
-        matches!(expand.as_slice(), [UiIntent::Domain(Intent::ToggleFolder(id))] if id == &folder)
-    );
-    apply(&mut model, expand);
-    draw(&mut ui, &model);
-    let first_space = ElementId::Space(model.spaces[0].id.clone());
-    focus(&mut ui, &model, &first_space);
-    let next = key(&mut ui, &model, Key::Right);
-    assert!(matches!(next.as_slice(), [UiIntent::Domain(Intent::SelectSpace(id))] if id == "work"));
-    apply(&mut model, next);
-    draw(&mut ui, &model);
-    assert_eq!(ui.focused(), Some(&ElementId::Space("work".into())));
-    assert!(
-        matches!(key(&mut ui, &model, Key::Left).as_slice(), [UiIntent::Domain(Intent::SelectSpace(id))] if id == &model.spaces[0].id)
-    );
+    focus(&mut ui, &model, &space);
+    assert!(matches!(
+        key(&mut ui, &model, Key::Enter).as_slice(),
+        [UiIntent::Domain(Intent::SelectSpace(id))] if id == &space_id
+    ));
+    focus(&mut ui, &model, &ElementId::Rail);
+    assert!(matches!(
+        key(&mut ui, &model, Key::Enter).as_slice(),
+        [UiIntent::Domain(Intent::SetRail(
+            vtabs_core::RailMode::Collapsed
+        ))]
+    ));
 }
 
 #[test]

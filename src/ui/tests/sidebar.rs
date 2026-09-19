@@ -113,17 +113,18 @@ fn sidebar_cache_preserves_order_numbers_hidden_counts_and_collapsed_reveal() {
 }
 
 #[test]
-fn metadata_keeps_the_tab_title_and_close_control_readable() {
+fn metadata_keeps_the_tab_directory_and_close_control_readable() {
     let mut model = Model::default();
     model.settings.show_metadata = true;
     model.settings.show_close = true;
     model.settings.cards = true;
+    model.set_home(Some("/home/me".into()));
     model
         .reconcile(
             vec![Tab {
                 id: 1,
                 title: "Editor with a deliberately long name".into(),
-                cwd: "~/project".into(),
+                cwd: "/home/me/project".into(),
                 domain: "local".into(),
                 ..Tab::default()
             }],
@@ -145,9 +146,94 @@ fn metadata_keeps_the_tab_title_and_close_control_readable() {
         .find(|hit| hit.id == ElementId::CloseTab(1))
         .unwrap()
         .rect;
-    assert!(row_text(&ui, tab, tab.y).contains("Editor"));
-    assert!(row_text(&ui, tab, tab.y + 1).contains("~/project"));
+    let row = row_text(&ui, tab, tab.y);
+    assert!(row.contains("~/project"), "{row}");
+    assert!(!row.contains("Editor"), "{row}");
+    assert!(row_text(&ui, tab, tab.y + 1).contains("local"));
     assert_eq!(row_text(&ui, close, close.y), " × ");
+}
+
+#[test]
+fn tab_rows_show_index_and_directory_with_a_repository_marker() {
+    let mut model = Model::default();
+    model.set_home(Some("/home/me".into()));
+    model
+        .reconcile(
+            vec![
+                Tab {
+                    id: 1,
+                    cwd: "/home/me/dotfiles/scripts".into(),
+                    repo_root: Some("/home/me/dotfiles".into()),
+                    ..Tab::default()
+                },
+                Tab {
+                    id: 2,
+                    cwd: "/home/me/Downloads".into(),
+                    ..Tab::default()
+                },
+                Tab {
+                    id: 3,
+                    cwd: "/etc".into(),
+                    ..Tab::default()
+                },
+            ],
+            Some(1),
+            true,
+        )
+        .unwrap();
+    let mut ui = SidebarUi::new();
+    ui.render(&model, Rect::new(0, 0, 32, 24), Duration::ZERO);
+    let row = |id: u64| {
+        let rect = ui
+            .hits
+            .iter()
+            .find(|hit| hit.id == ElementId::Tab(id))
+            .unwrap()
+            .rect;
+        row_text(&ui, rect, rect.y)
+    };
+    assert!(row(1).trim_start().starts_with("1 \u{f126}/dotfiles"));
+    assert!(row(2).trim_start().starts_with("2 ~/Downloads"));
+    assert!(row(3).trim_start().starts_with("3 /etc"));
+}
+
+#[test]
+fn renamed_tabs_replace_the_directory_and_hidden_indexes_leave_no_gap() {
+    let mut model = Model::default();
+    model.settings.show_indexes = false;
+    model.set_home(Some("/home/me".into()));
+    model
+        .reconcile(
+            vec![
+                Tab {
+                    id: 1,
+                    cwd: "/home/me/project".into(),
+                    title_override: Some("Deploy logs".into()),
+                    ..Tab::default()
+                },
+                Tab {
+                    id: 2,
+                    cwd: "/home/me/Downloads".into(),
+                    ..Tab::default()
+                },
+            ],
+            Some(1),
+            true,
+        )
+        .unwrap();
+    let mut ui = SidebarUi::new();
+    ui.render(&model, Rect::new(0, 0, 32, 24), Duration::ZERO);
+    let row = |id: u64| {
+        let rect = ui
+            .hits
+            .iter()
+            .find(|hit| hit.id == ElementId::Tab(id))
+            .unwrap()
+            .rect;
+        row_text(&ui, rect, rect.y)
+    };
+    assert!(row(1).trim_start().starts_with("Deploy logs"));
+    assert_eq!(row(2).trim(), "~/Downloads");
 }
 
 #[test]

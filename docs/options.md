@@ -10,8 +10,8 @@
 | `reduced_motion`      | `false`                                                       | Boolean. Suppress transitions                                                      |
 | `animation_ms`        | `140`                                                         | Integer 0–1000. Transition duration in milliseconds                                |
 | `cards`               | `true`                                                        | Boolean. Use cards instead of compact rows                                         |
-| `show_indices`        | `false`                                                       | Boolean. Visible tab indices                                                       |
-| `show_metadata`       | `false`                                                       | Boolean. Show current directory and domain                                         |
+| `show_indexes`        | `true`                                                        | Boolean. Visible tab indices                                                       |
+| `show_metadata`       | `false`                                                       | Boolean. Show the session domain                                                   |
 | `show_close`          | `true`                                                        | Boolean. Show close controls                                                       |
 | `confirm_close`       | `true`                                                        | Boolean. Confirm closing a tab with a running process                              |
 | `accent`              | `"#a9c7f5"`                                                   | Hex color `#RRGGBB`. Default accent color                                          |

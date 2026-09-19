@@ -9,8 +9,8 @@
 ---@field reduced_motion? boolean Suppress transitions
 ---@field animation_ms? integer Transition duration in milliseconds
 ---@field cards? boolean Use cards instead of compact rows
----@field show_indices? boolean Visible tab indices
----@field show_metadata? boolean Show current directory and domain
+---@field show_indexes? boolean Visible tab indices
+---@field show_metadata? boolean Show the session domain
 ---@field show_close? boolean Show close controls
 ---@field confirm_close? boolean Confirm closing a tab with a running process
 ---@field accent? string Default accent color

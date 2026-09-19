@@ -1,6 +1,7 @@
 //! The only product code coupled to WezTerm's internal APIs.
 mod cells;
 mod lua;
+mod repos;
 mod shutdown;
 mod storage;
 mod update;
@@ -58,6 +59,7 @@ struct Adapter {
     input_epoch: u64,
     pending_paste: Option<PendingPaste>,
     hook_queued: HashMap<u64, core::Tab>,
+    repos: repos::Repos,
 }
 
 impl Adapter {
@@ -65,6 +67,7 @@ impl Adapter {
         let config = lua::configuration();
         let mut app = WindowApp::new(&config.profile, false);
         app.set_window_identity(window_id as u64);
+        app.set_home(home_dir());
         if let Err(err) = app.config(config.value()) {
             log::error!("tabs config: {err}");
         }
@@ -99,6 +102,7 @@ impl Adapter {
             input_epoch: 0,
             pending_paste: None,
             hook_queued: HashMap::new(),
+            repos: repos::Repos::default(),
         }
     }
     fn apply(&mut self, result: Result<app::Update, core::Error>) {
@@ -490,6 +494,7 @@ impl Provider for Adapter {
             self.apply(result);
         }
         self.host_tabs = snapshot.tabs.iter().map(|tab| tab.id).collect();
+        let repos = &mut self.repos;
         let tabs = snapshot
             .tabs
             .into_iter()
@@ -506,6 +511,11 @@ impl Provider for Adapter {
                     id: tab.id as u64,
                     title: tab.title,
                     cwd: tab.cwd.clone(),
+                    repo_root: if tab.remote {
+                        None
+                    } else {
+                        repos.root(&tab.cwd).map(str::to_owned)
+                    },
                     domain: tab.domain.clone(),
                     process: tab.process,
                     remote: tab.remote,
@@ -1210,6 +1220,10 @@ fn running_process(id: core::TabId) -> Option<String> {
     )
 }
 
+fn home_dir() -> Option<String> {
+    config::HOME_DIR.to_str().map(str::to_string)
+}
+
 fn spawn(launch: core::LaunchSpec) -> config::keyassignment::SpawnCommand {
     config::keyassignment::SpawnCommand {
         args: (!launch.args.is_empty()).then_some(launch.args),
@@ -1241,6 +1255,10 @@ fn mouse_button(button: MousePress) -> ui::MouseButton {
 #[cfg(test)]
 #[path = "../tests/hook.rs"]
 mod hook_tests;
+
+#[cfg(test)]
+#[path = "../tests/repos.rs"]
+mod repos_tests;
 
 #[cfg(test)]
 #[path = "../tests/modal.rs"]

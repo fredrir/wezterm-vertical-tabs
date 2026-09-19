@@ -10,6 +10,30 @@ pub type TabId = u64;
 pub type SpaceId = String;
 pub const DEFAULT_SPACE: &str = "home";
 
+fn trimmed_path(path: &str) -> &str {
+    path.trim_end_matches('/')
+}
+
+fn dir_name(path: &str) -> &str {
+    let path = trimmed_path(path);
+    path.rsplit('/')
+        .next()
+        .filter(|name| !name.is_empty())
+        .unwrap_or(path)
+}
+
+fn is_under_home(path: &str, home: &str) -> bool {
+    let home = trimmed_path(home);
+    !home.is_empty()
+        && trimmed_path(path)
+            .strip_prefix(home)
+            .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
+}
+
+fn is_home(path: &str, home: &str) -> bool {
+    trimmed_path(path) == trimmed_path(home)
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Folder {
     pub id: String,
@@ -64,6 +88,9 @@ pub struct Tab {
     pub icon: String,
     #[serde(default)]
     pub cwd: String,
+    /// Repository root when the directory is inside a Git work tree.
+    #[serde(default)]
+    pub repo_root: Option<String>,
     #[serde(default)]
     pub domain: String,
     #[serde(default)]
@@ -94,11 +121,30 @@ pub struct Tab {
     pub title_hook: Option<String>,
 }
 impl Tab {
-    pub fn display_title(&self) -> &str {
+    /// An explicit rename from the context menu or a Lua title hook.
+    pub fn custom_title(&self) -> Option<&str> {
         self.title_override
             .as_deref()
             .or(self.title_hook.as_deref())
-            .unwrap_or(&self.title)
+    }
+
+    pub fn display_title(&self) -> &str {
+        self.custom_title().unwrap_or(&self.title)
+    }
+
+    pub fn location(&self, home: Option<&str>) -> Option<String> {
+        if self.cwd.is_empty() {
+            return None;
+        }
+        if let Some(repo) = &self.repo_root {
+            return Some(format!("{}", dir_name(repo)));
+        }
+        let home = home.filter(|home| is_under_home(&self.cwd, home));
+        if home.is_some_and(|home| is_home(&self.cwd, home)) {
+            return Some("~/".into());
+        }
+        let prefix = if home.is_some() { "~/" } else { "/" };
+        Some(format!("{prefix}{}", dir_name(&self.cwd)))
     }
 
     fn reconcile_host_metadata(&mut self, incoming: Self) -> bool {
@@ -112,7 +158,7 @@ impl Tab {
             };
         }
         update!(
-            id, title, icon, cwd, domain, host, user, process, remote, unread, bell
+            id, title, icon, cwd, repo_root, domain, host, user, process, remote, unread, bell
         );
         // Membership and title overrides belong to the application. discovery
         // supplies only domain/cwd; retain captured launch arguments and environment.
@@ -264,6 +310,8 @@ pub struct Model {
     pub settings: Settings,
     pub revision: u64,
     pub private: bool,
+    /// Host home directory; labels shorten only, paths are never rewritten.
+    pub home: Option<String>,
     pub config_owned: BTreeSet<String>,
     pub footer: String,
     order: Vec<TabId>,
@@ -300,6 +348,7 @@ impl Model {
             settings: Settings::default(),
             revision: 0,
             private,
+            home: None,
             config_owned: BTreeSet::new(),
             footer: String::new(),
             order: Vec::new(),
@@ -1149,6 +1198,12 @@ impl Model {
         if self.private != private {
             self.private = private;
             self.reopened.clear();
+            self.touch();
+        }
+    }
+    pub fn set_home(&mut self, home: Option<String>) {
+        if self.home != home {
+            self.home = home;
             self.touch();
         }
     }

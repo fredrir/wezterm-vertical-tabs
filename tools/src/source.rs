@@ -657,6 +657,13 @@ fn copy_changed(source: &Path, destination: &Path) -> Result<()> {
 
 fn sync_directory(source: &Path, destination: &Path) -> Result<()> {
     if fs::symlink_metadata(destination).is_ok_and(|v| v.file_type().is_symlink()) {
+        if let (Ok(dest_can), Ok(src_can)) =
+            (fs::canonicalize(destination), fs::canonicalize(source))
+        {
+            if dest_can == src_can {
+                return Ok(());
+            }
+        }
         fs::remove_file(destination)?;
     }
     fs::create_dir_all(destination)?;
