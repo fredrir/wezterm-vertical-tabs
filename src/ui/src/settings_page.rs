@@ -97,12 +97,12 @@ impl SidebarUi {
         self.page_rect = area;
         let spacious = area.height >= 24;
         let area = if spacious && area.width >= 48 {
-            self.rounded(area, self.theme.background, self.theme.background);
+            self.rounded(area, self.theme.background);
             Rect::new(area.x + 1, area.y + 1, area.width - 2, area.height - 2)
         } else {
             area
         };
-        self.rounded(area, self.theme.background, self.theme.border);
+        self.rounded(area, self.theme.background);
         let margin = if area.width >= 72 {
             4
         } else if area.width >= 40 {
@@ -126,11 +126,7 @@ impl SidebarUi {
             inner.width.min(3),
             1,
         );
-        self.rounded(
-            close,
-            self.theme.card,
-            self.settings_control_border(&ElementId::CloseSettings),
-        );
+        self.rounded(close, self.theme.card);
         self.write(
             close,
             " ×",
@@ -242,11 +238,7 @@ impl SidebarUi {
         }
         if footer_height > 0 {
             let reset = Rect::new(inner.x, bottom, inner.width.min(16), 1);
-            self.rounded(
-                reset,
-                self.theme.card,
-                self.settings_control_border(&ElementId::ResetSettings),
-            );
+            self.rounded(reset, self.theme.card);
             self.write(
                 reset,
                 " Reset defaults",
@@ -274,14 +266,6 @@ impl SidebarUi {
                     self.theme.muted(),
                 );
             }
-        }
-    }
-
-    fn settings_control_border(&self, id: &ElementId) -> ratatui::style::Color {
-        if self.focused.as_ref() == Some(id) || self.hovered.as_ref() == Some(id) {
-            self.theme.accent
-        } else {
-            self.theme.border
         }
     }
 
@@ -338,15 +322,7 @@ impl SidebarUi {
         } else {
             self.theme.card
         };
-        self.rounded(
-            rect,
-            fill,
-            if selected {
-                self.theme.accent
-            } else {
-                self.settings_control_border(&id)
-            },
-        );
+        self.rounded(rect, fill);
         self.write(
             rect,
             format!(" {label}"),
@@ -360,12 +336,7 @@ impl SidebarUi {
     }
 
     fn compose_settings_search(&mut self, rect: Rect) {
-        let border = if self.settings_search_focused {
-            self.theme.accent
-        } else {
-            self.theme.border
-        };
-        self.rounded(rect, self.theme.card, border);
+        self.rounded(rect, self.theme.card);
         let inset = u16::from(rect.width >= 4);
         let edit = Rect::new(
             rect.x + inset,
@@ -421,7 +392,7 @@ impl SidebarUi {
             let cells: Vec<_> = (selection.x..selection.right())
                 .map(|x| self.staging[(x, edit.y)].clone())
                 .collect();
-            self.rounded(selection, self.theme.selected, self.theme.selected);
+            self.rounded(selection, self.theme.selected);
             for (x, cell) in (selection.x..selection.right()).zip(cells) {
                 self.staging[(x, edit.y)] = cell;
                 self.staging[(x, edit.y)].set_style(
@@ -473,15 +444,7 @@ impl SidebarUi {
         } else {
             self.theme.card
         };
-        self.rounded(
-            rect,
-            fill,
-            if selected {
-                self.theme.accent
-            } else {
-                self.theme.border
-            },
-        );
+        self.rounded(rect, fill);
         let inset = u16::from(rect.width >= 4);
         let width = rect.width.saturating_sub(inset * 2);
         let y = rect.y + u16::from(rect.height >= 3);
@@ -503,15 +466,7 @@ impl SidebarUi {
             let value_rect = Rect::new(rect.right() - inset - value_width, y, value_width, 1);
             let value_fill = if toggle { self.theme.background } else { fill };
             if toggle {
-                self.rounded(
-                    value_rect,
-                    value_fill,
-                    if owned {
-                        self.theme.border
-                    } else {
-                        self.theme.accent
-                    },
-                );
+                self.rounded(value_rect, value_fill);
             }
             self.write(
                 value_rect,

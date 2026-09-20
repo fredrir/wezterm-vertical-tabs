@@ -9,6 +9,8 @@ use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 use vtabs_core::{Model, RailMode};
 
+const ITEM_GAP_ROWS: u16 = 1;
+
 fn icon_rect(mut rect: Rect, label: &str) -> Rect {
     let width = label.width();
     if usize::from(rect.width) > width && usize::from(rect.width) % 2 != width % 2 {
@@ -29,7 +31,7 @@ fn platform_tooltip(tooltip: String) -> String {
 }
 
 impl SidebarUi {
-    pub(crate) fn rounded(&mut self, rect: Rect, fill: Color, border: Color) {
+    pub(crate) fn rounded(&mut self, rect: Rect, fill: Color) {
         let rect = rect.intersection(self.staging.area);
         if rect.is_empty() {
             return;
@@ -40,7 +42,6 @@ impl SidebarUi {
         self.rounded_surfaces.push(RoundedSurface {
             rect,
             fill,
-            border,
             radius: 9.0,
             inset: 0.0,
         });
@@ -90,7 +91,7 @@ impl SidebarUi {
         } else {
             self.theme.background
         };
-        self.rounded(visual, fill, if focused { self.theme.accent } else { fill });
+        self.rounded(visual, fill);
         if icon {
             if let Some(surface) = self.rounded_surfaces.last_mut() {
                 surface.inset = if rect.width >= 3 && rect.height >= 2 {
@@ -233,6 +234,13 @@ impl SidebarUi {
         }
     }
 
+    pub(crate) fn visible_rows(&self, model: &Model) -> usize {
+        usize::from(
+            (self.tabs_rect.height + ITEM_GAP_ROWS) / (self.row_height(model) + ITEM_GAP_ROWS),
+        )
+        .max(1)
+    }
+
     pub(crate) fn compose_sidebar(&mut self, model: &Model, area: Rect) {
         let reveal_selection = self.reveal_selection;
         let compact = model.settings.rail == RailMode::Collapsed || area.width < 12;
@@ -243,14 +251,6 @@ impl SidebarUi {
             area.width.saturating_sub(inset * 2),
             area.height,
         );
-        let footer_height = if area.height >= 8 {
-            3
-        } else if area.height >= 5 {
-            2
-        } else {
-            1
-        };
-        let footer_y = area.bottom().saturating_sub(footer_height);
         let plus_width = if compact {
             (inner.width / 2).clamp(1, 3).min(inner.width)
         } else {
@@ -267,6 +267,14 @@ impl SidebarUi {
             );
             return;
         }
+        let gap = ITEM_GAP_ROWS;
+        let spaces_y = area.bottom() - 2;
+        let footer = (!model.footer.is_empty() && area.height >= 8)
+            .then(|| Rect::new(inner.x, spaces_y.saturating_sub(gap + 1), inner.width, 1));
+        let list_bottom = footer.map_or_else(
+            || spaces_y.saturating_sub(gap),
+            |footer| footer.y.saturating_sub(gap),
+        );
         let toolbar_height = 2;
         let left = (inner.x + self.header_inset).min(inner.right());
         let size = inner.width.min(4);
@@ -295,7 +303,7 @@ impl SidebarUi {
                 false,
             );
         }
-        let search_y = inner.y + toolbar_height;
+        let search_y = inner.y + toolbar_height + gap;
         let search_height = if area.height >= 12 { 2 } else { 1 };
         let search = Rect::new(inner.x, search_y, inner.width, search_height);
         self.search_rect = search;
@@ -304,15 +312,7 @@ impl SidebarUi {
         } else {
             search
         };
-        self.rounded(
-            search_visual,
-            self.theme.card,
-            if self.hovered == Some(ElementId::Search) || self.focused == Some(ElementId::Search) {
-                self.theme.accent
-            } else {
-                self.theme.border
-            },
-        );
+        self.rounded(search_visual, self.theme.selected);
         let search_label = if compact {
             Line::from("⌕").alignment(Alignment::Center)
         } else {
@@ -328,15 +328,16 @@ impl SidebarUi {
                 1,
             ),
             search_label,
-            self.theme.muted().bg(self.theme.card),
+            self.theme.muted().bg(self.theme.selected),
         );
         self.hit(
             ElementId::Search,
             search,
             platform_tooltip("Search tabs  Cmd+K".into()),
         );
-        let title_y = search.bottom();
-        if title_y < footer_y && !compact {
+        let title_y = search.bottom() + gap;
+        let list_y = title_y + gap + 1;
+        let tabs_y = if !compact && list_y < list_bottom {
             let name = model
                 .spaces
                 .iter()
@@ -373,17 +374,20 @@ impl SidebarUi {
                 "New folder  Cmd+Shift+G".into(),
                 false,
             );
-        }
-        let tabs_y = (title_y + u16::from(!compact)).min(footer_y);
+            list_y
+        } else {
+            title_y.min(list_bottom)
+        };
         self.tabs_rect = Rect::new(
             inner.x,
             tabs_y,
             inner.width,
-            footer_y.saturating_sub(tabs_y),
+            list_bottom.saturating_sub(tabs_y),
         );
         self.ensure_sidebar_entries(model);
         let row_height = self.row_height(model);
-        let capacity = usize::from(self.tabs_rect.height / row_height).max(1);
+        let stride = row_height + gap;
+        let capacity = self.visible_rows(model);
         if self.reveal_selection {
             if let Some(id) = model.selected_tab {
                 self.ensure_tab_visible(model, id);
@@ -407,11 +411,12 @@ impl SidebarUi {
         for at in self.tab_scroll..end {
             let index = at - self.tab_scroll;
             let entry = self.sidebar_rows[at];
+            let top = tabs_y + index as u16 * stride;
             let rect = Rect::new(
                 inner.x,
-                tabs_y + index as u16 * row_height,
+                top,
                 inner.width,
-                row_height.min(footer_y.saturating_sub(tabs_y + index as u16 * row_height)),
+                row_height.min(list_bottom.saturating_sub(top)),
             );
             if rect.is_empty() {
                 continue;
@@ -548,11 +553,11 @@ impl SidebarUi {
                 }
             }
         }
-        if model.visible_ids().is_empty() && self.tabs_rect.height > row_height + 1 && !compact {
+        if model.visible_ids().is_empty() && self.tabs_rect.height > row_height + gap && !compact {
             self.write(
                 Rect::new(
                     inner.x + 1,
-                    tabs_y + row_height + 1,
+                    tabs_y + stride,
                     inner.width.saturating_sub(2),
                     1,
                 ),
@@ -581,20 +586,15 @@ impl SidebarUi {
         {
             self.rounded_surfaces.push(RoundedSurface {
                 rect: hit.rect,
-                fill: Color::Reset,
-                border: self.theme.accent,
+                fill: self.theme.selected,
                 radius: 9.0,
                 inset: 0.0,
             });
         }
-        if footer_height >= 3 {
+        if let Some(footer) = footer {
             self.write(
-                Rect::new(inner.x, footer_y, inner.width, 1),
-                if model.footer.is_empty() {
-                    String::new()
-                } else {
-                    display_text(model.footer.lines().next().unwrap_or(""))
-                },
+                footer,
+                display_text(model.footer.lines().next().unwrap_or("")),
                 self.theme.muted(),
             );
         }
@@ -608,7 +608,7 @@ impl SidebarUi {
         self.space_scroll = self
             .space_scroll
             .min(model.spaces.len().saturating_sub(slots));
-        self.spaces_rect = Rect::new(inner.x, area.bottom() - 2, slots_width, 2);
+        self.spaces_rect = Rect::new(inner.x, spaces_y, slots_width, 2);
         if slots > 0
             && reveal_selection
             && let Some(index) = model
@@ -631,7 +631,7 @@ impl SidebarUi {
         {
             let rect = Rect::new(
                 inner.x + offset as u16 * slot_width,
-                area.bottom() - 2,
+                spaces_y,
                 slot_width.min(slots_width),
                 2,
             );
@@ -655,7 +655,7 @@ impl SidebarUi {
         }
         self.button(
             ElementId::CreateSpace,
-            Rect::new(plus.x, area.bottom() - 2, plus.width, 2),
+            Rect::new(plus.x, spaces_y, plus.width, 2),
             " +".into(),
             "New space".into(),
             false,

@@ -421,15 +421,7 @@ fn surface_motion_reuses_composition_and_preserves_editor_metadata_through_compl
         let surfaces: Vec<_> = ui
             .rounded_surfaces()
             .iter()
-            .map(|surface| {
-                (
-                    surface.rect,
-                    surface.fill,
-                    surface.border,
-                    surface.radius,
-                    surface.inset,
-                )
-            })
+            .map(|surface| (surface.rect, surface.fill, surface.radius, surface.inset))
             .collect();
         reference.invalidate();
         let expected = reference
@@ -459,13 +451,7 @@ fn surface_motion_reuses_composition_and_preserves_editor_metadata_through_compl
             assert_eq!(
                 ui.rounded_surfaces()
                     .iter()
-                    .map(|surface| (
-                        surface.rect,
-                        surface.fill,
-                        surface.border,
-                        surface.radius,
-                        surface.inset
-                    ))
+                    .map(|surface| (surface.rect, surface.fill, surface.radius, surface.inset))
                     .collect::<Vec<_>>(),
                 surfaces
             );

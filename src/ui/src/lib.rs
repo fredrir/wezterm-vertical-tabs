@@ -273,7 +273,6 @@ pub struct SidebarUi {
 pub struct RoundedSurface {
     pub rect: Rect,
     pub fill: ratatui::style::Color,
-    pub border: ratatui::style::Color,
     pub radius: f32,
     pub inset: f32,
 }

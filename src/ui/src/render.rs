@@ -82,10 +82,8 @@ impl SidebarUi {
                 self.last_selected_space = Some(model.selected_space.clone());
             }
             if self.last_selected_tab != model.selected_tab {
+                // Composition reveals the row once the frame's row capacity is known.
                 self.reveal_selection = true;
-                if let Some(id) = model.selected_tab {
-                    self.ensure_tab_visible(model, id);
-                }
                 self.last_selected_tab = model.selected_tab;
             }
             self.dirty = true;
@@ -407,7 +405,7 @@ impl SidebarUi {
         };
         self.overlay_rect = rect;
         Clear.render(rect, &mut self.staging);
-        self.rounded(rect, self.theme.background, self.theme.border);
+        self.rounded(rect, self.theme.background);
         let framed = rect.width >= 4 && rect.height >= 3;
         let search_header = searching && rect.height >= 5;
         let inner = if framed {
@@ -436,7 +434,7 @@ impl SidebarUi {
                             rect.width,
                             if search_header { 3 } else { 1 },
                         );
-                        self.rounded(field, self.theme.card, self.theme.accent);
+                        self.rounded(field, self.theme.card);
                         let label = if title.width >= 12 { "⌕ " } else { "" };
                         let label_width = label.width() as u16;
                         let edit =
@@ -501,7 +499,6 @@ impl SidebarUi {
                         } else {
                             self.theme.background
                         },
-                        self.theme.background,
                     );
                     let style = if !item.enabled {
                         self.theme.muted()
@@ -554,15 +551,7 @@ impl SidebarUi {
                         start >= form.editor.scroll_columns
                     })
                     .collect();
-                self.rounded(
-                    edit,
-                    self.theme.selected,
-                    if editing {
-                        self.theme.accent
-                    } else {
-                        self.theme.border
-                    },
-                );
+                self.rounded(edit, self.theme.selected);
                 self.write(edit, display, self.theme.base().bg(self.theme.selected));
                 self.hit(ElementId::Editor, edit, "Text entry");
                 if editing {
@@ -611,15 +600,7 @@ impl SidebarUi {
                         } else {
                             self.theme.card
                         };
-                        self.rounded(
-                            button,
-                            fill,
-                            if focused {
-                                self.theme.accent
-                            } else {
-                                self.theme.border
-                            },
-                        );
+                        self.rounded(button, fill);
                         self.write(button, label, self.item_style(&id, false).bg(fill));
                         self.hit(id, button, label.trim());
                     }
@@ -646,7 +627,6 @@ impl SidebarUi {
                 self.rounded_surfaces.push(RoundedSurface {
                     rect: Rect::new(columns.start, rect.y, columns.end - columns.start, 1),
                     fill: self.theme.accent,
-                    border: self.theme.accent,
                     radius: 2.0,
                     inset: 0.0,
                 });
@@ -712,7 +692,7 @@ impl SidebarUi {
             height,
         );
         Clear.render(rect, &mut self.staging);
-        self.rounded(rect, self.theme.card, self.theme.border);
+        self.rounded(rect, self.theme.card);
         let content = Rect::new(rect.x + 1, rect.y + 1, rect.width - 2, rect.height - 2);
         let text = text
             .into_iter()

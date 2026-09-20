@@ -81,7 +81,7 @@ fn sidebar_cache_preserves_order_numbers_hidden_counts_and_collapsed_reveal() {
     model
         .dispatch(Intent::ToggleFolder(services.clone()))
         .unwrap();
-    ui.tabs_rect = Rect::new(0, 0, 20, 2);
+    ui.tabs_rect = Rect::new(0, 0, 20, 3);
     ui.ensure_tab_visible(&model, 3);
     assert_eq!(ui.tab_scroll, 2);
     assert_eq!(ui.sidebar_rows.as_ptr(), allocation);
@@ -292,4 +292,52 @@ fn tooltips_stay_compact_when_settings_uses_the_content_pane() {
     assert!(tooltip.width <= 44);
     assert_eq!(tooltip.intersection(area), tooltip);
     assert!(row_text(&ui, tooltip, tooltip.y + 1).contains("Refresh"));
+}
+
+#[test]
+fn sidebar_items_are_separated_by_the_same_gap() {
+    let mut model = Model::default();
+    model.set_home(Some("/home/me".into()));
+    model
+        .reconcile(
+            (1..=2)
+                .map(|id| Tab {
+                    id,
+                    cwd: format!("/home/me/p{id}"),
+                    ..Tab::default()
+                })
+                .collect(),
+            Some(1),
+            true,
+        )
+        .unwrap();
+    let mut ui = SidebarUi::new();
+    let area = Rect::new(0, 0, 32, 32);
+    ui.render(&model, area, Duration::ZERO);
+    let rows: Vec<Rect> = [
+        ElementId::Rail,
+        ElementId::Search,
+        ElementId::CreateFolder,
+        ElementId::NewTab,
+        ElementId::Tab(1),
+        ElementId::Tab(2),
+    ]
+    .iter()
+    .map(|id| {
+        ui.hits
+            .iter()
+            .find(|hit| &hit.id == id)
+            .unwrap_or_else(|| panic!("{id:?} is not reachable"))
+            .rect
+    })
+    .collect();
+    for pair in rows.windows(2) {
+        assert_eq!(
+            pair[1].y - pair[0].bottom(),
+            ITEM_GAP_ROWS,
+            "{:?} to {:?}",
+            pair[0],
+            pair[1]
+        );
+    }
 }

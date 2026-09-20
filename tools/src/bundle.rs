@@ -238,6 +238,29 @@ pub fn verify(bundle: &Path) -> Result<BuildMetadata> {
     Ok(metadata)
 }
 
+/// Rebuilds are never byte-identical: `built_at` moves and code signatures are
+/// regenerated. Identity plus the reproducible source tree decides sameness.
+pub fn equivalent(installed: &Path, candidate: &Path) -> Result<bool> {
+    let installed_metadata = metadata(installed)?;
+    let candidate_metadata = metadata(candidate)?;
+    Ok(installed_metadata.upstream == candidate_metadata.upstream
+        && installed_metadata.source_digest == candidate_metadata.source_digest
+        && installed_metadata.compile_digest == candidate_metadata.compile_digest
+        && installed_metadata.target == candidate_metadata.target
+        && installed_metadata.profile == candidate_metadata.profile
+        && source_entries(installed)? == source_entries(candidate)?)
+}
+
+fn source_entries(bundle: &Path) -> Result<BTreeMap<String, FileDigest>> {
+    let manifest: BundleManifest = state::read_json(&bundle.join(MANIFEST))?
+        .context("bundle checksums missing; rebuild or obtain a verified bundle")?;
+    Ok(manifest
+        .files
+        .into_iter()
+        .filter(|(path, _)| path.starts_with("source/"))
+        .collect())
+}
+
 pub fn copy_tree(source: &Path, destination: &Path) -> Result<()> {
     fs::create_dir_all(destination)?;
     for entry in WalkDir::new(source)

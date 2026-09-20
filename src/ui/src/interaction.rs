@@ -609,7 +609,7 @@ impl SidebarUi {
     }
 
     pub(crate) fn reveal_row(&mut self, model: &Model, at: usize) {
-        let rows = usize::from(self.tabs_rect.height / self.row_height(model)).max(1);
+        let rows = self.visible_rows(model);
         if at < self.tab_scroll {
             self.tab_scroll = at;
         } else if at >= self.tab_scroll + rows {

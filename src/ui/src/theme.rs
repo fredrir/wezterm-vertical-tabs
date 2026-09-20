@@ -11,13 +11,12 @@ pub struct Theme {
     pub accent: Color,
     pub danger: Color,
     pub private: Color,
-    pub border: Color,
 }
 
 impl Default for Theme {
     fn default() -> Self {
         let mut theme = Self {
-            background: Color::Rgb(25, 34, 49),
+            background: Color::Rgb(6, 1, 81),
             foreground: Color::Rgb(225, 231, 240),
             muted: Color::Rgb(152, 168, 190),
             card: Color::Reset,
@@ -26,7 +25,6 @@ impl Default for Theme {
             accent: Color::Rgb(169, 199, 245),
             danger: Color::Rgb(250, 122, 134),
             private: Color::Rgb(207, 166, 255),
-            border: Color::Reset,
         };
         theme.sync_surfaces();
         theme
@@ -48,7 +46,6 @@ impl Theme {
         };
         self.hover = blend(4);
         self.card = blend(5);
-        self.border = blend(15);
     }
 
     pub fn base(&self) -> Style {

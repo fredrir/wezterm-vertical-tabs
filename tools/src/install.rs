@@ -57,8 +57,7 @@ pub fn install(ctx: &Context, bundle: &Path, stage_only: bool) -> Result<PathBuf
     if destination.exists() {
         bundle::verify(&destination)?;
         ensure!(
-            fs::read(destination.join("checksums.json"))?
-                == fs::read(bundle.join("checksums.json"))?,
+            bundle::equivalent(&destination, bundle)?,
             "installed bundle ID collision: immutable version contents differ"
         );
     } else {

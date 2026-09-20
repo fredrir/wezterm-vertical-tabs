@@ -1053,8 +1053,6 @@ impl Provider for Adapter {
                             radius: shape.radius,
                             inset: shape.inset,
                             fill: linear_color(shape.fill),
-                            border: linear_color(shape.border),
-                            border_width: if shape.fill == shape.border { 0. } else { 1. },
                         }),
                 );
             if let Some(cursor) = frame.cursor {
@@ -1068,8 +1066,6 @@ impl Provider for Adapter {
                     radius: 0.,
                     inset: 0.,
                     fill: linear_color(self.app.ui().theme.accent),
-                    border: linear_color(self.app.ui().theme.accent),
-                    border_width: 0.,
                 });
             }
         }

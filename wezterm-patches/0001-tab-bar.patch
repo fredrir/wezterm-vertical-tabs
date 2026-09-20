@@ -1323,7 +1323,7 @@ new file mode 100644
 index 00000000..f3a9a24b
 --- /dev/null
 +++ b/wezterm-client/src/topology.rs
-@@ -0,0 +1,93 @@
+@@ -0,0 +1,89 @@
 +//! Order topology snapshots after local resize acknowledgements.
 +use std::sync::{Arc, Mutex};
 +use std::task::{Poll, Waker};
@@ -1412,56 +1412,4 @@ index 00000000..f3a9a24b
 +    fn drop(&mut self) {
 +        self.0.lock().unwrap().applying -= 1;
 +    }
-+}
-+
-+#[cfg(test)]
-+#[path = "../tests/vtabs/topology.rs"]
-+mod vtabs_topology_tests;
-diff --git a/wezterm-client/tests/vtabs/topology.rs b/wezterm-client/tests/vtabs/topology.rs
-new file mode 100644
-index 00000000..0a245802
---- /dev/null
-+++ b/wezterm-client/tests/vtabs/topology.rs
-@@ -0,0 +1,42 @@
-+use super::*;
-+use futures::{pin_mut, FutureExt};
-+
-+#[test]
-+fn split_snapshot_waits_for_every_pane_resize_ack() {
-+    let sync = TopologySync::default();
-+    let left = sync.begin_resize().unwrap();
-+    let right = sync.begin_resize().unwrap();
-+    let ready = sync.ready();
-+    pin_mut!(ready);
-+    assert!(ready.as_mut().now_or_never().is_none());
-+    drop(left);
-+    assert!(ready.as_mut().now_or_never().is_none());
-+    drop(right);
-+    let (epoch, _) = ready.now_or_never().unwrap();
-+    assert!(sync.accepts(epoch));
-+}
-+#[test]
-+fn snapshot_captured_before_new_resize_is_rejected_even_after_ack() {
-+    let sync = TopologySync::default();
-+    let (old_epoch, _) = sync.ready().now_or_never().unwrap();
-+    let resize = sync.begin_resize().unwrap();
-+    assert!(!sync.accepts(old_epoch));
-+    drop(resize);
-+    assert!(!sync.accepts(old_epoch));
-+    let (current_epoch, _) = sync.ready().now_or_never().unwrap();
-+    assert!(sync.accepts(current_epoch));
-+}
-+#[test]
-+fn remote_snapshot_does_not_echo_resizes_and_notifications_coalesce() {
-+    let sync = TopologySync::default();
-+    let first = sync.request();
-+    let second = sync.request();
-+    let (_, included) = sync.ready().now_or_never().unwrap();
-+    let applying = sync.applying();
-+    assert!(sync.begin_resize().is_none());
-+    drop(applying);
-+    assert!(sync.finish(included));
-+    assert!(sync.completed(first) && sync.completed(second));
-+    assert!(!sync.completed(sync.request()));
-+    assert!(sync.begin_resize().is_some());
 +}

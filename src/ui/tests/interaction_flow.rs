@@ -133,12 +133,6 @@ fn form_buttons_accept_space_and_keep_text_and_ime_focus_separate() {
     assert!(frame.cursor.is_none());
     assert!(frame.ime_rect.is_none());
     assert_eq!(ui.next_deadline(), None);
-    let save = hit(&ui, &ElementId::Submit);
-    assert!(
-        ui.rounded_surfaces()
-            .iter()
-            .any(|surface| surface.rect == save && surface.fill != surface.border)
-    );
     assert!(
         matches!(key(&mut ui, &model, Key::Character(' ')).as_slice(),
         [UiIntent::Domain(Intent::CreateSpace { name })] if name == "Research")

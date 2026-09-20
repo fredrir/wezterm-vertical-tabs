@@ -123,6 +123,27 @@ def test_install_rejects_same_id_with_different_contents(tools_sandbox, bundle_f
     assert installed.read_text() != "different source\n"
 
 
+def test_install_accepts_a_rebuild_of_an_installed_version(tools_sandbox, bundle_factory):
+    tools_sandbox.run("install", "--bundle", bundle_factory("rebuilt"))
+    installed = binary_dir(tools_sandbox.install / "versions/rebuilt") / executable_name(
+        "wezterm-gui"
+    )
+    original = installed.read_bytes()
+    rebuild = bundle_factory("rebuilt", directory="rebuild")
+    # Code signatures and build timestamps change; the source tree does not.
+    resigned = binary_dir(rebuild) / executable_name("wezterm-gui")
+    resigned.write_bytes(resigned.read_bytes() + b"\n# resigned\n")
+    metadata = state(rebuild, "build")
+    metadata["built_at"] = metadata.get("built_at", 0) + 1
+    (rebuild / "build.json").write_text(json.dumps(metadata))
+    write_manifest(rebuild)
+
+    tools_sandbox.run("install", "--bundle", rebuild)
+
+    assert state(tools_sandbox.install, "active")["id"] == "rebuilt"
+    assert installed.read_bytes() == original
+
+
 def test_install_rejects_incompatible_target(tools_sandbox, bundle_factory):
     bundle = bundle_factory("wrong-target")
     metadata = state(bundle, "build")
