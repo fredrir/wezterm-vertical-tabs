@@ -806,3 +806,36 @@ fn host_close_prompt_names_the_process_and_defaults_to_closing() {
     assert!(key(&mut ui, &model, Key::Escape).is_empty());
     assert!(!ui.is_modal());
 }
+
+#[test]
+fn folder_chord_is_no_longer_a_shortcut_but_the_button_still_creates_folders() {
+    let model = model();
+    let mut ui = SidebarUi::new();
+    draw(&mut ui, &model);
+    let chord = |shift: bool| Modifiers {
+        super_key: true,
+        shift,
+        ..Modifiers::default()
+    };
+    for (character, shift) in [('g', false), ('G', true)] {
+        assert!(!is_shortcut(&Key::Character(character), chord(shift)));
+        assert!(
+            ui.event(
+                &model,
+                UiInput::Key {
+                    key: Key::Character(character),
+                    modifiers: chord(shift),
+                },
+            )
+            .is_empty()
+        );
+        draw(&mut ui, &model);
+        assert!(!ui.has_overlay());
+        assert!(!ui.text_input_active());
+    }
+    draw(&mut ui, &model);
+    click(&mut ui, &model, &ElementId::CreateFolder);
+    draw(&mut ui, &model);
+    assert!(ui.has_overlay());
+    assert!(ui.text_input_active());
+}

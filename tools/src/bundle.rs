@@ -238,8 +238,6 @@ pub fn verify(bundle: &Path) -> Result<BuildMetadata> {
     Ok(metadata)
 }
 
-/// Rebuilds are never byte-identical: `built_at` moves and code signatures are
-/// regenerated. Identity plus the reproducible source tree decides sameness.
 pub fn equivalent(installed: &Path, candidate: &Path) -> Result<bool> {
     let installed_metadata = metadata(installed)?;
     let candidate_metadata = metadata(candidate)?;
@@ -399,9 +397,18 @@ pub fn package(
                 && let Ok(mut val) = plist::Value::from_file(&plist_path)
             {
                 if let Some(dict) = val.as_dictionary_mut() {
-                    dict.insert("CFBundleName".into(), plist::Value::String("WezTerm Dev".into()));
-                    dict.insert("CFBundleDisplayName".into(), plist::Value::String("WezTerm (Dev)".into()));
-                    dict.insert("CFBundleIdentifier".into(), plist::Value::String("com.github.wez.wezterm.dev".into()));
+                    dict.insert(
+                        "CFBundleName".into(),
+                        plist::Value::String("WezTerm Dev".into()),
+                    );
+                    dict.insert(
+                        "CFBundleDisplayName".into(),
+                        plist::Value::String("WezTerm (Dev)".into()),
+                    );
+                    dict.insert(
+                        "CFBundleIdentifier".into(),
+                        plist::Value::String("com.github.wez.wezterm.dev".into()),
+                    );
                 }
                 let _ = val.to_file_xml(&plist_path);
             }
@@ -471,7 +478,10 @@ pub fn package(
         if is_dev {
             let desktop_path = resources.join("wezterm.desktop");
             if let Ok(content) = fs::read_to_string(&desktop_path) {
-                let _ = fs::write(&desktop_path, content.replace("Name=WezTerm", "Name=WezTerm Dev"));
+                let _ = fs::write(
+                    &desktop_path,
+                    content.replace("Name=WezTerm", "Name=WezTerm Dev"),
+                );
             }
             let _ = fs::write(resources.join("icons/terminal.png"), DEV_PNG);
         }

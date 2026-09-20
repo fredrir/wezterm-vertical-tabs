@@ -371,7 +371,7 @@ impl SidebarUi {
                 ElementId::CreateFolder,
                 folder,
                 " +".into(),
-                "New folder  Cmd+Shift+G".into(),
+                "New folder".into(),
                 false,
             );
             list_y

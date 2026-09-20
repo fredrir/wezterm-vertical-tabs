@@ -41,7 +41,6 @@ return config
 | Search tabs                         | `Cmd+K`                            | `Ctrl+Shift+K`       |
 | Toggle sidebar                      | `Cmd+B`                            | `Ctrl+Shift+B`       |
 | Close tab or settings               | `Cmd+W`                            | `Ctrl+Shift+W`       |
-| New folder                          | `Cmd+Shift+G`                      | `Ctrl+Shift+G`       |
 | Refresh configuration               | `Cmd+Shift+R`                      | `Ctrl+Shift+R`       |
 | Restore closed tab                  | `Cmd+Shift+T`                      | Sidebar context menu |
 | Tab 1 through 8 / last              | `Cmd+1..9`                         | `Ctrl+Shift+1..9`    |

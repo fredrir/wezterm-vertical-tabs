@@ -232,7 +232,7 @@ def scenarios(probe: Probe, gui: GuiInput):
             and state["visible"].index(ids[3]) < state["visible"].index(ids[2])
         )
     )
-    gui.key("ctrl+shift+g")
+    gui.click("CreateFolder")
     probe.wait(lambda state: gui.hit(state, "Editor") is not None)
     gui.text("Project")
     gui.key("Return")
@@ -392,7 +392,6 @@ def scenarios(probe: Probe, gui: GuiInput):
         "spaces": [home, work],
         "keyboard": [
             "Ctrl+Shift+T",
-            "Ctrl+Shift+G",
             "Ctrl+Shift+Comma",
             "Ctrl+Shift+K",
             "Ctrl+Shift+B",

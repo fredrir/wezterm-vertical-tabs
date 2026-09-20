@@ -13,8 +13,7 @@ pub fn is_shortcut(key: &Key, mods: Modifiers) -> bool {
         && matches!(
             key,
             Key::Character(
-                ',' | 't' | 'T' | 'k' | 'K' | 'b' | 'B' | 'w' | 'W' | 'g' | 'G' | 'r' | 'R' | '1'
-                    ..='9'
+                ',' | 't' | 'T' | 'k' | 'K' | 'b' | 'B' | 'w' | 'W' | 'r' | 'R' | '1'..='9'
             )
         ))
         || (mods.control && !mods.super_key && !mods.alt && *key == Key::Tab)
@@ -65,7 +64,6 @@ impl SidebarUi {
                     self.close_tab(model, id, intents);
                 }
             }
-            Key::Character('g' | 'G') => self.open_create_folder(),
             Key::Character('r' | 'R') => intents.push(UiIntent::Refresh),
             Key::Character(c @ '1'..='9') => {
                 self.hide_settings();
