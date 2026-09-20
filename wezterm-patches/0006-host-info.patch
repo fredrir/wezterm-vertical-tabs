@@ -1,5 +1,5 @@
 diff --git a/codec/src/lib.rs b/codec/src/lib.rs
-index 0c230e95..d2c66e8f 100644
+index 0c230e95..e504ec52 100644
 --- a/codec/src/lib.rs
 +++ b/codec/src/lib.rs
 @@ -503,6 +503,8 @@ pdu! {
@@ -11,13 +11,17 @@ index 0c230e95..d2c66e8f 100644
  }
  
  impl Pdu {
-@@ -882,6 +884,17 @@ pub struct GetPaneDirectionResponse {
+@@ -882,6 +884,21 @@ pub struct GetPaneDirectionResponse {
      pub pane_id: Option<PaneId>,
  }
  
++/// Which machine runs a pane, relayed hop by hop the way its working directory is.
 +/// A new PDU rather than a new field: stock servers reject it and stay compatible.
 +#[derive(Deserialize, Serialize, PartialEq, Debug)]
-+pub struct GetHostInfo {}
++pub struct GetHostInfo {
++    /// `None` asks about the server itself.
++    pub pane_id: Option<PaneId>,
++}
 +
 +#[derive(Deserialize, Serialize, PartialEq, Eq, Debug, Clone, Default)]
 +pub struct GetHostInfoResponse {
@@ -30,72 +34,87 @@ index 0c230e95..d2c66e8f 100644
  pub struct ActivatePaneDirection {
      pub pane_id: PaneId,
 diff --git a/wezterm-client/src/client.rs b/wezterm-client/src/client.rs
-index 3ed1d22b..67c09e48 100644
+index 3ed1d22b..bd0493e3 100644
 --- a/wezterm-client/src/client.rs
 +++ b/wezterm-client/src/client.rs
 @@ -1341,6 +1341,7 @@ impl Client {
  
      rpc!(ping, Ping = (), Pong);
      rpc!(list_panes, ListPanes = (), ListPanesResponse);
-+    rpc!(get_host_info, GetHostInfo = (), GetHostInfoResponse);
++    rpc!(get_host_info, GetHostInfo, GetHostInfoResponse);
      rpc!(spawn_v2, SpawnV2, SpawnResponse);
      rpc!(split_pane, SplitPane, SpawnResponse);
      rpc!(
-diff --git a/wezterm-client/src/domain.rs b/wezterm-client/src/domain.rs
-index f559706c..319dd96e 100644
---- a/wezterm-client/src/domain.rs
-+++ b/wezterm-client/src/domain.rs
-@@ -28,6 +28,8 @@ pub struct ClientInner {
-     pub focused_remote_pane_id: Mutex<Option<PaneId>>,
-     pub(crate) topology: crate::topology::TopologySync,
-     pub(crate) local_pane_layout: bool,
-+    /// Reported once by the machine that owns the panes; `None` from a stock server.
-+    pub host_info: Option<codec::GetHostInfoResponse>,
+diff --git a/wezterm-client/src/pane/clientpane.rs b/wezterm-client/src/pane/clientpane.rs
+index 4232f69c..5e9037b7 100644
+--- a/wezterm-client/src/pane/clientpane.rs
++++ b/wezterm-client/src/pane/clientpane.rs
+@@ -50,6 +50,7 @@ pub struct ClientPane {
+     config: Mutex<Option<Arc<dyn TerminalConfiguration>>>,
+     unseen_output: Mutex<bool>,
+     progress: Mutex<Progress>,
++    host_info: Arc<Mutex<Option<GetHostInfoResponse>>>,
  }
  
- impl ClientInner {
-@@ -247,6 +249,7 @@ impl ClientInner {
-         local_echo_threshold_ms: Option<u64>,
-         overlay_lag_indicator: bool,
-         local_pane_layout: bool,
-+        host_info: Option<codec::GetHostInfoResponse>,
+ impl ClientPane {
+@@ -61,6 +62,25 @@ impl ClientPane {
+         title: &str,
      ) -> Self {
-         Self {
-             client,
-@@ -259,6 +262,7 @@ impl ClientInner {
-             focused_remote_pane_id: Mutex::new(None),
-             topology: crate::topology::TopologySync::default(),
-             local_pane_layout,
+         let local_pane_id = alloc_pane_id();
++        let host_info = Arc::new(Mutex::new(None));
++        {
++            let client = Arc::clone(client);
++            let host_info = Arc::clone(&host_info);
++            promise::spawn::spawn(async move {
++                let request = GetHostInfo {
++                    pane_id: Some(remote_pane_id),
++                };
++                if let Ok(info) = client.client.get_host_info(request).await {
++                    host_info.lock().replace(info);
++                    // Consumers re-read pane metadata on this alert.
++                    Mux::get().notify(MuxNotification::Alert {
++                        pane_id: local_pane_id,
++                        alert: Alert::CurrentWorkingDirectoryChanged,
++                    });
++                }
++            })
++            .detach();
++        }
+         let writer = PaneWriter {
+             client: Arc::clone(client),
+             remote_pane_id,
+@@ -132,9 +152,31 @@ impl ClientPane {
+             user_vars: Mutex::new(HashMap::new()),
+             config: Mutex::new(None),
+             progress: Mutex::new(Progress::default()),
 +            host_info,
          }
      }
- }
-@@ -830,6 +834,7 @@ impl ClientDomain {
-         client: Client,
-         panes: ListPanesResponse,
-         primary_window_id: Option<WindowId>,
-+        host_info: Option<codec::GetHostInfoResponse>,
-     ) -> anyhow::Result<()> {
-         let mux = Mux::get();
-         let domain = mux
-@@ -847,6 +852,7 @@ impl ClientDomain {
-             threshold,
-             overlay_lag_indicator,
-             domain.config.local_pane_layout(),
-+            host_info,
-         ));
-         *domain.inner.lock().unwrap() = Some(Arc::clone(&inner));
  
-@@ -1132,7 +1138,8 @@ impl Domain for ClientDomain {
-                     "Server has {} tabs.  Attaching to local UI...\n",
-                     panes.tabs.len()
-                 ));
--                ClientDomain::finish_attach(domain_id, client, panes, window_id)
-+                let host_info = client.get_host_info().await.ok();
-+                ClientDomain::finish_attach(domain_id, client, panes, window_id, host_info)
-             }
-         })
-         .await
++    /// `None` until the owning server answers, and for good from a stock server.
++    pub fn host_info(&self) -> Option<GetHostInfoResponse> {
++        self.host_info.lock().clone()
++    }
++
++    /// An intermediate mux answers for the pane's real owner rather than for itself.
++    pub async fn relay_host_info(&self) -> anyhow::Result<GetHostInfoResponse> {
++        if let Some(info) = self.host_info() {
++            return Ok(info);
++        }
++        let info = self
++            .client
++            .client
++            .get_host_info(GetHostInfo {
++                pane_id: Some(self.remote_pane_id),
++            })
++            .await?;
++        self.host_info.lock().replace(info.clone());
++        Ok(info)
++    }
++
+     pub(crate) fn update_remote_tab_id(&self, tab_id: TabId) {
+         self.remote_tab_id.store(tab_id, Ordering::Relaxed);
+     }
 diff --git a/wezterm-mux-server-impl/Cargo.toml b/wezterm-mux-server-impl/Cargo.toml
 index 27a21788..c7bdd0a4 100644
 --- a/wezterm-mux-server-impl/Cargo.toml
@@ -109,23 +128,26 @@ index 27a21788..c7bdd0a4 100644
  url.workspace = true
  wezterm-client.workspace = true
 diff --git a/wezterm-mux-server-impl/src/sessionhandler.rs b/wezterm-mux-server-impl/src/sessionhandler.rs
-index b645b827..502dea9f 100644
+index b645b827..4d7b8344 100644
 --- a/wezterm-mux-server-impl/src/sessionhandler.rs
 +++ b/wezterm-mux-server-impl/src/sessionhandler.rs
-@@ -276,6 +276,12 @@ impl SessionHandler {
+@@ -276,6 +276,15 @@ impl SessionHandler {
  
          match decoded.pdu {
              Pdu::Ping(Ping {}) => send_response(Ok(Pdu::Pong(Pong {}))),
-+            Pdu::GetHostInfo(GetHostInfo {}) => {
-+                send_response(Ok(Pdu::GetHostInfoResponse(GetHostInfoResponse {
-+                    os: sysinfo::System::distribution_id(),
-+                    hostname: sysinfo::System::host_name().unwrap_or_default(),
-+                })))
++            Pdu::GetHostInfo(GetHostInfo { pane_id }) => {
++                spawn_into_main_thread(async move {
++                    promise::spawn::spawn(async move {
++                        send_response(Ok(Pdu::GetHostInfoResponse(host_info(pane_id).await)))
++                    })
++                    .detach();
++                })
++                .detach();
 +            }
              Pdu::SetWindowWorkspace(SetWindowWorkspace {
                  window_id,
                  workspace,
-@@ -998,6 +1004,7 @@ impl SessionHandler {
+@@ -998,6 +1007,7 @@ impl SessionHandler {
              | Pdu::UnitResponse { .. }
              | Pdu::LivenessResponse { .. }
              | Pdu::GetPaneDirectionResponse { .. }
@@ -133,3 +155,25 @@ index b645b827..502dea9f 100644
              | Pdu::SearchScrollbackResponse { .. }
              | Pdu::GetLinesResponse { .. }
              | Pdu::GetCodecVersionResponse { .. }
+@@ -1033,6 +1043,21 @@ fn schedule_domain_spawn_v2<SND>(
+         .detach();
+ }
+ 
++/// A pane this server merely relays belongs to the machine further along the chain.
++async fn host_info(pane_id: Option<PaneId>) -> GetHostInfoResponse {
++    if let Some(pane) = pane_id.and_then(|id| Mux::get().get_pane(id)) {
++        if let Some(relayed) = pane.downcast_ref::<wezterm_client::pane::ClientPane>() {
++            if let Ok(info) = relayed.relay_host_info().await {
++                return info;
++            }
++        }
++    }
++    GetHostInfoResponse {
++        os: sysinfo::System::distribution_id(),
++        hostname: sysinfo::System::host_name().unwrap_or_default(),
++    }
++}
++
+ fn schedule_split_pane<SND>(split: SplitPane, send_response: SND, client_id: Option<Arc<ClientId>>)
+ where
+     SND: Fn(anyhow::Result<Pdu>) + 'static,

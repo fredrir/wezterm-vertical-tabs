@@ -112,6 +112,11 @@ pub struct TabPane {
     pub repo_root: Option<String>,
     #[serde(default)]
     pub active: bool,
+    /// Splits of one tab can live on different machines.
+    #[serde(default)]
+    pub remote: bool,
+    #[serde(default)]
+    pub os: String,
 }
 impl TabPane {
     pub fn label(&self, home: Option<&str>) -> String {
@@ -142,7 +147,7 @@ pub struct Tab {
     pub process: String,
     #[serde(default)]
     pub remote: bool,
-    /// os-release style ID reported by the machine that owns the tab's domain.
+    /// os-release style ID of the machine running the tab's active pane.
     #[serde(default)]
     pub os: String,
     #[serde(default)]

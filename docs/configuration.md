@@ -67,9 +67,11 @@ return config
 | Space assignment      | Drop a tab on a bottom space control or use Move to space                                                               |
 | Folder persistence    | Catalog, names and collapse state persist; live membership follows the session boundary in [Boundaries](limitations.md) |
 | Tab title             | Double-click edits in place with the text selected; Enter saves, Escape cancels, an empty title restores the directory  |
-| Tab icon              | Local machine: terminal; remote mux: its operating system as reported by the patched `wezterm-mux-server`               |
-| Splits                | A split tab lists its panes side by side in one row; clicking a pane focuses it                                         |
-| Close control         | Shown while the tab row is hovered (`show_close`)                                                                       |
+| Tab icon              | Machine of the active pane: terminal when local, else its OS, relayed per pane by each patched `wezterm-mux-server`     |
+| Tab index             | Subscript on the icon for `Cmd+1`-`Cmd+9` (`show_indexes`); labels share one column with or without it                  |
+| Splits                | A split tab lists its panes side by side, each with its own machine icon; clicking a pane focuses it                    |
+| Close control         | Floats over the hovered tab row without moving its content (`show_close`)                                               |
+| Hints                 | Compact, beside the sidebar and level with the control; tabs show none outside the collapsed rail                       |
 | Motion                | Finite hover/selection transitions and press shrink; `reduced_motion` disables animation                                |
 | Closing tabs          | Idle tabs close at once; a running process prompts with Close preselected (`confirm_close`, upstream skip list, remote) |
 | Menus and prompts     | Context menus open under the pointer or focused control; confirmations preselect the confirming action                  |

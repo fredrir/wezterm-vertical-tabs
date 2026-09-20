@@ -15,9 +15,8 @@ const SURFACE_RADIUS: f32 = 9.0;
 const ROW_INSET: f32 = 1.5;
 const PRESS_INSET: f32 = 3.0;
 const NESTED_INSET: f32 = 4.0;
-/// The glyph, the blank cell it overflows into, and one cell of gap before the text.
-const ICON_CELLS: u16 = 3;
-const INDEX_CELLS: u16 = 3;
+/// The glyph, the blank cell it overflows into, its index badge, and a gap before the text.
+const ICON_CELLS: u16 = 4;
 const TRAILING_CELLS: u16 = 3;
 const MIN_SEGMENT_CELLS: u16 = 4;
 
@@ -30,9 +29,13 @@ fn icon_rect(mut rect: Rect, label: &str) -> Rect {
     rect
 }
 
+/// macOS chords read as key glyphs; other platforms spell out their remapped chord.
 fn platform_tooltip(tooltip: String) -> String {
     if cfg!(target_os = "macos") {
         tooltip
+            .replace("Cmd+Shift+", &format!("⇧{} ", icons::COMMAND))
+            .replace("Cmd+", &format!("{} ", icons::COMMAND))
+            .replace("Opt+", "⌥")
     } else {
         tooltip
             .replace("Cmd+Shift+", "Ctrl+Shift+")
@@ -47,13 +50,20 @@ struct Trailing {
     tooltip: &'static str,
 }
 
+enum Content<'a> {
+    Label(&'a str),
+    /// Splits read as side-by-side pills inside the tab's own row.
+    Panes(&'a Tab, Option<&'a str>),
+    Rename(TabId),
+}
+
 struct Row<'a> {
     id: ElementId,
     rect: Rect,
     indent: u16,
     icon: &'a str,
     index: Option<usize>,
-    label: &'a str,
+    content: Content<'a>,
     tooltip: String,
     selected: bool,
     muted: bool,
@@ -194,51 +204,55 @@ impl SidebarUi {
                 content: Rect::default(),
             };
         }
-        let mut x = row.rect.x + 1 + row.indent;
-        let right = row.rect.right().saturating_sub(if trailing.is_some() {
-            TRAILING_CELLS
-        } else {
-            1
-        });
-        let mut place = |ui: &mut Self, text: String, cells: u16| {
-            let width = cells.min(right.saturating_sub(x));
-            ui.write(Rect::new(x, row.rect.y, width, 1), text, style);
-            x += width;
-        };
-        place(self, row.icon.to_owned(), ICON_CELLS);
-        if let Some(index) = row.index {
-            place(self, format!("{index:<2}"), INDEX_CELLS);
-        }
-        let content = Rect::new(x, row.rect.y, right.saturating_sub(x), row.rect.height);
+        let x = row.rect.x + 1 + row.indent;
+        let right = row.rect.right().saturating_sub(1);
         self.write(
-            Rect::new(content.x, content.y, content.width, 1),
-            row.label.to_owned(),
+            Rect::new(x, row.rect.y, ICON_CELLS.min(right.saturating_sub(x)), 1),
+            format!("{} {}", row.icon, icons::badge(row.index)),
             style,
         );
-        self.hit(row.id, row.rect, platform_tooltip(row.tooltip));
-        if let Some(trailing) = trailing {
-            let rect = Rect::new(
-                row.rect.right() - TRAILING_CELLS,
-                row.rect.y,
-                TRAILING_CELLS,
-                row.rect.height,
-            );
-            self.write(
-                Rect::new(rect.x, rect.y, rect.width, 1),
-                trailing.icon,
-                style,
-            );
-            self.hit(trailing.id, rect, platform_tooltip(trailing.tooltip.into()));
-        }
-        RowLayout {
+        let x = (x + ICON_CELLS).min(right);
+        let layout = RowLayout {
             fill,
             style,
-            content,
+            content: Rect::new(x, row.rect.y, right - x, row.rect.height),
+        };
+        self.hit(row.id, row.rect, platform_tooltip(row.tooltip));
+        match row.content {
+            Content::Label(label) => self.write(
+                Rect::new(layout.content.x, layout.content.y, layout.content.width, 1),
+                label.to_owned(),
+                style,
+            ),
+            Content::Panes(tab, home) => self.pane_segments(tab, home, &layout),
+            Content::Rename(id) => self.compose_rename(id, layout.content, fill),
         }
+        if let Some(trailing) = trailing {
+            self.overlay_control(trailing, row.rect, style);
+        }
+        layout
     }
 
-    /// Splits read as side-by-side pills inside the tab's own row.
-    fn pane_segments(&mut self, model: &Model, tab: &Tab, layout: &RowLayout) {
+    /// Floats over the row's content so revealing it never shifts what is beneath.
+    fn overlay_control(&mut self, control: Trailing, row: Rect, style: Style) {
+        let rect = Rect::new(
+            row.right() - TRAILING_CELLS,
+            row.y,
+            TRAILING_CELLS,
+            row.height,
+        );
+        let symbols = [control.icon, " ", " "];
+        for (x, symbol) in (rect.x..rect.right()).zip(symbols) {
+            let cell = &mut self.staging[(x, rect.y)];
+            cell.set_symbol(symbol);
+            if let Some(fg) = style.fg {
+                cell.set_fg(fg);
+            }
+        }
+        self.hit(control.id, rect, platform_tooltip(control.tooltip.into()));
+    }
+
+    fn pane_segments(&mut self, tab: &Tab, home: Option<&str>, layout: &RowLayout) {
         let count = tab.panes.len() as u16;
         let area = layout.content;
         let base = area.width / count;
@@ -254,7 +268,11 @@ impl SidebarUi {
                 .theme
                 .lift(layout.fill, if pane.active || hovered { 14 } else { 7 });
             self.surface(rect, fill, 6.0, NESTED_INSET);
-            let label = pane.label(model.home.as_deref());
+            let label = format!(
+                "{} {}",
+                icons::host(pane.remote, &pane.os),
+                display_text(&pane.label(home))
+            );
             let style = if pane.active {
                 layout.style
             } else {
@@ -265,10 +283,10 @@ impl SidebarUi {
             };
             self.write(
                 Rect::new(rect.x + 1, rect.y, rect.width.saturating_sub(2), 1),
-                display_text(&label),
+                label,
                 style.bg(fill),
             );
-            self.hit(id, rect, format!("{}\n{}", pane.title, pane.cwd));
+            self.hit(id, rect, "");
         }
     }
 
@@ -609,7 +627,7 @@ impl SidebarUi {
                         indent: 0,
                         icon: icons::PLUS,
                         index: None,
-                        label: "New Tab",
+                        content: Content::Label("New Tab"),
                         tooltip: "New tab  Cmd+T".into(),
                         selected: false,
                         muted: true,
@@ -624,7 +642,7 @@ impl SidebarUi {
                         indent: 0,
                         icon: icons::SETTINGS,
                         index: model.settings.show_indexes.then_some(number),
-                        label: "Settings",
+                        content: Content::Label("Settings"),
                         tooltip: "Settings  Cmd+,".into(),
                         selected: self.settings_page,
                         muted: false,
@@ -650,7 +668,10 @@ impl SidebarUi {
                             icons::FOLDER_OPEN
                         },
                         index: None,
-                        label: &format!("{}  {count}", display_text(&folder.name)),
+                        content: Content::Label(&format!(
+                            "{}  {count}",
+                            display_text(&folder.name)
+                        )),
                         tooltip: format!(
                             "{}\nDrop tabs here. Right click to rename or ungroup.",
                             folder.name
@@ -743,13 +764,19 @@ impl SidebarUi {
             let label = if space.icon.is_empty() {
                 space.name.graphemes(true).next().unwrap_or("○")
             } else {
-                &space.icon
+                icons::space(space.icon.trim())
+            };
+            // One-cell glyphs take the same blank partner as the plus beside them.
+            let label = if label.width() == 1 {
+                format!("{label} ")
+            } else {
+                label.to_owned()
             };
             let activity = self.space_activity.contains(&space.id);
             self.icon_button(
                 ElementId::Space(space.id.clone()),
                 rect,
-                label.trim(),
+                &label,
                 format!(
                     "{}{}",
                     space.name,
@@ -801,7 +828,7 @@ impl SidebarUi {
             indent: 0,
             icon,
             index: None,
-            label: &label,
+            content: Content::Label(&label),
             tooltip,
             selected: false,
             muted: true,
@@ -825,15 +852,28 @@ impl SidebarUi {
             .or_else(|| tab.location(model.home.as_deref()))
             .unwrap_or_default();
         let name = display_text(&name);
-        let split = tab.panes.len() > 1 && !renaming;
+        let segmented = !compact
+            && tab.panes.len() > 1
+            && rect.width.saturating_sub(ICON_CELLS + 2)
+                >= tab.panes.len() as u16 * MIN_SEGMENT_CELLS;
+        let active = tab.panes.iter().find(|pane| pane.active);
         let layout = self.row(Row {
             id: ElementId::Tab(tab.id),
             rect,
             indent: if tab.folder_id.is_some() { 2 } else { 0 },
-            icon: icons::host(tab),
+            icon: active.map_or_else(
+                || icons::host(tab.remote, &tab.os),
+                |pane| icons::host(pane.remote, &pane.os),
+            ),
             index: (compact || model.settings.show_indexes).then_some(number),
-            label: if split || renaming { "" } else { &name },
-            tooltip: format!("{}\n{}\n{}", tab.display_title(), tab.cwd, tab.domain),
+            content: if renaming {
+                Content::Rename(tab.id)
+            } else if segmented {
+                Content::Panes(tab, model.home.as_deref())
+            } else {
+                Content::Label(&name)
+            },
+            tooltip: if compact { name.clone() } else { String::new() },
             selected: model.selected_tab == Some(tab.id) && !self.settings_page,
             muted: false,
             compact,
@@ -846,17 +886,7 @@ impl SidebarUi {
         if compact {
             return;
         }
-        if renaming {
-            self.compose_rename(tab.id, layout.content, layout.fill);
-        } else if split && layout.content.width >= tab.panes.len() as u16 * MIN_SEGMENT_CELLS {
-            self.pane_segments(model, tab, &layout);
-        } else if split {
-            self.write(
-                Rect::new(layout.content.x, rect.y, layout.content.width, 1),
-                name,
-                layout.style,
-            );
-        } else {
+        if !renaming && !segmented {
             self.title_rects.push((tab.id, layout.content));
         }
         if rect.height >= 3 {

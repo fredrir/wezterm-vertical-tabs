@@ -1,6 +1,4 @@
 //! Nerd Font glyphs. A trailing blank cell lets the renderer draw them at natural size.
-use vtabs_core::Tab;
-
 pub(crate) const SIDEBAR: &str = "\u{f10aa}";
 pub(crate) const SETTINGS: &str = "\u{f0493}";
 pub(crate) const REFRESH: &str = "\u{f0450}";
@@ -14,14 +12,30 @@ pub(crate) const FOLDER: &str = "\u{f0256}";
 pub(crate) const FOLDER_OPEN: &str = "\u{f0dcf}";
 pub(crate) const LOCAL: &str = "\u{f120}";
 pub(crate) const REMOTE: &str = "\u{f048b}";
+pub(crate) const COMMAND: &str = "\u{f0633}";
+const SPACE_DOT: &str = "\u{f0ec3}";
+
+/// Indexes ride along as a subscript of the icon; only `Cmd+1`..`Cmd+9` exist.
+pub(crate) fn badge(index: Option<usize>) -> &'static str {
+    const DIGITS: [&str; 9] = ["₁", "₂", "₃", "₄", "₅", "₆", "₇", "₈", "₉"];
+    index
+        .and_then(|index| DIGITS.get(index.checked_sub(1)?))
+        .copied()
+        .unwrap_or(" ")
+}
+
+/// The stock space icon joins the glyph set so the footer reads at one size.
+pub(crate) fn space(icon: &str) -> &str {
+    if icon == "◉" { SPACE_DOT } else { icon }
+}
 
 /// The local machine always reads as a terminal; remotes read as their operating system.
-pub(crate) fn host(tab: &Tab) -> &'static str {
-    if !tab.remote {
+pub(crate) fn host(remote: bool, os: &str) -> &'static str {
+    if !remote {
         return LOCAL;
     }
-    match tab.os.as_str() {
-        "arch" => "\u{f08c7}",
+    match os {
+        "arch" => "\u{f303}",
         "ubuntu" => "\u{ef72}",
         "debian" => "\u{f306}",
         "fedora" => "\u{f30a}",

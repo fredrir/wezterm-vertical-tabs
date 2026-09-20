@@ -527,26 +527,30 @@ impl Provider for Adapter {
                         cwd: (!tab.cwd.is_empty()).then_some(tab.cwd.clone()),
                         ..Default::default()
                     });
-                // The owning mux reports its machine, as it does each pane's directory.
-                let owner = domain.as_ref().and_then(|domain| {
-                    wezterm_client::domain::ClientDomain::get_client_inner_for_domain(
-                        domain.domain_id(),
-                    )
-                    .ok()?
-                    .host_info
-                    .clone()
-                });
-                let remote = tab.remote
-                    && owner
-                        .as_ref()
-                        .is_none_or(|owner| !owner.hostname.eq_ignore_ascii_case(local_host));
-                let mut repo_root = |cwd: &str| {
+                // Each pane's owning mux reports its machine, relayed like its directory.
+                let machine = |pane: &std::sync::Arc<dyn mux::pane::Pane>| {
+                    let Some(client) = pane.downcast_ref::<wezterm_client::pane::ClientPane>()
+                    else {
+                        return (false, String::new());
+                    };
+                    client.host_info().map_or((true, String::new()), |owner| {
+                        (
+                            !owner.hostname.eq_ignore_ascii_case(local_host),
+                            owner.os,
+                        )
+                    })
+                };
+                let host_tab = mux.get_tab(tab.id);
+                let (remote, os) = host_tab
+                    .as_ref()
+                    .and_then(|host| host.get_active_pane())
+                    .map_or((tab.remote, String::new()), |pane| machine(&pane));
+                let mut repo_root = |cwd: &str, remote: bool| {
                     (!remote)
                         .then(|| repos.root(cwd).map(str::to_owned))
                         .flatten()
                 };
-                let panes = mux
-                    .get_tab(tab.id)
+                let panes = host_tab
                     .map(|host| host.iter_panes_ignoring_zoom())
                     .filter(|panes| panes.len() > 1)
                     .into_iter()
@@ -557,12 +561,15 @@ impl Provider for Adapter {
                             .get_current_working_dir(mux::pane::CachePolicy::AllowStale)
                             .map(|url| url.path().to_string())
                             .unwrap_or_default();
+                        let (remote, os) = machine(&entry.pane);
                         core::TabPane {
                             id: entry.pane.pane_id() as u64,
                             title: entry.pane.get_title(),
-                            repo_root: repo_root(&cwd),
+                            repo_root: repo_root(&cwd, remote),
                             cwd,
                             active: entry.is_active,
+                            remote,
+                            os,
                         }
                     })
                     .collect();
@@ -570,11 +577,11 @@ impl Provider for Adapter {
                     id: tab.id as u64,
                     title: tab.title,
                     cwd: tab.cwd.clone(),
-                    repo_root: repo_root(&tab.cwd),
+                    repo_root: repo_root(&tab.cwd, remote),
                     domain: tab.domain.clone(),
                     process: tab.process,
                     remote,
-                    os: owner.map(|owner| owner.os).unwrap_or_default(),
+                    os,
                     panes,
                     unread: tab.unread,
                     bell: tab.bell,

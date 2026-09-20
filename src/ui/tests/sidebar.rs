@@ -209,18 +209,14 @@ fn tab_rows_show_host_icon_index_and_directory() {
     assert!(
         row(1)
             .trim_start()
-            .starts_with(&format!("{local}  1  dotfiles"))
+            .starts_with(&format!("{local} ₁ dotfiles"))
     );
     assert!(
         row(2)
             .trim_start()
-            .starts_with(&format!("{local}  2  ~/Downloads"))
+            .starts_with(&format!("{local} ₂ ~/Downloads"))
     );
-    assert!(
-        row(3)
-            .trim_start()
-            .starts_with(&format!("{local}  3  /etc"))
-    );
+    assert!(row(3).trim_start().starts_with(&format!("{local} ₃ /etc")));
 }
 
 #[test]
@@ -259,8 +255,8 @@ fn renamed_tabs_replace_the_directory_and_hidden_indexes_leave_no_gap() {
         row_text(&ui, rect, rect.y)
     };
     let local = icons::LOCAL;
-    assert_eq!(row(1).trim(), format!("{local}  Deploy logs"));
-    assert_eq!(row(2).trim(), format!("{local}  ~/Downloads"));
+    assert_eq!(row(1).trim(), format!("{local}   Deploy logs"));
+    assert_eq!(row(2).trim(), format!("{local}   ~/Downloads"));
 }
 
 #[test]
@@ -318,7 +314,14 @@ fn tooltips_stay_compact_when_settings_uses_the_content_pane() {
     let tooltip = ui.rounded_surfaces.last().unwrap().rect;
     assert!(tooltip.width <= 44);
     assert_eq!(tooltip.intersection(area), tooltip);
-    assert!(row_text(&ui, tooltip, tooltip.y + 1).contains("Refresh"));
+    assert_eq!(tooltip.height, 2);
+    assert_eq!(tooltip.x, 32 + 1);
+    let text = row_text(&ui, tooltip, tooltip.y);
+    assert!(text.starts_with(" Refresh configuration"), "{text:?}");
+    assert!(
+        !cfg!(target_os = "macos") || !text.contains("Cmd+"),
+        "{text:?}"
+    );
 }
 
 #[test]
@@ -453,7 +456,7 @@ fn remote_tabs_show_their_operating_system_and_local_tabs_a_terminal() {
     ui.render(&model, Rect::new(0, 0, 32, 32), Duration::ZERO);
     for (id, icon) in [
         (1, "\u{f120}"),
-        (2, "\u{f08c7}"),
+        (2, "\u{f303}"),
         (3, "\u{ef72}"),
         (4, icons::REMOTE),
     ] {
@@ -461,7 +464,7 @@ fn remote_tabs_show_their_operating_system_and_local_tabs_a_terminal() {
         assert!(
             row_text(&ui, rect, rect.y)
                 .trim_start()
-                .starts_with(&format!("{icon}  {id}")),
+                .starts_with(&format!("{icon} {}", icons::badge(Some(id as usize)))),
             "tab {id}"
         );
     }
@@ -533,7 +536,7 @@ fn space_title_swaps_its_icon_on_hover_and_collapses_pinned_tabs_and_folders() {
         assert!(ui.hits.iter().all(|hit| hit.id != hidden), "{hidden:?}");
     }
     let rect = hit_rect(&ui, &ElementId::Tab(1));
-    assert!(row_text(&ui, rect, rect.y).contains(" 2 "));
+    assert!(row_text(&ui, rect, rect.y).contains("₂"));
 }
 
 #[test]
@@ -703,15 +706,15 @@ fn left_icons_share_one_column_and_one_gap_before_their_text() {
     );
     let mut ui = SidebarUi::new();
     ui.render(&model, Rect::new(0, 0, 32, 32), Duration::ZERO);
-    for (id, icon, text) in [
-        (ElementId::Search, icons::SEARCH, "Search"),
-        (ElementId::SpaceTitle, icons::SPACE, "Home"),
-        (ElementId::NewTab, icons::PLUS, "New"),
-        (ElementId::Tab(1), icons::LOCAL, "1"),
+    for (id, icon, badge, text) in [
+        (ElementId::Search, icons::SEARCH, " ", "Search"),
+        (ElementId::SpaceTitle, icons::SPACE, " ", "Home"),
+        (ElementId::NewTab, icons::PLUS, " ", "New"),
+        (ElementId::Tab(1), icons::LOCAL, "₁", "~/project"),
     ] {
         let rect = hit_rect(&ui, &id);
         assert!(
-            row_text(&ui, rect, rect.y).starts_with(&format!(" {icon}  {text}")),
+            row_text(&ui, rect, rect.y).starts_with(&format!(" {icon} {badge} {text}")),
             "{id:?}: {:?}",
             row_text(&ui, rect, rect.y)
         );
@@ -780,4 +783,79 @@ fn hovering_the_close_control_adds_no_surface_of_its_own() {
             .iter()
             .all(|surface| surface.rect != close)
     );
+}
+
+#[test]
+fn hovering_a_split_tab_floats_the_close_control_without_moving_its_panes() {
+    let mut model = Model::default();
+    let pane = |id, cwd: &str, remote, os: &str| vtabs_core::TabPane {
+        id,
+        cwd: cwd.into(),
+        active: id == 7,
+        remote,
+        os: os.into(),
+        ..Default::default()
+    };
+    tabs(
+        &mut model,
+        vec![Tab {
+            id: 1,
+            panes: vec![
+                pane(7, "/home/me/api", false, ""),
+                pane(8, "/srv/web", true, "arch"),
+            ],
+            ..Tab::default()
+        }],
+    );
+    let area = Rect::new(0, 0, 48, 32);
+    let mut ui = SidebarUi::new();
+    ui.render(&model, area, Duration::ZERO);
+    let panes = |ui: &SidebarUi| [7, 8].map(|id| hit_rect(ui, &ElementId::Pane(1, id)));
+    let resting = panes(&ui);
+    let local = row_text(&ui, resting[0], resting[0].y);
+    let remote = row_text(&ui, resting[1], resting[1].y);
+    assert!(
+        local.contains(&format!("{} ~/api", icons::LOCAL)),
+        "{local:?}"
+    );
+    assert!(remote.contains("\u{f303} /web"), "{remote:?}");
+
+    let row = hit_rect(&ui, &ElementId::Tab(1));
+    ui.event(
+        &model,
+        UiInput::PointerMove {
+            x: row.x + 1,
+            y: row.y,
+        },
+    );
+    ui.render(&model, area, Duration::ZERO);
+    assert_eq!(panes(&ui), resting);
+    let close = hit_rect(&ui, &ElementId::CloseTab(1));
+    assert!(close.intersects(resting[1]));
+    assert!(row_text(&ui, close, close.y).starts_with(icons::CLOSE));
+    assert_eq!(
+        ui.hit_test(close.x, close.y).map(|hit| &hit.id),
+        Some(&ElementId::CloseTab(1))
+    );
+}
+
+#[test]
+fn footer_space_icons_match_the_new_space_plus() {
+    let mut model = Model::default();
+    model.spaces.push(Space::new("work", "Work"));
+    let mut ui = SidebarUi::new();
+    ui.render(&model, Rect::new(0, 0, 32, 32), Duration::ZERO);
+    let plus = hit_rect(&ui, &ElementId::CreateSpace);
+    let glyph = |rect: Rect| {
+        let text = row_text(&ui, rect, rect.y);
+        (text.find(|c: char| !c.is_whitespace()), text.trim().width())
+    };
+    for space in &model.spaces {
+        let rect = hit_rect(&ui, &ElementId::Space(space.id.clone()));
+        assert_eq!(
+            (rect.y, rect.width, rect.height),
+            (plus.y, plus.width, plus.height)
+        );
+        assert_eq!(glyph(rect), glyph(plus), "{}", space.id);
+    }
 }

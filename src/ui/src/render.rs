@@ -464,6 +464,7 @@ impl SidebarUi {
                 None => centered(area, menu_width(menu), desired_height),
             },
         };
+        let rect = self.clear_of_rows(rect, area);
         self.overlay_rect = rect;
         Clear.render(rect, &mut self.staging);
         self.rounded(rect, self.theme.background);
@@ -716,9 +717,11 @@ impl SidebarUi {
         if natural_width == 0 {
             return;
         }
+        // A row is about two cells tall, so one row of padding matches two columns.
+        let padding = if text.len() == 1 { 1 } else { 2 };
         let width = natural_width
             .min(42)
-            .min(usize::from(area.width - 2))
+            .min(usize::from(area.width).saturating_sub(padding * 2))
             .max(1);
         let mut lines = 0usize;
         for line in &text {
@@ -735,17 +738,23 @@ impl SidebarUi {
                 used = used.saturating_sub(1) % width + 1;
             }
         }
-        let height = (lines + 2).min(usize::from(area.height)) as u16;
-        let width = width as u16 + 2;
-        let rect = anchored(
-            area,
-            Position::new(hit.rect.x, hit.rect.bottom().saturating_sub(1)),
-            width,
-            height,
-        );
+        // The host centers a single line inside a two-row pill; longer text pads by a row.
+        let height = if lines == 1 { 2 } else { lines + 2 }.min(usize::from(area.height)) as u16;
+        let width = (width + padding * 2) as u16;
+        let rect = self.tooltip_rect(area, hit.rect, width, height);
         Clear.render(rect, &mut self.staging);
         self.rounded(rect, self.theme.card);
-        let content = Rect::new(rect.x + 1, rect.y + 1, rect.width - 2, rect.height - 2);
+        let padding = padding as u16;
+        let content = if lines == 1 {
+            Rect::new(rect.x + padding, rect.y, rect.width - padding * 2, 1)
+        } else {
+            Rect::new(
+                rect.x + padding,
+                rect.y + 1,
+                rect.width - padding * 2,
+                rect.height - 2,
+            )
+        };
         let text = text
             .into_iter()
             .enumerate()
@@ -766,6 +775,49 @@ impl SidebarUi {
 }
 
 impl SidebarUi {
+    /// Sidebar hints sit beside the rail, level with their control and out of its way.
+    fn tooltip_rect(&self, area: Rect, target: Rect, width: u16, height: u16) -> Rect {
+        let sidebar = self.sidebar_rect;
+        let beside = if sidebar.x > area.x {
+            sidebar.x.checked_sub(width + 1).filter(|x| *x >= area.x)
+        } else {
+            Some(sidebar.right() + 1).filter(|x| x + width <= area.right())
+        };
+        match beside.filter(|_| sidebar.contains(target.as_position())) {
+            Some(x) => Rect::new(
+                x,
+                target.y.min(area.bottom().saturating_sub(height)),
+                width,
+                height,
+            ),
+            None => self.clear_of_rows(
+                anchored(
+                    area,
+                    Position::new(target.x, target.bottom().saturating_sub(1)),
+                    width,
+                    height,
+                ),
+                area,
+            ),
+        }
+    }
+
+    /// A row's centered label reaches into its second cell row; overlays start clear of it.
+    fn clear_of_rows(&self, mut rect: Rect, area: Rect) -> Rect {
+        let splits_a_row = self.rounded_surfaces.iter().any(|surface| {
+            surface.rect.height == 2
+                && surface.rect.y + 1 == rect.y
+                && surface.rect.x < rect.right()
+                && rect.x < surface.rect.right()
+        });
+        if splits_a_row && rect.bottom() < area.bottom() {
+            rect.y += 1;
+        } else if splits_a_row && rect.y > area.y {
+            rect.y -= 1;
+        }
+        rect
+    }
+
     /// The sidebar search bar composed in this frame, when it has room for a dropdown.
     fn search_field(&self, area: Rect) -> Option<Rect> {
         (!self.search_rect.is_empty() && area.contains(self.search_rect.as_position()))

@@ -360,7 +360,7 @@ fn settings_stay_listed_as_a_tab_until_closed() {
         .map(|x| ui.buffer()[(x, row.rect.y)].symbol())
         .collect();
     assert!(
-        text.contains(&format!("{}  3  Settings", icons::SETTINGS)),
+        text.contains(&format!("{} ₃ Settings", icons::SETTINGS)),
         "{text}"
     );
     assert!(!has(&ui, ElementId::CloseSettingsTab));
@@ -503,7 +503,7 @@ fn settings_keeps_its_index_when_later_tabs_open_and_earlier_tabs_close() {
         rows.sort();
         rows.into_iter().map(|(_, label)| label).collect()
     };
-    assert_eq!(numbers(&ui), ["1", "2", "3 Settings"]);
+    assert_eq!(numbers(&ui), ["₁", "₂", "₃ Settings"]);
 
     let tab = |id| vtabs_core::Tab {
         id,
@@ -514,7 +514,7 @@ fn settings_keeps_its_index_when_later_tabs_open_and_earlier_tabs_close() {
         .unwrap();
     ui.hide_settings();
     draw(&mut ui, &model);
-    assert_eq!(numbers(&ui), ["1", "2", "3 Settings", "4"]);
+    assert_eq!(numbers(&ui), ["₁", "₂", "₃ Settings", "₄"]);
 
     let command = Modifiers {
         super_key: true,
@@ -544,7 +544,7 @@ fn settings_keeps_its_index_when_later_tabs_open_and_earlier_tabs_close() {
         .reconcile(vec![tab(2), tab(3)], Some(3), true)
         .unwrap();
     draw(&mut ui, &model);
-    assert_eq!(numbers(&ui), ["1", "2 Settings", "3"]);
+    assert_eq!(numbers(&ui), ["₁", "₂ Settings", "₃"]);
 }
 
 #[test]

@@ -119,7 +119,8 @@ fn context_menu_opens_below_the_pointer_and_stays_inside_the_window() {
             0
         };
         let first = hit(&ui, &ElementId::Menu("activate".into()));
-        assert_eq!(first.y, click.1 + 2);
+        // The frame clears the clicked row, whose centered label spans both of its cells.
+        assert_eq!(first.y, tab.bottom() + 1);
         // The frame starts at the pointer column unless the menu would leave the window.
         let frame_x = (sidebar_x + click.0).min(window.right() - (first.width + 2));
         assert_eq!(first.x, frame_x + 1);
@@ -233,7 +234,7 @@ fn edit_dialog_centers_across_window_and_returns_to_settings_page() {
 }
 
 #[test]
-fn tooltip_opens_below_the_hovered_control_without_stealing_keyboard_or_pointer_targets() {
+fn tooltip_opens_beside_the_sidebar_without_stealing_keyboard_or_pointer_targets() {
     let model = model();
     let mut ui = SidebarUi::new();
     ui.set_layout(28, 0);
@@ -252,8 +253,9 @@ fn tooltip_opens_below_the_hovered_control_without_stealing_keyboard_or_pointer_
     let area = Rect::new(0, 0, 100, 32);
     let frame = ui.render(&model, area, Duration::from_millis(601)).unwrap();
     let tooltip = ui.rounded_surfaces().last().unwrap().rect;
-    assert_eq!(tooltip.y, settings.bottom());
-    assert_eq!(tooltip.x, settings.x);
+    assert_eq!(tooltip.y, settings.y);
+    assert_eq!(tooltip.x, 28 + 1);
+    assert_eq!(tooltip.height, 2);
     assert_eq!(tooltip.intersection(area), tooltip);
     assert!(frame.cursor.is_none());
     assert!(frame.ime_rect.is_none());

@@ -1,0 +1,60 @@
+diff --git a/wezterm-gui/src/termwindow/ui_host.rs b/wezterm-gui/src/termwindow/ui_host.rs
+index 29fadf3b..f67b1e32 100644
+--- a/wezterm-gui/src/termwindow/ui_host.rs
++++ b/wezterm-gui/src/termwindow/ui_host.rs
+@@ -481,6 +481,40 @@ fn vtabs_centered_range(bounds: Bounds, cell_width: f32) -> Option<(usize, (f32,
+         ),
+     ))
+ }
++/// Menus, forms and long hints paint over the rows beneath them. Chips nested in a
++/// row are at most as tall as the row and leave its centering alone.
++fn vtabs_overlay_cover(
++    bounds: Bounds,
++    cell_width: f32,
++) -> Option<(std::ops::Range<usize>, (f32, f32))> {
++    if bounds.height <= 2. || bounds.y < 0. || bounds.y.fract() != 0. {
++        return None;
++    }
++    Some((
++        bounds.y as usize..(bounds.y + bounds.height).ceil() as usize,
++        (
++            bounds.x * cell_width,
++            (bounds.x + bounds.width) * cell_width,
++        ),
++    ))
++}
++/// Text under an overlay belongs to the overlay, not to the centered row it covers.
++fn vtabs_occlude(ranges: &mut Vec<(f32, f32)>, (left, right): (f32, f32)) {
++    let mut kept = Vec::with_capacity(ranges.len() + 1);
++    for &(start, end) in ranges.iter() {
++        if right <= start || left >= end {
++            kept.push((start, end));
++            continue;
++        }
++        if start < left {
++            kept.push((start, left));
++        }
++        if right < end {
++            kept.push((right, end));
++        }
++    }
++    *ranges = kept;
++}
+ fn vtabs_caret_rect(
+     geometry: Geometry,
+     offset: (f32, f32),
+@@ -1868,6 +1902,14 @@ impl TermWindow {
+                         if let Some(ranges) = ui.centered_ranges.get_mut(row) {
+                             ranges.push(range);
+                         }
++                    } else if let Some((rows, covered)) =
++                        vtabs_overlay_cover(primitive.bounds, geometry.cell_width)
++                    {
++                        for row in rows {
++                            if let Some(ranges) = ui.centered_ranges.get_mut(row) {
++                                vtabs_occlude(ranges, covered);
++                            }
++                        }
+                     }
+                 }
+             }

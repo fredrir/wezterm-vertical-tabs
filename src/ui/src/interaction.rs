@@ -225,11 +225,14 @@ impl SidebarUi {
                     self.dirty = true;
                     return intents;
                 }
+                let described = self
+                    .hit_test(x, y)
+                    .is_some_and(|hit| !hit.tooltip.is_empty());
                 let hit = self.hit_test(x, y).map(|hit| hit.id.clone());
                 if hit != self.hovered {
                     self.hovered = hit;
                     self.show_tooltip = false;
-                    self.tooltip_deadline = (self.hovered.is_some()
+                    self.tooltip_deadline = (described
                         && self.overlay.is_none()
                         && self.window_focused
                         && !self.dragging)
