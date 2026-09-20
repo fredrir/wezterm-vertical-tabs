@@ -413,6 +413,7 @@ impl Persistence {
                         space.icon = icon.into();
                     }
                     space.accent = get("accent").and_then(Value::as_str).map(str::to_owned);
+                    space.collapsed = get("collapsed").and_then(Value::as_bool).unwrap_or(false);
                     if let Some(rules) = get("rules") {
                         space.rules = serde_json::from_value(rules.clone())
                             .map_err(|e| Error(e.to_string()))?;
@@ -622,6 +623,7 @@ fn profile_values(model: &Model, scope: &Scope) -> BTreeMap<Key, Value> {
         insert(&entity, "name", json!(space.name));
         insert(&entity, "icon", json!(space.icon));
         insert(&entity, "accent", json!(space.accent));
+        insert(&entity, "collapsed", json!(space.collapsed));
         insert(&entity, "rules", json!(space.rules));
         insert(&entity, "template", json!(space.template));
     }

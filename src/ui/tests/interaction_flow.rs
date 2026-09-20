@@ -54,6 +54,19 @@ fn hit(ui: &SidebarUi, id: &ElementId) -> Rect {
         .rect
 }
 
+/// Trailing controls exist only while their row is hovered.
+fn hover(ui: &mut SidebarUi, model: &Model, id: &ElementId) {
+    let rect = hit(ui, id);
+    ui.event(
+        model,
+        UiInput::PointerMove {
+            x: rect.x + 1,
+            y: rect.y,
+        },
+    );
+    draw(ui, model);
+}
+
 fn click(ui: &mut SidebarUi, model: &Model, id: &ElementId) -> Vec<UiIntent> {
     let rect = hit(ui, id);
     let mut intents = ui.event(
@@ -736,6 +749,12 @@ fn closing_a_tab_defers_the_running_process_check_to_the_host() {
     let mut model = model();
     let mut ui = SidebarUi::new();
     draw(&mut ui, &model);
+    assert!(
+        ui.hit_regions()
+            .iter()
+            .all(|hit| hit.id != ElementId::CloseTab(10))
+    );
+    hover(&mut ui, &model, &ElementId::Tab(10));
     assert!(matches!(
         click(&mut ui, &model, &ElementId::CloseTab(10)).as_slice(),
         [UiIntent::Host(HostAction::CloseTab(10))]
@@ -763,6 +782,7 @@ fn closing_a_tab_defers_the_running_process_check_to_the_host() {
     model.settings.confirm_close = false;
     model.revision += 1;
     draw(&mut ui, &model);
+    hover(&mut ui, &model, &ElementId::Tab(10));
     assert!(matches!(
         click(&mut ui, &model, &ElementId::CloseTab(10)).as_slice(),
         [UiIntent::Domain(Intent::CloseTab(10))]
@@ -834,6 +854,7 @@ fn folder_chord_is_no_longer_a_shortcut_but_the_button_still_creates_folders() {
         assert!(!ui.text_input_active());
     }
     draw(&mut ui, &model);
+    hover(&mut ui, &model, &ElementId::SpaceTitle);
     click(&mut ui, &model, &ElementId::CreateFolder);
     draw(&mut ui, &model);
     assert!(ui.has_overlay());

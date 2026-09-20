@@ -1,5 +1,6 @@
 //! Event-driven in-memory Ratatui UI. The host publishes complete frames atomically and
 //! schedules only `next_deadline`; this crate performs no terminal, mux, or storage I/O.
+mod icons;
 mod input;
 mod interaction;
 mod render;
@@ -36,11 +37,11 @@ mod ui_tests;
 use ratatui::layout::Position;
 use std::time::Duration;
 use tachyonfx::{Effect, fx};
-use vtabs_core::{Intent, Model, SpaceId, TabId};
+use vtabs_core::{Intent, Model, PaneId, SpaceId, TabId};
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum ElementId {
-    PrivateInfo,
+    SpaceTitle,
     Search,
     Refresh,
     CreateFolder,
@@ -57,12 +58,25 @@ pub enum ElementId {
     Rail,
     Space(SpaceId),
     Tab(TabId),
+    Pane(TabId, PaneId),
     CloseTab(TabId),
     Menu(String),
     Setting(String),
     Editor,
     Submit,
     Cancel,
+}
+
+impl ElementId {
+    /// Controls nested in a row share its hover, press and drag identity.
+    pub(crate) fn row(&self) -> ElementId {
+        match self {
+            Self::CloseTab(id) | Self::Pane(id, _) => Self::Tab(*id),
+            Self::CloseSettingsTab => Self::SettingsTab,
+            Self::CreateFolder => Self::SpaceTitle,
+            other => other.clone(),
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -79,6 +93,7 @@ pub enum HostAction {
     MoveTabToNewWindow(TabId),
     /// The host closes an idle tab directly and asks `confirm_close_tab` for a busy one.
     CloseTab(TabId),
+    FocusPane(TabId, PaneId),
 }
 
 #[derive(Clone, Debug)]
@@ -104,6 +119,8 @@ pub struct FrameUpdate {
     pub changed_cells: Vec<(u16, u16)>,
     pub dirty_rows: Vec<u16>,
     pub cursor: Option<Position>,
+    /// Rows the caret moves down to follow text the host centers in a two-row surface.
+    pub cursor_shift: f32,
     pub ime_rect: Option<Rect>,
     pub transform: SurfaceTransform,
 }
@@ -196,6 +213,30 @@ enum Overlay {
     Form(Form),
 }
 
+/// Stamps resolve at the next render; input events carry no clock of their own.
+#[derive(Clone, Debug)]
+struct Press {
+    id: ElementId,
+    down: Option<Duration>,
+    up: Option<Option<Duration>>,
+    level: f32,
+    animating: bool,
+}
+
+/// The tab Settings follows, and the position that anchor last gave it.
+#[derive(Clone, Copy, Debug)]
+struct SettingsPlace {
+    anchor: Option<TabId>,
+    slot: usize,
+}
+
+#[derive(Clone, Debug)]
+struct InlineRename {
+    id: TabId,
+    initial: String,
+    editor: TextEditor,
+}
+
 #[derive(Clone, Copy, Debug)]
 struct Motion {
     from: f32,
@@ -219,6 +260,7 @@ pub struct SidebarUi {
     header_inset: u16,
     settings_page: bool,
     settings_tab: bool,
+    settings_place: Option<SettingsPlace>,
     reveal_settings: bool,
     settings_category: String,
     settings_query: TextEditor,
@@ -239,6 +281,10 @@ pub struct SidebarUi {
     focused: Option<ElementId>,
     hovered: Option<ElementId>,
     drag: Option<ElementId>,
+    press: Option<Press>,
+    rename: Option<InlineRename>,
+    title_rects: Vec<(TabId, Rect)>,
+    last_click: Option<(ElementId, Duration)>,
     overlay: Option<Overlay>,
     overlay_stack: Vec<Overlay>,
     restore_focus: Option<ElementId>,
@@ -248,6 +294,7 @@ pub struct SidebarUi {
     spaces_rect: Rect,
     overlay_rect: Rect,
     editor_rect: Rect,
+    editor_shift: f32,
     cursor: Option<Position>,
     effect: Option<Effect>,
     effect_area: Option<Rect>,
@@ -275,14 +322,28 @@ pub struct RoundedSurface {
     pub fill: ratatui::style::Color,
     pub radius: f32,
     pub inset: f32,
+    /// Icon buttons center a square within their cells; rows keep their full extent.
+    pub square: bool,
+    /// Rows to move down; marks inside host-centered text follow it by half a row.
+    pub shift_y: f32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SidebarRow {
-    Tab { id: TabId, number: usize },
-    Folder { index: usize, count: usize },
+    Tab {
+        id: TabId,
+        number: usize,
+    },
+    Folder {
+        index: usize,
+        count: usize,
+    },
+    /// Separates the pinned and folder group from the open tabs.
+    Gap,
     NewTab,
-    Settings,
+    Settings {
+        number: usize,
+    },
 }
 
 pub type Ui = SidebarUi;
@@ -307,6 +368,7 @@ impl SidebarUi {
             header_inset: 0,
             settings_page: false,
             settings_tab: false,
+            settings_place: None,
             reveal_settings: false,
             settings_category: "all".into(),
             settings_query: TextEditor::default(),
@@ -325,6 +387,10 @@ impl SidebarUi {
             focused: None,
             hovered: None,
             drag: None,
+            press: None,
+            rename: None,
+            title_rects: Vec::new(),
+            last_click: None,
             overlay: None,
             overlay_stack: Vec::new(),
             restore_focus: None,
@@ -334,6 +400,7 @@ impl SidebarUi {
             spaces_rect: Rect::default(),
             overlay_rect: Rect::default(),
             editor_rect: Rect::default(),
+            editor_shift: 0.0,
             cursor: None,
             effect: None,
             effect_area: None,
@@ -378,6 +445,10 @@ impl SidebarUi {
     /// Call when content receives focus; this does not mark the OS window unfocused.
     pub fn release_focus(&mut self) {
         self.hide_settings();
+        if self.rename.take().is_some() {
+            self.caret_deadline = None;
+            self.dirty = true;
+        }
         self.focused = None;
         self.drag = None;
     }
@@ -486,6 +557,10 @@ impl SidebarUi {
                 .map(|_| self.last_frame + Duration::from_millis(8)),
             self.motion
                 .map(|_| self.last_frame + Duration::from_millis(8)),
+            self.press
+                .as_ref()
+                .filter(|press| press.animating)
+                .map(|_| self.last_frame + Duration::from_millis(8)),
             self.caret_deadline,
             self.tooltip_deadline,
         ]
@@ -494,7 +569,13 @@ impl SidebarUi {
         .min()
     }
     pub fn has_animation(&self) -> bool {
-        self.effect.is_some() || self.motion.is_some()
+        self.effect.is_some()
+            || self.motion.is_some()
+            || self.press.as_ref().is_some_and(|press| press.animating)
+    }
+    /// Hosts stamp pointer input so click timing does not depend on repaint cadence.
+    pub fn set_clock(&mut self, now: Duration) {
+        self.now = self.now.max(now);
     }
     pub fn cancel_effects(&mut self) {
         let effect = self.effect.take().is_some();
@@ -572,6 +653,7 @@ impl SidebarUi {
     pub fn close_settings(&mut self) {
         self.settings_page = false;
         self.settings_tab = false;
+        self.settings_place = None;
         self.settings_search_focused = false;
         self.dismiss();
         self.focused = None;
@@ -606,6 +688,7 @@ impl SidebarUi {
     fn open_overlay(&mut self, overlay: Overlay) {
         self.cancel_effects();
         self.caret_deadline = None;
+        self.caret_visible = true;
         self.show_tooltip = false;
         self.tooltip_deadline = None;
         if self.overlay.is_none() && self.overlay_stack.is_empty() {

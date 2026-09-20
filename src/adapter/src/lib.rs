@@ -60,6 +60,7 @@ struct Adapter {
     pending_paste: Option<PendingPaste>,
     hook_queued: HashMap<u64, core::Tab>,
     repos: repos::Repos,
+    local_host: String,
 }
 
 impl Adapter {
@@ -103,6 +104,7 @@ impl Adapter {
             pending_paste: None,
             hook_queued: HashMap::new(),
             repos: repos::Repos::default(),
+            local_host: sysinfo::System::host_name().unwrap_or_default(),
         }
     }
     fn apply(&mut self, result: Result<app::Update, core::Error>) {
@@ -119,9 +121,15 @@ impl Adapter {
         }
     }
     fn dispatch(&mut self, intent: core::Intent) {
+        self.transact(|app| app.dispatch(intent));
+    }
+    fn transact(
+        &mut self,
+        run: impl FnOnce(&mut WindowApp) -> Result<app::Update, core::Error>,
+    ) {
         self.cancel_paste();
         let before = self.app.model().revision;
-        let result = self.app.dispatch(intent);
+        let result = run(&mut self.app);
         self.apply(result);
         self.window_hook_dirty |= before != self.app.model().revision;
         self.schedule_hooks();
@@ -183,6 +191,14 @@ impl Adapter {
                 }
                 C::MoveTabToNewWindow(id) => {
                     self.commands.push(Command::MoveToNewWindow(id as usize))
+                }
+                C::FocusPane { tab, pane } => {
+                    let mux = mux::Mux::get();
+                    if let (Some(tab), Some(pane)) =
+                        (mux.get_tab(tab as usize), mux.get_pane(pane as usize))
+                    {
+                        tab.set_active_pane(&pane);
+                    }
                 }
                 C::CustomAction(name) => self.commands.push(Command::Semantic(name)),
             },
@@ -353,6 +369,7 @@ impl Adapter {
             self.input_epoch = self.input_epoch.wrapping_add(1);
         }
         let before = self.app.model().revision;
+        self.app.ui_mut().set_clock(self.epoch.elapsed());
         let result = self.app.input(input);
         self.apply(result);
         self.window_hook_dirty |= before != self.app.model().revision;
@@ -495,30 +512,70 @@ impl Provider for Adapter {
         }
         self.host_tabs = snapshot.tabs.iter().map(|tab| tab.id).collect();
         let repos = &mut self.repos;
+        let local_host = &self.local_host;
+        let mux = mux::Mux::get();
         let tabs = snapshot
             .tabs
             .into_iter()
             .map(|tab| {
-                let launch = mux::Mux::get()
-                    .get_domain_by_name(&tab.domain)
+                let domain = mux.get_domain_by_name(&tab.domain);
+                let launch = domain
+                    .as_ref()
                     .filter(|domain| domain.spawnable())
                     .map(|_| core::LaunchSpec {
                         domain: Some(tab.domain.clone()),
                         cwd: (!tab.cwd.is_empty()).then_some(tab.cwd.clone()),
                         ..Default::default()
                     });
+                // The owning mux reports its machine, as it does each pane's directory.
+                let owner = domain.as_ref().and_then(|domain| {
+                    wezterm_client::domain::ClientDomain::get_client_inner_for_domain(
+                        domain.domain_id(),
+                    )
+                    .ok()?
+                    .host_info
+                    .clone()
+                });
+                let remote = tab.remote
+                    && owner
+                        .as_ref()
+                        .is_none_or(|owner| !owner.hostname.eq_ignore_ascii_case(local_host));
+                let mut repo_root = |cwd: &str| {
+                    (!remote)
+                        .then(|| repos.root(cwd).map(str::to_owned))
+                        .flatten()
+                };
+                let panes = mux
+                    .get_tab(tab.id)
+                    .map(|host| host.iter_panes_ignoring_zoom())
+                    .filter(|panes| panes.len() > 1)
+                    .into_iter()
+                    .flatten()
+                    .map(|entry| {
+                        let cwd = entry
+                            .pane
+                            .get_current_working_dir(mux::pane::CachePolicy::AllowStale)
+                            .map(|url| url.path().to_string())
+                            .unwrap_or_default();
+                        core::TabPane {
+                            id: entry.pane.pane_id() as u64,
+                            title: entry.pane.get_title(),
+                            repo_root: repo_root(&cwd),
+                            cwd,
+                            active: entry.is_active,
+                        }
+                    })
+                    .collect();
                 core::Tab {
                     id: tab.id as u64,
                     title: tab.title,
                     cwd: tab.cwd.clone(),
-                    repo_root: if tab.remote {
-                        None
-                    } else {
-                        repos.root(&tab.cwd).map(str::to_owned)
-                    },
+                    repo_root: repo_root(&tab.cwd),
                     domain: tab.domain.clone(),
                     process: tab.process,
-                    remote: tab.remote,
+                    remote,
+                    os: owner.map(|owner| owner.os).unwrap_or_default(),
+                    panes,
                     unread: tab.unread,
                     bell: tab.bell,
                     icon: tab.user_vars.get("icon").cloned().unwrap_or_default(),
@@ -629,8 +686,10 @@ impl Provider for Adapter {
     }
     fn navigation(&mut self, navigation: Navigation) {
         let intent = match navigation {
-            Navigation::Index(i) => core::Intent::ActivateIndex(i),
-            Navigation::Relative(delta, wrap) => core::Intent::ActivateRelative { delta, wrap },
+            Navigation::Index(index) => return self.transact(|app| app.activate_index(index)),
+            Navigation::Relative(delta, wrap) => {
+                return self.transact(|app| app.activate_relative(delta, wrap));
+            }
             Navigation::Last => core::Intent::ActivateLast,
             Navigation::Move(index) => match self.app.model().selected_tab {
                 Some(id) => core::Intent::MoveTab { id, index },
@@ -654,6 +713,10 @@ impl Provider for Adapter {
             }
             Navigation::Navigator => {
                 self.app.open_tab_navigator();
+                return;
+            }
+            Navigation::ClosePage => {
+                self.app.ui_mut().close_settings();
                 return;
             }
         };
@@ -1046,12 +1109,13 @@ impl Provider for Adapter {
                         .map(|shape| RoundedSurface {
                             bounds: Bounds {
                                 x: shape.rect.x as f32,
-                                y: shape.rect.y as f32,
+                                y: shape.rect.y as f32 + shape.shift_y,
                                 width: shape.rect.width as f32,
                                 height: shape.rect.height as f32,
                             },
                             radius: shape.radius,
                             inset: shape.inset,
+                            square: shape.square,
                             fill: linear_color(shape.fill),
                         }),
                 );
@@ -1059,12 +1123,13 @@ impl Provider for Adapter {
                 self.primitives.push(RoundedSurface {
                     bounds: Bounds {
                         x: cursor.x as f32,
-                        y: cursor.y as f32,
+                        y: cursor.y as f32 + frame.cursor_shift,
                         width: 0.12,
                         height: 1.,
                     },
                     radius: 0.,
                     inset: 0.,
+                    square: false,
                     fill: linear_color(self.app.ui().theme.accent),
                 });
             }

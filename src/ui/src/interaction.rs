@@ -2,7 +2,9 @@ use crate::*;
 use ratatui::layout::Position;
 use serde_json::Value;
 use std::time::Duration;
-use vtabs_core::{Intent, Model, RailMode, SettingKind, settings};
+use vtabs_core::{Intent, Model, RailMode, SettingKind, TabId, settings};
+
+const DOUBLE_CLICK: Duration = Duration::from_millis(500);
 
 impl SidebarUi {
     /// Report a failed read without replacing an editor's unsaved contents.
@@ -24,11 +26,115 @@ impl SidebarUi {
                 menu.search.is_some() || self.editor_menu_target().is_some()
             }
             None => {
-                self.settings_page
-                    && self.settings_search_focused
-                    && self.focused == Some(ElementId::SettingsSearch)
+                self.rename.is_some()
+                    || (self.settings_page
+                        && self.settings_search_focused
+                        && self.focused == Some(ElementId::SettingsSearch))
             }
         }
+    }
+
+    fn start_rename(&mut self, model: &Model, id: TabId) {
+        let Some(tab) = model.tabs.get(&id) else {
+            return;
+        };
+        let initial = tab
+            .custom_title()
+            .map(str::to_owned)
+            .or_else(|| tab.location(model.home.as_deref()))
+            .unwrap_or_default();
+        let mut editor = TextEditor::new(&initial);
+        editor.select_all();
+        self.rename = Some(InlineRename {
+            id,
+            initial,
+            editor,
+        });
+        self.focused = Some(ElementId::Editor);
+        self.drag = None;
+        self.press = None;
+        self.last_click = None;
+        self.reset_caret();
+        self.dirty = true;
+    }
+
+    /// An untouched label stays automatic; only an edit becomes a title override.
+    fn finish_rename(&mut self, commit: bool, intents: &mut Vec<UiIntent>) {
+        let Some(rename) = self.rename.take() else {
+            return;
+        };
+        let title: String = rename
+            .editor
+            .text()
+            .trim()
+            .chars()
+            .filter(|character| !character.is_control())
+            .take(512)
+            .collect();
+        if commit && title != rename.initial {
+            intents.push(UiIntent::Domain(Intent::RenameTab {
+                id: rename.id,
+                title,
+            }));
+        }
+        self.focused = Some(ElementId::Tab(rename.id));
+        self.caret_deadline = None;
+        self.dirty = true;
+    }
+
+    fn settings_slot(&mut self, model: &Model) -> Option<isize> {
+        self.ensure_sidebar_entries(model);
+        self.settings_place
+            .filter(|_| self.settings_tab)
+            .map(|place| place.slot as isize)
+    }
+
+    /// Settings holds one position in the tab order and answers to that index.
+    pub fn activate_index(&mut self, model: &Model, index: isize, intents: &mut Vec<UiIntent>) {
+        let Some(slot) = self.settings_slot(model) else {
+            self.hide_settings();
+            intents.push(UiIntent::Domain(Intent::ActivateIndex(index)));
+            return;
+        };
+        let total = model.visible_ids().len() as isize + 1;
+        let position = if index < 0 { total + index } else { index };
+        if position == slot {
+            self.open_settings();
+        } else {
+            self.hide_settings();
+            intents.push(UiIntent::Domain(Intent::ActivateIndex(
+                position - isize::from(position > slot),
+            )));
+        }
+    }
+
+    pub fn activate_relative(
+        &mut self,
+        model: &Model,
+        delta: isize,
+        wrap: bool,
+        intents: &mut Vec<UiIntent>,
+    ) {
+        let Some(slot) = self.settings_slot(model) else {
+            intents.push(UiIntent::Domain(Intent::ActivateRelative { delta, wrap }));
+            return;
+        };
+        let count = model.visible_ids().len() as isize;
+        let current = if self.settings_page {
+            slot
+        } else {
+            let at = model
+                .selected_tab
+                .and_then(|id| model.visible_ids().iter().position(|tab| *tab == id))
+                .unwrap_or(0) as isize;
+            at + isize::from(at >= slot)
+        };
+        let next = if wrap {
+            (current + delta).rem_euclid(count + 1)
+        } else {
+            (current + delta).clamp(0, count)
+        };
+        self.activate_index(model, next, intents);
     }
 
     pub fn event(&mut self, model: &Model, event: UiInput) -> Vec<UiIntent> {
@@ -47,12 +153,14 @@ impl SidebarUi {
                     self.caret_deadline = None;
                     self.tooltip_deadline = None;
                     self.drag = None;
+                    self.press = None;
                     self.dragging = false;
                     self.pointer_origin = None;
                     self.show_tooltip = false;
                 } else if (matches!(self.overlay, Some(Overlay::Form(_)))
                     && self.focused == Some(ElementId::Editor))
                     || (self.settings_page && self.settings_search_focused)
+                    || self.rename.is_some()
                 {
                     self.reset_caret();
                 }
@@ -65,6 +173,7 @@ impl SidebarUi {
                     self.caret_deadline = None;
                     self.tooltip_deadline = None;
                     self.drag = None;
+                    self.press = None;
                     self.dragging = false;
                     self.pointer_origin = None;
                     self.show_tooltip = false;
@@ -73,6 +182,7 @@ impl SidebarUi {
                     if (matches!(self.overlay, Some(Overlay::Form(_)))
                         && self.focused == Some(ElementId::Editor))
                         || (self.settings_page && self.settings_search_focused)
+                        || self.rename.is_some()
                     {
                         self.reset_caret();
                     }
@@ -90,10 +200,13 @@ impl SidebarUi {
                     return intents;
                 }
                 if self.drag == Some(ElementId::Editor)
-                    && let Some(Overlay::Form(form)) = &mut self.overlay
+                    && let Some(editor) = match (&mut self.overlay, &mut self.rename) {
+                        (Some(Overlay::Form(form)), _) => Some(&mut form.editor),
+                        (None, Some(rename)) => Some(&mut rename.editor),
+                        _ => None,
+                    }
                 {
-                    form.editor
-                        .click_column(usize::from(x.saturating_sub(self.editor_rect.x)), true);
+                    editor.click_column(usize::from(x.saturating_sub(self.editor_rect.x)), true);
                     self.reset_caret();
                     self.dirty = true;
                     return intents;
@@ -142,6 +255,9 @@ impl SidebarUi {
                     }
                     return intents;
                 }
+                if hit != Some(ElementId::Editor) {
+                    self.finish_rename(true, &mut intents);
+                }
                 self.pointer_origin = Some((x, y));
                 self.dragging = false;
                 if button == MouseButton::Right && self.overlay.is_none() {
@@ -172,23 +288,40 @@ impl SidebarUi {
                                 modifiers.shift,
                             );
                         }
-                        if let Some(Overlay::Form(form)) = &mut self.overlay {
-                            form.editor.click_column(
+                        if let Some(editor) = match (&mut self.overlay, &mut self.rename) {
+                            (Some(Overlay::Form(form)), _) => Some(&mut form.editor),
+                            (None, Some(rename)) => Some(&mut rename.editor),
+                            _ => None,
+                        } {
+                            editor.click_column(
                                 usize::from(x.saturating_sub(self.editor_rect.x)),
                                 modifiers.shift,
                             );
+                            self.reset_caret();
                         }
                         self.drag = Some(ElementId::Editor);
                         self.focused = Some(ElementId::Editor);
-                        if matches!(self.overlay, Some(Overlay::Form(_))) {
-                            self.reset_caret();
-                        }
                         self.dirty = true;
+                    }
+                    (MouseButton::Left, Some(ElementId::Tab(id)))
+                        if self.double_clicked_title(id, x, y) =>
+                    {
+                        self.start_rename(model, id);
                     }
                     (MouseButton::Left, Some(id)) => {
                         if matches!(self.overlay, Some(Overlay::Form(_))) {
                             self.caret_deadline = None;
                         }
+                        self.press = Some(Press {
+                            id: match &id {
+                                ElementId::Pane(..) => id.row(),
+                                _ => id.clone(),
+                            },
+                            down: None,
+                            up: None,
+                            level: 0.0,
+                            animating: true,
+                        });
                         self.focused = Some(id.clone());
                         self.drag = Some(id);
                         self.dirty = true;
@@ -206,17 +339,29 @@ impl SidebarUi {
                 self.pointer_origin = None;
                 self.dragging = false;
                 self.dirty = true;
+                if let Some(press) = &mut self.press {
+                    press.up.get_or_insert(None);
+                    press.animating = true;
+                }
                 let up = self.hit_test(x, y).map(|hit| hit.id.clone());
-                match (down, up) {
-                    (Some(from), Some(to)) if from == to => {
-                        if self.overlay.is_none() {
-                            self.set_anchor(x, y);
-                        }
-                        self.activate_element(model, to, &mut intents);
-                        if self.overlay.is_none() {
-                            self.anchor = None;
-                        }
+                if down.is_some() && down == up {
+                    let to = up.unwrap();
+                    if self.overlay.is_none() {
+                        self.set_anchor(x, y);
                     }
+                    self.last_click = Some((to.clone(), self.now));
+                    self.activate_element(model, to, &mut intents);
+                    if self.overlay.is_none() {
+                        self.anchor = None;
+                    }
+                    return intents;
+                }
+                // A row's nested controls drag and drop as the row itself.
+                match (
+                    down.as_ref().map(ElementId::row),
+                    up.as_ref().map(ElementId::row),
+                ) {
+                    (Some(from), Some(to)) if from == to => {}
                     (Some(ElementId::Tab(id)), Some(ElementId::Tab(target))) => {
                         if let Some(tab) = model.tabs.get(&target) {
                             if model
@@ -296,7 +441,13 @@ impl SidebarUi {
                 self.dirty = true;
             }
             UiInput::Text(text) | UiInput::Paste(text) | UiInput::ImeCommit(text) => {
-                if let Some(Overlay::Form(form)) = &mut self.overlay
+                if self.overlay.is_none()
+                    && let Some(rename) = &mut self.rename
+                {
+                    rename.editor.insert(&text);
+                    self.reset_caret();
+                    self.dirty = true;
+                } else if let Some(Overlay::Form(form)) = &mut self.overlay
                     && self.focused == Some(ElementId::Editor)
                 {
                     form.editor.insert(&text);
@@ -318,7 +469,13 @@ impl SidebarUi {
                 }
             }
             UiInput::ImePreedit { text, cursor } => {
-                if let Some(Overlay::Form(form)) = &mut self.overlay
+                if self.overlay.is_none()
+                    && let Some(rename) = &mut self.rename
+                {
+                    rename.editor.set_preedit(&text, cursor);
+                    self.reset_caret();
+                    self.dirty = true;
+                } else if let Some(Overlay::Form(form)) = &mut self.overlay
                     && self.focused == Some(ElementId::Editor)
                 {
                     form.editor.set_preedit(&text, cursor);
@@ -346,6 +503,25 @@ impl SidebarUi {
 
     fn key(&mut self, model: &Model, key: Key, modifiers: Modifiers, intents: &mut Vec<UiIntent>) {
         if self.shortcut(model, &key, modifiers, intents) {
+            return;
+        }
+        if self.overlay.is_none()
+            && let Some(rename) = &mut self.rename
+        {
+            match rename.editor.key(&key, modifiers) {
+                EditResult::Submit => self.finish_rename(true, intents),
+                EditResult::Cancel => self.finish_rename(false, intents),
+                EditResult::Copy(text) => {
+                    intents.push(UiIntent::SetClipboard(text));
+                    self.dirty = true;
+                }
+                EditResult::Paste => intents.push(UiIntent::RequestClipboard),
+                EditResult::Changed => {
+                    self.reset_caret();
+                    self.dirty = true;
+                }
+                EditResult::Unhandled => {}
+            }
             return;
         }
         if let Some(target) = self.editor_menu_target() {
@@ -497,6 +673,8 @@ impl SidebarUi {
                 self.focused,
                 Some(
                     ElementId::Tab(_)
+                        | ElementId::Pane(..)
+                        | ElementId::SpaceTitle
                         | ElementId::Space(_)
                         | ElementId::Folder(_)
                         | ElementId::NewTab
@@ -602,19 +780,30 @@ impl SidebarUi {
         if let Some(at) = self.sidebar_rows.iter().position(|row| match row {
             SidebarRow::Folder { index, .. } => collapsed_folder == Some(*index),
             SidebarRow::Tab { id: tab, .. } => collapsed_folder.is_none() && *tab == id,
-            SidebarRow::NewTab | SidebarRow::Settings => false,
+            SidebarRow::Gap | SidebarRow::NewTab | SidebarRow::Settings { .. } => false,
         }) {
             self.reveal_row(model, at);
         }
     }
 
     pub(crate) fn reveal_row(&mut self, model: &Model, at: usize) {
-        let rows = self.visible_rows(model);
         if at < self.tab_scroll {
             self.tab_scroll = at;
-        } else if at >= self.tab_scroll + rows {
-            self.tab_scroll = at + 1 - rows;
         }
+        while at >= self.tab_scroll + self.rows_fitting(model, self.tab_scroll) {
+            self.tab_scroll += 1;
+        }
+    }
+
+    fn double_clicked_title(&self, id: TabId, x: u16, y: u16) -> bool {
+        self.overlay.is_none()
+            && self
+                .title_rects
+                .iter()
+                .any(|(tab, rect)| *tab == id && rect.contains(Position::new(x, y)))
+            && self.last_click.as_ref().is_some_and(|(last, at)| {
+                *last == ElementId::Tab(id) && self.now.saturating_sub(*at) <= DOUBLE_CLICK
+            })
     }
 
     fn set_anchor(&mut self, x: u16, y: u16) {
@@ -695,6 +884,15 @@ impl SidebarUi {
                 intents.push(UiIntent::Domain(Intent::ActivateTab(id)));
                 self.start_effect(model);
             }
+            ElementId::Pane(id, pane) => {
+                self.hide_settings();
+                intents.push(UiIntent::Domain(Intent::ActivateTab(id)));
+                intents.push(UiIntent::Host(HostAction::FocusPane(id, pane)));
+                self.start_effect(model);
+            }
+            ElementId::SpaceTitle => intents.push(UiIntent::Domain(Intent::ToggleSpace(
+                model.selected_space.clone(),
+            ))),
             ElementId::CloseTab(id) => self.close_tab(model, id, intents),
             ElementId::Menu(id) => {
                 let action = match &self.overlay {
@@ -715,7 +913,7 @@ impl SidebarUi {
             }
             ElementId::Submit => self.submit_form(model, intents),
             ElementId::Cancel => self.back(),
-            ElementId::Editor | ElementId::PrivateInfo => {}
+            ElementId::Editor => {}
         }
     }
 
@@ -821,7 +1019,10 @@ impl SidebarUi {
                 self.pointer_origin = None;
                 self.push_menu("Edit text", items);
             }
-            ElementId::Tab(id) | ElementId::CloseTab(id) => {
+            ElementId::SpaceTitle => {
+                self.context_menu(model, ElementId::Space(model.selected_space.clone()))
+            }
+            ElementId::Tab(id) | ElementId::CloseTab(id) | ElementId::Pane(id, _) => {
                 let Some(tab) = model.tabs.get(&id) else {
                     return;
                 };
@@ -1101,7 +1302,10 @@ impl SidebarUi {
                 }
             }
             Action::RenameTab(id) => {
-                if let Some(tab) = model.tabs.get(&id) {
+                if self.title_rects.iter().any(|(tab, _)| *tab == id) {
+                    self.dismiss();
+                    self.start_rename(model, id);
+                } else if let Some(tab) = model.tabs.get(&id) {
                     self.open_form("Rename tab", FormKind::RenameTab(id), tab.display_title());
                 }
             }

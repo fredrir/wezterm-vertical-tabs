@@ -20,34 +20,45 @@ fn confirm_close_closes_a_tab_the_mux_does_not_report_busy_without_prompting() {
             configuration_epoch: 0,
         })
         .unwrap();
-    adapter.render(
-        Geometry {
-            sidebar: Bounds {
-                x: 0.,
-                y: 0.,
-                width: 256.,
-                height: 480.,
-            },
-            content: Bounds {
-                x: 256.,
-                y: 0.,
-                width: 800.,
-                height: 480.,
-            },
-            cell_width: 8.,
-            cell_height: 20.,
-            dpi: 96.,
-            ..Geometry::default()
+    let geometry = Geometry {
+        sidebar: Bounds {
+            x: 0.,
+            y: 0.,
+            width: 256.,
+            height: 480.,
         },
-        Instant::now(),
-    );
+        content: Bounds {
+            x: 256.,
+            y: 0.,
+            width: 800.,
+            height: 480.,
+        },
+        cell_width: 8.,
+        cell_height: 20.,
+        dpi: 96.,
+        ..Geometry::default()
+    };
+    adapter.render(geometry, Instant::now());
+    let row = adapter
+        .app
+        .ui()
+        .hit_regions()
+        .iter()
+        .find(|hit| hit.id == ui::ElementId::Tab(1))
+        .expect("tab row")
+        .rect;
+    adapter.ui_input(ui::UiInput::PointerMove {
+        x: row.x + 1,
+        y: row.y,
+    });
+    adapter.render(geometry, Instant::now());
     let close = adapter
         .app
         .ui()
         .hit_regions()
         .iter()
         .find(|hit| hit.id == ui::ElementId::CloseTab(1))
-        .expect("selected tab shows its close control")
+        .expect("hovered tab shows its close control")
         .rect;
     for input in [
         ui::UiInput::PointerDown {
@@ -203,7 +214,7 @@ fn hidden_and_collapsed_modals_use_window_bounds_without_resizing_the_rail() {
             let title = match action {
                 "settings" => "Settings",
                 "create_space" => "Create space",
-                _ => "⌕",
+                _ => "\u{f0349}",
             };
             assert!(text.contains(title), "modal was not composed: {}", text);
             let escape = window::KeyEvent {

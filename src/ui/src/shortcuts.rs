@@ -66,19 +66,15 @@ impl SidebarUi {
             }
             Key::Character('r' | 'R') => intents.push(UiIntent::Refresh),
             Key::Character(c @ '1'..='9') => {
-                self.hide_settings();
-                intents.push(UiIntent::Domain(Intent::ActivateIndex(if *c == '9' {
+                let index = if *c == '9' {
                     -1
                 } else {
                     (*c as u8 - b'1') as isize
-                })));
+                };
+                self.activate_index(model, index, intents);
             }
             Key::Tab => {
-                self.hide_settings();
-                intents.push(UiIntent::Domain(Intent::ActivateRelative {
-                    delta: if mods.shift { -1 } else { 1 },
-                    wrap: true,
-                }));
+                self.activate_relative(model, if mods.shift { -1 } else { 1 }, true, intents);
             }
             Key::Left | Key::Right => {
                 let current = model

@@ -1,0 +1,67 @@
+diff --git a/wezterm-gui/src/termwindow/mod.rs b/wezterm-gui/src/termwindow/mod.rs
+index cc91b4ff..250a26b9 100644
+--- a/wezterm-gui/src/termwindow/mod.rs
++++ b/wezterm-gui/src/termwindow/mod.rs
+@@ -2673,7 +2673,17 @@ impl TermWindow {
+                     w.show();
+                 }
+             }
+-            CloseCurrentTab { confirm } => self.close_current_tab(*confirm),
++            CloseCurrentTab { confirm } => {
++                if self
++                    .ui_host
++                    .as_ref()
++                    .is_some_and(|ui| ui.provider.content_page())
++                {
++                    self.vtabs_navigation(crate::termwindow::ui_host::Navigation::ClosePage)?;
++                } else {
++                    self.close_current_tab(*confirm);
++                }
++            }
+             CloseCurrentPane { confirm } => self.close_current_pane(*confirm),
+             Nop | DisableDefaultAssignment => {}
+             ReloadConfiguration => config::reload(),
+diff --git a/wezterm-gui/src/termwindow/ui_host.rs b/wezterm-gui/src/termwindow/ui_host.rs
+index 190bb0dd..29fadf3b 100644
+--- a/wezterm-gui/src/termwindow/ui_host.rs
++++ b/wezterm-gui/src/termwindow/ui_host.rs
+@@ -169,6 +169,8 @@ pub struct RoundedSurface {
+     pub radius: f32,
+     /// Visual inset leaves the raw cell bounds available for hit targets and text alignment.
+     pub inset: f32,
++    /// Icon buttons center a square; rows keep their full extent.
++    pub square: bool,
+     pub fill: LinearRgba,
+ }
+ #[derive(Clone, Debug)]
+@@ -205,6 +207,8 @@ pub enum Navigation {
+     Move(usize),
+     MoveRelative(isize),
+     Navigator,
++    /// A page shown in place of content closes before any tab beneath it.
++    ClosePage,
+ }
+ pub enum Input<'a> {
+     RawKey(&'a window::RawKeyEvent),
+@@ -401,9 +405,9 @@ fn vtabs_background_bounds(geometry: Geometry, content_page: bool) -> Bounds {
+     // Transient surfaces leave the terminal visible beneath their own rounded shapes.
+     geometry.ui_bounds(content_page)
+ }
+-fn vtabs_inset_bounds(mut bounds: Bounds, inset: f32) -> Bounds {
++fn vtabs_inset_bounds(mut bounds: Bounds, inset: f32, square: bool) -> Bounds {
+     let inset = if inset.is_finite() { inset.max(0.) } else { 0. };
+-    if inset > 0. {
++    if square {
+         let side = bounds.width.min(bounds.height).max(0.);
+         bounds.x += (bounds.width - side) / 2.;
+         bounds.y += (bounds.height - side) / 2.;
+@@ -1887,7 +1891,8 @@ impl TermWindow {
+                         height: primitive.bounds.height * geometry.cell_height,
+                     };
+                     let scale = geometry.dpi / 96.;
+-                    let rect = vtabs_inset_bounds(rect, primitive.inset * scale);
++                    let rect =
++                        vtabs_inset_bounds(rect, primitive.inset * scale, primitive.square);
+                     let mut quads = HeapQuadAllocator::default();
+                     self.paint_vtabs_surface(
+                         &mut TripleLayerQuadAllocator::Heap(&mut quads),

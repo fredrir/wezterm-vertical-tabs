@@ -413,6 +413,21 @@ impl WindowApp {
             return Ok(Update::default());
         }
         let intents = self.ui.event(&self.model, input);
+        self.run(intents)
+    }
+    /// Host key assignments reach the settings tab through the same index as shortcuts.
+    pub fn activate_index(&mut self, index: isize) -> Result<Update, Error> {
+        let mut intents = Vec::new();
+        self.ui.activate_index(&self.model, index, &mut intents);
+        self.run(intents)
+    }
+    pub fn activate_relative(&mut self, delta: isize, wrap: bool) -> Result<Update, Error> {
+        let mut intents = Vec::new();
+        self.ui
+            .activate_relative(&self.model, delta, wrap, &mut intents);
+        self.run(intents)
+    }
+    fn run(&mut self, intents: Vec<UiIntent>) -> Result<Update, Error> {
         let mut update = Update::default();
         for intent in intents {
             match intent {
@@ -438,6 +453,18 @@ impl WindowApp {
                 UiIntent::Host(HostAction::CloseTab(id)) => {
                     if self.model.tabs.contains_key(&id) {
                         update.commands.push(Command::ConfirmClose(id));
+                    }
+                }
+                UiIntent::Host(HostAction::FocusPane(tab, pane)) => {
+                    let owned = self
+                        .model
+                        .tabs
+                        .get(&tab)
+                        .is_some_and(|entry| entry.panes.iter().any(|entry| entry.id == pane));
+                    if owned {
+                        update
+                            .commands
+                            .push(Command::Host(HostCommand::FocusPane { tab, pane }));
                     }
                 }
             }

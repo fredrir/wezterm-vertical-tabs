@@ -1,4 +1,4 @@
-use crate::{input::display_text, *};
+use crate::{icons, input::display_text, *};
 use ratatui::{
     layout::Position,
     style::{Modifier, Style},
@@ -20,6 +20,7 @@ impl SidebarUi {
             self.reveal_selection = true;
             self.staging.resize(area);
             self.cancel_effects();
+            self.press = None;
             self.dirty = true;
         }
         if self.revision != Some(model.revision) {
@@ -67,6 +68,7 @@ impl SidebarUi {
             if self.last_selected_space.as_ref() != Some(&model.selected_space) {
                 self.reveal_selection = true;
                 self.tab_scroll = 0;
+                self.settings_place = None;
                 if let Some(index) = model
                     .spaces
                     .iter()
@@ -108,6 +110,7 @@ impl SidebarUi {
             self.show_tooltip = self.hovered.is_some();
             self.dirty = true;
         }
+        self.advance_press(model, now);
         if !self.dirty && self.effect.is_none() {
             return self
                 .motion
@@ -120,6 +123,7 @@ impl SidebarUi {
         self.rounded_surfaces.clear();
         self.cursor = None;
         self.editor_rect = Rect::default();
+        self.editor_shift = 0.0;
         self.search_rect = Rect::default();
         Block::default()
             .style(self.theme.base())
@@ -212,6 +216,44 @@ impl SidebarUi {
         Some(self.finish_frame(resized, changed_cells, dirty_rows, now))
     }
 
+    /// A press shrinks its surface and a release grows it back, even for a quick click.
+    fn advance_press(&mut self, model: &Model, now: Duration) {
+        let Some(press) = &mut self.press else {
+            return;
+        };
+        let settings = &model.settings;
+        let span = if settings.animations && !settings.reduced_motion {
+            Duration::from_millis(u64::from(settings.animation_ms) / 2)
+        } else {
+            Duration::ZERO
+        };
+        let eased = |from: Duration| {
+            if span.is_zero() {
+                return 1.0;
+            }
+            let t = (now.saturating_sub(from).as_secs_f32() / span.as_secs_f32()).clamp(0.0, 1.0);
+            1.0 - (1.0 - t).powi(3)
+        };
+        let down = *press.down.get_or_insert(now);
+        let release = press
+            .up
+            .as_mut()
+            .map(|up| (*up.get_or_insert(now)).max(down + span));
+        let level = match release {
+            Some(up) if now >= up => 1.0 - eased(up),
+            _ => eased(down),
+        };
+        let finished = release.is_some_and(|up| now >= up + span);
+        press.animating = !finished && (release.is_some() || level < 1.0);
+        if press.level != level || finished {
+            press.level = level;
+            self.dirty = true;
+        }
+        if finished {
+            self.press = None;
+        }
+    }
+
     fn finish_frame(
         &mut self,
         resized: bool,
@@ -241,7 +283,7 @@ impl SidebarUi {
             }
             Some(Overlay::Menu(menu)) => menu.search.as_ref().map(|search| &search.editor),
             _ if self.settings_page && self.settings_search_focused => Some(&self.settings_query),
-            _ => None,
+            _ => self.rename.as_ref().map(|rename| &rename.editor),
         };
         let ime_rect = editor.filter(|_| self.editor_rect.width > 0).map(|editor| {
             Rect::new(
@@ -261,6 +303,7 @@ impl SidebarUi {
             changed_cells,
             dirty_rows,
             cursor: self.cursor,
+            cursor_shift: self.editor_shift,
             ime_rect,
             transform,
         }
@@ -295,9 +338,27 @@ impl SidebarUi {
     fn prune_targets(&mut self, model: &Model) {
         let valid = |id: &ElementId| match id {
             ElementId::Tab(id) | ElementId::CloseTab(id) => model.tabs.contains_key(id),
+            ElementId::Pane(id, pane) => model
+                .tabs
+                .get(id)
+                .is_some_and(|tab| tab.panes.iter().any(|entry| entry.id == *pane)),
             ElementId::Space(id) => model.spaces.iter().any(|space| &space.id == id),
             _ => true,
         };
+        if self
+            .rename
+            .as_ref()
+            .is_some_and(|rename| !model.tabs.contains_key(&rename.id))
+        {
+            self.rename = None;
+            self.caret_deadline = None;
+            if self.focused == Some(ElementId::Editor) {
+                self.focused = None;
+            }
+        }
+        if self.press.as_ref().is_some_and(|press| !valid(&press.id)) {
+            self.press = None;
+        }
         if self.focused.as_ref().is_some_and(|id| !valid(id)) {
             self.focused = None;
         }
@@ -435,39 +496,17 @@ impl SidebarUi {
                             if search_header { 3 } else { 1 },
                         );
                         self.rounded(field, self.theme.card);
-                        let label = if title.width >= 12 { "⌕ " } else { "" };
+                        let label = if title.width >= 12 {
+                            format!("{} ", icons::SEARCH)
+                        } else {
+                            String::new()
+                        };
                         let label_width = label.width() as u16;
                         let edit =
                             Rect::new(title.x + label_width, title.y, title.width - label_width, 1);
-                        self.editor_rect = edit;
                         self.write(title, label, self.theme.muted());
                         self.hit(ElementId::Editor, field, "Search tabs");
-                        search.editor.keep_cursor_visible(usize::from(edit.width));
-                        let mut col = 0;
-                        let text: String = search
-                            .editor
-                            .display_text()
-                            .graphemes(true)
-                            .filter(|g| {
-                                let start = col;
-                                col += g.width();
-                                start >= search.editor.scroll_columns
-                            })
-                            .collect();
-                        self.write(edit, text, self.theme.base().bg(self.theme.card));
-                        self.compose_editor_marks(&search.editor, edit);
-                        if self.window_focused && edit.width > 0 {
-                            self.cursor = Some(Position::new(
-                                self.editor_rect.x
-                                    + search
-                                        .editor
-                                        .cursor_columns()
-                                        .saturating_sub(search.editor.scroll_columns)
-                                        .min(usize::from(edit.width - 1))
-                                        as u16,
-                                edit.y,
-                            ));
-                        }
+                        self.compose_editor(&mut search.editor, edit, self.theme.card, true);
                     } else {
                         self.write(title, display_text(&menu.title), self.theme.accent());
                     }
@@ -538,34 +577,10 @@ impl SidebarUi {
                 );
                 let input_y = inner.y + u16::from(inner.height > 1);
                 let edit = Rect::new(inner.x, input_y, inner.width, 1);
-                let editing = self.focused == Some(ElementId::Editor);
-                self.editor_rect = edit;
-                form.editor.keep_cursor_visible(usize::from(edit.width));
-                let text = form.editor.display_text();
-                let mut col = 0;
-                let display: String = text
-                    .graphemes(true)
-                    .filter(|g| {
-                        let start = col;
-                        col += g.width();
-                        start >= form.editor.scroll_columns
-                    })
-                    .collect();
                 self.rounded(edit, self.theme.selected);
-                self.write(edit, display, self.theme.base().bg(self.theme.selected));
+                let editing = self.focused == Some(ElementId::Editor);
+                self.compose_editor(&mut form.editor, edit, self.theme.selected, editing);
                 self.hit(ElementId::Editor, edit, "Text entry");
-                if editing {
-                    self.compose_editor_marks(&form.editor, edit);
-                }
-                if editing && self.caret_visible && self.window_focused && edit.width > 0 {
-                    let x = edit.x
-                        + form
-                            .editor
-                            .cursor_columns()
-                            .saturating_sub(form.editor.scroll_columns)
-                            .min(usize::from(edit.width - 1)) as u16;
-                    self.cursor = Some(Position::new(x, edit.y));
-                }
                 if inner.height > 2 {
                     self.write(
                         Rect::new(inner.x, input_y + 1, inner.width, 1),
@@ -609,6 +624,41 @@ impl SidebarUi {
         }
     }
 
+    /// One text field painter for forms, search and inline renames.
+    pub(crate) fn compose_editor(
+        &mut self,
+        editor: &mut TextEditor,
+        rect: Rect,
+        fill: ratatui::style::Color,
+        active: bool,
+    ) {
+        self.editor_rect = rect;
+        editor.keep_cursor_visible(usize::from(rect.width));
+        let mut column = 0;
+        let text: String = editor
+            .display_text()
+            .graphemes(true)
+            .filter(|grapheme| {
+                let start = column;
+                column += grapheme.width();
+                start >= editor.scroll_columns
+            })
+            .collect();
+        self.write(rect, text, self.theme.base().bg(fill));
+        if !active {
+            return;
+        }
+        self.compose_editor_marks(editor, rect);
+        if self.caret_visible && self.window_focused && rect.width > 0 {
+            let x = rect.x
+                + editor
+                    .cursor_columns()
+                    .saturating_sub(editor.scroll_columns)
+                    .min(usize::from(rect.width - 1)) as u16;
+            self.cursor = Some(Position::new(x, rect.y));
+        }
+    }
+
     fn compose_editor_marks(&mut self, editor: &TextEditor, rect: Rect) {
         let visible_columns = |range: std::ops::Range<usize>| {
             let start = range
@@ -629,6 +679,8 @@ impl SidebarUi {
                     fill: self.theme.accent,
                     radius: 2.0,
                     inset: 0.0,
+                    square: false,
+                    shift_y: self.editor_shift,
                 });
                 for x in columns {
                     self.staging[(x, rect.y)].set_style(

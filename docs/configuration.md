@@ -36,7 +36,7 @@ return config
 
 | Action                              | macOS                              | Linux / Windows      |
 | ----------------------------------- | ---------------------------------- | -------------------- |
-| Settings page                       | `Cmd+,`                            | `Ctrl+Shift+,`       |
+| Settings              | Gear tab opens last and keeps its index; later tabs follow it (`Cmd+index`, `Ctrl+Tab`); closes with ×, `Cmd+W`, Escape |
 | New tab                             | `Cmd+T`                            | `Ctrl+Shift+T`       |
 | Search tabs                         | `Cmd+K`                            | `Ctrl+Shift+K`       |
 | Toggle sidebar                      | `Cmd+B`                            | `Ctrl+Shift+B`       |
@@ -56,16 +56,21 @@ return config
 | --------------------- | ----------------------------------------------------------------------------------------------------------------------- |
 | Keyboard preference   | Disable `keyboard_shortcuts` to use custom Lua bindings                                                                 |
 | Terminal Control keys | Ordinary Control shortcuts remain available to the shell                                                                |
-| Settings              | Own tab with a gear icon; stays listed while other tabs are active until closed with ×, `Cmd+W` or Escape               |
+| Settings              | Own tab with a gear icon and the index after the last tab (`Cmd+index`, `Cmd+9`, `Ctrl+Tab`); close with ×, `Cmd+W`, Escape |
 | Search                | Results drop down from the search bar; Up/Down select results, Left/Right edit the query, Enter activates               |
-| Folders               | Create with the plus below search; rename, collapse, reorder, add a tab or ungroup from the context menu                |
+| Space row             | Click collapses pinned tabs and folders; hover shows the chevron and the new-folder plus; right click edits the space   |
+| Folders               | Create with the space row plus; rename, collapse, reorder, add a tab or ungroup from the context menu                   |
 | Tab grouping          | Drag onto a folder, or use the tab context menu                                                                         |
 | Reordering            | Drag tabs, folders and spaces; context menus provide Move up / Move down                                                |
 | Ungrouping            | Drop onto New Tab to ungroup and unpin; Remove from folder keeps the pin; processes remain running                      |
 | Pinned order          | Pinned tabs and folders precede New Tab; ordinary tabs follow                                                           |
 | Space assignment      | Drop a tab on a bottom space control or use Move to space                                                               |
 | Folder persistence    | Catalog, names and collapse state persist; live membership follows the session boundary in [Boundaries](limitations.md) |
-| Motion                | Finite hover/selection transitions; `reduced_motion` disables animation                                                 |
+| Tab title             | Double-click edits in place with the text selected; Enter saves, Escape cancels, an empty title restores the directory  |
+| Tab icon              | Local machine: terminal; remote mux: its operating system as reported by the patched `wezterm-mux-server`               |
+| Splits                | A split tab lists its panes side by side in one row; clicking a pane focuses it                                         |
+| Close control         | Shown while the tab row is hovered (`show_close`)                                                                       |
+| Motion                | Finite hover/selection transitions and press shrink; `reduced_motion` disables animation                                |
 | Closing tabs          | Idle tabs close at once; a running process prompts with Close preselected (`confirm_close`, upstream skip list, remote) |
 | Menus and prompts     | Context menus open under the pointer or focused control; confirmations preselect the confirming action                  |
 

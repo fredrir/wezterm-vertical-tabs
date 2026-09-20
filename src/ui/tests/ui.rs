@@ -102,7 +102,7 @@ fn private_tabs_explain_shared_spaces_and_settings_without_truncating_tooltip() 
     let header = ui
         .hit_regions()
         .iter()
-        .find(|hit| hit.id == ElementId::PrivateInfo)
+        .find(|hit| hit.id == ElementId::SpaceTitle)
         .unwrap();
     ui.event(
         &model,

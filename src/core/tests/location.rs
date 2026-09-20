@@ -15,7 +15,7 @@ fn location_names_the_repository_root_for_nested_directories() {
         tab("/srv/repo/src/ui", Some("/srv/repo"))
             .location(None)
             .as_deref(),
-        Some("\u{f126}/repo")
+        Some("repo")
     );
     assert_eq!(
         tab(
@@ -24,13 +24,13 @@ fn location_names_the_repository_root_for_nested_directories() {
         )
         .location(Some("/Users/fredrir"))
         .as_deref(),
-        Some("\u{f126}/dotfiles")
+        Some("dotfiles")
     );
     assert_eq!(
         tab("/Users/fredrir/dotfiles", Some("/Users/fredrir/dotfiles"))
             .location(Some("/Users/fredrir"))
             .as_deref(),
-        Some("\u{f126}/dotfiles")
+        Some("dotfiles")
     );
 }
 

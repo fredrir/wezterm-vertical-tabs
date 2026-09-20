@@ -14,3 +14,4 @@ vtabs-app = { path = "../app", default-features = false }
 vtabs-store = { path = "../store", default-features = false }
 ratatui = { version = "0.30.2", default-features = false }
 unicode-width = "0.2"
+sysinfo = { version = "0.39.6", default-features = false, features = ["system"] }

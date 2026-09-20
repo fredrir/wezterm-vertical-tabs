@@ -34,6 +34,22 @@ fn is_home(path: &str, home: &str) -> bool {
     trimmed_path(path) == trimmed_path(home)
 }
 
+/// Labels shorten a directory for display; the path itself is never rewritten.
+fn location_label(cwd: &str, repo_root: Option<&str>, home: Option<&str>) -> Option<String> {
+    if cwd.is_empty() {
+        return None;
+    }
+    if let Some(repo) = repo_root {
+        return Some(dir_name(repo).to_owned());
+    }
+    let home = home.filter(|home| is_under_home(cwd, home));
+    if home.is_some_and(|home| is_home(cwd, home)) {
+        return Some("~/".into());
+    }
+    let prefix = if home.is_some() { "~/" } else { "/" };
+    Some(format!("{prefix}{}", dir_name(cwd)))
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Folder {
     pub id: String,
@@ -55,6 +71,9 @@ pub struct Space {
     pub rules: Vec<RoutingRule>,
     #[serde(default)]
     pub template: Option<String>,
+    /// Hides this space's pinned tabs and folders; indexes stay stable.
+    #[serde(default)]
+    pub collapsed: bool,
 }
 impl Space {
     pub fn new(id: impl Into<String>, name: impl Into<String>) -> Self {
@@ -65,6 +84,7 @@ impl Space {
             accent: None,
             rules: Vec::new(),
             template: None,
+            collapsed: false,
         }
     }
 }
@@ -77,6 +97,27 @@ pub struct LaunchSpec {
     pub args: Vec<String>,
     #[serde(default)]
     pub env: BTreeMap<String, String>,
+}
+
+pub type PaneId = u64;
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TabPane {
+    pub id: PaneId,
+    #[serde(default)]
+    pub title: String,
+    #[serde(default)]
+    pub cwd: String,
+    #[serde(default)]
+    pub repo_root: Option<String>,
+    #[serde(default)]
+    pub active: bool,
+}
+impl TabPane {
+    pub fn label(&self, home: Option<&str>) -> String {
+        location_label(&self.cwd, self.repo_root.as_deref(), home)
+            .unwrap_or_else(|| self.title.clone())
+    }
 }
 
 /// Host metadata is copied only when it changes; membership remains application-owned.
@@ -101,6 +142,11 @@ pub struct Tab {
     pub process: String,
     #[serde(default)]
     pub remote: bool,
+    /// os-release style ID reported by the machine that owns the tab's domain.
+    #[serde(default)]
+    pub os: String,
+    #[serde(default)]
+    pub panes: Vec<TabPane>,
     #[serde(default)]
     pub unread: bool,
     #[serde(default)]
@@ -133,18 +179,7 @@ impl Tab {
     }
 
     pub fn location(&self, home: Option<&str>) -> Option<String> {
-        if self.cwd.is_empty() {
-            return None;
-        }
-        if let Some(repo) = &self.repo_root {
-            return Some(format!("{}", dir_name(repo)));
-        }
-        let home = home.filter(|home| is_under_home(&self.cwd, home));
-        if home.is_some_and(|home| is_home(&self.cwd, home)) {
-            return Some("~/".into());
-        }
-        let prefix = if home.is_some() { "~/" } else { "/" };
-        Some(format!("{prefix}{}", dir_name(&self.cwd)))
+        location_label(&self.cwd, self.repo_root.as_deref(), home)
     }
 
     fn reconcile_host_metadata(&mut self, incoming: Self) -> bool {
@@ -158,7 +193,8 @@ impl Tab {
             };
         }
         update!(
-            id, title, icon, cwd, repo_root, domain, host, user, process, remote, unread, bell
+            id, title, icon, cwd, repo_root, domain, host, user, process, remote, os, panes,
+            unread, bell
         );
         // Membership and title overrides belong to the application. discovery
         // supplies only domain/cwd; retain captured launch arguments and environment.
@@ -194,6 +230,7 @@ pub enum Intent {
         id: SpaceId,
         index: usize,
     },
+    ToggleSpace(SpaceId),
     CreateFolder {
         name: String,
     },
@@ -273,6 +310,10 @@ pub enum HostCommand {
         launch: LaunchSpec,
     },
     MoveTabToNewWindow(TabId),
+    FocusPane {
+        tab: TabId,
+        pane: PaneId,
+    },
     CustomAction(String),
 }
 
@@ -753,6 +794,7 @@ impl Model {
                 | Intent::RenameTab { .. }
                 | Intent::RenameFolder { .. }
                 | Intent::ToggleFolder(_)
+                | Intent::ToggleSpace(_)
                 | Intent::SetSetting { .. }
                 | Intent::ResetSetting(_)
                 | Intent::ResetSettings
@@ -874,6 +916,13 @@ impl Model {
                 self.folders[at].collapsed = !self.folders[at].collapsed;
                 out.durable_changed = true;
             }
+            Intent::ToggleSpace(id) => {
+                self.require_space(&id)?;
+                if let Some(space) = self.spaces.iter_mut().find(|space| space.id == id) {
+                    space.collapsed = !space.collapsed;
+                }
+                out.durable_changed = true;
+            }
             Intent::DeleteFolder(id) => {
                 let at = self.require_folder(&id)?;
                 self.folders.remove(at);
@@ -946,6 +995,16 @@ impl Model {
                     && folder.collapsed
                 {
                     folder.collapsed = false;
+                    out.durable_changed = true;
+                }
+                let tab = &self.tabs[&id];
+                if (tab.pinned || tab.folder_id.is_some())
+                    && let Some(space) = self
+                        .spaces
+                        .iter_mut()
+                        .find(|space| space.id == tab.space_id && space.collapsed)
+                {
+                    space.collapsed = false;
                     out.durable_changed = true;
                 }
                 self.activate(id);

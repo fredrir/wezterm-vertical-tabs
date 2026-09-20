@@ -1,0 +1,135 @@
+diff --git a/codec/src/lib.rs b/codec/src/lib.rs
+index 0c230e95..d2c66e8f 100644
+--- a/codec/src/lib.rs
++++ b/codec/src/lib.rs
+@@ -503,6 +503,8 @@ pdu! {
+     GetPaneDirection: 60,
+     GetPaneDirectionResponse: 61,
+     AdjustPaneSize: 62,
++    GetHostInfo: 63,
++    GetHostInfoResponse: 64,
+ }
+ 
+ impl Pdu {
+@@ -882,6 +884,17 @@ pub struct GetPaneDirectionResponse {
+     pub pane_id: Option<PaneId>,
+ }
+ 
++/// A new PDU rather than a new field: stock servers reject it and stay compatible.
++#[derive(Deserialize, Serialize, PartialEq, Debug)]
++pub struct GetHostInfo {}
++
++#[derive(Deserialize, Serialize, PartialEq, Eq, Debug, Clone, Default)]
++pub struct GetHostInfoResponse {
++    /// The os-release `ID`, or the platform name where no such file exists.
++    pub os: String,
++    pub hostname: String,
++}
++
+ #[derive(Deserialize, Serialize, PartialEq, Debug)]
+ pub struct ActivatePaneDirection {
+     pub pane_id: PaneId,
+diff --git a/wezterm-client/src/client.rs b/wezterm-client/src/client.rs
+index 3ed1d22b..67c09e48 100644
+--- a/wezterm-client/src/client.rs
++++ b/wezterm-client/src/client.rs
+@@ -1341,6 +1341,7 @@ impl Client {
+ 
+     rpc!(ping, Ping = (), Pong);
+     rpc!(list_panes, ListPanes = (), ListPanesResponse);
++    rpc!(get_host_info, GetHostInfo = (), GetHostInfoResponse);
+     rpc!(spawn_v2, SpawnV2, SpawnResponse);
+     rpc!(split_pane, SplitPane, SpawnResponse);
+     rpc!(
+diff --git a/wezterm-client/src/domain.rs b/wezterm-client/src/domain.rs
+index f559706c..319dd96e 100644
+--- a/wezterm-client/src/domain.rs
++++ b/wezterm-client/src/domain.rs
+@@ -28,6 +28,8 @@ pub struct ClientInner {
+     pub focused_remote_pane_id: Mutex<Option<PaneId>>,
+     pub(crate) topology: crate::topology::TopologySync,
+     pub(crate) local_pane_layout: bool,
++    /// Reported once by the machine that owns the panes; `None` from a stock server.
++    pub host_info: Option<codec::GetHostInfoResponse>,
+ }
+ 
+ impl ClientInner {
+@@ -247,6 +249,7 @@ impl ClientInner {
+         local_echo_threshold_ms: Option<u64>,
+         overlay_lag_indicator: bool,
+         local_pane_layout: bool,
++        host_info: Option<codec::GetHostInfoResponse>,
+     ) -> Self {
+         Self {
+             client,
+@@ -259,6 +262,7 @@ impl ClientInner {
+             focused_remote_pane_id: Mutex::new(None),
+             topology: crate::topology::TopologySync::default(),
+             local_pane_layout,
++            host_info,
+         }
+     }
+ }
+@@ -830,6 +834,7 @@ impl ClientDomain {
+         client: Client,
+         panes: ListPanesResponse,
+         primary_window_id: Option<WindowId>,
++        host_info: Option<codec::GetHostInfoResponse>,
+     ) -> anyhow::Result<()> {
+         let mux = Mux::get();
+         let domain = mux
+@@ -847,6 +852,7 @@ impl ClientDomain {
+             threshold,
+             overlay_lag_indicator,
+             domain.config.local_pane_layout(),
++            host_info,
+         ));
+         *domain.inner.lock().unwrap() = Some(Arc::clone(&inner));
+ 
+@@ -1132,7 +1138,8 @@ impl Domain for ClientDomain {
+                     "Server has {} tabs.  Attaching to local UI...\n",
+                     panes.tabs.len()
+                 ));
+-                ClientDomain::finish_attach(domain_id, client, panes, window_id)
++                let host_info = client.get_host_info().await.ok();
++                ClientDomain::finish_attach(domain_id, client, panes, window_id, host_info)
+             }
+         })
+         .await
+diff --git a/wezterm-mux-server-impl/Cargo.toml b/wezterm-mux-server-impl/Cargo.toml
+index 27a21788..c7bdd0a4 100644
+--- a/wezterm-mux-server-impl/Cargo.toml
++++ b/wezterm-mux-server-impl/Cargo.toml
+@@ -25,6 +25,7 @@ promise.workspace = true
+ rangeset.workspace = true
+ rcgen.workspace = true
+ smol.workspace = true
++sysinfo = { version = "0.39.6", default-features = false, features = ["system"] }
+ termwiz = { workspace=true, features=["use_serde"] }
+ url.workspace = true
+ wezterm-client.workspace = true
+diff --git a/wezterm-mux-server-impl/src/sessionhandler.rs b/wezterm-mux-server-impl/src/sessionhandler.rs
+index b645b827..502dea9f 100644
+--- a/wezterm-mux-server-impl/src/sessionhandler.rs
++++ b/wezterm-mux-server-impl/src/sessionhandler.rs
+@@ -276,6 +276,12 @@ impl SessionHandler {
+ 
+         match decoded.pdu {
+             Pdu::Ping(Ping {}) => send_response(Ok(Pdu::Pong(Pong {}))),
++            Pdu::GetHostInfo(GetHostInfo {}) => {
++                send_response(Ok(Pdu::GetHostInfoResponse(GetHostInfoResponse {
++                    os: sysinfo::System::distribution_id(),
++                    hostname: sysinfo::System::host_name().unwrap_or_default(),
++                })))
++            }
+             Pdu::SetWindowWorkspace(SetWindowWorkspace {
+                 window_id,
+                 workspace,
+@@ -998,6 +1004,7 @@ impl SessionHandler {
+             | Pdu::UnitResponse { .. }
+             | Pdu::LivenessResponse { .. }
+             | Pdu::GetPaneDirectionResponse { .. }
++            | Pdu::GetHostInfoResponse { .. }
+             | Pdu::SearchScrollbackResponse { .. }
+             | Pdu::GetLinesResponse { .. }
+             | Pdu::GetCodecVersionResponse { .. }

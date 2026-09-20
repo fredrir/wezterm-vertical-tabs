@@ -353,3 +353,34 @@ fn folder_spawn_command_captures_folder_and_space_without_mutating_selection() {
             .is_err()
     );
 }
+
+#[test]
+fn collapsed_spaces_persist_keep_indexes_and_reopen_for_a_hidden_selection() {
+    let mut model = model();
+    model
+        .dispatch(Intent::PinTab {
+            id: 2,
+            pinned: true,
+        })
+        .unwrap();
+    let space = model.selected_space.clone();
+    let visible = model.visible_ids().to_vec();
+    let revision = model.projection_revision();
+    let transition = model.dispatch(Intent::ToggleSpace(space.clone())).unwrap();
+    assert!(transition.commands.is_empty());
+    assert!(transition.durable_changed);
+    assert!(model.spaces[0].collapsed);
+    assert_eq!(model.visible_ids(), visible);
+    assert_eq!(model.projection_revision(), revision);
+
+    model.dispatch(Intent::ActivateTab(1)).unwrap();
+    assert!(model.spaces[0].collapsed, "an open tab stays visible");
+    let activation = model.dispatch(Intent::ActivateTab(2)).unwrap();
+    assert!(activation.durable_changed);
+    assert!(!model.spaces[0].collapsed);
+    assert!(
+        model
+            .dispatch(Intent::ToggleSpace("missing".into()))
+            .is_err()
+    );
+}

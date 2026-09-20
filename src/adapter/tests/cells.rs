@@ -42,6 +42,7 @@ fn frame(previous: Option<&Buffer>, next: &Buffer, revision: u64) -> FrameUpdate
         changed_cells,
         dirty_rows,
         cursor: None,
+        cursor_shift: 0.,
         ime_rect: None,
         transform: SurfaceTransform {
             translate_x: 0.,

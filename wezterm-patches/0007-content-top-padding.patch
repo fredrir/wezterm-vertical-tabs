@@ -1,0 +1,240 @@
+diff --git a/wezterm-gui/src/termwindow/mouseevent.rs b/wezterm-gui/src/termwindow/mouseevent.rs
+index e3a3c69f..4fccd678 100644
+--- a/wezterm-gui/src/termwindow/mouseevent.rs
++++ b/wezterm-gui/src/termwindow/mouseevent.rs
+@@ -316,7 +316,7 @@ impl super::TermWindow {
+         let border = self.get_os_border();
+         let y_offset = top_bar_height
+             + border.top.get() as f32
+-            + self.vtabs_titlebar_height()
++            + self.vtabs_content_top()
+             + self.vtabs_frame_gutter();
+ 
+         let from_top = start_event.coords.y.saturating_sub(item.y as isize);
+diff --git a/wezterm-gui/src/termwindow/render/mod.rs b/wezterm-gui/src/termwindow/render/mod.rs
+index efe6e324..70e287a3 100644
+--- a/wezterm-gui/src/termwindow/render/mod.rs
++++ b/wezterm-gui/src/termwindow/render/mod.rs
+@@ -356,7 +356,7 @@ impl crate::TermWindow {
+             .left
+             .evaluate_as_pixels(h_context);
+         let padding_right = self.config.window_padding.right;
+-        let padding_top = self.config.window_padding.top.evaluate_as_pixels(v_context) + self.vtabs_titlebar_height();
++        let padding_top = self.config.window_padding.top.evaluate_as_pixels(v_context) + self.vtabs_content_top();
+         let padding_bottom = self
+             .config
+             .window_padding
+diff --git a/wezterm-gui/src/termwindow/render/pane.rs b/wezterm-gui/src/termwindow/render/pane.rs
+index 6ff2b551..42535f9b 100644
+--- a/wezterm-gui/src/termwindow/render/pane.rs
++++ b/wezterm-gui/src/termwindow/render/pane.rs
+@@ -126,8 +126,8 @@ impl crate::TermWindow {
+ 
+             let (y, height_delta) = if pos.top == 0 {
+                 (
+-                    (top_pixel_y - padding_top + self.vtabs_titlebar_height()),
+-                    padding_top - self.vtabs_titlebar_height() + (cell_height / 2.0),
++                    (top_pixel_y - padding_top + self.vtabs_content_top()),
++                    padding_top - self.vtabs_content_top() + (cell_height / 2.0),
+                 )
+             } else {
+                 (
+@@ -232,7 +232,7 @@ impl crate::TermWindow {
+             let gutter = self.vtabs_frame_gutter() as usize;
+             let thumb_y_offset = top_bar_height as usize
+                 + border.top.get()
+-                + self.vtabs_titlebar_height() as usize
++                + self.vtabs_content_top() as usize
+                 + gutter;
+             let bottom_inset = border.bottom.get() + bottom_bar_height as usize + gutter;
+ 
+@@ -631,8 +631,8 @@ impl crate::TermWindow {
+ 
+         let (y, height_delta) = if pos.top == 0 {
+             (
+-                (top_pixel_y - padding_top + self.vtabs_titlebar_height()),
+-                padding_top - self.vtabs_titlebar_height() + (cell_height / 2.0),
++                (top_pixel_y - padding_top + self.vtabs_content_top()),
++                padding_top - self.vtabs_content_top() + (cell_height / 2.0),
+             )
+         } else {
+             (
+diff --git a/wezterm-gui/src/termwindow/resize.rs b/wezterm-gui/src/termwindow/resize.rs
+index f0ab8218..e23c16e3 100644
+--- a/wezterm-gui/src/termwindow/resize.rs
++++ b/wezterm-gui/src/termwindow/resize.rs
+@@ -196,7 +196,7 @@ impl super::TermWindow {
+                 pixel_cell: self.render_metrics.cell_size.height as f32,
+             };
+             let padding_left = config.window_padding.left.evaluate_as_pixels(h_context) as usize + self.vtabs_left_width() as usize + self.vtabs_frame_gutter() as usize;
+-            let padding_top = config.window_padding.top.evaluate_as_pixels(v_context) as usize + self.vtabs_titlebar_height() as usize + self.vtabs_frame_gutter() as usize;
++            let padding_top = config.window_padding.top.evaluate_as_pixels(v_context) as usize + self.vtabs_content_top() as usize + self.vtabs_frame_gutter() as usize;
+             let padding_bottom =
+                 config.window_padding.bottom.evaluate_as_pixels(v_context) as usize + self.vtabs_frame_gutter() as usize;
+             let padding_right = effective_right_padding(&config, h_context) + self.vtabs_right_width() as usize + self.vtabs_frame_gutter() as usize;
+@@ -242,7 +242,7 @@ impl super::TermWindow {
+                 pixel_cell: self.render_metrics.cell_size.height as f32,
+             };
+             let padding_left = config.window_padding.left.evaluate_as_pixels(h_context) as usize + self.vtabs_left_width() as usize + self.vtabs_frame_gutter() as usize;
+-            let padding_top = config.window_padding.top.evaluate_as_pixels(v_context) as usize + self.vtabs_titlebar_height() as usize + self.vtabs_frame_gutter() as usize;
++            let padding_top = config.window_padding.top.evaluate_as_pixels(v_context) as usize + self.vtabs_content_top() as usize + self.vtabs_frame_gutter() as usize;
+             let padding_bottom =
+                 config.window_padding.bottom.evaluate_as_pixels(v_context) as usize + self.vtabs_frame_gutter() as usize;
+             let padding_right = effective_right_padding(&config, h_context) + self.vtabs_right_width() as usize + self.vtabs_frame_gutter() as usize;
+@@ -506,7 +506,7 @@ impl super::TermWindow {
+             pixel_cell: render_metrics.cell_size.height as f32,
+         };
+         let padding_left = config.window_padding.left.evaluate_as_pixels(h_context) as usize + self.vtabs_left_width() as usize + self.vtabs_frame_gutter() as usize;
+-        let padding_top = config.window_padding.top.evaluate_as_pixels(v_context) as usize + self.vtabs_titlebar_height() as usize + self.vtabs_frame_gutter() as usize;
++        let padding_top = config.window_padding.top.evaluate_as_pixels(v_context) as usize + self.vtabs_content_top() as usize + self.vtabs_frame_gutter() as usize;
+         let padding_bottom = config.window_padding.bottom.evaluate_as_pixels(v_context) as usize + self.vtabs_frame_gutter() as usize;
+ 
+         let dimensions = Dimensions {
+diff --git a/wezterm-gui/src/termwindow/ui_host.rs b/wezterm-gui/src/termwindow/ui_host.rs
+index 82d3857b..190bb0dd 100644
+--- a/wezterm-gui/src/termwindow/ui_host.rs
++++ b/wezterm-gui/src/termwindow/ui_host.rs
+@@ -121,6 +121,14 @@ impl Geometry {
+                 - y,
+         }
+     }
++    /// The header strip spans only the sidebar when content reserves nothing above it.
++    pub fn header_width(self) -> f32 {
++        if self.header_height > 0. && self.content.y < self.sidebar.y + self.header_height {
++            self.sidebar.width
++        } else {
++            self.ui_bounds(true).width
++        }
++    }
+     pub fn grid_offset(self, whole_window: bool, columns: usize) -> (f32, f32) {
+         if !whole_window || self.sidebar.width <= 0. || self.sidebar.x <= self.content.x {
+             return (0., 0.);
+@@ -839,6 +847,27 @@ impl TermWindow {
+                 == window::IntegratedTitleButtonStyle::MacOsNative
+             && self.vtabs_titlebar_height() > 0.
+     }
++    /// A left sidebar wide enough for the native buttons carries the header itself.
++    fn vtabs_inline_header(&self) -> Option<f32> {
++        vtabs_sidebar_header_inset(
++            self.vtabs_integrated_macos(),
++            self.vtabs_reserved_width(),
++            self.render_metrics.cell_size.width as f32,
++            if self.vtabs_right_width() > 0. {
++                0.
++            } else {
++                80. * self.dimensions.dpi as f32 / 96.
++            },
++        )
++    }
++    /// Content then starts at the frame gutter, matching its other three sides.
++    pub fn vtabs_content_top(&self) -> f32 {
++        if self.vtabs_inline_header().is_some() && self.vtabs_left_width() > 0. {
++            0.
++        } else {
++            self.vtabs_titlebar_height()
++        }
++    }
+     pub fn vtabs_titlebar_height(&self) -> f32 {
+         Self::vtabs_titlebar_height_impl(
+             &self.config,
+@@ -874,7 +903,7 @@ impl TermWindow {
+             .unwrap_or(controls);
+         controls.max(font_height)
+     }
+-    fn ensure_vtabs_titlebar(&mut self, ui: &mut UiHost) -> anyhow::Result<()> {
++    fn ensure_vtabs_titlebar(&mut self, ui: &mut UiHost, width: f32) -> anyhow::Result<()> {
+         let height = self.vtabs_titlebar_height();
+         if height == 0. {
+             ui.chrome = None;
+@@ -882,7 +911,7 @@ impl TermWindow {
+             return Ok(());
+         }
+         let key = (
+-            self.dimensions.pixel_width,
++            width as usize,
+             self.dimensions.dpi,
+             self.config.generation(),
+             self.shape_generation,
+@@ -951,10 +980,6 @@ impl TermWindow {
+                 },
+             );
+         let border = self.get_os_border();
+-        let width = self
+-            .dimensions
+-            .pixel_width
+-            .saturating_sub((border.left + border.right).get()) as f32;
+         let element = Element::new(&font, ElementContent::Children(vec![group]))
+             .display(DisplayType::Block)
+             .item_type(UIItemType::TabBar(TabBarItem::None))
+@@ -999,7 +1024,7 @@ impl TermWindow {
+         let Some(mut ui) = self.ui_host.take() else {
+             return false;
+         };
+-        if let Err(error) = self.ensure_vtabs_titlebar(&mut ui) {
++        if let Err(error) = self.ensure_vtabs_titlebar(&mut ui, geometry.header_width()) {
+             log::error!("window controls: {error}");
+             self.ui_host = Some(ui);
+             return false;
+@@ -1096,28 +1121,20 @@ impl TermWindow {
+         let border = self.get_os_border();
+         let width = self.vtabs_reserved_width();
+         let top = self.vtabs_titlebar_height();
++        let content_top = self.vtabs_content_top();
+         let content = Bounds {
+             x: border.left.get() as f32 + self.vtabs_left_width(),
+-            y: border.top.get() as f32 + top,
++            y: border.top.get() as f32 + content_top,
+             width: (self.dimensions.pixel_width as f32
+                 - (border.left + border.right).get() as f32
+                 - width)
+                 .max(0.),
+             height: (self.dimensions.pixel_height as f32
+                 - (border.top + border.bottom).get() as f32
+-                - top)
++                - content_top)
+                 .max(0.),
+         };
+-        let header_inset = vtabs_sidebar_header_inset(
+-            self.vtabs_integrated_macos(),
+-            width,
+-            self.render_metrics.cell_size.width as f32,
+-            if self.vtabs_right_width() > 0. {
+-                0.
+-            } else {
+-                80. * self.dimensions.dpi as f32 / 96.
+-            },
+-        );
++        let header_inset = self.vtabs_inline_header();
+         let inline_header = header_inset.is_some();
+         Geometry {
+             sidebar: Bounds {
+@@ -1132,7 +1149,7 @@ impl TermWindow {
+                     content.y
+                 },
+                 width,
+-                height: content.height + if inline_header { top } else { 0. },
++                height: content.height + if inline_header { content_top } else { 0. },
+             },
+             content,
+             cell_width: self.render_metrics.cell_size.width as f32,
+@@ -1742,7 +1759,7 @@ impl TermWindow {
+         };
+         let result = (|| {
+             let start = Instant::now();
+-            self.ensure_vtabs_titlebar(&mut ui)?;
++            self.ensure_vtabs_titlebar(&mut ui, geometry.header_width())?;
+             if let Some(chrome) = &ui.chrome {
+                 self.render_element(chrome, self.render_state.as_ref().unwrap(), None)?;
+             }
+@@ -1797,10 +1814,7 @@ impl TermWindow {
+                     euclid::rect(
+                         border.left.get() as f32,
+                         border.top.get() as f32,
+-                        self.dimensions
+-                            .pixel_width
+-                            .saturating_sub((border.left + border.right).get())
+-                            as f32,
++                        geometry.header_width(),
+                         self.vtabs_titlebar_height(),
+                     ),
+                     background,

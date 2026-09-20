@@ -317,6 +317,20 @@ fn close_restores_visible_successor_as_explicit_id_command() {
 fn close_requests_ask_the_host_only_while_confirmation_is_enabled() {
     let mut app = app();
     app.render(Duration::ZERO);
+    let row = app
+        .ui()
+        .hit_regions()
+        .iter()
+        .find(|hit| hit.id == ui::ElementId::Tab(1))
+        .unwrap()
+        .rect;
+    // The close control exists only while its row is hovered.
+    app.input(ui::UiInput::PointerMove {
+        x: row.x + 1,
+        y: row.y,
+    })
+    .unwrap();
+    app.render(Duration::ZERO);
     let close = |app: &WindowApp| {
         app.ui()
             .hit_regions()

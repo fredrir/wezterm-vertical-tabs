@@ -33,19 +33,25 @@ impl Default for Theme {
 
 impl Theme {
     pub(crate) fn sync_surfaces(&mut self) {
-        let (Color::Rgb(br, bg, bb), Color::Rgb(fr, fg, fb)) = (self.background, self.foreground)
-        else {
+        if !matches!(
+            (self.background, self.foreground),
+            (Color::Rgb(..), Color::Rgb(..))
+        ) {
             return;
+        }
+        self.hover = self.lift(self.background, 4);
+        self.card = self.lift(self.background, 5);
+    }
+
+    /// Nested surfaces step toward the foreground from whatever fill contains them.
+    pub(crate) fn lift(&self, fill: Color, amount: u16) -> Color {
+        let (Color::Rgb(r, g, b), Color::Rgb(fr, fg, fb)) = (fill, self.foreground) else {
+            return fill;
         };
-        let blend = |amount: u16| {
-            let channel = |base: u8, foreground: u8| {
-                ((u16::from(base) * (100 - amount) + u16::from(foreground) * amount + 50) / 100)
-                    as u8
-            };
-            Color::Rgb(channel(br, fr), channel(bg, fg), channel(bb, fb))
+        let channel = |base: u8, foreground: u8| {
+            ((u16::from(base) * (100 - amount) + u16::from(foreground) * amount + 50) / 100) as u8
         };
-        self.hover = blend(4);
-        self.card = blend(5);
+        Color::Rgb(channel(r, fr), channel(g, fg), channel(b, fb))
     }
 
     pub fn base(&self) -> Style {

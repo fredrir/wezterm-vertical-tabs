@@ -314,6 +314,23 @@ fn has(ui: &SidebarUi, id: ElementId) -> bool {
     ui.hit_regions().iter().any(|hit| hit.id == id)
 }
 
+fn hover(ui: &mut SidebarUi, model: &Model, id: ElementId) {
+    let rect = ui
+        .hit_regions()
+        .iter()
+        .find(|hit| hit.id == id)
+        .unwrap_or_else(|| panic!("Missing target: {id:?}"))
+        .rect;
+    ui.event(
+        model,
+        UiInput::PointerMove {
+            x: rect.x + 1,
+            y: rect.y,
+        },
+    );
+    draw(ui, model);
+}
+
 #[test]
 fn settings_stay_listed_as_a_tab_until_closed() {
     let model = model_with_tabs();
@@ -342,8 +359,11 @@ fn settings_stay_listed_as_a_tab_until_closed() {
     let text: String = (row.rect.x..row.rect.right())
         .map(|x| ui.buffer()[(x, row.rect.y)].symbol())
         .collect();
-    assert!(text.contains("⚙ Settings"), "{text}");
-    assert!(has(&ui, ElementId::CloseSettingsTab));
+    assert!(
+        text.contains(&format!("{}  3  Settings", icons::SETTINGS)),
+        "{text}"
+    );
+    assert!(!has(&ui, ElementId::CloseSettingsTab));
 
     let intents = click(&mut ui, &model, ElementId::Tab(2));
     assert!(matches!(
@@ -361,10 +381,56 @@ fn settings_stay_listed_as_a_tab_until_closed() {
     assert!(ui.content_page());
     assert!(has(&ui, ElementId::SettingsSearch));
 
+    hover(&mut ui, &model, ElementId::SettingsTab);
     click(&mut ui, &model, ElementId::CloseSettingsTab);
     draw(&mut ui, &model);
     assert!(!ui.content_page());
     assert!(!has(&ui, ElementId::SettingsTab));
+}
+
+#[test]
+fn settings_tab_answers_to_its_index_like_any_tab() {
+    let model = model_with_tabs();
+    let mut ui = SidebarUi::new();
+    ui.set_layout(28, 0);
+    let chord = |ui: &mut SidebarUi, key: Key, modifiers: Modifiers| {
+        ui.event(&model, UiInput::Key { key, modifiers })
+    };
+    let command = Modifiers {
+        super_key: true,
+        ..Modifiers::default()
+    };
+    let control = Modifiers {
+        control: true,
+        ..Modifiers::default()
+    };
+    assert!(matches!(
+        chord(&mut ui, Key::Character('3'), command).as_slice(),
+        [UiIntent::Domain(Intent::ActivateIndex(2))]
+    ));
+    ui.open_settings();
+    ui.hide_settings();
+    for key in ['3', '9'] {
+        assert!(chord(&mut ui, Key::Character(key), command).is_empty());
+        assert!(ui.content_page(), "Cmd+{key}");
+        ui.hide_settings();
+    }
+    assert!(matches!(
+        chord(&mut ui, Key::Tab, control).as_slice(),
+        [UiIntent::Domain(Intent::ActivateIndex(1))]
+    ));
+    ui.open_settings();
+    assert!(matches!(
+        chord(&mut ui, Key::Tab, control).as_slice(),
+        [UiIntent::Domain(Intent::ActivateIndex(0))]
+    ));
+    assert!(!ui.content_page());
+    let back = Modifiers {
+        shift: true,
+        ..control
+    };
+    assert!(chord(&mut ui, Key::Tab, back).is_empty());
+    assert!(ui.content_page());
 }
 
 #[test]
@@ -405,6 +471,101 @@ fn keyboard_paths_hide_or_close_the_settings_tab() {
     ));
     assert!(ui.content_page());
     assert!(command(&mut ui, 'w').is_empty());
+    assert!(!ui.content_page());
+    draw(&mut ui, &model);
+    assert!(!has(&ui, ElementId::SettingsTab));
+}
+
+#[test]
+fn settings_keeps_its_index_when_later_tabs_open_and_earlier_tabs_close() {
+    let mut model = model_with_tabs();
+    let mut ui = SidebarUi::new();
+    ui.set_layout(28, 0);
+    ui.open_settings();
+    draw(&mut ui, &model);
+    let numbers = |ui: &SidebarUi| -> Vec<String> {
+        let mut rows: Vec<_> = ui
+            .hit_regions()
+            .iter()
+            .filter(|hit| matches!(hit.id, ElementId::Tab(_) | ElementId::SettingsTab))
+            .map(|hit| {
+                let text: String = (hit.rect.x..hit.rect.right())
+                    .map(|x| ui.buffer()[(x, hit.rect.y)].symbol())
+                    .collect();
+                let label = text
+                    .split_whitespace()
+                    .skip(1)
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                (hit.rect.y, label)
+            })
+            .collect();
+        rows.sort();
+        rows.into_iter().map(|(_, label)| label).collect()
+    };
+    assert_eq!(numbers(&ui), ["1", "2", "3 Settings"]);
+
+    let tab = |id| vtabs_core::Tab {
+        id,
+        ..vtabs_core::Tab::default()
+    };
+    model
+        .reconcile(vec![tab(1), tab(2), tab(3)], Some(3), true)
+        .unwrap();
+    ui.hide_settings();
+    draw(&mut ui, &model);
+    assert_eq!(numbers(&ui), ["1", "2", "3 Settings", "4"]);
+
+    let command = Modifiers {
+        super_key: true,
+        ..Modifiers::default()
+    };
+    let chord = |ui: &mut SidebarUi, key: char| {
+        ui.event(
+            &model,
+            UiInput::Key {
+                key: Key::Character(key),
+                modifiers: command,
+            },
+        )
+    };
+    assert!(matches!(
+        chord(&mut ui, '4').as_slice(),
+        [UiIntent::Domain(Intent::ActivateIndex(2))]
+    ));
+    assert!(matches!(
+        chord(&mut ui, '9').as_slice(),
+        [UiIntent::Domain(Intent::ActivateIndex(2))]
+    ));
+    assert!(chord(&mut ui, '3').is_empty());
+    assert!(ui.content_page());
+
+    model
+        .reconcile(vec![tab(2), tab(3)], Some(3), true)
+        .unwrap();
+    draw(&mut ui, &model);
+    assert_eq!(numbers(&ui), ["1", "2 Settings", "3"]);
+}
+
+#[test]
+fn command_w_closes_the_settings_tab_and_never_the_tab_beneath_it() {
+    let model = model_with_tabs();
+    let mut ui = SidebarUi::new();
+    ui.set_layout(28, 0);
+    draw(&mut ui, &model);
+    click(&mut ui, &model, ElementId::Settings);
+    draw(&mut ui, &model);
+    let intents = ui.event(
+        &model,
+        UiInput::Key {
+            key: Key::Character('w'),
+            modifiers: Modifiers {
+                super_key: true,
+                ..Modifiers::default()
+            },
+        },
+    );
+    assert!(intents.is_empty());
     assert!(!ui.content_page());
     draw(&mut ui, &model);
     assert!(!has(&ui, ElementId::SettingsTab));

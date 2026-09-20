@@ -513,3 +513,28 @@ fn remote_folder_deletion_survives_a_concurrent_local_reorder() {
         ["second"]
     );
 }
+
+#[test]
+fn space_collapse_state_round_trips_through_the_catalog() {
+    let mut app = WindowApp::default();
+    discover(&mut app, 1, &[1]);
+    let request = app.take_storage_request(Duration::ZERO).unwrap();
+    app.complete_storage(response(
+        &request,
+        vec![
+            profile_record("catalog", "order", json!(["home"])),
+            profile_record("space:home", "name", json!("Home")),
+            profile_record("space:home", "collapsed", json!(true)),
+        ],
+    ))
+    .unwrap();
+    assert!(app.model().spaces[0].collapsed);
+
+    app.dispatch(Intent::ToggleSpace("home".into())).unwrap();
+    let write = app.take_storage_request(Duration::from_secs(60)).unwrap();
+    assert!(write.operations.iter().any(|op| matches!(
+        op,
+        Operation::Put { key, value, .. }
+            if key.entity == "space:home" && key.field == "collapsed" && value == &json!(false)
+    )));
+}
