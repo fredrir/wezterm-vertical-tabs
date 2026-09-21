@@ -129,7 +129,7 @@ impl Adapter {
     /// server is asked and the verdict returns as a `close_check` message.
     fn check_close(&mut self, tab: core::TabId, pane: Option<core::PaneId>) {
         let Some(host) = mux::Mux::try_get().and_then(|mux| mux.get_tab(tab as usize)) else {
-            return;
+            return self.close_checked(tab, pane, None);
         };
         let reason = if pane.is_some() {
             mux::pane::CloseReason::Pane
