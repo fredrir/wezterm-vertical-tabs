@@ -34,6 +34,190 @@ impl SidebarUi {
         }
     }
 
+    /// Rows are two cells tall at most, so the pointer's place inside its cell decides
+    /// between landing beside a tab and landing inside it.
+    fn drop_target(&self, model: &Model, x: u16, y: u16) -> Option<DropTarget> {
+        let source = self.drag.as_ref()?;
+        let pane = matches!(source, ElementId::Pane(..));
+        let from = match source {
+            ElementId::Pane(tab, _) => ElementId::Tab(*tab),
+            other => other.row(),
+        };
+        let Some(hit) = self.hit_test(x, y) else {
+            let list = self.tabs_rect.contains(Position::new(x, y));
+            return (pane && list).then_some(DropTarget::NewTab);
+        };
+        match (&from, hit.id.row()) {
+            (ElementId::Tab(tab), ElementId::Tab(target)) if *tab != target => {
+                let within = (f32::from(y - hit.rect.y) + self.pointer_fraction.1)
+                    / f32::from(hit.rect.height.max(1));
+                Some(if !(0.3..=0.7).contains(&within) {
+                    DropTarget::Beside {
+                        tab: target,
+                        after: within > 0.5,
+                    }
+                } else {
+                    DropTarget::Into(target)
+                })
+            }
+            (ElementId::Tab(_), ElementId::NewTab) => Some(DropTarget::NewTab),
+            (ElementId::Tab(_), ElementId::Folder(id)) if !pane => Some(DropTarget::Folder(id)),
+            (ElementId::Tab(_), ElementId::Space(id)) if !pane => Some(DropTarget::Space(id)),
+            (ElementId::Folder(id), ElementId::Folder(target)) if *id != target => {
+                Some(DropTarget::Folder(target))
+            }
+            (ElementId::Space(id), ElementId::Space(target)) if *id != target => {
+                Some(DropTarget::Space(target))
+            }
+            _ => None,
+        }
+        .filter(|target| match target {
+            DropTarget::Beside { tab, .. } | DropTarget::Into(tab) => model.tabs.contains_key(tab),
+            _ => true,
+        })
+    }
+
+    fn aim_drop(&mut self, model: &Model, x: u16, y: u16) {
+        let target = self.drop_target(model, x, y);
+        if target == self.drop {
+            return;
+        }
+        // The insertion bar glides to its new boundary; other previews pop in place.
+        let edge = |target: &DropTarget, ui: &Self| match target {
+            DropTarget::Beside { tab, after } => ui
+                .hits
+                .iter()
+                .find(|hit| hit.id == ElementId::Tab(*tab))
+                .map(|hit| {
+                    f32::from(if *after {
+                        hit.rect.bottom()
+                    } else {
+                        hit.rect.y
+                    })
+                }),
+            _ => None,
+        };
+        let to = target.as_ref().and_then(|target| edge(target, self));
+        let from = self
+            .drop_motion
+            .filter(|_| matches!(self.drop, Some(DropTarget::Beside { .. })))
+            .map(|motion| motion.from + (motion.to - motion.from) * motion.progress);
+        self.drop_motion = target.as_ref().map(|_| DropMotion {
+            from: from.or(to).unwrap_or(0.0),
+            to: to.unwrap_or(0.0),
+            start: None,
+            progress: 0.0,
+        });
+        self.drop = target;
+        self.dirty = true;
+    }
+
+    fn apply_drop(
+        &mut self,
+        model: &Model,
+        source: ElementId,
+        target: DropTarget,
+        intents: &mut Vec<UiIntent>,
+    ) {
+        let place = |tab: TabId, after: bool, from: Option<TabId>| {
+            let visible = model.visible_ids();
+            let at = visible.iter().position(|id| *id == tab)? + usize::from(after);
+            // Core removes the dragged tab before inserting it again.
+            let above = from
+                .and_then(|from| visible.iter().position(|id| *id == from))
+                .is_some_and(|from| from < at);
+            Some(at - usize::from(above))
+        };
+        match (source, target) {
+            (ElementId::Pane(tab, pane), DropTarget::Into(target)) => {
+                intents.push(UiIntent::Host(HostAction::JoinPane { pane, tab: target }));
+                self.settle(ElementId::Tab(if tab == target { tab } else { target }));
+            }
+            (ElementId::Pane(tab, pane), DropTarget::Beside { tab: beside, after }) => {
+                intents.push(UiIntent::Host(HostAction::DetachPane {
+                    tab,
+                    pane,
+                    index: place(beside, after, None),
+                }));
+            }
+            (ElementId::Pane(tab, pane), DropTarget::NewTab) => {
+                intents.push(UiIntent::Host(HostAction::DetachPane {
+                    tab,
+                    pane,
+                    index: None,
+                }));
+            }
+            (source, target) => match (source.row(), target) {
+                (ElementId::Tab(id), DropTarget::Into(tab)) => {
+                    intents.push(UiIntent::Host(HostAction::JoinTab { source: id, tab }));
+                    self.settle(ElementId::Tab(tab));
+                }
+                (ElementId::Tab(id), DropTarget::Beside { tab, after }) => {
+                    let (Some(from), Some(beside)) = (model.tabs.get(&id), model.tabs.get(&tab))
+                    else {
+                        return;
+                    };
+                    if from.folder_id != beside.folder_id {
+                        intents.push(UiIntent::Domain(Intent::AssignFolder {
+                            tab_id: id,
+                            folder_id: beside.folder_id.clone(),
+                        }));
+                    }
+                    if from.pinned != beside.pinned {
+                        intents.push(UiIntent::Domain(Intent::PinTab {
+                            id,
+                            pinned: beside.pinned,
+                        }));
+                    }
+                    if let Some(index) = place(tab, after, Some(id)) {
+                        intents.push(UiIntent::Domain(Intent::MoveTab { id, index }));
+                    }
+                    self.settle(ElementId::Tab(id));
+                }
+                (ElementId::Tab(tab_id), DropTarget::Folder(folder_id)) => {
+                    intents.push(UiIntent::Domain(Intent::AssignFolder {
+                        tab_id,
+                        folder_id: Some(folder_id),
+                    }));
+                    self.settle(ElementId::Tab(tab_id));
+                }
+                (ElementId::Tab(id), DropTarget::NewTab) => {
+                    intents.push(UiIntent::Domain(Intent::AssignFolder {
+                        tab_id: id,
+                        folder_id: None,
+                    }));
+                    intents.push(UiIntent::Domain(Intent::PinTab { id, pinned: false }));
+                    self.settle(ElementId::Tab(id));
+                }
+                (ElementId::Tab(id), DropTarget::Space(space_id)) => {
+                    intents.push(UiIntent::Domain(Intent::AssignTab { id, space_id }));
+                }
+                (ElementId::Folder(id), DropTarget::Folder(target)) => {
+                    if let Some(index) = model.selected_folders().position(|f| f.id == target) {
+                        intents.push(UiIntent::Domain(Intent::MoveFolder { id, index }));
+                    }
+                }
+                (ElementId::Space(id), DropTarget::Space(target)) => {
+                    if let Some(index) = model.spaces.iter().position(|space| space.id == target) {
+                        intents.push(UiIntent::Domain(Intent::MoveSpace { id, index }));
+                    }
+                }
+                _ => {}
+            },
+        }
+    }
+
+    /// A landed row gives the same quick squeeze as a press, confirming where it went.
+    fn settle(&mut self, id: ElementId) {
+        self.press = Some(Press {
+            id,
+            down: None,
+            up: Some(None),
+            level: 0.0,
+            animating: true,
+        });
+    }
+
     fn start_rename(&mut self, model: &Model, id: TabId) {
         let Some(tab) = model.tabs.get(&id) else {
             return;
@@ -154,6 +338,8 @@ impl SidebarUi {
                     self.tooltip_deadline = None;
                     self.drag = None;
                     self.press = None;
+                    self.drop = None;
+                    self.drop_motion = None;
                     self.dragging = false;
                     self.pointer_origin = None;
                     self.show_tooltip = false;
@@ -174,6 +360,8 @@ impl SidebarUi {
                     self.tooltip_deadline = None;
                     self.drag = None;
                     self.press = None;
+                    self.drop = None;
+                    self.drop_motion = None;
                     self.dragging = false;
                     self.pointer_origin = None;
                     self.show_tooltip = false;
@@ -215,8 +403,32 @@ impl SidebarUi {
                     .pointer_origin
                     .is_some_and(|(px, py)| px.abs_diff(x).saturating_add(py.abs_diff(y)) > 1)
                     && self.drag.is_some()
+                    && !self.dragging
                 {
                     self.dragging = true;
+                    self.drag_label = match &self.drag {
+                        Some(ElementId::Pane(tab, pane)) => model
+                            .tabs
+                            .get(tab)
+                            .and_then(|tab| tab.panes.iter().find(|entry| entry.id == *pane))
+                            .map(|pane| pane.label(model.home.as_deref())),
+                        Some(other) => match other.row() {
+                            ElementId::Tab(id) => model.tabs.get(&id).map(|tab| {
+                                tab.custom_title()
+                                    .map(str::to_owned)
+                                    .or_else(|| tab.location(model.home.as_deref()))
+                                    .unwrap_or_else(|| tab.title.clone())
+                            }),
+                            _ => None,
+                        },
+                        None => None,
+                    }
+                    .unwrap_or_default();
+                    self.show_tooltip = false;
+                    self.tooltip_deadline = None;
+                }
+                if self.dragging {
+                    self.aim_drop(model, x, y);
                 }
                 if self.drag == Some(ElementId::SettingsSearch) && self.settings_page {
                     self.settings_query
@@ -338,6 +550,9 @@ impl SidebarUi {
                 y,
                 button: MouseButton::Left,
             } => {
+                // A fast drag can end without a final move; the release point decides.
+                let target = self.drop_target(model, x, y);
+                self.drop = None;
                 let down = self.drag.take();
                 self.pointer_origin = None;
                 self.dragging = false;
@@ -359,70 +574,9 @@ impl SidebarUi {
                     }
                     return intents;
                 }
-                // A row's nested controls drag and drop as the row itself.
-                match (
-                    down.as_ref().map(ElementId::row),
-                    up.as_ref().map(ElementId::row),
-                ) {
-                    (Some(from), Some(to)) if from == to => {}
-                    (Some(ElementId::Tab(id)), Some(ElementId::Tab(target))) => {
-                        if let Some(tab) = model.tabs.get(&target) {
-                            if model
-                                .tabs
-                                .get(&id)
-                                .is_some_and(|from| from.folder_id != tab.folder_id)
-                            {
-                                intents.push(UiIntent::Domain(Intent::AssignFolder {
-                                    tab_id: id,
-                                    folder_id: tab.folder_id.clone(),
-                                }));
-                            }
-                            if model
-                                .tabs
-                                .get(&id)
-                                .is_some_and(|from| from.pinned != tab.pinned)
-                            {
-                                intents.push(UiIntent::Domain(Intent::PinTab {
-                                    id,
-                                    pinned: tab.pinned,
-                                }));
-                            }
-                            if let Some(index) =
-                                model.visible_ids().iter().position(|tab| *tab == target)
-                            {
-                                intents.push(UiIntent::Domain(Intent::MoveTab { id, index }));
-                            }
-                        }
-                    }
-                    (Some(ElementId::Tab(tab_id)), Some(ElementId::Folder(folder_id))) => {
-                        intents.push(UiIntent::Domain(Intent::AssignFolder {
-                            tab_id,
-                            folder_id: Some(folder_id),
-                        }));
-                    }
-                    (Some(ElementId::Tab(id)), Some(ElementId::NewTab)) => {
-                        intents.push(UiIntent::Domain(Intent::AssignFolder {
-                            tab_id: id,
-                            folder_id: None,
-                        }));
-                        intents.push(UiIntent::Domain(Intent::PinTab { id, pinned: false }));
-                    }
-                    (Some(ElementId::Folder(id)), Some(ElementId::Folder(target))) => {
-                        if let Some(index) = model.selected_folders().position(|f| f.id == target) {
-                            intents.push(UiIntent::Domain(Intent::MoveFolder { id, index }));
-                        }
-                    }
-                    (Some(ElementId::Tab(id)), Some(ElementId::Space(space_id))) => {
-                        intents.push(UiIntent::Domain(Intent::AssignTab { id, space_id }))
-                    }
-                    (Some(ElementId::Space(id)), Some(ElementId::Space(target))) => {
-                        if let Some(index) =
-                            model.spaces.iter().position(|space| space.id == target)
-                        {
-                            intents.push(UiIntent::Domain(Intent::MoveSpace { id, index }));
-                        }
-                    }
-                    _ => {}
+                self.drop_motion = None;
+                if let (Some(source), Some(target)) = (down, target) {
+                    self.apply_drop(model, source, target, &mut intents);
                 }
             }
             UiInput::PointerUp { .. } => {}
@@ -640,6 +794,10 @@ impl SidebarUi {
                 return;
             }
             match key {
+                Key::Left | Key::Right if menu.message.is_some() => {
+                    menu.selected = next_enabled(&menu.items, menu.selected, 1);
+                    self.dirty = true;
+                }
                 Key::Escape | Key::Left => self.back(),
                 Key::Down | Key::Tab if !modifiers.shift => {
                     menu.selected = next_enabled(&menu.items, menu.selected, 1);
@@ -760,6 +918,10 @@ impl SidebarUi {
             },
             Key::Escape => {
                 self.focused = None;
+                self.drag = None;
+                self.dragging = false;
+                self.drop = None;
+                self.drop_motion = None;
                 self.cancel_effects();
                 self.dirty = true;
             }
@@ -897,6 +1059,13 @@ impl SidebarUi {
                 model.selected_space.clone(),
             ))),
             ElementId::CloseTab(id) => self.close_tab(model, id, intents),
+            ElementId::ClosePane(tab, pane) => {
+                intents.push(UiIntent::Host(if model.settings.confirm_close {
+                    HostAction::ClosePane(tab, pane)
+                } else {
+                    HostAction::KillPane(tab, pane)
+                }));
+            }
             ElementId::Menu(id) => {
                 let action = match &self.overlay {
                     Some(Overlay::Menu(menu)) => menu
@@ -934,6 +1103,7 @@ impl SidebarUi {
     }
     fn menu(&mut self, title: impl Into<String>, items: Vec<MenuItem>) {
         self.open_overlay(Overlay::Menu(Menu {
+            message: None,
             title: title.into(),
             selected: items.iter().position(|item| item.enabled).unwrap_or(0),
             items,
@@ -1025,7 +1195,10 @@ impl SidebarUi {
             ElementId::SpaceTitle => {
                 self.context_menu(model, ElementId::Space(model.selected_space.clone()))
             }
-            ElementId::Tab(id) | ElementId::CloseTab(id) | ElementId::Pane(id, _) => {
+            ElementId::Tab(id)
+            | ElementId::CloseTab(id)
+            | ElementId::Pane(id, _)
+            | ElementId::ClosePane(id, _) => {
                 let Some(tab) = model.tabs.get(&id) else {
                     return;
                 };
@@ -1395,13 +1568,11 @@ impl SidebarUi {
                 );
             }
             Action::Submenu { title, items } => self.push_menu(title, items),
-            Action::Confirm { label, action } => self.push_menu(
-                label,
-                vec![
-                    MenuItem::new("confirm", "Confirm", *action),
-                    MenuItem::new("cancel", "Cancel", Action::Close),
-                ],
-            ),
+            Action::Confirm { label, action } => self.confirm(label, "", "Confirm", *action),
+            Action::KillPane(tab, pane) => {
+                intents.push(UiIntent::Host(HostAction::KillPane(tab, pane)));
+                self.dismiss();
+            }
             Action::Close => self.back(),
         }
     }

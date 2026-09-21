@@ -328,6 +328,21 @@ pub enum HostCommand {
         tab: TabId,
         pane: PaneId,
     },
+    KillPane(PaneId),
+    /// The pane leaves its tab for one of its own, optionally at a visible index.
+    DetachPane {
+        pane: PaneId,
+        index: Option<usize>,
+    },
+    JoinPane {
+        pane: PaneId,
+        tab: TabId,
+    },
+    /// Every pane of `source` becomes a split of `tab`.
+    JoinTab {
+        source: TabId,
+        tab: TabId,
+    },
     CustomAction(String),
 }
 

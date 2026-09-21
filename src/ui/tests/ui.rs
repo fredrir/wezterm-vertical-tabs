@@ -609,7 +609,7 @@ fn nonempty_space_deletion_requires_explicit_destination_and_confirmation() {
         .find(|hit| hit.id == ElementId::Menu("cancel".into()))
         .unwrap()
         .rect;
-    assert!(confirm.y < cancel.y);
+    assert!(cancel.right() < confirm.x && cancel.y == confirm.y);
     assert_eq!(
         domain(ui.event(&model, UiInput::key(Key::Enter))),
         vec![Intent::DeleteSpace {

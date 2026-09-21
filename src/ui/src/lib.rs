@@ -59,6 +59,7 @@ pub enum ElementId {
     Space(SpaceId),
     Tab(TabId),
     Pane(TabId, PaneId),
+    ClosePane(TabId, PaneId),
     CloseTab(TabId),
     Menu(String),
     Setting(String),
@@ -71,7 +72,7 @@ impl ElementId {
     /// Controls nested in a row share its hover, press and drag identity.
     pub(crate) fn row(&self) -> ElementId {
         match self {
-            Self::CloseTab(id) | Self::Pane(id, _) => Self::Tab(*id),
+            Self::CloseTab(id) | Self::Pane(id, _) | Self::ClosePane(id, _) => Self::Tab(*id),
             Self::CloseSettingsTab => Self::SettingsTab,
             Self::CreateFolder => Self::SpaceTitle,
             other => other.clone(),
@@ -94,6 +95,25 @@ pub enum HostAction {
     /// The host closes an idle tab directly and asks `confirm_close_tab` for a busy one.
     CloseTab(TabId),
     FocusPane(TabId, PaneId),
+    /// The host closes an idle split directly and asks `confirm_close_pane` for a busy one.
+    ClosePane(TabId, PaneId),
+    KillPane(TabId, PaneId),
+    /// A pane dragged out of its tab becomes a tab of its own, optionally at an index.
+    DetachPane {
+        tab: TabId,
+        pane: PaneId,
+        index: Option<usize>,
+    },
+    /// A pane dropped inside another tab becomes one of its splits.
+    JoinPane {
+        pane: PaneId,
+        tab: TabId,
+    },
+    /// A tab dropped inside another tab hands over every pane it has.
+    JoinTab {
+        source: TabId,
+        tab: TabId,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -140,6 +160,7 @@ enum Action {
     RenameTab(TabId),
     MoveTab(TabId),
     CloseTab(TabId),
+    KillPane(TabId, PaneId),
     Settings,
     CloseSettings,
     EditSetting(String),
@@ -179,6 +200,8 @@ impl MenuItem {
 #[derive(Clone, Debug)]
 struct Menu {
     title: String,
+    /// A confirmation: the title asks, this explains, and the items read as buttons.
+    message: Option<String>,
     items: Vec<MenuItem>,
     selected: usize,
     scroll: usize,
@@ -226,6 +249,31 @@ struct Press {
     up: Option<Option<Duration>>,
     level: f32,
     animating: bool,
+}
+
+/// Where a drag would land, resolved on every pointer move so the preview never lies.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum DropTarget {
+    /// Reorder next to a tab; a dragged pane becomes a tab of its own there.
+    Beside {
+        tab: TabId,
+        after: bool,
+    },
+    /// Become a split of this tab.
+    Into(TabId),
+    Folder(String),
+    /// Leave folders and pins behind; a dragged pane becomes the last tab.
+    NewTab,
+    Space(SpaceId),
+}
+
+/// The drop preview glides between targets instead of jumping.
+#[derive(Clone, Copy, Debug)]
+struct DropMotion {
+    from: f32,
+    to: f32,
+    start: Option<Duration>,
+    progress: f32,
 }
 
 /// The tab Settings follows, and the position that anchor last gave it.
@@ -286,6 +334,11 @@ pub struct SidebarUi {
     hovered: Option<ElementId>,
     drag: Option<ElementId>,
     press: Option<Press>,
+    drop: Option<DropTarget>,
+    drop_motion: Option<DropMotion>,
+    drag_label: String,
+    /// Where inside its cell the pointer sits; rows are too short to zone by cells alone.
+    pointer_fraction: (f32, f32),
     rename: Option<InlineRename>,
     title_rects: Vec<(TabId, Rect)>,
     last_click: Option<(ElementId, Duration)>,
@@ -328,6 +381,8 @@ pub struct RoundedSurface {
     pub inset: f32,
     /// Icon buttons center a square within their cells; rows keep their full extent.
     pub square: bool,
+    /// Fraction of the rect's height to draw, about its center; thin bars need less than a cell.
+    pub scale_y: f32,
     /// Holds one text line per cell row, so the host centers nothing beneath it.
     pub stacked: bool,
     /// Rows to move down; marks inside host-centered text follow it by half a row.
@@ -350,6 +405,14 @@ enum SidebarRow {
     Settings {
         number: usize,
     },
+}
+
+fn running(process: &str) -> String {
+    if process.is_empty() {
+        "A process is still running.".into()
+    } else {
+        format!("{process} is still running.")
+    }
 }
 
 pub type Ui = SidebarUi;
@@ -393,6 +456,10 @@ impl SidebarUi {
             hovered: None,
             drag: None,
             press: None,
+            drop: None,
+            drop_motion: None,
+            drag_label: String::new(),
+            pointer_fraction: (0.5, 0.5),
             rename: None,
             title_rects: Vec::new(),
             last_click: None,
@@ -459,19 +526,45 @@ impl SidebarUi {
     }
     /// The host found a running process; the prompt names it when known.
     pub fn confirm_close_tab(&mut self, id: TabId, process: &str) {
-        let label = if process.is_empty() {
-            "Close this tab?".to_owned()
-        } else {
-            format!("{process} is still running. Close this tab?")
-        };
         self.dismiss();
-        self.push_menu(
-            label,
-            vec![
-                MenuItem::new("confirm", "Close", Action::Domain(Intent::CloseTab(id))),
-                MenuItem::new("cancel", "Cancel", Action::Close),
-            ],
+        self.confirm(
+            "Close tab?",
+            running(process),
+            "Close",
+            Action::Domain(Intent::CloseTab(id)),
         );
+    }
+    pub fn confirm_close_pane(&mut self, tab: TabId, pane: PaneId, process: &str) {
+        self.dismiss();
+        self.confirm(
+            "Close split?",
+            running(process),
+            "Close",
+            Action::KillPane(tab, pane),
+        );
+    }
+    /// Every confirmation shares one dialog with the accepting button preselected.
+    fn confirm(
+        &mut self,
+        title: impl Into<String>,
+        message: impl Into<String>,
+        accept: &str,
+        action: Action,
+    ) {
+        if let Some(overlay) = self.overlay.take() {
+            self.overlay_stack.push(overlay);
+        }
+        self.open_overlay(Overlay::Menu(Menu {
+            title: title.into(),
+            message: Some(message.into()),
+            items: vec![
+                MenuItem::new("cancel", "Cancel", Action::Close),
+                MenuItem::new("confirm", accept, action),
+            ],
+            selected: 1,
+            scroll: 0,
+            search: None,
+        }));
     }
     pub fn open_tab_navigator(&mut self, model: &Model) {
         let mut items: Vec<_> = model
@@ -523,6 +616,7 @@ impl SidebarUi {
             all_items: items.clone(),
         });
         self.open_overlay(Overlay::Menu(Menu {
+            message: None,
             title: "Search tabs".into(),
             items,
             selected: model
@@ -535,6 +629,7 @@ impl SidebarUi {
     }
     pub fn show_error(&mut self, message: impl Into<String>) {
         self.open_overlay(Overlay::Menu(Menu {
+            message: None,
             title: message.into(),
             items: vec![MenuItem::new("dismiss", "Dismiss", Action::Close)],
             selected: 0,
@@ -581,6 +676,9 @@ impl SidebarUi {
                 .as_ref()
                 .filter(|press| press.animating)
                 .map(|_| self.last_frame + Duration::from_millis(8)),
+            self.drop_motion
+                .filter(|motion| motion.progress < 1.0)
+                .map(|_| self.last_frame + Duration::from_millis(8)),
             self.caret_deadline,
             self.tooltip_deadline,
         ]
@@ -592,6 +690,11 @@ impl SidebarUi {
         self.effect.is_some()
             || self.motion.is_some()
             || self.press.as_ref().is_some_and(|press| press.animating)
+            || self.drop_motion.is_some_and(|motion| motion.progress < 1.0)
+    }
+    /// Hosts report the pointer's place within its cell so short rows can tell edge from middle.
+    pub fn set_pointer_fraction(&mut self, x: f32, y: f32) {
+        self.pointer_fraction = (x.clamp(0.0, 1.0), y.clamp(0.0, 1.0));
     }
     /// Hosts stamp pointer input so click timing does not depend on repaint cadence.
     pub fn set_clock(&mut self, now: Duration) {

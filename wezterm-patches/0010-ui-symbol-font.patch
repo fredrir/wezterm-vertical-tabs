@@ -1,0 +1,29 @@
+diff --git a/wezterm-gui/src/termwindow/ui_host.rs b/wezterm-gui/src/termwindow/ui_host.rs
+index bb05d9f1..443932a9 100644
+--- a/wezterm-gui/src/termwindow/ui_host.rs
++++ b/wezterm-gui/src/termwindow/ui_host.rs
+@@ -1963,6 +1963,15 @@ impl TermWindow {
+                     clip,
+                 );
+             }
++            // Patched "Mono" fonts shrink icons into one cell; the bundled symbols font
++            // leads this chain so an icon can fill the blank cell beside it.
++            let ui_font = {
++                let mut style = self.config.font.clone();
++                style
++                    .font
++                    .insert(0, config::FontAttributes::new("Symbols Nerd Font Mono"));
++                self.fonts.resolve_font(&style).ok()
++            };
+             for (y, line) in surface.rows.iter().enumerate() {
+                 let centered_ranges = &ui.centered_ranges[y];
+                 if ui
+@@ -2009,7 +2018,7 @@ impl TermWindow {
+                             window_is_transparent: false,
+                             default_bg: palette.resolve_bg(ColorAttribute::Default).to_linear(),
+                             style: None,
+-                            font: None,
++                            font: ui_font.clone(),
+                             use_pixel_positioning: false,
+                             render_metrics: self.render_metrics,
+                             shape_key: None,

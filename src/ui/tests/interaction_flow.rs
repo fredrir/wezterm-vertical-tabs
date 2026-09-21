@@ -803,16 +803,43 @@ fn host_close_prompt_names_the_process_and_defaults_to_closing() {
         .iter()
         .map(|cell| cell.symbol())
         .collect();
-    assert!(text.contains("vim is still running"), "{text}");
-    assert!(
-        hit(&ui, &ElementId::Menu("confirm".into())).y
-            < hit(&ui, &ElementId::Menu("cancel".into())).y
+    assert!(text.contains("Close tab?"), "{text}");
+    assert!(text.contains("vim is still running."), "{text}");
+    // Buttons share a row; the accepting one sits last and starts selected.
+    let (cancel, confirm) = (
+        hit(&ui, &ElementId::Menu("cancel".into())),
+        hit(&ui, &ElementId::Menu("confirm".into())),
     );
+    assert_eq!((cancel.y, cancel.height), (confirm.y, 2));
+    assert!(cancel.right() < confirm.x);
     assert!(matches!(
         key(&mut ui, &model, Key::Enter).as_slice(),
         [UiIntent::Domain(Intent::CloseTab(10))]
     ));
     assert!(!ui.is_modal());
+
+    ui.confirm_close_tab(10, "vim");
+    draw(&mut ui, &model);
+    key(&mut ui, &model, Key::Left);
+    assert!(
+        key(&mut ui, &model, Key::Enter).is_empty(),
+        "Cancel was selected"
+    );
+    assert!(!ui.is_modal());
+
+    ui.confirm_close_pane(10, 77, "cargo");
+    draw(&mut ui, &model);
+    let text: String = ui
+        .buffer()
+        .content
+        .iter()
+        .map(|cell| cell.symbol())
+        .collect();
+    assert!(text.contains("Close split?") && text.contains("cargo is still running."));
+    assert!(matches!(
+        key(&mut ui, &model, Key::Enter).as_slice(),
+        [UiIntent::Host(HostAction::KillPane(10, 77))]
+    ));
 
     ui.confirm_close_tab(20, "");
     draw(&mut ui, &model);
@@ -822,7 +849,7 @@ fn host_close_prompt_names_the_process_and_defaults_to_closing() {
         .iter()
         .map(|cell| cell.symbol())
         .collect();
-    assert!(text.contains("Close this tab?"), "{text}");
+    assert!(text.contains("A process is still running."), "{text}");
     assert!(key(&mut ui, &model, Key::Escape).is_empty());
     assert!(!ui.is_modal());
 }

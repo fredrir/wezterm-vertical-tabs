@@ -53,6 +53,8 @@ pub enum Command {
     RequestClipboard,
     /// Close directly when the tab is idle; otherwise call `SidebarUi::confirm_close_tab`.
     ConfirmClose(TabId),
+    /// The same for one split, answered with `SidebarUi::confirm_close_pane`.
+    ConfirmClosePane(TabId, core::PaneId),
 }
 #[derive(Clone, Debug, Default)]
 pub struct Update {
@@ -427,6 +429,12 @@ impl WindowApp {
             .activate_relative(&self.model, delta, wrap, &mut intents);
         self.run(intents)
     }
+    fn owns_pane(&self, tab: TabId, pane: core::PaneId) -> bool {
+        self.model
+            .tabs
+            .get(&tab)
+            .is_some_and(|entry| entry.panes.iter().any(|entry| entry.id == pane))
+    }
     fn run(&mut self, intents: Vec<UiIntent>) -> Result<Update, Error> {
         let mut update = Update::default();
         for intent in intents {
@@ -455,13 +463,51 @@ impl WindowApp {
                         update.commands.push(Command::ConfirmClose(id));
                     }
                 }
-                UiIntent::Host(HostAction::FocusPane(tab, pane)) => {
-                    let owned = self
+                UiIntent::Host(HostAction::ClosePane(tab, pane)) => {
+                    if self.owns_pane(tab, pane) {
+                        update.commands.push(Command::ConfirmClosePane(tab, pane));
+                    }
+                }
+                UiIntent::Host(HostAction::KillPane(tab, pane)) => {
+                    if self.owns_pane(tab, pane) {
+                        update
+                            .commands
+                            .push(Command::Host(HostCommand::KillPane(pane)));
+                    }
+                }
+                UiIntent::Host(HostAction::DetachPane { tab, pane, index }) => {
+                    if self.owns_pane(tab, pane) {
+                        update
+                            .commands
+                            .push(Command::Host(HostCommand::DetachPane { pane, index }));
+                    }
+                }
+                UiIntent::Host(HostAction::JoinPane { pane, tab }) => {
+                    let owner = self
                         .model
                         .tabs
-                        .get(&tab)
-                        .is_some_and(|entry| entry.panes.iter().any(|entry| entry.id == pane));
-                    if owned {
+                        .values()
+                        .find(|entry| entry.panes.iter().any(|entry| entry.id == pane))
+                        .map(|entry| entry.id);
+                    if owner.is_some_and(|owner| owner != tab) && self.model.tabs.contains_key(&tab)
+                    {
+                        update
+                            .commands
+                            .push(Command::Host(HostCommand::JoinPane { pane, tab }));
+                    }
+                }
+                UiIntent::Host(HostAction::JoinTab { source, tab }) => {
+                    if source != tab
+                        && self.model.tabs.contains_key(&source)
+                        && self.model.tabs.contains_key(&tab)
+                    {
+                        update
+                            .commands
+                            .push(Command::Host(HostCommand::JoinTab { source, tab }));
+                    }
+                }
+                UiIntent::Host(HostAction::FocusPane(tab, pane)) => {
+                    if self.owns_pane(tab, pane) {
                         update
                             .commands
                             .push(Command::Host(HostCommand::FocusPane { tab, pane }));

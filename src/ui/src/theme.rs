@@ -45,7 +45,21 @@ impl Theme {
 
     /// Nested surfaces step toward the foreground from whatever fill contains them.
     pub(crate) fn lift(&self, fill: Color, amount: u16) -> Color {
-        let (Color::Rgb(r, g, b), Color::Rgb(fr, fg, fb)) = (fill, self.foreground) else {
+        Self::blend(fill, self.foreground, amount)
+    }
+
+    /// Drop targets lean toward the accent so a drag reads apart from a hover.
+    pub(crate) fn tint(&self, fill: Color, amount: u16) -> Color {
+        Self::blend(fill, self.accent, amount)
+    }
+
+    /// Destructive buttons lean toward the danger color.
+    pub(crate) fn warn(&self, fill: Color, amount: u16) -> Color {
+        Self::blend(fill, self.danger, amount)
+    }
+
+    fn blend(fill: Color, toward: Color, amount: u16) -> Color {
+        let (Color::Rgb(r, g, b), Color::Rgb(fr, fg, fb)) = (fill, toward) else {
             return fill;
         };
         let channel = |base: u8, foreground: u8| {

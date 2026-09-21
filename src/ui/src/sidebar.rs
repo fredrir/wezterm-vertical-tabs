@@ -1,8 +1,8 @@
 use crate::{icons, input::display_text, *};
 use ratatui::{layout::Alignment, text::Line};
 use ratatui::{
-    style::{Color, Modifier, Style},
-    widgets::{Block, Widget},
+    style::{Color, Style},
+    widgets::{Block, Clear, Widget},
 };
 use std::collections::HashMap;
 use unicode_segmentation::UnicodeSegmentation;
@@ -15,6 +15,9 @@ pub(crate) const SURFACE_RADIUS: f32 = 9.0;
 pub(crate) const ROW_INSET: f32 = 1.5;
 const PRESS_INSET: f32 = 3.0;
 const NESTED_INSET: f32 = 4.0;
+/// Share of a cell row the insertion bar fills.
+const DROP_BAR: f32 = 0.14;
+const DROP_TINT: u16 = 24;
 /// Deep enough to stay inside a pressed row's shrunken pill.
 const OCCLUDER_INSET: f32 = 6.0;
 /// The glyph, the cell its index badge or its own overflow takes, and a gap before the text.
@@ -180,6 +183,7 @@ impl SidebarUi {
             radius,
             inset,
             square,
+            scale_y: 1.0,
             stacked: false,
             shift_y: 0.0,
         });
@@ -215,7 +219,13 @@ impl SidebarUi {
             || self.hovered.as_ref() == Some(&id)
             || self.focused.as_ref() == Some(&id)
             || self.press.as_ref().is_some_and(|press| press.id == id);
-        let fill = if self.hovered.as_ref() == Some(&id) {
+        let aimed = matches!(
+            (&self.drop, &id),
+            (Some(DropTarget::Space(space)), ElementId::Space(target)) if space == target
+        );
+        let fill = if aimed {
+            self.theme.tint(self.theme.card, DROP_TINT)
+        } else if self.hovered.as_ref() == Some(&id) {
             self.theme.hover
         } else {
             self.theme.background
@@ -245,16 +255,33 @@ impl SidebarUi {
         let hovered = self.row_hovered(&row.id);
         let focused = self.focused.as_ref() == Some(&row.id);
         let pressed = self.press.as_ref().is_some_and(|press| press.id == row.id);
-        let fill = match (row.selected, hovered || pressed, row.field) {
+        // The dragged row fades where it was; whatever it would land in leans to the accent.
+        let ghost = self.dragging
+            && self
+                .drag
+                .as_ref()
+                .is_some_and(|drag| !matches!(drag, ElementId::Pane(..)) && drag.row() == row.id);
+        let aimed = self
+            .drop
+            .as_ref()
+            .is_some_and(|drop| match (drop, &row.id) {
+                (DropTarget::Into(tab), ElementId::Tab(id)) => tab == id,
+                (DropTarget::Folder(folder), ElementId::Folder(id)) => folder == id,
+                (DropTarget::NewTab, ElementId::NewTab) => true,
+                _ => false,
+            });
+        let hovered = hovered && !self.dragging;
+        let fill = match (row.selected && !ghost, hovered || pressed, row.field) {
+            _ if aimed => self.theme.tint(self.theme.card, DROP_TINT),
             (true, ..) => self.theme.selected,
             (_, true, true) => self.theme.lift(self.theme.card, 5),
             (_, true, false) | (_, false, true) => self.theme.card,
             _ => self.theme.background,
         };
         let mut style = self.theme.base().bg(fill);
-        if row.selected {
-            style = style.fg(self.theme.accent).add_modifier(Modifier::BOLD);
-        } else if hovered {
+        if ghost {
+            style = style.fg(self.theme.lift(self.theme.background, 30));
+        } else if row.selected || aimed || hovered {
             style = style.fg(self.theme.accent);
         } else if row.muted && !focused {
             style = style.fg(self.theme.muted);
@@ -265,15 +292,21 @@ impl SidebarUi {
             SURFACE_RADIUS,
             ROW_INSET + self.press_inset(&row.id),
         );
+        let on_pane = matches!(
+            self.hovered,
+            Some(ElementId::Pane(..) | ElementId::ClosePane(..))
+        );
         let trailing = row.trailing.filter(|trailing| {
             !row.compact
                 && row.rect.width > TRAILING_CELLS + ICON_CELLS
-                && (hovered || self.focused.as_ref() == Some(&trailing.id))
+                && ((hovered && !on_pane) || self.focused.as_ref() == Some(&trailing.id))
         });
+        // The index takes the icon's place while the row is hovered.
+        let icon = icons::index(row.index)
+            .filter(|_| hovered)
+            .unwrap_or(row.icon);
         if row.compact {
-            let label = row
-                .index
-                .map_or_else(|| format!("{} ", row.icon), |index| index.to_string());
+            let label = format!("{icon} ");
             let visual = icon_rect(row.rect, &label);
             self.write(
                 Rect::new(visual.x, row.rect.y, visual.width, 1),
@@ -295,7 +328,7 @@ impl SidebarUi {
         let right = row.rect.right().saturating_sub(1);
         self.write(
             Rect::new(x, row.rect.y, ICON_CELLS.min(right.saturating_sub(x)), 1),
-            format!("{}{}", row.icon, icons::badge(row.index)),
+            icon.to_owned(),
             style,
         );
         let x = (x + ICON_CELLS).min(right);
@@ -321,7 +354,26 @@ impl SidebarUi {
         if let Some(trailing) = trailing {
             self.overlay_control(trailing, row.rect, style);
         }
+        if aimed && matches!(self.drop, Some(DropTarget::Into(_))) {
+            self.split_preview(&layout);
+        }
         layout
+    }
+
+    /// The landing tab shows the split it is about to gain, popping in from a smaller pill.
+    fn split_preview(&mut self, layout: &RowLayout) {
+        let area = layout.content;
+        let width = (area.width / 2).max(MIN_SEGMENT_CELLS).min(area.width);
+        let rect = Rect::new(area.right() - width, area.y, width, area.height.min(2));
+        let progress = self.drop_motion.map_or(1.0, |motion| motion.progress);
+        Clear.render(rect, &mut self.staging);
+        let fill = self.theme.tint(layout.fill, DROP_TINT);
+        self.surface(rect, fill, 6.0, NESTED_INSET + (1.0 - progress) * 8.0);
+        self.write(
+            Rect::new(rect.x + 1, rect.y, rect.width.saturating_sub(2), 1),
+            format!("{} {}", icons::PLUS, display_text(&self.drag_label)),
+            self.theme.accent().bg(fill),
+        );
     }
 
     /// Floats over the row's content so revealing it never shifts what is beneath.
@@ -345,6 +397,12 @@ impl SidebarUi {
 
     fn pane_segments(&mut self, tab: &Tab, home: Option<&str>, layout: &RowLayout) {
         let area = layout.content;
+        let machine = |pane: &TabPane| icons::host(pane.remote, &pane.os);
+        let shown = tab
+            .panes
+            .iter()
+            .find(|pane| pane.active)
+            .map_or_else(|| icons::host(tab.remote, &tab.os), machine);
         let slots = pane_slots(&tab.panes, area.width, area.height >= 2);
         // Two text lines share the row, so the host must not center either of them.
         let mut stacked: Vec<(u16, u16)> = Vec::new();
@@ -368,7 +426,9 @@ impl SidebarUi {
                 if slot.tall { area.height.min(2) } else { 1 },
             );
             let id = ElementId::Pane(tab.id, pane.id);
-            let fill = if self.hovered.as_ref() == Some(&id) {
+            let close = ElementId::ClosePane(tab.id, pane.id);
+            let hovered = [Some(&id), Some(&close)].contains(&self.hovered.as_ref());
+            let fill = if hovered && !self.dragging {
                 let fill = self.theme.lift(layout.fill, 12);
                 let inset = if slot.tall { NESTED_INSET } else { 1.0 };
                 self.surface(rect, fill, 6.0, inset);
@@ -376,24 +436,37 @@ impl SidebarUi {
             } else {
                 layout.fill
             };
-            let style = if pane.active {
+            let style = if self.dragging && self.drag.as_ref() == Some(&id) {
+                layout.style.fg(self.theme.lift(self.theme.background, 30))
+            } else if pane.active {
                 layout.style
             } else {
-                layout
-                    .style
-                    .fg(self.theme.muted)
-                    .remove_modifier(Modifier::BOLD)
+                layout.style.fg(self.theme.muted)
             };
+            // The first column starts where every other row's label does.
+            let pad = u16::from(slot.x > 0);
+            let label = display_text(&pane.label(home));
             self.write(
-                Rect::new(rect.x + 1, rect.y, rect.width.saturating_sub(2), 1),
-                format!(
-                    "{} {}",
-                    icons::host(pane.remote, &pane.os),
-                    display_text(&pane.label(home))
-                ),
+                Rect::new(rect.x + pad, rect.y, rect.width.saturating_sub(pad + 1), 1),
+                if machine(pane) == shown {
+                    label
+                } else {
+                    format!("{} {label}", machine(pane))
+                },
                 style.bg(fill),
             );
             self.hit(id, rect, "");
+            if hovered && !self.dragging && rect.width >= TRAILING_CELLS * 2 {
+                self.overlay_control(
+                    Trailing {
+                        id: close,
+                        icon: icons::CLOSE,
+                        tooltip: "Close split",
+                    },
+                    rect,
+                    style.bg(fill),
+                );
+            }
         }
     }
 
@@ -630,7 +703,7 @@ impl SidebarUi {
         let search_y = inner.y + toolbar_height + gap;
         let search_height = if area.height >= 12 { 2 } else { 1 };
         let search = Rect::new(inner.x, search_y, inner.width, search_height);
-        let layout = self.row(Row {
+        self.row(Row {
             id: ElementId::Search,
             rect: search,
             indent: 0,
@@ -644,7 +717,7 @@ impl SidebarUi {
             trailing: None,
             field: true,
         });
-        let title_y = search.bottom() + gap;
+        let title_y = search.bottom();
         // Row height follows the room below search, before the space row claims its share.
         self.tabs_rect = Rect::new(
             inner.x,
@@ -785,22 +858,25 @@ impl SidebarUi {
                 self.theme.muted(),
             );
         }
-        if self.dragging
-            && let Some(id) = self.hovered.as_ref().map(ElementId::row)
-            && let Some(hit) = self.hits.iter().find(|h| h.id == id).cloned()
-            && matches!(
-                id,
-                ElementId::Folder(_) | ElementId::Tab(_) | ElementId::NewTab | ElementId::Space(_)
-            )
-        {
+        if let (Some(DropTarget::Beside { .. }), Some(motion)) = (&self.drop, self.drop_motion) {
+            // A thin accent bar on the row boundary, gliding between boundaries.
+            let edge = motion.from + (motion.to - motion.from) * motion.progress;
+            let row = (edge.floor() as u16).clamp(
+                self.tabs_rect.y,
+                self.tabs_rect
+                    .bottom()
+                    .saturating_sub(1)
+                    .max(self.tabs_rect.y),
+            );
             self.rounded_surfaces.push(RoundedSurface {
-                rect: hit.rect,
-                fill: self.theme.selected,
-                radius: SURFACE_RADIUS,
-                inset: ROW_INSET,
+                rect: Rect::new(inner.x + 1, row, inner.width.saturating_sub(2), 1),
+                fill: self.theme.accent,
+                radius: 2.0,
+                inset: 0.0,
                 square: false,
+                scale_y: DROP_BAR,
                 stacked: false,
-                shift_y: 0.0,
+                shift_y: edge - f32::from(row) - 0.5,
             });
         }
         if let Some(footer) = footer {

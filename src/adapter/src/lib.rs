@@ -15,7 +15,7 @@ use std::{
     time::{Duration, Instant},
 };
 use vtabs_app::{self as app, WindowApp, core, ui};
-use window::{KeyCode, MouseEventKind, MousePress, Window};
+use window::{KeyCode, MouseEventKind, MousePress, Window, WindowOps};
 
 pub use lua::register;
 
@@ -24,6 +24,7 @@ pub fn create(window_id: usize) -> Box<dyn Provider> {
 }
 
 const PASTE_TIMEOUT: Duration = Duration::from_secs(1);
+const PLACEMENT_TIMEOUT: Duration = Duration::from_secs(3);
 const MAX_PASTE_INPUTS: usize = 128;
 const MAX_PASTE_INPUT_BYTES: usize = 16 * 1024;
 
@@ -61,6 +62,8 @@ struct Adapter {
     hook_queued: HashMap<u64, core::Tab>,
     repos: repos::Repos,
     local_host: String,
+    mux_window: Option<usize>,
+    placement: Option<(usize, Instant)>,
 }
 
 impl Adapter {
@@ -105,6 +108,8 @@ impl Adapter {
             hook_queued: HashMap::new(),
             repos: repos::Repos::default(),
             local_host: sysinfo::System::host_name().unwrap_or_default(),
+            mux_window: None,
+            placement: None,
         }
     }
     fn apply(&mut self, result: Result<app::Update, core::Error>) {
@@ -119,6 +124,116 @@ impl Adapter {
                 log::warn!("tabs: {err}");
             }
         }
+    }
+    /// Local panes answer at once. A client pane cannot see its process, so its owning
+    /// server is asked and the verdict returns as a `close_check` message.
+    fn check_close(&mut self, tab: core::TabId, pane: Option<core::PaneId>) {
+        let Some(host) = mux::Mux::try_get().and_then(|mux| mux.get_tab(tab as usize)) else {
+            return;
+        };
+        let reason = if pane.is_some() {
+            mux::pane::CloseReason::Pane
+        } else {
+            mux::pane::CloseReason::Tab
+        };
+        let (remote, local): (Vec<_>, Vec<_>) = host
+            .iter_panes_ignoring_zoom()
+            .into_iter()
+            .map(|entry| entry.pane)
+            .filter(|entry| pane.is_none_or(|pane| entry.pane_id() as u64 == pane))
+            .partition(|entry| {
+                entry
+                    .downcast_ref::<wezterm_client::pane::ClientPane>()
+                    .is_some()
+            });
+        let busy = local
+            .iter()
+            .find(|entry| !entry.can_close_without_prompting(reason))
+            .map(|entry| process_name(entry.as_ref()));
+        if busy.is_some() || remote.is_empty() {
+            return self.close_checked(tab, pane, busy);
+        }
+        let (window, id) = (self.window.clone(), self.mux_window);
+        promise::spawn::spawn(async move {
+            let mut busy = None;
+            for entry in &remote {
+                let Some(client) = entry.downcast_ref::<wezterm_client::pane::ClientPane>()
+                else {
+                    continue;
+                };
+                // A stock server cannot answer; keep upstream's cautious prompt for it.
+                match client.close_info().await {
+                    Ok(info) if !info.prompt => {}
+                    Ok(info) => busy = Some(info.process),
+                    Err(_) => busy = Some(String::new()),
+                }
+                if busy.is_some() {
+                    break;
+                }
+            }
+            if let (Some(window), Some(id)) = (window, id) {
+                window.notify(crate::termwindow::TermWindowNotif::Apply(Box::new(move |tw| {
+                    tw.vtabs_message_for(
+                        id,
+                        serde_json::json!({ "close_check": { "tab": tab, "pane": pane, "process": busy } }),
+                    );
+                })));
+            }
+        })
+        .detach();
+    }
+    fn close_checked(&mut self, tab: core::TabId, pane: Option<core::PaneId>, busy: Option<String>) {
+        match (pane, busy) {
+            (None, Some(process)) => self.app.ui_mut().confirm_close_tab(tab, &process),
+            (None, None) => self.dispatch(core::Intent::CloseTab(tab)),
+            (Some(pane), Some(process)) => {
+                self.app.ui_mut().confirm_close_pane(tab, pane, &process)
+            }
+            (Some(pane), None) => {
+                self.command(app::Command::Host(core::HostCommand::KillPane(pane)))
+            }
+        }
+    }
+    /// Each pane lands as a split beside the target tab's active pane.
+    fn join(&mut self, panes: Vec<usize>, tab: usize) {
+        let Some(beside) = mux::Mux::get()
+            .get_tab(tab)
+            .and_then(|tab| tab.get_active_pane())
+            .map(|pane| pane.pane_id())
+        else {
+            return;
+        };
+        self.rearrange(async move {
+            for pane in panes {
+                mux::Mux::get()
+                    .split_pane(
+                        beside,
+                        mux::tab::SplitRequest {
+                            target_is_second: true,
+                            ..Default::default()
+                        },
+                        mux::domain::SplitSource::MovePane(pane),
+                        config::keyassignment::SpawnTabDomain::CurrentPaneDomain,
+                    )
+                    .await?;
+            }
+            Ok(())
+        });
+    }
+    /// The mux moves panes asynchronously; a refusal surfaces as the sidebar's error.
+    fn rearrange(&self, work: impl std::future::Future<Output = anyhow::Result<()>> + 'static) {
+        let window = self.window.clone();
+        let id = self.mux_window;
+        promise::spawn::spawn(async move {
+            let Err(error) = work.await else { return };
+            log::warn!("tabs: {error:#}");
+            if let (Some(window), Some(id)) = (window, id) {
+                window.notify(crate::termwindow::TermWindowNotif::Apply(Box::new(move |tw| {
+                    tw.vtabs_message_for(id, serde_json::json!({ "error": format!("{error:#}") }));
+                })));
+            }
+        })
+        .detach();
     }
     fn dispatch(&mut self, intent: core::Intent) {
         self.transact(|app| app.dispatch(intent));
@@ -142,10 +257,8 @@ impl Adapter {
                 self.app.ui_mut().invalidate();
             }
             app::Command::SetClipboard(text) => self.commands.push(Command::Clipboard(text)),
-            app::Command::ConfirmClose(id) => match running_process(id) {
-                Some(process) => self.app.ui_mut().confirm_close_tab(id, &process),
-                None => self.dispatch(core::Intent::CloseTab(id)),
-            },
+            app::Command::ConfirmClose(id) => self.check_close(id, None),
+            app::Command::ConfirmClosePane(tab, pane) => self.check_close(tab, Some(pane)),
             app::Command::RequestClipboard => {
                 self.pending_paste = Some(PendingPaste {
                     token: self.input_epoch,
@@ -191,6 +304,35 @@ impl Adapter {
                 }
                 C::MoveTabToNewWindow(id) => {
                     self.commands.push(Command::MoveToNewWindow(id as usize))
+                }
+                C::KillPane(pane) => {
+                    let mux = mux::Mux::get();
+                    if let Some((_, _, tab)) = mux.resolve_pane_id(pane as usize) {
+                        if let Some(tab) = mux.get_tab(tab) {
+                            tab.kill_pane(pane as usize);
+                        }
+                    }
+                }
+                C::DetachPane { pane, index } => {
+                    self.placement = index.map(|index| (index, Instant::now()));
+                    let window = self.mux_window;
+                    self.rearrange(async move {
+                        mux::Mux::get()
+                            .move_pane_to_new_tab(pane as usize, window, None)
+                            .await
+                            .map(|_| ())
+                    });
+                }
+                C::JoinPane { pane, tab } => self.join(vec![pane as usize], tab as usize),
+                C::JoinTab { source, tab } => {
+                    let panes = mux::Mux::get()
+                        .get_tab(source as usize)
+                        .map(|tab| tab.iter_panes_ignoring_zoom())
+                        .unwrap_or_default()
+                        .iter()
+                        .map(|entry| entry.pane.pane_id())
+                        .collect();
+                    self.join(panes, tab as usize);
                 }
                 C::FocusPane { tab, pane } => {
                     let mux = mux::Mux::get();
@@ -500,6 +642,22 @@ impl Provider for Adapter {
             self.cancel_paste();
         }
         self.app.set_window_identity(snapshot.window_id as u64);
+        self.mux_window = Some(snapshot.window_id);
+        // A pane dragged out to a position becomes a tab there once the mux reports it.
+        let arrived = self
+            .placement
+            .take()
+            .filter(|(_, since)| since.elapsed() < PLACEMENT_TIMEOUT)
+            .and_then(|placement| {
+                let known: std::collections::HashSet<_> = self.host_tabs.iter().collect();
+                match snapshot.tabs.iter().find(|tab| !known.contains(&tab.id)) {
+                    Some(tab) => Some((tab.id as u64, placement.0)),
+                    None => {
+                        self.placement = Some(placement);
+                        None
+                    }
+                }
+            });
         let before = self.app.model().revision;
         if self.config_generation != snapshot.config_epoch {
             self.config_generation = snapshot.config_epoch;
@@ -692,6 +850,9 @@ impl Provider for Adapter {
         for tab in changed {
             self.hook_queued.insert(tab.id, tab);
         }
+        if let Some((id, index)) = arrived {
+            self.dispatch(core::Intent::MoveTab { id, index });
+        }
         self.schedule_hooks();
         self.storage();
     }
@@ -864,12 +1025,14 @@ impl Provider for Adapter {
                     }
                     return false;
                 }
-                let x = ((event.coords.x as f32 - bounds.x - self.surface.offset.0)
-                    / geometry.cell_width.max(1.))
-                .floor();
-                let y = ((event.coords.y as f32 - bounds.y - self.surface.offset.1)
-                    / geometry.cell_height.max(1.))
-                .floor();
+                let x = (event.coords.x as f32 - bounds.x - self.surface.offset.0)
+                    / geometry.cell_width.max(1.);
+                let y = (event.coords.y as f32 - bounds.y - self.surface.offset.1)
+                    / geometry.cell_height.max(1.);
+                self.app
+                    .ui_mut()
+                    .set_pointer_fraction(x.rem_euclid(1.), y.rem_euclid(1.));
+                let (x, y) = (x.floor(), y.floor());
                 let (x, y) = if inside
                     && x >= 0.
                     && y >= 0.
@@ -954,6 +1117,14 @@ impl Provider for Adapter {
             }
         } else if let Some(error) = message.get("error").and_then(|v| v.as_str()) {
             self.app.ui_mut().set_error(error);
+        } else if let Some(check) = message.get("close_check") {
+            if let Some(tab) = check.get("tab").and_then(|v| v.as_u64()) {
+                self.close_checked(
+                    tab,
+                    check.get("pane").and_then(|v| v.as_u64()),
+                    check.get("process").and_then(|v| v.as_str()).map(str::to_owned),
+                );
+            }
         } else if let Some(context) = message.get("initialize") {
             if let Some(transfer) = context.get("transfer") {
                 match serde_json::from_value::<app::WindowTransfer>(transfer.clone()) {
@@ -1120,9 +1291,11 @@ impl Provider for Adapter {
                         .map(|shape| RoundedSurface {
                             bounds: Bounds {
                                 x: shape.rect.x as f32,
-                                y: shape.rect.y as f32 + shape.shift_y,
+                                y: shape.rect.y as f32
+                                    + shape.shift_y
+                                    + shape.rect.height as f32 * (1. - shape.scale_y) / 2.,
                                 width: shape.rect.width as f32,
-                                height: shape.rect.height as f32,
+                                height: shape.rect.height as f32 * shape.scale_y,
                             },
                             radius: shape.radius,
                             inset: shape.inset,
@@ -1275,23 +1448,14 @@ impl Provider for Adapter {
     }
 }
 
-/// Upstream close policy: `skip_close_confirmation_for_processes_named`, the
-/// `mux-is-process-stateful` hook and remote panes. Empty when the tab is idle or gone.
-fn running_process(id: core::TabId) -> Option<String> {
-    let tab = mux::Mux::try_get()?.get_tab(id as usize)?;
-    if tab.can_close_without_prompting(mux::pane::CloseReason::Tab) {
-        return None;
-    }
-    let name = tab
-        .get_active_pane()
-        .and_then(|pane| pane.get_foreground_process_name(mux::pane::CachePolicy::AllowStale))
-        .unwrap_or_default();
-    Some(
-        std::path::Path::new(&name)
-            .file_name()
-            .map(|name| name.to_string_lossy().into_owned())
-            .unwrap_or_default(),
-    )
+fn process_name(pane: &dyn mux::pane::Pane) -> String {
+    pane.get_foreground_process_name(mux::pane::CachePolicy::AllowStale)
+        .and_then(|path| {
+            std::path::Path::new(&path)
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+        })
+        .unwrap_or_default()
 }
 
 fn home_dir() -> Option<String> {

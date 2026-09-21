@@ -13,15 +13,23 @@ pub(crate) const FOLDER_OPEN: &str = "\u{f0dcf}";
 pub(crate) const LOCAL: &str = "\u{f120}";
 pub(crate) const REMOTE: &str = "\u{f048b}";
 pub(crate) const COMMAND: &str = "\u{f0633}";
+pub(crate) const ALERT: &str = "\u{f05d6}";
 const SPACE_DOT: &str = "\u{f0ec3}";
 
-/// Indexes ride along as a subscript of the icon; only `Cmd+1`..`Cmd+9` exist.
-pub(crate) fn badge(index: Option<usize>) -> &'static str {
-    const DIGITS: [&str; 9] = ["₁", "₂", "₃", "₄", "₅", "₆", "₇", "₈", "₉"];
-    index
-        .and_then(|index| DIGITS.get(index.checked_sub(1)?))
-        .copied()
-        .unwrap_or(" ")
+/// Hovering a row swaps its icon for its index; only `Cmd+1`..`Cmd+9` exist.
+pub(crate) fn index(index: Option<usize>) -> Option<&'static str> {
+    const DIGITS: [&str; 9] = [
+        "\u{f03a6}",
+        "\u{f03a9}",
+        "\u{f03ac}",
+        "\u{f03ae}",
+        "\u{f03b0}",
+        "\u{f03b5}",
+        "\u{f03b8}",
+        "\u{f03bb}",
+        "\u{f03be}",
+    ];
+    DIGITS.get(index?.checked_sub(1)?).copied()
 }
 
 /// The stock space icon joins the glyph set so the footer reads at one size.

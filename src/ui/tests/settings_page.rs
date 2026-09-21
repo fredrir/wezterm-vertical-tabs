@@ -360,7 +360,7 @@ fn settings_stay_listed_as_a_tab_until_closed() {
         .map(|x| ui.buffer()[(x, row.rect.y)].symbol())
         .collect();
     assert!(
-        text.contains(&format!("{}₃ Settings", icons::SETTINGS)),
+        text.contains(&format!("{}  Settings", icons::SETTINGS)),
         "{text}"
     );
     assert!(!has(&ui, ElementId::CloseSettingsTab));
@@ -483,30 +483,34 @@ fn settings_keeps_its_index_when_later_tabs_open_and_earlier_tabs_close() {
     ui.set_layout(28, 0);
     ui.open_settings();
     draw(&mut ui, &model);
-    let numbers = |ui: &SidebarUi| -> Vec<String> {
+    // Hovering a row swaps its icon for its index glyph; read every row's that way.
+    let numbers = |ui: &mut SidebarUi, model: &Model| -> Vec<String> {
         let mut rows: Vec<_> = ui
             .hit_regions()
             .iter()
             .filter(|hit| matches!(hit.id, ElementId::Tab(_) | ElementId::SettingsTab))
-            .map(|hit| {
-                let text: String = (hit.rect.x..hit.rect.right())
-                    .map(|x| ui.buffer()[(x, hit.rect.y)].symbol())
-                    .collect();
-                let label = text
-                    .trim_start()
-                    .chars()
-                    .skip(1)
-                    .collect::<String>()
-                    .split_whitespace()
-                    .collect::<Vec<_>>()
-                    .join(" ");
-                (hit.rect.y, label)
-            })
+            .map(|hit| (hit.rect, hit.id == ElementId::SettingsTab))
             .collect();
-        rows.sort();
-        rows.into_iter().map(|(_, label)| label).collect()
+        rows.sort_by_key(|(rect, _)| rect.y);
+        rows.into_iter()
+            .map(|(rect, settings)| {
+                ui.event(
+                    model,
+                    UiInput::PointerMove {
+                        x: rect.x + 1,
+                        y: rect.y,
+                    },
+                );
+                draw(ui, model);
+                let glyph = ui.buffer()[(rect.x + 1, rect.y)].symbol().to_owned();
+                let number = (1..=9)
+                    .find(|n| icons::index(Some(*n)) == Some(glyph.as_str()))
+                    .expect("hovered row shows its index");
+                format!("{number}{}", if settings { " Settings" } else { "" })
+            })
+            .collect()
     };
-    assert_eq!(numbers(&ui), ["₁", "₂", "₃ Settings"]);
+    assert_eq!(numbers(&mut ui, &model), ["1", "2", "3 Settings"]);
 
     let tab = |id| vtabs_core::Tab {
         id,
@@ -517,7 +521,7 @@ fn settings_keeps_its_index_when_later_tabs_open_and_earlier_tabs_close() {
         .unwrap();
     ui.hide_settings();
     draw(&mut ui, &model);
-    assert_eq!(numbers(&ui), ["₁", "₂", "₃ Settings", "₄"]);
+    assert_eq!(numbers(&mut ui, &model), ["1", "2", "3 Settings", "4"]);
 
     let command = Modifiers {
         super_key: true,
@@ -547,7 +551,7 @@ fn settings_keeps_its_index_when_later_tabs_open_and_earlier_tabs_close() {
         .reconcile(vec![tab(2), tab(3)], Some(3), true)
         .unwrap();
     draw(&mut ui, &model);
-    assert_eq!(numbers(&ui), ["₁", "₂ Settings", "₃"]);
+    assert_eq!(numbers(&mut ui, &model), ["1", "2 Settings", "3"]);
 }
 
 #[test]

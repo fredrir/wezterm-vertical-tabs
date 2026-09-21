@@ -61,20 +61,23 @@ return config
 | Space row             | Click collapses pinned tabs and folders; hover shows the chevron and the new-folder plus; right click edits the space   |
 | Folders               | Create with the space row plus; rename, collapse, reorder, add a tab or ungroup from the context menu                   |
 | Tab grouping          | Drag onto a folder, or use the tab context menu                                                                         |
-| Reordering            | Drag tabs, folders and spaces; context menus provide Move up / Move down                                                |
+| Reordering            | Drag to a row's edge, where an accent bar marks the landing; folders and spaces drag too; Escape abandons a drag        |
+| Split by dragging     | Drop a tab or pane on a row's middle to join it as a split; drag a pane out to an edge or New Tab for its own tab       |
 | Ungrouping            | Drop onto New Tab to ungroup and unpin; Remove from folder keeps the pin; processes remain running                      |
 | Pinned order          | Pinned tabs and folders precede New Tab; ordinary tabs follow                                                           |
 | Space assignment      | Drop a tab on a bottom space control or use Move to space                                                               |
 | Folder persistence    | Catalog, names and collapse state persist; live membership follows the session boundary in [Boundaries](limitations.md) |
 | Tab title             | Double-click edits in place with the text selected; Enter saves, Escape cancels, an empty title restores the directory  |
 | Tab icon              | Machine of the active pane: terminal when local, else its OS, relayed per pane by each patched `wezterm-mux-server`     |
-| Tab index             | Subscript beside the icon, sharing its two cells, for `Cmd+1`-`Cmd+9` (`show_indexes`); labels keep one column          |
+| Tab index             | Replaces the row's icon while hovered, for `Cmd+1`-`Cmd+9` (`show_indexes`)                                             |
+| Icons                 | Drawn from WezTerm's bundled symbols font, so their size does not depend on the terminal font's Nerd Font variant       |
 | Splits                | Mirrors the layout in one row: side-by-side panes as columns, top/bottom panes as its two lines; click focuses a pane   |
 | Close control         | Floats over the hovered tab row without moving its content (`show_close`)                                               |
 | Hints                 | Compact, beside the sidebar and level with the control; tabs show none outside the collapsed rail                       |
 | Motion                | Finite hover/selection transitions and press shrink; `reduced_motion` disables animation                                |
-| Closing tabs          | Idle tabs close at once; a running process prompts with Close preselected (`confirm_close`, upstream skip list, remote) |
-| Menus and prompts     | Context menus open under the pointer or focused control; confirmations preselect the confirming action                  |
+| Closing tabs          | Idle tabs close at once; only a running process prompts, judged by the pane's owning mux (`confirm_close`, skip list)   |
+| Closing splits        | Hovering a split reveals its own ×; the tab's × shows over the icon side of the row                                     |
+| Menus and prompts     | Context menus open under the pointer or focused control; confirmations are a dialog with the accepting button selected  |
 
 **Spaces and routing**
 

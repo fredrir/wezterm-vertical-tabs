@@ -1,0 +1,134 @@
+diff --git a/codec/src/lib.rs b/codec/src/lib.rs
+index e504ec52..f44231c0 100644
+--- a/codec/src/lib.rs
++++ b/codec/src/lib.rs
+@@ -505,6 +505,8 @@ pdu! {
+     AdjustPaneSize: 62,
+     GetHostInfo: 63,
+     GetHostInfoResponse: 64,
++    GetPaneCloseInfo: 65,
++    GetPaneCloseInfoResponse: 66,
+ }
+ 
+ impl Pdu {
+@@ -892,6 +894,19 @@ pub struct GetHostInfo {
+     pub pane_id: Option<PaneId>,
+ }
+ 
++/// A client cannot see what runs in a remote pane, so its owner judges the close.
++#[derive(Deserialize, Serialize, PartialEq, Debug)]
++pub struct GetPaneCloseInfo {
++    pub pane_id: PaneId,
++}
++
++#[derive(Deserialize, Serialize, PartialEq, Eq, Debug, Clone, Default)]
++pub struct GetPaneCloseInfoResponse {
++    /// The owner's own close policy: skip list, `mux-is-process-stateful`, process tree.
++    pub prompt: bool,
++    pub process: String,
++}
++
+ #[derive(Deserialize, Serialize, PartialEq, Eq, Debug, Clone, Default)]
+ pub struct GetHostInfoResponse {
+     /// The os-release `ID`, or the platform name where no such file exists.
+diff --git a/wezterm-client/src/client.rs b/wezterm-client/src/client.rs
+index bd0493e3..4e48cdda 100644
+--- a/wezterm-client/src/client.rs
++++ b/wezterm-client/src/client.rs
+@@ -1342,6 +1342,11 @@ impl Client {
+     rpc!(ping, Ping = (), Pong);
+     rpc!(list_panes, ListPanes = (), ListPanesResponse);
+     rpc!(get_host_info, GetHostInfo, GetHostInfoResponse);
++    rpc!(
++        get_pane_close_info,
++        GetPaneCloseInfo,
++        GetPaneCloseInfoResponse
++    );
+     rpc!(spawn_v2, SpawnV2, SpawnResponse);
+     rpc!(split_pane, SplitPane, SpawnResponse);
+     rpc!(
+diff --git a/wezterm-client/src/pane/clientpane.rs b/wezterm-client/src/pane/clientpane.rs
+index 5e9037b7..3d2054ef 100644
+--- a/wezterm-client/src/pane/clientpane.rs
++++ b/wezterm-client/src/pane/clientpane.rs
+@@ -161,6 +161,16 @@ impl ClientPane {
+         self.host_info.lock().clone()
+     }
+ 
++    /// Asked at close time, since what runs in the pane changes; an error means a stock server.
++    pub async fn close_info(&self) -> anyhow::Result<GetPaneCloseInfoResponse> {
++        self.client
++            .client
++            .get_pane_close_info(GetPaneCloseInfo {
++                pane_id: self.remote_pane_id,
++            })
++            .await
++    }
++
+     /// An intermediate mux answers for the pane's real owner rather than for itself.
+     pub async fn relay_host_info(&self) -> anyhow::Result<GetHostInfoResponse> {
+         if let Some(info) = self.host_info() {
+diff --git a/wezterm-mux-server-impl/src/sessionhandler.rs b/wezterm-mux-server-impl/src/sessionhandler.rs
+index 4d7b8344..679107bd 100644
+--- a/wezterm-mux-server-impl/src/sessionhandler.rs
++++ b/wezterm-mux-server-impl/src/sessionhandler.rs
+@@ -276,6 +276,17 @@ impl SessionHandler {
+ 
+         match decoded.pdu {
+             Pdu::Ping(Ping {}) => send_response(Ok(Pdu::Pong(Pong {}))),
++            Pdu::GetPaneCloseInfo(GetPaneCloseInfo { pane_id }) => {
++                spawn_into_main_thread(async move {
++                    promise::spawn::spawn(async move {
++                        send_response(Ok(Pdu::GetPaneCloseInfoResponse(
++                            close_info(pane_id).await,
++                        )))
++                    })
++                    .detach();
++                })
++                .detach();
++            }
+             Pdu::GetHostInfo(GetHostInfo { pane_id }) => {
+                 spawn_into_main_thread(async move {
+                     promise::spawn::spawn(async move {
+@@ -1008,6 +1019,7 @@ impl SessionHandler {
+             | Pdu::LivenessResponse { .. }
+             | Pdu::GetPaneDirectionResponse { .. }
+             | Pdu::GetHostInfoResponse { .. }
++            | Pdu::GetPaneCloseInfoResponse { .. }
+             | Pdu::SearchScrollbackResponse { .. }
+             | Pdu::GetLinesResponse { .. }
+             | Pdu::GetCodecVersionResponse { .. }
+@@ -1043,6 +1055,33 @@ fn schedule_domain_spawn_v2<SND>(
+         .detach();
+ }
+ 
++/// The pane's owner applies the ordinary local policy; a relay asks further along. A pane
++/// that is gone needs no prompt, and an owner that cannot answer keeps the prompt.
++async fn close_info(pane_id: PaneId) -> GetPaneCloseInfoResponse {
++    let Some(pane) = Mux::get().get_pane(pane_id) else {
++        return GetPaneCloseInfoResponse::default();
++    };
++    if let Some(relayed) = pane.downcast_ref::<wezterm_client::pane::ClientPane>() {
++        return relayed
++            .close_info()
++            .await
++            .unwrap_or(GetPaneCloseInfoResponse {
++                prompt: true,
++                process: String::new(),
++            });
++    }
++    let prompt = !pane.can_close_without_prompting(mux::pane::CloseReason::Pane);
++    let process = pane
++        .get_foreground_process_name(CachePolicy::AllowStale)
++        .and_then(|path| {
++            std::path::Path::new(&path)
++                .file_name()
++                .map(|name| name.to_string_lossy().into_owned())
++        })
++        .unwrap_or_default();
++    GetPaneCloseInfoResponse { prompt, process }
++}
++
+ /// A pane this server merely relays belongs to the machine further along the chain.
+ async fn host_info(pane_id: Option<PaneId>) -> GetHostInfoResponse {
+     if let Some(pane) = pane_id.and_then(|id| Mux::get().get_pane(id)) {

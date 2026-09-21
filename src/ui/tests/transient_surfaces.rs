@@ -86,7 +86,7 @@ fn search_opens_as_a_centered_palette_of_sidebar_rows_without_expanding_either_s
             let text: String = (first.x..first.right())
                 .map(|x| ui.buffer()[(x, first.y)].symbol())
                 .collect();
-            assert!(text.contains('₁'), "{text:?}");
+            assert!(text.trim_start().starts_with(icons::LOCAL), "{text:?}");
         }
     }
 }

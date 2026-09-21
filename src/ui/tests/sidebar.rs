@@ -209,14 +209,14 @@ fn tab_rows_show_host_icon_index_and_directory() {
     assert!(
         row(1)
             .trim_start()
-            .starts_with(&format!("{local}₁ dotfiles"))
+            .starts_with(&format!("{local}  dotfiles"))
     );
     assert!(
         row(2)
             .trim_start()
-            .starts_with(&format!("{local}₂ ~/Downloads"))
+            .starts_with(&format!("{local}  ~/Downloads"))
     );
-    assert!(row(3).trim_start().starts_with(&format!("{local}₃ /etc")));
+    assert!(row(3).trim_start().starts_with(&format!("{local}  /etc")));
 }
 
 #[test]
@@ -364,7 +364,6 @@ fn rows_touch_within_a_group_and_groups_keep_a_gap() {
     let folder = ElementId::Folder(model.folders[0].id.clone());
     for (above, below) in [
         (ElementId::Rail, ElementId::Search),
-        (ElementId::Search, ElementId::SpaceTitle),
         (ElementId::Tab(3), ElementId::NewTab),
     ] {
         assert_eq!(
@@ -374,6 +373,7 @@ fn rows_touch_within_a_group_and_groups_keep_a_gap() {
         );
     }
     for (above, below) in [
+        (ElementId::Search, ElementId::SpaceTitle),
         (ElementId::SpaceTitle, folder.clone()),
         (folder, ElementId::Tab(3)),
         (ElementId::NewTab, ElementId::Tab(1)),
@@ -464,7 +464,7 @@ fn remote_tabs_show_their_operating_system_and_local_tabs_a_terminal() {
         assert!(
             row_text(&ui, rect, rect.y)
                 .trim_start()
-                .starts_with(&format!("{icon}{}", icons::badge(Some(id as usize)))),
+                .starts_with(&format!("{icon}  ")),
             "tab {id}"
         );
     }
@@ -535,8 +535,17 @@ fn space_title_swaps_its_icon_on_hover_and_collapses_pinned_tabs_and_folders() {
     for hidden in [ElementId::Tab(2), folder] {
         assert!(ui.hits.iter().all(|hit| hit.id != hidden), "{hidden:?}");
     }
+    // Hidden rows keep their index, so the remaining tab is still the second.
     let rect = hit_rect(&ui, &ElementId::Tab(1));
-    assert!(row_text(&ui, rect, rect.y).contains("₂"));
+    ui.event(
+        &model,
+        UiInput::PointerMove {
+            x: rect.x + 1,
+            y: rect.y,
+        },
+    );
+    ui.render(&model, area, Duration::ZERO);
+    assert!(row_text(&ui, rect, rect.y).contains(icons::index(Some(2)).unwrap()));
 }
 
 #[test]
@@ -706,15 +715,15 @@ fn left_icons_share_one_column_and_one_gap_before_their_text() {
     );
     let mut ui = SidebarUi::new();
     ui.render(&model, Rect::new(0, 0, 32, 32), Duration::ZERO);
-    for (id, icon, badge, text) in [
-        (ElementId::Search, icons::SEARCH, " ", "Search"),
-        (ElementId::SpaceTitle, icons::SPACE, " ", "Home"),
-        (ElementId::NewTab, icons::PLUS, " ", "New"),
-        (ElementId::Tab(1), icons::LOCAL, "₁", "~/project"),
+    for (id, icon, text) in [
+        (ElementId::Search, icons::SEARCH, "Search"),
+        (ElementId::SpaceTitle, icons::SPACE, "Home"),
+        (ElementId::NewTab, icons::PLUS, "New"),
+        (ElementId::Tab(1), icons::LOCAL, "~/project"),
     ] {
         let rect = hit_rect(&ui, &id);
         assert!(
-            row_text(&ui, rect, rect.y).starts_with(&format!(" {icon}{badge} {text}")),
+            row_text(&ui, rect, rect.y).starts_with(&format!(" {icon}  {text}")),
             "{id:?}: {:?}",
             row_text(&ui, rect, rect.y)
         );
@@ -814,9 +823,13 @@ fn hovering_a_split_tab_floats_the_close_control_without_moving_its_panes() {
     let resting = panes(&ui);
     let local = row_text(&ui, resting[0], resting[0].y);
     let remote = row_text(&ui, resting[1], resting[1].y);
-    assert!(
-        local.contains(&format!("{} ~/api", icons::LOCAL)),
-        "{local:?}"
+    // The row's icon already names the active pane's machine; only others repeat theirs.
+    let solo = hit_rect(&ui, &ElementId::Tab(1));
+    assert!(local.starts_with("~/api"), "{local:?}");
+    assert_eq!(
+        resting[0].x,
+        solo.x + 1 + ICON_CELLS,
+        "labels share one column"
     );
     assert!(remote.contains("\u{f303} /web"), "{remote:?}");
 
@@ -1008,4 +1021,307 @@ fn split_layout_is_mirrored_as_columns_and_two_text_lines() {
             .any(|surface| surface.stacked && surface.rect.y == row.y && surface.rect.height == 2),
         "stacked lines opt out of the host's vertical centering"
     );
+}
+
+/// Presses `from`, drags to `to` at a height within its row, and optionally releases.
+fn drag(
+    ui: &mut SidebarUi,
+    model: &Model,
+    area: Rect,
+    from: Rect,
+    to: Rect,
+    within: f32,
+    release: bool,
+) -> Vec<UiIntent> {
+    let spot = f32::from(to.height) * within;
+    let (x, y) = (to.x + to.width / 2, to.y + (spot as u16).min(to.height - 1));
+    ui.event(
+        model,
+        UiInput::PointerDown {
+            x: from.x + 1,
+            y: from.y,
+            button: MouseButton::Left,
+            modifiers: Modifiers::default(),
+        },
+    );
+    ui.set_pointer_fraction(0.5, spot.fract());
+    ui.event(model, UiInput::PointerMove { x, y });
+    ui.render(model, area, Duration::from_millis(500));
+    if !release {
+        return Vec::new();
+    }
+    ui.event(
+        model,
+        UiInput::PointerUp {
+            x,
+            y,
+            button: MouseButton::Left,
+        },
+    )
+}
+
+fn four_tabs() -> Model {
+    let mut model = Model::default();
+    tabs(
+        &mut model,
+        (1..=4)
+            .map(|id| Tab {
+                id,
+                cwd: format!("/srv/t{id}"),
+                ..Tab::default()
+            })
+            .collect(),
+    );
+    model
+}
+
+#[test]
+fn a_row_edge_reorders_and_its_middle_joins_as_a_split() {
+    let model = four_tabs();
+    let area = Rect::new(0, 0, 40, 40);
+    for (from, to, within, expected) in [
+        (1, 3, 0.1, Some(1)),
+        (1, 3, 0.9, Some(2)),
+        (4, 2, 0.1, Some(1)),
+        (4, 2, 0.9, Some(2)),
+        (1, 3, 0.5, None),
+    ] {
+        let mut ui = SidebarUi::new();
+        ui.render(&model, area, Duration::ZERO);
+        let (source, target) = (
+            hit_rect(&ui, &ElementId::Tab(from)),
+            hit_rect(&ui, &ElementId::Tab(to)),
+        );
+        let intents = drag(&mut ui, &model, area, source, target, within, true);
+        match expected {
+            Some(index) => assert!(
+                matches!(
+                    intents.as_slice(),
+                    [UiIntent::Domain(Intent::MoveTab { id, index: at })]
+                        if *id == from && *at == index
+                ),
+                "{from} onto {to} at {within}: {intents:?}"
+            ),
+            None => assert!(
+                matches!(
+                    intents.as_slice(),
+                    [UiIntent::Host(HostAction::JoinTab { source, tab })]
+                        if *source == from && *tab == to
+                ),
+                "{intents:?}"
+            ),
+        }
+    }
+}
+
+#[test]
+fn a_dragged_pane_becomes_its_own_tab_or_joins_another() {
+    let mut model = four_tabs();
+    let mut split = model.tabs[&2].clone();
+    split.panes = [21, 22]
+        .map(|id| vtabs_core::TabPane {
+            id,
+            cwd: format!("/srv/p{id}"),
+            active: id == 21,
+            ..Default::default()
+        })
+        .into();
+    let rest = [1, 3, 4].map(|id| model.tabs[&id].clone());
+    model
+        .reconcile([rest.to_vec(), vec![split]].concat(), Some(1), true)
+        .unwrap();
+    let area = Rect::new(0, 0, 48, 40);
+    let outcome = |to: ElementId, within: f32| {
+        let mut ui = SidebarUi::new();
+        ui.render(&model, area, Duration::ZERO);
+        let (pane, target) = (hit_rect(&ui, &ElementId::Pane(2, 22)), hit_rect(&ui, &to));
+        drag(&mut ui, &model, area, pane, target, within, true)
+    };
+    let at = model.visible_ids().iter().position(|id| *id == 4).unwrap();
+    assert!(matches!(
+        outcome(ElementId::Tab(4), 0.1).as_slice(),
+        [UiIntent::Host(HostAction::DetachPane { tab: 2, pane: 22, index })] if *index == Some(at)
+    ));
+    assert!(matches!(
+        outcome(ElementId::NewTab, 0.5).as_slice(),
+        [UiIntent::Host(HostAction::DetachPane {
+            tab: 2,
+            pane: 22,
+            index: None
+        })]
+    ));
+    assert!(matches!(
+        outcome(ElementId::Tab(4), 0.5).as_slice(),
+        [UiIntent::Host(HostAction::JoinPane { pane: 22, tab: 4 })]
+    ));
+    assert!(
+        outcome(ElementId::Tab(2), 0.5).is_empty(),
+        "its own tab is no target"
+    );
+}
+
+#[test]
+fn drags_preview_where_they_land_and_escape_abandons_them() {
+    let model = four_tabs();
+    let area = Rect::new(0, 0, 40, 40);
+    let mut ui = SidebarUi::new();
+    ui.render(&model, area, Duration::ZERO);
+    let (source, target) = (
+        hit_rect(&ui, &ElementId::Tab(1)),
+        hit_rect(&ui, &ElementId::Tab(3)),
+    );
+    let bar = |ui: &SidebarUi| {
+        ui.rounded_surfaces
+            .iter()
+            .find(|surface| surface.scale_y < 1.0)
+            .map(|surface| f32::from(surface.rect.y) + 0.5 + surface.shift_y)
+    };
+    drag(&mut ui, &model, area, source, target, 0.9, false);
+    assert_eq!(
+        bar(&ui),
+        Some(f32::from(target.bottom())),
+        "bar rests on the boundary"
+    );
+    assert!(
+        !row_text(&ui, source, source.y).is_empty()
+            && ui.buffer[(source.x + 5, source.y)].fg != ui.theme.foreground,
+        "the dragged row fades in place"
+    );
+
+    // The bar glides to the next boundary rather than jumping there.
+    ui.set_pointer_fraction(0.5, 0.05);
+    ui.event(
+        &model,
+        UiInput::PointerMove {
+            x: target.x + 4,
+            y: target.y,
+        },
+    );
+    ui.render(&model, area, Duration::from_millis(500));
+    ui.render(&model, area, Duration::from_millis(520));
+    let moving = bar(&ui).unwrap();
+    assert!(moving > f32::from(target.y) && moving < f32::from(target.bottom()));
+    assert!(ui.has_animation());
+    ui.render(&model, area, Duration::from_millis(900));
+    assert_eq!(bar(&ui), Some(f32::from(target.y)));
+    assert!(!ui.has_animation());
+
+    // Just below the row's midline is its middle zone: the drop joins instead of reordering.
+    ui.set_pointer_fraction(0.5, 0.1);
+    ui.event(
+        &model,
+        UiInput::PointerMove {
+            x: target.x + 4,
+            y: target.y + 1,
+        },
+    );
+    ui.render(&model, area, Duration::from_millis(1200));
+    assert_eq!(bar(&ui), None);
+    let text = row_text(&ui, target, target.y);
+    assert!(text.contains(&format!("{} /t1", icons::PLUS)), "{text:?}");
+
+    ui.event(&model, UiInput::key(Key::Escape));
+    ui.render(&model, area, Duration::from_millis(1300));
+    assert!(!row_text(&ui, target, target.y).contains("/t1"));
+    assert!(
+        ui.event(
+            &model,
+            UiInput::PointerUp {
+                x: target.x + 4,
+                y: target.y + 1,
+                button: MouseButton::Left,
+            },
+        )
+        .is_empty(),
+        "an abandoned drag drops nothing"
+    );
+}
+
+#[test]
+fn hovering_a_split_reveals_its_own_close_and_hides_the_tabs() {
+    let mut model = Model::default();
+    tabs(
+        &mut model,
+        vec![Tab {
+            id: 1,
+            panes: [7, 8]
+                .map(|id| vtabs_core::TabPane {
+                    id,
+                    cwd: format!("/srv/p{id}"),
+                    active: id == 7,
+                    ..Default::default()
+                })
+                .into(),
+            ..Tab::default()
+        }],
+    );
+    let area = Rect::new(0, 0, 48, 32);
+    let mut ui = SidebarUi::new();
+    ui.render(&model, area, Duration::ZERO);
+    let has = |ui: &SidebarUi, id: ElementId| ui.hits.iter().any(|hit| hit.id == id);
+    assert!(!has(&ui, ElementId::ClosePane(1, 8)));
+
+    let pane = hit_rect(&ui, &ElementId::Pane(1, 8));
+    ui.event(
+        &model,
+        UiInput::PointerMove {
+            x: pane.x + 1,
+            y: pane.y,
+        },
+    );
+    ui.render(&model, area, Duration::ZERO);
+    assert!(has(&ui, ElementId::ClosePane(1, 8)));
+    assert!(!has(&ui, ElementId::ClosePane(1, 7)));
+    assert!(
+        !has(&ui, ElementId::CloseTab(1)),
+        "one close control at a time"
+    );
+    let close = hit_rect(&ui, &ElementId::ClosePane(1, 8));
+    assert_eq!(close.right(), pane.right());
+
+    let ask = pointer_at(&mut ui, &model, close);
+    assert!(matches!(
+        ask.as_slice(),
+        [UiIntent::Host(HostAction::ClosePane(1, 8))]
+    ));
+    model.settings.confirm_close = false;
+    model.revision += 1;
+    ui.render(&model, area, Duration::ZERO);
+    let direct = pointer_at(&mut ui, &model, close);
+    assert!(matches!(
+        direct.as_slice(),
+        [UiIntent::Host(HostAction::KillPane(1, 8))]
+    ));
+
+    // The icon side of the row still offers the whole tab's close.
+    let row = hit_rect(&ui, &ElementId::Tab(1));
+    ui.event(
+        &model,
+        UiInput::PointerMove {
+            x: row.x + 1,
+            y: row.y,
+        },
+    );
+    ui.render(&model, area, Duration::ZERO);
+    assert!(has(&ui, ElementId::CloseTab(1)));
+}
+
+fn pointer_at(ui: &mut SidebarUi, model: &Model, rect: Rect) -> Vec<UiIntent> {
+    ui.event(
+        model,
+        UiInput::PointerDown {
+            x: rect.x,
+            y: rect.y,
+            button: MouseButton::Left,
+            modifiers: Modifiers::default(),
+        },
+    );
+    ui.event(
+        model,
+        UiInput::PointerUp {
+            x: rect.x,
+            y: rect.y,
+            button: MouseButton::Left,
+        },
+    )
 }

@@ -116,6 +116,7 @@ impl SidebarUi {
             self.dirty = true;
         }
         self.advance_press(model, now);
+        self.advance_drop(model, now);
         if !self.dirty && self.effect.is_none() {
             return self
                 .motion
@@ -218,6 +219,30 @@ impl SidebarUi {
         std::mem::swap(&mut self.buffer, &mut self.staging);
         self.dirty = false;
         Some(self.finish_frame(resized, changed_cells, dirty_rows, now))
+    }
+
+    /// Drop previews move fast enough to keep up with the pointer, never slower than a frame or two.
+    fn advance_drop(&mut self, model: &Model, now: Duration) {
+        let Some(motion) = &mut self.drop_motion else {
+            return;
+        };
+        let settings = &model.settings;
+        let span = if settings.animations && !settings.reduced_motion {
+            Duration::from_millis(u64::from(settings.animation_ms) * 2 / 3)
+        } else {
+            Duration::ZERO
+        };
+        let start = *motion.start.get_or_insert(now);
+        let progress = if span.is_zero() {
+            1.0
+        } else {
+            let t = (now.saturating_sub(start).as_secs_f32() / span.as_secs_f32()).clamp(0.0, 1.0);
+            1.0 - (1.0 - t).powi(3)
+        };
+        if motion.progress != progress {
+            motion.progress = progress;
+            self.dirty = true;
+        }
     }
 
     /// A press shrinks its surface and a release grows it back, even for a quick click.
@@ -342,7 +367,7 @@ impl SidebarUi {
     fn prune_targets(&mut self, model: &Model) {
         let valid = |id: &ElementId| match id {
             ElementId::Tab(id) | ElementId::CloseTab(id) => model.tabs.contains_key(id),
-            ElementId::Pane(id, pane) => model
+            ElementId::Pane(id, pane) | ElementId::ClosePane(id, pane) => model
                 .tabs
                 .get(id)
                 .is_some_and(|tab| tab.panes.iter().any(|entry| entry.id == *pane)),
@@ -444,6 +469,14 @@ impl SidebarUi {
             && menu.search.is_some()
         {
             self.compose_palette(area, menu);
+            return;
+        }
+        if let Overlay::Menu(menu) = overlay
+            && let Some(message) = &menu.message
+            && area.height >= DIALOG_ROWS
+            && area.width >= 24
+        {
+            self.compose_dialog(area, menu, message);
             return;
         }
         let desired_height = match overlay {
@@ -584,6 +617,66 @@ impl SidebarUi {
                     }
                 }
             }
+        }
+    }
+
+    /// A question, what it costs, and two buttons: the accepting one preselected and last.
+    fn compose_dialog(&mut self, area: Rect, menu: &Menu, message: &str) {
+        let explained = !message.is_empty();
+        let rect = centered(area, 46, DIALOG_ROWS - u16::from(!explained));
+        self.overlay_rect = rect;
+        Clear.render(rect, &mut self.staging);
+        self.rounded(rect, self.theme.background);
+        let inner = Rect::new(rect.x + 2, rect.y + 1, rect.width - 4, rect.height - 2);
+        self.write(
+            Rect::new(inner.x, inner.y, inner.width, 1),
+            format!(
+                "{:<width$}{}",
+                icons::ALERT,
+                display_text(&menu.title),
+                width = usize::from(ICON_CELLS)
+            ),
+            self.theme.base(),
+        );
+        if explained {
+            self.write(
+                Rect::new(
+                    inner.x + ICON_CELLS,
+                    inner.y + 1,
+                    inner.width - ICON_CELLS,
+                    1,
+                ),
+                display_text(message),
+                self.theme.muted(),
+            );
+        }
+        let mut right = inner.right();
+        for (at, item) in menu.items.iter().enumerate().rev() {
+            let width = (display_text(&item.label).width() as u16 + 4).min(right - inner.x);
+            let button = Rect::new(right - width, inner.bottom() - 2, width, 2);
+            right = button.x.saturating_sub(1).max(inner.x);
+            let id = ElementId::Menu(item.id.clone());
+            let active = at == menu.selected || self.hovered.as_ref() == Some(&id);
+            let accepts = !matches!(item.action, Action::Close);
+            let fill = match (accepts, active) {
+                (true, true) => self.theme.warn(self.theme.card, 45),
+                (true, false) => self.theme.warn(self.theme.card, 22),
+                (false, true) => self.theme.lift(self.theme.card, 12),
+                (false, false) => self.theme.card,
+            };
+            self.surface(button, fill, SURFACE_RADIUS, ROW_INSET);
+            self.write(
+                Rect::new(button.x, button.y, button.width, 1),
+                Line::from(display_text(&item.label)).alignment(ratatui::layout::Alignment::Center),
+                self.theme.base().bg(fill).fg(if accepts && active {
+                    self.theme.foreground
+                } else if active {
+                    self.theme.accent
+                } else {
+                    self.theme.muted
+                }),
+            );
+            self.hit(id, button, "");
         }
     }
 
@@ -739,6 +832,7 @@ impl SidebarUi {
                     radius: 2.0,
                     inset: 0.0,
                     square: false,
+                    scale_y: 1.0,
                     stacked: false,
                     shift_y: self.editor_shift,
                 });
@@ -878,6 +972,9 @@ impl SidebarUi {
     }
 }
 
+/// Padding, the question, its explanation, a gap, two-row buttons, padding.
+const DIALOG_ROWS: u16 = 7;
+
 fn centered(area: Rect, width: u16, height: u16) -> Rect {
     let width = width.min(area.width);
     let height = height.min(area.height);
@@ -953,6 +1050,10 @@ fn action_exists(model: &Model, action: &Action) -> bool {
                     model.spaces.iter().any(|space| &space.id == destination)
                 })
         }
+        Action::KillPane(tab, pane) => model
+            .tabs
+            .get(tab)
+            .is_some_and(|tab| tab.panes.iter().any(|entry| entry.id == *pane)),
         Action::Confirm { action, .. } => action_exists(model, action),
         Action::Submenu { items, .. } => {
             items.iter().any(|item| action_exists(model, &item.action))
