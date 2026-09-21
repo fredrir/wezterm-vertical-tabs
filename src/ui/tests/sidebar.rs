@@ -859,3 +859,46 @@ fn footer_space_icons_match_the_new_space_plus() {
         assert_eq!(glyph(rect), glyph(plus), "{}", space.id);
     }
 }
+
+#[test]
+fn only_the_active_tab_frames_its_panes() {
+    let mut model = Model::default();
+    let split = |id, first| Tab {
+        id,
+        panes: [first, first + 1]
+            .map(|pane| vtabs_core::TabPane {
+                id: pane,
+                cwd: format!("/srv/p{pane}"),
+                active: pane == first,
+                ..Default::default()
+            })
+            .into(),
+        ..Tab::default()
+    };
+    tabs(&mut model, vec![split(1, 10), split(2, 20)]);
+    let area = Rect::new(0, 0, 48, 32);
+    let mut ui = SidebarUi::new();
+    ui.render(&model, area, Duration::ZERO);
+    let framed = |ui: &SidebarUi, tab, pane| {
+        let rect = hit_rect(ui, &ElementId::Pane(tab, pane));
+        ui.rounded_surfaces
+            .iter()
+            .any(|surface| surface.rect == rect)
+    };
+    for (tab, pane, active) in [(1, 10, true), (1, 11, true), (2, 20, false), (2, 21, false)] {
+        assert_eq!(framed(&ui, tab, pane), active, "tab {tab} pane {pane}");
+        let rect = hit_rect(&ui, &ElementId::Pane(tab, pane));
+        assert!(row_text(&ui, rect, rect.y).contains(&format!("/p{pane}")));
+    }
+
+    let idle = hit_rect(&ui, &ElementId::Pane(2, 21));
+    ui.event(
+        &model,
+        UiInput::PointerMove {
+            x: idle.x + 1,
+            y: idle.y,
+        },
+    );
+    ui.render(&model, area, Duration::ZERO);
+    assert!(!framed(&ui, 2, 21), "hover alone adds no pane background");
+}

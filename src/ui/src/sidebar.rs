@@ -74,6 +74,7 @@ struct Row<'a> {
 struct RowLayout {
     fill: Color,
     style: Style,
+    selected: bool,
     /// Cells after the icon and index, before any trailing control.
     content: Rect,
 }
@@ -201,6 +202,7 @@ impl SidebarUi {
             return RowLayout {
                 fill,
                 style,
+                selected: row.selected,
                 content: Rect::default(),
             };
         }
@@ -215,6 +217,7 @@ impl SidebarUi {
         let layout = RowLayout {
             fill,
             style,
+            selected: row.selected,
             content: Rect::new(x, row.rect.y, right - x, row.rect.height),
         };
         self.hit(row.id, row.rect, platform_tooltip(row.tooltip));
@@ -264,10 +267,16 @@ impl SidebarUi {
             x += width;
             let id = ElementId::Pane(tab.id, pane.id);
             let hovered = self.hovered.as_ref() == Some(&id);
-            let fill = self
-                .theme
-                .lift(layout.fill, if pane.active || hovered { 14 } else { 7 });
-            self.surface(rect, fill, 6.0, NESTED_INSET);
+            // Only the active tab frames its panes; elsewhere they read as plain labels.
+            let fill = if layout.selected {
+                let fill = self
+                    .theme
+                    .lift(layout.fill, if pane.active || hovered { 14 } else { 7 });
+                self.surface(rect, fill, 6.0, NESTED_INSET);
+                fill
+            } else {
+                layout.fill
+            };
             let label = format!(
                 "{} {}",
                 icons::host(pane.remote, &pane.os),
