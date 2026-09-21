@@ -53,7 +53,7 @@ fn hit(ui: &SidebarUi, id: &ElementId) -> Rect {
 }
 
 #[test]
-fn launcher_drops_down_from_the_search_bar_without_expanding_either_sidebar() {
+fn search_opens_as_a_centered_palette_of_sidebar_rows_without_expanding_either_sidebar() {
     let area = Rect::new(3, 5, 100, 32);
     for side in [Side::Left, Side::Right] {
         for (rail, columns) in [
@@ -68,7 +68,6 @@ fn launcher_drops_down_from_the_search_bar_without_expanding_either_sidebar() {
             let mut ui = SidebarUi::new();
             ui.set_layout(columns, 0);
             ui.render(&model, area, Duration::ZERO);
-            let search = (rail != RailMode::Hidden).then(|| hit(&ui, &ElementId::Search));
             ui.open_tab_navigator(&model);
             assert!(ui.overlay_surface());
             assert!(!ui.content_page());
@@ -76,16 +75,18 @@ fn launcher_drops_down_from_the_search_bar_without_expanding_either_sidebar() {
             ui.render(&model, area, Duration::from_millis(1));
             assert_eq!(model.settings.rail, rail);
             assert_eq!(model.visible_ids(), tabs);
+            let palette = dialog_rect(&ui);
+            assert_centered(palette, area);
             let field = hit(&ui, &ElementId::Editor);
-            assert_eq!(field.intersection(area), field);
-            match search {
-                Some(search) => {
-                    assert_eq!(field.y, search.y);
-                    assert!(field.width >= search.width.max(34));
-                    assert_eq!(field.x, search.x.min(area.right() - field.width));
-                }
-                None => assert_centered(dialog_rect(&ui), area),
-            }
+            assert_eq!(field.intersection(palette), field);
+            assert_eq!(field.height, 2);
+            let first = hit(&ui, &ElementId::Menu(format!("tab/{}", tabs[0])));
+            assert_eq!(first.height, field.height);
+            assert_eq!((first.x, first.width), (field.x, field.width));
+            let text: String = (first.x..first.right())
+                .map(|x| ui.buffer()[(x, first.y)].symbol())
+                .collect();
+            assert!(text.contains('₁'), "{text:?}");
         }
     }
 }

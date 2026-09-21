@@ -1656,7 +1656,11 @@ fn filter_menu(menu: &mut Menu) {
         search
             .all_items
             .iter()
-            .filter(|item| item.label.to_lowercase().contains(&query))
+            .filter(|item| {
+                item.label.to_lowercase().contains(&query)
+                    || item.hint.to_lowercase().contains(&query)
+                    || item.index.is_some_and(|index| index.to_string() == query)
+            })
             .cloned(),
     );
     menu.selected = selected_id

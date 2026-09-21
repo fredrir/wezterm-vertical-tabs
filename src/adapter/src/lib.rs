@@ -570,6 +570,10 @@ impl Provider for Adapter {
                             active: entry.is_active,
                             remote,
                             os,
+                            left: entry.left.min(usize::from(u16::MAX)) as u16,
+                            top: entry.top.min(usize::from(u16::MAX)) as u16,
+                            width: entry.width.min(usize::from(u16::MAX)) as u16,
+                            height: entry.height.min(usize::from(u16::MAX)) as u16,
                         }
                     })
                     .collect();
@@ -1123,6 +1127,7 @@ impl Provider for Adapter {
                             radius: shape.radius,
                             inset: shape.inset,
                             square: shape.square,
+                            stacked: shape.stacked,
                             fill: linear_color(shape.fill),
                         }),
                 );
@@ -1137,6 +1142,7 @@ impl Provider for Adapter {
                     radius: 0.,
                     inset: 0.,
                     square: false,
+                    stacked: false,
                     fill: linear_color(self.app.ui().theme.accent),
                 });
             }

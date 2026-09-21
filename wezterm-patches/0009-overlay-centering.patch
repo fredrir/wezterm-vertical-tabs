@@ -1,8 +1,17 @@
 diff --git a/wezterm-gui/src/termwindow/ui_host.rs b/wezterm-gui/src/termwindow/ui_host.rs
-index 29fadf3b..f67b1e32 100644
+index 29fadf3b..bb05d9f1 100644
 --- a/wezterm-gui/src/termwindow/ui_host.rs
 +++ b/wezterm-gui/src/termwindow/ui_host.rs
-@@ -481,6 +481,40 @@ fn vtabs_centered_range(bounds: Bounds, cell_width: f32) -> Option<(usize, (f32,
+@@ -171,6 +171,8 @@ pub struct RoundedSurface {
+     pub inset: f32,
+     /// Icon buttons center a square; rows keep their full extent.
+     pub square: bool,
++    /// Holds one text line per cell row, so nothing beneath it centers that text.
++    pub stacked: bool,
+     pub fill: LinearRgba,
+ }
+ #[derive(Clone, Debug)]
+@@ -481,6 +483,41 @@ fn vtabs_centered_range(bounds: Bounds, cell_width: f32) -> Option<(usize, (f32,
          ),
      ))
  }
@@ -10,9 +19,10 @@ index 29fadf3b..f67b1e32 100644
 +/// row are at most as tall as the row and leave its centering alone.
 +fn vtabs_overlay_cover(
 +    bounds: Bounds,
++    stacked: bool,
 +    cell_width: f32,
 +) -> Option<(std::ops::Range<usize>, (f32, f32))> {
-+    if bounds.height <= 2. || bounds.y < 0. || bounds.y.fract() != 0. {
++    if (bounds.height <= 2. && !stacked) || bounds.y < 0. || bounds.y.fract() != 0. {
 +        return None;
 +    }
 +    Some((
@@ -43,12 +53,21 @@ index 29fadf3b..f67b1e32 100644
  fn vtabs_caret_rect(
      geometry: Geometry,
      offset: (f32, f32),
-@@ -1868,6 +1902,14 @@ impl TermWindow {
+@@ -1862,12 +1899,21 @@ impl TermWindow {
+                     ranges.clear();
+                 }
+                 for primitive in ui.provider.primitives() {
+-                    if let Some((row, range)) =
+-                        vtabs_centered_range(primitive.bounds, geometry.cell_width)
++                    if let Some((row, range)) = (!primitive.stacked)
++                        .then(|| vtabs_centered_range(primitive.bounds, geometry.cell_width))
++                        .flatten()
+                     {
                          if let Some(ranges) = ui.centered_ranges.get_mut(row) {
                              ranges.push(range);
                          }
 +                    } else if let Some((rows, covered)) =
-+                        vtabs_overlay_cover(primitive.bounds, geometry.cell_width)
++                        vtabs_overlay_cover(primitive.bounds, primitive.stacked, geometry.cell_width)
 +                    {
 +                        for row in rows {
 +                            if let Some(ranges) = ui.centered_ranges.get_mut(row) {

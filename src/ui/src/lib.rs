@@ -153,6 +153,9 @@ enum Action {
 #[derive(Clone, Debug)]
 struct MenuItem {
     id: String,
+    /// Palette rows share the sidebar's icon slot and index badge.
+    icon: &'static str,
+    index: Option<usize>,
     label: String,
     hint: String,
     action: Action,
@@ -163,6 +166,8 @@ impl MenuItem {
     fn new(id: impl Into<String>, label: impl Into<String>, action: Action) -> Self {
         Self {
             id: id.into(),
+            icon: "",
+            index: None,
             label: label.into(),
             hint: String::new(),
             action,
@@ -269,7 +274,6 @@ pub struct SidebarUi {
     settings_search_focused: bool,
     page_rect: Rect,
     sidebar_rect: Rect,
-    search_rect: Rect,
     sidebar_rows: Vec<SidebarRow>,
     sidebar_revision: Option<(u64, bool)>,
     /// Sidebar-relative origin for the next context menu; sidebar placement changes
@@ -324,6 +328,8 @@ pub struct RoundedSurface {
     pub inset: f32,
     /// Icon buttons center a square within their cells; rows keep their full extent.
     pub square: bool,
+    /// Holds one text line per cell row, so the host centers nothing beneath it.
+    pub stacked: bool,
     /// Rows to move down; marks inside host-centered text follow it by half a row.
     pub shift_y: f32,
 }
@@ -377,7 +383,6 @@ impl SidebarUi {
             settings_search_focused: false,
             page_rect: Rect::default(),
             sidebar_rect: Rect::default(),
-            search_rect: Rect::default(),
             sidebar_rows: Vec::new(),
             sidebar_revision: None,
             anchor: None,
@@ -475,11 +480,25 @@ impl SidebarUi {
             .filter_map(|id| model.tabs.get(id))
             .enumerate()
             .map(|(index, tab)| {
-                MenuItem::new(
+                let name = tab
+                    .custom_title()
+                    .map(str::to_owned)
+                    .or_else(|| tab.location(model.home.as_deref()));
+                let mut item = MenuItem::new(
                     format!("tab/{}", tab.id),
-                    format!("{} {}", index + 1, tab.display_title()),
+                    name.as_deref().unwrap_or(&tab.title),
                     Action::Domain(Intent::ActivateTab(tab.id)),
-                )
+                );
+                let active = tab.panes.iter().find(|pane| pane.active);
+                item.icon = active.map_or_else(
+                    || icons::host(tab.remote, &tab.os),
+                    |pane| icons::host(pane.remote, &pane.os),
+                );
+                item.index = Some(index + 1);
+                if name.is_some_and(|name| name != tab.title) {
+                    item.hint = tab.title.clone();
+                }
+                item
             })
             .collect();
         if model.settings.rail != vtabs_core::RailMode::Expanded {
@@ -496,6 +515,7 @@ impl SidebarUi {
                 Action::Domain(Intent::SetRail(vtabs_core::RailMode::Expanded)),
             );
             item.enabled = !owned;
+            item.icon = icons::SIDEBAR;
             items.push(item);
         }
         let search = Some(MenuSearch {

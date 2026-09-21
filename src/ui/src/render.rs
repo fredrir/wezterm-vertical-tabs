@@ -1,4 +1,9 @@
-use crate::{icons, input::display_text, *};
+use crate::{
+    icons,
+    input::display_text,
+    sidebar::{Content, ICON_CELLS, ROW_INSET, Row, SURFACE_RADIUS},
+    *,
+};
 use ratatui::{
     layout::Position,
     style::{Modifier, Style},
@@ -124,7 +129,6 @@ impl SidebarUi {
         self.cursor = None;
         self.editor_rect = Rect::default();
         self.editor_shift = 0.0;
-        self.search_rect = Rect::default();
         Block::default()
             .style(self.theme.base())
             .render(area, &mut self.staging);
@@ -436,29 +440,23 @@ impl SidebarUi {
     }
 
     fn compose_overlay(&mut self, _model: &Model, area: Rect, overlay: &mut Overlay) {
-        let searching = matches!(
-            overlay,
-            Overlay::Menu(Menu {
-                search: Some(_),
-                ..
-            })
-        );
+        if let Overlay::Menu(menu) = overlay
+            && menu.search.is_some()
+        {
+            self.compose_palette(area, menu);
+            return;
+        }
         let desired_height = match overlay {
             Overlay::Menu(menu) => menu
-                .search
-                .as_ref()
-                .map_or(menu.items.len(), |search| search.all_items.len())
+                .items
+                .len()
                 .max(1)
-                .saturating_add(if searching { 4 } else { 2 })
+                .saturating_add(2)
                 .min(usize::from(u16::MAX)) as u16,
             Overlay::Form(_) => 7,
         };
         let rect = match overlay {
             Overlay::Form(_) => centered(area, 64, desired_height),
-            Overlay::Menu(_) if searching => match self.search_field(area) {
-                Some(field) => dropdown(area, field, desired_height),
-                None => centered(area, 64, desired_height),
-            },
             Overlay::Menu(menu) => match self.anchor_position() {
                 Some(anchor) => anchored(area, anchor, menu_width(menu), desired_height),
                 None => centered(area, menu_width(menu), desired_height),
@@ -469,54 +467,18 @@ impl SidebarUi {
         Clear.render(rect, &mut self.staging);
         self.rounded(rect, self.theme.background);
         let framed = rect.width >= 4 && rect.height >= 3;
-        let search_header = searching && rect.height >= 5;
         let inner = if framed {
-            Rect::new(
-                rect.x + 1,
-                rect.y + if search_header { 3 } else { 1 },
-                rect.width - 2,
-                rect.height - if search_header { 4 } else { 2 },
-            )
+            Rect::new(rect.x + 1, rect.y + 1, rect.width - 2, rect.height - 2)
         } else {
             rect
         };
         match overlay {
             Overlay::Menu(menu) => {
                 if framed {
-                    let title = Rect::new(
-                        rect.x + 1,
-                        rect.y + u16::from(search_header),
-                        rect.width.saturating_sub(2),
-                        1,
-                    );
-                    if let Some(search) = &mut menu.search {
-                        let field = Rect::new(
-                            rect.x,
-                            rect.y,
-                            rect.width,
-                            if search_header { 3 } else { 1 },
-                        );
-                        self.rounded(field, self.theme.card);
-                        let label = if title.width >= 12 {
-                            format!("{} ", icons::SEARCH)
-                        } else {
-                            String::new()
-                        };
-                        let label_width = label.width() as u16;
-                        let edit =
-                            Rect::new(title.x + label_width, title.y, title.width - label_width, 1);
-                        self.write(title, label, self.theme.muted());
-                        self.hit(ElementId::Editor, field, "Search tabs");
-                        self.compose_editor(&mut search.editor, edit, self.theme.card, true);
-                    } else {
-                        self.write(title, display_text(&menu.title), self.theme.accent());
-                    }
-                }
-                if menu.items.is_empty() && inner.height > 0 {
                     self.write(
-                        Rect::new(inner.x, inner.y, inner.width, 1),
-                        "No matching tabs",
-                        self.theme.muted(),
+                        Rect::new(rect.x + 1, rect.y, rect.width.saturating_sub(2), 1),
+                        display_text(&menu.title),
+                        self.theme.accent(),
                     );
                 }
                 let rows = usize::from(inner.height);
@@ -625,6 +587,102 @@ impl SidebarUi {
         }
     }
 
+    /// Search floats centered and lists tabs with the sidebar's own rows.
+    fn compose_palette(&mut self, area: Rect, menu: &mut Menu) {
+        let Some(search) = &mut menu.search else {
+            return;
+        };
+        let tall = area.height >= 12 && area.width >= 12;
+        let line = if tall { 2 } else { 1 };
+        let pad = u16::from(tall);
+        let gap = u16::from(tall);
+        let wanted = search.all_items.len().max(1).min(usize::from(u16::MAX / 2)) as u16;
+        let rect = centered(area, 64, pad * 2 + line + gap + wanted * line);
+        self.overlay_rect = rect;
+        Clear.render(rect, &mut self.staging);
+        self.rounded(rect, self.theme.background);
+        let inner = Rect::new(
+            rect.x + pad,
+            rect.y + pad,
+            rect.width.saturating_sub(pad * 2),
+            rect.height.saturating_sub(pad * 2),
+        );
+        let field = Rect::new(inner.x, inner.y, inner.width, line.min(inner.height));
+        self.surface(field, self.theme.card, SURFACE_RADIUS, ROW_INSET);
+        let lead = ICON_CELLS.min(field.width.saturating_sub(1));
+        self.write(
+            Rect::new(field.x + 1, field.y, lead, 1),
+            icons::SEARCH,
+            self.theme.muted().bg(self.theme.card),
+        );
+        let edit = Rect::new(
+            field.x + 1 + lead,
+            field.y,
+            field.width.saturating_sub(lead + 2),
+            1,
+        );
+        // The host centers first-row text of a two-row surface; marks follow it.
+        self.editor_shift = if field.height == 2 { 0.5 } else { 0.0 };
+        self.compose_editor(&mut search.editor, edit, self.theme.card, true);
+        if search.editor.display_text().is_empty() {
+            self.write(edit, "Search tabs", self.theme.muted().bg(self.theme.card));
+        }
+        self.hit(ElementId::Editor, field, "");
+        let list = Rect::new(
+            inner.x,
+            field.bottom() + gap,
+            inner.width,
+            inner.bottom().saturating_sub(field.bottom() + gap),
+        );
+        let rows = usize::from(list.height / line).max(1);
+        if menu.selected < menu.scroll {
+            menu.scroll = menu.selected;
+        }
+        if menu.selected >= menu.scroll + rows {
+            menu.scroll = menu.selected + 1 - rows;
+        }
+        menu.scroll = menu.scroll.min(menu.items.len().saturating_sub(rows));
+        if menu.items.is_empty() && list.height > 0 {
+            self.write(
+                Rect::new(list.x + 1, list.y, list.width.saturating_sub(2), 1),
+                "No matching tabs",
+                self.theme.muted(),
+            );
+        }
+        for (offset, item) in menu.items.iter().skip(menu.scroll).take(rows).enumerate() {
+            let rect = Rect::new(
+                list.x,
+                list.y + offset as u16 * line,
+                list.width,
+                line.min(list.bottom().saturating_sub(list.y + offset as u16 * line)),
+            );
+            if rect.is_empty() {
+                break;
+            }
+            let layout = self.row(Row {
+                id: ElementId::Menu(item.id.clone()),
+                rect,
+                indent: 0,
+                icon: item.icon,
+                index: item.index,
+                content: Content::Label(&display_text(&item.label)),
+                tooltip: Some(String::new()),
+                selected: menu.scroll + offset == menu.selected,
+                muted: !item.enabled,
+                compact: false,
+                trailing: None,
+                field: false,
+            });
+            let hint = display_text(&item.hint);
+            let width = (hint.width() as u16).min(layout.content.width / 2);
+            self.write(
+                Rect::new(layout.content.right() - width, rect.y, width, 1),
+                hint,
+                self.theme.muted().bg(layout.fill),
+            );
+        }
+    }
+
     /// One text field painter for forms, search and inline renames.
     pub(crate) fn compose_editor(
         &mut self,
@@ -681,6 +739,7 @@ impl SidebarUi {
                     radius: 2.0,
                     inset: 0.0,
                     square: false,
+                    stacked: false,
                     shift_y: self.editor_shift,
                 });
                 for x in columns {
@@ -817,12 +876,6 @@ impl SidebarUi {
         }
         rect
     }
-
-    /// The sidebar search bar composed in this frame, when it has room for a dropdown.
-    fn search_field(&self, area: Rect) -> Option<Rect> {
-        (!self.search_rect.is_empty() && area.contains(self.search_rect.as_position()))
-            .then_some(self.search_rect)
-    }
 }
 
 fn centered(area: Rect, width: u16, height: u16) -> Rect {
@@ -851,14 +904,6 @@ fn anchored(area: Rect, anchor: Position, width: u16, height: u16) -> Rect {
         area.bottom() - height
     };
     Rect::new(x, y, width, height)
-}
-
-/// Results drop down from the search bar, which the field row covers exactly.
-fn dropdown(area: Rect, field: Rect, height: u16) -> Rect {
-    let width = field.width.max(34).min(area.width);
-    let x = field.x.clamp(area.x, area.right() - width);
-    let y = field.y.clamp(area.y, area.bottom() - 1);
-    Rect::new(x, y, width, height.min(area.bottom() - y))
 }
 
 fn menu_width(menu: &Menu) -> u16 {

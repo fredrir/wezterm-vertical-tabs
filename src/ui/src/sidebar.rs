@@ -7,16 +7,18 @@ use ratatui::{
 use std::collections::HashMap;
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
-use vtabs_core::{Model, RailMode, Tab};
+use vtabs_core::{Model, RailMode, Tab, TabPane};
 
 const GROUP_GAP: u16 = 1;
-const SURFACE_RADIUS: f32 = 9.0;
+pub(crate) const SURFACE_RADIUS: f32 = 9.0;
 /// Adjacent rows touch in cells; this pixel inset is the hairline between their pills.
-const ROW_INSET: f32 = 1.5;
+pub(crate) const ROW_INSET: f32 = 1.5;
 const PRESS_INSET: f32 = 3.0;
 const NESTED_INSET: f32 = 4.0;
-/// The glyph, the blank cell it overflows into, its index badge, and a gap before the text.
-const ICON_CELLS: u16 = 4;
+/// Deep enough to stay inside a pressed row's shrunken pill.
+const OCCLUDER_INSET: f32 = 6.0;
+/// The glyph, the cell its index badge or its own overflow takes, and a gap before the text.
+pub(crate) const ICON_CELLS: u16 = 3;
 const TRAILING_CELLS: u16 = 3;
 const MIN_SEGMENT_CELLS: u16 = 4;
 
@@ -43,40 +45,120 @@ fn platform_tooltip(tooltip: String) -> String {
     }
 }
 
+/// Where one pane sits in the row's mirror of the tab's split layout.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct PaneSlot {
+    pub pane: usize,
+    pub x: u16,
+    pub width: u16,
+    /// The text line it occupies; a pane spanning the tab's height takes both.
+    pub line: u16,
+    pub tall: bool,
+}
+
+/// Side-by-side panes become columns and top/bottom panes the row's two text lines.
+pub(crate) fn pane_slots(panes: &[TabPane], width: u16, two_lines: bool) -> Vec<PaneSlot> {
+    let measured = panes.iter().any(|pane| pane.width > 0 && pane.height > 0);
+    let mut lefts: Vec<u16> = if measured {
+        panes.iter().map(|pane| pane.left).collect()
+    } else {
+        (0..panes.len() as u16).collect()
+    };
+    lefts.sort_unstable();
+    lefts.dedup();
+    let columns = lefts.len().max(1) as u16;
+    let edge = |column: u16| (u32::from(column) * u32::from(width) / u32::from(columns)) as u16;
+    let bottom = panes
+        .iter()
+        .map(|pane| u32::from(pane.top) + u32::from(pane.height))
+        .max()
+        .unwrap_or(0);
+    let mut placed: Vec<(usize, u16, u16, u16, bool)> = panes
+        .iter()
+        .enumerate()
+        .map(|(at, pane)| {
+            let (left, right) = if measured {
+                (pane.left, pane.left.saturating_add(pane.width))
+            } else {
+                (at as u16, at as u16 + 1)
+            };
+            let start = lefts.iter().position(|edge| *edge == left).unwrap_or(0) as u16;
+            let end = (lefts.iter().filter(|edge| **edge < right).count() as u16).max(start + 1);
+            let (top, height) = (u32::from(pane.top), u32::from(pane.height));
+            let tall =
+                !two_lines || !measured || (top * 4 <= bottom && (top + height) * 4 >= bottom * 3);
+            let line = u16::from(!tall && top * 2 + height >= bottom);
+            (at, start, end, line, tall)
+        })
+        .collect();
+    placed.sort_by_key(|(at, start, _, line, _)| (*line, *start, panes[*at].top, *at));
+    let mut slots = Vec::with_capacity(placed.len());
+    let mut rest = placed.as_slice();
+    while let Some(&(_, start, _, line, _)) = rest.first() {
+        // More panes than the two lines can stack share their column side by side.
+        let count = rest
+            .iter()
+            .take_while(|(_, other, _, other_line, _)| (*other, *other_line) == (start, line))
+            .count();
+        let (group, remaining) = rest.split_at(count);
+        rest = remaining;
+        let end = group
+            .iter()
+            .map(|(_, _, end, _, _)| *end)
+            .max()
+            .unwrap_or(start + 1);
+        let (x, span) = (edge(start), edge(end) - edge(start));
+        for (share, &(pane, _, _, line, tall)) in group.iter().enumerate() {
+            let share = share as u16;
+            let count = count as u16;
+            let offset = span * share / count;
+            slots.push(PaneSlot {
+                pane,
+                x: x + offset,
+                width: span * (share + 1) / count - offset,
+                line,
+                tall,
+            });
+        }
+    }
+    slots
+}
+
 /// A control revealed at a row's trailing edge while the row is hovered.
-struct Trailing {
+pub(crate) struct Trailing {
     id: ElementId,
     icon: &'static str,
     tooltip: &'static str,
 }
 
-enum Content<'a> {
+pub(crate) enum Content<'a> {
     Label(&'a str),
     /// Splits read as side-by-side pills inside the tab's own row.
     Panes(&'a Tab, Option<&'a str>),
     Rename(TabId),
 }
 
-struct Row<'a> {
-    id: ElementId,
-    rect: Rect,
-    indent: u16,
-    icon: &'a str,
-    index: Option<usize>,
-    content: Content<'a>,
-    tooltip: String,
-    selected: bool,
-    muted: bool,
-    compact: bool,
-    trailing: Option<Trailing>,
+pub(crate) struct Row<'a> {
+    pub(crate) id: ElementId,
+    pub(crate) rect: Rect,
+    pub(crate) indent: u16,
+    pub(crate) icon: &'a str,
+    pub(crate) index: Option<usize>,
+    pub(crate) content: Content<'a>,
+    pub(crate) tooltip: Option<String>,
+    pub(crate) selected: bool,
+    pub(crate) muted: bool,
+    pub(crate) compact: bool,
+    pub(crate) trailing: Option<Trailing>,
+    /// Input fields rest on a faint fill instead of the bare sidebar.
+    pub(crate) field: bool,
 }
 
-struct RowLayout {
-    fill: Color,
-    style: Style,
-    selected: bool,
+pub(crate) struct RowLayout {
+    pub(crate) fill: Color,
+    pub(crate) style: Style,
     /// Cells after the icon and index, before any trailing control.
-    content: Rect,
+    pub(crate) content: Rect,
 }
 
 impl SidebarUi {
@@ -98,6 +180,7 @@ impl SidebarUi {
             radius,
             inset,
             square,
+            stacked: false,
             shift_y: 0.0,
         });
     }
@@ -158,16 +241,15 @@ impl SidebarUi {
     }
 
     /// Every list entry shares this geometry, hover, press and trailing-control behavior.
-    fn row(&mut self, row: Row<'_>) -> RowLayout {
+    pub(crate) fn row(&mut self, row: Row<'_>) -> RowLayout {
         let hovered = self.row_hovered(&row.id);
         let focused = self.focused.as_ref() == Some(&row.id);
         let pressed = self.press.as_ref().is_some_and(|press| press.id == row.id);
-        let fill = if row.selected {
-            self.theme.selected
-        } else if hovered || pressed {
-            self.theme.card
-        } else {
-            self.theme.background
+        let fill = match (row.selected, hovered || pressed, row.field) {
+            (true, ..) => self.theme.selected,
+            (_, true, true) => self.theme.lift(self.theme.card, 5),
+            (_, true, false) | (_, false, true) => self.theme.card,
+            _ => self.theme.background,
         };
         let mut style = self.theme.base().bg(fill);
         if row.selected {
@@ -198,11 +280,14 @@ impl SidebarUi {
                 Line::from(label).alignment(Alignment::Center),
                 style,
             );
-            self.hit(row.id, row.rect, platform_tooltip(row.tooltip));
+            self.hit(
+                row.id,
+                row.rect,
+                platform_tooltip(row.tooltip.clone().unwrap_or_default()),
+            );
             return RowLayout {
                 fill,
                 style,
-                selected: row.selected,
                 content: Rect::default(),
             };
         }
@@ -210,17 +295,20 @@ impl SidebarUi {
         let right = row.rect.right().saturating_sub(1);
         self.write(
             Rect::new(x, row.rect.y, ICON_CELLS.min(right.saturating_sub(x)), 1),
-            format!("{} {}", row.icon, icons::badge(row.index)),
+            format!("{}{}", row.icon, icons::badge(row.index)),
             style,
         );
         let x = (x + ICON_CELLS).min(right);
         let layout = RowLayout {
             fill,
             style,
-            selected: row.selected,
             content: Rect::new(x, row.rect.y, right - x, row.rect.height),
         };
-        self.hit(row.id, row.rect, platform_tooltip(row.tooltip));
+        self.hit(
+            row.id,
+            row.rect,
+            platform_tooltip(row.tooltip.clone().unwrap_or_default()),
+        );
         match row.content {
             Content::Label(label) => self.write(
                 Rect::new(layout.content.x, layout.content.y, layout.content.width, 1),
@@ -256,32 +344,38 @@ impl SidebarUi {
     }
 
     fn pane_segments(&mut self, tab: &Tab, home: Option<&str>, layout: &RowLayout) {
-        let count = tab.panes.len() as u16;
         let area = layout.content;
-        let base = area.width / count;
-        let extra = area.width % count;
-        let mut x = area.x;
-        for (at, pane) in tab.panes.iter().enumerate() {
-            let width = base + u16::from((at as u16) < extra);
-            let rect = Rect::new(x, area.y, width, area.height);
-            x += width;
+        let slots = pane_slots(&tab.panes, area.width, area.height >= 2);
+        // Two text lines share the row, so the host must not center either of them.
+        let mut stacked: Vec<(u16, u16)> = Vec::new();
+        for slot in slots.iter().filter(|slot| !slot.tall) {
+            let span = (slot.x, slot.width);
+            if area.height == 2 && !stacked.contains(&span) {
+                stacked.push(span);
+                let rect = Rect::new(area.x + slot.x, area.y, slot.width, 2);
+                self.shape(rect, layout.fill, 0.0, OCCLUDER_INSET, false);
+                if let Some(surface) = self.rounded_surfaces.last_mut() {
+                    surface.stacked = true;
+                }
+            }
+        }
+        for slot in slots {
+            let pane = &tab.panes[slot.pane];
+            let rect = Rect::new(
+                area.x + slot.x,
+                area.y + slot.line,
+                slot.width,
+                if slot.tall { area.height.min(2) } else { 1 },
+            );
             let id = ElementId::Pane(tab.id, pane.id);
-            let hovered = self.hovered.as_ref() == Some(&id);
-            // Only the active tab frames its panes; elsewhere they read as plain labels.
-            let fill = if layout.selected {
-                let fill = self
-                    .theme
-                    .lift(layout.fill, if pane.active || hovered { 14 } else { 7 });
-                self.surface(rect, fill, 6.0, NESTED_INSET);
+            let fill = if self.hovered.as_ref() == Some(&id) {
+                let fill = self.theme.lift(layout.fill, 12);
+                let inset = if slot.tall { NESTED_INSET } else { 1.0 };
+                self.surface(rect, fill, 6.0, inset);
                 fill
             } else {
                 layout.fill
             };
-            let label = format!(
-                "{} {}",
-                icons::host(pane.remote, &pane.os),
-                display_text(&pane.label(home))
-            );
             let style = if pane.active {
                 layout.style
             } else {
@@ -292,7 +386,11 @@ impl SidebarUi {
             };
             self.write(
                 Rect::new(rect.x + 1, rect.y, rect.width.saturating_sub(2), 1),
-                label,
+                format!(
+                    "{} {}",
+                    icons::host(pane.remote, &pane.os),
+                    display_text(&pane.label(home))
+                ),
                 style.bg(fill),
             );
             self.hit(id, rect, "");
@@ -532,45 +630,20 @@ impl SidebarUi {
         let search_y = inner.y + toolbar_height + gap;
         let search_height = if area.height >= 12 { 2 } else { 1 };
         let search = Rect::new(inner.x, search_y, inner.width, search_height);
-        self.search_rect = search;
-        let search_icon = format!("{} ", icons::SEARCH);
-        let search_visual = if compact {
-            icon_rect(search, &search_icon)
-        } else {
-            search
-        };
-        self.surface(
-            search_visual,
-            self.theme.selected,
-            SURFACE_RADIUS,
-            ROW_INSET + self.press_inset(&ElementId::Search),
-        );
-        let search_label = if compact {
-            Line::from(search_icon).alignment(Alignment::Center)
-        } else {
-            Line::from(format!(
-                "{:<width$}Search tabs",
-                icons::SEARCH,
-                width = usize::from(ICON_CELLS)
-            ))
-        };
-        self.write(
-            Rect::new(
-                search_visual.x + u16::from(!compact && search_visual.width > 1),
-                search.y,
-                search_visual
-                    .width
-                    .saturating_sub(if compact { 0 } else { 2 }),
-                1,
-            ),
-            search_label,
-            self.theme.muted().bg(self.theme.selected),
-        );
-        self.hit(
-            ElementId::Search,
-            search,
-            platform_tooltip("Search tabs  Cmd+K".into()),
-        );
+        let layout = self.row(Row {
+            id: ElementId::Search,
+            rect: search,
+            indent: 0,
+            icon: icons::SEARCH,
+            index: None,
+            content: Content::Label("Search..."),
+            selected: false,
+            tooltip: None,
+            muted: true,
+            compact,
+            trailing: None,
+            field: true,
+        });
         let title_y = search.bottom() + gap;
         // Row height follows the room below search, before the space row claims its share.
         self.tabs_rect = Rect::new(
@@ -637,11 +710,12 @@ impl SidebarUi {
                         icon: icons::PLUS,
                         index: None,
                         content: Content::Label("New Tab"),
-                        tooltip: "New tab  Cmd+T".into(),
+                        tooltip: Some("New tab  Cmd+T".into()),
                         selected: false,
                         muted: true,
                         compact,
                         trailing: None,
+                        field: false,
                     });
                 }
                 SidebarRow::Settings { number } => {
@@ -652,7 +726,7 @@ impl SidebarUi {
                         icon: icons::SETTINGS,
                         index: model.settings.show_indexes.then_some(number),
                         content: Content::Label("Settings"),
-                        tooltip: "Settings  Cmd+,".into(),
+                        tooltip: Some("Settings  Cmd+,".into()),
                         selected: self.settings_page,
                         muted: false,
                         compact,
@@ -661,6 +735,7 @@ impl SidebarUi {
                             icon: icons::CLOSE,
                             tooltip: "Close settings  Cmd+W",
                         }),
+                        field: false,
                     });
                 }
                 SidebarRow::Folder { index, count } => {
@@ -681,14 +756,15 @@ impl SidebarUi {
                             "{}  {count}",
                             display_text(&folder.name)
                         )),
-                        tooltip: format!(
+                        tooltip: Some(format!(
                             "{}\nDrop tabs here. Right click to rename or ungroup.",
                             folder.name
-                        ),
+                        )),
                         selected: false,
                         muted: false,
                         compact,
                         trailing: None,
+                        field: false,
                     });
                 }
                 SidebarRow::Tab { id, number } => {
@@ -723,6 +799,7 @@ impl SidebarUi {
                 radius: SURFACE_RADIUS,
                 inset: ROW_INSET,
                 square: false,
+                stacked: false,
                 shift_y: 0.0,
             });
         }
@@ -838,7 +915,7 @@ impl SidebarUi {
             icon,
             index: None,
             content: Content::Label(&label),
-            tooltip,
+            tooltip: Some(tooltip),
             selected: false,
             muted: true,
             compact: false,
@@ -847,6 +924,7 @@ impl SidebarUi {
                 icon: icons::PLUS,
                 tooltip: "New folder",
             }),
+            field: false,
         });
     }
 
@@ -882,7 +960,7 @@ impl SidebarUi {
             } else {
                 Content::Label(&name)
             },
-            tooltip: if compact { name.clone() } else { String::new() },
+            tooltip: compact.then(|| name.clone()),
             selected: model.selected_tab == Some(tab.id) && !self.settings_page,
             muted: false,
             compact,
@@ -891,6 +969,7 @@ impl SidebarUi {
                 icon: icons::CLOSE,
                 tooltip: "Close tab  Cmd+W",
             }),
+            field: false,
         });
         if compact {
             return;

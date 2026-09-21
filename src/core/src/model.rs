@@ -117,6 +117,15 @@ pub struct TabPane {
     pub remote: bool,
     #[serde(default)]
     pub os: String,
+    /// Cell extent inside the tab, so the sidebar can mirror the split layout.
+    #[serde(default)]
+    pub left: u16,
+    #[serde(default)]
+    pub top: u16,
+    #[serde(default)]
+    pub width: u16,
+    #[serde(default)]
+    pub height: u16,
 }
 impl TabPane {
     pub fn label(&self, home: Option<&str>) -> String {

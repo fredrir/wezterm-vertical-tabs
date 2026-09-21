@@ -360,7 +360,7 @@ fn settings_stay_listed_as_a_tab_until_closed() {
         .map(|x| ui.buffer()[(x, row.rect.y)].symbol())
         .collect();
     assert!(
-        text.contains(&format!("{} ₃ Settings", icons::SETTINGS)),
+        text.contains(&format!("{}₃ Settings", icons::SETTINGS)),
         "{text}"
     );
     assert!(!has(&ui, ElementId::CloseSettingsTab));
@@ -493,8 +493,11 @@ fn settings_keeps_its_index_when_later_tabs_open_and_earlier_tabs_close() {
                     .map(|x| ui.buffer()[(x, hit.rect.y)].symbol())
                     .collect();
                 let label = text
-                    .split_whitespace()
+                    .trim_start()
+                    .chars()
                     .skip(1)
+                    .collect::<String>()
+                    .split_whitespace()
                     .collect::<Vec<_>>()
                     .join(" ");
                 (hit.rect.y, label)

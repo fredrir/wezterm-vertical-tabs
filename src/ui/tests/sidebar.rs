@@ -209,14 +209,14 @@ fn tab_rows_show_host_icon_index_and_directory() {
     assert!(
         row(1)
             .trim_start()
-            .starts_with(&format!("{local} ₁ dotfiles"))
+            .starts_with(&format!("{local}₁ dotfiles"))
     );
     assert!(
         row(2)
             .trim_start()
-            .starts_with(&format!("{local} ₂ ~/Downloads"))
+            .starts_with(&format!("{local}₂ ~/Downloads"))
     );
-    assert!(row(3).trim_start().starts_with(&format!("{local} ₃ /etc")));
+    assert!(row(3).trim_start().starts_with(&format!("{local}₃ /etc")));
 }
 
 #[test]
@@ -255,8 +255,8 @@ fn renamed_tabs_replace_the_directory_and_hidden_indexes_leave_no_gap() {
         row_text(&ui, rect, rect.y)
     };
     let local = icons::LOCAL;
-    assert_eq!(row(1).trim(), format!("{local}   Deploy logs"));
-    assert_eq!(row(2).trim(), format!("{local}   ~/Downloads"));
+    assert_eq!(row(1).trim(), format!("{local}  Deploy logs"));
+    assert_eq!(row(2).trim(), format!("{local}  ~/Downloads"));
 }
 
 #[test]
@@ -464,7 +464,7 @@ fn remote_tabs_show_their_operating_system_and_local_tabs_a_terminal() {
         assert!(
             row_text(&ui, rect, rect.y)
                 .trim_start()
-                .starts_with(&format!("{icon} {}", icons::badge(Some(id as usize)))),
+                .starts_with(&format!("{icon}{}", icons::badge(Some(id as usize)))),
             "tab {id}"
         );
     }
@@ -714,7 +714,7 @@ fn left_icons_share_one_column_and_one_gap_before_their_text() {
     ] {
         let rect = hit_rect(&ui, &id);
         assert!(
-            row_text(&ui, rect, rect.y).starts_with(&format!(" {icon} {badge} {text}")),
+            row_text(&ui, rect, rect.y).starts_with(&format!(" {icon}{badge} {text}")),
             "{id:?}: {:?}",
             row_text(&ui, rect, rect.y)
         );
@@ -861,7 +861,7 @@ fn footer_space_icons_match_the_new_space_plus() {
 }
 
 #[test]
-fn only_the_active_tab_frames_its_panes() {
+fn panes_gain_a_background_only_while_hovered() {
     let mut model = Model::default();
     let split = |id, first| Tab {
         id,
@@ -885,20 +885,127 @@ fn only_the_active_tab_frames_its_panes() {
             .iter()
             .any(|surface| surface.rect == rect)
     };
-    for (tab, pane, active) in [(1, 10, true), (1, 11, true), (2, 20, false), (2, 21, false)] {
-        assert_eq!(framed(&ui, tab, pane), active, "tab {tab} pane {pane}");
+    for (tab, pane) in [(1, 10), (1, 11), (2, 20), (2, 21)] {
+        assert!(!framed(&ui, tab, pane), "tab {tab} pane {pane}");
         let rect = hit_rect(&ui, &ElementId::Pane(tab, pane));
         assert!(row_text(&ui, rect, rect.y).contains(&format!("/p{pane}")));
     }
+    for (tab, pane) in [(1, 11), (2, 21)] {
+        let rect = hit_rect(&ui, &ElementId::Pane(tab, pane));
+        ui.event(
+            &model,
+            UiInput::PointerMove {
+                x: rect.x + 1,
+                y: rect.y,
+            },
+        );
+        ui.render(&model, area, Duration::ZERO);
+        assert!(framed(&ui, tab, pane), "hovered pane {pane}");
+        assert!(!framed(&ui, tab, pane - 1), "its sibling stays bare");
+    }
+}
 
-    let idle = hit_rect(&ui, &ElementId::Pane(2, 21));
-    ui.event(
-        &model,
-        UiInput::PointerMove {
-            x: idle.x + 1,
-            y: idle.y,
-        },
+#[test]
+fn split_layout_is_mirrored_as_columns_and_two_text_lines() {
+    let pane = |id, left, top, width, height| vtabs_core::TabPane {
+        id,
+        left,
+        top,
+        width,
+        height,
+        ..Default::default()
+    };
+    let slot = |pane, x, width, line, tall| PaneSlot {
+        pane,
+        x,
+        width,
+        line,
+        tall,
+    };
+    let side_by_side = [pane(1, 0, 0, 40, 30), pane(2, 41, 0, 39, 30)];
+    assert_eq!(
+        pane_slots(&side_by_side, 20, true),
+        [slot(0, 0, 10, 0, true), slot(1, 10, 10, 0, true)]
     );
-    ui.render(&model, area, Duration::ZERO);
-    assert!(!framed(&ui, 2, 21), "hover alone adds no pane background");
+    let top_bottom = [pane(1, 0, 0, 80, 14), pane(2, 0, 15, 80, 15)];
+    assert_eq!(
+        pane_slots(&top_bottom, 20, true),
+        [slot(0, 0, 20, 0, false), slot(1, 0, 20, 1, false)]
+    );
+    let tall_beside_stack = [
+        pane(1, 0, 0, 40, 30),
+        pane(2, 41, 0, 39, 14),
+        pane(3, 41, 15, 39, 15),
+    ];
+    assert_eq!(
+        pane_slots(&tall_beside_stack, 20, true),
+        [
+            slot(0, 0, 10, 0, true),
+            slot(1, 10, 10, 0, false),
+            slot(2, 10, 10, 1, false)
+        ]
+    );
+    let three_stacked = [
+        pane(1, 0, 0, 80, 9),
+        pane(2, 0, 10, 80, 9),
+        pane(3, 0, 20, 80, 10),
+    ];
+    // Two text lines cannot stack three panes; the extra one shares its line side by side.
+    let slots = pane_slots(&three_stacked, 20, true);
+    let mut shown: Vec<_> = slots.iter().map(|slot| slot.pane).collect();
+    shown.sort_unstable();
+    assert_eq!(shown, [0, 1, 2]);
+    for line in 0..2 {
+        let width: u16 = slots
+            .iter()
+            .filter(|slot| slot.line == line)
+            .map(|slot| slot.width)
+            .sum();
+        assert_eq!(width, 20, "line {line}");
+    }
+    assert!(slots.iter().all(|slot| !slot.tall));
+    assert!(
+        pane_slots(&top_bottom, 20, false)
+            .iter()
+            .all(|slot| slot.tall && slot.line == 0),
+        "one-line rows fall back to columns"
+    );
+
+    let mut model = Model::default();
+    tabs(
+        &mut model,
+        vec![Tab {
+            id: 1,
+            panes: vec![
+                vtabs_core::TabPane {
+                    cwd: "/srv/top".into(),
+                    active: true,
+                    ..pane(1, 0, 0, 80, 14)
+                },
+                vtabs_core::TabPane {
+                    cwd: "/srv/bottom".into(),
+                    ..pane(2, 0, 15, 80, 15)
+                },
+            ],
+            ..Tab::default()
+        }],
+    );
+    let mut ui = SidebarUi::new();
+    ui.render(&model, Rect::new(0, 0, 48, 32), Duration::ZERO);
+    let row = hit_rect(&ui, &ElementId::Tab(1));
+    let (top, bottom) = (
+        hit_rect(&ui, &ElementId::Pane(1, 1)),
+        hit_rect(&ui, &ElementId::Pane(1, 2)),
+    );
+    assert_eq!((top.y, top.height), (row.y, 1));
+    assert_eq!((bottom.y, bottom.height), (row.y + 1, 1));
+    assert_eq!((top.x, top.width), (bottom.x, bottom.width));
+    assert!(row_text(&ui, top, top.y).contains("/top"));
+    assert!(row_text(&ui, bottom, bottom.y).contains("/bottom"));
+    assert!(
+        ui.rounded_surfaces
+            .iter()
+            .any(|surface| surface.stacked && surface.rect.y == row.y && surface.rect.height == 2),
+        "stacked lines opt out of the host's vertical centering"
+    );
 }

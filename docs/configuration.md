@@ -57,7 +57,7 @@ return config
 | Keyboard preference   | Disable `keyboard_shortcuts` to use custom Lua bindings                                                                 |
 | Terminal Control keys | Ordinary Control shortcuts remain available to the shell                                                                |
 | Settings              | Own tab with a gear icon and the index after the last tab (`Cmd+index`, `Cmd+9`, `Ctrl+Tab`); close with ×, `Cmd+W`, Escape |
-| Search                | Results drop down from the search bar; Up/Down select results, Left/Right edit the query, Enter activates               |
+| Search                | Centered palette of sidebar rows; Up/Down select, Left/Right edit the query, Enter opens; matches name, title or index  |
 | Space row             | Click collapses pinned tabs and folders; hover shows the chevron and the new-folder plus; right click edits the space   |
 | Folders               | Create with the space row plus; rename, collapse, reorder, add a tab or ungroup from the context menu                   |
 | Tab grouping          | Drag onto a folder, or use the tab context menu                                                                         |
@@ -68,8 +68,8 @@ return config
 | Folder persistence    | Catalog, names and collapse state persist; live membership follows the session boundary in [Boundaries](limitations.md) |
 | Tab title             | Double-click edits in place with the text selected; Enter saves, Escape cancels, an empty title restores the directory  |
 | Tab icon              | Machine of the active pane: terminal when local, else its OS, relayed per pane by each patched `wezterm-mux-server`     |
-| Tab index             | Subscript on the icon for `Cmd+1`-`Cmd+9` (`show_indexes`); labels share one column with or without it                  |
-| Splits                | A split tab lists its panes side by side, each with its own machine icon; clicking a pane focuses it                    |
+| Tab index             | Subscript beside the icon, sharing its two cells, for `Cmd+1`-`Cmd+9` (`show_indexes`); labels keep one column          |
+| Splits                | Mirrors the layout in one row: side-by-side panes as columns, top/bottom panes as its two lines; click focuses a pane   |
 | Close control         | Floats over the hovered tab row without moving its content (`show_close`)                                               |
 | Hints                 | Compact, beside the sidebar and level with the control; tabs show none outside the collapsed rail                       |
 | Motion                | Finite hover/selection transitions and press shrink; `reduced_motion` disables animation                                |
