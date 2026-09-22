@@ -33,7 +33,7 @@ fn group_label(group: &str) -> &'static str {
         "appearance" => "Tabs and details",
         "theme" => "Color and atmosphere",
         "motion" => "Motion and accessibility",
-        "behavior" => "Everyday behavior",
+        "behavior" => "General behavior",
         _ => "Preferences",
     }
 }
@@ -145,14 +145,6 @@ impl SidebarUi {
             self.theme.base().add_modifier(Modifier::BOLD),
         );
         let mut y = inner.y + 1;
-        if area.height >= 20 && inner.width >= 26 {
-            self.write(
-                Rect::new(inner.x, y, inner.width, 1),
-                "Make room for your way of working.",
-                self.theme.muted(),
-            );
-            y += 2;
-        }
         let footer_height = u16::from(inner.height >= 9);
         let bottom = inner.bottom().saturating_sub(footer_height);
         if y < bottom.saturating_sub(2) {
@@ -225,16 +217,9 @@ impl SidebarUi {
         if fields.is_empty() && list.height > 0 {
             self.write(
                 Rect::new(list.x, list.y, list.width, 1),
-                "No matching settings",
+                "No results",
                 self.theme.muted(),
             );
-            if list.height > 2 {
-                self.write(
-                    Rect::new(list.x, list.y + 2, list.width, 1),
-                    "Try another word or category.",
-                    self.theme.muted(),
-                );
-            }
         }
         if footer_height > 0 {
             let reset = Rect::new(inner.x, bottom, inner.width.min(16), 1);
@@ -250,22 +235,6 @@ impl SidebarUi {
                 reset,
                 "Reset saved settings to defaults",
             );
-            if inner.width >= 44 {
-                self.write(
-                    Rect::new(
-                        reset.right() + 2,
-                        bottom,
-                        inner.width.saturating_sub(reset.width + 2),
-                        1,
-                    ),
-                    if inner.width >= 66 {
-                        "↑↓   [E]nter   [D]elete   [Esc]"
-                    } else {
-                        "↑↓   Esc"
-                    },
-                    self.theme.muted(),
-                );
-            }
         }
     }
 
