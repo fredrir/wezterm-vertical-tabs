@@ -823,15 +823,20 @@ fn hovering_a_split_tab_floats_the_close_control_without_moving_its_panes() {
     let resting = panes(&ui);
     let local = row_text(&ui, resting[0], resting[0].y);
     let remote = row_text(&ui, resting[1], resting[1].y);
-    // The row's icon already names the active pane's machine; only others repeat theirs.
+    // Panes on different machines each name theirs; the row reads as an unknown remote.
     let solo = hit_rect(&ui, &ElementId::Tab(1));
-    assert!(local.starts_with("~/api"), "{local:?}");
+    assert!(
+        row_text(&ui, solo, solo.y)
+            .trim_start()
+            .starts_with(icons::REMOTE)
+    );
+    assert!(local.starts_with("\u{f120}/api"), "{local:?}");
     assert_eq!(
         resting[0].x,
         solo.x + 1 + ICON_CELLS,
         "labels share one column"
     );
-    assert!(remote.contains("\u{f303} /web"), "{remote:?}");
+    assert!(remote.contains("\u{f303}/web"), "{remote:?}");
 
     let row = hit_rect(&ui, &ElementId::Tab(1));
     ui.event(
@@ -1324,4 +1329,37 @@ fn pointer_at(ui: &mut SidebarUi, model: &Model, rect: Rect) -> Vec<UiIntent> {
             button: MouseButton::Left,
         },
     )
+}
+
+#[test]
+fn splits_on_one_machine_keep_its_glyph_and_bare_labels() {
+    let mut model = Model::default();
+    let pane = |id, cwd: &str| vtabs_core::TabPane {
+        id,
+        cwd: cwd.into(),
+        active: id == 7,
+        remote: true,
+        os: "arch".into(),
+        ..Default::default()
+    };
+    tabs(
+        &mut model,
+        vec![Tab {
+            id: 1,
+            remote: true,
+            os: "arch".into(),
+            panes: vec![pane(7, "/srv/api"), pane(8, "/srv/web")],
+            ..Tab::default()
+        }],
+    );
+    let mut ui = SidebarUi::new();
+    ui.render(&model, Rect::new(0, 0, 48, 32), Duration::ZERO);
+    let row = hit_rect(&ui, &ElementId::Tab(1));
+    assert!(
+        row_text(&ui, row, row.y)
+            .trim_start()
+            .starts_with("\u{f303}")
+    );
+    let web = hit_rect(&ui, &ElementId::Pane(1, 8));
+    assert!(row_text(&ui, web, web.y).trim_start().starts_with("/web"));
 }

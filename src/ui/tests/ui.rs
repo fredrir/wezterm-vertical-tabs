@@ -785,7 +785,7 @@ fn remote_glyphs_take_their_distro_color_and_local_ones_keep_the_row_color() {
     };
     assert_eq!(
         glyph(icons::host(true, "arch")),
-        Color::Rgb(0x6e, 0xeb, 0xd3)
+        Color::Rgb(0xe8, 0x64, 0x64)
     );
     assert_eq!(
         glyph(icons::host(true, "debian")),

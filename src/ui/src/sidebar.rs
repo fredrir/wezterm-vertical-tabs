@@ -386,12 +386,7 @@ impl SidebarUi {
 
     fn pane_segments(&mut self, tab: &Tab, home: Option<&str>, layout: &RowLayout) {
         let area = layout.content;
-        let machine = |pane: &TabPane| icons::host(pane.remote, &pane.os);
-        let shown = tab
-            .panes
-            .iter()
-            .find(|pane| pane.active)
-            .map_or_else(|| icons::host(tab.remote, &tab.os), machine);
+        let mixed = spans_machines(tab);
         let slots = pane_slots(&tab.panes, area.width, area.height >= 2);
         let mut stacked: Vec<(u16, u16)> = Vec::new();
         for slot in slots.iter().filter(|slot| !slot.tall) {
@@ -436,16 +431,20 @@ impl SidebarUi {
             let label = display_text(&pane.label(home));
             self.write(
                 Rect::new(rect.x + pad, rect.y, rect.width.saturating_sub(pad + 1), 1),
-                if machine(pane) == shown {
-                    Line::from(label)
-                } else {
+                if mixed {
+                    // The machine glyph stands in for the home or root prefix: 󰣇/dotfiles.
+                    let glyph = icons::host(pane.remote, &pane.os);
                     let glyph = match self.theme.host(pane.remote, &pane.os) {
-                        Some(color) if !ghost => {
-                            Span::styled(machine(pane), Style::new().fg(color))
-                        }
-                        _ => Span::raw(machine(pane)),
+                        Some(color) if !ghost => Span::styled(glyph, Style::new().fg(color)),
+                        _ => Span::raw(glyph),
                     };
-                    Line::from(vec![glyph, Span::raw(format!(" {label}"))])
+                    let name = label
+                        .strip_prefix("~/")
+                        .or_else(|| label.strip_prefix('/'))
+                        .unwrap_or(&label);
+                    Line::from(vec![glyph, Span::raw(format!("/{name}"))])
+                } else {
+                    Line::from(label)
                 },
                 style.bg(fill),
             );
@@ -1011,11 +1010,7 @@ impl SidebarUi {
             && tab.panes.len() > 1
             && rect.width.saturating_sub(ICON_CELLS + 2)
                 >= tab.panes.len() as u16 * MIN_SEGMENT_CELLS;
-        let (remote, os) = tab
-            .panes
-            .iter()
-            .find(|pane| pane.active)
-            .map_or((tab.remote, &tab.os), |pane| (pane.remote, &pane.os));
+        let (remote, os) = tab_machine(tab);
         let layout = self.row(Row {
             id: ElementId::Tab(tab.id),
             rect,

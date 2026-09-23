@@ -72,7 +72,7 @@ return config
 | Space assignment      | Drop a tab on a bottom space control or use Move to space                                                               |
 | Folder persistence    | Catalog, names and collapse state persist; live membership follows the session boundary in [Boundaries](limitations.md) |
 | Tab title             | Double-click edits in place with the text selected; Enter saves, Escape cancels, an empty title restores the directory  |
-| Tab icon              | Machine of the active pane: terminal when local, else its OS, relayed per pane by each patched `wezterm-mux-server`     |
+| Tab icon              | Active pane's machine, `󰒋` when splits span machines; each split then reads `GLYPH/name`                                |
 | Tab index             | Replaces the row's icon while hovered, for `Cmd+1`-`Cmd+9` (`show_indexes`)                                             |
 | Icons                 | Drawn from WezTerm's bundled symbols font, so their size does not depend on the terminal font's Nerd Font variant       |
 | Splits                | Mirrors the layout in one row: side-by-side panes as columns, top/bottom panes as its two lines; click focuses a pane   |
@@ -256,7 +256,7 @@ settings = { distro_colors = { arch = '#a6e3a1', remote = '#ffffff' } }
 
 | OS ID      | Default   |
 | ---------- | --------- |
-| `arch`     | `#6eebd3` |
+| `arch`     | `#e86464` |
 | `ubuntu`   | `#ffa05e` |
 | `debian`   | `#ff7ea6` |
 | `fedora`   | `#c9a4ff` |

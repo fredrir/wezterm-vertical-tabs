@@ -146,6 +146,27 @@ impl ForeignTab {
     }
 }
 
+fn spans_machines(tab: &Tab) -> bool {
+    let mut glyphs = tab
+        .panes
+        .iter()
+        .map(|pane| icons::host(pane.remote, &pane.os));
+    glyphs
+        .next()
+        .is_some_and(|first| glyphs.any(|glyph| glyph != first))
+}
+
+/// Splits spanning several machines read as an unknown remote rather than following focus.
+fn tab_machine(tab: &Tab) -> (bool, &str) {
+    if spans_machines(tab) {
+        return (true, "");
+    }
+    tab.panes
+        .iter()
+        .find(|pane| pane.active)
+        .map_or((tab.remote, &tab.os), |pane| (pane.remote, &pane.os))
+}
+
 fn tab_name(tab: &Tab, home: Option<&str>) -> Option<String> {
     tab.custom_title()
         .map(str::to_owned)
@@ -624,11 +645,7 @@ impl SidebarUi {
                 name.as_deref().unwrap_or(&tab.title),
                 Action::Domain(Intent::ActivateTab(tab.id)),
             );
-            let (remote, os) = tab
-                .panes
-                .iter()
-                .find(|pane| pane.active)
-                .map_or((tab.remote, &tab.os), |pane| (pane.remote, &pane.os));
+            let (remote, os) = tab_machine(tab);
             item.icon = icons::host(remote, os);
             item.icon_color = self.theme.host(remote, os);
             if name.is_some_and(|name| name != tab.title) {
