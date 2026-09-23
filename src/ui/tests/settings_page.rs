@@ -110,12 +110,12 @@ fn category_navigation_and_end_reveal_the_last_setting() {
     draw(&mut ui, &model);
     assert_eq!(
         ui.focused(),
-        Some(&ElementId::Setting("private_accent".into()))
+        Some(&ElementId::Setting("distro_colors".into()))
     );
     assert!(
         ui.hit_regions()
             .iter()
-            .any(|hit| hit.id == ElementId::Setting("private_accent".into()))
+            .any(|hit| hit.id == ElementId::Setting("distro_colors".into()))
     );
     assert!(ui.hit_regions().iter().all(|hit| match &hit.id {
         ElementId::Setting(key) => vtabs_core::settings::descriptor(key).unwrap().group == "theme",

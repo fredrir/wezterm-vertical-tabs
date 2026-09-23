@@ -213,6 +213,7 @@ struct MenuItem {
     id: String,
     /// Palette rows share the sidebar's icon slot and index badge.
     icon: &'static str,
+    icon_color: Option<ratatui::style::Color>,
     index: Option<usize>,
     label: String,
     hint: String,
@@ -227,6 +228,7 @@ impl MenuItem {
         Self {
             id: id.into(),
             icon: "",
+            icon_color: None,
             index: None,
             label: label.into(),
             hint: String::new(),
@@ -622,11 +624,13 @@ impl SidebarUi {
                 name.as_deref().unwrap_or(&tab.title),
                 Action::Domain(Intent::ActivateTab(tab.id)),
             );
-            let active = tab.panes.iter().find(|pane| pane.active);
-            item.icon = active.map_or_else(
-                || icons::host(tab.remote, &tab.os),
-                |pane| icons::host(pane.remote, &pane.os),
-            );
+            let (remote, os) = tab
+                .panes
+                .iter()
+                .find(|pane| pane.active)
+                .map_or((tab.remote, &tab.os), |pane| (pane.remote, &pane.os));
+            item.icon = icons::host(remote, os);
+            item.icon_color = self.theme.host(remote, os);
             if name.is_some_and(|name| name != tab.title) {
                 item.keywords = tab.title.clone();
             }
@@ -670,6 +674,7 @@ impl SidebarUi {
                 }),
             );
             item.icon = icons::host(tab.remote, &tab.os);
+            item.icon_color = self.theme.host(tab.remote, &tab.os);
             item.hint = tab.place.clone();
             if tab.label != tab.title {
                 item.keywords = tab.title.clone();

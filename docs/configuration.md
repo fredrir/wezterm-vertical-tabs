@@ -207,4 +207,29 @@ Use [development.md](development.md) for installation, build/update commands and
 | Renames    | Custom title from the context menu or a Lua hook replaces the directory                     |
 | Metadata   | Session domain on a second line; `show_metadata`                                            |
 | Icons      | Active foreground color; subtle centered hover surface                                      |
+| Remote     | OS glyph in its own color; the local terminal glyph keeps the row color (`distro_colors`)   |
 | Clipboard  | Cmd/Ctrl+A, C, X and V in editors, including macOS Edit menu equivalents; Ctrl+Shift too    |
+
+```lua
+settings = { distro_colors = { arch = '#a6e3a1', remote = '#ffffff' } }
+```
+
+| OS ID      | Default   |
+| ---------- | --------- |
+| `arch`     | `#6eebd3` |
+| `ubuntu`   | `#ffa05e` |
+| `debian`   | `#ff7ea6` |
+| `fedora`   | `#c9a4ff` |
+| `nixos`    | `#c3ee7a` |
+| `alpine`   | `#eee57a` |
+| `centos`   | `#e9a0ff` |
+| `rhel`     | `#ff7676` |
+| `opensuse` | `#8bf08a` |
+| `manjaro`  | `#5ee8a4` |
+| `raspbian` | `#ff9ad5` |
+| `gentoo`   | `#e0c8ff` |
+| `freebsd`  | `#ffb3a6` |
+| `linux`    | `#ffcb6b` |
+| `macos`    | `#e4e4ea` |
+| `windows`  | `#c6f7e2` |
+| `remote`   | `#ffe9a8` |

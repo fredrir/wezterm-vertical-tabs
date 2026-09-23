@@ -8,6 +8,7 @@ return {
     ["cards"] = true,
     ["confirm_close"] = true,
     ["default_domain"] = nil,
+    ["distro_colors"] = {},
     ["foreground"] = "#e1e7f0",
     ["keyboard_shortcuts"] = true,
     ["menus"] = {},
@@ -151,6 +152,13 @@ return {
       ["key"] = "private_accent",
       ["kind"] = "color",
       ["label"] = "Private accent",
+    },
+    {
+      ["description"] = "Remote glyph colors by os-release ID, `remote` when unknown",
+      ["group"] = "theme",
+      ["key"] = "distro_colors",
+      ["kind"] = "colors",
+      ["label"] = "Remote glyphs",
     },
     {
       ["description"] = "Enable tab, search, settings and sidebar shortcuts",

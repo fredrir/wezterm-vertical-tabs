@@ -81,6 +81,7 @@ fn generate(format: &str) -> Result<String, String> {
                     SettingKind::Number { .. } => "integer".into(),
                     SettingKind::Text => "string?".into(),
                     SettingKind::Color => "string".into(),
+                    SettingKind::Colors => "table<string, string>".into(),
                     SettingKind::Choice(choices) => choices
                         .iter()
                         .map(|c| format!("'{c}'"))
@@ -111,6 +112,7 @@ fn generate(format: &str) -> Result<String, String> {
                     SettingKind::Number { min, max } => format!("Integer {min}–{max}"),
                     SettingKind::Text => "String or null".into(),
                     SettingKind::Color => "Hex color `#RRGGBB`".into(),
+                    SettingKind::Colors => "Object of hex colors".into(),
                     SettingKind::Choice(choices) => choices
                         .iter()
                         .map(|value| format!("`{value}`"))

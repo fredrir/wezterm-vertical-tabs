@@ -20,6 +20,7 @@
 | `muted`               | `"#98a8be"`                                                   | Hex color `#RRGGBB`. Secondary text foreground                                     |
 | `selected_background` | `"#34485f"`                                                   | Hex color `#RRGGBB`. Selected card background                                      |
 | `private_accent`      | `"#cba6f7"`                                                   | Hex color `#RRGGBB`. Private window accent                                         |
+| `distro_colors`       | `{}`                                                          | Object of hex colors. Remote glyph colors by os-release ID, `remote` when unknown  |
 | `keyboard_shortcuts`  | `true`                                                        | Boolean. Enable tab, search, settings and sidebar shortcuts                        |
 | `reopen_limit`        | `20`                                                          | Integer 0–100. Maximum in-memory launch intents                                    |
 | `default_domain`      | `null`                                                        | String or null. Spawn domain used in an empty space; null retains the host default |

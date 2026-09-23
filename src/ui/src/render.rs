@@ -349,6 +349,11 @@ impl SidebarUi {
             Theme::parse_color(&settings.selected_background).unwrap_or(self.theme.selected);
         self.theme.private =
             Theme::parse_color(&settings.private_accent).unwrap_or(self.theme.private);
+        self.theme.machines = settings
+            .distro_colors
+            .iter()
+            .filter_map(|(os, color)| Some((os.clone(), Theme::parse_color(color)?)))
+            .collect();
         self.theme.accent = if model.private {
             self.theme.private
         } else {
@@ -757,6 +762,7 @@ impl SidebarUi {
                 rect,
                 indent: 0,
                 icon: item.icon,
+                icon_color: item.icon_color,
                 index: item.index,
                 content: Content::Label(&display_text(&item.label)),
                 tooltip: Some(String::new()),

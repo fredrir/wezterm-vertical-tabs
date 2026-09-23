@@ -1,5 +1,8 @@
 use crate::{icons, input::display_text, *};
-use ratatui::{layout::Alignment, text::Line};
+use ratatui::{
+    layout::Alignment,
+    text::{Line, Span},
+};
 use ratatui::{
     style::{Color, Style},
     widgets::{Block, Clear, Widget},
@@ -11,16 +14,12 @@ use vtabs_core::{Model, RailMode, Tab, TabPane};
 
 const GROUP_GAP: u16 = 1;
 pub(crate) const SURFACE_RADIUS: f32 = 9.0;
-/// Adjacent rows touch in cells; this pixel inset is the hairline between their pills.
 pub(crate) const ROW_INSET: f32 = 1.5;
 const PRESS_INSET: f32 = 3.0;
 const NESTED_INSET: f32 = 4.0;
-/// Share of a cell row the insertion bar fills.
 const DROP_BAR: f32 = 0.14;
 const DROP_TINT: u16 = 24;
-/// Deep enough to stay inside a pressed row's shrunken pill.
 const OCCLUDER_INSET: f32 = 6.0;
-/// The glyph, the cell its index badge or its own overflow takes, and a gap before the text.
 pub(crate) const ICON_CELLS: u16 = 3;
 const TRAILING_CELLS: u16 = 3;
 const MIN_SEGMENT_CELLS: u16 = 4;
@@ -34,7 +33,6 @@ fn icon_rect(mut rect: Rect, label: &str) -> Rect {
     rect
 }
 
-/// macOS chords read as key glyphs; other platforms spell out their remapped chord.
 fn platform_tooltip(tooltip: String) -> String {
     if cfg!(target_os = "macos") {
         tooltip
@@ -48,18 +46,15 @@ fn platform_tooltip(tooltip: String) -> String {
     }
 }
 
-/// Where one pane sits in the row's mirror of the tab's split layout.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct PaneSlot {
     pub pane: usize,
     pub x: u16,
     pub width: u16,
-    /// The text line it occupies; a pane spanning the tab's height takes both.
     pub line: u16,
     pub tall: bool,
 }
 
-/// Side-by-side panes become columns and top/bottom panes the row's two text lines.
 pub(crate) fn pane_slots(panes: &[TabPane], width: u16, two_lines: bool) -> Vec<PaneSlot> {
     let measured = panes.iter().any(|pane| pane.width > 0 && pane.height > 0);
     let mut lefts: Vec<u16> = if measured {
@@ -98,7 +93,6 @@ pub(crate) fn pane_slots(panes: &[TabPane], width: u16, two_lines: bool) -> Vec<
     let mut slots = Vec::with_capacity(placed.len());
     let mut rest = placed.as_slice();
     while let Some(&(_, start, _, line, _)) = rest.first() {
-        // More panes than the two lines can stack share their column side by side.
         let count = rest
             .iter()
             .take_while(|(_, other, _, other_line, _)| (*other, *other_line) == (start, line))
@@ -127,7 +121,6 @@ pub(crate) fn pane_slots(panes: &[TabPane], width: u16, two_lines: bool) -> Vec<
     slots
 }
 
-/// A control revealed at a row's trailing edge while the row is hovered.
 pub(crate) struct Trailing {
     id: ElementId,
     icon: &'static str,
@@ -136,7 +129,6 @@ pub(crate) struct Trailing {
 
 pub(crate) enum Content<'a> {
     Label(&'a str),
-    /// Splits read as side-by-side pills inside the tab's own row.
     Panes(&'a Tab, Option<&'a str>),
     Rename(TabId),
 }
@@ -146,6 +138,7 @@ pub(crate) struct Row<'a> {
     pub(crate) rect: Rect,
     pub(crate) indent: u16,
     pub(crate) icon: &'a str,
+    pub(crate) icon_color: Option<Color>,
     pub(crate) index: Option<usize>,
     pub(crate) content: Content<'a>,
     pub(crate) tooltip: Option<String>,
@@ -153,14 +146,12 @@ pub(crate) struct Row<'a> {
     pub(crate) muted: bool,
     pub(crate) compact: bool,
     pub(crate) trailing: Option<Trailing>,
-    /// Input fields rest on a faint fill instead of the bare sidebar.
     pub(crate) field: bool,
 }
 
 pub(crate) struct RowLayout {
     pub(crate) fill: Color,
     pub(crate) style: Style,
-    /// Cells after the icon and index, before any trailing control.
     pub(crate) content: Rect,
 }
 
@@ -250,12 +241,10 @@ impl SidebarUi {
         self.hit(id, rect, platform_tooltip(tooltip));
     }
 
-    /// Every list entry shares this geometry, hover, press and trailing-control behavior.
     pub(crate) fn row(&mut self, row: Row<'_>) -> RowLayout {
         let hovered = self.row_hovered(&row.id);
         let focused = self.focused.as_ref() == Some(&row.id);
         let pressed = self.press.as_ref().is_some_and(|press| press.id == row.id);
-        // The dragged row fades where it was; whatever it would land in leans to the accent.
         let ghost = self.dragging
             && self
                 .drag
@@ -301,17 +290,19 @@ impl SidebarUi {
                 && row.rect.width > TRAILING_CELLS + ICON_CELLS
                 && ((hovered && !on_pane) || self.focused.as_ref() == Some(&trailing.id))
         });
-        // The index takes the icon's place while the row is hovered.
-        let icon = icons::index(row.index)
-            .filter(|_| hovered)
-            .unwrap_or(row.icon);
+        let index = icons::index(row.index).filter(|_| hovered);
+        let icon = index.unwrap_or(row.icon);
+        let icon_style = match row.icon_color {
+            Some(color) if index.is_none() && !ghost => style.fg(color),
+            _ => style,
+        };
         if row.compact {
             let label = format!("{icon} ");
             let visual = icon_rect(row.rect, &label);
             self.write(
                 Rect::new(visual.x, row.rect.y, visual.width, 1),
                 Line::from(label).alignment(Alignment::Center),
-                style,
+                icon_style,
             );
             self.hit(
                 row.id,
@@ -329,7 +320,7 @@ impl SidebarUi {
         self.write(
             Rect::new(x, row.rect.y, ICON_CELLS.min(right.saturating_sub(x)), 1),
             icon.to_owned(),
-            style,
+            icon_style,
         );
         let x = (x + ICON_CELLS).min(right);
         let layout = RowLayout {
@@ -360,7 +351,6 @@ impl SidebarUi {
         layout
     }
 
-    /// The landing tab shows the split it is about to gain, popping in from a smaller pill.
     fn split_preview(&mut self, layout: &RowLayout) {
         let area = layout.content;
         let width = (area.width / 2).max(MIN_SEGMENT_CELLS).min(area.width);
@@ -376,7 +366,6 @@ impl SidebarUi {
         );
     }
 
-    /// Floats over the row's content so revealing it never shifts what is beneath.
     fn overlay_control(&mut self, control: Trailing, row: Rect, style: Style) {
         let rect = Rect::new(
             row.right() - TRAILING_CELLS,
@@ -404,7 +393,6 @@ impl SidebarUi {
             .find(|pane| pane.active)
             .map_or_else(|| icons::host(tab.remote, &tab.os), machine);
         let slots = pane_slots(&tab.panes, area.width, area.height >= 2);
-        // Two text lines share the row, so the host must not center either of them.
         let mut stacked: Vec<(u16, u16)> = Vec::new();
         for slot in slots.iter().filter(|slot| !slot.tall) {
             let span = (slot.x, slot.width);
@@ -436,22 +424,28 @@ impl SidebarUi {
             } else {
                 layout.fill
             };
-            let style = if self.dragging && self.drag.as_ref() == Some(&id) {
+            let ghost = self.dragging && self.drag.as_ref() == Some(&id);
+            let style = if ghost {
                 layout.style.fg(self.theme.lift(self.theme.background, 30))
             } else if pane.active {
                 layout.style
             } else {
                 layout.style.fg(self.theme.muted)
             };
-            // The first column starts where every other row's label does.
             let pad = u16::from(slot.x > 0);
             let label = display_text(&pane.label(home));
             self.write(
                 Rect::new(rect.x + pad, rect.y, rect.width.saturating_sub(pad + 1), 1),
                 if machine(pane) == shown {
-                    label
+                    Line::from(label)
                 } else {
-                    format!("{} {label}", machine(pane))
+                    let glyph = match self.theme.host(pane.remote, &pane.os) {
+                        Some(color) if !ghost => {
+                            Span::styled(machine(pane), Style::new().fg(color))
+                        }
+                        _ => Span::raw(machine(pane)),
+                    };
+                    Line::from(vec![glyph, Span::raw(format!(" {label}"))])
                 },
                 style.bg(fill),
             );
@@ -475,14 +469,12 @@ impl SidebarUi {
             return;
         };
         let edit = Rect::new(content.x, content.y, content.width, 1);
-        // The host centers first-row text of a two-row surface; marks follow it.
         self.editor_shift = if content.height == 2 { 0.5 } else { 0.0 };
         self.compose_editor(&mut rename.editor, edit, fill, true);
         self.hit(ElementId::Editor, edit, "Tab title");
         self.rename = Some(rename);
     }
 
-    /// Settings keeps its place among the open tabs; tabs opened later follow it.
     fn place_settings(&mut self, model: &Model) -> usize {
         let visible = model.visible_ids();
         let first_open = visible
@@ -544,7 +536,6 @@ impl SidebarUi {
                 self.sidebar_rows.push(row);
             }
             if let Some((_, range)) = tab.folder_id.as_deref().and_then(|id| folders.get_mut(id)) {
-                // The model's visible projection keeps each folder's members contiguous.
                 if range.start == range.end {
                     range.start = index;
                 }
@@ -604,7 +595,6 @@ impl SidebarUi {
         }
     }
 
-    /// Whole rows that fit the list when it starts at `start`; never fewer than one.
     pub(crate) fn rows_fitting(&self, model: &Model, start: usize) -> usize {
         let mut used = 0;
         self.sidebar_rows
@@ -708,6 +698,7 @@ impl SidebarUi {
             rect: search,
             indent: 0,
             icon: icons::SEARCH,
+            icon_color: None,
             index: None,
             content: Content::Label("Search..."),
             selected: false,
@@ -718,7 +709,6 @@ impl SidebarUi {
             field: true,
         });
         let title_y = search.bottom();
-        // Row height follows the room below search, before the space row claims its share.
         self.tabs_rect = Rect::new(
             inner.x,
             title_y,
@@ -781,6 +771,7 @@ impl SidebarUi {
                         rect,
                         indent: 0,
                         icon: icons::PLUS,
+                        icon_color: None,
                         index: None,
                         content: Content::Label("New Tab"),
                         tooltip: Some("New tab  Cmd+T".into()),
@@ -797,6 +788,7 @@ impl SidebarUi {
                         rect,
                         indent: 0,
                         icon: icons::SETTINGS,
+                        icon_color: None,
                         index: model.settings.show_indexes.then_some(number),
                         content: Content::Label("Settings"),
                         tooltip: Some("Settings  Cmd+,".into()),
@@ -824,6 +816,7 @@ impl SidebarUi {
                         } else {
                             icons::FOLDER_OPEN
                         },
+                        icon_color: None,
                         index: None,
                         content: Content::Label(&format!(
                             "{}  {count}",
@@ -859,7 +852,6 @@ impl SidebarUi {
             );
         }
         if let (Some(DropTarget::Beside { .. }), Some(motion)) = (&self.drop, self.drop_motion) {
-            // A thin accent bar on the row boundary, gliding between boundaries.
             let edge = motion.from + (motion.to - motion.from) * motion.progress;
             let row = (edge.floor() as u16).clamp(
                 self.tabs_rect.y,
@@ -928,7 +920,6 @@ impl SidebarUi {
             } else {
                 icons::space(space.icon.trim())
             };
-            // One-cell glyphs take the same blank partner as the plus beside them.
             let label = if label.width() == 1 {
                 format!("{label} ")
             } else {
@@ -989,6 +980,7 @@ impl SidebarUi {
             rect,
             indent: 0,
             icon,
+            icon_color: None,
             index: None,
             content: Content::Label(&label),
             tooltip: Some(tooltip),
@@ -1019,15 +1011,17 @@ impl SidebarUi {
             && tab.panes.len() > 1
             && rect.width.saturating_sub(ICON_CELLS + 2)
                 >= tab.panes.len() as u16 * MIN_SEGMENT_CELLS;
-        let active = tab.panes.iter().find(|pane| pane.active);
+        let (remote, os) = tab
+            .panes
+            .iter()
+            .find(|pane| pane.active)
+            .map_or((tab.remote, &tab.os), |pane| (pane.remote, &pane.os));
         let layout = self.row(Row {
             id: ElementId::Tab(tab.id),
             rect,
             indent: if tab.folder_id.is_some() { 2 } else { 0 },
-            icon: active.map_or_else(
-                || icons::host(tab.remote, &tab.os),
-                |pane| icons::host(pane.remote, &pane.os),
-            ),
+            icon: icons::host(remote, os),
+            icon_color: self.theme.host(remote, os),
             index: (compact || model.settings.show_indexes).then_some(number),
             content: if renaming {
                 Content::Rename(tab.id)

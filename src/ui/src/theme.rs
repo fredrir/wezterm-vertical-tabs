@@ -1,4 +1,6 @@
+use crate::icons;
 use ratatui::style::{Color, Style};
+use std::collections::BTreeMap;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Theme {
@@ -11,6 +13,7 @@ pub struct Theme {
     pub accent: Color,
     pub danger: Color,
     pub private: Color,
+    pub machines: BTreeMap<String, Color>,
 }
 
 impl Default for Theme {
@@ -25,6 +28,7 @@ impl Default for Theme {
             accent: Color::Rgb(169, 199, 245),
             danger: Color::Rgb(250, 122, 134),
             private: Color::Rgb(207, 166, 255),
+            machines: BTreeMap::new(),
         };
         theme.sync_surfaces();
         theme
@@ -43,17 +47,14 @@ impl Theme {
         self.card = self.lift(self.background, 5);
     }
 
-    /// Nested surfaces step toward the foreground from whatever fill contains them.
     pub(crate) fn lift(&self, fill: Color, amount: u16) -> Color {
         Self::blend(fill, self.foreground, amount)
     }
 
-    /// Drop targets lean toward the accent so a drag reads apart from a hover.
     pub(crate) fn tint(&self, fill: Color, amount: u16) -> Color {
         Self::blend(fill, self.accent, amount)
     }
 
-    /// Destructive buttons lean toward the danger color.
     pub(crate) fn warn(&self, fill: Color, amount: u16) -> Color {
         Self::blend(fill, self.danger, amount)
     }
@@ -66,6 +67,10 @@ impl Theme {
             ((u16::from(base) * (100 - amount) + u16::from(foreground) * amount + 50) / 100) as u8
         };
         Color::Rgb(channel(r, fr), channel(g, fg), channel(b, fb))
+    }
+
+    pub(crate) fn host(&self, remote: bool, os: &str) -> Option<Color> {
+        icons::host_color(remote, os, &self.machines)
     }
 
     pub fn base(&self) -> Style {

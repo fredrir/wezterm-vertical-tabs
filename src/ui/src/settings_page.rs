@@ -48,7 +48,9 @@ fn value_label(model: &Model, field: &SettingDescriptor) -> String {
                 "Off".into()
             }
         }
-        SettingKind::Object => format!("{} entries", value.as_object().map_or(0, |v| v.len())),
+        SettingKind::Object | SettingKind::Colors => {
+            format!("{} entries", value.as_object().map_or(0, |v| v.len()))
+        }
         SettingKind::List => format!("{} items", value.as_array().map_or(0, |v| v.len())),
         _ if value.is_null() => "Automatic".into(),
         _ => value

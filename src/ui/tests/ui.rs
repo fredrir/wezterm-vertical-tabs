@@ -1,4 +1,5 @@
 use super::*;
+use ratatui::style::Color;
 use std::time::Duration;
 use vtabs_core::{Intent, Model, Space, Tab};
 
@@ -753,4 +754,64 @@ fn search_ime_anchor_remains_available_for_no_matches_without_idle_tick() {
     assert!(frame.cursor.is_some());
     assert_eq!(ui.next_deadline(), None);
     assert!(ui.event(&model, UiInput::key(Key::Enter)).is_empty());
+}
+
+#[test]
+fn remote_glyphs_take_their_distro_color_and_local_ones_keep_the_row_color() {
+    let tab = |id, remote, os: &str| Tab {
+        id,
+        title: format!("tab {id}"),
+        remote,
+        os: os.into(),
+        ..Tab::default()
+    };
+    let mut model = Model::default();
+    model
+        .reconcile(
+            vec![
+                tab(1, false, ""),
+                tab(2, true, "arch"),
+                tab(3, true, "debian"),
+                tab(4, true, "plan9"),
+            ],
+            Some(1),
+            true,
+        )
+        .unwrap();
+    model
+        .settings
+        .distro_colors
+        .insert("debian".into(), "#ffd700".into());
+    model.revision += 1;
+    let mut ui = SidebarUi::new();
+    draw(&mut ui, &model, 0);
+    let glyph = |symbol: &str| {
+        ui.buffer()
+            .content
+            .iter()
+            .find(|cell| cell.symbol() == symbol)
+            .unwrap_or_else(|| panic!("{symbol:?} not drawn"))
+            .fg
+    };
+    assert_eq!(
+        glyph(icons::host(true, "arch")),
+        Color::Rgb(0x6e, 0xeb, 0xd3)
+    );
+    assert_eq!(
+        glyph(icons::host(true, "debian")),
+        Color::Rgb(0xff, 0xd7, 0x00)
+    );
+    assert_eq!(
+        glyph(icons::host(true, "plan9")),
+        Color::Rgb(0xff, 0xe9, 0xa8)
+    );
+    assert_eq!(glyph(icons::LOCAL), ui.theme.accent);
+}
+
+#[test]
+fn distro_colors_accept_only_hex_values() {
+    use vtabs_core::settings::validate_value;
+    assert!(validate_value("distro_colors", &serde_json::json!({"arch": "#aabbcc"})).is_ok());
+    assert!(validate_value("distro_colors", &serde_json::json!({"arch": "blue"})).is_err());
+    assert!(validate_value("distro_colors", &serde_json::json!("#aabbcc")).is_err());
 }

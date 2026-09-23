@@ -898,6 +898,7 @@ impl WindowApp {
                                 | "muted"
                                 | "selected_background"
                                 | "private_accent"
+                                | "distro_colors"
                         ) {
                             return Err(Error("Theme hooks may only set theme colors".into()));
                         }

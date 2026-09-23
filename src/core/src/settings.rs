@@ -41,6 +41,7 @@ pub struct Settings {
     pub muted: String,
     pub selected_background: String,
     pub private_accent: String,
+    pub distro_colors: BTreeMap<String, String>,
     pub reopen_limit: u16,
     pub default_domain: Option<String>,
     pub private_env: BTreeMap<String, String>,
@@ -81,6 +82,7 @@ impl Default for Settings {
             muted: "#98a8be".into(),
             selected_background: "#34485f".into(),
             private_accent: "#cba6f7".into(),
+            distro_colors: BTreeMap::new(),
             reopen_limit: 20,
             default_domain: None,
             private_env: BTreeMap::from([
@@ -97,9 +99,14 @@ impl Default for Settings {
 #[serde(rename_all = "snake_case")]
 pub enum SettingKind {
     Bool,
-    Number { min: u16, max: u16 },
+    Number {
+        min: u16,
+        max: u16,
+    },
     Text,
     Color,
+    /// Keyed hex colors.
+    Colors,
     Choice(&'static [&'static str]),
     Object,
     List,
@@ -242,6 +249,13 @@ pub const DESCRIPTORS: &[SettingDescriptor] = &[
         description: "Private window accent",
     },
     SettingDescriptor {
+        key: "distro_colors",
+        label: "Remote glyphs",
+        group: "theme",
+        kind: SettingKind::Colors,
+        description: "Remote glyph colors by os-release ID, `remote` when unknown",
+    },
+    SettingDescriptor {
         key: "keyboard_shortcuts",
         label: "Keyboard shortcuts",
         group: "behavior",
@@ -297,6 +311,11 @@ pub fn validate_value(key: &str, value: &Value) -> Result<(), String> {
             .is_some_and(|n| n >= u64::from(min) && n <= u64::from(max)),
         SettingKind::Text => value.is_null() || value.as_str().is_some_and(|s| s.len() <= 4096),
         SettingKind::Color => value.as_str().is_some_and(valid_color),
+        SettingKind::Colors => value.as_object().is_some_and(|o| {
+            o.len() <= 128
+                && o.iter()
+                    .all(|(k, v)| k.len() <= 64 && v.as_str().is_some_and(valid_color))
+        }),
         SettingKind::Choice(choices) => value.as_str().is_some_and(|s| choices.contains(&s)),
         SettingKind::Object => value.as_object().is_some_and(|o| {
             o.len() <= 128
