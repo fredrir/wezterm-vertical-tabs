@@ -110,6 +110,9 @@ pub struct TabPane {
     pub cwd: String,
     #[serde(default)]
     pub repo_root: Option<String>,
+    /// The owning machine's home; `None` falls back to this host's.
+    #[serde(default)]
+    pub home: Option<String>,
     #[serde(default)]
     pub active: bool,
     /// Splits of one tab can live on different machines.
@@ -129,8 +132,12 @@ pub struct TabPane {
 }
 impl TabPane {
     pub fn label(&self, home: Option<&str>) -> String {
-        location_label(&self.cwd, self.repo_root.as_deref(), home)
-            .unwrap_or_else(|| self.title.clone())
+        location_label(
+            &self.cwd,
+            self.repo_root.as_deref(),
+            self.home.as_deref().or(home),
+        )
+        .unwrap_or_else(|| self.title.clone())
     }
 }
 
@@ -146,6 +153,9 @@ pub struct Tab {
     /// Repository root when the directory is inside a Git work tree.
     #[serde(default)]
     pub repo_root: Option<String>,
+    /// The owning machine's home; `None` falls back to this host's.
+    #[serde(default)]
+    pub home: Option<String>,
     #[serde(default)]
     pub domain: String,
     #[serde(default)]
@@ -193,7 +203,11 @@ impl Tab {
     }
 
     pub fn location(&self, home: Option<&str>) -> Option<String> {
-        location_label(&self.cwd, self.repo_root.as_deref(), home)
+        location_label(
+            &self.cwd,
+            self.repo_root.as_deref(),
+            self.home.as_deref().or(home),
+        )
     }
 
     fn reconcile_host_metadata(&mut self, incoming: Self) -> bool {
@@ -207,7 +221,7 @@ impl Tab {
             };
         }
         update!(
-            id, title, icon, cwd, repo_root, domain, host, user, process, remote, os, panes,
+            id, title, icon, cwd, repo_root, home, domain, host, user, process, remote, os, panes,
             unread, bell
         );
         // Membership and title overrides belong to the application. discovery

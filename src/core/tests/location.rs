@@ -61,3 +61,62 @@ fn location_marks_the_home_directory_and_absolute_directories() {
     );
     assert_eq!(tab("", None).location(Some("/Users/fredrir")), None);
 }
+
+#[test]
+fn location_labels_against_the_owning_machines_home() {
+    let remote = |cwd: &str, repo_root: Option<&str>| Tab {
+        home: Some("/home/fredrir".into()),
+        ..tab(cwd, repo_root)
+    };
+    let local = Some("/Users/fredrir");
+    assert_eq!(
+        remote("/home/fredrir/Downloads", None)
+            .location(local)
+            .as_deref(),
+        Some("~/Downloads")
+    );
+    assert_eq!(
+        remote("/home/fredrir", None).location(local).as_deref(),
+        Some("~/")
+    );
+    assert_eq!(
+        remote(
+            "/home/fredrir/dotfiles/nvim",
+            Some("/home/fredrir/dotfiles")
+        )
+        .location(local)
+        .as_deref(),
+        Some("dotfiles")
+    );
+    assert_eq!(
+        remote("/Users/fredrir/Downloads", None)
+            .location(local)
+            .as_deref(),
+        Some("/Downloads")
+    );
+    assert_eq!(
+        tab("/home/fredrir/Downloads", None)
+            .location(local)
+            .as_deref(),
+        Some("/Downloads")
+    );
+}
+
+#[test]
+fn pane_labels_against_the_owning_machines_home() {
+    let pane = TabPane {
+        cwd: "/root/src".into(),
+        home: Some("/root".into()),
+        title: "zsh".into(),
+        ..TabPane::default()
+    };
+    assert_eq!(pane.label(Some("/Users/fredrir")), "~/src");
+    assert_eq!(
+        TabPane {
+            home: None,
+            ..pane.clone()
+        }
+        .label(Some("/Users/fredrir")),
+        "/src"
+    );
+}

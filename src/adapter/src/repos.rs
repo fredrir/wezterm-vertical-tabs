@@ -1,5 +1,5 @@
-//! Git repository discovery for sidebar labels. Roots are cached per directory.
-use std::{collections::HashMap, path::Path};
+//! Git repository discovery for local sidebar labels. Roots are cached per directory.
+use std::collections::HashMap;
 
 const CAPACITY: usize = 256;
 
@@ -18,16 +18,7 @@ impl Repos {
         }
         self.known
             .entry(cwd.to_owned())
-            .or_insert_with(|| git_root(cwd))
+            .or_insert_with(|| mux::location::repo_root(cwd))
             .as_deref()
     }
-}
-
-// Worktrees and submodules keep `.git` as a file, so existence is the test.
-fn git_root(cwd: &str) -> Option<String> {
-    Path::new(cwd)
-        .ancestors()
-        .find(|dir| dir.join(".git").exists())
-        .and_then(Path::to_str)
-        .map(str::to_owned)
 }

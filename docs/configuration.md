@@ -203,7 +203,7 @@ Use [development.md](development.md) for installation, build/update commands and
 | Frame      | Sidebar background surrounds rounded terminal content on every edge                         |
 | Search     | Compact sidebar trigger; launcher drops down from it, tooltips open below their control     |
 | Tab rows   | Index, directory marker and the deepest directory name                                      |
-| Directory  | `U+F126` repository root, `~/` for home and below it, `/` otherwise                         |
+| Directory  | Repository root name, `~/` for the owning machine's home and below it, `/` otherwise        |
 | Renames    | Custom title from the context menu or a Lua hook replaces the directory                     |
 | Metadata   | Session domain on a second line; `show_metadata`                                            |
 | Icons      | Active foreground color; subtle centered hover surface                                      |

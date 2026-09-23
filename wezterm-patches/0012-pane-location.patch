@@ -1,0 +1,295 @@
+diff --git a/codec/src/lib.rs b/codec/src/lib.rs
+index f44231c0..d0f0a84e 100644
+--- a/codec/src/lib.rs
++++ b/codec/src/lib.rs
+@@ -507,6 +507,8 @@ pdu! {
+     GetHostInfoResponse: 64,
+     GetPaneCloseInfo: 65,
+     GetPaneCloseInfoResponse: 66,
++    GetPaneLocation: 67,
++    GetPaneLocationResponse: 68,
+ }
+ 
+ impl Pdu {
+@@ -907,6 +909,20 @@ pub struct GetPaneCloseInfoResponse {
+     pub process: String,
+ }
+ 
++/// Only the machine that owns a pane can see its home and Git work tree.
++#[derive(Deserialize, Serialize, PartialEq, Debug)]
++pub struct GetPaneLocation {
++    pub pane_id: PaneId,
++}
++
++#[derive(Deserialize, Serialize, PartialEq, Eq, Debug, Clone, Default)]
++pub struct GetPaneLocationResponse {
++    /// The directory this answer describes; a stale answer names an older one.
++    pub cwd: String,
++    pub home: String,
++    pub repo_root: Option<String>,
++}
++
+ #[derive(Deserialize, Serialize, PartialEq, Eq, Debug, Clone, Default)]
+ pub struct GetHostInfoResponse {
+     /// The os-release `ID`, or the platform name where no such file exists.
+diff --git a/mux/src/lib.rs b/mux/src/lib.rs
+index 6d1a7461..0fc6b066 100644
+--- a/mux/src/lib.rs
++++ b/mux/src/lib.rs
+@@ -38,6 +38,7 @@ pub mod client;
+ pub mod connui;
+ pub mod domain;
+ pub mod localpane;
++pub mod location;
+ pub mod pane;
+ pub mod renderable;
+ pub mod ssh;
+diff --git a/mux/src/location.rs b/mux/src/location.rs
+new file mode 100644
+index 00000000..c3aa29e6
+--- /dev/null
++++ b/mux/src/location.rs
+@@ -0,0 +1,18 @@
++//! Where a directory sits on the machine that owns it.
++use std::path::Path;
++
++/// Worktrees and submodules keep `.git` as a file, so existence is the test.
++pub fn repo_root(cwd: &str) -> Option<String> {
++    if cwd.is_empty() {
++        return None;
++    }
++    Path::new(cwd)
++        .ancestors()
++        .find(|dir| dir.join(".git").exists())
++        .and_then(Path::to_str)
++        .map(str::to_owned)
++}
++
++pub fn home() -> String {
++    config::HOME_DIR.to_string_lossy().into_owned()
++}
+diff --git a/wezterm-client/src/client.rs b/wezterm-client/src/client.rs
+index 4e48cdda..479d7f6a 100644
+--- a/wezterm-client/src/client.rs
++++ b/wezterm-client/src/client.rs
+@@ -1347,6 +1347,7 @@ impl Client {
+         GetPaneCloseInfo,
+         GetPaneCloseInfoResponse
+     );
++    rpc!(get_pane_location, GetPaneLocation, GetPaneLocationResponse);
+     rpc!(spawn_v2, SpawnV2, SpawnResponse);
+     rpc!(split_pane, SplitPane, SpawnResponse);
+     rpc!(
+diff --git a/wezterm-client/src/pane/clientpane.rs b/wezterm-client/src/pane/clientpane.rs
+index 3d2054ef..222aef10 100644
+--- a/wezterm-client/src/pane/clientpane.rs
++++ b/wezterm-client/src/pane/clientpane.rs
+@@ -161,6 +161,27 @@ impl ClientPane {
+         self.host_info.lock().clone()
+     }
+ 
++    /// The owner's answer for the current directory; `None` while pending, and for good from a stock server.
++    pub fn location(&self) -> Option<GetPaneLocationResponse> {
++        let renderable = self.renderable.lock();
++        let inner = renderable.inner.borrow();
++        let cwd = inner.working_dir.as_ref().map_or("", |url| url.path());
++        inner.location.get().filter(|location| location.cwd == cwd)
++    }
++
++    /// An intermediate mux answers for the pane's real owner rather than for itself.
++    pub async fn relay_location(&self) -> anyhow::Result<GetPaneLocationResponse> {
++        if let Some(location) = self.location() {
++            return Ok(location);
++        }
++        self.client
++            .client
++            .get_pane_location(GetPaneLocation {
++                pane_id: self.remote_pane_id,
++            })
++            .await
++    }
++
+     /// Asked at close time, since what runs in the pane changes; an error means a stock server.
+     pub async fn close_info(&self) -> anyhow::Result<GetPaneCloseInfoResponse> {
+         self.client
+diff --git a/wezterm-client/src/pane/location.rs b/wezterm-client/src/pane/location.rs
+new file mode 100644
+index 00000000..e3fdde79
+--- /dev/null
++++ b/wezterm-client/src/pane/location.rs
+@@ -0,0 +1,64 @@
++//! The owning server resolves a pane's home and Git work tree whenever its directory changes.
++use crate::domain::ClientInner;
++use codec::{GetPaneLocation, GetPaneLocationResponse};
++use mux::pane::PaneId;
++use mux::{Mux, MuxNotification};
++use parking_lot::Mutex;
++use std::sync::Arc;
++use wezterm_term::Alert;
++
++#[derive(Default)]
++struct State {
++    resolved: Option<GetPaneLocationResponse>,
++    requests: u64,
++}
++
++#[derive(Clone, Default)]
++pub struct PaneLocation(Arc<Mutex<State>>);
++
++impl PaneLocation {
++    pub fn get(&self) -> Option<GetPaneLocationResponse> {
++        self.0.lock().resolved.clone()
++    }
++
++    /// Stock servers reject the request, leaving the location unknown.
++    pub fn refresh(
++        &self,
++        client: &Arc<ClientInner>,
++        remote_pane_id: PaneId,
++        local_pane_id: PaneId,
++    ) {
++        let request = {
++            let mut state = self.0.lock();
++            state.requests += 1;
++            state.requests
++        };
++        let state = Arc::clone(&self.0);
++        let client = Arc::clone(client);
++        promise::spawn::spawn(async move {
++            let Ok(location) = client
++                .client
++                .get_pane_location(GetPaneLocation {
++                    pane_id: remote_pane_id,
++                })
++                .await
++            else {
++                return;
++            };
++            {
++                let mut state = state.lock();
++                // An answer overtaken by a later directory change is already stale.
++                if state.requests != request {
++                    return;
++                }
++                state.resolved = Some(location);
++            }
++            // Consumers re-read pane metadata on this alert.
++            Mux::get().notify(MuxNotification::Alert {
++                pane_id: local_pane_id,
++                alert: Alert::CurrentWorkingDirectoryChanged,
++            });
++        })
++        .detach();
++    }
++}
+diff --git a/wezterm-client/src/pane/mod.rs b/wezterm-client/src/pane/mod.rs
+index 3461571f..e80787bb 100644
+--- a/wezterm-client/src/pane/mod.rs
++++ b/wezterm-client/src/pane/mod.rs
+@@ -1,5 +1,6 @@
+ pub use clientpane::ClientPane;
+ 
+ mod clientpane;
++mod location;
+ mod mousestate;
+ mod renderable;
+diff --git a/wezterm-client/src/pane/renderable.rs b/wezterm-client/src/pane/renderable.rs
+index 68fa518f..af9d2f3f 100644
+--- a/wezterm-client/src/pane/renderable.rs
++++ b/wezterm-client/src/pane/renderable.rs
+@@ -1,5 +1,6 @@
+ use crate::domain::ClientInner;
+ use crate::pane::clientpane::ClientPane;
++use crate::pane::location::PaneLocation;
+ use anyhow::anyhow;
+ use codec::*;
+ use config::{configuration, ConfigHandle};
+@@ -68,6 +69,7 @@ pub struct RenderableInner {
+     lines: LruCache<StableRowIndex, LineEntry>,
+     pub title: String,
+     pub working_dir: Option<Url>,
++    pub location: PaneLocation,
+     pub seqno: SequenceNo,
+ 
+     fetch_limiter: RateLimiter,
+@@ -110,6 +112,7 @@ impl RenderableInner {
+             ),
+             title: title.to_string(),
+             working_dir: None,
++            location: PaneLocation::default(),
+             fetch_limiter,
+             last_send_time: now,
+             last_recv_time: now,
+@@ -351,7 +354,14 @@ impl RenderableInner {
+         }
+         self.dimensions = delta.dimensions;
+         self.title = delta.title;
+-        self.working_dir = delta.working_dir.map(Into::into);
++        let working_dir = delta.working_dir.map(Into::into);
++        if working_dir != self.working_dir {
++            self.working_dir = working_dir;
++            if self.working_dir.is_some() {
++                self.location
++                    .refresh(&self.client, self.remote_pane_id, self.local_pane_id);
++            }
++        }
+         log::trace!(
+             "server says: seqno from {} -> {} for local_pane_id={}",
+             self.seqno,
+diff --git a/wezterm-mux-server-impl/src/sessionhandler.rs b/wezterm-mux-server-impl/src/sessionhandler.rs
+index 679107bd..7ded6428 100644
+--- a/wezterm-mux-server-impl/src/sessionhandler.rs
++++ b/wezterm-mux-server-impl/src/sessionhandler.rs
+@@ -287,6 +287,19 @@ impl SessionHandler {
+                 })
+                 .detach();
+             }
++            Pdu::GetPaneLocation(GetPaneLocation { pane_id }) => {
++                spawn_into_main_thread(async move {
++                    promise::spawn::spawn(async move {
++                        send_response(
++                            pane_location(pane_id)
++                                .await
++                                .map(Pdu::GetPaneLocationResponse),
++                        )
++                    })
++                    .detach();
++                })
++                .detach();
++            }
+             Pdu::GetHostInfo(GetHostInfo { pane_id }) => {
+                 spawn_into_main_thread(async move {
+                     promise::spawn::spawn(async move {
+@@ -1020,6 +1033,7 @@ impl SessionHandler {
+             | Pdu::GetPaneDirectionResponse { .. }
+             | Pdu::GetHostInfoResponse { .. }
+             | Pdu::GetPaneCloseInfoResponse { .. }
++            | Pdu::GetPaneLocationResponse { .. }
+             | Pdu::SearchScrollbackResponse { .. }
+             | Pdu::GetLinesResponse { .. }
+             | Pdu::GetCodecVersionResponse { .. }
+@@ -1082,6 +1096,24 @@ async fn close_info(pane_id: PaneId) -> GetPaneCloseInfoResponse {
+     GetPaneCloseInfoResponse { prompt, process }
+ }
+ 
++async fn pane_location(pane_id: PaneId) -> anyhow::Result<GetPaneLocationResponse> {
++    let pane = Mux::get()
++        .get_pane(pane_id)
++        .ok_or_else(|| anyhow!("no such pane {}", pane_id))?;
++    if let Some(relayed) = pane.downcast_ref::<wezterm_client::pane::ClientPane>() {
++        return relayed.relay_location().await;
++    }
++    let cwd = pane
++        .get_current_working_dir(CachePolicy::AllowStale)
++        .map(|url| url.path().to_owned())
++        .unwrap_or_default();
++    Ok(GetPaneLocationResponse {
++        home: mux::location::home(),
++        repo_root: mux::location::repo_root(&cwd),
++        cwd,
++    })
++}
++
+ /// A pane this server merely relays belongs to the machine further along the chain.
+ async fn host_info(pane_id: Option<PaneId>) -> GetHostInfoResponse {
+     if let Some(pane) = pane_id.and_then(|id| Mux::get().get_pane(id)) {

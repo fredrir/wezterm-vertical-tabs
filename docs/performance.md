@@ -12,7 +12,7 @@ just check
 | ----------------------- | --------------------------------------------------------------------------------- |
 | Unchanged snapshots     | Reuse tab metadata and ordering; skip topology allocations                        |
 | Metadata updates        | Update changed host fields; rebuild visible ordering only when membership changes |
-| Tab labels              | Repository probes cached per directory; remote domains never probe                |
+| Tab labels              | Local probes cached per directory; remote owners probe once per directory change  |
 | Sidebar groups          | Group tabs and count folder members once per model revision                       |
 | Sidebar painting        | Reuse cached rows, tab numbers and folder counts                                  |
 | Surface movement        | Publish transforms using retained cells and hit regions                           |
