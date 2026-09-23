@@ -887,3 +887,65 @@ fn folder_chord_is_no_longer_a_shortcut_but_the_button_still_creates_folders() {
     assert!(ui.has_overlay());
     assert!(ui.text_input_active());
 }
+
+fn palette(ui: &SidebarUi) -> Vec<(String, Option<usize>, String)> {
+    let Some(Overlay::Menu(menu)) = &ui.overlay else {
+        panic!("tab search is not open");
+    };
+    menu.items
+        .iter()
+        .map(|item| (item.label.clone(), item.index, item.hint.clone()))
+        .collect()
+}
+
+#[test]
+fn search_lists_the_current_space_first_then_every_other_space_and_hidden_tabs() {
+    let mut model = model();
+    model
+        .dispatch(Intent::AssignTab {
+            id: 20,
+            space_id: "work".into(),
+        })
+        .unwrap();
+    model.apply_filter_hook(30, false).unwrap();
+    let mut ui = SidebarUi::new();
+    ui.open_tab_navigator(&model);
+    assert_eq!(
+        palette(&ui),
+        [
+            ("Alpha".into(), Some(1), String::new()),
+            ("Café".into(), None, "Home · hidden".into()),
+            ("Beta".into(), None, "Work".into()),
+        ]
+    );
+    draw(&mut ui, &model);
+    ui.event(&model, UiInput::Text("work".into()));
+    assert!(matches!(
+        key(&mut ui, &model, Key::Enter).as_slice(),
+        [UiIntent::Domain(Intent::ActivateTab(20))]
+    ));
+}
+
+#[test]
+fn search_reaches_tabs_in_other_windows_by_name_or_title() {
+    let model = model();
+    let mut ui = SidebarUi::new();
+    let tab = Tab {
+        id: 99,
+        title: "nvim".into(),
+        title_override: Some("Editor".into()),
+        ..Tab::default()
+    };
+    ui.set_foreign_tabs(vec![ForeignTab::new(7, &tab, None, "Work · window 2")]);
+    ui.open_tab_navigator(&model);
+    assert_eq!(
+        palette(&ui).last(),
+        Some(&("Editor".into(), None, "Work · window 2".into()))
+    );
+    draw(&mut ui, &model);
+    ui.event(&model, UiInput::Text("nvim".into()));
+    assert!(matches!(
+        key(&mut ui, &model, Key::Enter).as_slice(),
+        [UiIntent::Host(HostAction::ShowTab { window: 7, tab: 99 })]
+    ));
+}

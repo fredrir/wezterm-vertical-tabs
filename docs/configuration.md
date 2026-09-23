@@ -58,6 +58,8 @@ return config
 | Terminal Control keys | Ordinary Control shortcuts remain available to the shell                                                                |
 | Settings              | Own tab with a gear icon and the index after the last tab (`Cmd+index`, `Cmd+9`, `Ctrl+Tab`); close with ×, `Cmd+W`, Escape |
 | Search                | Centered palette of sidebar rows; Up/Down select, Left/Right edit the query, Enter opens; matches name, title or index  |
+| Search scope          | Current space (indexed), other spaces, filter-hidden, other windows (`window N`), other workspaces, disconnected domains |
+| Search `__detached`   | Moves the tab into this window; other workspaces switch; disconnected domains reattach                                  |
 | Space row             | Click collapses pinned tabs and folders; hover shows the chevron and the new-folder plus; right click edits the space   |
 | Folders               | Create with the space row plus; rename, collapse, reorder, add a tab or ungroup from the context menu                   |
 | Tab grouping          | Drag onto a folder, or use the tab context menu                                                                         |

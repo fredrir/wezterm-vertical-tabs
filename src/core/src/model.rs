@@ -525,33 +525,47 @@ impl Model {
         }
         Ok(())
     }
-    fn rebuild_visible(&mut self) {
-        self.clean_folder_membership();
-        self.projection_revision = self.projection_revision.wrapping_add(1);
-        self.visible.clear();
+    /// A space's tabs in sidebar order, including those a filter hook hides.
+    pub fn space_tabs(&self, space: &str) -> Vec<TabId> {
+        let mut ids = Vec::new();
+        self.project_space(space, true, &mut ids);
+        ids
+    }
+    pub fn is_hidden(&self, id: TabId) -> bool {
+        self.hidden.contains(&id)
+    }
+    fn project_space(&self, space: &str, include_hidden: bool, out: &mut Vec<TabId>) {
         let mut grouped: BTreeMap<&str, Vec<TabId>> = BTreeMap::new();
         let mut normal = Vec::new();
         for id in &self.order {
             let Some(tab) = self.tabs.get(id) else {
                 continue;
             };
-            if tab.space_id != self.selected_space || self.hidden.contains(id) {
+            if tab.space_id != space || (!include_hidden && self.hidden.contains(id)) {
                 continue;
             }
             if let Some(folder) = tab.folder_id.as_deref() {
                 grouped.entry(folder).or_default().push(*id);
             } else if tab.pinned {
-                self.visible.push(*id);
+                out.push(*id);
             } else {
                 normal.push(*id);
             }
         }
         for folder in &self.folders {
             if let Some(tabs) = grouped.remove(folder.id.as_str()) {
-                self.visible.extend(tabs);
+                out.extend(tabs);
             }
         }
-        self.visible.extend(normal);
+        out.extend(normal);
+    }
+    fn rebuild_visible(&mut self) {
+        self.clean_folder_membership();
+        self.projection_revision = self.projection_revision.wrapping_add(1);
+        let mut visible = std::mem::take(&mut self.visible);
+        visible.clear();
+        self.project_space(&self.selected_space, false, &mut visible);
+        self.visible = visible;
         if self
             .selected_tab
             .is_none_or(|id| !self.visible.contains(&id))

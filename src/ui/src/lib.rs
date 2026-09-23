@@ -37,7 +37,7 @@ mod ui_tests;
 use ratatui::layout::Position;
 use std::time::Duration;
 use tachyonfx::{Effect, fx};
-use vtabs_core::{Intent, Model, PaneId, SpaceId, TabId};
+use vtabs_core::{Intent, Model, PaneId, SpaceId, Tab, TabId};
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum ElementId {
@@ -114,6 +114,42 @@ pub enum HostAction {
         source: TabId,
         tab: TabId,
     },
+    /// The host asks the owning window to show a tab, reattaching its domain if needed.
+    ShowTab {
+        window: u64,
+        tab: TabId,
+    },
+}
+
+/// A tab outside this window's sidebar: another window's, or one a detached domain took.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ForeignTab {
+    pub window: u64,
+    pub id: TabId,
+    pub label: String,
+    pub title: String,
+    pub place: String,
+    pub remote: bool,
+    pub os: String,
+}
+impl ForeignTab {
+    pub fn new(window: u64, tab: &Tab, home: Option<&str>, place: impl Into<String>) -> Self {
+        Self {
+            window,
+            id: tab.id,
+            label: tab_name(tab, home).unwrap_or_else(|| tab.title.clone()),
+            title: tab.title.clone(),
+            place: place.into(),
+            remote: tab.remote,
+            os: tab.os.clone(),
+        }
+    }
+}
+
+fn tab_name(tab: &Tab, home: Option<&str>) -> Option<String> {
+    tab.custom_title()
+        .map(str::to_owned)
+        .or_else(|| tab.location(home))
 }
 
 #[derive(Clone, Debug)]
@@ -161,6 +197,7 @@ enum Action {
     MoveTab(TabId),
     CloseTab(TabId),
     KillPane(TabId, PaneId),
+    Host(HostAction),
     Settings,
     CloseSettings,
     EditSetting(String),
@@ -179,6 +216,8 @@ struct MenuItem {
     index: Option<usize>,
     label: String,
     hint: String,
+    /// Matched by search but not shown.
+    keywords: String,
     action: Action,
     enabled: bool,
 }
@@ -191,6 +230,7 @@ impl MenuItem {
             index: None,
             label: label.into(),
             hint: String::new(),
+            keywords: String::new(),
             action,
             enabled: true,
         }
@@ -371,6 +411,7 @@ pub struct SidebarUi {
     pending_form: Option<u64>,
     last_rail: Option<vtabs_core::RailMode>,
     reveal_selection: bool,
+    foreign_tabs: Vec<ForeignTab>,
 }
 
 #[derive(Clone, Debug)]
@@ -492,6 +533,7 @@ impl SidebarUi {
             pending_form: None,
             last_rail: None,
             reveal_selection: true,
+            foreign_tabs: Vec::new(),
         }
     }
     pub fn buffer(&self) -> &Buffer {
@@ -566,34 +608,74 @@ impl SidebarUi {
             search: None,
         }));
     }
+    /// Rows the tab search lists after this window's own tabs.
+    pub fn set_foreign_tabs(&mut self, tabs: Vec<ForeignTab>) {
+        self.foreign_tabs = tabs;
+    }
+    /// The current space leads with its index badges; every other tab this window can reach follows.
     pub fn open_tab_navigator(&mut self, model: &Model) {
+        let home = model.home.as_deref();
+        let row = |tab: &Tab| {
+            let name = tab_name(tab, home);
+            let mut item = MenuItem::new(
+                format!("tab/{}", tab.id),
+                name.as_deref().unwrap_or(&tab.title),
+                Action::Domain(Intent::ActivateTab(tab.id)),
+            );
+            let active = tab.panes.iter().find(|pane| pane.active);
+            item.icon = active.map_or_else(
+                || icons::host(tab.remote, &tab.os),
+                |pane| icons::host(pane.remote, &pane.os),
+            );
+            if name.is_some_and(|name| name != tab.title) {
+                item.keywords = tab.title.clone();
+            }
+            item
+        };
         let mut items: Vec<_> = model
             .visible_ids()
             .iter()
             .filter_map(|id| model.tabs.get(id))
             .enumerate()
             .map(|(index, tab)| {
-                let name = tab
-                    .custom_title()
-                    .map(str::to_owned)
-                    .or_else(|| tab.location(model.home.as_deref()));
-                let mut item = MenuItem::new(
-                    format!("tab/{}", tab.id),
-                    name.as_deref().unwrap_or(&tab.title),
-                    Action::Domain(Intent::ActivateTab(tab.id)),
-                );
-                let active = tab.panes.iter().find(|pane| pane.active);
-                item.icon = active.map_or_else(
-                    || icons::host(tab.remote, &tab.os),
-                    |pane| icons::host(pane.remote, &pane.os),
-                );
+                let mut item = row(tab);
                 item.index = Some(index + 1);
-                if name.is_some_and(|name| name != tab.title) {
-                    item.hint = tab.title.clone();
-                }
+                item.hint = item.keywords.clone();
                 item
             })
             .collect();
+        let current = model.selected_space.as_str();
+        for space in model.spaces.iter() {
+            for id in model.space_tabs(&space.id) {
+                let hidden = model.is_hidden(id);
+                if space.id == current && !hidden {
+                    continue;
+                }
+                let mut item = row(&model.tabs[&id]);
+                item.hint = if hidden {
+                    format!("{} · hidden", space.name)
+                } else {
+                    space.name.clone()
+                };
+                items.push(item);
+            }
+        }
+        items.extend(self.foreign_tabs.iter().map(|tab| {
+            let mut item = MenuItem::new(
+                format!("window/{}/tab/{}", tab.window, tab.id),
+                &tab.label,
+                Action::Host(HostAction::ShowTab {
+                    window: tab.window,
+                    tab: tab.id,
+                }),
+            );
+            item.icon = icons::host(tab.remote, &tab.os);
+            item.hint = tab.place.clone();
+            if tab.label != tab.title {
+                item.keywords = tab.title.clone();
+            }
+            item
+        }));
         if model.settings.rail != vtabs_core::RailMode::Expanded {
             let owned = model.config_owned.contains("rail");
             let mut item = MenuItem::new(

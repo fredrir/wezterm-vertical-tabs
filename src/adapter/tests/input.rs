@@ -545,3 +545,26 @@ fn composed_release_does_not_duplicate_text_and_caret_is_visible() {
             .any(|shape| shape.bounds.width == 0.12)
     );
 }
+
+#[test]
+fn unclaimed_command_chords_reach_host_bindings_while_search_is_open() {
+    config::designate_this_as_the_main_thread();
+    let mut adapter = Adapter::new(9860);
+    adapter.app.open_tab_navigator();
+    for mods in [
+        window::Modifiers::SUPER,
+        window::Modifiers::SUPER | window::Modifiers::SHIFT,
+        window::Modifiers::CTRL,
+    ] {
+        assert!(!adapter.input(Input::Key(&logical_key(KeyCode::Char(' '), mods))));
+        assert!(!adapter.input(Input::Key(&logical_key(
+            KeyCode::Composed(" ".into()),
+            mods
+        ))));
+    }
+    assert!(adapter.input(Input::Key(&logical_key(
+        KeyCode::Char(' '),
+        window::Modifiers::NONE
+    ))));
+    assert!(adapter.app.ui().is_modal());
+}

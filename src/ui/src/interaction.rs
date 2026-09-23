@@ -1573,6 +1573,10 @@ impl SidebarUi {
                 intents.push(UiIntent::Host(HostAction::KillPane(tab, pane)));
                 self.dismiss();
             }
+            Action::Host(action) => {
+                intents.push(UiIntent::Host(action));
+                self.dismiss();
+            }
             Action::Close => self.back(),
         }
     }
@@ -1830,6 +1834,7 @@ fn filter_menu(menu: &mut Menu) {
             .filter(|item| {
                 item.label.to_lowercase().contains(&query)
                     || item.hint.to_lowercase().contains(&query)
+                    || item.keywords.to_lowercase().contains(&query)
                     || item.index.is_some_and(|index| index.to_string() == query)
             })
             .cloned(),

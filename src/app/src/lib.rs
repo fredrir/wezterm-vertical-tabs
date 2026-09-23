@@ -55,6 +55,11 @@ pub enum Command {
     ConfirmClose(TabId),
     /// The same for one split, answered with `SidebarUi::confirm_close_pane`.
     ConfirmClosePane(TabId, core::PaneId),
+    /// A tab another window owns, or one this window lost to a detached domain.
+    ShowTab {
+        window: u64,
+        tab: TabId,
+    },
 }
 #[derive(Clone, Debug, Default)]
 pub struct Update {
@@ -506,6 +511,9 @@ impl WindowApp {
                             .push(Command::Host(HostCommand::JoinTab { source, tab }));
                     }
                 }
+                UiIntent::Host(HostAction::ShowTab { window, tab }) => {
+                    update.commands.push(Command::ShowTab { window, tab });
+                }
                 UiIntent::Host(HostAction::FocusPane(tab, pane)) => {
                     if self.owns_pane(tab, pane) {
                         update
@@ -546,6 +554,30 @@ impl WindowApp {
     }
     pub fn open_tab_navigator(&mut self) {
         self.ui.open_tab_navigator(&self.model);
+    }
+    pub fn set_foreign_tabs(&mut self, tabs: Vec<ui::ForeignTab>) {
+        self.ui.set_foreign_tabs(tabs);
+    }
+    /// A tab that returns under a new ID takes back the place and name it left with.
+    pub fn restore_tab(&mut self, id: TabId, previous: &Tab) -> Result<Update, Error> {
+        let mut update = Update {
+            model_changed: self.model.restore_tab_membership(
+                id,
+                &previous.space_id,
+                previous.manual_assignment,
+                previous.pinned,
+                previous.folder_id.as_deref(),
+            )?,
+            ..Update::default()
+        };
+        if let Some(title) = previous.title_override.clone() {
+            update.merge(self.dispatch(Intent::RenameTab { id, title })?);
+        }
+        if update.model_changed {
+            update.projection_changed = true;
+            self.storage.observe_session(&self.model, self.now);
+        }
+        Ok(update)
     }
 
     /// Call after the spawned tab exists in an accepted snapshot. Identity is explicit; never

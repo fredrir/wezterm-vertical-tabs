@@ -1,5 +1,6 @@
 //! The only product code coupled to WezTerm's internal APIs.
 mod cells;
+mod directory;
 mod lua;
 mod repos;
 mod shutdown;
@@ -27,6 +28,8 @@ const PASTE_TIMEOUT: Duration = Duration::from_secs(1);
 const PLACEMENT_TIMEOUT: Duration = Duration::from_secs(3);
 const MAX_PASTE_INPUTS: usize = 128;
 const MAX_PASTE_INPUT_BYTES: usize = 16 * 1024;
+/// The workspace a pane detaches into; its tabs come back into the searching window.
+const DETACHED_WORKSPACE: &str = "__detached";
 
 struct PendingPaste {
     token: u64,
@@ -64,6 +67,8 @@ struct Adapter {
     local_host: String,
     mux_window: Option<usize>,
     placement: Option<(usize, Instant)>,
+    published: Option<u64>,
+    pending_show: Option<core::TabId>,
 }
 
 impl Adapter {
@@ -110,6 +115,8 @@ impl Adapter {
             local_host: sysinfo::System::host_name().unwrap_or_default(),
             mux_window: None,
             placement: None,
+            published: None,
+            pending_show: None,
         }
     }
     fn apply(&mut self, result: Result<app::Update, core::Error>) {
@@ -182,7 +189,12 @@ impl Adapter {
         })
         .detach();
     }
-    fn close_checked(&mut self, tab: core::TabId, pane: Option<core::PaneId>, busy: Option<String>) {
+    fn close_checked(
+        &mut self,
+        tab: core::TabId,
+        pane: Option<core::PaneId>,
+        busy: Option<String>,
+    ) {
         match (pane, busy) {
             (None, Some(process)) => self.app.ui_mut().confirm_close_tab(tab, &process),
             (None, None) => self.dispatch(core::Intent::CloseTab(tab)),
@@ -228,9 +240,14 @@ impl Adapter {
             let Err(error) = work.await else { return };
             log::warn!("tabs: {error:#}");
             if let (Some(window), Some(id)) = (window, id) {
-                window.notify(crate::termwindow::TermWindowNotif::Apply(Box::new(move |tw| {
-                    tw.vtabs_message_for(id, serde_json::json!({ "error": format!("{error:#}") }));
-                })));
+                window.notify(crate::termwindow::TermWindowNotif::Apply(Box::new(
+                    move |tw| {
+                        tw.vtabs_message_for(
+                            id,
+                            serde_json::json!({ "error": format!("{error:#}") }),
+                        );
+                    },
+                )));
             }
         })
         .detach();
@@ -238,16 +255,14 @@ impl Adapter {
     fn dispatch(&mut self, intent: core::Intent) {
         self.transact(|app| app.dispatch(intent));
     }
-    fn transact(
-        &mut self,
-        run: impl FnOnce(&mut WindowApp) -> Result<app::Update, core::Error>,
-    ) {
+    fn transact(&mut self, run: impl FnOnce(&mut WindowApp) -> Result<app::Update, core::Error>) {
         self.cancel_paste();
         let before = self.app.model().revision;
         let result = run(&mut self.app);
         self.apply(result);
         self.window_hook_dirty |= before != self.app.model().revision;
         self.schedule_hooks();
+        self.publish();
     }
     fn command(&mut self, command: app::Command) {
         use core::HostCommand as C;
@@ -259,6 +274,7 @@ impl Adapter {
             app::Command::SetClipboard(text) => self.commands.push(Command::Clipboard(text)),
             app::Command::ConfirmClose(id) => self.check_close(id, None),
             app::Command::ConfirmClosePane(tab, pane) => self.check_close(tab, Some(pane)),
+            app::Command::ShowTab { window, tab } => self.show_tab(window as usize, tab),
             app::Command::RequestClipboard => {
                 self.pending_paste = Some(PendingPaste {
                     token: self.input_epoch,
@@ -511,11 +527,259 @@ impl Adapter {
             self.input_epoch = self.input_epoch.wrapping_add(1);
         }
         let before = self.app.model().revision;
+        if matches!(
+            input,
+            ui::UiInput::Key { .. } | ui::UiInput::PointerUp { .. }
+        ) {
+            self.sync_foreign();
+        }
         self.app.ui_mut().set_clock(self.epoch.elapsed());
         let result = self.app.input(input);
         self.apply(result);
         self.window_hook_dirty |= before != self.app.model().revision;
         self.schedule_hooks();
+        self.publish();
+    }
+    /// Other windows list this one's tabs; republish only when they could have changed.
+    fn publish(&mut self) {
+        let revision = self.app.model().revision;
+        if self.published == Some(revision) {
+            return;
+        }
+        self.published = Some(revision);
+        let model = self.app.model();
+        let home = model.home.as_deref();
+        let window = self.window_id as u64;
+        let tabs = model
+            .spaces
+            .iter()
+            .flat_map(|space| {
+                model
+                    .space_tabs(&space.id)
+                    .into_iter()
+                    .map(move |id| ui::ForeignTab::new(window, &model.tabs[&id], home, &space.name))
+            })
+            .collect();
+        directory::publish(self.window_id, tabs);
+    }
+    /// Windows shown in a GUI list themselves; the mux lists windows of other workspaces.
+    fn sync_foreign(&mut self) {
+        let front_end = crate::frontend::try_front_end();
+        let shown = |id| {
+            front_end
+                .as_ref()
+                .is_some_and(|front_end| front_end.gui_window_for_mux_window(id).is_some())
+        };
+        let mut tabs = directory::foreign(self.window_id, shown);
+        let Some(mux) = mux::Mux::try_get() else {
+            return self.app.set_foreign_tabs(tabs);
+        };
+        let home = self.app.model().home.clone();
+        for id in mux.iter_windows() {
+            if id == self.window_id || shown(id) {
+                continue;
+            }
+            let Some(window) = mux.get_window(id) else {
+                continue;
+            };
+            let place = match window.get_workspace() {
+                DETACHED_WORKSPACE => "detached".to_owned(),
+                workspace => workspace.to_owned(),
+            };
+            for tab in window.iter_tabs() {
+                let Some(pane) = tab.get_active_pane() else {
+                    continue;
+                };
+                let cwd = pane
+                    .get_current_working_dir(mux::pane::CachePolicy::AllowStale)
+                    .map(|url| url.path().to_string())
+                    .unwrap_or_default();
+                let tab = core::Tab {
+                    id: tab.tab_id() as u64,
+                    title: Some(tab.get_title())
+                        .filter(|title| !title.is_empty())
+                        .unwrap_or_else(|| pane.get_title()),
+                    repo_root: self.repos.root(&cwd).map(str::to_owned),
+                    cwd,
+                    ..Default::default()
+                };
+                tabs.push(ui::ForeignTab::new(
+                    id as u64,
+                    &tab,
+                    home.as_deref(),
+                    &place,
+                ));
+            }
+        }
+        self.app.set_foreign_tabs(tabs);
+    }
+    fn open_tab_navigator(&mut self) {
+        self.sync_foreign();
+        self.app.open_tab_navigator();
+    }
+    /// Detached tabs come into this window; others are shown where they live.
+    fn show_tab(&mut self, window: usize, tab: core::TabId) {
+        if self.reattach(tab) {
+            return;
+        }
+        let Some(gui) = crate::frontend::try_front_end()
+            .and_then(|front_end| front_end.gui_window_for_mux_window(window))
+        else {
+            let mux = mux::Mux::get();
+            let Some(workspace) = mux.get_window(window).map(|w| w.get_workspace().to_owned())
+            else {
+                return self.app.ui_mut().set_error("Window closed");
+            };
+            if workspace == DETACHED_WORKSPACE {
+                return self.adopt(tab);
+            }
+            if let Some(mut window) = mux.get_window_mut(window) {
+                if let Some(index) = window.get_tab_idx_for_id(tab as usize) {
+                    window.remember_and_set_active_tab_idx(index);
+                }
+            }
+            return mux.set_active_workspace(&workspace);
+        };
+        gui.window.focus();
+        gui.window
+            .notify(crate::termwindow::TermWindowNotif::Apply(Box::new(
+                move |tw| {
+                    tw.vtabs_message_for(window, serde_json::json!({ "show_tab": tab }));
+                },
+            )));
+    }
+    /// The tab's active pane becomes a tab here and its other panes rejoin it.
+    fn adopt(&mut self, tab: core::TabId) {
+        let Some(host) = mux::Mux::get().get_tab(tab as usize) else {
+            return;
+        };
+        let mut panes = host.iter_panes_ignoring_zoom();
+        panes.sort_by_key(|entry| !entry.is_active);
+        let mut panes = panes.into_iter().map(|entry| entry.pane.pane_id());
+        let Some(first) = panes.next() else {
+            return;
+        };
+        let rest: Vec<_> = panes.collect();
+        let (window, id) = (self.window.clone(), self.mux_window);
+        self.rearrange(async move {
+            let mux = mux::Mux::get();
+            let (tab, _) = mux.move_pane_to_new_tab(first, id, None).await?;
+            for pane in rest {
+                mux.split_pane(
+                    first,
+                    mux::tab::SplitRequest {
+                        target_is_second: true,
+                        ..Default::default()
+                    },
+                    mux::domain::SplitSource::MovePane(pane),
+                    config::keyassignment::SpawnTabDomain::CurrentPaneDomain,
+                )
+                .await?;
+            }
+            if let (Some(window), Some(id)) = (window, id) {
+                let tab = tab.tab_id();
+                window.notify(crate::termwindow::TermWindowNotif::Apply(Box::new(
+                    move |tw| {
+                        tw.vtabs_message_for(id, serde_json::json!({ "show_tab": tab }));
+                    },
+                )));
+            }
+            Ok(())
+        });
+    }
+    fn reattach(&mut self, tab: core::TabId) -> bool {
+        let Some(domain) = directory::detached(|records| {
+            let mut domain = None;
+            for record in records {
+                record.show = record.tab.id == tab;
+                if record.show {
+                    domain = Some(record.domain);
+                }
+            }
+            domain
+        }) else {
+            return false;
+        };
+        let Some(domain) = mux::Mux::get().get_domain(domain) else {
+            return true;
+        };
+        let window = self.mux_window;
+        promise::spawn::spawn(async move {
+            if let Err(error) = domain.attach(window).await {
+                log::warn!("tabs reattach: {error:#}");
+            }
+        })
+        .detach();
+        true
+    }
+    /// Only a client domain can reattach, and only while the mux still knows it.
+    fn remember_detached(&self, id: core::TabId) {
+        let Some(&(domain, remote, _)) = self.remote_tabs.get(&id) else {
+            return;
+        };
+        let Some(tab) = self.app.model().tabs.get(&id) else {
+            return;
+        };
+        if mux::Mux::get()
+            .get_domain(domain)
+            .is_none_or(|domain| domain.state() != mux::domain::DomainState::Detached)
+        {
+            return;
+        }
+        let model = self.app.model();
+        directory::remember(directory::DetachedTab {
+            listing: ui::ForeignTab::new(
+                self.window_id as u64,
+                tab,
+                model.home.as_deref(),
+                format!("{} · detached", tab.domain),
+            ),
+            tab: tab.clone(),
+            domain,
+            remote,
+            show: false,
+        });
+    }
+    /// Reattached tabs return with new IDs; whichever window receives one restores it.
+    fn restore_reattached(&mut self) {
+        let mux = mux::Mux::get();
+        let model = self.app.model();
+        let returned = directory::detached(|records| {
+            let mut returned = Vec::new();
+            for record in std::mem::take(records) {
+                let Some(domain) = mux.get_domain(record.domain) else {
+                    continue;
+                };
+                if domain.state() == mux::domain::DomainState::Detached {
+                    records.push(record);
+                    continue;
+                }
+                let Some(id) = wezterm_client::domain::ClientDomain::get_client_inner_for_domain(
+                    record.domain,
+                )
+                .ok()
+                .and_then(|inner| inner.remote_to_local_tab_id(record.remote)) else {
+                    continue;
+                };
+                if model.tabs.contains_key(&(id as u64)) {
+                    returned.push((id as u64, record));
+                } else if mux.get_tab(id).is_some() {
+                    records.push(record);
+                }
+            }
+            returned
+        });
+        let mut show = None;
+        for (id, record) in returned {
+            let result = self.app.restore_tab(id, &record.tab);
+            self.apply(result);
+            if record.show {
+                show = Some(id);
+            }
+        }
+        if let Some(id) = show {
+            self.dispatch(core::Intent::ActivateTab(id));
+        }
     }
     fn schedule_hooks(&mut self) {
         if !self.hooks_enabled {
@@ -692,10 +956,7 @@ impl Provider for Adapter {
                         return (false, String::new());
                     };
                     client.host_info().map_or((true, String::new()), |owner| {
-                        (
-                            !owner.hostname.eq_ignore_ascii_case(local_host),
-                            owner.os,
-                        )
+                        (!owner.hostname.eq_ignore_ascii_case(local_host), owner.os)
                     })
                 };
                 let host_tab = mux.get_tab(tab.id);
@@ -806,11 +1067,14 @@ impl Provider for Adapter {
                                     .is_some_and(|(_, _, tab)| tab as u64 != *id)
                             })
                         });
-                    (detached || remapped || moved).then_some(*id)
+                    (detached || remapped || moved).then_some((*id, detached))
                 })
                 .collect::<Vec<_>>()
         };
-        for id in departed {
+        for (id, detached) in departed {
+            if detached {
+                self.remember_detached(id);
+            }
             self.app.acknowledge_tab_departure(id);
         }
         self.remote_tabs = {
@@ -853,8 +1117,17 @@ impl Provider for Adapter {
         if let Some((id, index)) = arrived {
             self.dispatch(core::Intent::MoveTab { id, index });
         }
+        self.restore_reattached();
+        if let Some(id) = self
+            .pending_show
+            .filter(|id| self.app.model().tabs.contains_key(id))
+        {
+            self.pending_show = None;
+            self.dispatch(core::Intent::ActivateTab(id));
+        }
         self.schedule_hooks();
         self.storage();
+        self.publish();
     }
     fn navigation(&mut self, navigation: Navigation) {
         let intent = match navigation {
@@ -884,7 +1157,7 @@ impl Provider for Adapter {
                 }
             }
             Navigation::Navigator => {
-                self.app.open_tab_navigator();
+                self.open_tab_navigator();
                 return;
             }
             Navigation::ClosePage => {
@@ -957,8 +1230,12 @@ impl Provider for Adapter {
                 if !key.key_is_down {
                     return self.keyboard_focus();
                 }
+                // Unclaimed Cmd/Ctrl chords are key bindings, never text, even in a modal.
+                let chord = key
+                    .modifiers
+                    .intersects(window::Modifiers::SUPER | window::Modifiers::CTRL);
                 if let KeyCode::Composed(text) = &key.key {
-                    if !self.keyboard_focus() {
+                    if !self.keyboard_focus() || chord {
                         return false;
                     }
                     self.ui_input(ui::UiInput::ImeCommit(text.clone()));
@@ -993,10 +1270,8 @@ impl Provider for Adapter {
                 }
                 // Navigation bindings are still when the rail itself has focus.
                 if !shortcut
-                    && !self.app.is_modal()
-                    && key
-                        .modifiers
-                        .intersects(window::Modifiers::SUPER | window::Modifiers::CTRL)
+                    && chord
+                    && (!self.app.is_modal() || matches!(code, ui::Key::Character(_)))
                 {
                     return false;
                 }
@@ -1122,7 +1397,10 @@ impl Provider for Adapter {
                 self.close_checked(
                     tab,
                     check.get("pane").and_then(|v| v.as_u64()),
-                    check.get("process").and_then(|v| v.as_str()).map(str::to_owned),
+                    check
+                        .get("process")
+                        .and_then(|v| v.as_str())
+                        .map(str::to_owned),
                 );
             }
         } else if let Some(context) = message.get("initialize") {
@@ -1158,6 +1436,12 @@ impl Provider for Adapter {
                 {
                     self.app.set_launch(id, launch).ok();
                 }
+            }
+        } else if let Some(id) = message.get("show_tab").and_then(|id| id.as_u64()) {
+            if self.app.model().tabs.contains_key(&id) {
+                self.dispatch(core::Intent::ActivateTab(id));
+            } else {
+                self.pending_show = Some(id);
             }
         } else if let Some(id) = message.get("tab_departed").and_then(|id| id.as_u64()) {
             self.app.acknowledge_tab_departure(id);
@@ -1201,7 +1485,7 @@ impl Provider for Adapter {
             match action.as_str() {
                 Some("settings") => self.app.open_settings(),
                 Some("create_space") => self.app.open_create_space(),
-                Some("navigator") => self.app.open_tab_navigator(),
+                Some("navigator") => self.open_tab_navigator(),
                 Some("retry_storage") => self.app.retry_storage(),
                 _ => match serde_json::from_value::<core::Intent>(action.clone()) {
                     Ok(intent) => self.dispatch(intent),
@@ -1232,6 +1516,7 @@ impl Provider for Adapter {
         }
         self.schedule_hooks();
         self.storage();
+        self.publish();
     }
     fn projection(&self) -> Projection {
         let projection = self.app.projection();
@@ -1349,6 +1634,11 @@ impl Provider for Adapter {
         self.cursor
     }
     fn shutdown(self: Box<Self>) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()>>> {
+        // A window holding only a detached domain's tabs closes before any snapshot drops them.
+        for id in self.app.model().tabs.keys() {
+            self.remember_detached(*id);
+        }
+        directory::withdraw(self.window_id);
         Box::pin(shutdown::drain(self.app, self.outstanding))
     }
     fn move_context(&self, tab: usize) -> serde_json::Value {
