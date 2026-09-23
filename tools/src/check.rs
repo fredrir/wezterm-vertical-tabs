@@ -65,7 +65,7 @@ fn schema(ctx: &Context, directory: &std::path::Path, check: bool) -> Result<()>
     });
     for (format, path) in [
         ("lua", "plugin/schema.lua"),
-        ("types", "plugin/types.lua"),
+        ("types", "plugin/types/vtabs.lua"),
         ("markdown", "docs/options.md"),
     ] {
         ctx.runner.run(

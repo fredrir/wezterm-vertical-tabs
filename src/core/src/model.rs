@@ -2,6 +2,7 @@ use crate::{
     routing::{self, RoutingRule, SpaceTemplate},
     settings::{self, RailMode, Settings},
 };
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
@@ -59,7 +60,7 @@ pub struct Folder {
     pub collapsed: bool,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct Space {
     pub id: SpaceId,
     pub name: String,
@@ -89,7 +90,7 @@ impl Space {
     }
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct LaunchSpec {
     pub domain: Option<String>,
     pub cwd: Option<String>,
@@ -101,7 +102,7 @@ pub struct LaunchSpec {
 
 pub type PaneId = u64;
 
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct TabPane {
     pub id: PaneId,
     #[serde(default)]
@@ -142,7 +143,7 @@ impl TabPane {
 }
 
 /// Host metadata is copied only when it changes; membership remains application-owned.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct Tab {
     pub id: TabId,
     pub title: String,
@@ -234,7 +235,7 @@ impl Tab {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub enum Intent {
     SelectSpace(SpaceId),
     CreateSpace {
@@ -306,10 +307,11 @@ pub enum Intent {
     ReturnToAuto(TabId),
     Reopen,
     SetSetting {
+        #[schemars(with = "settings::Key")]
         key: String,
         value: Value,
     },
-    ResetSetting(String),
+    ResetSetting(#[schemars(with = "settings::Key")] String),
     ResetSettings,
     SetRail(RailMode),
     PrivateWindow,
@@ -404,8 +406,9 @@ pub struct Model {
     mru: VecDeque<TabId>,
     reopened: VecDeque<(TabId, SpaceId, LaunchSpec)>,
     departed: BTreeSet<TabId>,
-    persisted_settings: BTreeMap<String, Value>,
+    managed_settings: BTreeMap<String, Value>,
     lua_settings: BTreeMap<String, Value>,
+    rail_override: Option<RailMode>,
     hook_routes: BTreeMap<TabId, Option<SpaceId>>,
     hidden: BTreeSet<TabId>,
     next_space: u64,
@@ -441,8 +444,9 @@ impl Model {
             mru: VecDeque::new(),
             reopened: VecDeque::new(),
             departed: BTreeSet::new(),
-            persisted_settings: BTreeMap::new(),
+            managed_settings: BTreeMap::new(),
             lua_settings: BTreeMap::new(),
+            rail_override: None,
             hook_routes: BTreeMap::new(),
             hidden: BTreeSet::new(),
             next_space: 1,
@@ -494,8 +498,8 @@ impl Model {
             .find(|s| s.id == self.selected_space)
             .unwrap_or(&self.spaces[0])
     }
-    pub fn persisted_settings(&self) -> &BTreeMap<String, Value> {
-        &self.persisted_settings
+    pub fn managed_settings(&self) -> &BTreeMap<String, Value> {
+        &self.managed_settings
     }
     pub fn configured_settings(&self) -> &BTreeMap<String, Value> {
         &self.lua_settings
@@ -855,6 +859,7 @@ impl Model {
                 | Intent::SetSetting { .. }
                 | Intent::ResetSetting(_)
                 | Intent::ResetSettings
+                | Intent::SetRail(_)
         );
         let mut out = Transition::default();
         match intent {
@@ -1237,7 +1242,10 @@ impl Model {
                     return Err(Error(format!("{key} is configured in Lua")));
                 }
                 self.settings.set(&key, value.clone())?;
-                self.persisted_settings.insert(key, value);
+                if key == "rail" {
+                    self.rail_override = None;
+                }
+                self.managed_settings.insert(key, value);
                 out.durable_changed = true;
                 out.layout_changed = true;
             }
@@ -1248,22 +1256,26 @@ impl Model {
                 let value = Settings::default()
                     .get(&key)
                     .ok_or_else(|| Error(format!("Unknown setting: {key}")))?;
-                self.persisted_settings.remove(&key);
+                self.managed_settings.remove(&key);
+                if key == "rail" {
+                    self.rail_override = None;
+                }
                 self.settings.set(&key, value)?;
                 out.durable_changed = true;
                 out.layout_changed = true;
             }
             Intent::ResetSettings => {
-                self.persisted_settings.clear();
+                self.managed_settings.clear();
+                self.rail_override = None;
                 self.rebuild_settings()?;
                 out.durable_changed = true;
                 out.layout_changed = true;
             }
+            // A session toggle: Lua keeps the startup value and nothing is written.
             Intent::SetRail(rail) => {
-                return self.dispatch(Intent::SetSetting {
-                    key: "rail".into(),
-                    value: serde_json::to_value(rail).unwrap(),
-                });
+                self.rail_override = Some(rail);
+                self.settings.rail = rail;
+                out.layout_changed = true;
             }
             Intent::PrivateWindow => {
                 let mut launch = self.default_launch();
@@ -1511,11 +1523,11 @@ impl Model {
         }
         Ok(())
     }
-    pub fn load_preferences(&mut self, values: BTreeMap<String, Value>) -> Result<(), Error> {
+    pub fn load_managed_settings(&mut self, values: BTreeMap<String, Value>) -> Result<(), Error> {
         for (k, v) in &values {
             settings::validate_value(k, v).map_err(Error)?;
         }
-        self.persisted_settings = values;
+        self.managed_settings = values;
         self.rebuild_settings()?;
         self.touch();
         Ok(())
@@ -1539,12 +1551,11 @@ impl Model {
     }
     fn rebuild_settings(&mut self) -> Result<(), Error> {
         let mut settings = Settings::default();
-        for (k, v) in self
-            .persisted_settings
-            .iter()
-            .chain(self.lua_settings.iter())
-        {
+        for (k, v) in self.managed_settings.iter().chain(self.lua_settings.iter()) {
             settings.set(k, v.clone()).map_err(Error)?;
+        }
+        if let Some(rail) = self.rail_override {
+            settings.rail = rail;
         }
         self.settings = settings;
         Ok(())

@@ -7,8 +7,8 @@
 | Tooling     | `cargo xtask` uses the `xtask` profile: optimized hashing, incremental rebuilds  |
 | GUI         | WezTerm renderer with the patch series and project Rust application              |
 | UI          | Retained Ratatui text, rounded geometry and finite TachyonFX effects             |
-| Persistence | `wez-vtabs-store`; bundled SQLite, asynchronous bounded JSON requests            |
-| Lua         | Optional configuration, generated schema/types, semantic hooks                   |
+| Persistence | `wez-vtabs-store`; bundled SQLite for runtime state; settings in a Lua file      |
+| Lua         | Source of truth for settings/spaces, schemars-generated types, semantic hooks    |
 
 ```sh
 just check
@@ -34,7 +34,7 @@ Recipes invoke `cargo xtask`. Installed launch entries invoke the bundled Rust b
 | `just check`                                | Rust format/tests/Clippy, schema contracts, Ruff and pytest                          |
 | `just bench`                                | Release timings and Rust allocation counts; [measurement boundaries](performance.md) |
 | `just test tools -- -k install`             | Focused pytest suite; extra arguments after `--`                                     |
-| `just generate`                             | Generate Lua schema/types and option documentation                                   |
+| `just generate`                             | Generate `plugin/schema.lua`, `plugin/types/vtabs.lua` and `docs/options.md`         |
 | `just generate --check`                     | Verify generated artifacts                                                           |
 | `just package`                              | Verified bundle, ZIP/tar.gz archive and release manifest in `dist/`                  |
 | `just package --bundle PATH`                | Verify and archive an existing bundle                                                |

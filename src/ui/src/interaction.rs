@@ -1131,7 +1131,7 @@ impl SidebarUi {
                 "reset-settings",
                 "Reset settings",
                 Action::Confirm {
-                    label: "Reset persisted settings?".into(),
+                    label: "Reset saved settings?".into(),
                     action: Box::new(Action::Domain(Intent::ResetSettings)),
                 },
             ),

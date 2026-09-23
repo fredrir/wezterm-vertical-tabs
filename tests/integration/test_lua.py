@@ -27,11 +27,24 @@ def test_production_plugin_boundary(project_root, isolated_env):
     assert result.stdout.strip() == "production Lua boundary passed"
 
 
+CONSUMERS = {
+    "options": "local tabs = require 'plugin.init'\n"
+    "tabs.apply_to_config({}, {settings = {width = 280, side = 'left'}, settings_file = '/tmp/x.lua'})\n",
+    "invalid-options": "local tabs = require 'plugin.init'\n"
+    "tabs.apply_to_config({}, {settings = {width = 'wide', side = 'up'}})\n",
+    "managed": "---@type TabsManaged\n"
+    "return { settings = { width = 300 }, spaces = { { id = 'notes', name = 'Notes' } } }\n",
+    "invalid-managed": "---@type TabsManaged\nreturn { settings = { side = 'up' } }\n",
+    "action": "local tabs = require 'plugin.init'\n"
+    "tabs.action('navigator')\ntabs.action({ ResetSetting = 'width' })\n",
+    "invalid-action": "local tabs = require 'plugin.init'\ntabs.action('navigate')\n",
+}
+
+
 @pytest.mark.luals
-@pytest.mark.parametrize(("width", "side", "valid"), [(280, "left", True), ("wide", "up", False)])
-def test_public_options_are_checked_by_luals(
-    project_root, isolated_env, tmp_path, width, side, valid
-):
+@pytest.mark.parametrize("consumer", sorted(CONSUMERS))
+def test_public_contracts_are_checked_by_luals(project_root, isolated_env, tmp_path, consumer):
+    valid = not consumer.startswith("invalid")
     server = shutil.which("lua-language-server")
     if server is None:
         pytest.fail("--run-luals requires lua-language-server on PATH")
@@ -42,11 +55,7 @@ def test_public_options_are_checked_by_luals(
         "---@type any\nlocal wezterm = {}\nreturn wezterm\n", encoding="utf-8"
     )
     example = workspace / "consumer.lua"
-    example.write_text(
-        "local tabs = require 'plugin.init'\n"
-        f"tabs.apply_to_config({{}}, {{settings = {{width = {json.dumps(width)}, side = '{side}'}}}})\n",
-        encoding="utf-8",
-    )
+    example.write_text(CONSUMERS[consumer], encoding="utf-8")
     (workspace / ".luarc.json").write_text(
         json.dumps(
             {
@@ -86,5 +95,7 @@ def test_public_options_are_checked_by_luals(
         ]
         assert result.returncode != 0
         assert any(
-            entry.get("code") in {"assign-type-mismatch", "param-type-mismatch"} for entry in errors
+            entry.get("code")
+            in {"assign-type-mismatch", "param-type-mismatch", "return-type-mismatch"}
+            for entry in errors
         ), diagnostics

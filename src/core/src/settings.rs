@@ -1,8 +1,9 @@
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum Side {
     #[default]
@@ -10,7 +11,7 @@ pub enum Side {
     Right,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum RailMode {
     #[default]
@@ -48,7 +49,7 @@ pub struct Settings {
     pub menus: Vec<MenuEntry>,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct MenuEntry {
     pub id: String,
     pub label: String,
@@ -365,4 +366,32 @@ impl Settings {
     pub fn schema() -> Value {
         json!({"version":1,"defaults":Self::default(),"options":DESCRIPTORS})
     }
+}
+
+/// Schema marker for a partial settings table; Lua types come from `DESCRIPTORS`.
+pub struct Overrides;
+impl JsonSchema for Overrides {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "Settings".into()
+    }
+    fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({"type": "object"})
+    }
+}
+
+/// Schema for a setting name, enumerated from `DESCRIPTORS`.
+pub struct Key;
+impl JsonSchema for Key {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "SettingKey".into()
+    }
+    fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        let keys: Vec<_> = DESCRIPTORS.iter().map(|d| d.key).collect();
+        schemars::json_schema!({"type": "string", "enum": keys})
+    }
+}
+
+/// Theme hooks may override these keys only.
+pub fn is_theme(key: &str) -> bool {
+    descriptor(key).is_some_and(|d| d.group == "theme")
 }

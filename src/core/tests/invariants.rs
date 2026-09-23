@@ -190,7 +190,7 @@ fn private_windows_do_not_retain_reopen_launch_history() {
 #[test]
 fn settings_precedence_and_atomic_validation() {
     let mut m = model();
-    m.load_preferences(BTreeMap::from([("width".into(), json!(300))]))
+    m.load_managed_settings(BTreeMap::from([("width".into(), json!(300))]))
         .unwrap();
     m.apply_config(BTreeMap::from([("width".into(), json!(400))]))
         .unwrap();

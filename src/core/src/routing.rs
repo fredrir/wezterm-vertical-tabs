@@ -1,7 +1,8 @@
 use crate::{Space, Tab};
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum MatchField {
     Domain,
@@ -11,13 +12,13 @@ pub enum MatchField {
     Cwd,
     Title,
 }
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct RoutingRule {
     pub remote: Option<bool>,
     #[serde(default)]
     pub fields: Vec<(MatchField, Vec<String>)>,
 }
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct SpaceTemplate {
     pub id: String,
     pub name: String,

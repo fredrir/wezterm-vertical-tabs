@@ -167,7 +167,7 @@ fn reserved_spawn_activates_captured_space_when_interaction_unchanged() {
     }));
 }
 #[test]
-fn private_state_excludes_session_writes_but_persists_public_preferences() {
+fn private_state_excludes_session_writes_but_persists_public_catalog_state() {
     let mut app = WindowApp::new("default", true);
     drain_initial(&mut app);
     app.dispatch(Intent::CreateSpace {
@@ -187,47 +187,6 @@ fn private_state_excludes_session_writes_but_persists_public_preferences() {
             matches!(key.scope, store::Scope::Profile { .. }),
         Operation::Read { scope } => matches!(scope, store::Scope::Profile { .. }),
     }));
-}
-#[test]
-fn delayed_storage_read_merges_without_losing_local_settings() {
-    let mut app = app();
-    let request = app.take_storage_request(Duration::ZERO).unwrap();
-    app.dispatch(Intent::SetSetting {
-        key: "width".into(),
-        value: json!(350),
-    })
-    .unwrap();
-    let key = store::Key {
-        scope: store::Scope::profile("default"),
-        entity: "settings".into(),
-        field: "width".into(),
-    };
-    let other = store::Key {
-        field: "cards".into(),
-        ..key.clone()
-    };
-    app.complete_storage(success(
-        &request,
-        vec![
-            Record {
-                key,
-                value: Some(json!(280)),
-                revision: 1,
-            },
-            Record {
-                key: other,
-                value: Some(json!(false)),
-                revision: 1,
-            },
-        ],
-    ))
-    .unwrap();
-    assert_eq!(app.model().settings.width, 350);
-    assert!(!app.model().settings.cards);
-    let write = app.take_storage_request(Duration::from_secs(1)).unwrap();
-    assert!(write.operations.iter().any(
-        |o| matches!(o,Operation::Put{key,value,..}if key.field=="width"&&value==&json!(350))
-    ));
 }
 #[test]
 fn unverified_session_ids_cannot_restore_assignment() {
@@ -253,26 +212,25 @@ fn unverified_session_ids_cannot_restore_assignment() {
 fn storage_requests_coalesce_and_old_completion_cannot_clear_newer_write() {
     let mut app = app();
     drain_initial(&mut app);
-    app.dispatch(Intent::SetSetting {
-        key: "width".into(),
-        value: json!(300),
+    app.dispatch(Intent::CreateFolder {
+        name: "First".into(),
     })
     .unwrap();
-    app.dispatch(Intent::SetSetting {
-        key: "width".into(),
-        value: json!(310),
-    })
-    .unwrap();
+    let id = app.model().folders[0].id.clone();
+    let rename = |app: &mut WindowApp, name: &str| {
+        app.dispatch(Intent::RenameFolder {
+            id: id.clone(),
+            name: name.into(),
+        })
+        .unwrap();
+    };
+    rename(&mut app, "Second");
     assert!(
         app.take_storage_request(Duration::from_millis(50))
             .is_none()
     );
     let write = app.take_storage_request(Duration::from_secs(1)).unwrap();
-    app.dispatch(Intent::SetSetting {
-        key: "width".into(),
-        value: json!(320),
-    })
-    .unwrap();
+    rename(&mut app, "Third");
     let records = write
         .operations
         .iter()
@@ -291,7 +249,7 @@ fn storage_requests_coalesce_and_old_completion_cannot_clear_newer_write() {
     app.complete_storage(success(&write, records)).unwrap();
     let next = app.take_storage_request(Duration::from_secs(2)).unwrap();
     assert!(next.operations.iter().any(
-        |o| matches!(o,Operation::Put{key,value,..}if key.field=="width"&&value==&json!(320))
+        |o| matches!(o,Operation::Put{key,value,..}if key.field=="name"&&value==&json!("Third"))
     ));
 }
 #[test]

@@ -202,7 +202,7 @@ fn tab_navigator_uses_stable_visible_ids() {
 }
 
 #[test]
-fn navigator_recovers_hidden_sidebar_without_overwriting_lua_preferences() {
+fn navigator_recovers_hidden_sidebar_as_a_session_override_even_when_lua_owns_rail() {
     for rail in [
         vtabs_core::RailMode::Hidden,
         vtabs_core::RailMode::Collapsed,
@@ -224,25 +224,15 @@ fn navigator_recovers_hidden_sidebar_without_overwriting_lua_preferences() {
                 &ElementId::Menu("sidebar/expand".into()),
             ));
             assert_eq!(model.settings.rail, rail);
-            if owned {
-                assert!(intents.is_empty());
-                let text = ui
-                    .buffer()
-                    .content
-                    .iter()
-                    .map(|cell| cell.symbol())
-                    .collect::<String>();
-                assert!(text.contains("Rail controlled by Lua"));
-                assert!(ui.is_modal());
-            } else {
-                assert_eq!(
-                    intents,
-                    vec![Intent::SetRail(vtabs_core::RailMode::Expanded)]
-                );
-                model.dispatch(intents[0].clone()).unwrap();
-                assert_eq!(model.settings.rail, vtabs_core::RailMode::Expanded);
-                assert!(!ui.needs_expanded_space());
-            }
+            assert_eq!(
+                intents,
+                vec![Intent::SetRail(vtabs_core::RailMode::Expanded)]
+            );
+            let transition = model.dispatch(intents[0].clone()).unwrap();
+            assert!(!transition.durable_changed);
+            assert!(model.managed_settings().is_empty());
+            assert_eq!(model.settings.rail, vtabs_core::RailMode::Expanded);
+            assert!(!ui.needs_expanded_space());
         }
     }
 }

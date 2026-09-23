@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{
     collections::{BTreeMap, BTreeSet},
+    path::PathBuf,
     sync::{LazyLock, Mutex},
     time::Duration,
 };
@@ -18,19 +19,21 @@ pub struct Configuration {
     #[serde(default = "default_profile")]
     pub profile: String,
     pub settings: BTreeMap<String, Value>,
-    pub spaces: Option<Vec<core::Space>>,
+    pub spaces: Vec<core::Space>,
     pub templates: Vec<core::SpaceTemplate>,
+    /// Loaded by the plugin from `managed_path`; the settings UI rewrites that file.
+    pub managed: Option<core::Managed>,
+    pub managed_path: Option<PathBuf>,
 }
 fn default_profile() -> String {
     "default".into()
 }
 impl Configuration {
     pub fn value(&self) -> Value {
-        let mut value = json!({"profile": self.profile, "settings": self.settings, "templates": self.templates});
-        if let Some(spaces) = &self.spaces {
-            value["spaces"] = json!(spaces);
-        }
-        value
+        json!({
+            "profile": self.profile, "settings": self.settings, "spaces": self.spaces,
+            "templates": self.templates, "managed": self.managed,
+        })
     }
 }
 const CONFIG_REGISTRY: &str = "wez-vtabs-configuration";
@@ -48,8 +51,10 @@ impl Default for Configuration {
         Self {
             profile: default_profile(),
             settings: BTreeMap::new(),
-            spaces: None,
+            spaces: Vec::new(),
             templates: Vec::new(),
+            managed: None,
+            managed_path: None,
         }
     }
 }
@@ -136,14 +141,9 @@ pub struct WindowHookContext {
 }
 impl WindowHookContext {
     pub fn from_app(app: &WindowApp) -> Self {
-        let model = app.model();
         Self {
             token: app.hook_token(None),
-            value: json!({
-                "profile": model.profile, "private": model.private,
-                "selected_space": model.selected_space, "space": model.selected_space(),
-                "active_tab": model.selected_tab, "settings": model.settings,
-            }),
+            value: json!(core::WindowContext::of(app.model())),
         }
     }
 }
@@ -167,7 +167,7 @@ pub fn register(lua: &Lua) -> anyhow::Result<()> {
         "dispatch",
         lua.create_function(
             |lua, (window, action): (mlua::UserDataRef<GuiWin>, mlua::Value)| {
-                let action: Value = lua.from_value(action)?;
+                let action: core::Action = lua.from_value(action)?;
                 let mux_window_id = window.mux_window_id;
                 window
                     .window

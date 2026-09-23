@@ -4,6 +4,7 @@ mod directory;
 mod location;
 mod lua;
 mod repos;
+mod settings_file;
 mod shutdown;
 mod storage;
 mod update;
@@ -52,6 +53,7 @@ struct Adapter {
     host_tabs: Vec<usize>,
     remote_tabs: HashMap<u64, (usize, usize, Vec<usize>)>,
     config_generation: usize,
+    managed_path: Option<std::path::PathBuf>,
     pointer_captured: bool,
     next_spawn_space: Option<String>,
     next_spawn_folder: Option<String>,
@@ -100,6 +102,7 @@ impl Adapter {
             host_tabs: Vec::new(),
             remote_tabs: HashMap::new(),
             config_generation: usize::MAX,
+            managed_path: config.managed_path,
             pointer_captured: false,
             next_spawn_space: None,
             next_spawn_folder: None,
@@ -819,7 +822,15 @@ impl Adapter {
         if let Some(window) = self.window.clone() {
             if let Some(request) = self.app.take_storage_request(self.epoch.elapsed()) {
                 self.outstanding = Some(request.request_id);
-                storage::request(window, request, self.window_id);
+                storage::request(window.clone(), request, self.window_id);
+            }
+            if let Some(source) = self.app.take_managed_write() {
+                match self.managed_path.clone() {
+                    Some(path) => settings_file::save(window, path, source, self.window_id),
+                    None => self
+                        .app
+                        .complete_managed_write(Err("no settings_file configured".into())),
+                }
             }
         }
         for error in self.app.take_errors() {
@@ -933,7 +944,9 @@ impl Provider for Adapter {
             self.hook_metadata.clear();
             self.window_hook_dirty = true;
             self.cancel_paste();
-            let result = self.app.config(lua::configuration().value());
+            let config = lua::configuration();
+            self.managed_path = config.managed_path.clone();
+            let result = self.app.config(config.value());
             self.apply(result);
         }
         self.host_tabs = snapshot.tabs.iter().map(|tab| tab.id).collect();
@@ -1461,6 +1474,17 @@ impl Provider for Adapter {
                     None,
                 );
             }
+        } else if let Some(result) = message.get("managed") {
+            let result = match result.get("error").and_then(|e| e.as_str()) {
+                Some(error) => Err(error.to_owned()),
+                None => Ok(()),
+            };
+            let saved = result.is_ok();
+            self.app.complete_managed_write(result);
+            // Reloading applies the saved file to every window of this GUI.
+            if saved {
+                std::thread::spawn(config::reload);
+            }
         } else if let Some(result) = message.get("store") {
             self.outstanding = None;
             if let Some(response) = result.get("ok") {
@@ -1479,15 +1503,13 @@ impl Provider for Adapter {
             }
         } else if let Some(action) = message.get("action") {
             self.cancel_paste();
-            match action.as_str() {
-                Some("settings") => self.app.open_settings(),
-                Some("create_space") => self.app.open_create_space(),
-                Some("navigator") => self.open_tab_navigator(),
-                Some("retry_storage") => self.app.retry_storage(),
-                _ => match serde_json::from_value::<core::Intent>(action.clone()) {
-                    Ok(intent) => self.dispatch(intent),
-                    Err(err) => log::warn!("tabs action: {err}"),
-                },
+            match serde_json::from_value::<core::Action>(action.clone()) {
+                Ok(core::Action::Ui(core::UiAction::Settings)) => self.app.open_settings(),
+                Ok(core::Action::Ui(core::UiAction::CreateSpace)) => self.app.open_create_space(),
+                Ok(core::Action::Ui(core::UiAction::Navigator)) => self.open_tab_navigator(),
+                Ok(core::Action::Ui(core::UiAction::RetryStorage)) => self.app.retry_storage(),
+                Ok(core::Action::Intent(intent)) => self.dispatch(intent),
+                Err(err) => log::warn!("tabs action: {err}"),
             }
         } else if message.get("hooks").is_some() {
             self.hook_pending = false;

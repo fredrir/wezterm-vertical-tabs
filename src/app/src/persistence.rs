@@ -3,7 +3,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     time::Duration,
 };
-use vtabs_core::{Error, Folder, Model, Space, SpaceTemplate};
+use vtabs_core::{Error, Folder, Model, Space};
 use vtabs_store::{
     Key, MAX_OPERATIONS, Operation, PROTOCOL_VERSION, Record, Request, Response, Scope,
 };
@@ -296,50 +296,48 @@ impl Persistence {
             }
         }
         if read {
-            // Catalog order is one semantic field, but simultaneous creation in two GUI
+            // Folder order is one semantic field, but simultaneous creation in two GUI
             // clients must retain both new IDs. Local reorder wins for existing entries;
-            // append remote additions unless this client explicitly deleted that space.
-            for (field, prefix) in [("order", "space"), ("folder_order", "folder")] {
-                let key = Key {
-                    scope: self.profile.clone(),
-                    entity: "catalog".into(),
-                    field: field.into(),
-                };
-                if let (Some(Some(local)), Some(remote)) = (
-                    self.dirty.get(&key),
-                    self.known.get(&key).and_then(|r| r.value.as_ref()),
-                ) && let (Some(local), Some(remote)) = (local.as_array(), remote.as_array())
-                {
-                    let mut order = local.clone();
-                    order.retain(|value| {
-                        let Some(id) = value.as_str() else {
-                            return true;
-                        };
-                        let name = Key {
-                            scope: self.profile.clone(),
-                            entity: format!("{prefix}:{id}"),
-                            field: "name".into(),
-                        };
-                        !self
-                            .known
-                            .get(&name)
-                            .is_some_and(|record| record.value.is_none())
-                            || matches!(self.dirty.get(&name), Some(Some(_)))
-                    });
-                    for id in remote.iter().filter_map(Value::as_str) {
-                        let deleted = self.dirty.get(&Key {
-                            scope: self.profile.clone(),
-                            entity: format!("{prefix}:{id}"),
-                            field: "name".into(),
-                        }) == Some(&None);
-                        if !deleted && !order.iter().any(|v| v.as_str() == Some(id)) {
-                            order.push(json!(id));
-                        }
+            // append remote additions unless this client explicitly deleted that folder.
+            let key = Key {
+                scope: self.profile.clone(),
+                entity: "catalog".into(),
+                field: "folder_order".into(),
+            };
+            if let (Some(Some(local)), Some(remote)) = (
+                self.dirty.get(&key),
+                self.known.get(&key).and_then(|r| r.value.as_ref()),
+            ) && let (Some(local), Some(remote)) = (local.as_array(), remote.as_array())
+            {
+                let mut order = local.clone();
+                order.retain(|value| {
+                    let Some(id) = value.as_str() else {
+                        return true;
+                    };
+                    let name = Key {
+                        scope: self.profile.clone(),
+                        entity: format!("folder:{id}"),
+                        field: "name".into(),
+                    };
+                    !self
+                        .known
+                        .get(&name)
+                        .is_some_and(|record| record.value.is_none())
+                        || matches!(self.dirty.get(&name), Some(Some(_)))
+                });
+                for id in remote.iter().filter_map(Value::as_str) {
+                    let deleted = self.dirty.get(&Key {
+                        scope: self.profile.clone(),
+                        entity: format!("folder:{id}"),
+                        field: "name".into(),
+                    }) == Some(&None);
+                    if !deleted && !order.iter().any(|v| v.as_str() == Some(id)) {
+                        order.push(json!(id));
                     }
-                    let value = Value::Array(order);
-                    self.dirty.insert(key.clone(), Some(value.clone()));
-                    self.observed.insert(key, value);
                 }
+                let value = Value::Array(order);
+                self.dirty.insert(key.clone(), Some(value.clone()));
+                self.observed.insert(key, value);
             }
         }
         let changed = if read {
@@ -390,52 +388,36 @@ impl Persistence {
                 .map(|(k, v)| (k.clone(), v.clone())),
         );
         let mut changed = false;
-        {
-            let order_key = Key {
-                scope: self.profile.clone(),
-                entity: "catalog".into(),
-                field: "order".into(),
-            };
-            if let Some(order) = values.get(&order_key).and_then(Value::as_array) {
-                let mut spaces = Vec::new();
-                for id in order.iter().filter_map(Value::as_str) {
-                    let entity = format!("space:{id}");
-                    let get = |field: &str| {
-                        values.get(&Key {
-                            scope: self.profile.clone(),
-                            entity: entity.clone(),
-                            field: field.into(),
-                        })
-                    };
-                    let mut space =
-                        Space::new(id, get("name").and_then(Value::as_str).unwrap_or(id));
-                    if let Some(icon) = get("icon").and_then(Value::as_str) {
-                        space.icon = icon.into();
-                    }
-                    space.accent = get("accent").and_then(Value::as_str).map(str::to_owned);
-                    space.collapsed = get("collapsed").and_then(Value::as_bool).unwrap_or(false);
-                    if let Some(rules) = get("rules") {
-                        space.rules = serde_json::from_value(rules.clone())
-                            .map_err(|e| Error(e.to_string()))?;
-                    }
-                    space.template = get("template").and_then(Value::as_str).map(str::to_owned);
+        // Spaces are declared in Lua; only derived spaces and collapse state live here.
+        let mut spaces = model.spaces.clone();
+        if let Some(value) = values.get(&Key {
+            scope: self.profile.clone(),
+            entity: "catalog".into(),
+            field: "derived".into(),
+        }) {
+            let derived = serde_json::from_value::<Vec<Space>>(value.clone())
+                .map_err(|e| Error(e.to_string()))?;
+            for space in derived {
+                if space.template.is_some() && !spaces.iter().any(|s| s.id == space.id) {
                     spaces.push(space);
                 }
-                let templates = values
-                    .get(&Key {
-                        scope: self.profile.clone(),
-                        entity: "catalog".into(),
-                        field: "templates".into(),
-                    })
-                    .map(|v| serde_json::from_value::<Vec<SpaceTemplate>>(v.clone()))
-                    .transpose()
-                    .map_err(|e| Error(e.to_string()))?
-                    .unwrap_or_default();
-                if !spaces.is_empty() && (spaces != model.spaces || templates != model.templates) {
-                    model.load_catalog(spaces, templates)?;
-                    changed = true;
-                }
             }
+        }
+        for space in &mut spaces {
+            if let Some(collapsed) = values
+                .get(&Key {
+                    scope: self.profile.clone(),
+                    entity: format!("space:{}", space.id),
+                    field: "collapsed".into(),
+                })
+                .and_then(Value::as_bool)
+            {
+                space.collapsed = collapsed;
+            }
+        }
+        if spaces != model.spaces {
+            model.load_catalog(spaces, model.templates.clone())?;
+            changed = true;
         }
         let folder_order_key = Key {
             scope: self.profile.clone(),
@@ -490,15 +472,6 @@ impl Persistence {
                 model.load_folders(folders)?;
                 changed = true;
             }
-        }
-        let preferences = values
-            .iter()
-            .filter(|(key, _)| key.scope == self.profile && key.entity == "settings")
-            .map(|(key, value)| (key.field.clone(), value.clone()))
-            .collect::<BTreeMap<_, _>>();
-        if &preferences != model.persisted_settings() {
-            model.load_preferences(preferences)?;
-            changed = true;
         }
         if !model.private
             && let Some(scope) = &self.session
@@ -597,10 +570,19 @@ fn profile_values(model: &Model, scope: &Scope) -> BTreeMap<Key, Value> {
     };
     insert(
         "catalog",
-        "order",
-        json!(model.spaces.iter().map(|s| &s.id).collect::<Vec<_>>()),
+        "derived",
+        json!(
+            model
+                .spaces
+                .iter()
+                .filter(|space| space.template.is_some())
+                .map(|space| Space {
+                    collapsed: false,
+                    ..space.clone()
+                })
+                .collect::<Vec<_>>()
+        ),
     );
-    insert("catalog", "templates", json!(model.templates));
     insert(
         "catalog",
         "folder_order",
@@ -619,16 +601,11 @@ fn profile_values(model: &Model, scope: &Scope) -> BTreeMap<Key, Value> {
         insert(&entity, "collapsed", json!(folder.collapsed));
     }
     for space in &model.spaces {
-        let entity = format!("space:{}", space.id);
-        insert(&entity, "name", json!(space.name));
-        insert(&entity, "icon", json!(space.icon));
-        insert(&entity, "accent", json!(space.accent));
-        insert(&entity, "collapsed", json!(space.collapsed));
-        insert(&entity, "rules", json!(space.rules));
-        insert(&entity, "template", json!(space.template));
-    }
-    for (key, value) in model.persisted_settings() {
-        insert("settings", key, value.clone());
+        insert(
+            &format!("space:{}", space.id),
+            "collapsed",
+            json!(space.collapsed),
+        );
     }
     values
 }

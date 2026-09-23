@@ -1,6 +1,6 @@
 # Configuration
 
-The Rust application works with its defaults. Lua configuration is optional. Set the module path below to `plugin/init.lua` in the local dev-branch checkout.
+The Rust application works with its defaults. Lua configuration is the source of truth; set the module path below to `plugin/init.lua` in the local dev-branch checkout.
 
 ```lua
 local wezterm = require 'wezterm'
@@ -20,13 +20,15 @@ return config
 
 | Name                  | Value                                                                        |
 | --------------------- | ---------------------------------------------------------------------------- |
-| `profile`             | Shared catalog/settings scope; default `default`                             |
+| `profile`             | Shared folder/session scope; default `default`                               |
 | `settings`            | Explicit overrides; [generated option reference](options.md)                 |
 | `spaces`              | Optional declared catalog of `{id, name, icon?, accent?, rules?, template?}` |
 | `templates`           | Dynamic spaces derived from metadata                                         |
 | `hooks`               | Optional semantic callbacks                                                  |
-| Precedence            | Rust defaults → persisted settings → explicit Lua overrides                  |
-| Config-owned settings | Identified in the settings UI; edits do not overwrite explicit Lua values    |
+| `settings_file`       | Managed Lua file; default `wezterm.config_dir .. "/vtabs_settings.lua"`      |
+| Precedence            | Rust defaults → `settings_file` → explicit `apply_to_config` values          |
+| Config-owned settings | Read-only in the settings UI                                                 |
+| Types                 | `plugin/types/`; generated from Rust with `just generate`                    |
 | Actions               | Indexed, relative, negative-index and MRU navigation follow visible tabs     |
 | Raw mux identities    | CLI/mux tab IDs retain upstream meaning                                      |
 | Sidebar width         | Logical pixels; clamped against available content area                       |
@@ -81,6 +83,44 @@ return config
 | Closing splits        | Hovering a split reveals its own ×; the tab's × shows over the icon side of the row                                     |
 | Menus and prompts     | Context menus open under the pointer or focused control; confirmations are a dialog with the accepting button selected  |
 
+**Settings file**
+
+```lua
+-- ~/.config/wezterm/vtabs_settings.lua
+---@type TabsManaged
+return {
+  settings = { width = 300, show_metadata = true },
+  spaces = { { icon = "◉", id = "notes", name = "Notes" } },
+  templates = {},
+}
+```
+
+| Name              | Value                                                                        |
+| ----------------- | ---------------------------------------------------------------------------- |
+| Writer            | Settings UI, space create/rename/edit/move/delete; atomic replace            |
+| Reload            | Written file reloads the config; hand edits reload through the watch list    |
+| Missing file      | Empty; created on the first UI edit                                          |
+| Symlink           | Target rewritten, link kept                                                  |
+| Declared `spaces` | Listed first; a file entry with the same `id` is ignored                     |
+| Session only      | Rail toggle (`Cmd+B`, `SetRail`); Lua keeps the startup value                |
+| SQLite            | Folders, space collapse, template-derived spaces, verified session state     |
+
+**Editor types**
+
+```json
+{ "workspace.library": ["/absolute/path/to/wezterm-vertical-tabs/plugin/types"] }
+```
+
+| Type                | Value                                             |
+| ------------------- | ------------------------------------------------- |
+| `TabsOptions`       | `apply_to_config` options                         |
+| `TabsSettings`      | `settings` table                                  |
+| `TabsManaged`       | `settings_file` content                           |
+| `TabsSpace`         | `spaces` entry                                    |
+| `TabsSpaceTemplate` | `templates` entry                                 |
+| `TabsHooks`         | `hooks` callbacks; `TabsTab`, `TabsWindowContext` |
+| `TabsAction`        | `vtabs.action` / `wezterm.vtabs.dispatch` value   |
+
 **Spaces and routing**
 
 ```lua
@@ -117,7 +157,7 @@ vtabs.apply_to_config(config, {
 | `remote`                  | Optional boolean constraint                                                 |
 | Templates                 | `$domain`, `$host`, `$user`, `$proc`/`$process`, `$cwd`, `$title`           |
 | Deleting a nonempty space | Select a destination for its tabs                                           |
-| Private window            | Live tab state stays private; explicit catalog/settings edits remain shared |
+| Private window            | Live tab state stays private; settings file edits remain shared             |
 
 **Optional actions**
 
@@ -140,12 +180,12 @@ vtabs.apply_to_config(config, {
 | `{ AssignFolder = { tab_id = tab_id, folder_id = folder_id } }` | Group and pin a tab                    |
 | `{ NewTabInFolder = folder_id }`                                | Spawn a tab inside a folder            |
 | `{ DeleteFolder = folder_id }`                                  | Ungroup tabs without closing them      |
-| `{ SetSetting = { key = 'width', value = 300 } }`               | Set an editable preference             |
-| `{ SetRail = 'collapsed' }`                                     | Change rail mode                       |
+| `{ SetSetting = { key = 'width', value = 300 } }`               | Write a setting to `settings_file`     |
+| `{ SetRail = 'collapsed' }`                                     | Change rail mode for this session      |
 | `'PrivateWindow'`                                               | Create a private window                |
 | `'Reopen'`                                                      | Reopen an available launch description |
 
-The full typed action set is `Intent` in `src/core/src/model.rs`. Pane/split actions remain ordinary WezTerm actions.
+The full typed action set is `TabsAction` in `plugin/types/vtabs.lua`, generated from `Action` in `src/core/src/contract.rs`; `dispatch` rejects unknown actions. Pane/split actions remain ordinary WezTerm actions.
 
 **Hooks**
 
@@ -192,14 +232,14 @@ vtabs.apply_to_config(config, {
 | `wezterm.vtabs.capability`               | Current integration contract marker                                          |
 | `wezterm.vtabs.schema`                   | Rust settings schema                                                         |
 | `wezterm.vtabs.configure(options)`       | Validated configuration update                                               |
-| `wezterm.vtabs.dispatch(window, action)` | Semantic action on one GUI window                                            |
+| `wezterm.vtabs.dispatch(window, action)` | Validated semantic action on one GUI window                                  |
 | `wezterm.vtabs.inspect(window)`          | Async diagnostic projection, geometry, model summary and CPU timing counters |
 
 Use [development.md](development.md) for installation, build/update commands and GUI verification. Storage boundaries are documented in [protocol.md](protocol.md).
 
 | Appearance | Default behavior                                                                            |
 | ---------- | ------------------------------------------------------------------------------------------- |
-| Palette    | Dark blue background `#192231`, accent `#a9c7f5`; saved and explicit colors retain priority |
+| Palette    | Dark blue background `#192231`, accent `#a9c7f5`; file and explicit colors retain priority  |
 | Frame      | Sidebar background surrounds rounded terminal content on every edge                         |
 | Search     | Compact sidebar trigger; launcher drops down from it, tooltips open below their control     |
 | Tab rows   | Index, directory marker and the deepest directory name                                      |

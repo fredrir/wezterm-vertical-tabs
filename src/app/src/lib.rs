@@ -1,4 +1,5 @@
 //! Per-window, single-event-loop coordinator for the statically linked UI.
+mod managed;
 mod persistence;
 
 pub use vtabs_core as core;
@@ -127,6 +128,7 @@ pub struct WindowTransfer {
     pub configuration: BTreeMap<String, Value>,
     pub configured_spaces: Vec<core::Space>,
     pub configured_templates: Vec<core::SpaceTemplate>,
+    pub managed: Option<core::Managed>,
     pub tab: core::Tab,
 }
 
@@ -147,6 +149,7 @@ pub struct WindowApp {
     pending_spawns: BTreeMap<u64, SpawnToken>,
     configured_spaces: Vec<core::Space>,
     configured_templates: Vec<core::SpaceTemplate>,
+    managed: managed::ManagedFile,
     geometry_revision: u64,
 }
 
@@ -183,6 +186,7 @@ impl WindowApp {
             pending_spawns: BTreeMap::new(),
             configured_spaces: Vec::new(),
             configured_templates: Vec::new(),
+            managed: managed::ManagedFile::default(),
             geometry_revision: 0,
         }
     }
@@ -221,10 +225,11 @@ impl WindowApp {
             spaces: self.model.spaces.clone(),
             folders: self.model.folders.clone(),
             templates: self.model.templates.clone(),
-            preferences: self.model.persisted_settings().clone(),
+            preferences: self.model.managed_settings().clone(),
             configuration: self.model.configured_settings().clone(),
             configured_spaces: self.configured_spaces.clone(),
             configured_templates: self.configured_templates.clone(),
+            managed: self.managed.baseline().cloned(),
             tab: tab.clone(),
         })
     }
@@ -251,11 +256,16 @@ impl WindowApp {
             .model
             .load_catalog(transfer.spaces, transfer.templates)?;
         candidate.model.load_folders(transfer.folders)?;
-        candidate.model.load_preferences(transfer.preferences)?;
+        candidate
+            .model
+            .load_managed_settings(transfer.preferences)?;
         candidate.model.apply_config(transfer.configuration)?;
         candidate.configured_spaces = transfer.configured_spaces;
         candidate.configured_templates = transfer.configured_templates;
-        candidate.merge_configured_catalog()?;
+        if let Some(managed) = transfer.managed {
+            candidate.managed.loaded(managed);
+            candidate.managed.touch();
+        }
         let id = transfer.tab.id;
         candidate
             .model
@@ -405,6 +415,7 @@ impl WindowApp {
         }
         if transition.durable_changed {
             self.storage.observe(&self.model, self.now);
+            self.managed.touch();
         }
         let commands = transition.commands.into_iter().map(Command::Host).collect();
         Ok(Update {
@@ -694,74 +705,41 @@ impl WindowApp {
             ..Update::default()
         })
     }
-    pub fn configure_spaces(
-        &mut self,
-        spaces: Vec<core::Space>,
-        templates: Vec<core::SpaceTemplate>,
-    ) -> Result<Update, Error> {
-        let mut candidate = self.model.clone();
-        candidate.load_catalog(spaces.clone(), templates.clone())?;
-        let initial = self.model.tabs.is_empty()
-            && self.model.spaces.len() == 1
-            && self.model.spaces[0].id == core::DEFAULT_SPACE;
-        self.configured_spaces = spaces;
-        self.configured_templates = templates;
-        if initial {
-            self.model.load_catalog(
-                self.configured_spaces.clone(),
-                self.configured_templates.clone(),
-            )?;
-        } else {
-            self.merge_configured_catalog()?;
-        }
-        self.ui.invalidate();
-        Ok(Update {
-            model_changed: true,
-            projection_changed: true,
-            ..Update::default()
-        })
+    fn managed_projection(&self) -> core::Managed {
+        managed::ManagedFile::projection(
+            &self.model,
+            &self.configured_spaces,
+            &self.configured_templates,
+        )
     }
-    fn merge_configured_catalog(&mut self) -> Result<(), Error> {
-        if self.configured_spaces.is_empty() && self.configured_templates.is_empty() {
-            return Ok(());
-        }
-        let mut spaces = self.configured_spaces.clone();
-        spaces.extend(
-            self.model
-                .spaces
-                .iter()
-                .filter(|space| !self.configured_spaces.iter().any(|s| s.id == space.id))
-                .cloned(),
+    /// Lua source for the managed settings file after a UI edit; one write is in flight.
+    pub fn take_managed_write(&mut self) -> Option<String> {
+        let (model, spaces, templates) = (
+            &self.model,
+            &self.configured_spaces,
+            &self.configured_templates,
         );
-        let mut templates = self.configured_templates.clone();
-        templates.extend(
-            self.model
-                .templates
-                .iter()
-                .filter(|template| {
-                    !self
-                        .configured_templates
-                        .iter()
-                        .any(|t| t.id == template.id)
-                })
-                .cloned(),
-        );
-        if spaces != self.model.spaces || templates != self.model.templates {
-            self.model.load_catalog(spaces, templates)?;
+        self.managed
+            .take(|| managed::ManagedFile::projection(model, spaces, templates))
+    }
+    pub fn complete_managed_write(&mut self, result: Result<(), String>) {
+        self.managed.written();
+        if let Err(error) = result {
+            self.errors.push(format!("Settings file: {error}"));
         }
-        Ok(())
     }
     /// Lua registration sends a JSON-compatible table. The Rust schema validates every
     /// setting before mutation; callbacks are registered separately and return HookResult.
+    /// Precedence: Rust defaults, then the managed file, then values written in the config.
     pub fn config(&mut self, value: Value) -> Result<Update, Error> {
-        #[derive(serde::Deserialize)]
+        #[derive(serde::Deserialize, Default)]
         #[serde(default, deny_unknown_fields)]
-        #[derive(Default)]
         struct Config {
             settings: BTreeMap<String, Value>,
-            spaces: Option<Vec<core::Space>>,
+            spaces: Vec<core::Space>,
             templates: Vec<core::SpaceTemplate>,
             profile: Option<String>,
+            managed: Option<core::Managed>,
         }
 
         let config: Config =
@@ -777,46 +755,57 @@ impl WindowApp {
                 "Profile is chosen when creating the window application".into(),
             ));
         }
-        // Validate both layers on a detached model before publishing either.
-        let mut candidate = self.model.clone();
-        candidate.apply_config(config.settings)?;
-        if let Some(spaces) = &config.spaces {
-            let initial = self.model.tabs.is_empty()
-                && self.model.spaces.len() == 1
-                && self.model.spaces[0].id == core::DEFAULT_SPACE;
-            let mut merged = spaces.clone();
-            if !initial {
-                merged.extend(
-                    self.model
-                        .spaces
-                        .iter()
-                        .filter(|s| !spaces.iter().any(|v| v.id == s.id))
-                        .cloned(),
-                );
+        let current = self.managed_projection();
+        let file = config.managed.filter(|_| !self.managed.pending(&current));
+        let loaded = file.is_some();
+        let initial = self.model.tabs.is_empty()
+            && self.model.spaces.len() == 1
+            && self.model.spaces[0].id == core::DEFAULT_SPACE;
+        let managed = file.unwrap_or_else(|| core::Managed {
+            spaces: if initial { Vec::new() } else { current.spaces },
+            ..current
+        });
+
+        let mut spaces = config.spaces.clone();
+        for space in managed.spaces.iter().chain(
+            self.model
+                .spaces
+                .iter()
+                .filter(|space| space.template.is_some()),
+        ) {
+            if !spaces.iter().any(|s| s.id == space.id) {
+                spaces.push(space.clone());
             }
-            let mut templates = config.templates.clone();
-            templates.extend(
-                self.model
-                    .templates
-                    .iter()
-                    .filter(|t| !config.templates.iter().any(|v| v.id == t.id))
-                    .cloned(),
-            );
-            candidate.load_catalog(merged, templates)?;
-        } else if !config.templates.is_empty() {
-            let mut templates = config.templates.clone();
-            templates.extend(
-                self.model
-                    .templates
-                    .iter()
-                    .filter(|t| !config.templates.iter().any(|v| v.id == t.id))
-                    .cloned(),
-            );
-            candidate.load_catalog(candidate.spaces.clone(), templates)?;
+        }
+        if spaces.is_empty() {
+            spaces.push(core::Space::new(core::DEFAULT_SPACE, "Home"));
+        }
+        for space in &mut spaces {
+            if let Some(existing) = self.model.spaces.iter().find(|s| s.id == space.id) {
+                space.collapsed = existing.collapsed;
+            }
+        }
+        let mut templates = config.templates.clone();
+        for template in managed.templates {
+            if !templates.iter().any(|t| t.id == template.id) {
+                templates.push(template);
+            }
+        }
+
+        // Validate every layer on a detached model before publishing any of them.
+        let mut candidate = self.model.clone();
+        candidate.load_managed_settings(managed.settings)?;
+        candidate.apply_config(config.settings)?;
+        if spaces != candidate.spaces || templates != candidate.templates {
+            candidate.load_catalog(spaces, templates)?;
         }
         self.model = candidate;
-        self.configured_spaces = config.spaces.unwrap_or_default();
+        self.configured_spaces = config.spaces;
         self.configured_templates = config.templates;
+        if loaded {
+            let projection = self.managed_projection();
+            self.managed.loaded(projection);
+        }
         self.configuration_epoch = self.configuration_epoch.wrapping_add(1);
         self.ui
             .set_config_owned(self.model.config_owned.iter().cloned());
@@ -890,16 +879,7 @@ impl WindowApp {
                 HookResult::Footer(footer) => candidate.apply_footer_hook(footer)?,
                 HookResult::Theme(values) => {
                     for (key, value) in &values {
-                        if !matches!(
-                            key.as_str(),
-                            "accent"
-                                | "background"
-                                | "foreground"
-                                | "muted"
-                                | "selected_background"
-                                | "private_accent"
-                                | "distro_colors"
-                        ) {
+                        if !core::settings::is_theme(key) {
                             return Err(Error("Theme hooks may only set theme colors".into()));
                         }
                         core::settings::validate_value(key, value).map_err(Error)?;
@@ -933,7 +913,6 @@ impl WindowApp {
     pub fn complete_storage(&mut self, response: store::Response) -> Result<Update, Error> {
         let changed = self.storage.complete(&mut self.model, response, self.now)?;
         if changed {
-            self.merge_configured_catalog()?;
             self.ui.invalidate();
         }
         Ok(Update {
@@ -991,6 +970,10 @@ mod folders_tests;
 #[cfg(test)]
 #[path = "../tests/lifecycle.rs"]
 mod lifecycle_tests;
+
+#[cfg(test)]
+#[path = "../tests/managed.rs"]
+mod managed_tests;
 
 #[cfg(test)]
 #[path = "../tests/persistence.rs"]

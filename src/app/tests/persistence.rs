@@ -27,11 +27,14 @@ fn initial(app: &mut WindowApp) {
     app.complete_storage(response(&request, vec![])).unwrap();
 }
 
+fn declare(app: &mut WindowApp, spaces: serde_json::Value) {
+    app.config(json!({"managed": {"spaces": spaces}})).unwrap();
+}
+
 #[test]
-fn configured_spaces_keep_project_created_catalog_and_persistence() {
+fn spaces_created_in_the_ui_leave_only_collapse_state_in_the_store() {
     let mut app = WindowApp::default();
-    app.configure_spaces(vec![Space::new("work", "From config")], vec![])
-        .unwrap();
+    declare(&mut app, json!([]));
     initial(&mut app);
     app.dispatch(Intent::CreateSpace {
         name: "Created in UI".into(),
@@ -39,42 +42,40 @@ fn configured_spaces_keep_project_created_catalog_and_persistence() {
     .unwrap();
     let id = app.model().selected_space.clone();
     let request = app.take_storage_request(Duration::from_secs(1)).unwrap();
-    assert!(
-        request
-            .operations
-            .iter()
-            .any(|op| matches!(op,Operation::Put{key,..}if key.entity==format!("space:{id}")))
-    );
-    app.configure_spaces(vec![Space::new("work", "Updated config")], vec![])
-        .unwrap();
-    assert!(app.model().spaces.iter().any(|s| s.id == id));
-    assert_eq!(app.model().spaces[0].name, "Updated config");
+    let fields = request
+        .operations
+        .iter()
+        .filter_map(|op| match op {
+            Operation::Put { key, .. } if key.entity == format!("space:{id}") => {
+                Some(key.field.as_str())
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(fields, ["collapsed"]);
+    assert!(app.take_managed_write().unwrap().contains("Created in UI"));
 }
 #[test]
-fn configuration_wins_restored_fields_without_hiding_dynamic_spaces() {
+fn stale_store_records_for_declared_spaces_and_settings_are_ignored() {
     let mut app = WindowApp::default();
-    app.configure_spaces(vec![Space::new("work", "Configured")], vec![])
-        .unwrap();
+    declare(&mut app, json!([{"id": "work", "name": "Declared"}]));
     let request = app.take_storage_request(Duration::ZERO).unwrap();
     app.complete_storage(response(
         &request,
         vec![
-            profile_record("catalog", "order", json!(["work", "dynamic"])),
+            profile_record("catalog", "order", json!(["work", "old"])),
             profile_record("space:work", "name", json!("Old name")),
-            profile_record("space:dynamic", "name", json!("User-created")),
+            profile_record("space:old", "name", json!("Old space")),
+            profile_record("settings", "width", json!(300)),
         ],
     ))
     .unwrap();
-    assert_eq!(app.model().spaces[0].name, "Configured");
-    assert!(
-        app.model()
-            .spaces
-            .iter()
-            .any(|s| s.id == "dynamic" && s.name == "User-created")
-    );
+    let spaces = &app.model().spaces;
+    assert_eq!((spaces.len(), spaces[0].name.as_str()), (1, "Declared"));
+    assert_eq!(app.model().settings.width, Settings::default().width);
 }
 #[test]
-fn refresh_is_coalesced_and_discovers_remote_spaces() {
+fn refresh_is_coalesced_and_restores_template_derived_spaces() {
     let mut app = WindowApp::default();
     initial(&mut app);
     app.refresh_storage();
@@ -82,41 +83,23 @@ fn refresh_is_coalesced_and_discovers_remote_spaces() {
     let request = app.take_storage_request(Duration::ZERO).unwrap();
     assert_eq!(request.operations.len(), 1);
     app.refresh_storage();
+    let mut derived = Space::new("host-arch", "arch");
+    derived.template = Some("host-$host".into());
     app.complete_storage(response(
         &request,
         vec![
-            profile_record("catalog", "order", json!(["home", "remote"])),
-            profile_record("space:home", "name", json!("Home")),
-            profile_record("space:remote", "name", json!("Other window")),
+            profile_record("catalog", "derived", json!([derived])),
+            profile_record("space:host-arch", "collapsed", json!(true)),
         ],
     ))
     .unwrap();
-    assert!(app.model().spaces.iter().any(|s| s.id == "remote"));
+    assert!(
+        app.model()
+            .spaces
+            .iter()
+            .any(|s| s.id == "host-arch" && s.collapsed)
+    );
     assert!(app.take_storage_request(Duration::from_secs(1)).is_none());
-}
-#[test]
-fn concurrent_space_creation_merges_remote_catalog_ids() {
-    let mut app = WindowApp::default();
-    initial(&mut app);
-    app.dispatch(Intent::CreateSpace {
-        name: "Local".into(),
-    })
-    .unwrap();
-    let local = app.model().selected_space.clone();
-    app.refresh_storage();
-    let request = app.take_storage_request(Duration::ZERO).unwrap();
-    app.complete_storage(response(
-        &request,
-        vec![
-            profile_record("catalog", "order", json!(["home", "remote"])),
-            profile_record("space:remote", "name", json!("Remote")),
-        ],
-    ))
-    .unwrap();
-    assert!(app.model().spaces.iter().any(|s| s.id == local));
-    assert!(app.model().spaces.iter().any(|s| s.id == "remote"));
-    let write = app.take_storage_request(Duration::from_secs(1)).unwrap();
-    assert!(write.operations.iter().any(|op|matches!(op,Operation::Put{key,value,..}if key.entity=="catalog"&&key.field=="order"&&value.as_array().unwrap().contains(&json!(local))&&value.as_array().unwrap().contains(&json!("remote")))));
 }
 #[test]
 fn space_ids_are_unique_across_window_apps() {
@@ -148,6 +131,10 @@ fn verified_window_preferences_restore_only_exact_window() {
     let mut app = WindowApp::default();
     app.set_window_identity(7);
     app.set_verified_session(Some("verified".into()));
+    declare(
+        &mut app,
+        json!([{"id": "home", "name": "Home"}, {"id": "work", "name": "Work"}]),
+    );
     let request = app.take_storage_request(Duration::ZERO).unwrap();
     let scope = Scope::Session {
         profile: "default".into(),
@@ -155,19 +142,15 @@ fn verified_window_preferences_restore_only_exact_window() {
     };
     app.complete_storage(response(
         &request,
-        vec![
-            profile_record("catalog", "order", json!(["home", "work"])),
-            profile_record("space:work", "name", json!("Work")),
-            Record {
-                key: Key {
-                    scope,
-                    entity: "window:7".into(),
-                    field: "selected_space".into(),
-                },
-                value: Some(json!("work")),
-                revision: 1,
+        vec![Record {
+            key: Key {
+                scope,
+                entity: "window:7".into(),
+                field: "selected_space".into(),
             },
-        ],
+            value: Some(json!("work")),
+            revision: 1,
+        }],
     ))
     .unwrap();
     assert_eq!(app.model().selected_space, "work");
@@ -348,20 +331,18 @@ fn explicit_folder_deletion_wins_over_a_stale_remote_catalog() {
 }
 
 #[test]
-fn malformed_folder_catalog_does_not_publish_partial_space_or_settings_changes() {
+fn malformed_folder_catalog_does_not_publish_partial_catalog_changes() {
     let mut app = WindowApp::default();
+    declare(&mut app, json!([{"id": "work", "name": "Work"}]));
     let request = app.take_storage_request(Duration::ZERO).unwrap();
     let mut records = vec![
-        profile_record("catalog", "order", json!(["work"])),
-        profile_record("space:work", "name", json!("Work")),
+        profile_record("space:work", "collapsed", json!(true)),
         profile_record("catalog", "folder_order", json!(["tools", "tools"])),
-        profile_record("settings", "width", json!(350)),
     ];
     records.extend(folder_records("tools", "Tools", "work"));
     assert!(app.complete_storage(response(&request, records)).is_err());
-    assert_eq!(app.model().spaces, [Space::new("home", "Home")]);
+    assert!(!app.model().spaces[0].collapsed);
     assert!(app.model().folders.is_empty());
-    assert_eq!(app.model().settings.width, Settings::default().width);
     assert!(app.storage_pending());
     let retry = app.take_storage_request(Duration::from_secs(3)).unwrap();
     app.complete_storage(response(
@@ -370,7 +351,7 @@ fn malformed_folder_catalog_does_not_publish_partial_space_or_settings_changes()
     ))
     .unwrap();
     assert_eq!(app.model().folders[0].name, "Tools");
-    assert_eq!(app.model().spaces[0].id, "work");
+    assert!(app.model().spaces[0].collapsed);
 }
 
 #[test]
@@ -515,17 +496,13 @@ fn remote_folder_deletion_survives_a_concurrent_local_reorder() {
 }
 
 #[test]
-fn space_collapse_state_round_trips_through_the_catalog() {
+fn space_collapse_state_round_trips_through_the_store() {
     let mut app = WindowApp::default();
     discover(&mut app, 1, &[1]);
     let request = app.take_storage_request(Duration::ZERO).unwrap();
     app.complete_storage(response(
         &request,
-        vec![
-            profile_record("catalog", "order", json!(["home"])),
-            profile_record("space:home", "name", json!("Home")),
-            profile_record("space:home", "collapsed", json!(true)),
-        ],
+        vec![profile_record("space:home", "collapsed", json!(true))],
     ))
     .unwrap();
     assert!(app.model().spaces[0].collapsed);

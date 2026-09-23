@@ -96,4 +96,12 @@
 | SQLite busy timeout | 1500 ms                                   |
 | GUI helper deadline | 3 seconds; child killed/reaped on timeout |
 
-The application coalesces field changes and keeps memory authoritative for rendering/navigation. Successful writes notify other windows in the same GUI; independent GUI clients refresh on focus. Profiles/settings survive sessions. Live assignments/pins restore only with verified session identity. Private live-tab state and reopen history are excluded; explicit shared catalog/settings edits remain durable.
+| Name                 | Value                                                                        |
+| -------------------- | ---------------------------------------------------------------------------- |
+| Settings and spaces  | Lua `settings_file`, not SQLite; see [configuration](configuration.md)       |
+| Profile fields       | `folder:*`, `catalog.folder_order`, `catalog.derived`, `space:*.collapsed`   |
+| Session fields       | `tab:*.membership`, `window:*.selected_space`; verified session identity     |
+| Legacy fields        | `settings`, `catalog.order`, `catalog.templates`, other `space:*` ignored    |
+| Write coalescing     | 100 ms; memory stays authoritative for rendering/navigation                  |
+| Other windows        | Notified after commit; independent GUI clients refresh on focus              |
+| Private windows      | Live-tab state and reopen history excluded; shared catalog edits kept        |

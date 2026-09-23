@@ -557,6 +557,15 @@ def geometry_scenarios(probe):
     }
 
 
+def wait_for_managed(probe, path, text, failure):
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        if path.exists() and text in path.read_text(encoding="utf-8"):
+            return
+        probe.sample_for(0.05)
+    raise AssertionError(failure)
+
+
 def feature_scenarios(probe):
     state = probe.latest[probe.window]
     home = state["model"]["selected_space"]
@@ -599,23 +608,8 @@ def feature_scenarios(probe):
         assert idle[0]["hook_calls"] == idle[-1]["hook_calls"], "idle sidebar reruns Lua hooks"
     probe.intent({"SetSetting": {"key": "width", "value": 300}})
     probe.wait(lambda state: state.get("model", {}).get("settings", {}).get("width") == 300)
-    deadline = time.monotonic() + 5
-    rows = []
-    while time.monotonic() < deadline:
-        try:
-            with sqlite3.connect(
-                f"file:{probe.root / 'state.sqlite'}?mode=ro", uri=True
-            ) as connection:
-                rows = connection.execute(
-                    "SELECT entity,field,value FROM fields WHERE value IS NOT NULL"
-                ).fetchall()
-            if any(field == "width" and value == "300" for _, field, value in rows):
-                break
-        except sqlite3.Error:
-            pass
-        probe.sample_for(0.05)
-    else:
-        raise AssertionError("settings write did not reach SQLite")
+    managed = probe.root / "vtabs_settings.lua"
+    wait_for_managed(probe, managed, "width = 300", "settings write did not reach the Lua file")
     probe.intent("PrivateWindow")
     private = probe.wait(
         lambda state: state.get("model", {}).get("private") is True, any_window=True
@@ -663,17 +657,16 @@ def feature_scenarios(probe):
         ),
         any_window=True,
     )
-    deadline = time.monotonic() + 5
-    while time.monotonic() < deadline:
-        with sqlite3.connect(f"file:{probe.root / 'state.sqlite'}?mode=ro", uri=True) as connection:
-            persisted = connection.execute(
-                "SELECT scope,entity,value FROM fields WHERE value IS NOT NULL"
-            ).fetchall()
-        if any("Shared catalog edit" in value for _, _, value in persisted):
-            break
-        probe.sample_for(0.05)
-    else:
-        raise AssertionError("explicit shared catalog edit was not persisted")
+    wait_for_managed(
+        probe,
+        managed,
+        "Shared catalog edit",
+        "explicit shared catalog edit was not written to the Lua file",
+    )
+    with sqlite3.connect(f"file:{probe.root / 'state.sqlite'}?mode=ro", uri=True) as connection:
+        persisted = connection.execute(
+            "SELECT scope,entity,value FROM fields WHERE value IS NOT NULL"
+        ).fetchall()
     assert all("PRIVATE MUST NOT PERSIST" not in value for _, _, value in persisted), (
         "private tab metadata reached SQLite"
     )
@@ -684,7 +677,7 @@ def feature_scenarios(probe):
     return {
         "empty_space": space,
         "private_window": private_window,
-        "persisted_fields": len(rows),
+        "persisted_fields": len(persisted),
         "idle_samples": len(idle),
     }
 

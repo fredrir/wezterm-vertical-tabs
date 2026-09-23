@@ -1,63 +1,252 @@
 //! Generate optional Lua types and a machine-readable schema from the Rust authority.
+use serde_json::{Map, Value};
 use std::fmt::Write;
-use vtabs_core::{SettingKind, Settings, settings};
+use vtabs_core::{SettingKind, Settings, lua, settings};
 
-fn lua_inline(value: &serde_json::Value) -> String {
+const PREFIX: &str = "Tabs";
+
+fn class_name(reference: &str) -> String {
+    format!("{PREFIX}{}", reference.rsplit('/').next().unwrap())
+}
+
+fn literal(value: &Value) -> String {
     match value {
-        serde_json::Value::Null => "nil".into(),
-        serde_json::Value::Bool(b) => b.to_string(),
-        serde_json::Value::Number(n) => n.to_string(),
-        serde_json::Value::String(s) => serde_json::to_string(s).unwrap(),
-        serde_json::Value::Array(items) if items.is_empty() => "{}".into(),
-        serde_json::Value::Array(items) => format!(
-            "{{ {} }}",
-            items.iter().map(lua_inline).collect::<Vec<_>>().join(", ")
-        ),
-        serde_json::Value::Object(fields) if fields.is_empty() => "{}".into(),
-        serde_json::Value::Object(fields) => format!(
-            "{{ {} }}",
-            fields
-                .iter()
-                .map(|(k, v)| format!(
-                    "[{}] = {}",
-                    serde_json::to_string(k).unwrap(),
-                    lua_inline(v)
-                ))
-                .collect::<Vec<_>>()
-                .join(", ")
-        ),
+        Value::String(text) => format!("'{text}'"),
+        other => other.to_string(),
     }
 }
 
-fn lua_value(value: &serde_json::Value, indent: usize, column: usize) -> String {
-    let inline = lua_inline(value);
-    if column + inline.chars().count() + usize::from(indent > 0) <= 120 {
-        return inline;
+fn nullable(ty: String) -> String {
+    if ty.contains(['|', ' ', '?']) {
+        format!("{ty}|nil")
+    } else {
+        format!("{ty}?")
     }
-    let entries: Vec<_> = match value {
-        serde_json::Value::Array(items) => items.iter().map(|item| (String::new(), item)).collect(),
-        serde_json::Value::Object(fields) => fields
-            .iter()
-            .map(|(key, value)| {
-                (
-                    format!("[{}] = ", serde_json::to_string(key).unwrap()),
-                    value,
-                )
-            })
-            .collect(),
-        _ => return inline,
+}
+
+fn element(ty: String) -> String {
+    if ty.contains(['|', '?']) {
+        format!("({ty})")
+    } else {
+        ty
+    }
+}
+
+fn is_null(schema: &Value) -> bool {
+    schema.get("type").and_then(Value::as_str) == Some("null")
+}
+
+fn fields(object: &Map<String, Value>, separator: &str) -> Vec<(String, String)> {
+    let required: Vec<&str> = object
+        .get("required")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .collect();
+    object
+        .get("properties")
+        .and_then(Value::as_object)
+        .into_iter()
+        .flatten()
+        .map(|(name, schema)| {
+            let optional = !required.contains(&name.as_str());
+            let mut ty = lua_type(schema);
+            if optional && let Some(inner) = ty.strip_suffix('?').or(ty.strip_suffix("|nil")) {
+                ty = inner.into();
+            }
+            let marker = if optional { "?" } else { "" };
+            (
+                format!("{name}{marker}{separator}{ty}"),
+                description(schema),
+            )
+        })
+        .collect()
+}
+
+fn description(schema: &Value) -> String {
+    schema
+        .get("description")
+        .and_then(Value::as_str)
+        .map(|text| text.split_whitespace().collect::<Vec<_>>().join(" "))
+        .unwrap_or_default()
+}
+
+fn primitive(name: &str, object: &Map<String, Value>) -> String {
+    match name {
+        "string" => "string".into(),
+        "integer" => "integer".into(),
+        "number" => "number".into(),
+        "boolean" => "boolean".into(),
+        "null" => "nil".into(),
+        "array" => match (object.get("prefixItems"), object.get("items")) {
+            (Some(Value::Array(items)), _) => format!(
+                "{{ {} }}",
+                items
+                    .iter()
+                    .enumerate()
+                    .map(|(index, item)| format!("[{}]: {}", index + 1, lua_type(item)))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+            (_, Some(items)) => format!("{}[]", element(lua_type(items))),
+            _ => "any[]".into(),
+        },
+        "object" => match (object.get("properties"), object.get("additionalProperties")) {
+            (Some(_), _) => format!(
+                "{{ {} }}",
+                fields(object, ": ")
+                    .into_iter()
+                    .map(|(field, _)| field)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+            (_, Some(values @ Value::Object(_))) => format!("table<string, {}>", lua_type(values)),
+            _ => "table".into(),
+        },
+        _ => "any".into(),
+    }
+}
+
+fn lua_type(schema: &Value) -> String {
+    let Some(object) = schema.as_object().filter(|object| !object.is_empty()) else {
+        return "any".into();
     };
-    let mut out = String::from("{\n");
-    for (prefix, value) in entries {
-        writeln!(
-            &mut out,
-            "{}{prefix}{},",
-            " ".repeat(indent + 2),
-            lua_value(value, indent + 2, indent + 2 + prefix.chars().count())
-        )
-        .unwrap();
+    if let Some(reference) = object.get("$ref").and_then(Value::as_str) {
+        return class_name(reference);
     }
-    write!(&mut out, "{}}}", " ".repeat(indent)).unwrap();
+    if let Some(value) = object.get("const") {
+        return literal(value);
+    }
+    if let Some(values) = object.get("enum").and_then(Value::as_array) {
+        return values.iter().map(literal).collect::<Vec<_>>().join("|");
+    }
+    if let Some(variants) = object
+        .get("oneOf")
+        .or_else(|| object.get("anyOf"))
+        .and_then(Value::as_array)
+    {
+        let types = variants
+            .iter()
+            .filter(|variant| !is_null(variant))
+            .map(lua_type)
+            .collect::<Vec<_>>()
+            .join("|");
+        return if variants.iter().any(is_null) {
+            nullable(types)
+        } else {
+            types
+        };
+    }
+    match object.get("type") {
+        Some(Value::String(name)) => primitive(name, object),
+        Some(Value::Array(names)) => {
+            let types = names
+                .iter()
+                .filter_map(Value::as_str)
+                .filter(|name| *name != "null")
+                .map(|name| primitive(name, object))
+                .collect::<Vec<_>>()
+                .join("|");
+            if names.iter().any(|name| name == "null") {
+                nullable(types)
+            } else {
+                types
+            }
+        }
+        _ => "any".into(),
+    }
+}
+
+fn documented(out: &mut String, text: &str) {
+    if !text.is_empty() {
+        writeln!(out, "--- {text}").unwrap();
+    }
+}
+
+fn definitions() -> Map<String, Value> {
+    let mut generator = schemars::SchemaGenerator::default();
+    generator.subschema_for::<vtabs_core::Managed>();
+    generator.subschema_for::<vtabs_core::Tab>();
+    generator.subschema_for::<vtabs_core::WindowContext>();
+    generator.subschema_for::<vtabs_core::Action>();
+    generator.subschema_for::<settings::MenuEntry>();
+    let mut definitions = generator.take_definitions(true);
+    // Settings are annotated from their descriptors, which carry ranges and descriptions.
+    definitions.remove("Settings");
+    definitions
+}
+
+fn setting_type(kind: &SettingKind) -> String {
+    match kind {
+        SettingKind::Bool => "boolean".into(),
+        SettingKind::Number { .. } => "integer".into(),
+        SettingKind::Text => "string".into(),
+        SettingKind::Color => "string".into(),
+        SettingKind::Colors => "table<string, string>".into(),
+        SettingKind::Choice(choices) => choices
+            .iter()
+            .map(|c| format!("'{c}'"))
+            .collect::<Vec<_>>()
+            .join("|"),
+        SettingKind::Object => "table<string, string>".into(),
+        SettingKind::List => "TabsMenuEntry[]".into(),
+    }
+}
+
+fn settings_class(out: &mut String, name: &str, theme_only: bool) {
+    writeln!(out, "---@class {name}").unwrap();
+    for option in settings::descriptors() {
+        if !theme_only || settings::is_theme(option.key) {
+            writeln!(
+                out,
+                "---@field {}? {} {}",
+                option.key,
+                setting_type(&option.kind),
+                option.description
+            )
+            .unwrap();
+        }
+    }
+    out.push('\n');
+}
+
+const API: &str = r#"---@class TabsHooks
+---@field title? fun(tab: TabsTab): string? Display title
+---@field routing? fun(tab: TabsTab): string? Existing space ID
+---@field filter? fun(tab: TabsTab): boolean? Visibility
+---@field theme? fun(context: TabsWindowContext): TabsTheme? Theme-color overrides
+---@field footer? fun(context: TabsWindowContext): string|string[]|nil Rows shown above spaces
+
+---@class TabsOptions
+---@field profile? string Shared catalog scope; default `default`
+---@field settings? TabsSettings Owned by this config; read-only in the settings UI
+---@field spaces? TabsSpace[] Owned by this config; listed before spaces created in the UI
+---@field templates? TabsSpaceTemplate[] Dynamic spaces derived from tab metadata
+---@field hooks? TabsHooks
+---@field settings_file? string File the settings UI writes; default `wezterm.config_dir .. "/vtabs_settings.lua"`
+"#;
+
+fn types() -> String {
+    let mut out = String::from("-- Generated from vtabs-core; edit the Rust types.\n---@meta\n\n");
+    settings_class(&mut out, "TabsSettings", false);
+    settings_class(&mut out, "TabsTheme", true);
+    for (name, schema) in definitions() {
+        let object = schema.as_object().unwrap();
+        documented(&mut out, &description(&schema));
+        if object.contains_key("properties")
+            && object.get("type").and_then(Value::as_str) == Some("object")
+        {
+            writeln!(out, "---@class {PREFIX}{name}").unwrap();
+            for (field, text) in fields(object, " ") {
+                writeln!(out, "{}", format!("---@field {field} {text}").trim_end()).unwrap();
+            }
+        } else {
+            writeln!(out, "---@alias {PREFIX}{name} {}", lua_type(&schema)).unwrap();
+        }
+        out.push('\n');
+    }
+    out.push_str(API);
     out
 }
 
@@ -69,37 +258,9 @@ fn generate(format: &str) -> Result<String, String> {
         )),
         "lua" => Ok(format!(
             "-- Generated by cargo run -p vtabs-core --bin gen-schema -- lua\nreturn {}\n",
-            lua_value(&Settings::schema(), 0, 7)
+            lua::source(&Settings::schema(), 7)
         )),
-        "types" => {
-            let mut out = String::from(
-                "-- Generated from vtabs-core; edit the Rust schema.\n---@meta\n---@class TabsSettings\n",
-            );
-            for option in settings::descriptors() {
-                let ty = match option.kind {
-                    SettingKind::Bool => "boolean".into(),
-                    SettingKind::Number { .. } => "integer".into(),
-                    SettingKind::Text => "string?".into(),
-                    SettingKind::Color => "string".into(),
-                    SettingKind::Colors => "table<string, string>".into(),
-                    SettingKind::Choice(choices) => choices
-                        .iter()
-                        .map(|c| format!("'{c}'"))
-                        .collect::<Vec<_>>()
-                        .join("|"),
-                    SettingKind::Object => "table<string, string>".into(),
-                    SettingKind::List => "table[]".into(),
-                };
-                writeln!(
-                    &mut out,
-                    "---@field {}? {} {}",
-                    option.key, ty, option.description
-                )
-                .unwrap();
-            }
-            out.push_str("\n---@class TabsOptions\n---@field profile? string\n---@field settings? TabsSettings\n---@field spaces? table[]\n---@field templates? table[]\n---@field hooks? table<string, function>\n");
-            Ok(out)
-        }
+        "types" => Ok(types()),
         "markdown" => {
             let defaults = Settings::default();
             let mut out = String::from(
