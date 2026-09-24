@@ -84,7 +84,7 @@ pub fn deploy(
         None => None,
     };
     let links = match targets.bin.as_deref() {
-        Some(bin) => place_links(ctx, &installed, bin)?,
+        Some(bin) => place_links(ctx, &link_source(&installed, targets)?, bin)?,
         None => Vec::new(),
     };
     Ok(json!({
@@ -173,17 +173,25 @@ fn place_desktop(ctx: &Context, installed: &Path, entry: &Path) -> Result<Value>
     Ok(json!({"path": entry, "replaced": replaced}))
 }
 
+fn link_source(installed: &Path, targets: &Targets) -> Result<PathBuf> {
+    match &targets.app {
+        Some(app) if cfg!(target_os = "macos") => Ok(absolute(app)?.join("Contents/MacOS")),
+        _ => Ok(bundle::binary_dir(installed)),
+    }
+}
+
 /// A link earlier on PATH shadows a packaged CLI on both macOS and Linux.
-fn place_links(ctx: &Context, installed: &Path, bin: &Path) -> Result<Vec<Value>> {
+fn place_links(ctx: &Context, binaries: &Path, bin: &Path) -> Result<Vec<Value>> {
     let _stage = ctx.runner.stage("deploy-links");
-    let binaries = bundle::binary_dir(installed);
     fs::create_dir_all(bin)?;
     let bin = bin.canonicalize()?;
     let mut links = Vec::new();
     for name in LINKS {
         let link = bin.join(bundle::executable_name(name));
         let target = binaries.join(bundle::executable_name(name));
-        let owned = fs::read_link(&link).is_ok_and(|current| current.starts_with(&ctx.install));
+        let owned = fs::read_link(&link).is_ok_and(|current| {
+            current.starts_with(&ctx.install) || current.starts_with(binaries)
+        });
         let retired = retire(ctx, &link, owned)?;
         symlink(&target, &link)?;
         links.push(json!({"path": link, "target": target, "replaced": finish(retired)?}));

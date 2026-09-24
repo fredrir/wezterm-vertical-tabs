@@ -106,8 +106,9 @@ cargo run --quiet --locked -p vtabs-core --bin gen-schema -- json
 | MacOS launch entry           | `install/WezTerm VTabs.app`                                                                          |
 | MacOS application            | `just deploy` copies the active `WezTerm.app`; a replaced foreign app moves to `install/replaced`    |
 | MacOS deploy links           | `~/.local/bin` links to `wezterm{,-gui,-mux-server}`, `wez-vtabs{,-store}` and `strip-ansi-escapes`  |
+| MacOS deploy link target     | Deployed `WezTerm.app/Contents/MacOS/NAME`                                                           |
 | MacOS signing                | Keychain `Developer ID Application`, else ad-hoc; helpers as `com.github.wez.wezterm.NAME`           |
-| MacOS local network          | Local network rules match a stale Mach-O UUID; deploy to a path no old build used                    |
+| MacOS local network          | Consent keyed by real executable path and signing identifier; run binaries from the deployed app     |
 | Linux deploy                 | `~/.local/share/applications/org.wezfurlong.wezterm.desktop` and the same `~/.local/bin` links       |
 | Linux launch entry           | `install/wez-vtabs` and `install/wez-vtabs.desktop`                                                  |
 | Windows launch entry         | `install/wez-vtabs.cmd`                                                                              |

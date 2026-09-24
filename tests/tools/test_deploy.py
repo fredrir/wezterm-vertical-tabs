@@ -126,8 +126,16 @@ def test_deploy_links_every_binary_into_the_default_user_directory(
     for name in LINKED_BINARIES:
         link = tmp_path / "home/.local/bin" / name
         assert link.is_symlink()
-        assert link.resolve() == installed(sandbox_home, "first", name).resolve()
+        assert link.resolve() == (app / "Contents/MacOS" / executable_name(name)).resolve()
     assert [link["replaced"] for link in result["links"]] == [None] * len(LINKED_BINARIES)
+
+    result = sandbox_home.json("deploy", "--bundle", bundle_factory("second"), "--app", app)
+
+    assert all(link["replaced"] == {"kind": "previous"} for link in result["links"])
+    for name in LINKED_BINARIES:
+        link = tmp_path / "home/.local/bin" / name
+        assert link.resolve() == (app / "Contents/MacOS" / executable_name(name)).resolve()
+        assert link.read_bytes() == installed(sandbox_home, "second", name).read_bytes()
     version = subprocess.run(
         [str(tmp_path / "home/.local/bin/wez-vtabs"), "--version"],
         env=sandbox_home.env,
