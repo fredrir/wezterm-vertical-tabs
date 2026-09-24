@@ -120,6 +120,9 @@ local function execute(window,pane,command)
         p:send_text('exit\n')
       end
     end
+  elseif command.kind=='detach' then
+    closing[window:window_id()]=window:mux_window():window_id()
+    pane:move_to_new_window('__detached')
   else error('unknown test command') end
 end
 local sample

@@ -104,6 +104,69 @@ def test_mutual_tls_tab_lifecycle(wezterm_binaries, headless_display, tmp_path):
 
 
 @pytest.mark.gui
+def test_detaching_the_last_pane_quits_and_reconnecting_starts_fresh(
+    wezterm_binaries, headless_display, tmp_path
+):
+    probe = Probe(
+        tmp_path / "unix",
+        wezterm_binaries["wezterm-gui"],
+        wezterm_binaries["wez-vtabs-store"],
+        "unix",
+        server=wezterm_binaries["wezterm-mux-server"],
+        display=headless_display,
+    )
+    mux_env = dict(probe.env, WEZTERM_UNIX_SOCKET=str(probe.root / "mux.sock"))
+
+    def cli(*arguments):
+        return subprocess.check_output(
+            [wezterm_binaries["wezterm"], "--config-file", probe.config, "cli", *arguments],
+            env=mux_env,
+            text=True,
+            timeout=5,
+        )
+
+    def panes():
+        return json.loads(cli("list", "--format", "json"))
+
+    def workspaces():
+        return sorted(pane["workspace"] for pane in panes())
+
+    try:
+        workspace = probe.start()["workspace"]
+        # The mux server's own startup pane would give the GUI a workspace to fall back to.
+        for pane in panes():
+            if pane["workspace"] != workspace:
+                cli("kill-pane", "--pane-id", str(pane["pane_id"]))
+        probe.sample_for(0.5)
+        probe.send("detach")
+        probe.gui_process.wait(timeout=10)
+        assert probe.gui_process.returncode == 0
+        assert probe.processes[0].poll() is None, "quitting the GUI stopped the mux"
+        assert workspaces() == ["__detached"]
+
+        (probe.root / "command.json").unlink()
+        probe.latest.clear()
+        probe.gui_process = probe.start_process(
+            [
+                probe.gui,
+                "--config-file",
+                probe.config,
+                "connect",
+                "scenario-unix",
+                "--class",
+                probe.identity,
+            ],
+            "reconnect.log",
+        )
+        state = probe.wait(lambda state: state.get("tabs"), timeout=25, any_window=True)
+        assert state["workspace"] != "__detached"
+        assert len(state["tabs"]) == 1
+        assert workspaces() == ["__detached", "default"]
+    finally:
+        probe.close()
+
+
+@pytest.mark.gui
 def test_unix_attach_and_new_tab_agree_without_a_window_resize(
     wezterm_binaries, headless_display, tmp_path
 ):

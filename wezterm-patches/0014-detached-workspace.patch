@@ -1,0 +1,100 @@
+diff --git a/mux/src/lib.rs b/mux/src/lib.rs
+index 0fc6b066..7c3cf3c2 100644
+--- a/mux/src/lib.rs
++++ b/mux/src/lib.rs
+@@ -53,6 +53,8 @@ pub mod window;
+ use crate::activity::Activity;
+ 
+ pub const DEFAULT_WORKSPACE: &str = "default";
++/// Holds detached panes; the GUI never switches to it on its own.
++pub const DETACHED_WORKSPACE: &str = "__detached";
+ 
+ #[derive(Clone, Debug)]
+ pub enum MuxNotification {
+diff --git a/wezterm-gui/src/frontend.rs b/wezterm-gui/src/frontend.rs
+index 5e970c46..07765ac0 100644
+--- a/wezterm-gui/src/frontend.rs
++++ b/wezterm-gui/src/frontend.rs
+@@ -370,12 +370,15 @@ impl GuiFrontEnd {
+                 return promise.get_future().unwrap();
+             }
+             for workspace in mux.iter_workspaces() {
+-                if !mux.is_workspace_empty(&workspace) {
++                if workspace != mux::DETACHED_WORKSPACE && !mux.is_workspace_empty(&workspace) {
+                     mux.set_active_workspace_for_client(&self.client_id, &workspace);
+                     log::debug!("using {} instead, as it is not empty", workspace);
+                     break;
+                 }
+             }
++            if self.only_detached_windows_remain() {
++                self.quit_once_idle();
++            }
+         }
+ 
+         let workspace = mux.active_workspace_for_client(&self.client_id);
+@@ -453,6 +456,34 @@ impl GuiFrontEnd {
+         future
+     }
+ 
++    fn only_detached_windows_remain(&self) -> bool {
++        let mux = Mux::get();
++        let workspace = mux.active_workspace_for_client(&self.client_id);
++        !mux.is_empty()
++            && mux.iter_windows_in_workspace(&workspace).is_empty()
++            && mux
++                .iter_workspaces()
++                .iter()
++                .all(|w| w == mux::DETACHED_WORKSPACE || mux.is_workspace_empty(w))
++    }
++
++    /// Quits as if the last window closed, once closing windows finish their own work.
++    fn quit_once_idle(&self) {
++        if !config::configuration().quit_when_all_windows_are_closed {
++            return;
++        }
++        promise::spawn::spawn_into_main_thread(async move {
++            while mux::activity::Activity::count() > 0 {
++                smol::Timer::after(std::time::Duration::from_millis(50)).await;
++            }
++            if front_end().only_detached_windows_remain() {
++                log::trace!("Only detached windows remain, terminate gui");
++                Connection::get().unwrap().terminate_message_loop();
++            }
++        })
++        .detach();
++    }
++
+     fn has_mux_window(&self, mux_window_id: MuxWindowId) -> bool {
+         for &mux_id in self.known_windows.borrow().values() {
+             if mux_id == mux_window_id {
+diff --git a/wezterm-gui/src/main.rs b/wezterm-gui/src/main.rs
+index 1adb1cb9..7dfe1947 100644
+--- a/wezterm-gui/src/main.rs
++++ b/wezterm-gui/src/main.rs
+@@ -265,7 +265,7 @@ fn have_panes_in_domain_and_ws(domain: &Arc<dyn Domain>, workspace: &Option<Stri
+         return false;
+     }
+ 
+-    if let Some(ws) = &workspace {
++    let in_workspace = |ws: &str| {
+         for window_id in mux.iter_windows_in_workspace(ws) {
+             if let Some(win) = mux.get_window(window_id) {
+                 for t in win.iter_tabs() {
+@@ -278,8 +278,15 @@ fn have_panes_in_domain_and_ws(domain: &Arc<dyn Domain>, workspace: &Option<Stri
+             }
+         }
+         false
+-    } else {
+-        true
++    };
++
++    match workspace {
++        Some(ws) => in_workspace(ws),
++        None => mux
++            .iter_workspaces()
++            .iter()
++            .filter(|ws| *ws != mux::DETACHED_WORKSPACE)
++            .any(|ws| in_workspace(ws)),
+     }
+ }
+ 

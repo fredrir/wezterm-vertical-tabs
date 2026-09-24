@@ -13,6 +13,7 @@ use crate::termwindow::ui_host::{
     Bounds, Command, Geometry, Input, Navigation, Projection, Provider, Reservation,
     RoundedSurface, Snapshot, Surface,
 };
+use mux::DETACHED_WORKSPACE;
 use std::{
     collections::{HashMap, VecDeque},
     time::{Duration, Instant},
@@ -30,8 +31,6 @@ const PASTE_TIMEOUT: Duration = Duration::from_secs(1);
 const PLACEMENT_TIMEOUT: Duration = Duration::from_secs(3);
 const MAX_PASTE_INPUTS: usize = 128;
 const MAX_PASTE_INPUT_BYTES: usize = 16 * 1024;
-/// The workspace a pane detaches into; its tabs come back into the searching window.
-const DETACHED_WORKSPACE: &str = "__detached";
 
 struct PendingPaste {
     token: u64,

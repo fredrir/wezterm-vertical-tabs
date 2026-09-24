@@ -62,6 +62,7 @@ return config
 | Search                | Centered palette of sidebar rows; Up/Down select, Left/Right edit the query, Enter opens; matches name, title or index  |
 | Search scope          | Current space (indexed), other spaces, filter-hidden, other windows (`window N`), other workspaces, disconnected domains |
 | Search `__detached`   | Moves the tab into this window; other workspaces switch; disconnected domains reattach                                  |
+| `__detached` windows  | Never shown on their own; when only they remain the GUI quits (`quit_when_all_windows_are_closed`); reconnecting spawns a fresh tab |
 | Space row             | Click collapses pinned tabs and folders; hover shows the chevron and the new-folder plus; right click edits the space   |
 | Folders               | Create with the space row plus; rename, collapse, reorder, add a tab or ungroup from the context menu                   |
 | Tab grouping          | Drag onto a folder, or use the tab context menu                                                                         |
