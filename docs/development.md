@@ -11,51 +11,102 @@
 | Lua         | Source of truth for settings/spaces, schemars-generated types, semantic hooks    |
 
 ```sh
-just check
-just bench
+just deploy
 just build
 just dev
-just package
-just install
-just deploy
-just launch
-just update
-just doctor
+just test
+just lint
+just status
+just setup
 ```
 
 Recipes invoke `cargo xtask`. Installed launch entries invoke the bundled Rust binary directly.
 
-| Command                                     | Value                                                                                |
-| ------------------------------------------- | ------------------------------------------------------------------------------------ |
-| `just deps --upstream SHA`                  | Run selected upstream system dependency installer                                    |
-| `just build --upstream SHA --timings`       | Exact upstream, Cargo freshness, validation, command timings                         |
-| `just dev`                                  | Cached upstream, incremental `iterate` profile, runtime bundle without archive       |
-| `just dev --watch`                          | Debounced Rust/adapter/plugin changes; separate owned GUI process                    |
-| `just check`                                | Rust format/tests/Clippy, schema contracts, Ruff and pytest                          |
-| `just bench`                                | Release timings and Rust allocation counts; [measurement boundaries](performance.md) |
-| `just test tools -- -k install`             | Focused pytest suite; extra arguments after `--`                                     |
-| `just generate`                             | Generate `plugin/schema.lua`, `plugin/types/vtabs.lua` and `docs/options.md`         |
-| `just generate --check`                     | Verify generated artifacts                                                           |
-| `just package`                              | Verified bundle, ZIP/tar.gz archive and release manifest in `dist/`                  |
-| `just package --bundle PATH`                | Verify and archive an existing bundle                                                |
-| `just install --bundle PATH`                | Verify and install an immutable local bundle                                         |
-| `just deploy`                               | Build, install and replace the desktop app; `--app PATH`, `--bin DIR`, `--no-app`    |
-| `just deploy --upstream main`               | Deploy against the newest upstream; plain `deploy` reuses the last built revision    |
-| `just deploy --bundle PATH --offline`       | Deploy an existing verified bundle without fetching upstream                         |
-| `just launch -- start --always-new-process` | Promote completed pending version and forward GUI arguments                          |
-| `just update --check`                       | Resolve update availability without compiling or installing                          |
-| `just update --manifest PATH_OR_HTTPS_URL`  | Download/copy a verified prebuilt release                                            |
-| `just status` / `just versions`             | Active, pending, previous and installed versions                                     |
-| `just rollback [ID]`                        | Select a verified installed version; default previous                                |
-| `just plan dev --json`                      | Inputs and execution decisions without fetch/build                                   |
-| `just doctor --for check`                   | Required tool versions and state health                                              |
-| `just patch check --upstream SHA`           | Check ordered patches in an isolated worktree                                        |
-| `just cache inspect`                        | Owned run/bundle sizes and retention decisions                                       |
-| `just cache gc --dry-run --keep 5`          | Preview pruning of runs, bundles and versions; active/pending/previous/running kept  |
-| `--offline`                                 | No Git/network fetching; Cargo and uv offline                                        |
-| `--profile NAME` / `--debug`                | Explicit Cargo profile / development profile                                         |
-| `--jobs N`                                  | Cargo job limit and pytest worker count                                              |
-| `--json` / `--explain` / `--timings`        | Machine output / decisions / command durations                                       |
+| Command                                        | Value                                                                                        |
+| ---------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| `just deploy`                                  | Build, install and replace the desktop app; `--app PATH`, `--bin DIR`, `--no-app`            |
+| `just deploy --on MACHINE`                     | Compile on `MACHINE`, install and place here                                                 |
+| `just deploy --to MACHINE`                     | Compile on the default `--on` machine, install and place on `MACHINE`                        |
+| `just deploy --on archie --to archie`          | Compile and install on archie                                                                |
+| `just deploy --rollback [ID]`                  | Reactivate and place the previous or given installed version                                 |
+| `just deploy --upstream main`                  | Move every machine to the newest upstream; plain `deploy` reuses the pinned revision         |
+| `just deploy --bundle PATH --offline`          | Deploy an existing verified bundle without fetching upstream                                 |
+| `just build [--on M] [--to M]`                 | Exact upstream, Cargo freshness, validation; `--to` bundles for another machine              |
+| `just dev`                                     | Cached upstream, incremental `iterate` profile, hot reload; `--no-watch` launches once       |
+| `just test [SUITE] [-- ARGS]`                  | `all`, `tools`, `rust`, `lua`, `gui`, `ssh`, `tls`, `bench`; pytest arguments after `--`     |
+| `just test --on MACHINE`                       | Same suite on `MACHINE` against the synced working tree                                      |
+| `just lint`                                    | Rust format, Clippy, Ruff, `uv.lock`, generated schema/types/options                         |
+| `just lint --fix`                              | Rewrite formatting and generated artifacts, then lint; `--on MACHINE`                        |
+| `just status [--to MACHINE]`                   | Active, pending, previous and installed versions                                             |
+| `just setup [--on MACHINE]`                    | Upstream `get-deps --testing` and `uv sync`; `--check` only diagnoses                        |
+| `--offline`                                    | No Git/network fetching; Cargo and uv offline                                                |
+| `--profile NAME` / `--debug`                   | Explicit Cargo profile / development profile                                                 |
+| `--jobs N`                                     | Cargo job limit and pytest worker count                                                      |
+| `--json` / `--explain` / `--timings`           | Machine output / decisions / command durations                                               |
+
+| `cargo xtask`                                  | Value                                                                                        |
+| ---------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| `check`                                        | CI: `lint`, Cargo tests and pytest                                                           |
+| `package [--bundle PATH]`                      | Verified bundle, ZIP/tar.gz archive and release manifest in `dist/`                          |
+| `update --check` / `--manifest PATH_OR_URL`    | Installed updater: availability / verified prebuilt release                                  |
+| `launch -- ARGS`                               | Promote completed pending version and forward GUI arguments                                  |
+| `plan dev --json`                              | Inputs and execution decisions without fetch/build                                           |
+| `patch check --upstream SHA`                   | Check ordered patches in an isolated worktree                                                |
+| `cache inspect` / `cache gc --dry-run --keep N`| Owned run/bundle sizes; pruning preview                                                      |
+| `repro RUN_JSON [--execute]`                   | Inspect or replay a failure report                                                           |
+
+**Targets**
+
+`~/.config/wez-vtabs/targets.toml`; `WEZ_VTABS_TARGETS` overrides the path. Without a file, every command runs locally.
+
+```toml
+on = "archie"
+
+[targets.macie]
+host = "macie"
+platform = "macos"
+
+[targets.archie]
+host = "archie"
+platform = "arch"
+role = "mux"
+
+[targets.ntnu]
+host = "ntnu"
+platform = "ubuntu-26.04"
+role = "mux"
+```
+
+| Key                  | Value                                                                                           |
+| -------------------- | ----------------------------------------------------------------------------------------------- |
+| `--on MACHINE`       | Runs the command: `local`, or a name below; `build`, `deploy`, `test`, `lint`, `setup`          |
+| `--to MACHINE`       | Receives the result: `local` (default), or a name below; `build`, `deploy`, `status`            |
+| `on`                 | Default `--on`; a machine's own `on` overrides it; `on = "archie"` is `local` on archie itself  |
+| `host`               | SSH host; the entry matching this machine's short hostname is `local`                           |
+| `platform`           | `macos` or `distro[-version]`: `arch`, `ubuntu-26.04`, `debian-13`, `fedora`                    |
+| `role`               | `desktop` (default) or `mux`: `wezterm`, `wezterm-mux-server`, `wez-vtabs`; no app or GUI build |
+| Unreachable host     | `Error: Unreachable (HOST)` before any work                                                     |
+| Upstream             | `cache/upstream.json` pins every machine to the last deployed revision                          |
+
+| Flow                           | Value                                                                                     |
+| ------------------------------ | ----------------------------------------------------------------------------------------- |
+| `--on` is `--to`               | Sync working tree, run `deploy --on local` there                                          |
+| `--on` differs from `--to`     | Sync, build the bundle on `--on`, relay it through this machine, `deploy --bundle`        |
+| Linux platform on another host | `cargo xtask package` inside an x86_64 container; Podman or Docker                        |
+| Linux platform on a Mac        | Docker Desktop with Rosetta, started in the background when needed                        |
+| macOS platform on a Linux host | Cross-compiled in a clang/lld container; packaged and signed on the Mac (`--prebuilt`)    |
+| `test`/`lint`/`setup`          | Sync working tree to `--on`, run there                                                    |
+| `status`/`--rollback`          | `--to` machine's deployed `~/.local/bin/wez-vtabs`                                        |
+
+| Path                                        | Value                                                                   |
+| ------------------------------------------- | ----------------------------------------------------------------------- |
+| `~/.cache/wez-vtabs/remote/ORIGIN/source`   | Synced working tree; `target/` and `.venv/` survive syncs               |
+| `~/.cache/wez-vtabs/remote/ORIGIN/cache`    | Builder cache for that origin, separate from local checkouts            |
+| `~/.cache/wez-vtabs/remote/ORIGIN/out/NAME` | Bundle built for machine `NAME`                                         |
+| `~/.cache/wez-vtabs/incoming/bundle`        | Bundle received by a target before `deploy --bundle`                    |
+| `cache/platforms/PLATFORM`                  | Container cache: upstream clone, worktree, targets and tool build       |
+| `~/.cache/wez-vtabs/sdk`                    | macOS SDK from the Mac's Xcode; `arm64e.x1` stub slices removed for lld |
+| `cache/staging/NAME`                        | Bundle relayed from the `--on` machine                                  |
 
 **Source boundaries**
 
@@ -90,6 +141,8 @@ cargo run --quiet --locked -p vtabs-core --bin gen-schema -- json
 | ---------------------------- | ---------------------------------------------------------------------------------------------------- |
 | `WEZ_VTABS_CACHE`            | `$XDG_CACHE_HOME/wez-vtabs`, `~/.cache/wez-vtabs`, or `%LOCALAPPDATA%/wez-vtabs`                     |
 | `WEZ_VTABS_INSTALL`          | `$XDG_DATA_HOME/wez-vtabs`, `~/.local/share/wez-vtabs`, or `%LOCALAPPDATA%/wez-vtabs`                |
+| `WEZ_VTABS_APP`              | `deploy --app`: `/Applications/WezTerm.app`, or the XDG `org.wezfurlong.wezterm.desktop` entry       |
+| `WEZ_VTABS_BIN`              | `deploy --bin`: `~/.local/bin`                                                                       |
 | `cache/upstream`             | Tool-owned upstream clone and Cargo target cache                                                     |
 | `cache/worktree`             | Owned patched checkout; adapter changes synchronize in place                                         |
 | `cache/project`              | Installed updater's separate dev-branch checkout; an ownership marker is required before replacement |
@@ -123,9 +176,9 @@ Install platform dependencies using the selected upstream checkout's `get-deps` 
 
 ```sh
 # Download and extract the CI tooling-reproduction artifact.
-just repro /path/to/run/run.json
-just repro /path/to/run/run.json --execute
-just repro /path/to/run/run.json --execute --project-root /path/to/checkout
+cargo xtask repro /path/to/run/run.json
+cargo xtask repro /path/to/run/run.json --execute
+cargo xtask repro /path/to/run/run.json --execute --project-root /path/to/checkout
 ```
 
 | Name          | Value                                                                                           |
@@ -140,7 +193,7 @@ just repro /path/to/run/run.json --execute --project-root /path/to/checkout
 
 **Prebuilt releases**
 
-`just package` writes an adjacent `*.manifest.json`. Publish it beside its archive, then use `just update --manifest URL`. CI uploads both as artifacts; no release is published by local commands.
+`cargo xtask package` writes an adjacent `*.manifest.json`. Publish it beside its archive, then use `cargo xtask update --manifest URL`. CI uploads both as artifacts; no release is published by local commands.
 
 | Manifest field                              | Value                                                |
 | ------------------------------------------- | ---------------------------------------------------- |

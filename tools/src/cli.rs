@@ -1,5 +1,8 @@
 use clap::{Parser, Subcommand, ValueEnum};
+use clap_complete::engine::ArgValueCandidates;
 use std::path::PathBuf;
+
+use crate::state::Role;
 
 #[derive(Debug, Parser)]
 #[command(
@@ -40,7 +43,7 @@ pub enum Commands {
     Prepare,
     /// Run the selected upstream system dependency installer.
     Deps,
-    /// Compile and validate binaries.
+    /// Compile and validate; --to builds a bundle for another machine.
     Build(BuildArgs),
     /// Build an iteration bundle and launch a separate GUI.
     Dev {
@@ -57,12 +60,28 @@ pub enum Commands {
     },
     /// Run the same project checks as CI.
     Check,
+    /// Formatting, Clippy, Ruff and generated files; --fix rewrites them.
+    Lint {
+        #[arg(long)]
+        fix: bool,
+        #[command(flatten)]
+        on: On,
+    },
     /// Run a focused suite; extra pytest arguments follow --.
     Test {
         #[arg(value_enum, default_value_t = Suite::All)]
         suite: Suite,
+        #[command(flatten)]
+        on: On,
         #[arg(last = true)]
         args: Vec<String>,
+    },
+    /// Install system and Python dependencies; --check only diagnoses.
+    Setup {
+        #[arg(long)]
+        check: bool,
+        #[command(flatten)]
+        on: On,
     },
     /// Generate or verify schema, Lua types and option documentation.
     Generate {
@@ -75,6 +94,18 @@ pub enum Commands {
         output: Option<PathBuf>,
         #[arg(long)]
         bundle: Option<PathBuf>,
+        #[arg(long, hide = true)]
+        role: Option<Role>,
+        #[arg(long, hide = true)]
+        no_archive: bool,
+    },
+    /// Cross-compile for a host that packages and signs the result with `deploy --prebuilt`.
+    #[command(hide = true)]
+    Prebuild {
+        #[arg(long)]
+        triple: String,
+        #[arg(long)]
+        output: PathBuf,
     },
     /// Install a verified immutable bundle.
     Install {
@@ -85,15 +116,26 @@ pub enum Commands {
     },
     /// Build, install and replace the desktop application with the active version.
     Deploy {
+        #[command(flatten)]
+        on: On,
+        #[command(flatten)]
+        to: To,
+        /// Reactivate and place the previous or given installed version.
+        #[arg(long, value_name = "ID", num_args = 0..=1, conflicts_with = "bundle")]
+        rollback: Option<Option<String>>,
+        #[arg(long, hide = true)]
+        role: Option<Role>,
+        #[arg(long, hide = true, conflicts_with_all = ["bundle", "rollback"])]
+        prebuilt: Option<PathBuf>,
         #[arg(long)]
         bundle: Option<PathBuf>,
         /// macOS application bundle or Linux desktop entry to replace.
-        #[arg(long, conflicts_with = "no_app")]
+        #[arg(long, env = "WEZ_VTABS_APP")]
         app: Option<PathBuf>,
         /// Directory for the bundled binary links; default ~/.local/bin.
-        #[arg(long, conflicts_with = "no_app")]
+        #[arg(long, env = "WEZ_VTABS_BIN")]
         bin: Option<PathBuf>,
-        /// Install only; keep the desktop application as it is.
+        /// Install only; overrides --app and --bin.
         #[arg(long)]
         no_app: bool,
     },
@@ -126,7 +168,11 @@ pub enum Commands {
         #[arg(default_value = "build", value_parser = ["build", "prepare", "dev", "check", "package"])]
         operation: String,
     },
-    Status,
+    /// Active, pending and previous versions.
+    Status {
+        #[command(flatten)]
+        to: To,
+    },
     Versions,
     /// Select an installed version, or the preceding version.
     Rollback {
@@ -167,6 +213,43 @@ pub enum Suite {
     Gui,
     Ssh,
     Tls,
+    /// Release timings and allocation counts.
+    Bench,
+}
+
+#[derive(Debug, Clone, Default, clap::Args)]
+pub struct On {
+    /// Machine that runs it: local or a targets.toml name; default `on` from targets.toml.
+    #[arg(long, value_name = "MACHINE", add = ArgValueCandidates::new(crate::targets::candidates))]
+    pub on: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, clap::Args)]
+pub struct To {
+    /// Machine it is for: local (default) or a targets.toml name.
+    #[arg(long, value_name = "MACHINE", add = ArgValueCandidates::new(crate::targets::candidates))]
+    pub to: Option<String>,
+}
+
+#[derive(Debug, Parser, Default, Clone)]
+pub struct BuildArgs {
+    #[command(flatten)]
+    pub on: On,
+    #[command(flatten)]
+    pub to: To,
+    #[arg(long, hide = true)]
+    pub role: Option<Role>,
+    /// Container platform: distro[-version], e.g. ubuntu-26.04, arch.
+    #[arg(long, hide = true)]
+    pub platform: Option<String>,
+    #[arg(long, hide = true, requires = "platform")]
+    pub image: Option<String>,
+    #[arg(long, hide = true)]
+    pub container_runtime: Option<String>,
+    #[arg(long, hide = true)]
+    pub clean_builder: bool,
+    #[arg(long, hide = true)]
+    pub output: Option<PathBuf>,
 }
 
 #[derive(Debug, Subcommand)]
@@ -184,187 +267,4 @@ pub enum CacheCommand {
 #[derive(Debug, Subcommand)]
 pub enum PatchCommand {
     Check,
-}
-
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
-pub struct TargetOs {
-    pub distro: String,
-    pub version: String,
-    pub image: String,
-}
-
-#[derive(Debug, Parser, Default, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub struct BuildArgs {
-    /// Build inside Ubuntu container (default version: 26.04)
-    #[arg(long)]
-    pub ubuntu: bool,
-    /// Build inside Debian container (default version: latest)
-    #[arg(long)]
-    pub debian: bool,
-    /// Build inside Fedora container (default version: latest)
-    #[arg(long)]
-    pub fedora: bool,
-    /// Build inside Arch Linux container
-    #[arg(long)]
-    pub arch: bool,
-    /// Build inside Alpine Linux container
-    #[arg(long)]
-    pub alpine: bool,
-    /// Target distribution name (e.g. ubuntu, debian, fedora, arch, alpine)
-    #[arg(long)]
-    pub os: Option<String>,
-    /// Target distribution version (e.g. 26.04, 24.04, 12, latest)
-    #[arg(long = "os-version", alias = "distro-version")]
-    pub os_version: Option<String>,
-    /// Target version 26 / 26.04 (e.g. with --ubuntu)
-    #[arg(long = "26", alias = "26.04")]
-    pub v26: bool,
-    /// Target version 24 / 24.04 (e.g. with --ubuntu)
-    #[arg(long = "24", alias = "24.04")]
-    pub v24: bool,
-    /// Target version 22 / 22.04 (e.g. with --ubuntu)
-    #[arg(long = "22", alias = "22.04")]
-    pub v22: bool,
-    /// Target version 12 (e.g. with --debian)
-    #[arg(long = "12", alias = "12.0")]
-    pub v12: bool,
-    /// Target version 13 (e.g. with --debian)
-    #[arg(long = "13", alias = "13.0")]
-    pub v13: bool,
-    /// Target version 41 (e.g. with --fedora)
-    #[arg(long = "41")]
-    pub v41: bool,
-    /// Target version 42 (e.g. with --fedora)
-    #[arg(long = "42")]
-    pub v42: bool,
-    /// Explicit container base image to build with (e.g. docker.io/library/ubuntu:26.04)
-    #[arg(long)]
-    pub image: Option<String>,
-    /// Container runtime to use (docker or podman; default: auto-detect)
-    #[arg(long)]
-    pub container_runtime: Option<String>,
-    /// Directory where built binaries should be placed (default: dist/<os>-<version>)
-    #[arg(long)]
-    pub output_dir: Option<PathBuf>,
-    /// Skip running tests during container build
-    #[arg(long)]
-    pub skip_tests: bool,
-    /// Rebuild the container builder image from scratch
-    #[arg(long)]
-    pub clean_builder: bool,
-    /// Filter building only specific binary (e.g. wezterm, wez-vtabs-store)
-    #[arg(long = "bin")]
-    pub bin_filter: Option<String>,
-}
-
-impl BuildArgs {
-    pub fn has_target_os(&self) -> bool {
-        self.ubuntu
-            || self.debian
-            || self.fedora
-            || self.arch
-            || self.alpine
-            || self.os.is_some()
-            || self.image.is_some()
-            || self.v26
-            || self.v24
-            || self.v22
-            || self.v12
-            || self.v13
-            || self.v41
-            || self.v42
-    }
-
-    pub fn resolve_target_os(&self) -> anyhow::Result<Option<TargetOs>> {
-        if !self.has_target_os() {
-            return Ok(None);
-        }
-
-        if let Some(ref img) = self.image {
-            let (distro, version) = parse_image_distro_version(img);
-            return Ok(Some(TargetOs {
-                distro,
-                version,
-                image: img.clone(),
-            }));
-        }
-
-        let distro = if self.ubuntu || self.v26 || self.v24 || self.v22 {
-            "ubuntu"
-        } else if self.debian || self.v12 || self.v13 {
-            "debian"
-        } else if self.fedora || self.v41 || self.v42 {
-            "fedora"
-        } else if self.arch {
-            "arch"
-        } else if self.alpine {
-            "alpine"
-        } else if let Some(ref os) = self.os {
-            os.as_str()
-        } else {
-            "ubuntu"
-        }
-        .to_lowercase();
-
-        let version = match distro.as_str() {
-            "ubuntu" => {
-                if self.v26 {
-                    "26.04"
-                } else if self.v24 {
-                    "24.04"
-                } else if self.v22 {
-                    "22.04"
-                } else {
-                    match self.os_version.as_deref() {
-                        Some("26") => "26.04",
-                        Some("24") => "24.04",
-                        Some("22") => "22.04",
-                        Some(v) => v,
-                        None => "26.04",
-                    }
-                }
-            }
-            "debian" => {
-                if self.v12 {
-                    "12"
-                } else if self.v13 {
-                    "13"
-                } else {
-                    self.os_version.as_deref().unwrap_or("latest")
-                }
-            }
-            "fedora" => {
-                if self.v41 {
-                    "41"
-                } else if self.v42 {
-                    "42"
-                } else {
-                    self.os_version.as_deref().unwrap_or("latest")
-                }
-            }
-            "arch" | "archlinux" => self.os_version.as_deref().unwrap_or("base"),
-            _ => self.os_version.as_deref().unwrap_or("latest"),
-        }
-        .to_string();
-
-        let image = match distro.as_str() {
-            "arch" | "archlinux" => "docker.io/library/archlinux:base".to_string(),
-            _ => format!("docker.io/library/{}:{}", distro, version),
-        };
-
-        Ok(Some(TargetOs {
-            distro,
-            version,
-            image,
-        }))
-    }
-}
-
-fn parse_image_distro_version(image: &str) -> (String, String) {
-    let tag_part = image.rsplit('/').next().unwrap_or(image);
-    if let Some((name, tag)) = tag_part.split_once(':') {
-        (name.to_string(), tag.to_string())
-    } else {
-        (tag_part.to_string(), "latest".to_string())
-    }
 }

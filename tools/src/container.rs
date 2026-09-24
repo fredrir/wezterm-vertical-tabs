@@ -1,63 +1,82 @@
+//! Builds in containers with their own cache: x86_64 Linux bundles, and macOS binaries
+//! cross-compiled for a Mac to package and sign.
+
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::Instant;
 
 use anyhow::{Context as _, Result, bail, ensure};
 use serde_json::{Value, json};
 
-use crate::bundle::hash_file;
-use crate::cli::{BuildArgs, TargetOs};
 use crate::process::CommandSpec;
-use crate::source;
-use crate::state::{self, Context};
+use crate::state::{self, BuildMetadata, Context};
+use crate::targets::Platform;
 
-pub const CONTAINER_BINARIES: &[&str] = &[
-    "wezterm-gui",
-    "wezterm",
-    "wezterm-mux-server",
-    "strip-ansi-escapes",
-    "wez-vtabs-store",
-    "wez-vtabs",
-];
+const PLATFORM: &str = "linux/amd64";
+pub const MACOS_TRIPLE: &str = "aarch64-apple-darwin";
+const MACOS_BASE: &str = "docker.io/library/archlinux:base";
 
-pub fn plan(ctx: &Context, args: &BuildArgs, target: &TargetOs) -> Result<Value> {
-    let output_dir = resolve_output_dir(ctx, args, target);
-    let builder_tag = builder_image_tag(target);
-    let runtime = detect_runtime(args.container_runtime.as_deref())
-        .unwrap_or_else(|_| "docker/podman".into());
-    let binaries = if let Some(ref filter) = args.bin_filter {
-        vec![filter.as_str()]
-    } else {
-        CONTAINER_BINARIES.to_vec()
-    };
-    Ok(json!({
-        "target_os": target.distro,
-        "version": target.version,
-        "base_image": target.image,
-        "builder_image": builder_tag,
-        "runtime": runtime,
-        "output_dir": output_dir.display().to_string(),
-        "binaries": binaries,
-        "skip_tests": args.skip_tests,
-        "clean_builder": args.clean_builder,
-    }))
+/// clang, lld and Rust for aarch64-apple-darwin; the SDK is mounted at /sdk.
+const MACOS_DOCKERFILE: &str = r#"ARG BASE_IMAGE
+FROM ${BASE_IMAGE}
+
+ENV RUSTUP_HOME=/usr/local/rustup \
+    CARGO_HOME=/usr/local/cargo \
+    PATH=/usr/local/cargo/bin:$PATH
+
+RUN printf 'Server = %s/$repo/os/$arch\n' \
+        https://geo.mirror.pkgbuild.com \
+        https://mirror.rackspace.com/archlinux \
+        https://mirrors.kernel.org/archlinux \
+        https://fastly.mirror.pkgbuild.com \
+        > /etc/pacman.d/mirrorlist \
+    && pacman -Syu --noconfirm --needed --disable-download-timeout \
+        base-devel clang lld llvm cmake git perl pkgconf python rustup file \
+    && pacman -Scc --noconfirm
+
+RUN mkdir -p /usr/local/cargo /usr/local/rustup \
+    && rustup toolchain install stable --profile minimal --target aarch64-apple-darwin \
+    && rustup default stable \
+    && chmod -R a+rwX /usr/local/cargo /usr/local/rustup
+
+RUN git config --system --add safe.directory '*'
+
+# One driver for cc-rs, build-script link probes and rustc's final link.
+RUN for driver in clang clang++; do \
+        printf '#!/bin/sh\nexec %s --target=arm64-apple-macos"$MACOSX_DEPLOYMENT_TARGET" -isysroot "$SDKROOT" -fuse-ld=lld -Wno-unused-command-line-argument "$@"\n' "$driver" \
+            > "/usr/local/bin/aarch64-apple-darwin-$driver"; \
+        chmod 755 "/usr/local/bin/aarch64-apple-darwin-$driver"; \
+    done
+
+ENV SDKROOT=/sdk/MacOSX.sdk \
+    MACOSX_DEPLOYMENT_TARGET=11.0 \
+    CC_aarch64_apple_darwin=aarch64-apple-darwin-clang \
+    CXX_aarch64_apple_darwin=aarch64-apple-darwin-clang++ \
+    AR_aarch64_apple_darwin=llvm-ar \
+    RANLIB_aarch64_apple_darwin=llvm-ranlib \
+    CARGO_TARGET_AARCH64_APPLE_DARWIN_LINKER=aarch64-apple-darwin-clang
+"#;
+
+#[derive(Debug, Default)]
+pub struct Options {
+    pub image: Option<String>,
+    pub runtime: Option<String>,
+    pub clean: bool,
 }
 
-pub fn detect_runtime(explicit: Option<&str>) -> Result<String> {
+/// `start` launches Docker Desktop when x86_64 builds on a Mac need it.
+pub fn detect_runtime(explicit: Option<&str>, start: bool) -> Result<String> {
     if let Some(runtime) = explicit {
-        ensure!(
-            which(runtime),
-            "specified container runtime '{runtime}' was not found in PATH"
-        );
+        ensure!(which(runtime), "container runtime not found: {runtime}");
         return Ok(runtime.to_string());
     }
-
     for var in ["VTABS_CONTAINER_RUNTIME", "VTABS_TEST_CONTAINER_RUNTIME"] {
         if let Some(runtime) = std::env::var(var).ok().filter(|r| which(r)) {
             return Ok(runtime);
         }
     }
-
+    if cfg!(target_os = "macos") && emulated() {
+        return docker_desktop(start);
+    }
     let candidates = ["podman", "docker"];
     if let Some(&candidate) = candidates
         .iter()
@@ -68,23 +87,39 @@ pub fn detect_runtime(explicit: Option<&str>) -> Result<String> {
     if let Some(&candidate) = candidates.iter().find(|&&c| which(c)) {
         return Ok(candidate.to_string());
     }
-
     bail!("container build requires Podman or Docker in PATH");
+}
+
+/// Docker Desktop runs x86_64 containers through Rosetta; podman's default libkrun VM cannot.
+fn docker_desktop(start: bool) -> Result<String> {
+    ensure!(
+        which("docker"),
+        "x86_64 builds on Apple silicon need Docker Desktop"
+    );
+    if start && !is_runtime_working("docker") {
+        eprintln!("+ open -g -a Docker");
+        std::process::Command::new("open")
+            .args(["-g", "-a", "Docker"])
+            .status()
+            .context("start: Docker Desktop")?;
+        let started = std::time::Instant::now();
+        while !is_runtime_working("docker") {
+            ensure!(
+                started.elapsed() < std::time::Duration::from_secs(120),
+                "Docker Desktop did not start"
+            );
+            std::thread::sleep(std::time::Duration::from_secs(2));
+        }
+    }
+    Ok("docker".into())
 }
 
 fn which(cmd: &str) -> bool {
     if Path::new(cmd).is_absolute() {
         return Path::new(cmd).is_file();
     }
-    if let Some(path) = std::env::var_os("PATH") {
-        for dir in std::env::split_paths(&path) {
-            let full = dir.join(cmd);
-            if full.is_file() {
-                return true;
-            }
-        }
-    }
-    false
+    std::env::var_os("PATH")
+        .is_some_and(|path| std::env::split_paths(&path).any(|dir| dir.join(cmd).is_file()))
 }
 
 fn is_runtime_working(cmd: &str) -> bool {
@@ -93,8 +128,7 @@ fn is_runtime_working(cmd: &str) -> bool {
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
+        .is_ok_and(|s| s.success())
 }
 
 fn image_exists(runtime: &str, tag: &str) -> bool {
@@ -103,31 +137,60 @@ fn image_exists(runtime: &str, tag: &str) -> bool {
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
+        .is_ok_and(|s| s.success())
 }
 
 fn is_podman(runtime: &str) -> bool {
-    let file = Path::new(runtime)
+    Path::new(runtime)
         .file_name()
         .and_then(|s| s.to_str())
-        .unwrap_or(runtime);
-    file.contains("podman")
+        .unwrap_or(runtime)
+        .contains("podman")
 }
 
-pub fn builder_image_tag(target: &TargetOs) -> String {
-    format!(
-        "localhost/wez-vtabs-builder:{}-{}",
-        target.distro, target.version
-    )
+/// Apple silicon and other non-x86_64 hosts run the builder emulated.
+fn emulated() -> bool {
+    std::env::consts::ARCH != "x86_64"
 }
 
-pub fn builder_dockerfile(target: &TargetOs) -> String {
-    let distro = target.distro.as_str();
-    let pkg_install = match distro {
+/// Copied from a Mac by `remote::ensure_sdk`, independent of the build cache.
+pub fn sdk_dir() -> PathBuf {
+    std::env::var_os("XDG_CACHE_HOME")
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| crate::home().join(".cache"))
+        .join("wez-vtabs/sdk")
+}
+
+pub fn builder_image_tag(platform: &Platform) -> String {
+    match platform {
+        Platform::Macos => "localhost/wez-vtabs-builder:macos-cross".into(),
+        Platform::Linux(distro) => format!(
+            "localhost/wez-vtabs-builder:{}-{}-x86_64",
+            distro.name, distro.version
+        ),
+    }
+}
+
+fn base_image<'a>(platform: &'a Platform, options: &'a Options) -> &'a str {
+    options.image.as_deref().unwrap_or(match platform {
+        Platform::Macos => MACOS_BASE,
+        Platform::Linux(distro) => &distro.image,
+    })
+}
+
+pub fn cache_dir(ctx: &Context, platform: &Platform) -> PathBuf {
+    ctx.cache.join("platforms").join(platform.to_string())
+}
+
+pub fn builder_dockerfile(platform: &Platform) -> String {
+    let Platform::Linux(distro) = platform else {
+        return MACOS_DOCKERFILE.into();
+    };
+    let pkg_install = match distro.name.as_str() {
         "ubuntu" | "debian" | "pop" => {
             r#"RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates curl git build-essential cmake pkg-config python3 \
+    ca-certificates curl git build-essential cmake pkg-config python3 ncurses-bin \
     libegl1-mesa-dev libssl-dev libfontconfig1-dev libwayland-dev \
     libx11-xcb-dev libxcb-ewmh-dev libxcb-icccm4-dev libxcb-image0-dev \
     libxcb-keysyms1-dev libxcb-randr0-dev libxcb-render0-dev libxcb-xkb-dev \
@@ -135,41 +198,41 @@ pub fn builder_dockerfile(target: &TargetOs) -> String {
     && rm -rf /var/lib/apt/lists/*"#
         }
         "fedora" | "centos" | "rhel" | "rocky" | "alma" => {
-            r#"RUN dnf install -y make gcc gcc-c++ cmake git pkgconf python3 \
+            r#"RUN dnf install -y make gcc gcc-c++ cmake git pkgconf python3 ncurses \
     fontconfig-devel openssl-devel libxcb-devel libxkbcommon-devel \
     libxkbcommon-x11-devel wayland-devel mesa-libEGL-devel \
     xcb-util-devel xcb-util-keysyms-devel xcb-util-image-devel xcb-util-wm-devel \
     curl ca-certificates"#
         }
         "alpine" => {
-            r#"RUN apk add --no-cache build-base cmake git pkgconf python3 \
+            r#"RUN apk add --no-cache build-base cmake git pkgconf python3 ncurses \
     fontconfig-dev libx11-dev libxkbcommon-dev openssl-dev \
     wayland-dev xcb-util-dev xcb-util-image-dev xcb-util-keysyms-dev \
     xcb-util-wm-dev zlib-dev zstd-dev curl ca-certificates bash"#
         }
-        "arch" | "archlinux" => {
-            r#"RUN pacman -Syu --noconfirm base-devel cmake git pkgconf python3 \
+        "arch" => {
+            r#"RUN pacman -Syu --noconfirm base-devel cmake git pkgconf python3 ncurses \
     fontconfig libx11 libxkbcommon-x11 wayland xcb-util \
-    xcb-util-image xcb-util-keysyms xcb-util-wm curl rust cargo \
+    xcb-util-image xcb-util-keysyms xcb-util-wm curl rust \
     && pacman -Scc --noconfirm"#
         }
         _ => {
             r#"RUN if command -v apt-get >/dev/null 2>&1; then \
         apt-get update && apt-get install -y --no-install-recommends \
-            ca-certificates curl git build-essential cmake pkg-config python3 \
+            ca-certificates curl git build-essential cmake pkg-config python3 ncurses-bin \
             libegl1-mesa-dev libssl-dev libfontconfig1-dev libwayland-dev \
             libx11-xcb-dev libxcb-ewmh-dev libxcb-icccm4-dev libxcb-image0-dev \
             libxcb-keysyms1-dev libxcb-randr0-dev libxcb-render0-dev libxcb-xkb-dev \
             libxkbcommon-dev libxkbcommon-x11-dev libxcb-util-dev \
             && rm -rf /var/lib/apt/lists/*; \
     elif command -v dnf >/dev/null 2>&1; then \
-        dnf install -y make gcc gcc-c++ cmake git pkgconf python3 \
+        dnf install -y make gcc gcc-c++ cmake git pkgconf python3 ncurses \
             fontconfig-devel openssl-devel libxcb-devel libxkbcommon-devel \
             libxkbcommon-x11-devel wayland-devel mesa-libEGL-devel \
             xcb-util-devel xcb-util-keysyms-devel xcb-util-image-devel xcb-util-wm-devel \
             curl ca-certificates; \
     elif command -v apk >/dev/null 2>&1; then \
-        apk add --no-cache build-base cmake git pkgconf python3 \
+        apk add --no-cache build-base cmake git pkgconf python3 ncurses \
             fontconfig-dev libx11-dev libxkbcommon-dev openssl-dev \
             wayland-dev xcb-util-dev xcb-util-image-dev xcb-util-keysyms-dev \
             xcb-util-wm-dev zlib-dev zstd-dev curl ca-certificates bash; \
@@ -199,204 +262,173 @@ RUN if ! (command -v rustc >/dev/null && command -v cargo >/dev/null && [ "$(rus
     )
 }
 
-pub fn ensure_builder_image(
+fn ensure_builder_image(
     ctx: &Context,
     runtime: &str,
-    target: &TargetOs,
+    platform: &Platform,
+    base: &str,
     clean: bool,
 ) -> Result<String> {
-    let tag = builder_image_tag(target);
-
+    let tag = builder_image_tag(platform);
     if !clean && image_exists(runtime, &tag) {
         return Ok(tag);
     }
-
-    let _stage = ctx
-        .runner
-        .stage(&format!("builder-image:{}", target.distro));
-
-    let dockerfile_content = builder_dockerfile(target);
+    let _stage = ctx.runner.stage(&format!("builder-image:{platform}"));
     let temp_dir = tempfile::tempdir().context("create tempdir for dockerfile")?;
-    let dockerfile_path = temp_dir.path().join("Dockerfile");
-    fs::write(&dockerfile_path, &dockerfile_content)?;
-
-    let build_spec = CommandSpec::new(runtime).args([
-        "build",
-        "--build-arg",
-        &format!("BASE_IMAGE={}", target.image),
-        "-t",
-        &tag,
-        "-f",
-        &dockerfile_path.display().to_string(),
-        &temp_dir.path().display().to_string(),
-    ]);
-
-    ctx.runner.run(build_spec).with_context(|| {
-        format!(
-            "failed to build container builder image for {} ({})",
-            target.distro, target.image
+    let dockerfile = temp_dir.path().join("Dockerfile");
+    fs::write(&dockerfile, builder_dockerfile(platform))?;
+    let mut build = CommandSpec::new(runtime).arg("build");
+    if emulated() {
+        build = build.args(["--platform", PLATFORM]);
+    }
+    ctx.runner
+        .run(
+            build
+                .args([
+                    "--build-arg",
+                    &format!("BASE_IMAGE={base}"),
+                    "-t",
+                    &tag,
+                    "-f",
+                ])
+                .arg(&dockerfile)
+                .arg(temp_dir.path()),
         )
-    })?;
-
+        .with_context(|| format!("builder image for {platform} ({base})"))?;
     Ok(tag)
 }
 
-pub fn resolve_output_dir(ctx: &Context, args: &BuildArgs, target: &TargetOs) -> PathBuf {
-    args.output_dir.clone().unwrap_or_else(|| {
-        ctx.root
-            .join("dist")
-            .join(format!("{}-{}", target.distro, target.version))
-    })
+fn pinned_upstream(ctx: &Context, cache: &Path) -> Result<Option<String>> {
+    if ctx.upstream.is_some() {
+        return Ok(ctx.upstream.clone());
+    }
+    let previous: Option<BuildMetadata> = state::read_json(&cache.join("build.json"))?;
+    Ok(previous.map(|previous| previous.upstream))
 }
 
-pub fn build(ctx: &Context, args: &BuildArgs, target: &TargetOs) -> Result<Value> {
-    let start_time = Instant::now();
-
-    let resolved = source::resolve(ctx)?;
-    let worktree = source::prepare(ctx, &resolved)?;
-
-    let runtime = detect_runtime(args.container_runtime.as_deref())?;
-    let builder_tag = ensure_builder_image(ctx, &runtime, target, args.clean_builder)?;
-
-    let container_cache = ctx
-        .cache
-        .join("containers")
-        .join(format!("{}-{}", target.distro, target.version));
-    let target_dir = container_cache.join("target");
-    fs::create_dir_all(&target_dir)?;
-
-    let profile = if ctx.profile == "debug" {
-        "dev"
-    } else {
-        &ctx.profile
+fn tool_arguments(
+    ctx: &Context,
+    platform: &Platform,
+    cache: &Path,
+    output: &Path,
+) -> Result<Vec<String>> {
+    let mut arguments = vec![
+        "cargo".into(),
+        "xtask".into(),
+        "--project-root".into(),
+        ctx.root.display().to_string(),
+        "--cache".into(),
+        cache.display().to_string(),
+        "--install-root".into(),
+        cache.join("install").display().to_string(),
+        "--profile".into(),
+        ctx.profile.clone(),
+    ];
+    if let Some(upstream) = pinned_upstream(ctx, cache)? {
+        arguments.extend(["--upstream".into(), upstream]);
+    }
+    if ctx.offline {
+        arguments.push("--offline".into());
+    }
+    if let Some(jobs) = ctx.jobs {
+        arguments.extend(["--jobs".into(), jobs.to_string()]);
+    }
+    let command: &[&str] = match platform {
+        Platform::Macos => &["prebuild", "--triple", MACOS_TRIPLE],
+        Platform::Linux(_) => &["package", "--role", ctx.role.name(), "--no-archive"],
     };
-    let profile_dir = if profile == "dev" { "debug" } else { profile };
+    arguments.extend(command.iter().map(|value| value.to_string()));
+    arguments.extend(["--output".into(), output.display().to_string()]);
+    Ok(arguments)
+}
 
-    #[cfg(unix)]
-    let (uid, gid) = unsafe { (libc::getuid(), libc::getgid()) };
-    #[cfg(not(unix))]
-    let (uid, gid) = (1000, 1000);
+pub fn plan(ctx: &Context, platform: &Platform, options: &Options, output: &Path) -> Result<Value> {
+    let cache = cache_dir(ctx, platform);
+    Ok(json!({
+        "platform": platform.to_string(),
+        "base_image": base_image(platform, options),
+        "builder_image": builder_image_tag(platform),
+        "runtime": detect_runtime(options.runtime.as_deref(), false).unwrap_or_else(|_| "docker/podman".into()),
+        "emulated": emulated(),
+        "role": ctx.role,
+        "cache": cache,
+        "output": output,
+        "command": tool_arguments(ctx, platform, &cache, output)?,
+    }))
+}
 
-    let host_cargo_home = std::env::var_os("CARGO_HOME")
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".cargo")));
+/// Linux: a verified bundle directory. macOS: a prebuilt directory for `deploy --prebuilt`.
+pub fn build(
+    ctx: &Context,
+    platform: &Platform,
+    options: &Options,
+    output: &Path,
+) -> Result<PathBuf> {
+    let sdk = sdk_dir();
+    if *platform == Platform::Macos {
+        ensure!(
+            sdk.join("MacOSX.sdk/SDKSettings.json").is_file(),
+            "macOS SDK missing: {}; deploy a macOS target from a Mac once",
+            sdk.display()
+        );
+    }
+    let runtime = detect_runtime(options.runtime.as_deref(), true)?;
+    let base = base_image(platform, options);
+    let tag = ensure_builder_image(ctx, &runtime, platform, base, options.clean)?;
+    let cache = cache_dir(ctx, platform);
+    fs::create_dir_all(&cache)?;
+    fs::create_dir_all(output)?;
+    let cache = cache.canonicalize()?;
+    let output = output.canonicalize()?;
+    let _stage = ctx.runner.stage(&format!("container-build:{platform}"));
 
-    let cargo_flags = format!(
-        "{}{}",
-        if ctx.offline { " --offline" } else { "" },
-        ctx.jobs.map(|j| format!(" -j {j}")).unwrap_or_default(),
-    );
-
-    let (vtabs_cmd, wezterm_cmd) = match args.bin_filter.as_deref() {
-        Some("wez-vtabs-store") => (
-            format!(
-                "cargo build --profile {profile} --locked{cargo_flags} --manifest-path {root}/Cargo.toml -p vtabs-store --features sqlite",
-                root = ctx.root.display(),
-            ),
-            "true".to_string(),
-        ),
-        Some("wez-vtabs") => (
-            format!(
-                "cargo build --profile {profile} --locked{cargo_flags} --manifest-path {root}/Cargo.toml -p tools --bin wez-vtabs",
-                root = ctx.root.display(),
-            ),
-            "true".to_string(),
-        ),
-        Some(filter) => (
-            "true".to_string(),
-            format!(
-                "cargo build --profile {profile}{cargo_flags} --manifest-path {worktree}/Cargo.toml -p {filter}",
-                worktree = worktree.display(),
-            ),
-        ),
-        None => (
-            format!(
-                "cargo build --profile {profile} --locked{cargo_flags} --manifest-path {root}/Cargo.toml -p vtabs-store --features sqlite && \
-                 cargo build --profile {profile} --locked{cargo_flags} --manifest-path {root}/Cargo.toml -p tools --bin wez-vtabs",
-                root = ctx.root.display(),
-            ),
-            format!(
-                "cargo build --profile {profile}{cargo_flags} --manifest-path {worktree}/Cargo.toml -p wezterm-gui -p wezterm -p wezterm-mux-server -p strip-ansi-escapes",
-                worktree = worktree.display(),
-            ),
-        ),
-    };
-    let test_cmd = if args.skip_tests {
-        "true".to_string()
-    } else if let Some(ref filter) = args.bin_filter {
-        if filter == "wezterm-gui" {
-            format!(
-                "cargo test --locked{cargo_flags} --manifest-path {worktree}/Cargo.toml -p wezterm-gui vtabs",
-                worktree = worktree.display(),
-            )
-        } else if filter == "wez-vtabs-store" {
-            format!(
-                "cargo test --locked{cargo_flags} --manifest-path {root}/Cargo.toml -p vtabs-store --features sqlite",
-                root = ctx.root.display(),
-            )
-        } else {
-            "true".to_string()
-        }
-    } else {
-        format!(
-            "cargo test --locked{cargo_flags} --manifest-path {worktree}/Cargo.toml -p wezterm-gui vtabs && \
-             cargo test --locked{cargo_flags} --manifest-path {worktree}/Cargo.toml -p wezterm-client --lib vtabs && \
-             cargo test --locked{cargo_flags} --manifest-path {worktree}/Cargo.toml -p wezterm-input-types --lib vtabs",
-            worktree = worktree.display(),
-        )
-    };
-
-    let build_script = format!("set -e\n{vtabs_cmd}\n{wezterm_cmd}\n{test_cmd}\n");
-
-    let _stage = ctx
-        .runner
-        .stage(&format!("container-build:{}", target.distro));
-
-    let mut run_spec = CommandSpec::new(&runtime);
-    run_spec = run_spec.arg("run").arg("--rm");
-
-    // Map user
+    let mut run = CommandSpec::new(&runtime).args(["run", "--rm"]);
+    if emulated() {
+        run = run.args(["--platform", PLATFORM]);
+    }
     #[cfg(unix)]
     {
+        let (uid, gid) = unsafe { (libc::getuid(), libc::getgid()) };
         if is_podman(&runtime) && uid != 0 {
-            run_spec = run_spec.args(["--userns=keep-id", "--user", &format!("{}:{}", uid, gid)]);
-        } else {
-            run_spec = run_spec.args(["--user", &format!("{}:{}", uid, gid)]);
+            run = run.arg("--userns=keep-id");
         }
+        run = run.args(["--user", &format!("{uid}:{gid}")]);
     }
-    #[cfg(not(unix))]
+    for path in [&ctx.root, &cache, &output] {
+        run = run.args(["-v", &format!("{}:{}", path.display(), path.display())]);
+    }
+    if *platform == Platform::Macos {
+        run = run.args(["-v", &format!("{}:/sdk:ro", sdk.display())]);
+    }
+    // Synced remote sources record their project revision beside the source root.
+    if let Some(record) = ctx
+        .root
+        .parent()
+        .map(|parent| parent.join("build.json"))
+        .filter(|path| path.is_file())
     {
-        run_spec = run_spec.args(["--user", &format!("{}:{}", uid, gid)]);
+        run = run.args([
+            "-v",
+            &format!("{}:{}:ro", record.display(), record.display()),
+        ]);
     }
-
-    // Volume mounts
-    run_spec = run_spec.args([
-        "-v",
-        &format!("{}:{}", ctx.root.display(), ctx.root.display()),
-        "-v",
-        &format!("{}:{}", ctx.cache.display(), ctx.cache.display()),
-    ]);
-
-    if let Some(ref cargo_home) = host_cargo_home {
-        let registry = cargo_home.join("registry");
-        if registry.is_dir() {
-            run_spec = run_spec.args([
+    let cargo_home = std::env::var_os("CARGO_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| crate::home().join(".cargo"));
+    for name in ["registry", "git"] {
+        if cargo_home.join(name).is_dir() {
+            run = run.args([
                 "-v",
-                &format!("{}:/usr/local/cargo/registry", registry.display()),
+                &format!(
+                    "{}:/usr/local/cargo/{name}",
+                    cargo_home.join(name).display()
+                ),
             ]);
         }
-        let git_dir = cargo_home.join("git");
-        if git_dir.is_dir() {
-            run_spec =
-                run_spec.args(["-v", &format!("{}:/usr/local/cargo/git", git_dir.display())]);
-        }
     }
-
-    if let Some(home) = std::env::var_os("HOME") {
-        run_spec = run_spec.args(["-e", &format!("HOME={}", home.to_string_lossy())]);
-    }
-
-    run_spec = run_spec.args([
+    run = run.args([
+        "-e",
+        &format!("HOME={}", cache.display()),
         "-e",
         "GIT_CONFIG_COUNT=1",
         "-e",
@@ -404,135 +436,30 @@ pub fn build(ctx: &Context, args: &BuildArgs, target: &TargetOs) -> Result<Value
         "-e",
         "GIT_CONFIG_VALUE_0=*",
         "-e",
-        &format!("CARGO_TARGET_DIR={}", target_dir.display()),
+        &format!("CARGO_TARGET_DIR={}", cache.join("xtask-target").display()),
         "-w",
-        &worktree.display().to_string(),
-        &builder_tag,
-        "sh",
-        "-c",
-        &build_script,
+        &ctx.root.display().to_string(),
+        &tag,
     ]);
-
-    ctx.runner.run(run_spec).with_context(|| {
-        format!(
-            "container build failed for target {} ({})",
-            target.distro, target.image
-        )
-    })?;
-
-    // Collect binaries
-    let output_dir = resolve_output_dir(ctx, args, target);
-    fs::create_dir_all(&output_dir)?;
-
-    let binaries_dir = target_dir.join(profile_dir);
-    let mut artifacts = serde_json::Map::new();
-    let mut hashes = serde_json::Map::new();
-
-    let target_binaries = if let Some(ref filter) = args.bin_filter {
-        vec![filter.as_str()]
-    } else {
-        CONTAINER_BINARIES.to_vec()
+    let output_json = ctx
+        .runner
+        .capture(run.args(tool_arguments(ctx, platform, &cache, &output)?))
+        .with_context(|| format!("container build failed for {platform} ({base})"))?;
+    let result: Value =
+        serde_json::from_str(&output_json).context("container build printed no result")?;
+    let key = match platform {
+        Platform::Macos => "prebuilt",
+        Platform::Linux(_) => "bundle",
     };
-
-    for &binary_name in &target_binaries {
-        let src = binaries_dir.join(binary_name);
-        ensure!(
-            src.is_file(),
-            "expected binary '{binary_name}' was not produced at {}",
-            src.display()
-        );
-        let dest = output_dir.join(binary_name);
-        fs::copy(&src, &dest)
-            .with_context(|| format!("copy {} to {}", src.display(), dest.display()))?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let mut perms = fs::metadata(&dest)?.permissions();
-            perms.set_mode(0o755);
-            fs::set_permissions(&dest, perms)?;
-        }
-        let digest = hash_file(&dest)?;
-        artifacts.insert(
-            binary_name.to_string(),
-            Value::String(dest.display().to_string()),
-        );
-        hashes.insert(binary_name.to_string(), Value::String(digest));
-    }
-
-    if target_binaries.contains(&"wez-vtabs") {
-        let launcher_dest = output_dir.join("wez-vtabs-launcher");
-        if !launcher_dest.exists() {
-            #[cfg(unix)]
-            {
-                let _ = std::os::unix::fs::symlink("wez-vtabs", &launcher_dest);
-            }
-            #[cfg(not(unix))]
-            {
-                let _ = fs::copy(output_dir.join("wez-vtabs"), &launcher_dest);
-            }
-        }
-        let desktop_dest = output_dir.join("wez-vtabs.desktop");
-        if !desktop_dest.exists() {
-            let desktop_content = "[Desktop Entry]\n\
-                Name=WezTerm (Vertical Tabs)\n\
-                Comment=WezTerm terminal emulator with vertical tabs\n\
-                Type=Application\n\
-                Categories=System;TerminalEmulator;\n\
-                StartupWMClass=org.wezfurlong.wezterm\n\
-                Exec=wez-vtabs launch\n\
-                Icon=org.wezfurlong.wezterm\n\
-                Terminal=false\n";
-            let _ = fs::write(&desktop_dest, desktop_content);
-        }
-    }
-
-    let manifest = json!({
-        "target_os": target.distro,
-        "version": target.version,
-        "image": target.image,
-        "builder_image": builder_tag,
-        "profile": profile,
-        "upstream": resolved.revision,
-        "created_at": state::now(),
-        "hashes": hashes,
-        "artifacts": artifacts,
-    });
-    state::write_json(&output_dir.join("checksums.json"), &manifest)?;
-
-    let archive_path = ctx.root.join("dist").join(format!(
-        "wez-vtabs-{}-{}.tar.gz",
-        target.distro, target.version
-    ));
-    archive_directory(&output_dir, &archive_path)
-        .with_context(|| format!("create archive {}", archive_path.display()))?;
-
-    let duration = start_time.elapsed().as_secs_f64();
-    let result = json!({
-        "status": "completed",
-        "target_os": target.distro,
-        "version": target.version,
-        "image": target.image,
-        "builder_image": builder_tag,
-        "runtime": runtime,
-        "profile": profile,
-        "output_dir": output_dir.display().to_string(),
-        "archive": archive_path.display().to_string(),
-        "artifacts": artifacts,
-        "hashes": hashes,
-        "duration_seconds": duration,
-    });
-
-    Ok(result)
-}
-
-fn archive_directory(dir: &Path, archive: &Path) -> Result<()> {
-    if let Some(parent) = archive.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    let file = fs::File::create(archive)?;
-    let enc = flate2::write::GzEncoder::new(file, flate2::Compression::default());
-    let mut tar = tar::Builder::new(enc);
-    tar.append_dir_all(".", dir)?;
-    tar.finish()?;
-    Ok(())
+    let bundle = PathBuf::from(
+        result[key]
+            .as_str()
+            .context("container build result missing")?,
+    );
+    ensure!(
+        bundle.is_dir(),
+        "container bundle missing: {}",
+        bundle.display()
+    );
+    Ok(bundle)
 }

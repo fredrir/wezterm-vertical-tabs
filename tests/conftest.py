@@ -73,9 +73,12 @@ def isolated_env(tmp_path: Path) -> dict[str, str]:
         path.mkdir(mode=0o700, exist_ok=True)
         variable = "XDG_RUNTIME_DIR" if name == "runtime" else f"XDG_{name.upper()}_HOME"
         environment[variable] = str(path)
+    # Deploy defaults are the real /Applications and ~/.local/bin; never reach them.
     environment.update(
         WEZ_VTABS_CACHE=str(root / "vtabs-cache"),
         WEZ_VTABS_INSTALL=str(root / "vtabs-install"),
+        WEZ_VTABS_APP=str(root / "Applications/WezTerm.app"),
+        WEZ_VTABS_BIN=str(root / "bin"),
         PYTHONUTF8="1",
     )
     return environment

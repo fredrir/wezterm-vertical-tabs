@@ -24,6 +24,40 @@ pub struct Context {
     pub jobs: Option<usize>,
     pub json: bool,
     pub explain: bool,
+    pub role: Role,
+    /// Cross-compilation target; the host when absent.
+    pub triple: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize, clap::ValueEnum)]
+#[serde(rename_all = "lowercase")]
+pub enum Role {
+    #[default]
+    Desktop,
+    /// Headless host reached through SSH domains: CLI and mux server only.
+    Mux,
+}
+
+impl Role {
+    pub fn name(self) -> &'static str {
+        match self {
+            Role::Desktop => "desktop",
+            Role::Mux => "mux",
+        }
+    }
+
+    pub fn binaries(self) -> &'static [&'static str] {
+        match self {
+            Role::Desktop => &[
+                "wezterm-gui",
+                "wezterm",
+                "wezterm-mux-server",
+                "strip-ansi-escapes",
+                "wez-vtabs-store",
+            ],
+            Role::Mux => &["wezterm", "wezterm-mux-server"],
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
@@ -49,6 +83,8 @@ pub struct BuildMetadata {
     pub target: String,
     #[serde(default)]
     pub profile: String,
+    #[serde(default)]
+    pub role: Role,
     #[serde(default)]
     pub project_source: ProjectSource,
     #[serde(default)]

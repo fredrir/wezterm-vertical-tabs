@@ -126,6 +126,16 @@ def test_status_versions_and_rollback_preserve_immutable_bundles(tools_sandbox, 
     status = tools_sandbox.json("status")
     assert status["active"]["id"] == "first"
     assert status["pending"] is None
+    assert {version["id"] for version in status["versions"]} == {"first", "second", "third"}
+    assert set(status["versions"][0]) == {
+        "id",
+        "active",
+        "pending",
+        "previous",
+        "built_at",
+        "upstream",
+        "role",
+    }
     versions = tools_sandbox.json("versions")
     assert {version["id"] for version in versions} == {"first", "second", "third"}
     assert sum(version["active"] for version in versions) == 1

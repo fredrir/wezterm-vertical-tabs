@@ -307,7 +307,8 @@ impl Runner {
             let stdout = child.stdout.take().context("stdout missing")?;
             let stderr = child.stderr.take().context("stderr missing")?;
             let deverbose = spec.deverbose;
-            let out = std::thread::spawn(move || pump(stdout, stdout_file, !capture, capture, false));
+            let out =
+                std::thread::spawn(move || pump(stdout, stdout_file, !capture, capture, false));
             let err = std::thread::spawn(move || pump(stderr, stderr_file, true, true, deverbose));
             let mut interrupted = None;
             let status = loop {
@@ -472,24 +473,24 @@ pub fn format_compiler_diagnostics(output: &str) -> Option<String> {
     for line in output.lines() {
         if let Ok(value) = serde_json::from_str::<serde_json::Value>(line)
             && value.get("reason").and_then(|v| v.as_str()) == Some("compiler-message")
-                && let Some(rendered) = value
-                    .get("message")
-                    .and_then(|m| m.get("rendered"))
-                    .and_then(|r| r.as_str())
-                {
-                    let level = value
-                        .get("message")
-                        .and_then(|m| m.get("level"))
-                        .and_then(|l| l.as_str());
-                    let trimmed = rendered.trim_end();
-                    if !trimmed.is_empty() {
-                        if level == Some("error") {
-                            errors.push(trimmed.to_string());
-                        } else {
-                            others.push(trimmed.to_string());
-                        }
-                    }
+            && let Some(rendered) = value
+                .get("message")
+                .and_then(|m| m.get("rendered"))
+                .and_then(|r| r.as_str())
+        {
+            let level = value
+                .get("message")
+                .and_then(|m| m.get("level"))
+                .and_then(|l| l.as_str());
+            let trimmed = rendered.trim_end();
+            if !trimmed.is_empty() {
+                if level == Some("error") {
+                    errors.push(trimmed.to_string());
+                } else {
+                    others.push(trimmed.to_string());
                 }
+            }
+        }
     }
     if !errors.is_empty() {
         Some(errors.join("\n\n"))

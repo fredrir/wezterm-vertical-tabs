@@ -81,16 +81,31 @@ pub fn generate(ctx: &Context, check: bool) -> Result<()> {
     schema(ctx, &helpers(ctx)?, check)
 }
 
-pub fn check(ctx: &Context) -> Result<()> {
-    let _stage = ctx.runner.stage("check");
+fn format(ctx: &Context) -> Result<()> {
+    ctx.runner
+        .run(uv(ctx).args(["run", "--locked", "ruff", "check", "--fix"]))?;
+    ctx.runner
+        .run(uv(ctx).args(["run", "--locked", "ruff", "format"]))?;
+    ctx.runner.run(cargo(ctx).args(["fmt", "--all"]))?;
+    ctx.runner
+        .run(cargo(ctx).args(["fmt", "--manifest-path", "src/adapter/Cargo.toml"]))?;
+    generate(ctx, false)
+}
+
+/// Static checks; `fix` first rewrites formatting and generated files.
+pub fn lint(ctx: &Context, fix: bool) -> Result<PathBuf> {
+    let _stage = ctx.runner.stage("lint");
+    if fix {
+        format(ctx)?;
+    }
     // Only independent format/lint processes run together; Cargo builds stay coordinated.
     let results = std::thread::scope(|scope| {
         let lint = scope.spawn(|| -> Result<()> {
             ctx.runner.run(uv(ctx).args(["lock", "--check"]))?;
             ctx.runner
-                .run(uv(ctx).args(["run", "--locked", "ruff", "check", "tests"]))?;
+                .run(uv(ctx).args(["run", "--locked", "ruff", "check"]))?;
             ctx.runner
-                .run(uv(ctx).args(["run", "--locked", "ruff", "format", "--check", "tests"]))
+                .run(uv(ctx).args(["run", "--locked", "ruff", "format", "--check"]))
         });
         let fmt = scope.spawn(|| -> Result<()> {
             ctx.runner
@@ -110,10 +125,6 @@ pub fn check(ctx: &Context) -> Result<()> {
     results
         .1
         .map_err(|_| anyhow::anyhow!("format worker failed"))??;
-    ctx.runner.run(locked(
-        ctx,
-        cargo(ctx).args(["test", "--workspace", "--all-features"]),
-    ))?;
     ctx.runner.run(
         locked(
             ctx,
@@ -123,7 +134,30 @@ pub fn check(ctx: &Context) -> Result<()> {
     )?;
     let directory = helpers(ctx)?;
     schema(ctx, &directory, true)?;
+    Ok(directory)
+}
+
+pub fn check(ctx: &Context) -> Result<()> {
+    let _stage = ctx.runner.stage("check");
+    let directory = lint(ctx, false)?;
+    ctx.runner.run(locked(
+        ctx,
+        cargo(ctx).args(["test", "--workspace", "--all-features"]),
+    ))?;
     pytest(ctx, Suite::All, &[], Some(directory))
+}
+
+fn bench(ctx: &Context, args: &[String]) -> Result<()> {
+    ctx.runner.run(
+        locked(
+            ctx,
+            CommandSpec::new(std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into()))
+                .cwd(&ctx.root)
+                .args(["run", "--release", "-p", "vtabs-bench"]),
+        )
+        .arg("--")
+        .args(args),
+    )
 }
 
 fn pytest(ctx: &Context, suite: Suite, args: &[String], binaries: Option<PathBuf>) -> Result<()> {
@@ -152,6 +186,7 @@ fn pytest(ctx: &Context, suite: Suite, args: &[String], binaries: Option<PathBuf
             "-k",
             "tls",
         ]),
+        Suite::Bench => unreachable!("benchmarks run through Cargo"),
     };
     if let Some(directory) = binaries {
         command = command.arg("--rust-bin-dir").arg(directory);
@@ -162,6 +197,9 @@ fn pytest(ctx: &Context, suite: Suite, args: &[String], binaries: Option<PathBuf
 
 pub fn test(ctx: &Context, suite: Suite, args: &[String]) -> Result<()> {
     let _stage = ctx.runner.stage("test");
+    if matches!(suite, Suite::Bench) {
+        return bench(ctx, args);
+    }
     let mut args = args.to_vec();
     if matches!(suite, Suite::Rust) {
         ctx.runner.run(locked(

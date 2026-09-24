@@ -1,11 +1,11 @@
 # Performance
 
 ```sh
-just bench
-just bench core
-just bench ui
-just bench store
-just check
+just test bench
+just test bench -- core
+just test bench -- ui
+just test bench -- store
+cargo xtask check
 ```
 
 | Work                    | Optimization                                                                      |

@@ -7,15 +7,7 @@ use serde_json::{Value, json};
 
 use crate::process::{CommandSpec, RunReport, relevant_environment};
 use crate::source;
-use crate::state::{self, BuildMetadata, Context};
-
-pub const BINARIES: &[&str] = &[
-    "wezterm-gui",
-    "wezterm",
-    "wezterm-mux-server",
-    "strip-ansi-escapes",
-    "wez-vtabs-store",
-];
+use crate::state::{self, BuildMetadata, Context, Role};
 
 fn cargo(ctx: &Context, cwd: &Path, target_dir: &Path, command: &str) -> CommandSpec {
     let is_dev = (ctx.profile == "iterate" || ctx.profile == "dev") && !ctx.explain;
@@ -149,6 +141,9 @@ fn config_records(ctx: &Context, worktree: &Path) -> Result<Value> {
 }
 
 fn requested_target(ctx: &Context, worktree: &Path) -> Result<Option<String>> {
+    if let Some(triple) = &ctx.triple {
+        return Ok(Some(triple.clone()));
+    }
     if let Ok(target) = std::env::var("CARGO_BUILD_TARGET") {
         ensure!(!target.is_empty(), "CARGO_BUILD_TARGET must not be empty");
         return Ok(Some(target));
@@ -292,7 +287,11 @@ fn capture_locks(ctx: &Context, worktree: &Path) -> Result<Value> {
     }))
 }
 
-fn collect_artifacts(output: &str, artifacts: &mut BTreeMap<String, PathBuf>) -> Result<()> {
+fn collect_artifacts(
+    output: &str,
+    binaries: &[&str],
+    artifacts: &mut BTreeMap<String, PathBuf>,
+) -> Result<()> {
     for line in output.lines() {
         let Ok(message) = serde_json::from_str::<Value>(line) else {
             continue;
@@ -306,7 +305,7 @@ fn collect_artifacts(output: &str, artifacts: &mut BTreeMap<String, PathBuf>) ->
         let Some(name) = message["target"]["name"].as_str() else {
             continue;
         };
-        if BINARIES.contains(&name) {
+        if binaries.contains(&name) {
             let path = PathBuf::from(executable);
             ensure!(
                 path.is_file(),
@@ -363,11 +362,13 @@ fn validate_wezterm(
     target: Option<&str>,
 ) -> Result<()> {
     let _stage = ctx.runner.stage("validate");
-    for (package, library) in [
+    let packages = [
         ("wezterm-gui", false),
         ("wezterm-client", true),
         ("wezterm-input-types", true),
-    ] {
+    ];
+    let without_gui = usize::from(ctx.role == Role::Mux);
+    for &(package, library) in &packages[without_gui..] {
         let mut command =
             cargo(ctx, worktree, target_dir, "test").args(["--locked", "-p", package]);
         if let Some(target) = target {
@@ -418,13 +419,17 @@ fn bundle_id(metadata: &BuildMetadata) -> Result<String> {
         "incomplete build identity"
     );
     let identifier = format!(
-        "{}-{}-{}-{}-{}-{}",
+        "{}-{}-{}-{}-{}-{}{}",
         &metadata.upstream[..12],
         &metadata.source_digest[..12],
         &metadata.compile_digest[..12],
         &project_id[..8],
         metadata.target,
-        metadata.profile
+        metadata.profile,
+        match metadata.role {
+            Role::Desktop => "",
+            Role::Mux => "-mux",
+        }
     );
     state::safe_id(&identifier)?;
     Ok(identifier)
@@ -445,6 +450,7 @@ pub fn restage(ctx: &Context, previous: &BuildMetadata) -> Result<Option<BuildMe
         &ctx.profile
     };
     if previous.profile != profile
+        || previous.role != ctx.role
         || ctx
             .upstream
             .as_ref()
@@ -490,7 +496,7 @@ pub fn restage(ctx: &Context, previous: &BuildMetadata) -> Result<Option<BuildMe
                 return Ok(None);
             }
         }
-        for name in BINARIES {
+        for name in previous.role.binaries() {
             let Some(path) = previous.artifacts.get(*name).filter(|path| path.is_file()) else {
                 return Ok(None);
             };
@@ -501,7 +507,7 @@ pub fn restage(ctx: &Context, previous: &BuildMetadata) -> Result<Option<BuildMe
             }
         }
     } else {
-        for name in BINARIES {
+        for name in previous.role.binaries() {
             if !previous.artifacts.get(*name).is_some_and(|p| p.is_file()) {
                 return Ok(None);
             }
@@ -592,8 +598,9 @@ pub fn build(ctx: &Context) -> Result<BuildMetadata> {
     } else {
         &ctx.profile
     };
+    let binaries = ctx.role.binaries();
     let mut configuration = json!({
-        "version":2,"rustc":toolchain,"cargo":cargo_version,"target":target,"profile":profile,
+        "version":2,"rustc":toolchain,"cargo":cargo_version,"target":target,"profile":profile,"role":ctx.role,
         "project_rustc":project_toolchain,"project_cargo":project_cargo,
         "compile_inputs":compile_inputs,"validation_inputs":validation_inputs,
         "environment":relevant_environment(),"cargo_configs":config_records(ctx,&worktree)?,
@@ -613,7 +620,7 @@ pub fn build(ctx: &Context) -> Result<BuildMetadata> {
         target_dir.join(profile)
     };
     if is_dev {
-        for name in BINARIES {
+        for name in binaries {
             let exe = profile_dir.join(crate::bundle::executable_name(name));
             if exe.is_file() {
                 artifacts.insert(name.to_string(), exe);
@@ -624,9 +631,11 @@ pub fn build(ctx: &Context) -> Result<BuildMetadata> {
     // Cargo is the authority for freshness, including build-script dependencies
     // and toolchain/config changes that a project-only fingerprint cannot see.
     let compile_stage = ctx.runner.stage("compile");
-    let need_store_build = !is_dev
-        || !artifacts.contains_key("wez-vtabs-store")
-        || store_sources_newer(&ctx.root.join("src/store"), &artifacts["wez-vtabs-store"]).unwrap_or(true);
+    let need_store_build = binaries.contains(&"wez-vtabs-store")
+        && (!is_dev
+            || !artifacts.contains_key("wez-vtabs-store")
+            || store_sources_newer(&ctx.root.join("src/store"), &artifacts["wez-vtabs-store"])
+                .unwrap_or(true));
     if need_store_build {
         let mut helper = cargo(ctx, &ctx.root, &target_dir, "build")
             .args([
@@ -643,7 +652,7 @@ pub fn build(ctx: &Context) -> Result<BuildMetadata> {
         preserve_cargo_timings(ctx, &target_dir)?;
         let helper_str = helper_output?;
         print_warnings(&helper_str);
-        collect_artifacts(&helper_str, &mut artifacts)?;
+        collect_artifacts(&helper_str, binaries, &mut artifacts)?;
     }
 
     let mut application =
@@ -651,15 +660,8 @@ pub fn build(ctx: &Context) -> Result<BuildMetadata> {
     if replay.is_some() {
         application = application.arg("--locked");
     }
-    if is_dev {
-        application = application.args(["-p", "wezterm-gui"]);
-        for package in &BINARIES[..4] {
-            if *package != "wezterm-gui" && !artifacts.contains_key(*package) {
-                application = application.args(["-p", package]);
-            }
-        }
-    } else {
-        for package in &BINARIES[..4] {
+    for package in binaries.iter().filter(|name| **name != "wez-vtabs-store") {
+        if !is_dev || *package == "wezterm-gui" || !artifacts.contains_key(*package) {
             application = application.args(["-p", package]);
         }
     }
@@ -674,8 +676,8 @@ pub fn build(ctx: &Context) -> Result<BuildMetadata> {
     ctx.runner.metadata("build_configuration", &configuration)?;
     let app_str = output?;
     print_warnings(&app_str);
-    collect_artifacts(&app_str, &mut artifacts)?;
-    for name in BINARIES {
+    collect_artifacts(&app_str, binaries, &mut artifacts)?;
+    for name in binaries {
         ensure!(
             artifacts.contains_key(*name),
             "Cargo did not produce required binary: {name}"
@@ -728,6 +730,8 @@ pub fn build(ctx: &Context) -> Result<BuildMetadata> {
         if ctx.explain {
             eprintln!("tests: skip validation tests during dev profile iteration");
         }
+    } else if target != host {
+        eprintln!("tests: {target} binaries cannot run on {host}; validation skipped");
     } else if previous
         .as_ref()
         .is_some_and(|v| v.validation_digest == validation_digest)
@@ -749,6 +753,7 @@ pub fn build(ctx: &Context) -> Result<BuildMetadata> {
         validation_digest,
         target,
         profile: profile.into(),
+        role: ctx.role,
         project_source: project,
         built_at: state::now(),
         configuration,
@@ -766,21 +771,102 @@ pub fn build(ctx: &Context) -> Result<BuildMetadata> {
     Ok(metadata)
 }
 
+const PREBUILT_ASSETS: &[&str] = &[
+    "LICENSE.md",
+    "assets/macos",
+    "assets/shell-integration",
+    "assets/shell-completion",
+    "termwiz/data/wezterm.terminfo",
+];
+
+/// Cross-compiled binaries with the worktree assets and source their host packages and signs.
+pub fn prebuilt(ctx: &Context, metadata: &BuildMetadata, output: &Path) -> Result<PathBuf> {
+    let _stage = ctx.runner.stage("prebuilt");
+    let worktree = ctx.cache.join("worktree");
+    let target_dir = metadata.configuration["target_directory"]
+        .as_str()
+        .map(PathBuf::from)
+        .context("build target directory missing")?;
+    let tool = cargo(ctx, &ctx.root, &target_dir, "build")
+        .args([
+            "--locked",
+            "--message-format=json-render-diagnostics",
+            "--manifest-path",
+        ])
+        .arg(ctx.root.join("Cargo.toml"))
+        .args([
+            "-p",
+            "tools",
+            "--bin",
+            "wez-vtabs",
+            "--target",
+            &metadata.target,
+        ]);
+    let mut tools = BTreeMap::new();
+    collect_artifacts(&ctx.runner.capture(tool)?, &["wez-vtabs"], &mut tools)?;
+    let tool = tools
+        .remove("wez-vtabs")
+        .context("Cargo did not produce wez-vtabs")?;
+
+    let destination = output.join(format!("wez-vtabs-prebuilt-{}", metadata.id));
+    if destination.exists() {
+        fs::remove_dir_all(&destination)?;
+    }
+    let bin = destination.join("bin");
+    fs::create_dir_all(&bin)?;
+    let mut relative = metadata.clone();
+    for (name, path) in &metadata.artifacts {
+        fs::copy(path, bin.join(name))?;
+        relative
+            .artifacts
+            .insert(name.clone(), Path::new("bin").join(name));
+    }
+    fs::copy(&tool, bin.join("wez-vtabs"))?;
+    let assets = destination.join("worktree");
+    for item in PREBUILT_ASSETS {
+        let from = worktree.join(item);
+        let to = assets.join(item);
+        if from.is_dir() {
+            crate::bundle::copy_tree(&from, &to)?;
+        } else {
+            fs::create_dir_all(to.parent().context("asset parent missing")?)?;
+            fs::copy(&from, &to)?;
+        }
+    }
+    fs::create_dir_all(assets.join("assets/fonts"))?;
+    for entry in fs::read_dir(worktree.join("assets/fonts"))? {
+        let entry = entry?;
+        if entry.file_name().to_string_lossy().starts_with("LICENSE") && entry.path().is_file() {
+            fs::copy(
+                entry.path(),
+                assets.join("assets/fonts").join(entry.file_name()),
+            )?;
+        }
+    }
+    source::copy_source(&ctx.root, &destination.join("source"))?;
+    state::write_json(&destination.join("build.json"), &relative)?;
+    state::write_json(
+        &destination.join("prebuilt.json"),
+        &json!({"tool": "bin/wez-vtabs", "target": metadata.target}),
+    )?;
+    Ok(destination)
+}
+
 fn print_warnings(output: &str) {
     for line in output.lines() {
         if let Ok(value) = serde_json::from_str::<serde_json::Value>(line)
             && value.get("reason").and_then(|v| v.as_str()) == Some("compiler-message")
-                && value
-                    .get("message")
-                    .and_then(|m| m.get("level"))
-                    .and_then(|l| l.as_str())
-                    == Some("warning")
-                    && let Some(rendered) = value
-                        .get("message")
-                        .and_then(|m| m.get("rendered"))
-                        .and_then(|r| r.as_str())
-                    {
-                        eprint!("{rendered}");
-                    }
+            && value
+                .get("message")
+                .and_then(|m| m.get("level"))
+                .and_then(|l| l.as_str())
+                == Some("warning")
+            && let Some(rendered) = value
+                .get("message")
+                .and_then(|m| m.get("rendered"))
+                .and_then(|r| r.as_str())
+        {
+            eprint!("{rendered}");
+        }
     }
 }

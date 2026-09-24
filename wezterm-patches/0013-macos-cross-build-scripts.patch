@@ -1,0 +1,30 @@
+diff --git a/wezterm-gui/build.rs b/wezterm-gui/build.rs
+index abd3b7f..40b7b45 100644
+--- a/wezterm-gui/build.rs
++++ b/wezterm-gui/build.rs
+@@ -1,4 +1,3 @@
+-#[cfg(any(windows, target_os = "macos"))]
+ fn executable_output_dir() -> std::path::PathBuf {
+     let out_dir = std::path::PathBuf::from(std::env::var_os("OUT_DIR").unwrap());
+     out_dir
+@@ -161,8 +160,7 @@ END
+         embed_resource::compile(rcfile_name);
+     }
+ 
+-    #[cfg(target_os = "macos")]
+-    {
++    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos") {
+         use anyhow::Context as _;
+         let repo_dir = std::env::current_dir()
+             .ok()
+diff --git a/wezterm-toast-notification/build.rs b/wezterm-toast-notification/build.rs
+index 5ecc6da..1d94bd3 100644
+--- a/wezterm-toast-notification/build.rs
++++ b/wezterm-toast-notification/build.rs
+@@ -1,5 +1,5 @@
+ fn main() {
+-    if cfg!(target_os = "macos") {
++    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos") {
+         println!("cargo:rustc-link-lib=framework=UserNotifications");
+     }
+ }

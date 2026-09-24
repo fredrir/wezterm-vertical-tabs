@@ -1,5 +1,4 @@
 use super::{
-    core::*,
     store::{self, Operation, Record, Request, Response},
     *,
 };

@@ -7,18 +7,21 @@ mod deploy;
 mod diagnostics;
 mod install;
 mod process;
+mod remote;
 mod sign;
 mod source;
 mod state;
+mod targets;
 mod update;
 mod watch;
 
 use anyhow::{Context as _, Result};
-use clap::Parser;
+use clap::{CommandFactory, Parser, ValueEnum};
 use cli::{Cli, Commands};
 use serde_json::{Value, json};
 use state::{Context, Lock};
 use std::path::{Path, PathBuf};
+use targets::Platform;
 
 fn home() -> PathBuf {
     std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
@@ -117,9 +120,80 @@ fn context(cli: &Cli) -> Result<Context> {
         jobs: cli.jobs.map(usize::from),
         json: cli.json,
         explain: cli.explain,
+        role: state::Role::default(),
+        triple: None,
     };
     ctx.runner.metadata("context",&json!({"root":ctx.root,"cache":ctx.cache,"install":ctx.install,"profile":ctx.profile,"offline":ctx.offline,"jobs":ctx.jobs,"target":env!("WEZ_VTABS_TARGET")}))?;
     Ok(ctx)
+}
+
+fn request(ctx: &Context, cli: &Cli) -> Result<remote::Request> {
+    let mut globals = Vec::new();
+    for (enabled, flag) in [
+        (cli.offline, "--offline"),
+        (cli.debug, "--debug"),
+        (cli.explain, "--explain"),
+        (cli.timings, "--timings"),
+        (cli.json, "--json"),
+    ] {
+        if enabled {
+            globals.push(flag.to_owned());
+        }
+    }
+    if let Some(profile) = &cli.profile {
+        globals.extend(["--profile".into(), profile.clone()]);
+    }
+    if let Some(jobs) = cli.jobs {
+        globals.extend(["--jobs".into(), jobs.to_string()]);
+    }
+    Ok(remote::Request {
+        globals,
+        upstream: remote::pinned_upstream(ctx)?,
+    })
+}
+
+/// Runs `command` on the `--on` machine, or returns `None` to run it here.
+fn elsewhere(
+    ctx: &Context,
+    cli: &Cli,
+    on: &cli::On,
+    mut command: Vec<String>,
+) -> Result<Option<(Value, i32)>> {
+    let Some(host) = targets::plan(on.on.as_deref(), None)?.on else {
+        return Ok(None);
+    };
+    let tail = command
+        .iter()
+        .position(|value| value == "--")
+        .unwrap_or(command.len());
+    command.splice(tail..tail, ["--on".to_owned(), targets::LOCAL.to_owned()]);
+    remote::delegate(ctx, &host, &request(ctx, cli)?, &command).map(Some)
+}
+
+fn setup(ctx: &Context) -> Result<Value> {
+    anyhow::ensure!(!ctx.offline, "setup requires online mode");
+    let resolved = {
+        let _lock = Lock::acquire(&ctx.cache.join("build.lock"))?;
+        let resolved = source::resolve(ctx)?;
+        source::prepare(ctx, &resolved)?;
+        resolved
+    };
+    let worktree = ctx.cache.join("worktree");
+    eprintln!("+ {} --testing", worktree.join("get-deps").display());
+    // Foreground and on the terminal so sudo can prompt.
+    let status = std::process::Command::new(worktree.join("get-deps"))
+        .arg("--testing")
+        .current_dir(&worktree)
+        .env("CI", "yes")
+        .status()
+        .context("start: get-deps")?;
+    anyhow::ensure!(status.success(), "get-deps failed: {status}");
+    ctx.runner.run(
+        process::CommandSpec::new("uv")
+            .args(["sync", "--locked"])
+            .cwd(&ctx.root),
+    )?;
+    Ok(json!({"upstream":resolved.revision,"status":"ready"}))
 }
 
 fn dispatch(ctx: &Context, cli: &Cli) -> Result<(Value, i32)> {
@@ -130,11 +204,37 @@ fn dispatch(ctx: &Context, cli: &Cli) -> Result<(Value, i32)> {
             let path = source::prepare(ctx, &resolved)?;
             json!({"upstream":resolved.revision,"worktree":path})
         }
-        Commands::Build(build_args) => {
-            let _lock = Lock::acquire(&ctx.cache.join("build.lock"))?;
-            if let Some(target_os) = build_args.resolve_target_os()? {
-                serde_json::to_value(container::build(ctx, build_args, &target_os)?)?
+        Commands::Build(args) => {
+            let plan = targets::plan(args.on.on.as_deref(), args.to.to.as_deref())?;
+            if args.platform.is_none() && !plan.is_local() {
+                return remote::build(ctx, &plan, &request(ctx, cli)?);
+            }
+            let ctx = &Context {
+                role: args.role.or(plan.role()).unwrap_or_default(),
+                ..ctx.clone()
+            };
+            if let Some(platform) = &args.platform {
+                let platform = Platform::parse(platform)?;
+                let output = args.output.clone().unwrap_or_else(|| ctx.root.join("dist"));
+                if platform == Platform::Macos && cfg!(target_os = "macos") {
+                    let _lock = Lock::acquire(&ctx.cache.join("build.lock"))?;
+                    let metadata = build::build(ctx)?;
+                    return Ok((
+                        json!({"bundle":bundle::package(ctx, &metadata, &output, false)?}),
+                        0,
+                    ));
+                }
+                let options = container::Options {
+                    image: args.image.clone(),
+                    runtime: args.container_runtime.clone(),
+                    clean: args.clean_builder,
+                };
+                if ctx.explain {
+                    return Ok((container::plan(ctx, &platform, &options, &output)?, 0));
+                }
+                json!({"bundle":container::build(ctx, &platform, &options, &output)?})
             } else {
+                let _lock = Lock::acquire(&ctx.cache.join("build.lock"))?;
                 serde_json::to_value(build::build(ctx)?)?
             }
         }
@@ -167,9 +267,53 @@ fn dispatch(ctx: &Context, cli: &Cli) -> Result<(Value, i32)> {
             check::check(ctx)?;
             json!({"status":"passed"})
         }
-        Commands::Test { suite, args } => {
+        Commands::Lint { fix, on } => {
+            let mut command = vec!["lint".to_owned()];
+            if *fix {
+                command.push("--fix".into());
+            }
+            if let Some(result) = elsewhere(ctx, cli, on, command)? {
+                return Ok(result);
+            }
+            check::lint(ctx, *fix)?;
+            json!({"status":"passed"})
+        }
+        Commands::Test { suite, on, args } => {
+            let name = suite
+                .to_possible_value()
+                .context("suite name")?
+                .get_name()
+                .to_owned();
+            let mut command = vec!["test".to_owned(), name];
+            if !args.is_empty() {
+                command.push("--".into());
+                command.extend(args.iter().cloned());
+            }
+            if let Some(result) = elsewhere(ctx, cli, on, command)? {
+                return Ok(result);
+            }
             check::test(ctx, *suite, args)?;
             json!({"status":"passed"})
+        }
+        Commands::Setup { check, on } => {
+            let mut command = vec!["setup".to_owned()];
+            if *check {
+                command.push("--check".into());
+            }
+            if let Some(result) = elsewhere(ctx, cli, on, command)? {
+                return Ok(result);
+            }
+            if *check {
+                let build = diagnostics::doctor(ctx, "build")?;
+                let tests = diagnostics::doctor(ctx, "check")?;
+                let ok = build["ok"] == true && tests["ok"] == true;
+                let checks: Vec<Value> = [&build, &tests]
+                    .iter()
+                    .flat_map(|report| report["checks"].as_array().cloned().unwrap_or_default())
+                    .collect();
+                return Ok((json!({"ok":ok,"checks":checks}), if ok { 0 } else { 1 }));
+            }
+            setup(ctx)?
         }
         Commands::Generate { check } => {
             check::generate(ctx, *check)?;
@@ -178,14 +322,21 @@ fn dispatch(ctx: &Context, cli: &Cli) -> Result<(Value, i32)> {
         Commands::Package {
             output,
             bundle: existing,
+            role,
+            no_archive,
         } => {
             if let Some(existing) = existing {
                 bundle::verify(existing)?;
                 json!({"archive":bundle::archive_bundle(existing)?})
             } else {
+                let ctx = &Context {
+                    role: role.unwrap_or_default(),
+                    ..ctx.clone()
+                };
                 let _lock = Lock::acquire(&ctx.cache.join("build.lock"))?;
                 let metadata = build::build(ctx)?;
-                json!({"bundle":bundle::package(ctx,&metadata,&output.clone().unwrap_or_else(||ctx.root.join("dist")),true)?,"build":metadata})
+                let output = output.clone().unwrap_or_else(|| ctx.root.join("dist"));
+                json!({"bundle":bundle::package(ctx,&metadata,&output,!no_archive)?,"build":metadata})
             }
         }
         Commands::Install {
@@ -208,19 +359,54 @@ fn dispatch(ctx: &Context, cli: &Cli) -> Result<(Value, i32)> {
             let installed = install::install(ctx, &path, *stage_only)?;
             json!({"installed":installed,"staged":stage_only,"pruned":diagnostics::prune(ctx,_lock.as_ref())?})
         }
+        Commands::Prebuild { triple, output } => {
+            let ctx = &Context {
+                triple: Some(triple.clone()),
+                ..ctx.clone()
+            };
+            let _lock = Lock::acquire(&ctx.cache.join("build.lock"))?;
+            let metadata = build::build(ctx)?;
+            json!({"prebuilt":build::prebuilt(ctx, &metadata, output)?})
+        }
         Commands::Deploy {
+            on,
+            to,
+            rollback,
+            role,
+            prebuilt,
             bundle: existing,
             app,
             bin,
             no_app,
         } => {
-            let _lock = if existing.is_none() {
+            let plan = targets::plan(on.on.as_deref(), to.to.as_deref())?;
+            let build_elsewhere =
+                existing.is_none() && prebuilt.is_none() && rollback.is_none() && plan.on.is_some();
+            if !plan.to_is_local() || build_elsewhere {
+                return remote::deploy(ctx, &plan, &request(ctx, cli)?, rollback.as_ref());
+            }
+            let role = role.or(plan.role()).unwrap_or_default();
+            let ctx = &Context {
+                role,
+                ..ctx.clone()
+            };
+            let source = match (existing, rollback, prebuilt) {
+                (Some(path), _, _) => deploy::Source::Bundle(path),
+                (None, Some(id), _) => deploy::Source::Rollback(id.as_deref()),
+                (None, None, Some(path)) => deploy::Source::Prebuilt(path),
+                (None, None, None) => deploy::Source::Build,
+            };
+            let _lock = if matches!(source, deploy::Source::Build | deploy::Source::Prebuilt(_)) {
                 Some(Lock::acquire(&ctx.cache.join("build.lock"))?)
             } else {
                 None
             };
             let targets = deploy::Targets::resolve(app.clone(), bin.clone(), *no_app);
-            deploy::deploy(ctx, existing.as_deref(), &targets, _lock.as_ref())?
+            let value = deploy::deploy(ctx, source, &targets, _lock.as_ref())?;
+            if let Some(revision) = value["upstream"]["revision"].as_str() {
+                remote::record_upstream(ctx, revision)?;
+            }
+            value
         }
         Commands::Update {
             daily,
@@ -246,7 +432,15 @@ fn dispatch(ctx: &Context, cli: &Cli) -> Result<(Value, i32)> {
             return Ok((value, status));
         }
         Commands::Plan { operation } => diagnostics::plan(ctx, operation)?,
-        Commands::Status => install::status(&ctx.install)?,
+        Commands::Status { to } => {
+            let plan = targets::plan(Some(targets::LOCAL), to.to.as_deref())?;
+            match plan.to {
+                Some(target) if !target.local => {
+                    return remote::installed(ctx, &target, &["status"]);
+                }
+                _ => install::status(&ctx.install)?,
+            }
+        }
         Commands::Versions => install::versions(&ctx.install)?,
         Commands::Rollback { id } => {
             json!({"active":install::rollback(&ctx.install,id.as_deref())?})
@@ -275,6 +469,9 @@ fn dispatch(ctx: &Context, cli: &Cli) -> Result<(Value, i32)> {
 }
 
 fn execute() -> Result<i32> {
+    clap_complete::CompleteEnv::with_factory(Cli::command)
+        .var("WEZ_VTABS_COMPLETE")
+        .complete();
     let cli = Cli::parse();
     let ctx = context(&cli)?;
     let cancellation = ctx.runner.clone();
@@ -286,7 +483,9 @@ fn execute() -> Result<i32> {
                 | Commands::Deps
                 | Commands::Patch { .. }
                 | Commands::Check
+                | Commands::Lint { .. }
                 | Commands::Test { .. }
+                | Commands::Setup { .. }
                 | Commands::Generate { .. }
         ) {
             let project = source::project_source(&ctx)?;
@@ -304,13 +503,8 @@ fn execute() -> Result<i32> {
                     | Commands::Dev { .. }
                     | Commands::Prepare
             )
+            && !matches!(&cli.command, Commands::Build(args) if args.platform.is_some())
         {
-            if let Commands::Build(ref build_args) = cli.command
-                && let Some(target_os) = build_args.resolve_target_os()?
-            {
-                let plan = container::plan(&ctx, build_args, &target_os)?;
-                return Ok((plan, 0));
-            }
             eprintln!(
                 "{}",
                 serde_json::to_string_pretty(&diagnostics::plan(&ctx, "build")?)?
@@ -325,7 +519,10 @@ fn execute() -> Result<i32> {
             } else {
                 Some(format!("exit: {status}"))
             })?;
-            if !matches!(cli.command, Commands::Launch { .. } | Commands::Dev { .. }) || cli.json {
+            if !value.is_null()
+                && (!matches!(cli.command, Commands::Launch { .. } | Commands::Dev { .. })
+                    || cli.json)
+            {
                 println!("{}", serde_json::to_string_pretty(&value)?);
             }
             if cli.timings {
@@ -334,6 +531,11 @@ fn execute() -> Result<i32> {
             Ok(status)
         }
         Err(error) => {
+            if let Some(unreachable) = error.downcast_ref::<remote::Unreachable>() {
+                let _ = ctx.runner.finish(Some(unreachable.to_string()));
+                eprintln!("Error: {unreachable}");
+                return Ok(1);
+            }
             if ctx.root.join("Cargo.toml").is_file()
                 && !ctx.runner.directory().join("source").is_dir()
             {

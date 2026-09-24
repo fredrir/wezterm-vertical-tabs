@@ -11,16 +11,9 @@ use sha2::{Digest, Sha256};
 use walkdir::WalkDir;
 
 use crate::process::CommandSpec;
-use crate::state::{self, BuildMetadata, Context};
+use crate::state::{self, BuildMetadata, Context, Role};
 
 const MANIFEST: &str = "checksums.json";
-const BINARIES: &[&str] = &[
-    "wezterm-gui",
-    "wezterm",
-    "wezterm-mux-server",
-    "strip-ansi-escapes",
-    "wez-vtabs-store",
-];
 
 const DEV_ICNS: &[u8] = include_bytes!("../assets/terminal-dev.icns");
 const DEV_ICO: &[u8] = include_bytes!("../assets/terminal-dev.ico");
@@ -222,13 +215,19 @@ pub fn verify(bundle: &Path) -> Result<BuildMetadata> {
         actual == manifest.files,
         "bundle checksum mismatch: contents or permissions changed"
     );
-    for required in [
-        crate::install::gui_path(bundle),
-        binary_dir(bundle).join(executable_name("wez-vtabs-store")),
-        tool_path(bundle),
-        bundle.join("source/Cargo.toml"),
-        bundle.join("source/tools/Cargo.toml"),
-    ] {
+    let binaries = match metadata.role {
+        Role::Desktop => ["wezterm-gui", "wez-vtabs-store"],
+        Role::Mux => ["wezterm", "wezterm-mux-server"],
+    };
+    for required in binaries
+        .map(|name| binary_dir(bundle).join(executable_name(name)))
+        .into_iter()
+        .chain([
+            tool_path(bundle),
+            bundle.join("source/Cargo.toml"),
+            bundle.join("source/tools/Cargo.toml"),
+        ])
+    {
         ensure!(
             required.is_file(),
             "bundle incomplete: {}",
@@ -352,8 +351,32 @@ pub fn package(
     output: &Path,
     archive: bool,
 ) -> Result<PathBuf> {
+    package_from(ctx, metadata, &ctx.cache.join("worktree"), output, archive)
+}
+
+/// Packages and signs binaries cross-compiled elsewhere; see `build::prebuilt`.
+pub fn package_prebuilt(ctx: &Context, prebuilt: &Path, output: &Path) -> Result<PathBuf> {
+    let mut metadata: BuildMetadata =
+        state::read_json(&prebuilt.join("build.json"))?.context("prebuilt metadata missing")?;
+    for path in metadata.artifacts.values_mut() {
+        *path = prebuilt.join(&path);
+    }
+    package_from(ctx, &metadata, &prebuilt.join("worktree"), output, false)
+}
+
+fn package_from(
+    ctx: &Context,
+    metadata: &BuildMetadata,
+    source: &Path,
+    output: &Path,
+    archive: bool,
+) -> Result<PathBuf> {
     let _stage = ctx.runner.stage("bundle");
     crate::source::verify_source(&ctx.root, metadata)?;
+    ensure!(
+        metadata.role == Role::Desktop || cfg!(target_os = "linux"),
+        "mux bundles are Linux-only"
+    );
     let name = format!("wez-vtabs-{}", state::safe_id(&metadata.id)?);
     fs::create_dir_all(output)?;
     let destination = output.join(name);
@@ -374,7 +397,6 @@ pub fn package(
         .prefix(".bundle-")
         .tempdir_in(output)?;
     let bundle = staging.path();
-    let source = ctx.cache.join("worktree");
     let runtime_copy = ctx.runner.stage("copy-runtime");
     let bindir = binary_dir(bundle);
     let is_dev = ctx.profile == "iterate" || ctx.profile == "dev";
@@ -431,7 +453,7 @@ pub fn package(
             copy_file(&entry.path(), &licenses.join(entry.file_name()))?;
         }
     }
-    for name in BINARIES {
+    for name in metadata.role.binaries() {
         let artifact = metadata
             .artifacts
             .get(*name)
@@ -448,9 +470,9 @@ pub fn package(
         }
     }
     copy_file(&std::env::current_exe()?, &tool_path(bundle))?;
-    shell_assets(&source, bundle, &resources)?;
+    shell_assets(source, bundle, &resources)?;
     if cfg!(windows) {
-        copy_windows_runtime(&source, std::slice::from_ref(&bindir))?;
+        copy_windows_runtime(source, std::slice::from_ref(&bindir))?;
         if is_dev {
             let _ = fs::write(bindir.join("terminal.ico"), DEV_ICO);
         }
@@ -470,7 +492,7 @@ pub fn package(
             let _ = copy_tree(&terminfo_dest, &cached_terminfo);
         }
     }
-    if cfg!(target_os = "linux") {
+    if cfg!(target_os = "linux") && metadata.role == Role::Desktop {
         copy_tree(&source.join("assets/icon"), &resources.join("icons"))?;
         for name in ["wezterm.desktop", "wezterm.appdata.xml"] {
             copy_file(&source.join("assets").join(name), &resources.join(name))?;

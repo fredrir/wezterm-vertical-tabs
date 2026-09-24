@@ -55,6 +55,7 @@ def create_bundle(
     tools_binary: Path,
     target: str,
     wezterm_binaries: dict[str, Path] | None = None,
+    role: str = "desktop",
 ) -> Path:
     binaries = binary_dir(bundle)
     binaries.mkdir(parents=True)
@@ -65,13 +66,18 @@ def create_bundle(
         '[package]\nname = "tools"\nversion = "0.1.0"\n', encoding="utf-8"
     )
     shutil.copy2(tools_binary, binaries / executable_name("wez-vtabs"))
-    for executable in (
-        "wezterm-gui",
-        "wezterm",
-        "wezterm-mux-server",
-        "wez-vtabs-store",
-        "strip-ansi-escapes",
-    ):
+    executables = (
+        ("wezterm", "wezterm-mux-server")
+        if role == "mux"
+        else (
+            "wezterm-gui",
+            "wezterm",
+            "wezterm-mux-server",
+            "wez-vtabs-store",
+            "strip-ansi-escapes",
+        )
+    )
+    for executable in executables:
         destination = binaries / executable_name(executable)
         if wezterm_binaries is not None:
             shutil.copy2(wezterm_binaries[executable], destination)
@@ -89,7 +95,8 @@ def create_bundle(
             )
             destination.chmod(0o755)
     (bundle / "build.json").write_text(
-        json.dumps({"id": name, "capability": 1, "target": target}), encoding="utf-8"
+        json.dumps({"id": name, "capability": 1, "target": target, "role": role}),
+        encoding="utf-8",
     )
     marker_dir = bundle / "WezTerm.app/Contents/Resources" if sys.platform == "darwin" else binaries
     marker_dir.mkdir(parents=True, exist_ok=True)

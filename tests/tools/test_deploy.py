@@ -24,6 +24,7 @@ LINKED_BINARIES = (
 def sandbox_home(tools_sandbox, tmp_path):
     """The default `~/.local/bin` placement must not touch the real home directory."""
     tools_sandbox.env["HOME"] = str(tmp_path / "home")
+    tools_sandbox.env.pop("WEZ_VTABS_BIN")
     return tools_sandbox
 
 
@@ -154,3 +155,70 @@ def test_deploy_without_an_application_only_installs(tools_sandbox, bundle_facto
     assert state(tools_sandbox.install, "active")["id"] == "only"
     assert result["app"] is None
     assert not (tools_sandbox.install / "replaced").exists()
+
+
+def placement(tmp_path):
+    if sys.platform == "darwin":
+        app = tmp_path / "Applications/WezTerm.app"
+        (app / "Contents/MacOS").mkdir(parents=True)
+        return app
+    return tmp_path / "share/applications/org.wezfurlong.wezterm.desktop"
+
+
+@pytest.mark.skipif(sys.platform not in ("darwin", "linux"), reason="application placement")
+def test_rollback_places_the_previous_version_again(sandbox_home, bundle_factory, tmp_path):
+    app = placement(tmp_path)
+    bin_dir = tmp_path / "bin"
+    for name in ("first", "second"):
+        sandbox_home.run("deploy", "--bundle", bundle_factory(name), "--app", app, "--bin", bin_dir)
+
+    result = sandbox_home.json("deploy", "--rollback", "--app", app, "--bin", bin_dir)
+
+    assert state(sandbox_home.install, "active")["id"] == "first"
+    assert state(sandbox_home.install, "previous")["id"] == "second"
+    assert result["installed"].endswith("/versions/first")
+    for name in LINKED_BINARIES:
+        assert (bin_dir / name).read_bytes() == installed(sandbox_home, "first", name).read_bytes()
+
+
+@pytest.mark.skipif(sys.platform not in ("darwin", "linux"), reason="PATH link placement")
+def test_mux_bundle_links_only_the_cli_and_server(sandbox_home, bundle_factory, tmp_path):
+    app = placement(tmp_path)
+    bin_dir = tmp_path / "bin"
+
+    result = sandbox_home.json(
+        "deploy", "--bundle", bundle_factory("mux", role="mux"), "--app", app, "--bin", bin_dir
+    )
+
+    assert result["app"] is None
+    assert not app.exists() or not any((app / "Contents/MacOS").iterdir())
+    assert sorted(path.name for path in bin_dir.iterdir()) == [
+        "wez-vtabs",
+        "wezterm",
+        "wezterm-mux-server",
+    ]
+    assert not (sandbox_home.install / "wez-vtabs").exists()
+    assert not (sandbox_home.install / "wez-vtabs.desktop").exists()
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="links into installed versions")
+def test_switching_to_mux_removes_own_desktop_only_links(sandbox_home, bundle_factory, tmp_path):
+    app = placement(tmp_path)
+    bin_dir = tmp_path / "bin"
+    (bin_dir).mkdir()
+    (bin_dir / "unrelated").write_text("kept")
+    sandbox_home.run(
+        "deploy", "--bundle", bundle_factory("desktop"), "--app", app, "--bin", bin_dir
+    )
+
+    result = sandbox_home.json(
+        "deploy", "--bundle", bundle_factory("mux", role="mux"), "--app", app, "--bin", bin_dir
+    )
+
+    assert sorted(path.name for path in bin_dir.iterdir()) == [
+        "unrelated",
+        "wez-vtabs",
+        "wezterm",
+        "wezterm-mux-server",
+    ]
+    assert sum(1 for link in result["links"] if link.get("removed")) == 3

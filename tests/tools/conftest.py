@@ -170,9 +170,9 @@ def local_upstream(tools_sandbox: ToolSandbox, tmp_path: Path) -> tuple[Path, st
 
 @pytest.fixture
 def bundle_factory(tools_binary: Path, rust_host: str, tmp_path: Path):
-    def create(name: str, directory: str | None = None) -> Path:
+    def create(name: str, directory: str | None = None, role: str = "desktop") -> Path:
         return create_bundle(
-            tmp_path / (directory or f"bundle-{name}"), name, tools_binary, rust_host
+            tmp_path / (directory or f"bundle-{name}"), name, tools_binary, rust_host, role=role
         )
 
     return create

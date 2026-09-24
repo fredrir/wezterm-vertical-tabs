@@ -8,18 +8,33 @@ use anyhow::{Context as _, Result, ensure};
 use serde_json::{Value, json};
 
 use crate::process::CommandSpec;
-use crate::state::{Context, Lock};
+use crate::state::{BuildMetadata, Context, Lock, Role};
 use crate::{build, bundle, install};
 
 const DESKTOP_MARKER: &str = "X-WezVtabs-Install=";
-const LINKS: [&str; 6] = [
-    "wezterm",
-    "wezterm-gui",
-    "wezterm-mux-server",
-    "wez-vtabs",
-    "wez-vtabs-store",
-    "strip-ansi-escapes",
-];
+
+fn linked(role: Role) -> &'static [&'static str] {
+    match role {
+        Role::Desktop => &[
+            "wezterm",
+            "wezterm-gui",
+            "wezterm-mux-server",
+            "wez-vtabs",
+            "wez-vtabs-store",
+            "strip-ansi-escapes",
+        ],
+        Role::Mux => &["wezterm", "wezterm-mux-server", "wez-vtabs"],
+    }
+}
+
+pub enum Source<'a> {
+    Build,
+    Bundle(&'a Path),
+    /// The previous version, or an installed ID.
+    Rollback(Option<&'a str>),
+    /// Binaries cross-compiled elsewhere; packaged and signed here.
+    Prebuilt(&'a Path),
+}
 
 pub struct Targets {
     pub app: Option<PathBuf>,
@@ -28,7 +43,8 @@ pub struct Targets {
 
 impl Targets {
     pub fn resolve(app: Option<PathBuf>, bin: Option<PathBuf>, disabled: bool) -> Self {
-        if disabled {
+        let bin = bin.or_else(|| Some(crate::home().join(".local/bin")));
+        if disabled || !(cfg!(target_os = "macos") || cfg!(target_os = "linux")) {
             Self {
                 app: None,
                 bin: None,
@@ -36,9 +52,9 @@ impl Targets {
         } else if cfg!(target_os = "macos") {
             Self {
                 app: app.or_else(|| Some(PathBuf::from("/Applications/WezTerm.app"))),
-                bin: bin.or_else(|| Some(crate::home().join(".local/bin"))),
+                bin,
             }
-        } else if cfg!(target_os = "linux") {
+        } else {
             Self {
                 app: app.or_else(|| {
                     Some(
@@ -47,12 +63,7 @@ impl Targets {
                             .join("org.wezfurlong.wezterm.desktop"),
                     )
                 }),
-                bin: bin.or_else(|| Some(crate::home().join(".local/bin"))),
-            }
-        } else {
-            Self {
-                app: None,
-                bin: None,
+                bin,
             }
         }
     }
@@ -60,23 +71,44 @@ impl Targets {
 
 pub fn deploy(
     ctx: &Context,
-    existing: Option<&Path>,
+    source: Source,
     targets: &Targets,
     build_lock: Option<&Lock>,
 ) -> Result<Value> {
     let pinned = pin_upstream(ctx)?;
     let ctx = pinned.as_ref().unwrap_or(ctx);
-    let bundle = match existing {
-        Some(path) => path.to_path_buf(),
-        None => {
+    let (installed, pruned) = match source {
+        Source::Rollback(id) => (install::rollback(&ctx.install, id)?, Value::Null),
+        Source::Bundle(path) => (
+            install::install(ctx, path, false)?,
+            crate::diagnostics::prune(ctx, build_lock)?,
+        ),
+        Source::Build => {
             let metadata = build::build(ctx)?;
-            bundle::package(ctx, &metadata, &ctx.cache.join("bundles"), false)?
+            let bundle = bundle::package(ctx, &metadata, &ctx.cache.join("bundles"), false)?;
+            (
+                install::install(ctx, &bundle, false)?,
+                crate::diagnostics::prune(ctx, build_lock)?,
+            )
+        }
+        Source::Prebuilt(path) => {
+            let bundle = bundle::package_prebuilt(ctx, path, &ctx.cache.join("bundles"))?;
+            (
+                install::install(ctx, &bundle, false)?,
+                crate::diagnostics::prune(ctx, build_lock)?,
+            )
         }
     };
-    let installed = install::install(ctx, &bundle, false)?;
-    let pruned = crate::diagnostics::prune(ctx, build_lock)?;
+    let metadata = crate::state::read_json::<BuildMetadata>(&installed.join("build.json"))?
+        .context("installed version metadata missing")?;
+    let role = metadata.role;
+    // Headless versions have no application; never replace one with them.
+    let targets = &Targets {
+        app: targets.app.clone().filter(|_| role == Role::Desktop),
+        bin: targets.bin.clone(),
+    };
     if targets.bin.is_some() {
-        ensure_binaries(&installed)?;
+        ensure_binaries(&installed, role)?;
     }
     let app = match &targets.app {
         Some(app) if cfg!(target_os = "macos") => Some(place_app(ctx, &installed, app)?),
@@ -84,31 +116,31 @@ pub fn deploy(
         None => None,
     };
     let links = match targets.bin.as_deref() {
-        Some(bin) => place_links(ctx, &link_source(&installed, targets)?, bin)?,
+        Some(bin) => place_links(ctx, &link_source(&installed, targets)?, bin, role)?,
         None => Vec::new(),
     };
     Ok(json!({
         "installed": installed,
         "app": app,
         "links": links,
-        "upstream": {"revision": ctx.upstream, "pinned": pinned.is_some()},
+        "upstream": {"revision": metadata.upstream, "pinned": pinned.is_some()},
         "pruned": pruned,
         "next": "Quit and reopen WezTerm to run this version",
     }))
 }
 
 /// Plugin changes should not pull a newer WezTerm and its full rebuild along; only an
-/// explicit `--upstream` moves past the revision the last build used.
+/// explicit `--upstream` moves past the revision the last deploy used on any machine.
 fn pin_upstream(ctx: &Context) -> Result<Option<Context>> {
     if ctx.upstream.is_some() {
         return Ok(None);
     }
-    let previous: Option<crate::state::BuildMetadata> =
-        crate::state::read_json(&ctx.cache.join("build.json"))?;
-    Ok(previous.map(|previous| Context {
-        upstream: Some(previous.upstream),
-        ..ctx.clone()
-    }))
+    Ok(
+        crate::remote::pinned_upstream(ctx)?.map(|upstream| Context {
+            upstream: Some(upstream),
+            ..ctx.clone()
+        }),
+    )
 }
 
 /// Swap the application atomically; a running instance keeps its renamed files open.
@@ -181,12 +213,12 @@ fn link_source(installed: &Path, targets: &Targets) -> Result<PathBuf> {
 }
 
 /// A link earlier on PATH shadows a packaged CLI on both macOS and Linux.
-fn place_links(ctx: &Context, binaries: &Path, bin: &Path) -> Result<Vec<Value>> {
+fn place_links(ctx: &Context, binaries: &Path, bin: &Path, role: Role) -> Result<Vec<Value>> {
     let _stage = ctx.runner.stage("deploy-links");
     fs::create_dir_all(bin)?;
     let bin = bin.canonicalize()?;
     let mut links = Vec::new();
-    for name in LINKS {
+    for name in linked(role) {
         let link = bin.join(bundle::executable_name(name));
         let target = binaries.join(bundle::executable_name(name));
         let owned = fs::read_link(&link).is_ok_and(|current| {
@@ -196,12 +228,23 @@ fn place_links(ctx: &Context, binaries: &Path, bin: &Path) -> Result<Vec<Value>>
         symlink(&target, &link)?;
         links.push(json!({"path": link, "target": target, "replaced": finish(retired)?}));
     }
+    // A role change leaves own links to binaries this version does not have.
+    for name in linked(Role::Desktop)
+        .iter()
+        .filter(|name| !linked(role).contains(name))
+    {
+        let link = bin.join(bundle::executable_name(name));
+        if fs::read_link(&link).is_ok_and(|current| current.starts_with(&ctx.install)) {
+            fs::remove_file(&link)?;
+            links.push(json!({"path": link, "removed": true}));
+        }
+    }
     Ok(links)
 }
 
-fn ensure_binaries(installed: &Path) -> Result<()> {
+fn ensure_binaries(installed: &Path, role: Role) -> Result<()> {
     let binaries = bundle::binary_dir(installed);
-    for name in LINKS {
+    for name in linked(role) {
         ensure!(
             binaries.join(bundle::executable_name(name)).is_file(),
             "installed version has no {name} binary"

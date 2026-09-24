@@ -28,7 +28,7 @@ return config
 | `settings_file`       | Managed Lua file; default `wezterm.config_dir .. "/vtabs_settings.lua"`      |
 | Precedence            | Rust defaults → `settings_file` → explicit `apply_to_config` values          |
 | Config-owned settings | Read-only in the settings UI                                                 |
-| Types                 | `plugin/types/`; generated from Rust with `just generate`                    |
+| Types                 | `plugin/types/`; generated from Rust with `just lint --fix`                  |
 | Actions               | Indexed, relative, negative-index and MRU navigation follow visible tabs     |
 | Raw mux identities    | CLI/mux tab IDs retain upstream meaning                                      |
 | Sidebar width         | Logical pixels; clamped against available content area                       |

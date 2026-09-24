@@ -14,7 +14,7 @@ pub const UPSTREAM_URL: &str = "https://github.com/wezterm/wezterm.git";
 pub const PROJECT_URL: &str = "https://github.com/fredrir/wezterm-vertical-tabs.git";
 pub const PROJECT_BRANCH: &str = "dev";
 const PREPARATION_VERSION: u32 = 3;
-const SOURCE_ITEMS: &[&str] = &[
+pub const SOURCE_ITEMS: &[&str] = &[
     "Cargo.toml",
     "Cargo.lock",
     "rust-toolchain",
@@ -36,7 +36,7 @@ const SOURCE_ITEMS: &[&str] = &[
     "tools",
     "tests",
 ];
-const IGNORED: &[&str] = &[
+pub const IGNORED: &[&str] = &[
     "target",
     "__pycache__",
     ".git",
@@ -659,10 +659,9 @@ fn sync_directory(source: &Path, destination: &Path) -> Result<()> {
     if fs::symlink_metadata(destination).is_ok_and(|v| v.file_type().is_symlink()) {
         if let (Ok(dest_can), Ok(src_can)) =
             (fs::canonicalize(destination), fs::canonicalize(source))
+            && dest_can == src_can
         {
-            if dest_can == src_can {
-                return Ok(());
-            }
+            return Ok(());
         }
         fs::remove_file(destination)?;
     }

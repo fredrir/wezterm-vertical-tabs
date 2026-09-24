@@ -69,7 +69,9 @@ pub fn install(ctx: &Context, bundle: &Path, stage_only: bool) -> Result<PathBuf
         fs::rename(staging.path(), &destination)?;
     }
     // Prepare all launch infrastructure before committing the active pointer.
-    install_entry(&ctx.install, &destination)?;
+    if metadata.role == state::Role::Desktop {
+        install_entry(&ctx.install, &destination)?;
+    }
     let next = Pointer { id: metadata.id };
     if stage_only {
         state::write_json(&ctx.install.join("pending.json"), &next)?;
@@ -154,10 +156,23 @@ pub fn versions(root: &Path) -> Result<Value> {
 }
 
 pub fn status(root: &Path) -> Result<Value> {
+    let versions: Vec<Value> = versions(root)?
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|version| {
+            let metadata = &version["metadata"];
+            json!({
+                "id": version["id"], "active": version["active"], "pending": version["pending"],
+                "previous": version["previous"], "built_at": metadata["built_at"],
+                "upstream": metadata["upstream"], "role": metadata["role"],
+            })
+        })
+        .collect();
     Ok(json!({
         "install":root,"active":pointer(root,"active")?,"pending":pointer(root,"pending")?,
         "previous":pointer(root,"previous")?,"update":state::read_json::<Value>(&root.join("update.json"))?,
-        "versions":versions(root)?
+        "versions":versions
     }))
 }
 

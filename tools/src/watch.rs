@@ -96,7 +96,9 @@ fn build_gui_command(gui: &Path, bundle: &Path, root: &Path, args: &[String]) ->
     if !has_config_opt {
         global_args.push("--skip-config".into());
         global_args.push("--config".into());
-        global_args.push("window_frame={active_titlebar_bg=\"#b45309\",active_titlebar_fg=\"#ffffff\"}".into());
+        global_args.push(
+            "window_frame={active_titlebar_bg=\"#b45309\",active_titlebar_fg=\"#ffffff\"}".into(),
+        );
     }
 
     let has_start = args.iter().any(|arg| arg == "start");
@@ -129,7 +131,10 @@ fn build_gui_command(gui: &Path, bundle: &Path, root: &Path, args: &[String]) ->
         global_args.push("start".into());
         global_args.push("--always-new-process".into());
         global_args.push("--no-auto-connect".into());
-        if !sub_args.iter().any(|a| a == "--workspace" || a.starts_with("--workspace=")) {
+        if !sub_args
+            .iter()
+            .any(|a| a == "--workspace" || a.starts_with("--workspace="))
+        {
             global_args.push("--workspace".into());
             global_args.push("vtabs-dev".into());
         }
@@ -200,7 +205,10 @@ mod macos_window {
             ));
             let cf_num_val: Option<
                 unsafe extern "C" fn(CFNumberRef, libc::c_int, *mut libc::c_int) -> Boolean,
-            > = std::mem::transmute(libc::dlsym(libc::RTLD_DEFAULT, c"CFNumberGetValue".as_ptr()));
+            > = std::mem::transmute(libc::dlsym(
+                libc::RTLD_DEFAULT,
+                c"CFNumberGetValue".as_ptr(),
+            ));
             let cf_str_create: Option<
                 unsafe extern "C" fn(*const c_void, *const libc::c_char, u32) -> CFStringRef,
             > = std::mem::transmute(libc::dlsym(
@@ -231,8 +239,7 @@ mod macos_window {
                 return false;
             };
 
-            let k_pid =
-                cf_str_create(std::ptr::null(), c"kCGWindowOwnerPID".as_ptr(), 0x08000100);
+            let k_pid = cf_str_create(std::ptr::null(), c"kCGWindowOwnerPID".as_ptr(), 0x08000100);
             let k_layer = cf_str_create(std::ptr::null(), c"kCGWindowLayer".as_ptr(), 0x08000100);
 
             let windows = cg_list_copy(1, 0);
@@ -313,31 +320,33 @@ fn scan_source_stats(root: &Path) -> BTreeMap<PathBuf, FileStat> {
                     continue;
                 }
                 if let Ok(meta) = entry.metadata()
-                    && let Ok(mtime) = meta.modified() {
-                        let rel = entry.path().strip_prefix(root).unwrap_or(entry.path());
-                        stats.insert(
-                            rel.to_path_buf(),
-                            FileStat {
-                                mtime,
-                                len: meta.len(),
-                            },
-                        );
-                    }
+                    && let Ok(mtime) = meta.modified()
+                {
+                    let rel = entry.path().strip_prefix(root).unwrap_or(entry.path());
+                    stats.insert(
+                        rel.to_path_buf(),
+                        FileStat {
+                            mtime,
+                            len: meta.len(),
+                        },
+                    );
+                }
             }
         }
     }
     for file_name in ["Cargo.toml", "Cargo.lock", "rust-toolchain.toml"] {
         let file = root.join(file_name);
         if let Ok(meta) = file.metadata()
-            && let Ok(mtime) = meta.modified() {
-                stats.insert(
-                    PathBuf::from(file_name),
-                    FileStat {
-                        mtime,
-                        len: meta.len(),
-                    },
-                );
-            }
+            && let Ok(mtime) = meta.modified()
+        {
+            stats.insert(
+                PathBuf::from(file_name),
+                FileStat {
+                    mtime,
+                    len: meta.len(),
+                },
+            );
+        }
     }
     stats
 }
@@ -390,8 +399,12 @@ pub fn dev(ctx: &Context, watch: bool, debounce_ms: u64, args: &[String]) -> Res
     let pid = session.child.id();
     eprintln!("[vtabs:dev] ✨ GUI ready in {build_elapsed:.2}s (pid: {pid}, workspace: vtabs-dev)");
     if watch {
-        eprintln!("[vtabs:dev] ⏳ Hot reload active (watching src/ and plugin/ with {debounce_ms}ms debounce)");
-        eprintln!("[vtabs:dev] 💡 Edit any Lua or Rust file to hot-reload. Press Ctrl+C to stop.\n");
+        eprintln!(
+            "[vtabs:dev] ⏳ Hot reload active (watching src/ and plugin/ with {debounce_ms}ms debounce)"
+        );
+        eprintln!(
+            "[vtabs:dev] 💡 Edit any Lua or Rust file to hot-reload. Press Ctrl+C to stop.\n"
+        );
     }
 
     let mut previous_stats = scan_source_stats(&ctx.root);
@@ -421,52 +434,57 @@ pub fn dev(ctx: &Context, watch: bool, debounce_ms: u64, args: &[String]) -> Res
                 pending = Some((Instant::now(), changed));
             }
             if let Some((started, changed)) = &pending
-                && started.elapsed() >= Duration::from_millis(debounce_ms) {
-                    let changed_files = changed.clone();
-                    pending = None;
+                && started.elapsed() >= Duration::from_millis(debounce_ms)
+            {
+                let changed_files = changed.clone();
+                pending = None;
 
-                    let is_lua_only = changed_files.iter().all(|p| p.starts_with("plugin/"));
-                    let action = if is_lua_only { "restaging" } else { "rebuilding" };
-                    let summary = if changed_files.is_empty() {
-                        "source".to_string()
-                    } else if changed_files.len() <= 2 {
-                        changed_files.join(", ")
-                    } else {
-                        format!("{} (+{} more)", changed_files[0], changed_files.len() - 1)
-                    };
-                    eprintln!("[vtabs:dev] ⚡ Change detected in {summary} ({action}...)");
+                let is_lua_only = changed_files.iter().all(|p| p.starts_with("plugin/"));
+                let action = if is_lua_only {
+                    "restaging"
+                } else {
+                    "rebuilding"
+                };
+                let summary = if changed_files.is_empty() {
+                    "source".to_string()
+                } else if changed_files.len() <= 2 {
+                    changed_files.join(", ")
+                } else {
+                    format!("{} (+{} more)", changed_files[0], changed_files.len() - 1)
+                };
+                eprintln!("[vtabs:dev] ⚡ Change detected in {summary} ({action}...)");
 
-                    let reload_start = Instant::now();
-                    match build_runtime(&ctx, Some(&runtime.metadata)) {
-                        Ok(next) => match start(&ctx, &next.path, args) {
-                            Ok(next_session) => {
-                                // Seamless zero-flicker handoff: wait for the new window to be
-                                // mapped and rendered before dropping the previous session.
-                                if std::env::var_os("WEZ_VTABS_PROJECT_URL").is_none() {
-                                    macos_window::wait_for_window(
-                                        next_session.child.id(),
-                                        Duration::from_millis(800),
-                                    );
-                                }
-                                drop(session);
-                                session = next_session;
-                                runtime = next;
-                                let elapsed = reload_start.elapsed().as_secs_f32();
-                                eprintln!("[vtabs:dev] ✨ Reloaded GUI in {elapsed:.2}s\n");
-                            }
-                            Err(error) => {
-                                eprintln!(
-                                    "[vtabs:dev] ❌ GUI spawn failed: {error:#}; current GUI kept running\n"
+                let reload_start = Instant::now();
+                match build_runtime(&ctx, Some(&runtime.metadata)) {
+                    Ok(next) => match start(&ctx, &next.path, args) {
+                        Ok(next_session) => {
+                            // Seamless zero-flicker handoff: wait for the new window to be
+                            // mapped and rendered before dropping the previous session.
+                            if std::env::var_os("WEZ_VTABS_PROJECT_URL").is_none() {
+                                macos_window::wait_for_window(
+                                    next_session.child.id(),
+                                    Duration::from_millis(800),
                                 );
                             }
-                        },
+                            drop(session);
+                            session = next_session;
+                            runtime = next;
+                            let elapsed = reload_start.elapsed().as_secs_f32();
+                            eprintln!("[vtabs:dev] ✨ Reloaded GUI in {elapsed:.2}s\n");
+                        }
                         Err(error) => {
                             eprintln!(
-                                "[vtabs:dev] ❌ Build failed:\n{error:#}\n[vtabs:dev] ⏳ Current GUI kept running; waiting for changes...\n"
+                                "[vtabs:dev] ❌ GUI spawn failed: {error:#}; current GUI kept running\n"
                             );
                         }
+                    },
+                    Err(error) => {
+                        eprintln!(
+                            "[vtabs:dev] ❌ Build failed:\n{error:#}\n[vtabs:dev] ⏳ Current GUI kept running; waiting for changes...\n"
+                        );
                     }
                 }
+            }
         }
         // Keep the runtime lease alive through the current GUI's lifetime.
         let _ = &runtime;

@@ -3,71 +3,30 @@ tool := "cargo xtask"
 _default:
     @just --list --unsorted
 
-deps *args:
-    @{{tool}} deps {{args}}
-
-# Compile and validate binaries (locally or containerized via e.g. --ubuntu --26, --debian).
-build *args:
-    @{{tool}} build {{args}}
-
-# Build an iteration bundle; --watch rebuilds changed runtime inputs.
-dev *args:
-    @{{tool}} dev {{args}}
-
-check *args:
-    @{{tool}} check {{args}}
-
-# Select all/tools/rust/lua/gui/ssh/tls; pytest arguments follow --.
-test *args:
-    @{{tool}} test {{args}}
-
-# Release timings and allocation counts for core, UI and storage workloads.
-bench *args:
-    cargo run --release --locked -p vtabs-bench -- {{args}}
-
-lint:
-    uv run --locked ruff check
-    uv run --locked ruff format --check
-
-package *args:
-    @{{tool}} package {{args}}
-
-install *args:
-    @{{tool}} install {{args}}
-
-# Build, install and replace /Applications/WezTerm.app; link the bundled binaries into ~/.local/bin.
+# Build and install; --on MACHINE compiles, --to MACHINE receives, --rollback [ID].
 deploy *args:
     @{{tool}} deploy {{args}}
 
-update *args:
-    @{{tool}} update {{args}}
+# Compile and validate; --on MACHINE compiles, --to MACHINE bundles for another machine.
+build *args:
+    @{{tool}} build {{args}}
 
-launch *args:
-    @{{tool}} launch {{args}}
+# Iteration bundle; hot-reloads changes unless --no-watch.
+dev *args:
+    @{{tool}} dev {{args}}
 
-doctor *args:
-    @{{tool}} doctor {{args}}
+# Suite: all/tools/rust/lua/gui/ssh/tls/bench; --on MACHINE; pytest arguments follow --.
+test *args:
+    @{{tool}} test {{args}}
 
-generate *args:
-    @{{tool}} generate {{args}}
+# Formatting, Clippy, Ruff and generated files; --fix rewrites them; --on MACHINE.
+lint *args:
+    @{{tool}} lint {{args}}
 
-plan *args:
-    @{{tool}} plan {{args}}
+# Active, pending and previous versions; --to MACHINE.
+status *args:
+    @{{tool}} status {{args}}
 
-status:
-    @{{tool}} status
-
-versions:
-    @{{tool}} versions
-
-rollback *args:
-    @{{tool}} rollback {{args}}
-
-cache *args:
-    @{{tool}} cache {{args}}
-
-patch *args:
-    @{{tool}} patch {{args}}
-
-repro *args:
-    @{{tool}} repro {{args}}
+# System and Python dependencies; --check only diagnoses; --on MACHINE.
+setup *args:
+    @{{tool}} setup {{args}}

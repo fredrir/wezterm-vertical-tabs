@@ -1,4 +1,4 @@
-use super::{core::*, *};
+use super::*;
 
 fn discover(app: &mut WindowApp, revision: u64, active: TabId) {
     app.update(HostSnapshot {
