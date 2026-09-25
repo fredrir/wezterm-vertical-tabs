@@ -229,35 +229,14 @@
     </cargoProject>
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="f71fe60c-f64a-4f88-920a-219e301a1e53" name="Changes" comment="">
-      <change afterPath="$PROJECT_DIR$/.idea/inspectionProfiles/Project_Default.xml" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/.idea/vcs.xml" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/src/adapter/src/repos.rs" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/src/adapter/tests/repos.rs" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/src/core/tests/location.rs" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/docs/configuration.md" beforeDir="false" afterPath="$PROJECT_DIR$/docs/configuration.md" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/docs/limitations.md" beforeDir="false" afterPath="$PROJECT_DIR$/docs/limitations.md" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/docs/options.md" beforeDir="false" afterPath="$PROJECT_DIR$/docs/options.md" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/docs/performance.md" beforeDir="false" afterPath="$PROJECT_DIR$/docs/performance.md" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/plugin/schema.lua" beforeDir="false" afterPath="$PROJECT_DIR$/plugin/schema.lua" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/plugin/types.lua" beforeDir="false" afterPath="$PROJECT_DIR$/plugin/types.lua" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/adapter/src/lib.rs" beforeDir="false" afterPath="$PROJECT_DIR$/src/adapter/src/lib.rs" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/app/src/lib.rs" beforeDir="false" afterPath="$PROJECT_DIR$/src/app/src/lib.rs" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/core/src/lib.rs" beforeDir="false" afterPath="$PROJECT_DIR$/src/core/src/lib.rs" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/core/src/model.rs" beforeDir="false" afterPath="$PROJECT_DIR$/src/core/src/model.rs" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/core/src/settings.rs" beforeDir="false" afterPath="$PROJECT_DIR$/src/core/src/settings.rs" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/ui/src/sidebar.rs" beforeDir="false" afterPath="$PROJECT_DIR$/src/ui/src/sidebar.rs" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/ui/tests/sidebar.rs" beforeDir="false" afterPath="$PROJECT_DIR$/src/ui/tests/sidebar.rs" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/tools/src/source.rs" beforeDir="false" afterPath="$PROJECT_DIR$/tools/src/source.rs" afterDir="false" />
-    </list>
+    <list default="true" id="f71fe60c-f64a-4f88-920a-219e301a1e53" name="Changes" comment="" />
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
     <option name="HIGHLIGHT_NON_ACTIVE_CHANGELIST" value="false" />
     <option name="LAST_RESOLUTION" value="IGNORE" />
   </component>
   <component name="EmbeddingIndexingInfo">
-    <option name="cachedIndexableFilesCount" value="960" />
+    <option name="cachedIndexableFilesCount" value="11" />
     <option name="fileBasedEmbeddingIndicesEnabled" value="true" />
   </component>
   <component name="ExecutionTargetManager" SELECTED_TARGET="RsBuildProfile:test" />
@@ -352,35 +331,35 @@
     <option name="hideEmptyMiddlePackages" value="true" />
     <option name="showLibraryContents" value="true" />
   </component>
-  <component name="PropertiesComponent"><![CDATA[{
-  "keyToString": {
-    "Cargo.Test vertical-tabs.executor": "Run",
-    "CidrDebugProfileConversion": "true",
-    "ModuleVcsDetector.initialDetectionPerformed": "true",
-    "RunOnceActivity.MCP Project settings loaded": "true",
-    "RunOnceActivity.ShowReadmeOnStart": "true",
-    "RunOnceActivity.git.unshallow": "true",
-    "RunOnceActivity.rust.reset.selective.auto.import": "true",
-    "RunOnceActivity.typescript.service.memoryLimit.init": "true",
-    "codeWithMe.voiceChat.enabledByDefault": "false",
-    "com.intellij.ml.llm.matterhorn.ej.ui.settings.DefaultModelSelectionForGA.v1": "true",
-    "git-widget-placeholder": "native",
-    "junie.onboarding.icon.badge.shown": "true",
-    "last_opened_file_path": "/Users/fredrir/projects/wez-plugins/vertical-tabs",
-    "node.js.detected.package.eslint": "true",
-    "node.js.detected.package.tslint": "true",
-    "node.js.selected.package.eslint": "(autodetect)",
-    "node.js.selected.package.tslint": "(autodetect)",
-    "nodejs_package_manager_path": "npm",
-    "org.rust.cargo.project.model.PROJECT_DISCOVERY": "true",
-    "org.rust.cargo.project.model.impl.CargoExternalSystemProjectAware.subscribe.first.balloon": "",
-    "org.rust.first.attach.projects": "true",
-    "org.rust.hideNoCargoProjectNotifications/Users/fredrir/projects/wez-plugins/vertical-tabs/src/adapter/src/lib.rs": "true",
-    "org.rust.hideNoCargoProjectNotifications/Users/fredrir/projects/wez-plugins/vertical-tabs/src/adapter/src/repos.rs": "true",
-    "settings.editor.selected.configurable": "Errors",
-    "to.speed.mode.migration.done": "true"
+  <component name="PropertiesComponent">{
+  &quot;keyToString&quot;: {
+    &quot;Cargo.Test vertical-tabs.executor&quot;: &quot;Run&quot;,
+    &quot;CidrDebugProfileConversion&quot;: &quot;true&quot;,
+    &quot;ModuleVcsDetector.initialDetectionPerformed&quot;: &quot;true&quot;,
+    &quot;RunOnceActivity.MCP Project settings loaded&quot;: &quot;true&quot;,
+    &quot;RunOnceActivity.ShowReadmeOnStart&quot;: &quot;true&quot;,
+    &quot;RunOnceActivity.git.unshallow&quot;: &quot;true&quot;,
+    &quot;RunOnceActivity.rust.reset.selective.auto.import&quot;: &quot;true&quot;,
+    &quot;RunOnceActivity.typescript.service.memoryLimit.init&quot;: &quot;true&quot;,
+    &quot;codeWithMe.voiceChat.enabledByDefault&quot;: &quot;false&quot;,
+    &quot;com.intellij.ml.llm.matterhorn.ej.ui.settings.DefaultModelSelectionForGA.v1&quot;: &quot;true&quot;,
+    &quot;git-widget-placeholder&quot;: &quot;native&quot;,
+    &quot;junie.onboarding.icon.badge.shown&quot;: &quot;true&quot;,
+    &quot;last_opened_file_path&quot;: &quot;/Users/fredrir/projects/wez-plugins/vertical-tabs&quot;,
+    &quot;node.js.detected.package.eslint&quot;: &quot;true&quot;,
+    &quot;node.js.detected.package.tslint&quot;: &quot;true&quot;,
+    &quot;node.js.selected.package.eslint&quot;: &quot;(autodetect)&quot;,
+    &quot;node.js.selected.package.tslint&quot;: &quot;(autodetect)&quot;,
+    &quot;nodejs_package_manager_path&quot;: &quot;npm&quot;,
+    &quot;org.rust.cargo.project.model.PROJECT_DISCOVERY&quot;: &quot;true&quot;,
+    &quot;org.rust.cargo.project.model.impl.CargoExternalSystemProjectAware.subscribe.first.balloon&quot;: &quot;&quot;,
+    &quot;org.rust.first.attach.projects&quot;: &quot;true&quot;,
+    &quot;org.rust.hideNoCargoProjectNotifications/Users/fredrir/projects/wez-plugins/vertical-tabs/src/adapter/src/lib.rs&quot;: &quot;true&quot;,
+    &quot;org.rust.hideNoCargoProjectNotifications/Users/fredrir/projects/wez-plugins/vertical-tabs/src/adapter/src/repos.rs&quot;: &quot;true&quot;,
+    &quot;settings.editor.selected.configurable&quot;: &quot;Errors&quot;,
+    &quot;to.speed.mode.migration.done&quot;: &quot;true&quot;
   }
-}]]></component>
+}</component>
   <component name="RunManager" selected="Cargo.Test vertical-tabs">
     <configuration name="Run gen-schema" type="CargoCommandRunConfiguration" factoryName="Cargo Command">
       <option name="command" value="run --package vtabs-core --bin gen-schema" />

@@ -397,14 +397,10 @@ def test_adopting_a_remote_pane_takes_over_its_backing_tab(mux_pair):
     )
 
 
-def test_adoption_skips_panes_the_server_only_relays(mux_pair, wezterm_binaries, isolated_env):
-    local, _ = mux_pair
-    plain = int(local.cli("spawn", "--new-window"))
-    local.cli("spawn", "--new-window", "--domain-name", "shared")
-    wait_for(lambda: len(local.panes()) == 2)
+def observer_of(local, wezterm_binaries, isolated_env, local_pane_layout):
     hop = {
         "name": "hop",
-        "local_pane_layout": True,
+        "local_pane_layout": local_pane_layout,
         "proxy_command": [
             "/usr/bin/env",
             f"WEZTERM_UNIX_SOCKET={local.socket}",
@@ -416,8 +412,45 @@ def test_adoption_skips_panes_the_server_only_relays(mux_pair, wezterm_binaries,
             "proxy",
         ],
     }
-    observer = MuxServer(local.root.parent / "observer", wezterm_binaries, isolated_env, [], [hop])
+    return MuxServer(local.root.parent / "observer", wezterm_binaries, isolated_env, [], [hop])
+
+
+def test_adoption_skips_panes_the_server_only_relays(mux_pair, wezterm_binaries, isolated_env):
+    local, _ = mux_pair
+    plain = int(local.cli("spawn", "--new-window"))
+    local.cli("spawn", "--new-window", "--domain-name", "shared")
+    wait_for(lambda: len(local.panes()) == 2)
+    observer = observer_of(local, wezterm_binaries, isolated_env, local_pane_layout=True)
     try:
         assert [p["pane_id"] for p in observer.adoptable("hop")] == [plain]
+    finally:
+        observer.close()
+
+
+def test_relayed_scrollback_reaches_a_client_of_the_relaying_mux(
+    mux_pair, wezterm_binaries, isolated_env
+):
+    local, _ = mux_pair
+    source = int(local.cli("spawn", "--new-window"))
+    burst = ("/bin/sh", "-c", "seq 1 3000; exec sleep 60")
+    relayed = int(local.cli("spawn", "--pane-id", source, "--domain-name", "proxied", "--", *burst))
+    # Reading only the viewport leaves the scrollback uncached on the relaying mux.
+    wait_for(lambda: "\n3000" in local.cli("get-text", "--pane-id", relayed))
+
+    # A GUI attaches to its localmux the same way: an ordinary client domain.
+    observer = observer_of(local, wezterm_binaries, isolated_env, local_pane_layout=False)
+    try:
+        observer.cli("spawn", "--new-window", "--domain-name", "hop")
+
+        def mirrors(pane):
+            return "\n3000" in observer.cli("get-text", "--pane-id", pane["pane_id"])
+
+        (mirrored,) = wait_for(lambda: [p["pane_id"] for p in observer.panes() if mirrors(p)])
+        scrollback = "\n".join(map(str, range(1, 3001)))
+        wait_for(
+            lambda: (
+                scrollback in observer.cli("get-text", "--pane-id", mirrored, "--start-line", -3100)
+            )
+        )
     finally:
         observer.close()

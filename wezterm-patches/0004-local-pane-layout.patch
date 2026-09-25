@@ -572,6 +572,58 @@ diff --git a/wezterm-client/src/pane/clientpane.rs b/wezterm-client/src/pane/cli
              Value::String("is_tardy".to_string()),
              Value::Bool(inner.is_tardy()),
          );
+diff --git a/wezterm-client/src/pane/renderable.rs b/wezterm-client/src/pane/renderable.rs
+--- a/wezterm-client/src/pane/renderable.rs
++++ b/wezterm-client/src/pane/renderable.rs
+@@ -358,7 +358,7 @@
+             delta.seqno,
+             self.local_pane_id
+         );
+-        self.seqno = delta.seqno;
++        self.advance_seqno(delta.seqno);
+ 
+         let config = configuration();
+         for (stable_row, line) in bonus_lines {
+@@ -432,13 +432,19 @@
+             lines.put(stable_row, entry);
+         }
+         self.lines = lines;
++    }
++
++    // A relaying mux only reports lines stamped after the seqno its client last saw
++    fn advance_seqno(&mut self, at_least: SequenceNo) {
++        self.seqno = (self.seqno + 1).max(at_least);
+     }
+ 
+     fn make_stale(&mut self, stable_row: StableRowIndex) {
+         match self.lines.pop(&stable_row) {
+-            Some(LineEntry::Stale(old))
+-            | Some(LineEntry::Line(old))
+-            | Some(LineEntry::LineAndFetching(old, _)) => {
++            Some(LineEntry::Stale(mut old))
++            | Some(LineEntry::Line(mut old))
++            | Some(LineEntry::LineAndFetching(mut old, _)) => {
++                old.update_last_change_seqno(self.seqno);
+                 self.lines.put(stable_row, LineEntry::Stale(old));
+             }
+             Some(LineEntry::Fetching(_)) | None => {}
+@@ -487,6 +493,7 @@
+                 None => return,
+             }
+         } else {
++            line.update_last_change_seqno(self.seqno);
+             LineEntry::Line(line)
+         };
+         self.lines.put(stable_row, entry);
+@@ -549,6 +556,8 @@
+                     let config = configuration();
+ 
+                     log::trace!("fetch complete for {:?} at {:?}", to_fetch, now);
++                    let newest = lines.iter().map(|(_, line)| line.current_seqno()).max();
++                    inner.advance_seqno(newest.unwrap_or(SEQ_ZERO));
+                     for (stable_row, line) in lines.into_iter() {
+                         inner.put_line(stable_row, line, &config, Some(now));
+                     }
 diff --git a/wezterm-mux-server/src/main.rs b/wezterm-mux-server/src/main.rs
 --- a/wezterm-mux-server/src/main.rs
 +++ b/wezterm-mux-server/src/main.rs
