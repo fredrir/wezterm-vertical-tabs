@@ -4,6 +4,7 @@ import concurrent.futures
 import json
 import os
 import signal
+import socket
 import subprocess
 import tempfile
 import time
@@ -14,6 +15,8 @@ import pytest
 from tests.scenarios.tls_fixture import LocalTlsMux
 
 pytestmark = pytest.mark.gui
+
+BACKING = "__backing:" + socket.gethostname().split(".")[0]
 
 
 class MuxServer:
@@ -40,9 +43,12 @@ class MuxServer:
             and key not in {"ZDOTDIR", "ENV", "BASH_ENV", "HWIRE_SESSION"}
         }
         self.env["WEZTERM_UNIX_SOCKET"] = str(self.socket)
-        self.log = (root / "mux.log").open("w")
+        self.start()
+
+    def start(self):
+        self.log = (self.root / "mux.log").open("a")
         self.process = subprocess.Popen(
-            [str(binaries["wezterm-mux-server"]), "--config-file", str(self.config)],
+            [str(self.binaries["wezterm-mux-server"]), "--config-file", str(self.config)],
             env=self.env,
             stdin=subprocess.DEVNULL,
             stdout=self.log,
@@ -50,6 +56,12 @@ class MuxServer:
             start_new_session=True,
         )
         wait_for(lambda: self.socket.exists())
+
+    def restart(self):
+        """Stands in for a reboot: local shells die, remote shells outlive their proxies."""
+        self.close()
+        self.socket.unlink(missing_ok=True)
+        self.start()
 
     def cli(self, *args):
         return subprocess.run(
@@ -70,6 +82,11 @@ class MuxServer:
 
     def panes(self):
         return json.loads(self.cli("list", "--format", "json"))
+
+    def adoptable(self, domain):
+        return json.loads(
+            self.cli("adopt-pane", "--domain-name", domain, "--list", "--format", "json")
+        )
 
     def close(self):
         try:
@@ -310,3 +327,97 @@ def test_shared_client_removal_does_not_resize_an_unaffected_sibling(mux_pair):
         source = replacement
         panes = json.loads(remote("list", "--format", "json"))
         assert geometry(next(p for p in panes if p["pane_id"] == sibling)) == expected
+
+
+def workspace_of(remote, pane_id):
+    panes = json.loads(remote("list", "--format", "json"))
+    return next(p["workspace"] for p in panes if p["pane_id"] == pane_id)
+
+
+@pytest.mark.parametrize(("domain", "alternate"), [("peer", "peer-alt"), ("proxied", None)])
+def test_restarted_mux_restores_its_backing_tabs_as_detached(mux_pair, domain, alternate):
+    local, remote = mux_pair
+    source = int(local.cli("spawn", "--new-window"))
+    backed = int(local.cli("split-pane", "--pane-id", source, "--domain-name", domain))
+    local.cli("send-text", "--pane-id", backed, "--no-paste", "echo restored-marker\n")
+    (backing,) = wait_for(
+        lambda: len(p := json.loads(remote("list", "--format", "json"))) == 1 and p
+    )
+    assert backing["workspace"] == BACKING
+    wait_for(lambda: "restored-marker" in remote("get-text", "--pane-id", backing["pane_id"]))
+
+    local.restart()
+    # Listing attaches the domain, which restores the orphan before listing what remains.
+    assert local.adoptable(domain) == []
+    (restored,) = [p for p in local.panes() if p["workspace"] == "__detached"]
+    wait_for(lambda: "restored-marker" in local.cli("get-text", "--pane-id", restored["pane_id"]))
+    if alternate:
+        # Another route to the same server must not restore a second copy.
+        assert local.adoptable(alternate) == []
+        assert len([p for p in local.panes() if p["workspace"] == "__detached"]) == 1
+
+    local.cli("kill-pane", "--pane-id", restored["pane_id"])
+    wait_for(lambda: not json.loads(remote("list", "--format", "json")))
+
+
+def test_adopting_a_remote_pane_takes_over_its_backing_tab(mux_pair):
+    local, remote = mux_pair
+    existing = int(remote("spawn", "--new-window"))
+    foreign = int(remote("spawn", "--new-window", "--workspace", "__backing:elsewhere"))
+    source = int(local.cli("spawn", "--new-window"))
+    window = next(p["window_id"] for p in local.panes() if p["pane_id"] == source)
+    assert [p["pane_id"] for p in local.adoptable("peer")] == [existing]
+    with pytest.raises(subprocess.CalledProcessError):
+        local.cli("adopt-pane", "--domain-name", "peer", "--remote-pane-id", foreign)
+
+    adopted = int(
+        local.cli(
+            "adopt-pane",
+            "--domain-name",
+            "peer",
+            "--remote-pane-id",
+            existing,
+            "--window-id",
+            window,
+        )
+    )
+    panes = {p["pane_id"]: p for p in local.panes()}
+    assert panes[adopted]["window_id"] == window
+    assert panes[adopted]["tab_id"] != panes[source]["tab_id"]
+    assert workspace_of(remote, existing) == BACKING
+    assert workspace_of(remote, foreign) == "__backing:elsewhere"
+    assert local.adoptable("peer") == []
+    assert local.adoptable("peer-alt") == []
+
+    local.cli("kill-pane", "--pane-id", adopted)
+    wait_for(
+        lambda: (
+            existing not in {p["pane_id"] for p in json.loads(remote("list", "--format", "json"))}
+        )
+    )
+
+
+def test_adoption_skips_panes_the_server_only_relays(mux_pair, wezterm_binaries, isolated_env):
+    local, _ = mux_pair
+    plain = int(local.cli("spawn", "--new-window"))
+    local.cli("spawn", "--new-window", "--domain-name", "shared")
+    wait_for(lambda: len(local.panes()) == 2)
+    hop = {
+        "name": "hop",
+        "local_pane_layout": True,
+        "proxy_command": [
+            "/usr/bin/env",
+            f"WEZTERM_UNIX_SOCKET={local.socket}",
+            str(wezterm_binaries["wezterm"]),
+            "--config-file",
+            str(local.config),
+            "cli",
+            "--no-auto-start",
+            "proxy",
+        ],
+    }
+    observer = MuxServer(local.root.parent / "observer", wezterm_binaries, isolated_env, [], [hop])
+    try:
+        assert [p["pane_id"] for p in observer.adoptable("hop")] == [plain]
+    finally:
+        observer.close()

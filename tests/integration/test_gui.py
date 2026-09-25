@@ -104,8 +104,9 @@ def test_mutual_tls_tab_lifecycle(wezterm_binaries, headless_display, tmp_path):
 
 
 @pytest.mark.gui
+@pytest.mark.parametrize("hidden", [[], ["__backing:elsewhere"]])
 def test_detaching_the_last_pane_quits_and_reconnecting_starts_fresh(
-    wezterm_binaries, headless_display, tmp_path
+    wezterm_binaries, headless_display, tmp_path, hidden
 ):
     probe = Probe(
         tmp_path / "unix",
@@ -137,12 +138,15 @@ def test_detaching_the_last_pane_quits_and_reconnecting_starts_fresh(
         for pane in panes():
             if pane["workspace"] != workspace:
                 cli("kill-pane", "--pane-id", str(pane["pane_id"]))
+        # Tabs backing another host's panes must not keep the GUI open or receive it.
+        for name in hidden:
+            cli("spawn", "--new-window", "--workspace", name)
         probe.sample_for(0.5)
         probe.send("detach")
         probe.gui_process.wait(timeout=10)
         assert probe.gui_process.returncode == 0
         assert probe.processes[0].poll() is None, "quitting the GUI stopped the mux"
-        assert workspaces() == ["__detached"]
+        assert workspaces() == sorted(["__detached", *hidden])
 
         (probe.root / "command.json").unlink()
         probe.latest.clear()
@@ -159,9 +163,9 @@ def test_detaching_the_last_pane_quits_and_reconnecting_starts_fresh(
             "reconnect.log",
         )
         state = probe.wait(lambda state: state.get("tabs"), timeout=25, any_window=True)
-        assert state["workspace"] != "__detached"
+        assert state["workspace"] not in ["__detached", *hidden]
         assert len(state["tabs"]) == 1
-        assert workspaces() == ["__detached", "default"]
+        assert workspaces() == sorted(["__detached", "default", *hidden])
     finally:
         probe.close()
 

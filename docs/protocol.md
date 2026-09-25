@@ -9,15 +9,17 @@
 | Storage transport | One JSON request on stdin; one JSON response on stdout    |
 | Storage helper    | `wez-vtabs-store --db PATH`                               |
 | Protocol version  | `1`                                                       |
-| Mux wire          | Upstream protocol plus optional PDUs 63–68                |
+| Mux wire          | Upstream protocol plus optional PDUs 63–72                |
 
-| Mux PDU            | Value                                         |
-| ------------------ | --------------------------------------------- |
-| `GetHostInfo`      | `{pane_id?}` → `{os, hostname}`               |
-| `GetPaneCloseInfo` | `{pane_id}` → `{prompt, process}`             |
-| `GetPaneLocation`  | `{pane_id}` → `{cwd, home, repo_root?}`       |
-| Relay              | Intermediate mux answers for the pane's owner |
-| Stock server       | Rejects the PDU; client keeps upstream labels |
+| Mux PDU              | Value                                                                   |
+| -------------------- | ----------------------------------------------------------------------- |
+| `GetHostInfo`        | `{pane_id?}` → `{os, hostname}`                                         |
+| `GetPaneCloseInfo`   | `{pane_id}` → `{prompt, process}`                                       |
+| `GetPaneLocation`    | `{pane_id}` → `{cwd, home, repo_root?}`                                 |
+| `ListAdoptablePanes` | `{domain}` → `{panes}`; attaches `domain` first                         |
+| `AdoptPane`          | `{domain, remote_pane_id, window_id?}` → `{pane_id, tab_id, window_id}` |
+| Relay                | Intermediate mux answers for the pane's owner                           |
+| Stock server         | Rejects the PDU; client keeps upstream labels                           |
 
 **Storage request**
 

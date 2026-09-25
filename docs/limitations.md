@@ -24,16 +24,20 @@ Private windows exclude live-tab persistence and reopen history. Catalog/setting
 
 ## Remote panes in local layouts
 
-| Name                               | Value                                                                                                                                                        |
-| ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `tls_clients[].local_pane_layout`  | `false`; set `true` on the mux that owns the displayed split tree                                                                                            |
-| `unix_domains[].local_pane_layout` | `false`; same, e.g. with `proxy_command = { "ssh", "-T", HOST, "wezterm", "cli", "proxy" }`                                                                  |
-| `unix_domains[].proxy_command`     | Client-only; `wezterm-mux-server` neither listens on it nor exports it as `WEZTERM_UNIX_SOCKET`                                                              |
-| `ssh_domains[].local_pane_layout`  | `false`; same, `multiplexing = "WezTerm"` only                                                                                                               |
-| Attachment                         | Fresh remote shells; existing remote tabs/windows are not imported                                                                                           |
-| Ownership                          | Local tabs and splits; each remote shell has an independent backing tab                                                                                      |
-| CLI                                | `wezterm cli split-pane --pane-id ID --domain-name DOMAIN`                                                                                                   |
-| Lua capability                     | `wezterm.mux.supports_local_pane_layout`; `wezterm.mux.local_pane_layout_domains` = `{ "tls", "unix", "ssh" }`                                               |
-| Client-pane metadata               | `pane:get_metadata().remote_pane_id`; ID on the immediately connected mux                                                                                    |
-| Activation                         | Updated GUI/CLI and owning mux server; restart required for existing domains                                                                                 |
-| Reattachment                       | Live TLS reconnects retain panes; unix/SSH disconnects close their panes; detaching the domain or restarting the owning mux does not import old backing tabs |
+| Name                               | Value                                                                                                                                               |
+| ---------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `tls_clients[].local_pane_layout`  | `false`; set `true` on the mux that owns the displayed split tree                                                                                   |
+| `unix_domains[].local_pane_layout` | `false`; same, e.g. with `proxy_command = { "ssh", "-T", HOST, "wezterm", "cli", "proxy" }`                                                         |
+| `unix_domains[].proxy_command`     | Client-only; `wezterm-mux-server` neither listens on it nor exports it as `WEZTERM_UNIX_SOCKET`                                                     |
+| `ssh_domains[].local_pane_layout`  | `false`; same, `multiplexing = "WezTerm"` only                                                                                                      |
+| Attachment                         | Fresh remote shells; existing remote tabs/windows are not imported, only adopted                                                                    |
+| Ownership                          | Local tabs and splits; each remote shell has an independent backing tab in the remote's `__backing:<host>` workspace                                |
+| Hidden workspaces                  | `__detached`, `__backing:*`; a GUI never switches to them on its own                                                                                |
+| CLI                                | `wezterm cli split-pane --pane-id ID --domain-name DOMAIN`                                                                                          |
+| Adopt                              | `wezterm cli adopt-pane --domain-name DOMAIN --remote-pane-id ID [--window-id ID]`; moves the backing tab to `__backing:<host>`                     |
+| Adoptable                          | `wezterm cli adopt-pane --domain-name DOMAIN --list`; not shown by any route, not relayed, not another host's backing tab                           |
+| Lua capability                     | `wezterm.mux.supports_local_pane_layout`; `wezterm.mux.local_pane_layout_domains` = `{ "tls", "unix", "ssh" }`                                      |
+| Client-pane metadata               | `pane:get_metadata().remote_pane_id`; ID on the immediately connected mux                                                                           |
+| Activation                         | Updated GUI/CLI and owning mux server; restart required for existing domains                                                                        |
+| Reattachment                       | Live TLS reconnects retain panes; unix/SSH disconnects close their panes; the next attach adopts orphaned `__backing:<host>` tabs into `__detached` |
+| Server identity                    | Host name, executable and config path; routes to one server share adopted panes                                                                     |
