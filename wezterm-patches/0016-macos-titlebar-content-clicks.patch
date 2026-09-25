@@ -1,0 +1,173 @@
+diff --git a/window/src/lib.rs b/window/src/lib.rs
+--- a/window/src/lib.rs
++++ b/window/src/lib.rs
+@@ -292,6 +292,9 @@
+     /// click before forwarding the event (Windows).
+     fn set_window_drag_position(&self, _coords: ScreenPoint) {}
+ 
++    /// Content that a mouse down never drags, even under a transparent macOS titlebar
++    fn set_window_drag_exclusion(&self, _content: Rect) {}
++
+     /// Changes the location of the window on the screen.
+     /// The coordinates are of the top left pixel of the
+     /// client area.
+diff --git a/window/src/os/macos/window.rs b/window/src/os/macos/window.rs
+--- a/window/src/os/macos/window.rs
++++ b/window/src/os/macos/window.rs
+@@ -507,6 +507,7 @@
+                 invalidated: true,
+                 gl_context_pair: None,
+                 text_cursor_position: Rect::new(Point::new(0, 0), Size::new(0, 0)),
++                drag_exclusion: None,
+                 tracking_rect_tag: 0,
+                 hscroll_remainder: 0.,
+                 vscroll_remainder: 0.,
+@@ -839,6 +840,13 @@
+     fn set_text_cursor_position(&self, cursor: Rect) {
+         Connection::with_window_inner(self.id, move |inner| {
+             inner.set_text_cursor_position(cursor);
++            Ok(())
++        });
++    }
++
++    fn set_window_drag_exclusion(&self, content: Rect) {
++        Connection::with_window_inner(self.id, move |inner| {
++            inner.set_window_drag_exclusion(content);
+             Ok(())
+         });
+     }
+@@ -1356,6 +1364,12 @@
+                 let input_context: id = msg_send![&**self.view, inputContext];
+                 let () = msg_send![input_context, invalidateCharacterCoordinates];
+             }
++        }
++    }
++
++    fn set_window_drag_exclusion(&mut self, content: Rect) {
++        if let Some(window_view) = WindowView::get_this(unsafe { &**self.view }) {
++            window_view.inner.borrow_mut().drag_exclusion = Some(content);
+         }
+     }
+ 
+@@ -1620,6 +1634,7 @@
+     invalidated: bool,
+     gl_context_pair: Option<GlContextPair>,
+     text_cursor_position: Rect,
++    drag_exclusion: Option<Rect>,
+     tracking_rect_tag: NSInteger,
+     hscroll_remainder: f64,
+     vscroll_remainder: f64,
+@@ -2358,6 +2373,20 @@
+         NO
+     }
+ 
++    // Keeps a transparent titlebar from dragging or zooming the window over excluded content
++    extern "C" fn mouse_down_can_move_window(this: &Object, _sel: Sel) -> BOOL {
++        let content =
++            Self::get_this(this).and_then(|myself| myself.inner.try_borrow().ok()?.drag_exclusion);
++        let event: id = unsafe { msg_send![appkit::NSApp(), currentEvent] };
++        match content {
++            Some(content) if !event.is_null() => {
++                let point = Self::backing_point(this as *const Object as id, event);
++                to_yes_no(!content.contains(Point::new(point.x as isize, point.y as isize)))
++            }
++            _ => YES,
++        }
++    }
++
+     extern "C" fn wezterm_perform_key_assignment(
+         this: &mut Object,
+         _sel: Sel,
+@@ -2394,22 +2423,27 @@
+         }
+     }
+ 
+-    fn mouse_common(this: &mut Object, nsevent: id, kind: MouseEventKind) {
+-        let view = this as id;
+-        let coords;
+-        let mouse_buttons;
+-        let modifiers;
+-        let screen_coords;
++    fn backing_point(view: id, nsevent: id) -> NSPoint {
+         unsafe {
+             let point = NSView::convertPoint_fromView_(view, nsevent.locationInWindow(), nil);
+             let rect = NSRect::new(NSPoint::new(0., 0.), NSSize::new(point.x, point.y));
+             let backing_rect = NSView::convertRectToBacking(view, rect);
+             // backing_rect computes abs() values, so we need to restore the sign
+             // from the original point
+-            coords = NSPoint::new(
++            NSPoint::new(
+                 f64::copysign(backing_rect.size.width, point.x),
+                 f64::copysign(backing_rect.size.height, point.y),
+-            );
++            )
++        }
++    }
++
++    fn mouse_common(this: &mut Object, nsevent: id, kind: MouseEventKind) {
++        let view = this as id;
++        let coords = Self::backing_point(view, nsevent);
++        let mouse_buttons;
++        let modifiers;
++        let screen_coords;
++        unsafe {
+             mouse_buttons = decode_mouse_buttons(NSEvent::pressedMouseButtons(nsevent));
+             modifiers = key_modifiers(nsevent.modifierFlags());
+             screen_coords = NSEvent::mouseLocation(nsevent);
+@@ -3339,6 +3373,11 @@
+             cls.add_method(
+                 sel!(allowsAutomaticWindowTabbing),
+                 Self::allow_automatic_tabbing as extern "C" fn(&Object, Sel) -> BOOL,
++            );
++
++            cls.add_method(
++                sel!(mouseDownCanMoveWindow),
++                Self::mouse_down_can_move_window as extern "C" fn(&Object, Sel) -> BOOL,
+             );
+ 
+             cls.add_method(
+diff --git a/wezterm-gui/src/termwindow/mod.rs b/wezterm-gui/src/termwindow/mod.rs
+--- a/wezterm-gui/src/termwindow/mod.rs
++++ b/wezterm-gui/src/termwindow/mod.rs
+@@ -2143,6 +2143,30 @@
+                 self.render_metrics.cell_size,
+             );
+             win.set_text_cursor_position(r);
++        }
++    }
++
++    /// Mirrors how mouse_event_impl maps window coordinates onto terminal cells
++    fn update_window_drag_exclusion(&self) {
++        if let Some(win) = self.window.as_ref() {
++            let border = self.get_os_border();
++            let tab_bar_height = if self.show_tab_bar && !self.config.tab_bar_at_bottom {
++                self.tab_bar_pixel_height().unwrap_or(0.)
++            } else {
++                0.
++            };
++            let (padding_left, padding_top) = self.padding_left_top();
++            let content = Rect::new(
++                Point::new(
++                    (padding_left + border.left.get() as f32) as isize,
++                    (padding_top + tab_bar_height + border.top.get() as f32) as isize,
++                ),
++                Size::new(
++                    self.terminal_size.pixel_width as isize,
++                    self.terminal_size.pixel_height as isize,
++                ),
++            );
++            win.set_window_drag_exclusion(content);
+         }
+     }
+ 
+diff --git a/wezterm-gui/src/termwindow/render/paint.rs b/wezterm-gui/src/termwindow/render/paint.rs
+--- a/wezterm-gui/src/termwindow/render/paint.rs
++++ b/wezterm-gui/src/termwindow/render/paint.rs
+@@ -252,6 +252,7 @@
+             .context("filled_rectangle for window background")?;
+         }
+ 
++        self.update_window_drag_exclusion();
+         for pos in panes {
+             if pos.is_active {
+                 self.update_text_cursor(&pos);
