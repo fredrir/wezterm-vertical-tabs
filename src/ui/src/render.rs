@@ -685,7 +685,7 @@ impl SidebarUi {
         }
     }
 
-    /// Search floats centered and lists tabs with the sidebar's own rows.
+    /// Launchers share the sidebar row painter and editor.
     fn compose_palette(&mut self, area: Rect, menu: &mut Menu) {
         let Some(search) = &mut menu.search else {
             return;
@@ -723,7 +723,11 @@ impl SidebarUi {
         self.editor_shift = if field.height == 2 { 0.5 } else { 0.0 };
         self.compose_editor(&mut search.editor, edit, self.theme.card, true);
         if search.editor.display_text().is_empty() {
-            self.write(edit, "Search tabs", self.theme.muted().bg(self.theme.card));
+            self.write(
+                edit,
+                menu.title.clone(),
+                self.theme.muted().bg(self.theme.card),
+            );
         }
         self.hit(ElementId::Editor, field, "");
         let list = Rect::new(
@@ -743,7 +747,11 @@ impl SidebarUi {
         if menu.items.is_empty() && list.height > 0 {
             self.write(
                 Rect::new(list.x + 1, list.y, list.width.saturating_sub(2), 1),
-                "No matching tabs",
+                if search.all_items.is_empty() {
+                    search.empty
+                } else {
+                    "No matches"
+                },
                 self.theme.muted(),
             );
         }
@@ -765,7 +773,7 @@ impl SidebarUi {
                 icon_color: item.icon_color,
                 index: item.index,
                 content: Content::Label(&display_text(&item.label)),
-                tooltip: Some(String::new()),
+                tooltip: None,
                 selected: menu.scroll + offset == menu.selected,
                 muted: !item.enabled,
                 compact: false,

@@ -1,6 +1,7 @@
 //! The only product code coupled to WezTerm's internal APIs.
 mod cells;
 mod directory;
+mod jobs;
 mod location;
 mod lua;
 mod repos;
@@ -71,6 +72,7 @@ struct Adapter {
     placement: Option<(usize, Instant)>,
     published: Option<u64>,
     pending_show: Option<core::TabId>,
+    jobs_refresh: Option<Instant>,
 }
 
 impl Adapter {
@@ -120,6 +122,7 @@ impl Adapter {
             placement: None,
             published: None,
             pending_show: None,
+            jobs_refresh: None,
         }
     }
     fn apply(&mut self, result: Result<app::Update, core::Error>) {
@@ -270,6 +273,8 @@ impl Adapter {
     fn command(&mut self, command: app::Command) {
         use core::HostCommand as C;
         match command {
+            app::Command::OpenJobs => self.open_jobs(),
+            app::Command::Job(target, operation) => self.job_action(target, operation),
             app::Command::Refresh => {
                 std::thread::spawn(config::reload);
                 self.app.ui_mut().invalidate();
@@ -1444,6 +1449,8 @@ impl Provider for Adapter {
                 }
             }
         } else if let Some(id) = message.get("show_tab").and_then(|id| id.as_u64()) {
+            self.app.ui_mut().dismiss();
+            self.app.ui_mut().release_focus();
             if self.app.model().tabs.contains_key(&id) {
                 self.dispatch(core::Intent::ActivateTab(id));
             } else {
@@ -1503,6 +1510,7 @@ impl Provider for Adapter {
                 Ok(core::Action::Ui(core::UiAction::Settings)) => self.app.open_settings(),
                 Ok(core::Action::Ui(core::UiAction::CreateSpace)) => self.app.open_create_space(),
                 Ok(core::Action::Ui(core::UiAction::Navigator)) => self.open_tab_navigator(),
+                Ok(core::Action::Ui(core::UiAction::Jobs)) => self.open_jobs(),
                 Ok(core::Action::Ui(core::UiAction::RetryStorage)) => self.app.retry_storage(),
                 Ok(core::Action::Intent(intent)) => self.dispatch(intent),
                 Err(err) => log::warn!("tabs action: {err}"),
@@ -1545,6 +1553,7 @@ impl Provider for Adapter {
     }
     fn render(&mut self, geometry: Geometry, now: Instant) {
         self.expire_paste(now);
+        self.poll_jobs(now);
         if self.geometry != geometry {
             self.app.ui_mut().invalidate();
         }
@@ -1643,6 +1652,7 @@ impl Provider for Adapter {
             .map(|duration| self.epoch + duration)
             .into_iter()
             .chain(self.pending_paste.as_ref().map(|pending| pending.deadline))
+            .chain(self.jobs_refresh.filter(|_| self.app.ui().jobs_open()))
             .min()
     }
     fn caret(&self) -> Option<(usize, usize)> {

@@ -48,6 +48,8 @@ pub struct HostSnapshot {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Command {
+    OpenJobs,
+    Job(core::jobs::JobTarget, core::jobs::JobOperation),
     Refresh,
     Host(HostCommand),
     SetClipboard(String),
@@ -455,6 +457,10 @@ impl WindowApp {
         let mut update = Update::default();
         for intent in intents {
             match intent {
+                UiIntent::Host(HostAction::OpenJobs) => update.commands.push(Command::OpenJobs),
+                UiIntent::Host(HostAction::Job(target, operation)) => {
+                    update.commands.push(Command::Job(target, operation))
+                }
                 UiIntent::Refresh => {
                     self.refresh_storage();
                     update.commands.push(Command::Refresh);

@@ -27,7 +27,7 @@ def test_build_reuses_validation_for_docs_but_rechecks_test_and_toolchain_change
     _, revision = local_upstream
     tools_sandbox.run("--upstream", revision, "build")
     first = metadata(tools_sandbox)
-    assert len(cargo_commands(recording_cargo, "test")) == 3
+    assert len(cargo_commands(recording_cargo, "test")) == 4
     assert all("external-target" in path for path in first["artifacts"].values())
 
     write_file(tools_sandbox.root, "README.md", "Documentation changed\n")
@@ -36,7 +36,7 @@ def test_build_reuses_validation_for_docs_but_rechecks_test_and_toolchain_change
     assert docs["compile_digest"] == first["compile_digest"]
     assert docs["validation_digest"] == first["validation_digest"]
     assert docs["id"] != first["id"]
-    assert len(cargo_commands(recording_cargo, "test")) == 3
+    assert len(cargo_commands(recording_cargo, "test")) == 4
     assert len(cargo_commands(recording_cargo, "build")) == 4
 
     write_file(tools_sandbox.root, "tests/tools/test_added.py", "def test_added(): pass\n")
@@ -44,13 +44,13 @@ def test_build_reuses_validation_for_docs_but_rechecks_test_and_toolchain_change
     tests = metadata(tools_sandbox)
     assert tests["compile_digest"] == docs["compile_digest"]
     assert tests["validation_digest"] != docs["validation_digest"]
-    assert len(cargo_commands(recording_cargo, "test")) == 6
+    assert len(cargo_commands(recording_cargo, "test")) == 8
 
     tools_sandbox.env["RUSTFLAGS"] = "-C target-cpu=generic"
     tools_sandbox.run("--upstream", revision, "--offline", "build")
     flags = metadata(tools_sandbox)
     assert flags["compile_digest"] != tests["compile_digest"]
-    assert len(cargo_commands(recording_cargo, "test")) == 9
+    assert len(cargo_commands(recording_cargo, "test")) == 12
 
 
 def test_build_rejects_source_changes_during_compilation(

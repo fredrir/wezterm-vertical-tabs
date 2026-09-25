@@ -364,6 +364,7 @@ fn validate_wezterm(
     let _stage = ctx.runner.stage("validate");
     let packages = [
         ("wezterm-gui", false),
+        ("wezterm-mux-server-impl", true),
         ("wezterm-client", true),
         ("wezterm-input-types", true),
     ];

@@ -126,7 +126,7 @@
 ---@field width? integer
 
 --- Sidebar surfaces opened by `vtabs.action`, besides domain intents.
----@alias TabsUiAction 'settings'|'create_space'|'navigator'|'retry_storage'
+---@alias TabsUiAction 'settings'|'create_space'|'navigator'|'jobs'|'retry_storage'
 
 --- Input to the window-level `theme` and `footer` hooks.
 ---@class TabsWindowContext

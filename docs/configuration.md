@@ -41,6 +41,7 @@ return config
 | Settings              | Gear tab opens last and keeps its index; later tabs follow it (`Cmd+index`, `Ctrl+Tab`); closes with ×, `Cmd+W`, Escape |
 | New tab                             | `Cmd+T`                            | `Ctrl+Shift+T`       |
 | Search tabs                         | `Cmd+K`                            | `Ctrl+Shift+K`       |
+| Search jobs                         | `Cmd+Z`                            | `Ctrl+Shift+Z`       |
 | Toggle sidebar                      | `Cmd+B`                            | `Ctrl+Shift+B`       |
 | Close tab or settings               | `Cmd+W`                            | `Ctrl+Shift+W`       |
 | Refresh configuration               | `Cmd+Shift+R`                      | `Ctrl+Shift+R`       |
@@ -83,6 +84,27 @@ return config
 | Closing tabs          | Idle tabs close at once; only a running process prompts, judged by the pane's owning mux (`confirm_close`, skip list)   |
 | Closing splits        | Hovering a split reveals its own ×; the tab's × shows over the icon side of the row                                     |
 | Menus and prompts     | Context menus open under the pointer or focused control; confirmations are a dialog with the accepting button selected  |
+
+**Shell jobs**
+
+Source the helper from `.zshrc` on each participating machine, then open a new shell:
+
+```zsh
+source /path/to/vertical-tabs/plugin/vtabs.zsh
+# Deployed macOS app:
+# source /Applications/WezTerm.app/Contents/Resources/plugin/vtabs.zsh
+```
+
+| Name | Value |
+| --- | --- |
+| Shell | Zsh with interactive job control; helper also ships in the bundle's `plugin` directory |
+| Scope | Shell jobs in panes of connected Local, SSH, mux and TLS domains, across windows/workspaces |
+| Enter / click | Focus the owning window/tab/pane and run `fg`; unfinished prompt input is restored afterward |
+| F10 / right click | Bring to foreground, Resume in background (`bg`), Terminate (`kill -TERM`, confirmed) |
+| Search | Command, host, domain, pane, job number or state; refreshes while open |
+| Busy shell | Jobs remain listed; actions become available at the owning shell's prompt |
+| Lifetime | Running and suspended jobs only; no completed-job history, detached domains or unrelated processes |
+| Lua action | `vtabs.action("jobs")`; `keyboard_shortcuts = false` permits custom bindings |
 
 **Settings file**
 

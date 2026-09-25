@@ -3,6 +3,7 @@
 mod icons;
 mod input;
 mod interaction;
+mod launcher;
 mod render;
 mod settings_page;
 mod shortcuts;
@@ -34,6 +35,8 @@ mod transient_surfaces_tests;
 #[path = "../tests/ui.rs"]
 mod ui_tests;
 
+pub use launcher::JobEntry;
+use launcher::{Launcher, filter_menu};
 use ratatui::layout::Position;
 use std::time::Duration;
 use tachyonfx::{Effect, fx};
@@ -89,6 +92,8 @@ pub struct HitRegion {
 
 #[derive(Clone, Debug)]
 pub enum HostAction {
+    OpenJobs,
+    Job(vtabs_core::jobs::JobTarget, vtabs_core::jobs::JobOperation),
     /// Custom menu actions remain semantic; the adapter resolves a registered Lua action.
     Custom(String),
     MoveTabToNewWindow(TabId),
@@ -242,6 +247,7 @@ struct MenuItem {
     keywords: String,
     action: Action,
     enabled: bool,
+    actions: Vec<MenuItem>,
 }
 
 impl MenuItem {
@@ -256,6 +262,7 @@ impl MenuItem {
             keywords: String::new(),
             action,
             enabled: true,
+            actions: Vec::new(),
         }
     }
 }
@@ -268,13 +275,7 @@ struct Menu {
     items: Vec<MenuItem>,
     selected: usize,
     scroll: usize,
-    search: Option<MenuSearch>,
-}
-
-#[derive(Clone, Debug)]
-struct MenuSearch {
-    editor: TextEditor,
-    all_items: Vec<MenuItem>,
+    search: Option<Launcher>,
 }
 
 #[derive(Clone, Debug)]
@@ -435,6 +436,7 @@ pub struct SidebarUi {
     last_rail: Option<vtabs_core::RailMode>,
     reveal_selection: bool,
     foreign_tabs: Vec<ForeignTab>,
+    jobs: Vec<JobEntry>,
 }
 
 #[derive(Clone, Debug)]
@@ -557,6 +559,7 @@ impl SidebarUi {
             last_rail: None,
             reveal_selection: true,
             foreign_tabs: Vec::new(),
+            jobs: Vec::new(),
         }
     }
     pub fn buffer(&self) -> &Buffer {
@@ -634,98 +637,6 @@ impl SidebarUi {
     /// Rows the tab search lists after this window's own tabs.
     pub fn set_foreign_tabs(&mut self, tabs: Vec<ForeignTab>) {
         self.foreign_tabs = tabs;
-    }
-    /// The current space leads with its index badges; every other tab this window can reach follows.
-    pub fn open_tab_navigator(&mut self, model: &Model) {
-        let home = model.home.as_deref();
-        let row = |tab: &Tab| {
-            let name = tab_name(tab, home);
-            let mut item = MenuItem::new(
-                format!("tab/{}", tab.id),
-                name.as_deref().unwrap_or(&tab.title),
-                Action::Domain(Intent::ActivateTab(tab.id)),
-            );
-            let (remote, os) = tab_machine(tab);
-            item.icon = icons::host(remote, os);
-            item.icon_color = self.theme.host(remote, os);
-            if name.is_some_and(|name| name != tab.title) {
-                item.keywords = tab.title.clone();
-            }
-            item
-        };
-        let mut items: Vec<_> = model
-            .visible_ids()
-            .iter()
-            .filter_map(|id| model.tabs.get(id))
-            .enumerate()
-            .map(|(index, tab)| {
-                let mut item = row(tab);
-                item.index = Some(index + 1);
-                item.hint = item.keywords.clone();
-                item
-            })
-            .collect();
-        let current = model.selected_space.as_str();
-        for space in model.spaces.iter() {
-            for id in model.space_tabs(&space.id) {
-                let hidden = model.is_hidden(id);
-                if space.id == current && !hidden {
-                    continue;
-                }
-                let mut item = row(&model.tabs[&id]);
-                item.hint = if hidden {
-                    format!("{} · hidden", space.name)
-                } else {
-                    space.name.clone()
-                };
-                items.push(item);
-            }
-        }
-        items.extend(self.foreign_tabs.iter().map(|tab| {
-            let mut item = MenuItem::new(
-                format!("window/{}/tab/{}", tab.window, tab.id),
-                &tab.label,
-                Action::Host(HostAction::ShowTab {
-                    window: tab.window,
-                    tab: tab.id,
-                }),
-            );
-            item.icon = icons::host(tab.remote, &tab.os);
-            item.icon_color = self.theme.host(tab.remote, &tab.os);
-            item.hint = tab.place.clone();
-            if tab.label != tab.title {
-                item.keywords = tab.title.clone();
-            }
-            item
-        }));
-        if model.settings.rail != vtabs_core::RailMode::Expanded {
-            let mut item = MenuItem::new(
-                "sidebar/expand",
-                if model.settings.rail == vtabs_core::RailMode::Hidden {
-                    "Show sidebar"
-                } else {
-                    "Expand sidebar"
-                },
-                Action::Domain(Intent::SetRail(vtabs_core::RailMode::Expanded)),
-            );
-            item.icon = icons::SIDEBAR;
-            items.push(item);
-        }
-        let search = Some(MenuSearch {
-            editor: TextEditor::default(),
-            all_items: items.clone(),
-        });
-        self.open_overlay(Overlay::Menu(Menu {
-            message: None,
-            title: "Search tabs".into(),
-            items,
-            selected: model
-                .selected_tab
-                .and_then(|id| model.visible_ids().iter().position(|tab| *tab == id))
-                .unwrap_or(0),
-            scroll: 0,
-            search,
-        }));
     }
     pub fn show_error(&mut self, message: impl Into<String>) {
         self.open_overlay(Overlay::Menu(Menu {

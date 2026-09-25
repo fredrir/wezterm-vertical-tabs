@@ -13,7 +13,8 @@ pub fn is_shortcut(key: &Key, mods: Modifiers) -> bool {
         && matches!(
             key,
             Key::Character(
-                ',' | 't' | 'T' | 'k' | 'K' | 'b' | 'B' | 'w' | 'W' | 'r' | 'R' | '1'..='9'
+                ',' | 't' | 'T' | 'k' | 'K' | 'z' | 'Z' | 'b' | 'B' | 'w' | 'W' | 'r' | 'R' | '1'
+                    ..='9'
             )
         ))
         || (mods.control && !mods.super_key && !mods.alt && *key == Key::Tab)
@@ -40,6 +41,7 @@ impl SidebarUi {
                 }
             }
             Key::Character('k' | 'K') => self.open_tab_navigator(model),
+            Key::Character('z' | 'Z') => intents.push(UiIntent::Host(HostAction::OpenJobs)),
             Key::Character('b' | 'B') => {
                 intents.push(UiIntent::Domain(Intent::SetRail(
                     if model.settings.rail == RailMode::Expanded {

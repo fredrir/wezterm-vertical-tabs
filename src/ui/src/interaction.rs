@@ -695,6 +695,8 @@ impl SidebarUi {
             {
                 self.restore_editor(target);
             }
+        } else if key == Key::F10 && self.launcher_actions(None) {
+            return;
         } else if key == Key::F10 && self.text_input_active() {
             let target = if self.overlay.is_some() {
                 ElementId::Editor
@@ -1148,6 +1150,9 @@ impl SidebarUi {
     }
     fn context_menu(&mut self, model: &Model, id: ElementId) {
         match id {
+            ElementId::Menu(id) => {
+                self.launcher_actions(Some(&id));
+            }
             ElementId::Editor | ElementId::SettingsSearch => {
                 let editor = match (&self.overlay, &id) {
                     (Some(Overlay::Form(form)), ElementId::Editor) => Some(&form.editor),
@@ -1819,29 +1824,4 @@ fn custom_menu(entries: &[settings::MenuEntry], prefix: &str) -> Vec<MenuItem> {
             item
         })
         .collect()
-}
-
-fn filter_menu(menu: &mut Menu) {
-    let Some(search) = &menu.search else {
-        return;
-    };
-    let query = search.editor.text().to_lowercase();
-    let selected_id = menu.items.get(menu.selected).map(|item| item.id.clone());
-    menu.items.clear();
-    menu.items.extend(
-        search
-            .all_items
-            .iter()
-            .filter(|item| {
-                item.label.to_lowercase().contains(&query)
-                    || item.hint.to_lowercase().contains(&query)
-                    || item.keywords.to_lowercase().contains(&query)
-                    || item.index.is_some_and(|index| index.to_string() == query)
-            })
-            .cloned(),
-    );
-    menu.selected = selected_id
-        .and_then(|id| menu.items.iter().position(|item| item.id == id))
-        .unwrap_or(0);
-    menu.scroll = 0;
 }
