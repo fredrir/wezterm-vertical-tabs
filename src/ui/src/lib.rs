@@ -28,6 +28,10 @@ mod interaction_flow_tests;
 mod settings_page_tests;
 
 #[cfg(test)]
+#[path = "../tests/snapshots.rs"]
+mod snapshot_tests;
+
+#[cfg(test)]
 #[path = "../tests/transient_surfaces.rs"]
 mod transient_surfaces_tests;
 

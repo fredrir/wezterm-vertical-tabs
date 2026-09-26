@@ -1,0 +1,127 @@
+---
+source: src/ui/src/../tests/snapshots.rs
+expression: "snapshot(ui, frame)"
+---
+Buffer {
+    area: Rect { x: 0, y: 0, width: 60, height: 34 },
+    content: [
+        "                         󱂪                          󰒓   󰑐   ",
+        "                                                            ",
+        "                                                            ",
+        "                      󰍉  Search...                          ",
+        "                                                            ",
+        "                      󰌨  Home                               ",
+        "                                                            ",
+        "                                                            ",
+        "                        ~/journal                         ▏",
+        "                         local                              ",
+        "                                                            ",
+        "                      󰷏  Docs  2                            ",
+        "                                                            ",
+        "                                                            ",
+        "                          ~/guide                          ",
+        "                           local                            ",
+        "                                                            ",
+        "                          ~/api                            ",
+        "                           local                            ",
+        "                                                            ",
+        "                                                            ",
+        "                      󰐕  New Tab                            ",
+        "                                                            ",
+        "                                                            ",
+        "                      󰒋  /api            /web             ",
+        "                         local            /logs            ",
+        "                                                            ",
+        "                                                            ",
+        "                                                            ",
+        "                                                            ",
+        "                     main ✓ 2 changes                       ",
+        "                                                            ",
+        "                      󰻃   󰻃   󰻃                         󰐕   ",
+        "                                                            ",
+    ],
+    styles: [
+        x: 0, y: 0, fg: Rgb(225, 231, 240), bg: Rgb(25, 34, 49), modifier: NONE,
+        x: 24, y: 0, fg: Rgb(152, 168, 190), bg: Rgb(25, 34, 49), modifier: NONE,
+        x: 28, y: 0, fg: Rgb(225, 231, 240), bg: Rgb(25, 34, 49), modifier: NONE,
+        x: 51, y: 0, fg: Rgb(152, 168, 190), bg: Rgb(25, 34, 49), modifier: NONE,
+        x: 59, y: 0, fg: Rgb(225, 231, 240), bg: Rgb(25, 34, 49), modifier: NONE,
+        x: 21, y: 3, fg: Rgb(225, 231, 240), bg: Rgb(35, 44, 59), modifier: NONE,
+        x: 22, y: 3, fg: Rgb(152, 168, 190), bg: Rgb(35, 44, 59), modifier: NONE,
+        x: 58, y: 3, fg: Rgb(225, 231, 240), bg: Rgb(35, 44, 59), modifier: NONE,
+        x: 59, y: 3, fg: Rgb(225, 231, 240), bg: Rgb(25, 34, 49), modifier: NONE,
+        x: 21, y: 4, fg: Rgb(225, 231, 240), bg: Rgb(35, 44, 59), modifier: NONE,
+        x: 59, y: 4, fg: Rgb(225, 231, 240), bg: Rgb(25, 34, 49), modifier: NONE,
+        x: 22, y: 5, fg: Rgb(152, 168, 190), bg: Rgb(25, 34, 49), modifier: NONE,
+        x: 58, y: 5, fg: Rgb(225, 231, 240), bg: Rgb(25, 34, 49), modifier: NONE,
+        x: 59, y: 8, fg: Rgb(152, 168, 190), bg: Rgb(25, 34, 49), modifier: NONE,
+        x: 0, y: 9, fg: Rgb(225, 231, 240), bg: Rgb(25, 34, 49), modifier: NONE,
+        x: 25, y: 9, fg: Rgb(152, 168, 190), bg: Rgb(25, 34, 49), modifier: NONE,
+        x: 58, y: 9, fg: Rgb(225, 231, 240), bg: Rgb(25, 34, 49), modifier: NONE,
+        x: 27, y: 15, fg: Rgb(152, 168, 190), bg: Rgb(25, 34, 49), modifier: NONE,
+        x: 58, y: 15, fg: Rgb(225, 231, 240), bg: Rgb(25, 34, 49), modifier: NONE,
+        x: 27, y: 18, fg: Rgb(152, 168, 190), bg: Rgb(25, 34, 49), modifier: NONE,
+        x: 58, y: 18, fg: Rgb(225, 231, 240), bg: Rgb(25, 34, 49), modifier: NONE,
+        x: 22, y: 21, fg: Rgb(152, 168, 190), bg: Rgb(25, 34, 49), modifier: NONE,
+        x: 58, y: 21, fg: Rgb(225, 231, 240), bg: Rgb(25, 34, 49), modifier: NONE,
+        x: 21, y: 24, fg: Rgb(225, 231, 240), bg: Rgb(52, 72, 95), modifier: NONE,
+        x: 22, y: 24, fg: Rgb(255, 233, 168), bg: Rgb(52, 72, 95), modifier: NONE,
+        x: 25, y: 24, fg: Rgb(152, 168, 190), bg: Rgb(52, 72, 95), modifier: NONE,
+        x: 40, y: 24, fg: Rgb(225, 231, 240), bg: Rgb(52, 72, 95), modifier: NONE,
+        x: 42, y: 24, fg: Rgb(169, 199, 245), bg: Rgb(52, 72, 95), modifier: NONE,
+        x: 57, y: 24, fg: Rgb(225, 231, 240), bg: Rgb(52, 72, 95), modifier: NONE,
+        x: 59, y: 24, fg: Rgb(225, 231, 240), bg: Rgb(25, 34, 49), modifier: NONE,
+        x: 21, y: 25, fg: Rgb(225, 231, 240), bg: Rgb(52, 72, 95), modifier: NONE,
+        x: 59, y: 25, fg: Rgb(225, 231, 240), bg: Rgb(25, 34, 49), modifier: NONE,
+        x: 21, y: 26, fg: Rgb(225, 231, 240), bg: Rgb(52, 72, 95), modifier: NONE,
+        x: 59, y: 26, fg: Rgb(225, 231, 240), bg: Rgb(25, 34, 49), modifier: NONE,
+        x: 21, y: 30, fg: Rgb(152, 168, 190), bg: Rgb(25, 34, 49), modifier: NONE,
+        x: 59, y: 30, fg: Rgb(225, 231, 240), bg: Rgb(25, 34, 49), modifier: NONE,
+        x: 21, y: 32, fg: Rgb(169, 199, 245), bg: Rgb(25, 34, 49), modifier: NONE,
+        x: 25, y: 32, fg: Rgb(152, 168, 190), bg: Rgb(25, 34, 49), modifier: NONE,
+        x: 33, y: 32, fg: Rgb(225, 231, 240), bg: Rgb(25, 34, 49), modifier: NONE,
+        x: 55, y: 32, fg: Rgb(152, 168, 190), bg: Rgb(25, 34, 49), modifier: NONE,
+        x: 59, y: 32, fg: Rgb(225, 231, 240), bg: Rgb(25, 34, 49), modifier: NONE,
+    ]
+}
+surfaces:
+  RoundedSurface { rect: Rect { x: 24, y: 0, width: 4, height: 2 }, fill: Rgb(25, 34, 49), radius: 8.0, inset: 5.0, square: true, scale_y: 1.0, stacked: false, shift_y: 0.0 }
+  RoundedSurface { rect: Rect { x: 51, y: 0, width: 4, height: 2 }, fill: Rgb(25, 34, 49), radius: 8.0, inset: 5.0, square: true, scale_y: 1.0, stacked: false, shift_y: 0.0 }
+  RoundedSurface { rect: Rect { x: 55, y: 0, width: 4, height: 2 }, fill: Rgb(25, 34, 49), radius: 8.0, inset: 5.0, square: true, scale_y: 1.0, stacked: false, shift_y: 0.0 }
+  RoundedSurface { rect: Rect { x: 21, y: 3, width: 38, height: 2 }, fill: Rgb(35, 44, 59), radius: 9.0, inset: 1.5, square: false, scale_y: 1.0, stacked: false, shift_y: 0.0 }
+  RoundedSurface { rect: Rect { x: 21, y: 5, width: 38, height: 3 }, fill: Rgb(25, 34, 49), radius: 9.0, inset: 1.5, square: false, scale_y: 1.0, stacked: false, shift_y: 0.0 }
+  RoundedSurface { rect: Rect { x: 21, y: 8, width: 38, height: 3 }, fill: Rgb(25, 34, 49), radius: 9.0, inset: 1.5, square: false, scale_y: 1.0, stacked: false, shift_y: 0.0 }
+  RoundedSurface { rect: Rect { x: 21, y: 11, width: 38, height: 3 }, fill: Rgb(25, 34, 49), radius: 9.0, inset: 1.5, square: false, scale_y: 1.0, stacked: false, shift_y: 0.0 }
+  RoundedSurface { rect: Rect { x: 21, y: 14, width: 38, height: 3 }, fill: Rgb(25, 34, 49), radius: 9.0, inset: 1.5, square: false, scale_y: 1.0, stacked: false, shift_y: 0.0 }
+  RoundedSurface { rect: Rect { x: 21, y: 17, width: 38, height: 3 }, fill: Rgb(25, 34, 49), radius: 9.0, inset: 1.5, square: false, scale_y: 1.0, stacked: false, shift_y: 0.0 }
+  RoundedSurface { rect: Rect { x: 21, y: 21, width: 38, height: 3 }, fill: Rgb(25, 34, 49), radius: 9.0, inset: 1.5, square: false, scale_y: 1.0, stacked: false, shift_y: 0.0 }
+  RoundedSurface { rect: Rect { x: 21, y: 24, width: 38, height: 3 }, fill: Rgb(52, 72, 95), radius: 9.0, inset: 1.5, square: false, scale_y: 1.0, stacked: false, shift_y: 0.0 }
+  RoundedSurface { rect: Rect { x: 21, y: 32, width: 4, height: 2 }, fill: Rgb(25, 34, 49), radius: 8.0, inset: 5.0, square: true, scale_y: 1.0, stacked: false, shift_y: 0.0 }
+  RoundedSurface { rect: Rect { x: 25, y: 32, width: 4, height: 2 }, fill: Rgb(25, 34, 49), radius: 8.0, inset: 5.0, square: true, scale_y: 1.0, stacked: false, shift_y: 0.0 }
+  RoundedSurface { rect: Rect { x: 29, y: 32, width: 4, height: 2 }, fill: Rgb(25, 34, 49), radius: 8.0, inset: 5.0, square: true, scale_y: 1.0, stacked: false, shift_y: 0.0 }
+  RoundedSurface { rect: Rect { x: 55, y: 32, width: 4, height: 2 }, fill: Rgb(25, 34, 49), radius: 8.0, inset: 5.0, square: true, scale_y: 1.0, stacked: false, shift_y: 0.0 }
+hits:
+  Rail Rect { x: 24, y: 0, width: 4, height: 2 } "Toggle sidebar  <cmd>B"
+  Settings Rect { x: 51, y: 0, width: 4, height: 2 } "Settings  <cmd>,"
+  Refresh Rect { x: 55, y: 0, width: 4, height: 2 } "Refresh configuration  <cmd>R"
+  Search Rect { x: 21, y: 3, width: 38, height: 2 } ""
+  SpaceTitle Rect { x: 21, y: 5, width: 38, height: 3 } "Home\nHide pinned tabs and folders"
+  Tab(1) Rect { x: 21, y: 8, width: 38, height: 3 } ""
+  Folder("folder-1") Rect { x: 21, y: 11, width: 38, height: 3 } "Docs\nDrop tabs here. Right click to rename or ungroup."
+  Tab(2) Rect { x: 21, y: 14, width: 38, height: 3 } ""
+  Tab(3) Rect { x: 21, y: 17, width: 38, height: 3 } ""
+  NewTab Rect { x: 21, y: 21, width: 38, height: 3 } "New tab  <cmd>T"
+  Tab(4) Rect { x: 21, y: 24, width: 38, height: 3 } ""
+  Pane(4, 7) Rect { x: 25, y: 24, width: 16, height: 2 } ""
+  Pane(4, 8) Rect { x: 41, y: 24, width: 17, height: 1 } ""
+  Pane(4, 9) Rect { x: 41, y: 25, width: 17, height: 1 } ""
+  Space("home") Rect { x: 21, y: 32, width: 4, height: 2 } "Home"
+  Space("work") Rect { x: 25, y: 32, width: 4, height: 2 } "Work"
+  Space("personal") Rect { x: 29, y: 32, width: 4, height: 2 } "Personal"
+  CreateSpace Rect { x: 55, y: 32, width: 4, height: 2 } "New space"
+cursor: None
+cursor_shift: 0
+ime_rect: None
+transform: SurfaceTransform { translate_x: 0.0, opacity: 1.0 }
+focused: None
+modal: false overlay_surface: false content_page: false text_input: false
