@@ -107,14 +107,13 @@ impl Sidebar {
         rect: Rect,
         cx: &mut Canvas,
     ) {
-        let (model, compact) = (view.model, view.compact);
+        let model = view.model;
         let theme = cx.theme;
         let home = model.home.as_deref();
         let rename = self.rename.as_mut().filter(|rename| rename.id == tab.id);
         let renaming = rename.is_some();
         let name = display_text(&tab_name(tab, home).unwrap_or_default());
-        let segmented = !compact
-            && tab.panes.len() > 1
+        let segmented = tab.panes.len() > 1
             && rect.width.saturating_sub(ICON_CELLS + 2)
                 >= tab.panes.len() as u16 * MIN_SEGMENT_CELLS;
         let (remote, os) = tab_machine(tab);
@@ -129,10 +128,8 @@ impl Sidebar {
         let layout = Row {
             indent: if tab.folder_id.is_some() { 2 } else { 0 },
             icon_color: theme.host(remote, os),
-            index: (compact || model.settings.show_indexes).then_some(number),
-            tooltip: compact.then(|| name.clone()),
+            index: model.settings.show_indexes.then_some(number),
             selected: model.selected_tab == Some(tab.id) && !view.props.settings_open,
-            compact,
             trailing: model.settings.show_close.then_some(Trailing {
                 id: ElementId::CloseTab(tab.id),
                 icon: icons::CLOSE,
@@ -152,9 +149,6 @@ impl Sidebar {
             )
         }
         .render(cx);
-        if compact {
-            return;
-        }
         if cx.aimed(&id) {
             split_preview(cx, &layout);
         }

@@ -19,7 +19,7 @@
 | Shutdown            | Owned application quits through its public action and exits successfully before fixture cleanup                                     |
 | SSH mux             | Containerized loopback transport, temporary keys, rejected unknown key, new/close/reopen lifecycle                                  |
 | TLS mux             | Certificate and hostname verification, mutual authentication, tab lifecycle and key cleanup                                         |
-| Geometry            | Resizing, left/right sidebar, expanded/collapsed/hidden rail, integrated chrome, tiny windows, fonts, zoom and fullscreen           |
+| Geometry            | Resizing, left/right sidebar, expanded/hidden sidebar, integrated chrome, tiny windows, fonts, zoom and fullscreen                  |
 | Splits              | Pane identities and topology retained; active and background tabs remain sized consistently                                         |
 | Mouse               | Tab activation, folder expand/collapse, tab reorder and folder assignment                                                           |
 | Keyboard            | Settings, search, tab creation, folders, sidebar toggle, Escape, field editing and terminal Control keys                            |

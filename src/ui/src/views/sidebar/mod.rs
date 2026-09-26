@@ -15,7 +15,7 @@ use crate::runtime::canvas::{Canvas, RoundedSurface};
 use ratatui::layout::Rect;
 use rows::GROUP_GAP;
 use std::collections::BTreeSet;
-use vtabs_core::{Model, RailMode, SpaceId, TabId};
+use vtabs_core::{Model, SpaceId, TabId};
 
 const DROP_BAR: f32 = 0.14;
 
@@ -68,19 +68,13 @@ pub(crate) struct SidebarProps {
 pub(crate) struct View<'a> {
     model: &'a Model,
     props: SidebarProps,
-    compact: bool,
 }
 
 impl Sidebar {
     pub fn render(&mut self, model: &Model, area: Rect, props: SidebarProps, cx: &mut Canvas) {
         let theme = cx.theme;
         let reveal_selection = self.reveal_selection;
-        let compact = model.settings.rail == RailMode::Collapsed || area.width < 12;
-        let view = View {
-            model,
-            props,
-            compact,
-        };
+        let view = View { model, props };
         let inset = u16::from(area.width >= 8);
         let inner = Rect::new(
             area.x + inset,
@@ -89,11 +83,7 @@ impl Sidebar {
             area.height,
         );
         let plus_label = format!("{} ", icons::PLUS);
-        let plus_width = if compact {
-            (inner.width / 2).clamp(1, 3).min(inner.width)
-        } else {
-            inner.width.min(4)
-        };
+        let plus_width = inner.width.min(4);
         let plus = Rect::new(inner.right() - plus_width, area.bottom() - 1, plus_width, 1);
         let create_space = |rect: Rect, cx: &mut Canvas| {
             Button::icon(ElementId::CreateSpace, &plus_label)
@@ -118,7 +108,6 @@ impl Sidebar {
         let search = Rect::new(inner.x, search_y, inner.width, search_height);
         Row {
             muted: true,
-            compact,
             field: true,
             ..Row::new(
                 ElementId::Search,
@@ -136,7 +125,7 @@ impl Sidebar {
             list_bottom.saturating_sub(title_y),
         );
         let row_height = self.row_height(model);
-        let tabs_y = if !compact && title_y + row_height < list_bottom {
+        let tabs_y = if title_y + row_height < list_bottom {
             space_title(
                 model,
                 Rect::new(inner.x, title_y, inner.width, row_height),
@@ -193,7 +182,6 @@ impl Sidebar {
                     Row {
                         tooltip: Some("New tab  Cmd+T".into()),
                         muted: true,
-                        compact,
                         ..Row::new(
                             ElementId::NewTab,
                             rect,
@@ -208,7 +196,6 @@ impl Sidebar {
                         index: model.settings.show_indexes.then_some(number),
                         tooltip: Some("Settings  Cmd+,".into()),
                         selected: view.props.settings_open,
-                        compact,
                         trailing: model.settings.show_close.then_some(Trailing {
                             id: ElementId::CloseSettingsTab,
                             icon: icons::CLOSE,
@@ -233,7 +220,6 @@ impl Sidebar {
                             "{}\nDrop tabs here. Right click to rename or ungroup.",
                             folder.name
                         )),
-                        compact,
                         ..Row::new(
                             ElementId::Folder(folder.id.clone()),
                             rect,
@@ -298,7 +284,7 @@ impl Sidebar {
                 .tooltip("Toggle sidebar  Cmd+B")
                 .render(Rect::new(left, inner.y, size, TOOLBAR_ROWS), cx);
         }
-        if !view.compact && inner.width >= props.header_inset + 12 {
+        if inner.width >= props.header_inset + 12 {
             Button::icon(ElementId::Settings, &format!("{} ", icons::SETTINGS))
                 .tooltip("Settings  Cmd+,")
                 .selected(props.settings_open)

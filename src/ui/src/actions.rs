@@ -450,7 +450,7 @@ impl SidebarUi {
 
 pub(crate) fn toggle_rail(model: &Model) -> Intent {
     Intent::SetRail(if model.settings.rail == RailMode::Expanded {
-        RailMode::Collapsed
+        RailMode::Hidden
     } else {
         RailMode::Expanded
     })

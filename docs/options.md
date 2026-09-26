@@ -2,10 +2,9 @@
 
 | Name                  | Default                                                       | Value                                                                              |
 | --------------------- | ------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
-| `width`               | `256`                                                         | Integer 32–1024. Expanded width in logical pixels                                  |
-| `rail_width`          | `40`                                                          | Integer 16–128. Collapsed width in logical pixels                                  |
+| `width`               | `256`                                                         | Integer 32–1024. Width in logical pixels                                           |
 | `side`                | `"left"`                                                      | `left`, `right`. Sidebar edge                                                      |
-| `rail`                | `"expanded"`                                                  | `expanded`, `collapsed`, `hidden`. Sidebar visibility                              |
+| `rail`                | `"expanded"`                                                  | `expanded`, `hidden`. Sidebar visibility                                           |
 | `animations`          | `true`                                                        | Boolean. Enable finite visual transitions                                          |
 | `reduced_motion`      | `false`                                                       | Boolean. Suppress transitions                                                      |
 | `animation_ms`        | `140`                                                         | Integer 0–1000. Transition duration in milliseconds                                |

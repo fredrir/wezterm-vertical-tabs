@@ -92,11 +92,11 @@ fn without_a_settings_file_edits_stay_in_memory() {
 #[test]
 fn rail_toggles_are_session_state_that_survives_reloads() {
     let mut app = configured(json!({"settings": {"rail": "expanded"}, "managed": {}}));
-    app.dispatch(Intent::SetRail(RailMode::Collapsed)).unwrap();
+    app.dispatch(Intent::SetRail(RailMode::Hidden)).unwrap();
     assert!(app.take_managed_write().is_none());
     app.config(json!({"settings": {"rail": "expanded"}, "managed": {}}))
         .unwrap();
-    assert_eq!(app.model().settings.rail, RailMode::Collapsed);
+    assert_eq!(app.model().settings.rail, RailMode::Hidden);
 }
 
 #[test]

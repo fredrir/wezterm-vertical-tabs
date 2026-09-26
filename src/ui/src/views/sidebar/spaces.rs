@@ -18,11 +18,7 @@ impl Sidebar {
     ) {
         let model = view.model;
         let slots_width = bar.width;
-        let slot_width = if view.compact {
-            slots_width.max(1)
-        } else {
-            slots_width.clamp(1, 4)
-        };
+        let slot_width = slots_width.clamp(1, 4);
         let slots = usize::from(slots_width / slot_width);
         self.space_scroll = self
             .space_scroll

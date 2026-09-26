@@ -57,11 +57,7 @@ fn hit(ui: &SidebarUi, id: &ElementId) -> Rect {
 fn search_opens_as_a_centered_palette_of_sidebar_rows_without_expanding_either_sidebar() {
     let area = Rect::new(3, 5, 100, 32);
     for side in [Side::Left, Side::Right] {
-        for (rail, columns) in [
-            (RailMode::Expanded, 28),
-            (RailMode::Collapsed, 4),
-            (RailMode::Hidden, 0),
-        ] {
+        for (rail, columns) in [(RailMode::Expanded, 28), (RailMode::Hidden, 0)] {
             let mut model = model();
             model.settings.side = side;
             model.settings.rail = rail;

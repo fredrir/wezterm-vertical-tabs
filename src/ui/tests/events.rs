@@ -348,7 +348,7 @@ fn sidebar_arrows_are_inert_while_activation_still_follows_the_focused_control()
     assert!(matches!(
         key(&mut ui, &model, Key::Enter).as_slice(),
         [UiIntent::Domain(Intent::SetRail(
-            vtabs_core::RailMode::Collapsed
+            vtabs_core::RailMode::Hidden
         ))]
     ));
 }

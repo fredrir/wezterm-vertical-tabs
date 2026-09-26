@@ -16,7 +16,6 @@ return {
     private_accent = "#cba6f7",
     private_env = { HISTFILE = "", VTABS_PRIVATE = "1", fish_private_mode = "1" },
     rail = "expanded",
-    rail_width = 40,
     reduced_motion = false,
     reopen_limit = 20,
     selected_background = "#34485f",
@@ -28,18 +27,11 @@ return {
   },
   options = {
     {
-      description = "Expanded width in logical pixels",
+      description = "Width in logical pixels",
       group = "layout",
       key = "width",
       kind = { number = { max = 1024, min = 32 } },
       label = "Sidebar width",
-    },
-    {
-      description = "Collapsed width in logical pixels",
-      group = "layout",
-      key = "rail_width",
-      kind = { number = { max = 128, min = 16 } },
-      label = "Rail width",
     },
     {
       description = "Sidebar edge",
@@ -52,7 +44,7 @@ return {
       description = "Sidebar visibility",
       group = "layout",
       key = "rail",
-      kind = { choice = { "expanded", "collapsed", "hidden" } },
+      kind = { choice = { "expanded", "hidden" } },
       label = "Rail",
     },
     {

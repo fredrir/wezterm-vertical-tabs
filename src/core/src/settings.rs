@@ -16,7 +16,6 @@ pub enum Side {
 pub enum RailMode {
     #[default]
     Expanded,
-    Collapsed,
     Hidden,
 }
 
@@ -24,7 +23,6 @@ pub enum RailMode {
 #[serde(default, deny_unknown_fields)]
 pub struct Settings {
     pub width: u16,
-    pub rail_width: u16,
     pub side: Side,
     pub rail: RailMode,
     pub animations: bool,
@@ -65,7 +63,6 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             width: 256,
-            rail_width: 40,
             side: Side::Left,
             rail: RailMode::Expanded,
             animations: true,
@@ -128,14 +125,7 @@ pub const DESCRIPTORS: &[SettingDescriptor] = &[
         label: "Sidebar width",
         group: "layout",
         kind: SettingKind::Number { min: 32, max: 1024 },
-        description: "Expanded width in logical pixels",
-    },
-    SettingDescriptor {
-        key: "rail_width",
-        label: "Rail width",
-        group: "layout",
-        kind: SettingKind::Number { min: 16, max: 128 },
-        description: "Collapsed width in logical pixels",
+        description: "Width in logical pixels",
     },
     SettingDescriptor {
         key: "side",
@@ -148,7 +138,7 @@ pub const DESCRIPTORS: &[SettingDescriptor] = &[
         key: "rail",
         label: "Rail",
         group: "layout",
-        kind: SettingKind::Choice(&["expanded", "collapsed", "hidden"]),
+        kind: SettingKind::Choice(&["expanded", "hidden"]),
         description: "Sidebar visibility",
     },
     SettingDescriptor {
@@ -359,7 +349,6 @@ impl Settings {
     pub fn logical_width(&self) -> u16 {
         match self.rail {
             RailMode::Expanded => self.width,
-            RailMode::Collapsed => self.rail_width,
             RailMode::Hidden => 0,
         }
     }

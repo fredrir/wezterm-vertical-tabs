@@ -2,7 +2,7 @@ use super::*;
 use std::fmt::Write;
 use std::time::Duration;
 use vtabs_core::jobs::JobTarget;
-use vtabs_core::{Intent, Model, RailMode, Side, Space, Tab, TabPane};
+use vtabs_core::{Intent, Model, Side, Space, Tab, TabPane};
 
 const SIDEBAR: Rect = Rect::new(0, 0, 44, 34);
 const WINDOW: Rect = Rect::new(0, 0, 120, 40);
@@ -261,15 +261,6 @@ fn sidebar_metadata_on_the_right() {
     ui.set_layout(40, 3);
     let frame = draw(&mut ui, &model, Rect::new(0, 0, 60, 34), 0);
     assert_screen("sidebar_metadata_on_the_right", &ui, &frame);
-}
-
-#[test]
-fn sidebar_compact_rail() {
-    let mut model = fixture();
-    model.settings.rail = RailMode::Collapsed;
-    let mut ui = SidebarUi::new();
-    let frame = draw(&mut ui, &model, Rect::new(0, 0, 8, 30), 0);
-    assert_screen("sidebar_compact_rail", &ui, &frame);
 }
 
 #[test]

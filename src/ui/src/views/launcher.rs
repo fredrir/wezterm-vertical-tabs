@@ -259,14 +259,10 @@ impl SidebarUi {
             }
             item
         }));
-        if model.settings.rail != vtabs_core::RailMode::Expanded {
+        if model.settings.rail == vtabs_core::RailMode::Hidden {
             let mut item = MenuItem::new(
                 "sidebar/expand",
-                if model.settings.rail == vtabs_core::RailMode::Hidden {
-                    "Show sidebar"
-                } else {
-                    "Expand sidebar"
-                },
+                "Show sidebar",
                 Action::Domain(Intent::SetRail(vtabs_core::RailMode::Expanded)),
             );
             item.icon = icons::SIDEBAR;

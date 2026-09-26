@@ -17,28 +17,28 @@ Buffer {
         "  󰷏  Docs  2                                 Your workspace                                                             ",
         "                                                                                                                        ",
         "      ~/guide                                Sidebar width                                                    256      ",
-        "                                              Expanded width in logical pixels                                          ",
+        "                                              Width in logical pixels                                                   ",
         "      ~/api                                                                                                            ",
         "                                                                                                                        ",
         "                                                                                                                        ",
-        "  󰐕  New Tab                                  Rail width                                                        40      ",
-        "                                              Collapsed width in logical pixels                                         ",
+        "  󰐕  New Tab                                  Side                                                            left      ",
+        "                                              Sidebar edge                                                              ",
         "  󰒋  /api            /web                                                                                             ",
         "                      /logs                                                                                            ",
         "    ~/dotfiles                                                                                                         ",
-        "                                              Side                                                            left      ",
-        "    Release notes                            Sidebar edge                                                              ",
+        "                                              Rail                                                        expanded      ",
+        "    Release notes                            Sidebar visibility                                                        ",
         "                                                                                                                        ",
         "  󰒓  Settings                                                                                                           ",
-        "                                                                                                                        ",
-        "                                              Rail                                                        expanded      ",
-        "                                              Sidebar visibility                                                        ",
-        "                                                                                                                        ",
-        "                                                                                                                        ",
         "                                             Motion and accessibility                                                   ",
         "                                                                                                                        ",
         "                                              Animations                                                      Off       ",
         "                                              Enable finite visual transitions                                          ",
+        "                                                                                                                        ",
+        "                                                                                                                        ",
+        "                                                                                                                        ",
+        "                                              Reduced motion                                                  Off       ",
+        "                                              Suppress transitions                                                      ",
         "                                                                                                                        ",
         "                                                                                                                        ",
         " main ✓ 2 changes                                                                                                       ",
@@ -104,7 +104,7 @@ Buffer {
         x: 2, y: 16, fg: Rgb(152, 168, 190), bg: Rgb(25, 34, 49), modifier: NONE,
         x: 38, y: 16, fg: Rgb(225, 231, 240), bg: Rgb(25, 34, 49), modifier: NONE,
         x: 45, y: 16, fg: Rgb(225, 231, 240), bg: Rgb(35, 44, 59), modifier: NONE,
-        x: 112, y: 16, fg: Rgb(169, 199, 245), bg: Rgb(35, 44, 59), modifier: NONE,
+        x: 110, y: 16, fg: Rgb(169, 199, 245), bg: Rgb(35, 44, 59), modifier: NONE,
         x: 114, y: 16, fg: Rgb(225, 231, 240), bg: Rgb(35, 44, 59), modifier: NONE,
         x: 115, y: 16, fg: Rgb(225, 231, 240), bg: Rgb(25, 34, 49), modifier: NONE,
         x: 45, y: 17, fg: Rgb(225, 231, 240), bg: Rgb(35, 44, 59), modifier: NONE,
@@ -125,8 +125,8 @@ Buffer {
         x: 115, y: 20, fg: Rgb(225, 231, 240), bg: Rgb(25, 34, 49), modifier: NONE,
         x: 45, y: 21, fg: Rgb(225, 231, 240), bg: Rgb(52, 72, 95), modifier: NONE,
         x: 46, y: 21, fg: Rgb(225, 231, 240), bg: Rgb(52, 72, 95), modifier: BOLD,
-        x: 109, y: 21, fg: Rgb(225, 231, 240), bg: Rgb(52, 72, 95), modifier: NONE,
-        x: 110, y: 21, fg: Rgb(169, 199, 245), bg: Rgb(52, 72, 95), modifier: BOLD,
+        x: 105, y: 21, fg: Rgb(225, 231, 240), bg: Rgb(52, 72, 95), modifier: NONE,
+        x: 106, y: 21, fg: Rgb(169, 199, 245), bg: Rgb(52, 72, 95), modifier: BOLD,
         x: 114, y: 21, fg: Rgb(225, 231, 240), bg: Rgb(52, 72, 95), modifier: NONE,
         x: 115, y: 21, fg: Rgb(225, 231, 240), bg: Rgb(25, 34, 49), modifier: NONE,
         x: 45, y: 22, fg: Rgb(225, 231, 240), bg: Rgb(52, 72, 95), modifier: NONE,
@@ -139,20 +139,20 @@ Buffer {
         x: 39, y: 24, fg: Rgb(225, 231, 240), bg: Rgb(25, 34, 49), modifier: NONE,
         x: 1, y: 25, fg: Rgb(225, 231, 240), bg: Rgb(52, 72, 95), modifier: NONE,
         x: 39, y: 25, fg: Rgb(225, 231, 240), bg: Rgb(25, 34, 49), modifier: NONE,
-        x: 45, y: 25, fg: Rgb(225, 231, 240), bg: Rgb(35, 44, 59), modifier: NONE,
+        x: 45, y: 25, fg: Rgb(152, 168, 190), bg: Rgb(25, 34, 49), modifier: NONE,
         x: 115, y: 25, fg: Rgb(225, 231, 240), bg: Rgb(25, 34, 49), modifier: NONE,
         x: 45, y: 26, fg: Rgb(225, 231, 240), bg: Rgb(35, 44, 59), modifier: NONE,
-        x: 106, y: 26, fg: Rgb(169, 199, 245), bg: Rgb(35, 44, 59), modifier: NONE,
-        x: 114, y: 26, fg: Rgb(225, 231, 240), bg: Rgb(35, 44, 59), modifier: NONE,
         x: 115, y: 26, fg: Rgb(225, 231, 240), bg: Rgb(25, 34, 49), modifier: NONE,
         x: 45, y: 27, fg: Rgb(225, 231, 240), bg: Rgb(35, 44, 59), modifier: NONE,
-        x: 46, y: 27, fg: Rgb(152, 168, 190), bg: Rgb(35, 44, 59), modifier: NONE,
+        x: 109, y: 27, fg: Rgb(169, 199, 245), bg: Rgb(25, 34, 49), modifier: NONE,
         x: 114, y: 27, fg: Rgb(225, 231, 240), bg: Rgb(35, 44, 59), modifier: NONE,
         x: 115, y: 27, fg: Rgb(225, 231, 240), bg: Rgb(25, 34, 49), modifier: NONE,
         x: 45, y: 28, fg: Rgb(225, 231, 240), bg: Rgb(35, 44, 59), modifier: NONE,
+        x: 46, y: 28, fg: Rgb(152, 168, 190), bg: Rgb(35, 44, 59), modifier: NONE,
+        x: 114, y: 28, fg: Rgb(225, 231, 240), bg: Rgb(35, 44, 59), modifier: NONE,
         x: 115, y: 28, fg: Rgb(225, 231, 240), bg: Rgb(25, 34, 49), modifier: NONE,
-        x: 45, y: 30, fg: Rgb(152, 168, 190), bg: Rgb(25, 34, 49), modifier: NONE,
-        x: 115, y: 30, fg: Rgb(225, 231, 240), bg: Rgb(25, 34, 49), modifier: NONE,
+        x: 45, y: 29, fg: Rgb(225, 231, 240), bg: Rgb(35, 44, 59), modifier: NONE,
+        x: 115, y: 29, fg: Rgb(225, 231, 240), bg: Rgb(25, 34, 49), modifier: NONE,
         x: 45, y: 31, fg: Rgb(225, 231, 240), bg: Rgb(35, 44, 59), modifier: NONE,
         x: 115, y: 31, fg: Rgb(225, 231, 240), bg: Rgb(25, 34, 49), modifier: NONE,
         x: 45, y: 32, fg: Rgb(225, 231, 240), bg: Rgb(35, 44, 59), modifier: NONE,
@@ -209,7 +209,8 @@ surfaces:
   RoundedSurface { rect: Rect { x: 45, y: 10, width: 70, height: 4 }, fill: Rgb(35, 44, 59), radius: 9.0, inset: 0.0, square: false, scale_y: 1.0, stacked: false, shift_y: 0.0 }
   RoundedSurface { rect: Rect { x: 45, y: 15, width: 70, height: 4 }, fill: Rgb(35, 44, 59), radius: 9.0, inset: 0.0, square: false, scale_y: 1.0, stacked: false, shift_y: 0.0 }
   RoundedSurface { rect: Rect { x: 45, y: 20, width: 70, height: 4 }, fill: Rgb(52, 72, 95), radius: 9.0, inset: 0.0, square: false, scale_y: 1.0, stacked: false, shift_y: 0.0 }
-  RoundedSurface { rect: Rect { x: 45, y: 25, width: 70, height: 4 }, fill: Rgb(35, 44, 59), radius: 9.0, inset: 0.0, square: false, scale_y: 1.0, stacked: false, shift_y: 0.0 }
+  RoundedSurface { rect: Rect { x: 45, y: 26, width: 70, height: 4 }, fill: Rgb(35, 44, 59), radius: 9.0, inset: 0.0, square: false, scale_y: 1.0, stacked: false, shift_y: 0.0 }
+  RoundedSurface { rect: Rect { x: 109, y: 27, width: 5, height: 1 }, fill: Rgb(25, 34, 49), radius: 9.0, inset: 0.0, square: false, scale_y: 1.0, stacked: false, shift_y: 0.0 }
   RoundedSurface { rect: Rect { x: 45, y: 31, width: 70, height: 4 }, fill: Rgb(35, 44, 59), radius: 9.0, inset: 0.0, square: false, scale_y: 1.0, stacked: false, shift_y: 0.0 }
   RoundedSurface { rect: Rect { x: 109, y: 32, width: 5, height: 1 }, fill: Rgb(25, 34, 49), radius: 9.0, inset: 0.0, square: false, scale_y: 1.0, stacked: false, shift_y: 0.0 }
   RoundedSurface { rect: Rect { x: 45, y: 37, width: 16, height: 1 }, fill: Rgb(35, 44, 59), radius: 9.0, inset: 0.0, square: false, scale_y: 1.0, stacked: false, shift_y: 0.0 }
@@ -243,15 +244,15 @@ hits:
   SettingsCategory("theme") Rect { x: 67, y: 7, width: 8, height: 1 } "Colors settings"
   SettingsCategory("motion") Rect { x: 76, y: 7, width: 8, height: 1 } "Motion settings"
   SettingsCategory("behavior") Rect { x: 85, y: 7, width: 9, height: 1 } "General settings"
-  Setting("width") Rect { x: 45, y: 10, width: 70, height: 4 } "Expanded width in logical pixels. Click or press Enter to edit. Delete restores the default."
-  Setting("rail_width") Rect { x: 45, y: 15, width: 70, height: 4 } "Collapsed width in logical pixels. Click or press Enter to edit. Delete restores the default."
-  Setting("side") Rect { x: 45, y: 20, width: 70, height: 4 } "Sidebar edge. Click or press Enter to edit. Delete restores the default."
-  Setting("rail") Rect { x: 45, y: 25, width: 70, height: 4 } "Sidebar visibility. Click or press Enter to edit. Delete restores the default."
-  Setting("animations") Rect { x: 45, y: 31, width: 70, height: 4 } "Enable finite visual transitions. Click or press Enter to edit. Delete restores the default."
+  Setting("width") Rect { x: 45, y: 10, width: 70, height: 4 } "Width in logical pixels. Click or press Enter to edit. Delete restores the default."
+  Setting("side") Rect { x: 45, y: 15, width: 70, height: 4 } "Sidebar edge. Click or press Enter to edit. Delete restores the default."
+  Setting("rail") Rect { x: 45, y: 20, width: 70, height: 4 } "Sidebar visibility. Click or press Enter to edit. Delete restores the default."
+  Setting("animations") Rect { x: 45, y: 26, width: 70, height: 4 } "Enable finite visual transitions. Click or press Enter to edit. Delete restores the default."
+  Setting("reduced_motion") Rect { x: 45, y: 31, width: 70, height: 4 } "Suppress transitions. Click or press Enter to edit. Delete restores the default."
   ResetSettings Rect { x: 45, y: 37, width: 16, height: 1 } "Reset saved settings to defaults"
 cursor: None
 cursor_shift: 0
 ime_rect: None
 transform: SurfaceTransform { translate_x: 0.0, opacity: 1.0 }
-focused: Some(Setting("side"))
+focused: Some(Setting("rail"))
 modal: true overlay_surface: true content_page: true text_input: false

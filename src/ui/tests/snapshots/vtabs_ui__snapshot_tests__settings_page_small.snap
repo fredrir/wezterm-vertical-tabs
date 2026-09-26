@@ -13,9 +13,9 @@ Buffer {
         "  󰌨  Home            Your workspace               ",
         "                      Sidebar width          256  ",
         "    Release notes                                ",
-        "  󰒓  Settings      ▏  Rail width              40  ",
+        "  󰒓  Settings      ▏  Side                  left  ",
         "                                                  ",
-        " main ✓ 2 changes     Side                  left  ",
+        " main ✓ 2 changes     Rail              expanded  ",
         "                                                  ",
         "  󰻃   󰻃   󰻃     󰐕     Reset defaults              ",
         "                                                  ",
@@ -69,7 +69,7 @@ Buffer {
         x: 19, y: 8, fg: Rgb(152, 168, 190), bg: Rgb(25, 34, 49), modifier: NONE,
         x: 20, y: 8, fg: Rgb(225, 231, 240), bg: Rgb(25, 34, 49), modifier: NONE,
         x: 21, y: 8, fg: Rgb(225, 231, 240), bg: Rgb(35, 44, 59), modifier: NONE,
-        x: 46, y: 8, fg: Rgb(169, 199, 245), bg: Rgb(35, 44, 59), modifier: NONE,
+        x: 44, y: 8, fg: Rgb(169, 199, 245), bg: Rgb(35, 44, 59), modifier: NONE,
         x: 48, y: 8, fg: Rgb(225, 231, 240), bg: Rgb(35, 44, 59), modifier: NONE,
         x: 49, y: 8, fg: Rgb(225, 231, 240), bg: Rgb(25, 34, 49), modifier: NONE,
         x: 21, y: 9, fg: Rgb(225, 231, 240), bg: Rgb(35, 44, 59), modifier: NONE,
@@ -77,7 +77,7 @@ Buffer {
         x: 1, y: 10, fg: Rgb(152, 168, 190), bg: Rgb(25, 34, 49), modifier: NONE,
         x: 19, y: 10, fg: Rgb(225, 231, 240), bg: Rgb(25, 34, 49), modifier: NONE,
         x: 21, y: 10, fg: Rgb(225, 231, 240), bg: Rgb(35, 44, 59), modifier: NONE,
-        x: 44, y: 10, fg: Rgb(169, 199, 245), bg: Rgb(35, 44, 59), modifier: NONE,
+        x: 40, y: 10, fg: Rgb(169, 199, 245), bg: Rgb(35, 44, 59), modifier: NONE,
         x: 48, y: 10, fg: Rgb(225, 231, 240), bg: Rgb(35, 44, 59), modifier: NONE,
         x: 49, y: 10, fg: Rgb(225, 231, 240), bg: Rgb(25, 34, 49), modifier: NONE,
         x: 21, y: 11, fg: Rgb(225, 231, 240), bg: Rgb(35, 44, 59), modifier: NONE,
@@ -136,9 +136,9 @@ hits:
   SettingsCategory("theme") Rect { x: 21, y: 4, width: 8, height: 1 } "Colors settings"
   SettingsCategory("motion") Rect { x: 30, y: 4, width: 8, height: 1 } "Motion settings"
   SettingsCategory("behavior") Rect { x: 39, y: 4, width: 9, height: 1 } "General settings"
-  Setting("width") Rect { x: 21, y: 6, width: 28, height: 2 } "Expanded width in logical pixels. Click or press Enter to edit. Delete restores the default."
-  Setting("rail_width") Rect { x: 21, y: 8, width: 28, height: 2 } "Collapsed width in logical pixels. Click or press Enter to edit. Delete restores the default."
-  Setting("side") Rect { x: 21, y: 10, width: 28, height: 2 } "Sidebar edge. Click or press Enter to edit. Delete restores the default."
+  Setting("width") Rect { x: 21, y: 6, width: 28, height: 2 } "Width in logical pixels. Click or press Enter to edit. Delete restores the default."
+  Setting("side") Rect { x: 21, y: 8, width: 28, height: 2 } "Sidebar edge. Click or press Enter to edit. Delete restores the default."
+  Setting("rail") Rect { x: 21, y: 10, width: 28, height: 2 } "Sidebar visibility. Click or press Enter to edit. Delete restores the default."
   ResetSettings Rect { x: 21, y: 12, width: 16, height: 1 } "Reset saved settings to defaults"
 cursor: None
 cursor_shift: 0

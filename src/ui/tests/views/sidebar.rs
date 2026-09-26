@@ -276,9 +276,8 @@ fn renamed_tabs_replace_the_directory_and_hidden_indexes_leave_no_gap() {
 }
 
 #[test]
-fn compact_footer_keeps_the_selected_space_beside_new_space() {
+fn narrow_footer_keeps_the_selected_space_beside_new_space() {
     let mut model = Model::default();
-    model.settings.rail = RailMode::Collapsed;
     model
         .spaces
         .extend((0..8).map(|index| Space::new(format!("space-{index}"), format!("Space {index}"))));

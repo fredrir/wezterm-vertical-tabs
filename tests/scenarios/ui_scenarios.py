@@ -351,7 +351,7 @@ def scenarios(probe: Probe, gui: GuiInput):
     gui.focus_terminal()
     shortcut(
         "ctrl+shift+b",
-        lambda state: state["model"]["settings"]["rail"] == "collapsed",
+        lambda state: state["model"]["settings"]["rail"] == "hidden",
         "Rail",
     )
     gui.focus_terminal()

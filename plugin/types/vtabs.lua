@@ -2,10 +2,9 @@
 ---@meta
 
 ---@class TabsSettings
----@field width? integer Expanded width in logical pixels
----@field rail_width? integer Collapsed width in logical pixels
+---@field width? integer Width in logical pixels
 ---@field side? 'left'|'right' Sidebar edge
----@field rail? 'expanded'|'collapsed'|'hidden' Sidebar visibility
+---@field rail? 'expanded'|'hidden' Sidebar visibility
 ---@field animations? boolean Enable finite visual transitions
 ---@field reduced_motion? boolean Suppress transitions
 ---@field animation_ms? integer Transition duration in milliseconds
@@ -62,13 +61,13 @@
 ---@field id string
 ---@field label string
 
----@alias TabsRailMode 'expanded'|'collapsed'|'hidden'
+---@alias TabsRailMode 'expanded'|'hidden'
 
 ---@class TabsRoutingRule
 ---@field fields? { [1]: TabsMatchField, [2]: string[] }[]
 ---@field remote? boolean
 
----@alias TabsSettingKey 'width'|'rail_width'|'side'|'rail'|'animations'|'reduced_motion'|'animation_ms'|'cards'|'show_indexes'|'show_metadata'|'show_close'|'confirm_close'|'accent'|'background'|'foreground'|'muted'|'selected_background'|'private_accent'|'distro_colors'|'keyboard_shortcuts'|'reopen_limit'|'default_domain'|'private_env'|'menus'
+---@alias TabsSettingKey 'width'|'side'|'rail'|'animations'|'reduced_motion'|'animation_ms'|'cards'|'show_indexes'|'show_metadata'|'show_close'|'confirm_close'|'accent'|'background'|'foreground'|'muted'|'selected_background'|'private_accent'|'distro_colors'|'keyboard_shortcuts'|'reopen_limit'|'default_domain'|'private_env'|'menus'
 
 ---@class TabsSpace
 ---@field accent? string

@@ -203,37 +203,32 @@ fn tab_navigator_uses_stable_visible_ids() {
 
 #[test]
 fn navigator_recovers_hidden_sidebar_as_a_session_override_even_when_lua_owns_rail() {
-    for rail in [
-        vtabs_core::RailMode::Hidden,
-        vtabs_core::RailMode::Collapsed,
-    ] {
-        for owned in [false, true] {
-            let mut ui = SidebarUi::new();
-            let mut model = model();
-            model.settings.rail = rail;
-            if owned {
-                model.config_owned.insert("rail".into());
-            }
-            ui.open_tab_navigator(&model);
-            assert!(!ui.content_page());
-            assert!(ui.overlay_surface());
-            draw(&mut ui, &model, 0);
-            let intents = domain(click(
-                &mut ui,
-                &model,
-                &ElementId::Menu("sidebar/expand".into()),
-            ));
-            assert_eq!(model.settings.rail, rail);
-            assert_eq!(
-                intents,
-                vec![Intent::SetRail(vtabs_core::RailMode::Expanded)]
-            );
-            let transition = model.dispatch(intents[0].clone()).unwrap();
-            assert!(!transition.durable_changed);
-            assert!(model.managed_settings().is_empty());
-            assert_eq!(model.settings.rail, vtabs_core::RailMode::Expanded);
-            assert!(!ui.content_page());
+    for owned in [false, true] {
+        let mut ui = SidebarUi::new();
+        let mut model = model();
+        model.settings.rail = vtabs_core::RailMode::Hidden;
+        if owned {
+            model.config_owned.insert("rail".into());
         }
+        ui.open_tab_navigator(&model);
+        assert!(!ui.content_page());
+        assert!(ui.overlay_surface());
+        draw(&mut ui, &model, 0);
+        let intents = domain(click(
+            &mut ui,
+            &model,
+            &ElementId::Menu("sidebar/expand".into()),
+        ));
+        assert_eq!(model.settings.rail, vtabs_core::RailMode::Hidden);
+        assert_eq!(
+            intents,
+            vec![Intent::SetRail(vtabs_core::RailMode::Expanded)]
+        );
+        let transition = model.dispatch(intents[0].clone()).unwrap();
+        assert!(!transition.durable_changed);
+        assert!(model.managed_settings().is_empty());
+        assert_eq!(model.settings.rail, vtabs_core::RailMode::Expanded);
+        assert!(!ui.content_page());
     }
 }
 
@@ -279,7 +274,7 @@ fn rail_commit_animates_only_surface_then_goes_idle() {
     let mut model = model();
     draw(&mut ui, &model, 0);
     model
-        .dispatch(Intent::SetRail(vtabs_core::RailMode::Collapsed))
+        .dispatch(Intent::SetRail(vtabs_core::RailMode::Hidden))
         .unwrap();
     let frame = ui
         .render(&model, Rect::new(0, 0, 5, 24), Duration::from_millis(1))

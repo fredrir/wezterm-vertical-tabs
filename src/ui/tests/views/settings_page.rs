@@ -467,7 +467,7 @@ fn keyboard_paths_hide_or_close_the_settings_tab() {
     assert!(matches!(
         command(&mut ui, 'b').as_slice(),
         [UiIntent::Domain(Intent::SetRail(
-            vtabs_core::RailMode::Collapsed
+            vtabs_core::RailMode::Hidden
         ))]
     ));
     assert!(ui.content_page());

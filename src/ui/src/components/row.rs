@@ -3,9 +3,8 @@ use crate::element::ElementId;
 use crate::icons;
 use crate::keybinds::platform_tooltip;
 use crate::runtime::canvas::Canvas;
-use ratatui::layout::{Alignment, Rect};
+use ratatui::layout::Rect;
 use ratatui::style::{Color, Style};
-use ratatui::text::Line;
 use unicode_width::UnicodeWidthStr;
 
 pub(crate) struct Trailing {
@@ -30,7 +29,6 @@ pub(crate) struct Row<'a> {
     pub tooltip: Option<String>,
     pub selected: bool,
     pub muted: bool,
-    pub compact: bool,
     pub trailing: Option<Trailing>,
     pub field: bool,
 }
@@ -48,7 +46,6 @@ impl<'a> Row<'a> {
             tooltip: None,
             selected: false,
             muted: false,
-            compact: false,
             trailing: None,
             field: false,
         }
@@ -109,8 +106,7 @@ impl Row<'_> {
             Some(ElementId::Pane(..) | ElementId::ClosePane(..))
         );
         let trailing = self.trailing.filter(|trailing| {
-            !self.compact
-                && self.rect.width > TRAILING_CELLS + ICON_CELLS
+            self.rect.width > TRAILING_CELLS + ICON_CELLS
                 && ((hovered && !on_pane) || cx.focused(&trailing.id))
         });
         let index = icons::index(self.index).filter(|_| hovered);
@@ -120,21 +116,6 @@ impl Row<'_> {
             _ => style,
         };
         let tooltip = platform_tooltip(self.tooltip.unwrap_or_default());
-        if self.compact {
-            let label = format!("{icon} ");
-            let visual = icon_rect(self.rect, &label);
-            cx.write(
-                Rect::new(visual.x, self.rect.y, visual.width, 1),
-                Line::from(label).alignment(Alignment::Center),
-                icon_style,
-            );
-            cx.hit(self.id, self.rect, tooltip);
-            return RowLayout {
-                fill,
-                style,
-                content: Rect::default(),
-            };
-        }
         let x = self.rect.x + 1 + self.indent;
         let right = self.rect.right().saturating_sub(1);
         cx.write(

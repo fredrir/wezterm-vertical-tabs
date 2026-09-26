@@ -32,7 +32,7 @@ return config
 | Actions               | Indexed, relative, negative-index and MRU navigation follow visible tabs     |
 | Raw mux identities    | CLI/mux tab IDs retain upstream meaning                                      |
 | Sidebar width         | Logical pixels; clamped against available content area                       |
-| Side/rail             | `left`/`right`; `expanded`/`collapsed`/`hidden`                              |
+| Side/rail             | `left`/`right`; `expanded`/`hidden`; hidden also hides macOS window buttons  |
 
 **Keyboard and mouse**
 
@@ -79,7 +79,7 @@ return config
 | Icons                 | Drawn from WezTerm's bundled symbols font, so their size does not depend on the terminal font's Nerd Font variant       |
 | Splits                | Mirrors the layout in one row: side-by-side panes as columns, top/bottom panes as its two lines; click focuses a pane   |
 | Close control         | Floats over the hovered tab row without moving its content (`show_close`)                                               |
-| Hints                 | Compact, beside the sidebar and level with the control; tabs show none outside the collapsed rail                       |
+| Hints                 | Compact, beside the sidebar and level with the control; tabs show none                                                  |
 | Motion                | Finite hover/selection transitions and press shrink; `reduced_motion` disables animation                                |
 | Closing tabs          | Idle tabs close at once; only a running process prompts, judged by the pane's owning mux (`confirm_close`, skip list)   |
 | Closing splits        | Hovering a split reveals its own ×; the tab's × shows over the icon side of the row                                     |
@@ -204,7 +204,7 @@ vtabs.apply_to_config(config, {
 | `{ NewTabInFolder = folder_id }`                                | Spawn a tab inside a folder            |
 | `{ DeleteFolder = folder_id }`                                  | Ungroup tabs without closing them      |
 | `{ SetSetting = { key = 'width', value = 300 } }`               | Write a setting to `settings_file`     |
-| `{ SetRail = 'collapsed' }`                                     | Change rail mode for this session      |
+| `{ SetRail = 'hidden' }`                                        | Change rail mode for this session      |
 | `'PrivateWindow'`                                               | Create a private window                |
 | `'Reopen'`                                                      | Reopen an available launch description |
 

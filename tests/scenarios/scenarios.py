@@ -812,7 +812,6 @@ def edge_scenarios(probe):
         assert right["sidebar"]["y"] > 0, "integrated chrome not reserved"
         assert right["sidebar"]["y"] == right["content"]["y"], "content and sidebar do not align"
     for rail, expected in (
-        ("collapsed", "rail_width"),
         ("hidden", None),
         ("expanded", "width"),
     ):
