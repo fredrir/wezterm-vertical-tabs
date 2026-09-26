@@ -72,7 +72,7 @@ fn search_opens_as_a_centered_palette_of_sidebar_rows_without_expanding_either_s
             ui.open_tab_navigator(&model);
             assert!(ui.overlay_surface());
             assert!(!ui.content_page());
-            assert!(!ui.needs_expanded_space());
+            assert!(!ui.content_page());
             ui.render(&model, area, Duration::from_millis(1));
             assert_eq!(model.settings.rail, rail);
             assert_eq!(model.visible_ids(), tabs);

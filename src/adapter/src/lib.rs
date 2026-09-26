@@ -1625,7 +1625,7 @@ impl Provider for Adapter {
                     inset: 0.,
                     square: false,
                     stacked: false,
-                    fill: linear_color(self.app.ui().theme.accent),
+                    fill: linear_color(self.app.ui().theme().accent),
                 });
             }
         }

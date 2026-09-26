@@ -215,7 +215,7 @@ fn navigator_recovers_hidden_sidebar_as_a_session_override_even_when_lua_owns_ra
                 model.config_owned.insert("rail".into());
             }
             ui.open_tab_navigator(&model);
-            assert!(!ui.needs_expanded_space());
+            assert!(!ui.content_page());
             assert!(ui.overlay_surface());
             draw(&mut ui, &model, 0);
             let intents = domain(click(
@@ -232,7 +232,7 @@ fn navigator_recovers_hidden_sidebar_as_a_session_override_even_when_lua_owns_ra
             assert!(!transition.durable_changed);
             assert!(model.managed_settings().is_empty());
             assert_eq!(model.settings.rail, vtabs_core::RailMode::Expanded);
-            assert!(!ui.needs_expanded_space());
+            assert!(!ui.content_page());
         }
     }
 }

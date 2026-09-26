@@ -49,7 +49,7 @@ mod ui_tests;
 /// changes; terminal repaint alone does not invalidate the sidebar.
 #[derive(Default)]
 pub struct SidebarUi {
-    pub theme: Theme,
+    theme: Theme,
     frame: Frame,
     paint: Paint,
     host: Host,
@@ -96,8 +96,6 @@ fn running(process: &str) -> String {
     }
 }
 
-pub type Ui = SidebarUi;
-
 impl SidebarUi {
     pub fn new() -> Self {
         Self::default()
@@ -114,10 +112,9 @@ impl SidebarUi {
     pub fn is_modal(&self) -> bool {
         self.overlays.current.is_some() || self.settings.open
     }
-    /// Settings retain a sidebar beside their content page. Transient surfaces use the
-    /// window viewport without changing the user's sidebar reservation.
-    pub fn needs_expanded_space(&self) -> bool {
-        self.settings.open
+    /// Colors follow the settings and the selected space as of the last render.
+    pub fn theme(&self) -> &Theme {
+        &self.theme
     }
     pub fn has_focus(&self) -> bool {
         self.focused.is_some() || self.is_modal()
@@ -155,7 +152,7 @@ impl SidebarUi {
     pub fn set_foreign_tabs(&mut self, tabs: Vec<ForeignTab>) {
         self.launchers.foreign_tabs = tabs;
     }
-    pub fn show_error(&mut self, message: impl Into<String>) {
+    pub(crate) fn show_error(&mut self, message: impl Into<String>) {
         let items = vec![MenuItem::new("dismiss", "Dismiss", Action::Close)];
         self.open_overlay(Overlay::Menu(Menu::new(message, items)));
     }
@@ -271,7 +268,7 @@ impl SidebarUi {
         self.settings.search_focused = false;
         self.frame.dirty = true;
     }
-    pub fn hide_settings(&mut self) {
+    pub(crate) fn hide_settings(&mut self) {
         if self.settings.open {
             self.settings.open = false;
             self.settings.search_focused = false;
@@ -289,6 +286,7 @@ impl SidebarUi {
     pub fn has_overlay(&self) -> bool {
         self.overlays.current.is_some()
     }
+    /// Settings keep the sidebar beside a content page, which needs the window's full width.
     pub fn content_page(&self) -> bool {
         self.settings.open
     }
@@ -309,7 +307,7 @@ impl SidebarUi {
             self.invalidate();
         }
     }
-    pub fn open_create_folder(&mut self) {
+    pub(crate) fn open_create_folder(&mut self) {
         self.open_form("New folder", FormKind::CreateFolder, "");
     }
     pub fn open_create_space(&mut self) {
