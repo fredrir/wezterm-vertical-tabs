@@ -37,7 +37,6 @@ impl Default for Theme {
 }
 
 impl Theme {
-    /// Follows the settings, the selected space's accent and private windows.
     pub(crate) fn apply(&mut self, model: &Model) {
         let settings = &model.settings;
         self.background = Self::parse_color(&settings.background).unwrap_or(self.background);

@@ -1,4 +1,3 @@
-//! Context menus: a framed list anchored at the pointer, or centered without one.
 use crate::components::{anchored, centered, list, panel};
 use crate::element::ElementId;
 use crate::input::display_text;
@@ -7,7 +6,6 @@ use crate::runtime::canvas::Canvas;
 use ratatui::layout::{Position, Rect};
 use unicode_width::UnicodeWidthStr;
 
-/// Returns the menu's surface.
 pub(crate) fn menu(cx: &mut Canvas, area: Rect, anchor: Option<Position>, menu: &mut Menu) -> Rect {
     let height = menu
         .items

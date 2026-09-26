@@ -183,7 +183,7 @@ impl SidebarUi {
             .find(|hit| hit.rect.contains(Position::new(x, y)))
     }
     pub fn next_deadline(&self) -> Option<Duration> {
-        if !self.host.visible || !self.host.focused || self.frame.buffer.area.is_empty() {
+        if !self.host.live() || self.frame.buffer.area.is_empty() {
             return None;
         }
         [

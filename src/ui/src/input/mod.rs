@@ -1,4 +1,3 @@
-//! What the host sends: keys, pointer events, text and focus changes.
 mod editor;
 
 pub use editor::{EditResult, TextEditor};

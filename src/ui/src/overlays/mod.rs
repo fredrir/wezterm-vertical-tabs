@@ -1,4 +1,3 @@
-//! Menus, dialogs, forms and launchers stacked over the sidebar.
 mod forms;
 mod menus;
 

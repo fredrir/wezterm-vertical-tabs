@@ -1,4 +1,3 @@
-//! Screens built from components: the sidebar, the settings page and the launchers.
 pub(crate) mod launcher;
 pub(crate) mod settings_page;
 pub(crate) mod sidebar;

@@ -1,4 +1,3 @@
-//! Reusable pieces every surface is drawn from; each reads props and draws into a `Canvas`.
 pub(crate) mod button;
 pub(crate) mod dialog;
 pub(crate) mod list;
@@ -47,7 +46,6 @@ pub(crate) fn anchored(area: Rect, anchor: Position, width: u16, height: u16) ->
     Rect::new(x, y, width, height)
 }
 
-/// A popup's cleared surface and the content area inside its one-cell frame.
 pub(crate) struct Panel {
     pub rect: Rect,
     pub inner: Rect,

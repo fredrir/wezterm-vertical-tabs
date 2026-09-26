@@ -1,4 +1,3 @@
-//! Modal surfaces that ask for a decision or a value.
 use crate::actions::Action;
 use crate::components::button::{Button, Tone};
 use crate::components::text_input::TextInput;
@@ -68,7 +67,6 @@ pub(crate) fn confirm(cx: &mut Canvas, area: Rect, menu: &Menu) -> Rect {
     rect
 }
 
-/// A title, one text field, a hint or error, and Save/Cancel.
 pub(crate) fn form(cx: &mut Canvas, area: Rect, form: &mut Form, editing: bool) -> Rect {
     let theme = cx.theme;
     let panel = panel(cx, centered(area, 64, 7), area);

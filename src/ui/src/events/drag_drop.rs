@@ -89,18 +89,13 @@ impl SidebarUi {
         }
         // The insertion bar glides to its new boundary; other previews pop in place.
         let edge = |target: &DropTarget, ui: &Self| match target {
-            DropTarget::Beside { tab, after } => ui
-                .paint
-                .hits
-                .iter()
-                .find(|hit| hit.id == ElementId::Tab(*tab))
-                .map(|hit| {
-                    f32::from(if *after {
-                        hit.rect.bottom()
-                    } else {
-                        hit.rect.y
-                    })
-                }),
+            DropTarget::Beside { tab, after } => ui.paint.hit(&ElementId::Tab(*tab)).map(|hit| {
+                f32::from(if *after {
+                    hit.rect.bottom()
+                } else {
+                    hit.rect.y
+                })
+            }),
             _ => None,
         };
         let to = target.as_ref().and_then(|target| edge(target, self));

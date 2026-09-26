@@ -33,11 +33,10 @@ pub struct FrameUpdate {
     pub transform: SurfaceTransform,
 }
 
-/// The published buffer, the one being composed and what they were composed from.
 pub(crate) struct Frame {
     pub buffer: Buffer,
     pub staging: Buffer,
-    pub revision: Option<u64>,
+    pub model_revision: Option<u64>,
     pub number: u64,
     pub dirty: bool,
     pub last: Duration,
@@ -50,7 +49,7 @@ impl Default for Frame {
         Self {
             buffer: Buffer::default(),
             staging: Buffer::default(),
-            revision: None,
+            model_revision: None,
             number: 0,
             dirty: true,
             last: Duration::ZERO,
@@ -73,7 +72,7 @@ impl SidebarUi {
             self.pointer.press = None;
             self.frame.dirty = true;
         }
-        if self.frame.revision != Some(model.revision) {
+        if self.frame.model_revision != Some(model.revision) {
             if self
                 .overlays
                 .pending_form
@@ -81,7 +80,7 @@ impl SidebarUi {
             {
                 self.dismiss();
             }
-            self.frame.revision = Some(model.revision);
+            self.frame.model_revision = Some(model.revision);
             self.theme.apply(model);
             self.settings.config_owned.clone_from(&model.config_owned);
             if self
@@ -89,8 +88,7 @@ impl SidebarUi {
                 .last_rail
                 .is_some_and(|rail| rail != model.settings.rail)
                 && motion::enabled(&model.settings)
-                && self.host.focused
-                && self.host.visible
+                && self.host.live()
                 && !self.is_modal()
                 && !area.is_empty()
             {
@@ -391,7 +389,7 @@ impl SidebarUi {
                 .pointer
                 .hovered
                 .as_ref()
-                .and_then(|id| cx.paint.hits.iter().find(|hit| &hit.id == id))
+                .and_then(|id| cx.paint.hit(id))
                 .cloned();
             match target {
                 Some(target) => tooltip(&mut cx, area, sidebar, &target),

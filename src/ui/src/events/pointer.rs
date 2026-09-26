@@ -268,13 +268,7 @@ impl SidebarUi {
     }
 
     pub(crate) fn anchor_focused(&mut self, id: &ElementId) {
-        if let Some(rect) = self
-            .paint
-            .hits
-            .iter()
-            .find(|hit| &hit.id == id)
-            .map(|hit| hit.rect)
-        {
+        if let Some(rect) = self.paint.hit(id).map(|hit| hit.rect) {
             self.set_anchor(rect.x, rect.bottom().saturating_sub(1));
         }
     }

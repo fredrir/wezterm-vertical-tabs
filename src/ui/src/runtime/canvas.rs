@@ -55,7 +55,6 @@ pub(crate) struct Field {
     pub caret: Option<Position>,
 }
 
-/// Everything a composition leaves beside the buffer.
 #[derive(Default)]
 pub(crate) struct Paint {
     pub surfaces: Vec<RoundedSurface>,
@@ -74,12 +73,15 @@ impl Paint {
         self.hits.clear();
         self.fields.clear();
     }
+    /// The first region registered for `id`; `SidebarUi::hit_test` picks the topmost instead.
+    pub fn hit(&self, id: &ElementId) -> Option<&HitRegion> {
+        self.hits.iter().find(|hit| &hit.id == id)
+    }
     pub fn field(&self, id: &ElementId) -> Option<&Field> {
         self.fields.iter().rev().find(|field| &field.id == id)
     }
 }
 
-/// What every component draws into, and the interaction state it reads.
 pub(crate) struct Canvas<'a> {
     pub buf: &'a mut Buffer,
     pub paint: &'a mut Paint,
@@ -110,7 +112,6 @@ impl Canvas<'_> {
     pub fn clear(&mut self, rect: Rect) {
         Clear.render(rect, self.buf);
     }
-    /// Paints the surface's cells and asks the host to round them.
     pub fn fill(&mut self, surface: RoundedSurface) {
         let rect = surface.rect.intersection(self.buf.area);
         if rect.is_empty() {
@@ -161,7 +162,6 @@ impl Canvas<'_> {
             .filter(|press| &press.id == id)
             .map_or(0.0, |press| press.level * PRESS_INSET)
     }
-    /// The element a drag would drop onto.
     pub fn aimed(&self, id: &ElementId) -> bool {
         match (&self.pointer.drop, id) {
             (Some(DropTarget::Into(tab)), ElementId::Tab(target)) => tab == target,

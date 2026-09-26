@@ -13,11 +13,8 @@ pub(crate) enum Tone {
 }
 
 enum Kind {
-    /// A square glyph on the bare background.
     Icon,
-    /// A left-aligned label on a card.
     Text,
-    /// A centered label that tints with its tone when active.
     Action(Tone),
 }
 

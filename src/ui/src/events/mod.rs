@@ -1,4 +1,3 @@
-//! Routes host input to pointer, keyboard and text handlers.
 mod drag_drop;
 mod keyboard;
 mod pointer;

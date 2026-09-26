@@ -9,7 +9,6 @@ use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
 impl Sidebar {
-    /// One button per space along `bar`, scrolled to keep the selected space in view.
     pub(crate) fn spaces(
         &mut self,
         view: &View,

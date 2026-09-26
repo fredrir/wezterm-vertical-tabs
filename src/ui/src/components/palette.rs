@@ -1,4 +1,3 @@
-//! A centered search field over a filtered list of sidebar rows.
 use crate::components::row::{Content, Row};
 use crate::components::text_input::TextInput;
 use crate::components::{ICON_CELLS, ROW_INSET, SURFACE_RADIUS, centered, list};
@@ -10,7 +9,6 @@ use crate::runtime::canvas::Canvas;
 use ratatui::layout::Rect;
 use unicode_width::UnicodeWidthStr;
 
-/// Returns the palette's surface.
 pub(crate) fn palette(cx: &mut Canvas, area: Rect, menu: &mut Menu) -> Rect {
     let theme = cx.theme;
     let Some(search) = &mut menu.search else {

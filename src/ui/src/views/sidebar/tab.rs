@@ -181,7 +181,6 @@ fn rename_field(cx: &mut Canvas, editor: &mut TextEditor, layout: &RowLayout) {
     cx.hit(ElementId::Editor, edit, "Tab title");
 }
 
-/// Where a dragged tab would join as a split, labelled with what is being dropped.
 fn split_preview(cx: &mut Canvas, layout: &RowLayout) {
     let theme = cx.theme;
     let area = layout.content;

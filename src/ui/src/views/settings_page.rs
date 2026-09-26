@@ -51,7 +51,7 @@ impl Default for SettingsPage {
     }
 }
 
-pub(crate) fn fields(category: &str, query: &str) -> Vec<&'static SettingDescriptor> {
+fn fields(category: &str, query: &str) -> Vec<&'static SettingDescriptor> {
     let query = query.trim().to_lowercase();
     settings::descriptors()
         .iter()
@@ -97,7 +97,7 @@ fn value_label(model: &Model, field: &SettingDescriptor) -> String {
     }
 }
 
-pub(crate) fn row_height(area: Rect) -> u16 {
+fn row_height(area: Rect) -> u16 {
     if area.height >= 18 && area.width >= 22 {
         4
     } else if area.height >= 11 && area.width >= 14 {
@@ -304,7 +304,7 @@ impl SettingsPage {
             .render(rect, cx);
     }
 
-    pub(crate) fn search(&mut self, rect: Rect, overlay_open: bool, cx: &mut Canvas) {
+    fn search(&mut self, rect: Rect, overlay_open: bool, cx: &mut Canvas) {
         let theme = cx.theme;
         cx.rounded(rect, theme.card);
         let inset = u16::from(rect.width >= 4);
@@ -417,7 +417,7 @@ impl SidebarUi {
         self.frame.dirty = true;
     }
 
-    pub(crate) fn settings_input_text(&mut self, text: &str) {
+    fn settings_input_text(&mut self, text: &str) {
         self.settings.search_focused = true;
         self.focused = Some(ElementId::SettingsSearch);
         self.settings.query.insert(text);

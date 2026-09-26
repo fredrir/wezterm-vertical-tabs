@@ -1,4 +1,3 @@
-//! One painter for forms, search fields and inline renames.
 use crate::element::ElementId;
 use crate::input::TextEditor;
 use crate::runtime::canvas::{Canvas, Field, RoundedSurface};
@@ -38,7 +37,6 @@ impl<'a> TextInput<'a> {
         self.shift = shift;
         self
     }
-    /// Shown while the field is empty.
     pub fn placeholder(mut self, placeholder: &'a str) -> Self {
         self.placeholder = Some(placeholder);
         self

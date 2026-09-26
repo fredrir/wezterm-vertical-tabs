@@ -59,14 +59,12 @@ impl Default for Sidebar {
     }
 }
 
-/// What the sidebar shows of state it does not own.
 pub(crate) struct SidebarProps {
     pub header_inset: u16,
     pub settings_open: bool,
     pub settings_listed: bool,
 }
 
-/// Inputs every part of one sidebar render shares.
 pub(crate) struct View<'a> {
     model: &'a Model,
     props: SidebarProps,

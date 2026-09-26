@@ -57,7 +57,7 @@ impl SidebarUi {
             if key == Key::Tab {
                 let mut order: Vec<_> = [ElementId::Editor, ElementId::Submit, ElementId::Cancel]
                     .into_iter()
-                    .filter(|id| self.paint.hits.iter().any(|hit| &hit.id == id))
+                    .filter(|id| self.paint.hit(id).is_some())
                     .collect();
                 if order.is_empty() {
                     order.push(ElementId::Editor);

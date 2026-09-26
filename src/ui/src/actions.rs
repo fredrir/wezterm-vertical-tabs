@@ -1,4 +1,3 @@
-//! What activating an element or choosing a menu item does.
 use crate::SidebarUi;
 use crate::element::ElementId;
 use crate::input::{Key, Modifiers, TextEditor};

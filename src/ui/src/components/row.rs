@@ -1,4 +1,3 @@
-//! The list row behind tabs, folders, the search field and launcher entries.
 use crate::components::{DROP_TINT, ICON_CELLS, ROW_INSET, SURFACE_RADIUS, TRAILING_CELLS};
 use crate::element::ElementId;
 use crate::icons;
@@ -9,7 +8,6 @@ use ratatui::style::{Color, Style};
 use ratatui::text::Line;
 use unicode_width::UnicodeWidthStr;
 
-/// A control that appears at the row's end while it is hovered or focused.
 pub(crate) struct Trailing {
     pub id: ElementId,
     pub icon: &'static str,

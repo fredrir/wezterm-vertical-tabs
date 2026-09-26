@@ -4,14 +4,12 @@ use std::time::Duration;
 use tachyonfx::{Effect, fx};
 use vtabs_core::{Model, Settings};
 
-/// Frame cadence while anything animates.
 pub(crate) const FRAME: Duration = Duration::from_millis(8);
 
 pub(crate) fn enabled(settings: &Settings) -> bool {
     settings.animations && !settings.reduced_motion && settings.animation_ms > 0
 }
 
-/// A fraction of the configured animation length, or zero when motion is off.
 pub(crate) fn span(settings: &Settings, numerator: u64, denominator: u64) -> Duration {
     if enabled(settings) {
         Duration::from_millis(u64::from(settings.animation_ms) * numerator / denominator)
@@ -49,7 +47,6 @@ pub(crate) struct Tween {
     pub duration: Duration,
 }
 
-/// A finite cell effect over one area, and the surface transform the compositor applies.
 #[derive(Default)]
 pub(crate) struct Effects {
     pub cell: Option<Effect>,
@@ -180,7 +177,7 @@ impl SidebarUi {
                 .hovered
                 .as_ref()
                 .or(self.focused.as_ref())
-                .and_then(|id| self.paint.hits.iter().find(|hit| &hit.id == id))
+                .and_then(|id| self.paint.hit(id))
                 .map(|hit| hit.rect)
             else {
                 return;

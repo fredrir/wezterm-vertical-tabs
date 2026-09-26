@@ -1,5 +1,3 @@
-//! Scrolling, stepping and focus cycling shared by every list-like surface.
-
 /// Scrolls just far enough to show `at`; `end(start)` is the first row past a view from `start`.
 pub(crate) fn reveal(scroll: usize, at: usize, end: impl Fn(usize) -> usize) -> usize {
     let mut scroll = scroll.min(at);
@@ -36,7 +34,6 @@ pub(crate) fn offset(current: usize, delta: i32, len: usize) -> usize {
     }
 }
 
-/// Steps from `current` in `delta` direction to the next enabled entry, wrapping around.
 pub(crate) fn next_enabled<T>(
     items: &[T],
     current: usize,
@@ -56,7 +53,6 @@ pub(crate) fn next_enabled<T>(
     current.min(items.len() - 1)
 }
 
-/// Tab order: after `current`, wrapping; without a current entry it starts at either end.
 pub(crate) fn cycle<T: PartialEq + Clone>(
     ids: &[T],
     current: Option<&T>,
