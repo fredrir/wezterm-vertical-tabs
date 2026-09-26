@@ -46,12 +46,13 @@ impl RoundedSurface {
     }
 }
 
-/// Where a text field was drawn, for pointer columns and the IME.
+/// Where a text field was drawn, for pointer columns, the caret and the IME.
 #[derive(Clone, Debug)]
 pub(crate) struct Field {
     pub id: ElementId,
     pub rect: Rect,
     pub shift: f32,
+    pub caret: Option<Position>,
 }
 
 /// Everything a composition leaves beside the buffer.
@@ -60,7 +61,6 @@ pub(crate) struct Paint {
     pub surfaces: Vec<RoundedSurface>,
     pub hits: Vec<HitRegion>,
     pub fields: Vec<Field>,
-    pub cursor: Option<Position>,
 }
 
 impl Paint {
@@ -68,7 +68,6 @@ impl Paint {
         self.surfaces.clear();
         self.hits.clear();
         self.fields.clear();
-        self.cursor = None;
     }
     /// Modal surfaces replace every target beneath them.
     pub fn clear_targets(&mut self) {

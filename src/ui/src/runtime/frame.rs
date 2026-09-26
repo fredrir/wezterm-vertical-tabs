@@ -242,7 +242,7 @@ impl SidebarUi {
             resized,
             changed_cells,
             dirty_rows,
-            cursor: self.paint.cursor,
+            cursor: field.and_then(|(_, field)| field.caret),
             cursor_shift,
             ime_rect,
             transform,
@@ -400,3 +400,7 @@ impl SidebarUi {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "../../tests/runtime/frame.rs"]
+mod tests;

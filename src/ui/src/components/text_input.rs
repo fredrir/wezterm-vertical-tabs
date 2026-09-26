@@ -46,11 +46,6 @@ impl<'a> TextInput<'a> {
 
     pub fn render(self, rect: Rect, cx: &mut Canvas) {
         let theme = cx.theme;
-        cx.paint.fields.push(Field {
-            id: self.id,
-            rect,
-            shift: self.shift,
-        });
         let editor = self.editor;
         editor.keep_cursor_visible(usize::from(rect.width));
         let display = editor.display_text();
@@ -64,7 +59,14 @@ impl<'a> TextInput<'a> {
                 theme.base().bg(self.fill),
             ),
         }
+        let mut field = Field {
+            id: self.id,
+            rect,
+            shift: self.shift,
+            caret: None,
+        };
         if !self.active {
+            cx.paint.fields.push(field);
             return;
         }
         let columns = |range: Range<usize>| {
@@ -98,8 +100,9 @@ impl<'a> TextInput<'a> {
                     .cursor_columns()
                     .saturating_sub(editor.scroll_columns)
                     .min(usize::from(rect.width - 1)) as u16;
-            cx.paint.cursor = Some(Position::new(x, rect.y));
+            field.caret = Some(Position::new(x, rect.y));
         }
+        cx.paint.fields.push(field);
     }
 }
 
