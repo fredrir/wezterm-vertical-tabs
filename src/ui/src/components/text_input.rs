@@ -8,14 +8,6 @@ use std::ops::Range;
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Selection {
-    /// Accent-filled, like a native text field.
-    Accent,
-    /// A rounded selected-row fill that keeps the accent text readable.
-    Subtle,
-}
-
 pub(crate) struct TextInput<'a> {
     id: ElementId,
     editor: &'a mut TextEditor,
@@ -23,7 +15,6 @@ pub(crate) struct TextInput<'a> {
     active: bool,
     shift: f32,
     placeholder: Option<&'a str>,
-    selection: Selection,
 }
 
 impl<'a> TextInput<'a> {
@@ -35,7 +26,6 @@ impl<'a> TextInput<'a> {
             active: false,
             shift: 0.0,
             placeholder: None,
-            selection: Selection::Accent,
         }
     }
     /// Draws the selection, preedit and caret.
@@ -48,12 +38,9 @@ impl<'a> TextInput<'a> {
         self.shift = shift;
         self
     }
-    pub fn placeholder(mut self, placeholder: Option<&'a str>) -> Self {
-        self.placeholder = placeholder;
-        self
-    }
-    pub fn selection(mut self, selection: Selection) -> Self {
-        self.selection = selection;
+    /// Shown while the field is empty.
+    pub fn placeholder(mut self, placeholder: &'a str) -> Self {
+        self.placeholder = Some(placeholder);
         self
     }
 
@@ -90,35 +77,16 @@ impl<'a> TextInput<'a> {
             && !selection.is_empty()
         {
             let marked = Rect::new(selection.start, rect.y, selection.len() as u16, 1);
-            match self.selection {
-                Selection::Accent => {
-                    cx.mark(RoundedSurface {
-                        shift_y: self.shift,
-                        ..RoundedSurface::new(marked, theme.accent, 2.0, 0.0)
-                    });
-                    for x in selection {
-                        cx.set_style(
-                            x,
-                            rect.y,
-                            Style::default().fg(theme.background).bg(theme.accent),
-                        );
-                    }
-                }
-                Selection::Subtle => {
-                    let cells: Vec<_> = selection
-                        .clone()
-                        .map(|x| cx.buf[(x, rect.y)].clone())
-                        .collect();
-                    cx.rounded(marked, theme.selected);
-                    for (x, cell) in selection.zip(cells) {
-                        cx.buf[(x, rect.y)] = cell;
-                        cx.set_style(
-                            x,
-                            rect.y,
-                            Style::default().fg(theme.accent).bg(theme.selected),
-                        );
-                    }
-                }
+            cx.mark(RoundedSurface {
+                shift_y: self.shift,
+                ..RoundedSurface::new(marked, theme.accent, 2.0, 0.0)
+            });
+            for x in selection {
+                cx.set_style(
+                    x,
+                    rect.y,
+                    Style::default().fg(theme.background).bg(theme.accent),
+                );
             }
         }
         for x in columns(editor.preedit_columns()) {

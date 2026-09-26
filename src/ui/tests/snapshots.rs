@@ -509,6 +509,13 @@ fn settings_page_wide() {
     key(&mut ui, &model, Key::Down, Modifiers::default());
     let frame = draw(&mut ui, &model, WINDOW, 0);
     assert_screen("settings_page_selected_row", &ui, &frame);
+    hover_on(
+        &mut ui,
+        &model,
+        &ElementId::SettingsCategory("theme".into()),
+    );
+    let frame = draw(&mut ui, &model, WINDOW, 0);
+    assert_screen("settings_page_hovered_chip", &ui, &frame);
 }
 
 #[test]

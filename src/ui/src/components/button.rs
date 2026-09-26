@@ -16,7 +16,7 @@ enum Kind {
     /// A square glyph on the bare background.
     Icon,
     /// A left-aligned label on a card.
-    Text { highlight: bool },
+    Text,
     /// A centered label that tints with its tone when active.
     Action(Tone),
 }
@@ -34,7 +34,7 @@ impl<'a> Button<'a> {
         Self::new(id, label, Kind::Icon)
     }
     pub fn text(id: ElementId, label: &'a str) -> Self {
-        Self::new(id, label, Kind::Text { highlight: false })
+        Self::new(id, label, Kind::Text)
     }
     pub fn action(id: ElementId, label: &'a str, tone: Tone) -> Self {
         Self::new(id, label, Kind::Action(tone))
@@ -56,18 +56,11 @@ impl<'a> Button<'a> {
         self.selected = selected;
         self
     }
-    /// Hover and focus fill the whole button instead of only tinting its label.
-    pub fn highlight(mut self) -> Self {
-        if let Kind::Text { highlight } = &mut self.kind {
-            *highlight = true;
-        }
-        self
-    }
 
     pub fn render(self, rect: Rect, cx: &mut Canvas) {
         match self.kind {
             Kind::Icon => self.render_icon(rect, cx),
-            Kind::Text { highlight } => self.render_text(rect, cx, highlight),
+            Kind::Text => self.render_text(rect, cx),
             Kind::Action(tone) => self.render_action(rect, cx, tone),
         }
     }
@@ -105,14 +98,10 @@ impl<'a> Button<'a> {
         cx.hit(self.id, rect, platform_tooltip(self.tooltip));
     }
 
-    fn render_text(self, rect: Rect, cx: &mut Canvas, highlight: bool) {
+    fn render_text(self, rect: Rect, cx: &mut Canvas) {
         let theme = cx.theme;
-        let lit = highlight && (cx.focused(&self.id) || cx.hovered(&self.id));
-        let fill = if self.selected || lit {
-            theme.selected
-        } else {
-            theme.card
-        };
+        let active = self.selected || cx.focused(&self.id) || cx.hovered(&self.id);
+        let fill = if active { theme.selected } else { theme.card };
         cx.rounded(rect, fill);
         let style = cx.item_style(&self.id, self.selected).bg(fill);
         cx.write(rect, format!(" {}", self.label), style);

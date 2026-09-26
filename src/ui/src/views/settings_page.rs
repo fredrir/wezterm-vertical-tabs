@@ -1,7 +1,7 @@
 use crate::SidebarUi;
 use crate::components::button::Button;
 use crate::components::list;
-use crate::components::text_input::{Selection, TextInput};
+use crate::components::text_input::TextInput;
 use crate::element::ElementId;
 use crate::input::{EditResult, Key, Modifiers, TextEditor, display_text};
 use crate::intent::UiIntent;
@@ -320,8 +320,7 @@ impl SettingsPage {
         );
         TextInput::new(ElementId::SettingsSearch, &mut self.query, theme.card)
             .active(self.search_focused && !overlay_open)
-            .placeholder((!self.search_focused).then_some("Search settings"))
-            .selection(Selection::Subtle)
+            .placeholder("Search settings")
             .render(edit, cx);
     }
 

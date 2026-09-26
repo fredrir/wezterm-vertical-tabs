@@ -116,10 +116,7 @@ pub(crate) fn form(cx: &mut Canvas, area: Rect, form: &mut Form, editing: bool) 
             (ElementId::Submit, save, "Save"),
             (ElementId::Cancel, cancel, "Cancel"),
         ] {
-            Button::text(id, label)
-                .tooltip(label)
-                .highlight()
-                .render(button, cx);
+            Button::text(id, label).tooltip(label).render(button, cx);
         }
     }
     panel.rect

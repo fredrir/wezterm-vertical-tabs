@@ -49,7 +49,7 @@ pub(crate) fn palette(cx: &mut Canvas, area: Rect, menu: &mut Menu) -> Rect {
     TextInput::new(ElementId::Editor, &mut search.editor, theme.card)
         .active(true)
         .shift(shift)
-        .placeholder(Some(&menu.title))
+        .placeholder(&menu.title)
         .render(edit, cx);
     cx.hit(ElementId::Editor, field, "");
     let list = Rect::new(
