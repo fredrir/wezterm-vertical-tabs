@@ -67,6 +67,7 @@ impl SidebarUi {
             ElementId::Rail => intents.push(UiIntent::Domain(toggle_rail(model))),
             ElementId::Space(id) => {
                 self.sidebar.scroll = 0;
+                self.frame.dirty = true;
                 intents.push(UiIntent::Domain(Intent::SelectSpace(id)));
                 self.start_effect(model);
             }
@@ -465,3 +466,7 @@ pub(crate) fn reset_settings() -> Action {
         action: Box::new(Action::Domain(Intent::ResetSettings)),
     }
 }
+
+#[cfg(test)]
+#[path = "../tests/actions.rs"]
+mod tests;

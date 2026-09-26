@@ -8,7 +8,7 @@ use crate::components::list;
 use crate::element::ElementId;
 use crate::input::TextEditor;
 use crate::views::launcher::Launcher;
-use ratatui::layout::{Position, Rect};
+use ratatui::layout::Rect;
 use vtabs_core::{Model, SpaceId, TabId};
 
 #[derive(Clone, Debug)]
@@ -104,7 +104,7 @@ pub(crate) struct Overlays {
     pub rect: Rect,
     /// Sidebar-relative origin for the next context menu; sidebar placement changes
     /// between the sidebar-only grid and the window viewport.
-    pub anchor: Option<Position>,
+    pub anchor: Option<(i32, i32)>,
 }
 
 impl Overlays {

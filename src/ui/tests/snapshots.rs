@@ -551,6 +551,40 @@ fn settings_page_small_and_categories() {
 }
 
 #[test]
+fn settings_menus_open_at_the_pointer_beside_a_right_sidebar() {
+    let mut model = fixture();
+    model.settings.side = Side::Right;
+    let mut ui = SidebarUi::new();
+    ui.set_layout(40, 0);
+    ui.open_settings();
+    draw(&mut ui, &model, WINDOW, 0);
+    let first_row_x = |ui: &SidebarUi| {
+        ui.hit_regions()
+            .iter()
+            .find(|hit| matches!(hit.id, ElementId::Menu(_)))
+            .map(|hit| hit.rect.x)
+            .unwrap()
+    };
+    let side = center(hit(&ui, &ElementId::Setting("side".into())));
+    click_on(&mut ui, &model, &ElementId::Setting("side".into()));
+    let frame = draw(&mut ui, &model, WINDOW, 0);
+    assert!(first_row_x(&ui).abs_diff(side.0) <= 2);
+    assert_screen("right_sidebar_setting_choice_menu", &ui, &frame);
+    key(&mut ui, &model, Key::Escape, Modifiers::default());
+    draw(&mut ui, &model, WINDOW, 0);
+    let rail = center(hit(&ui, &ElementId::Setting("rail".into())));
+    down_on(
+        &mut ui,
+        &model,
+        &ElementId::Setting("rail".into()),
+        MouseButton::Right,
+    );
+    let frame = draw(&mut ui, &model, WINDOW, 0);
+    assert!(first_row_x(&ui).abs_diff(rail.0) <= 2);
+    assert_screen("right_sidebar_setting_context_menu", &ui, &frame);
+}
+
+#[test]
 fn setting_context_menu_over_the_page() {
     let model = fixture();
     let mut ui = SidebarUi::new();

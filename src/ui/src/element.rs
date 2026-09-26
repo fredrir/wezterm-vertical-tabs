@@ -39,4 +39,14 @@ impl ElementId {
             other => other.clone(),
         }
     }
+    pub(crate) fn on_settings_page(&self) -> bool {
+        matches!(
+            self,
+            Self::SettingsCategory(_)
+                | Self::SettingsSearch
+                | Self::CloseSettings
+                | Self::ResetSettings
+                | Self::Setting(_)
+        )
+    }
 }

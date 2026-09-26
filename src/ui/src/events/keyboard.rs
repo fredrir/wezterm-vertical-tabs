@@ -188,25 +188,10 @@ impl SidebarUi {
             return;
         }
         if self.settings.open
-            && !matches!(
-                self.focused,
-                Some(
-                    ElementId::Tab(_)
-                        | ElementId::Pane(..)
-                        | ElementId::SpaceTitle
-                        | ElementId::Space(_)
-                        | ElementId::Folder(_)
-                        | ElementId::NewTab
-                        | ElementId::CreateSpace
-                        | ElementId::CreateFolder
-                        | ElementId::Rail
-                        | ElementId::Refresh
-                        | ElementId::Search
-                        | ElementId::Settings
-                        | ElementId::SettingsTab
-                        | ElementId::CloseSettingsTab
-                )
-            )
+            && self
+                .focused
+                .as_ref()
+                .is_none_or(ElementId::on_settings_page)
         {
             self.settings_key(model, key, modifiers, intents);
             return;

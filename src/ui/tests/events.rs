@@ -950,3 +950,79 @@ fn search_reaches_tabs_in_other_windows_by_name_or_title() {
         [UiIntent::Host(HostAction::ShowTab { window: 7, tab: 99 })]
     ));
 }
+
+#[test]
+fn enter_on_a_split_close_button_left_focused_beside_settings_never_edits_a_setting() {
+    let mut model = model();
+    model.set_home(Some("/home/me".into()));
+    let pane = |id, cwd: &str| vtabs_core::TabPane {
+        id,
+        cwd: cwd.into(),
+        active: id == 1,
+        ..Default::default()
+    };
+    model
+        .reconcile(
+            vec![Tab {
+                id: 10,
+                panes: vec![pane(1, "/home/me/api"), pane(2, "/home/me/web")],
+                ..Tab::default()
+            }],
+            Some(10),
+            true,
+        )
+        .unwrap();
+    let area = Rect::new(0, 0, 120, 40);
+    let mut ui = SidebarUi::new();
+    ui.set_layout(40, 0);
+    ui.open_settings();
+    ui.render(&model, area, Duration::ZERO);
+    let pane = hit(&ui, &ElementId::Pane(10, 2));
+    ui.event(
+        &model,
+        UiInput::PointerMove {
+            x: pane.x + 1,
+            y: pane.y,
+        },
+    );
+    ui.render(&model, area, Duration::ZERO);
+    let close = hit(&ui, &ElementId::ClosePane(10, 2));
+    ui.event(
+        &model,
+        UiInput::PointerDown {
+            x: close.x,
+            y: close.y,
+            button: MouseButton::Left,
+            modifiers: Modifiers::default(),
+        },
+    );
+    for (x, y) in [(close.x, close.y + 6), (0, area.bottom() - 4)] {
+        ui.event(&model, UiInput::PointerMove { x, y });
+    }
+    ui.event(
+        &model,
+        UiInput::PointerUp {
+            x: 0,
+            y: area.bottom() - 4,
+            button: MouseButton::Left,
+        },
+    );
+    assert_eq!(ui.focused(), Some(&ElementId::ClosePane(10, 2)));
+
+    let intents = key(&mut ui, &model, Key::Enter);
+    assert!(
+        !intents
+            .iter()
+            .any(|intent| matches!(intent, UiIntent::Domain(Intent::SetSetting { .. }))),
+        "{intents:?}"
+    );
+    assert!(
+        matches!(
+            intents.as_slice(),
+            [UiIntent::Host(
+                HostAction::ClosePane(10, 2) | HostAction::KillPane(10, 2)
+            )]
+        ),
+        "{intents:?}"
+    );
+}

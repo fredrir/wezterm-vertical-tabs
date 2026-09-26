@@ -258,10 +258,12 @@ impl SidebarUi {
             })
     }
 
+    /// Signed, so content left of a right-side sidebar keeps its own position.
     fn set_anchor(&mut self, x: u16, y: u16) {
-        self.overlays.anchor = Some(Position::new(
-            x.saturating_sub(self.sidebar.rect.x),
-            y.saturating_sub(self.sidebar.rect.y),
+        let origin = self.sidebar.rect;
+        self.overlays.anchor = Some((
+            i32::from(x) - i32::from(origin.x),
+            i32::from(y) - i32::from(origin.y),
         ));
     }
 
@@ -278,11 +280,12 @@ impl SidebarUi {
     }
 
     pub(crate) fn anchor_position(&self) -> Option<Position> {
-        self.overlays.anchor.map(|anchor| {
-            Position::new(
-                self.sidebar.rect.x.saturating_add(anchor.x),
-                self.sidebar.rect.y.saturating_add(anchor.y),
-            )
-        })
+        let origin = self.sidebar.rect;
+        let resolve = |base: u16, offset: i32| {
+            (i32::from(base) + offset).clamp(0, i32::from(u16::MAX)) as u16
+        };
+        self.overlays
+            .anchor
+            .map(|(x, y)| Position::new(resolve(origin.x, x), resolve(origin.y, y)))
     }
 }
