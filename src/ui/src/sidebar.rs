@@ -7,10 +7,10 @@ use ratatui::{
     style::{Color, Style},
     widgets::{Block, Clear, Widget},
 };
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
-use vtabs_core::{Model, RailMode, Tab, TabPane};
+use vtabs_core::{Model, RailMode, SpaceId, Tab, TabPane};
 
 const GROUP_GAP: u16 = 1;
 pub(crate) const SURFACE_RADIUS: f32 = 9.0;
@@ -23,6 +23,78 @@ const OCCLUDER_INSET: f32 = 6.0;
 pub(crate) const ICON_CELLS: u16 = 3;
 const TRAILING_CELLS: u16 = 3;
 const MIN_SEGMENT_CELLS: u16 = 4;
+
+pub(crate) struct Sidebar {
+    pub rows: Vec<SidebarRow>,
+    pub rows_revision: Option<(u64, bool)>,
+    pub scroll: usize,
+    pub space_scroll: usize,
+    pub rect: Rect,
+    pub list: Rect,
+    pub spaces: Rect,
+    pub title_rects: Vec<(TabId, Rect)>,
+    pub rename: Option<InlineRename>,
+    pub settings_place: Option<SettingsPlace>,
+    pub reveal_selection: bool,
+    pub reveal_settings: bool,
+    pub space_activity: BTreeSet<SpaceId>,
+    pub last_tab: Option<TabId>,
+    pub last_space: Option<SpaceId>,
+}
+
+impl Default for Sidebar {
+    fn default() -> Self {
+        Self {
+            rows: Vec::new(),
+            rows_revision: None,
+            scroll: 0,
+            space_scroll: 0,
+            rect: Rect::default(),
+            list: Rect::default(),
+            spaces: Rect::default(),
+            title_rects: Vec::new(),
+            rename: None,
+            settings_place: None,
+            reveal_selection: true,
+            reveal_settings: false,
+            space_activity: BTreeSet::new(),
+            last_tab: None,
+            last_space: None,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SidebarRow {
+    Tab {
+        id: TabId,
+        number: usize,
+    },
+    Folder {
+        index: usize,
+        count: usize,
+    },
+    /// Separates the pinned and folder group from the open tabs.
+    Gap,
+    NewTab,
+    Settings {
+        number: usize,
+    },
+}
+
+/// The tab Settings follows, and the position that anchor last gave it.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct SettingsPlace {
+    pub anchor: Option<TabId>,
+    pub slot: usize,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct InlineRename {
+    pub id: TabId,
+    pub initial: String,
+    pub editor: TextEditor,
+}
 
 fn icon_rect(mut rect: Rect, label: &str) -> Rect {
     let width = label.width();
@@ -161,14 +233,14 @@ impl SidebarUi {
     }
 
     fn shape(&mut self, rect: Rect, fill: Color, radius: f32, inset: f32, square: bool) {
-        let rect = rect.intersection(self.staging.area);
+        let rect = rect.intersection(self.frame.staging.area);
         if rect.is_empty() {
             return;
         }
         Block::default()
             .style(Style::default().bg(fill))
-            .render(rect, &mut self.staging);
-        self.rounded_surfaces.push(RoundedSurface {
+            .render(rect, &mut self.frame.staging);
+        self.paint.surfaces.push(RoundedSurface {
             square,
             ..RoundedSurface::new(rect, fill, radius, inset)
         });
@@ -179,14 +251,15 @@ impl SidebarUi {
     }
 
     fn press_inset(&self, id: &ElementId) -> f32 {
-        self.press
+        self.pointer
+            .press
             .as_ref()
             .filter(|press| &press.id == id)
             .map_or(0.0, |press| press.level * PRESS_INSET)
     }
 
     fn row_hovered(&self, id: &ElementId) -> bool {
-        self.hovered.as_ref().map(ElementId::row).as_ref() == Some(id)
+        self.pointer.hovered.as_ref().map(ElementId::row).as_ref() == Some(id)
     }
 
     fn icon_button(
@@ -201,16 +274,20 @@ impl SidebarUi {
             return;
         }
         let active = selected
-            || self.hovered.as_ref() == Some(&id)
+            || self.pointer.hovered.as_ref() == Some(&id)
             || self.focused.as_ref() == Some(&id)
-            || self.press.as_ref().is_some_and(|press| press.id == id);
+            || self
+                .pointer
+                .press
+                .as_ref()
+                .is_some_and(|press| press.id == id);
         let aimed = matches!(
-            (&self.drop, &id),
+            (&self.pointer.drop, &id),
             (Some(DropTarget::Space(space)), ElementId::Space(target)) if space == target
         );
         let fill = if aimed {
             self.theme.tint(self.theme.card, DROP_TINT)
-        } else if self.hovered.as_ref() == Some(&id) {
+        } else if self.pointer.hovered.as_ref() == Some(&id) {
             self.theme.hover
         } else {
             self.theme.background
@@ -238,13 +315,18 @@ impl SidebarUi {
     pub(crate) fn row(&mut self, row: Row<'_>) -> RowLayout {
         let hovered = self.row_hovered(&row.id);
         let focused = self.focused.as_ref() == Some(&row.id);
-        let pressed = self.press.as_ref().is_some_and(|press| press.id == row.id);
-        let ghost = self.dragging
-            && self
-                .drag
-                .as_ref()
-                .is_some_and(|drag| !matches!(drag, ElementId::Pane(..)) && drag.row() == row.id);
+        let pressed = self
+            .pointer
+            .press
+            .as_ref()
+            .is_some_and(|press| press.id == row.id);
+        let ghost =
+            self.pointer.dragging
+                && self.pointer.drag.as_ref().is_some_and(|drag| {
+                    !matches!(drag, ElementId::Pane(..)) && drag.row() == row.id
+                });
         let aimed = self
+            .pointer
             .drop
             .as_ref()
             .is_some_and(|drop| match (drop, &row.id) {
@@ -253,7 +335,7 @@ impl SidebarUi {
                 (DropTarget::NewTab, ElementId::NewTab) => true,
                 _ => false,
             });
-        let hovered = hovered && !self.dragging;
+        let hovered = hovered && !self.pointer.dragging;
         let fill = match (row.selected && !ghost, hovered || pressed, row.field) {
             _ if aimed => self.theme.tint(self.theme.card, DROP_TINT),
             (true, ..) => self.theme.selected,
@@ -276,7 +358,7 @@ impl SidebarUi {
             ROW_INSET + self.press_inset(&row.id),
         );
         let on_pane = matches!(
-            self.hovered,
+            self.pointer.hovered,
             Some(ElementId::Pane(..) | ElementId::ClosePane(..))
         );
         let trailing = row.trailing.filter(|trailing| {
@@ -339,7 +421,7 @@ impl SidebarUi {
         if let Some(trailing) = trailing {
             self.overlay_control(trailing, row.rect, style);
         }
-        if aimed && matches!(self.drop, Some(DropTarget::Into(_))) {
+        if aimed && matches!(self.pointer.drop, Some(DropTarget::Into(_))) {
             self.split_preview(&layout);
         }
         layout
@@ -349,13 +431,16 @@ impl SidebarUi {
         let area = layout.content;
         let width = (area.width / 2).max(MIN_SEGMENT_CELLS).min(area.width);
         let rect = Rect::new(area.right() - width, area.y, width, area.height.min(2));
-        let progress = self.drop_motion.map_or(1.0, |motion| motion.progress);
-        Clear.render(rect, &mut self.staging);
+        let progress = self
+            .pointer
+            .drop_motion
+            .map_or(1.0, |motion| motion.progress);
+        Clear.render(rect, &mut self.frame.staging);
         let fill = self.theme.tint(layout.fill, DROP_TINT);
         self.surface(rect, fill, 6.0, NESTED_INSET + (1.0 - progress) * 8.0);
         self.write(
             Rect::new(rect.x + 1, rect.y, rect.width.saturating_sub(2), 1),
-            format!("{} {}", icons::PLUS, display_text(&self.drag_label)),
+            format!("{} {}", icons::PLUS, display_text(&self.pointer.drag_label)),
             self.theme.accent().bg(fill),
         );
     }
@@ -369,7 +454,7 @@ impl SidebarUi {
         );
         let symbols = [control.icon, " ", " "];
         for (x, symbol) in (rect.x..rect.right()).zip(symbols) {
-            let cell = &mut self.staging[(x, rect.y)];
+            let cell = &mut self.frame.staging[(x, rect.y)];
             cell.set_symbol(symbol);
             if let Some(fg) = style.fg {
                 cell.set_fg(fg);
@@ -389,7 +474,7 @@ impl SidebarUi {
                 stacked.push(span);
                 let rect = Rect::new(area.x + slot.x, area.y, slot.width, 2);
                 self.shape(rect, layout.fill, 0.0, OCCLUDER_INSET, false);
-                if let Some(surface) = self.rounded_surfaces.last_mut() {
+                if let Some(surface) = self.paint.surfaces.last_mut() {
                     surface.stacked = true;
                 }
             }
@@ -404,8 +489,8 @@ impl SidebarUi {
             );
             let id = ElementId::Pane(tab.id, pane.id);
             let close = ElementId::ClosePane(tab.id, pane.id);
-            let hovered = [Some(&id), Some(&close)].contains(&self.hovered.as_ref());
-            let fill = if hovered && !self.dragging {
+            let hovered = [Some(&id), Some(&close)].contains(&self.pointer.hovered.as_ref());
+            let fill = if hovered && !self.pointer.dragging {
                 let fill = self.theme.lift(layout.fill, 12);
                 let inset = if slot.tall { NESTED_INSET } else { 1.0 };
                 self.surface(rect, fill, 6.0, inset);
@@ -413,7 +498,7 @@ impl SidebarUi {
             } else {
                 layout.fill
             };
-            let ghost = self.dragging && self.drag.as_ref() == Some(&id);
+            let ghost = self.pointer.dragging && self.pointer.drag.as_ref() == Some(&id);
             let style = if ghost {
                 layout.style.fg(self.theme.lift(self.theme.background, 30))
             } else if pane.active {
@@ -443,7 +528,7 @@ impl SidebarUi {
                 style.bg(fill),
             );
             self.hit(id, rect, "");
-            if hovered && !self.dragging && rect.width >= TRAILING_CELLS * 2 {
+            if hovered && !self.pointer.dragging && rect.width >= TRAILING_CELLS * 2 {
                 self.overlay_control(
                     Trailing {
                         id: close,
@@ -458,14 +543,14 @@ impl SidebarUi {
     }
 
     fn compose_rename(&mut self, id: TabId, content: Rect, fill: Color) {
-        let Some(mut rename) = self.rename.take().filter(|rename| rename.id == id) else {
+        let Some(mut rename) = self.sidebar.rename.take().filter(|rename| rename.id == id) else {
             return;
         };
         let edit = Rect::new(content.x, content.y, content.width, 1);
-        self.editor_shift = if content.height == 2 { 0.5 } else { 0.0 };
+        self.paint.editor_shift = if content.height == 2 { 0.5 } else { 0.0 };
         self.compose_editor(&mut rename.editor, edit, fill, true);
         self.hit(ElementId::Editor, edit, "Tab title");
-        self.rename = Some(rename);
+        self.sidebar.rename = Some(rename);
     }
 
     fn place_settings(&mut self, model: &Model) -> usize {
@@ -474,7 +559,7 @@ impl SidebarUi {
             .iter()
             .position(|id| model.tabs.get(id).is_some_and(|tab| !tab.pinned))
             .unwrap_or(visible.len());
-        let slot = match self.settings_place {
+        let slot = match self.sidebar.settings_place {
             None => visible.len(),
             Some(SettingsPlace { anchor: None, .. }) => 0,
             Some(SettingsPlace {
@@ -486,7 +571,7 @@ impl SidebarUi {
                 .map_or(slot.saturating_sub(1), |at| at + 1),
         }
         .clamp(first_open, visible.len());
-        self.settings_place = Some(SettingsPlace {
+        self.sidebar.settings_place = Some(SettingsPlace {
             anchor: slot.checked_sub(1).map(|at| visible[at]),
             slot,
         });
@@ -494,13 +579,14 @@ impl SidebarUi {
     }
 
     pub(crate) fn ensure_sidebar_entries(&mut self, model: &Model) {
-        if self.sidebar_revision == Some((model.revision, self.settings_tab)) {
+        if self.sidebar.rows_revision == Some((model.revision, self.settings.listed)) {
             return;
         }
-        let slot = self.settings_tab.then(|| self.place_settings(model));
+        let slot = self.settings.listed.then(|| self.place_settings(model));
         let number = |index: usize| index + 1 + usize::from(slot.is_some_and(|slot| index >= slot));
-        self.sidebar_rows.clear();
-        self.sidebar_rows
+        self.sidebar.rows.clear();
+        self.sidebar
+            .rows
             .reserve(model.visible_ids().len() + model.folders.len() + 2);
         let mut folders = HashMap::with_capacity(model.selected_folders().count());
         folders.extend(
@@ -526,7 +612,7 @@ impl SidebarUi {
                 number: number(index),
             };
             if tab.pinned && tab.folder_id.is_none() && !collapsed {
-                self.sidebar_rows.push(row);
+                self.sidebar.rows.push(row);
             }
             if let Some((_, range)) = tab.folder_id.as_deref().and_then(|id| folders.get_mut(id)) {
                 if range.start == range.end {
@@ -540,38 +626,38 @@ impl SidebarUi {
                 continue;
             }
             let (count, range) = folders.remove(folder.id.as_str()).unwrap_or_default();
-            self.sidebar_rows.push(SidebarRow::Folder { index, count });
+            self.sidebar.rows.push(SidebarRow::Folder { index, count });
             if !folder.collapsed {
-                self.sidebar_rows.extend(range.map(|index| SidebarRow::Tab {
+                self.sidebar.rows.extend(range.map(|index| SidebarRow::Tab {
                     id: model.visible_ids()[index],
                     number: number(index),
                 }));
             }
         }
-        if !self.sidebar_rows.is_empty() {
-            self.sidebar_rows.push(SidebarRow::Gap);
+        if !self.sidebar.rows.is_empty() {
+            self.sidebar.rows.push(SidebarRow::Gap);
         }
-        self.sidebar_rows.push(SidebarRow::NewTab);
+        self.sidebar.rows.push(SidebarRow::NewTab);
         let settings = slot.map(|slot| SidebarRow::Settings { number: slot + 1 });
         for (index, id) in model.visible_ids().iter().enumerate() {
             if slot == Some(index) {
-                self.sidebar_rows.extend(settings);
+                self.sidebar.rows.extend(settings);
             }
             if model.tabs.get(id).is_some_and(|tab| !tab.pinned) {
-                self.sidebar_rows.push(SidebarRow::Tab {
+                self.sidebar.rows.push(SidebarRow::Tab {
                     id: *id,
                     number: number(index),
                 });
             }
         }
         if slot == Some(model.visible_ids().len()) {
-            self.sidebar_rows.extend(settings);
+            self.sidebar.rows.extend(settings);
         }
-        self.sidebar_revision = Some((model.revision, self.settings_tab));
+        self.sidebar.rows_revision = Some((model.revision, self.settings.listed));
     }
 
     pub(crate) fn row_height(&self, model: &Model) -> u16 {
-        if self.tabs_rect.width < 12 || !model.settings.cards || self.tabs_rect.height < 4 {
+        if self.sidebar.list.width < 12 || !model.settings.cards || self.sidebar.list.height < 4 {
             1
         } else if model.settings.show_metadata {
             3
@@ -590,38 +676,40 @@ impl SidebarUi {
 
     pub(crate) fn rows_fitting(&self, model: &Model, start: usize) -> usize {
         let mut used = 0;
-        self.sidebar_rows
+        self.sidebar
+            .rows
             .iter()
             .skip(start)
             .take_while(|row| {
                 used += self.row_span(model, **row);
-                used <= self.tabs_rect.height
+                used <= self.sidebar.list.height
             })
             .count()
             .max(1)
     }
 
     pub(crate) fn visible_rows(&self, model: &Model) -> usize {
-        self.rows_fitting(model, self.tab_scroll)
+        self.rows_fitting(model, self.sidebar.scroll)
     }
 
     fn max_scroll(&self, model: &Model) -> usize {
         let mut used = 0;
         let hidden = self
-            .sidebar_rows
+            .sidebar
+            .rows
             .iter()
             .rev()
             .take_while(|row| {
                 used += self.row_span(model, **row);
-                used <= self.tabs_rect.height
+                used <= self.sidebar.list.height
             })
             .count()
             .max(1);
-        self.sidebar_rows.len().saturating_sub(hidden)
+        self.sidebar.rows.len().saturating_sub(hidden)
     }
 
     pub(crate) fn compose_sidebar(&mut self, model: &Model, area: Rect) {
-        let reveal_selection = self.reveal_selection;
+        let reveal_selection = self.sidebar.reveal_selection;
         let compact = model.settings.rail == RailMode::Collapsed || area.width < 12;
         let inset = u16::from(area.width >= 8);
         let inner = Rect::new(
@@ -656,7 +744,7 @@ impl SidebarUi {
             |footer| footer.y.saturating_sub(gap),
         );
         let toolbar_height = 2;
-        let left = (inner.x + self.header_inset).min(inner.right());
+        let left = (inner.x + self.host.header_inset).min(inner.right());
         let size = inner.width.min(4);
         if left + size <= inner.right() {
             self.icon_button(
@@ -667,13 +755,13 @@ impl SidebarUi {
                 false,
             );
         }
-        if !compact && inner.width >= self.header_inset + 12 {
+        if !compact && inner.width >= self.host.header_inset + 12 {
             self.icon_button(
                 ElementId::Settings,
                 Rect::new(inner.right() - 8, inner.y, 4, toolbar_height),
                 &format!("{} ", icons::SETTINGS),
                 "Settings  Cmd+,".into(),
-                self.settings_page,
+                self.settings.open,
             );
             self.icon_button(
                 ElementId::Refresh,
@@ -702,7 +790,7 @@ impl SidebarUi {
             field: true,
         });
         let title_y = search.bottom();
-        self.tabs_rect = Rect::new(
+        self.sidebar.list = Rect::new(
             inner.x,
             title_y,
             inner.width,
@@ -715,36 +803,37 @@ impl SidebarUi {
         } else {
             title_y.min(list_bottom)
         };
-        self.tabs_rect = Rect::new(
+        self.sidebar.list = Rect::new(
             inner.x,
             tabs_y,
             inner.width,
             list_bottom.saturating_sub(tabs_y),
         );
         self.ensure_sidebar_entries(model);
-        if self.reveal_selection {
+        if self.sidebar.reveal_selection {
             if let Some(id) = model.selected_tab {
                 self.ensure_tab_visible(model, id);
             }
-            self.reveal_selection = false;
+            self.sidebar.reveal_selection = false;
         }
-        if self.reveal_settings {
+        if self.sidebar.reveal_settings {
             if let Some(at) = self
-                .sidebar_rows
+                .sidebar
+                .rows
                 .iter()
                 .position(|row| matches!(row, SidebarRow::Settings { .. }))
             {
                 self.reveal_row(model, at);
             }
-            self.reveal_settings = false;
+            self.sidebar.reveal_settings = false;
         }
-        self.tab_scroll = self.tab_scroll.min(self.max_scroll(model));
-        self.title_rects.clear();
+        self.sidebar.scroll = self.sidebar.scroll.min(self.max_scroll(model));
+        self.sidebar.title_rects.clear();
         let capacity = self.visible_rows(model);
-        let end = (self.tab_scroll + capacity).min(self.sidebar_rows.len());
+        let end = (self.sidebar.scroll + capacity).min(self.sidebar.rows.len());
         let mut top = tabs_y;
-        for at in self.tab_scroll..end {
-            let entry = self.sidebar_rows[at];
+        for at in self.sidebar.scroll..end {
+            let entry = self.sidebar.rows[at];
             let span = self.row_span(model, entry);
             let rect = Rect::new(
                 inner.x,
@@ -785,7 +874,7 @@ impl SidebarUi {
                         index: model.settings.show_indexes.then_some(number),
                         content: Content::Label("Settings"),
                         tooltip: Some("Settings  Cmd+,".into()),
-                        selected: self.settings_page,
+                        selected: self.settings.open,
                         muted: false,
                         compact,
                         trailing: model.settings.show_close.then_some(Trailing {
@@ -834,9 +923,9 @@ impl SidebarUi {
                 }
             }
         }
-        if self.sidebar_rows.len() > capacity && self.tabs_rect.width > 2 {
-            let y = self.tabs_rect.y
-                + (self.tabs_rect.height.saturating_sub(1) as usize * self.tab_scroll
+        if self.sidebar.rows.len() > capacity && self.sidebar.list.width > 2 {
+            let y = self.sidebar.list.y
+                + (self.sidebar.list.height.saturating_sub(1) as usize * self.sidebar.scroll
                     / self.max_scroll(model).max(1)) as u16;
             self.write(
                 Rect::new(area.right() - 1, y, 1, 1),
@@ -844,17 +933,20 @@ impl SidebarUi {
                 self.theme.muted(),
             );
         }
-        if let (Some(DropTarget::Beside { .. }), Some(motion)) = (&self.drop, self.drop_motion) {
+        if let (Some(DropTarget::Beside { .. }), Some(motion)) =
+            (&self.pointer.drop, self.pointer.drop_motion)
+        {
             let edge = motion.position();
             let row = (edge.floor() as u16).clamp(
-                self.tabs_rect.y,
-                self.tabs_rect
+                self.sidebar.list.y,
+                self.sidebar
+                    .list
                     .bottom()
                     .saturating_sub(1)
-                    .max(self.tabs_rect.y),
+                    .max(self.sidebar.list.y),
             );
             let bar = Rect::new(inner.x + 1, row, inner.width.saturating_sub(2), 1);
-            self.rounded_surfaces.push(RoundedSurface {
+            self.paint.surfaces.push(RoundedSurface {
                 scale_y: DROP_BAR,
                 shift_y: edge - f32::from(row) - 0.5,
                 ..RoundedSurface::new(bar, self.theme.accent, 2.0, 0.0)
@@ -874,10 +966,11 @@ impl SidebarUi {
             slots_width.clamp(1, 4)
         };
         let slots = usize::from(slots_width / slot_width);
-        self.space_scroll = self
+        self.sidebar.space_scroll = self
+            .sidebar
             .space_scroll
             .min(model.spaces.len().saturating_sub(slots));
-        self.spaces_rect = Rect::new(inner.x, spaces_y, slots_width, 2);
+        self.sidebar.spaces = Rect::new(inner.x, spaces_y, slots_width, 2);
         if slots > 0
             && reveal_selection
             && let Some(index) = model
@@ -885,12 +978,12 @@ impl SidebarUi {
                 .iter()
                 .position(|s| s.id == model.selected_space)
         {
-            self.space_scroll = list::reveal_rows(self.space_scroll, index, slots);
+            self.sidebar.space_scroll = list::reveal_rows(self.sidebar.space_scroll, index, slots);
         }
         for (offset, space) in model
             .spaces
             .iter()
-            .skip(self.space_scroll)
+            .skip(self.sidebar.space_scroll)
             .take(slots)
             .enumerate()
         {
@@ -910,7 +1003,7 @@ impl SidebarUi {
             } else {
                 label.to_owned()
             };
-            let activity = self.space_activity.contains(&space.id);
+            let activity = self.sidebar.space_activity.contains(&space.id);
             self.icon_button(
                 ElementId::Space(space.id.clone()),
                 rect,
@@ -983,6 +1076,7 @@ impl SidebarUi {
 
     fn compose_tab(&mut self, model: &Model, tab: &Tab, number: usize, rect: Rect, compact: bool) {
         let renaming = self
+            .sidebar
             .rename
             .as_ref()
             .is_some_and(|rename| rename.id == tab.id);
@@ -1007,7 +1101,7 @@ impl SidebarUi {
                 Content::Label(&name)
             },
             tooltip: compact.then(|| name.clone()),
-            selected: model.selected_tab == Some(tab.id) && !self.settings_page,
+            selected: model.selected_tab == Some(tab.id) && !self.settings.open,
             muted: false,
             compact,
             trailing: model.settings.show_close.then_some(Trailing {
@@ -1021,7 +1115,7 @@ impl SidebarUi {
             return;
         }
         if !renaming && !segmented {
-            self.title_rects.push((tab.id, layout.content));
+            self.sidebar.title_rects.push((tab.id, layout.content));
         }
         if rect.height >= 3 {
             self.write(

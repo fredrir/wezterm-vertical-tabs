@@ -889,7 +889,7 @@ fn folder_chord_is_no_longer_a_shortcut_but_the_button_still_creates_folders() {
 }
 
 fn palette(ui: &SidebarUi) -> Vec<(String, Option<usize>, String)> {
-    let Some(Overlay::Menu(menu)) = &ui.overlay else {
+    let Some(Overlay::Menu(menu)) = &ui.overlays.current else {
         panic!("tab search is not open");
     };
     menu.items

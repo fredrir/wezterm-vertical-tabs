@@ -42,10 +42,13 @@ mod transient_surfaces_tests;
 mod ui_tests;
 
 pub use launcher::JobEntry;
-use launcher::{Launcher, filter_menu};
+use launcher::{Launcher, Launchers, filter_menu};
+use motion::{Caret, Effects, Tooltip, Tween};
 use ratatui::layout::Position;
+use settings_page::SettingsPage;
+use sidebar::{InlineRename, Sidebar, SidebarRow};
 use std::time::Duration;
-use tachyonfx::{Effect, fx};
+use tachyonfx::fx;
 use vtabs_core::{Intent, Model, PaneId, SpaceId, Tab, TabId};
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -365,103 +368,145 @@ impl DropMotion {
     }
 }
 
-/// The tab Settings follows, and the position that anchor last gave it.
-#[derive(Clone, Copy, Debug)]
-struct SettingsPlace {
-    anchor: Option<TabId>,
-    slot: usize,
-}
-
-#[derive(Clone, Debug)]
-struct InlineRename {
-    id: TabId,
-    initial: String,
-    editor: TextEditor,
-}
-
-#[derive(Clone, Copy, Debug)]
-struct Motion {
-    from: f32,
-    to: f32,
-    start: Duration,
-    duration: Duration,
-}
-
 /// The UI retains allocated buffers and composes only after semantic invalidation.
 /// `Model::revision` must change with model data. `invalidate` handles external style/focus
 /// changes; terminal repaint alone does not invalidate the sidebar.
 pub struct SidebarUi {
+    pub theme: Theme,
+    frame: Frame,
+    paint: Paint,
+    host: Host,
+    focused: Option<ElementId>,
+    pointer: Pointer,
+    caret: Caret,
+    tooltip: Tooltip,
+    effects: Effects,
+    sidebar: Sidebar,
+    settings: SettingsPage,
+    overlays: Overlays,
+    launchers: Launchers,
+}
+
+/// The published buffer, the one being composed and what they were composed from.
+struct Frame {
     buffer: Buffer,
     staging: Buffer,
     revision: Option<u64>,
-    frame_revision: u64,
+    number: u64,
     dirty: bool,
-    pub theme: Theme,
-    rounded_surfaces: Vec<RoundedSurface>,
+    last: Duration,
+    now: Duration,
+    last_rail: Option<vtabs_core::RailMode>,
+}
+
+impl Default for Frame {
+    fn default() -> Self {
+        Self {
+            buffer: Buffer::default(),
+            staging: Buffer::default(),
+            revision: None,
+            number: 0,
+            dirty: true,
+            last: Duration::ZERO,
+            now: Duration::ZERO,
+            last_rail: None,
+        }
+    }
+}
+
+/// Everything a composition leaves beside the buffer.
+#[derive(Default)]
+struct Paint {
+    surfaces: Vec<RoundedSurface>,
+    hits: Vec<HitRegion>,
+    cursor: Option<Position>,
+    editor_rect: Rect,
+    editor_shift: f32,
+}
+
+struct Host {
+    visible: bool,
+    focused: bool,
     sidebar_columns: Option<u16>,
     header_inset: u16,
-    settings_page: bool,
-    settings_tab: bool,
-    settings_place: Option<SettingsPlace>,
-    reveal_settings: bool,
-    settings_category: String,
-    settings_query: TextEditor,
-    settings_selected: usize,
-    settings_scroll: usize,
-    settings_search_focused: bool,
-    page_rect: Rect,
-    sidebar_rect: Rect,
-    sidebar_rows: Vec<SidebarRow>,
-    sidebar_revision: Option<(u64, bool)>,
-    /// Sidebar-relative origin for the next context menu; sidebar placement changes
-    /// between the sidebar-only grid and the window viewport.
-    anchor: Option<Position>,
-    pointer_origin: Option<(u16, u16)>,
-    dragging: bool,
-    hits: Vec<HitRegion>,
-    focused: Option<ElementId>,
+}
+
+impl Default for Host {
+    fn default() -> Self {
+        Self {
+            visible: true,
+            focused: true,
+            sidebar_columns: None,
+            header_inset: 0,
+        }
+    }
+}
+
+impl Host {
+    fn live(&self) -> bool {
+        self.visible && self.focused
+    }
+}
+
+struct Pointer {
     hovered: Option<ElementId>,
     drag: Option<ElementId>,
+    dragging: bool,
+    origin: Option<(u16, u16)>,
+    /// Where inside its cell the pointer sits; rows are too short to zone by cells alone.
+    fraction: (f32, f32),
     press: Option<Press>,
     drop: Option<DropTarget>,
     drop_motion: Option<DropMotion>,
     drag_label: String,
-    /// Where inside its cell the pointer sits; rows are too short to zone by cells alone.
-    pointer_fraction: (f32, f32),
-    rename: Option<InlineRename>,
-    title_rects: Vec<(TabId, Rect)>,
     last_click: Option<(ElementId, Duration)>,
-    overlay: Option<Overlay>,
-    overlay_stack: Vec<Overlay>,
+}
+
+impl Default for Pointer {
+    fn default() -> Self {
+        Self {
+            hovered: None,
+            drag: None,
+            dragging: false,
+            origin: None,
+            fraction: (0.5, 0.5),
+            press: None,
+            drop: None,
+            drop_motion: None,
+            drag_label: String::new(),
+            last_click: None,
+        }
+    }
+}
+
+impl Pointer {
+    fn cancel_drag(&mut self) {
+        self.drag = None;
+        self.dragging = false;
+        self.drop = None;
+        self.drop_motion = None;
+    }
+}
+
+#[derive(Default)]
+struct Overlays {
+    current: Option<Overlay>,
+    stack: Vec<Overlay>,
     restore_focus: Option<ElementId>,
-    tab_scroll: usize,
-    space_scroll: usize,
-    tabs_rect: Rect,
-    spaces_rect: Rect,
-    overlay_rect: Rect,
-    editor_rect: Rect,
-    editor_shift: f32,
-    cursor: Option<Position>,
-    effect: Option<Effect>,
-    effect_area: Option<Rect>,
-    motion: Option<Motion>,
-    last_frame: Duration,
-    now: Duration,
-    visible: bool,
-    window_focused: bool,
-    caret_visible: bool,
-    caret_deadline: Option<Duration>,
-    tooltip_deadline: Option<Duration>,
-    show_tooltip: bool,
-    config_owned: std::collections::BTreeSet<String>,
-    space_activity: std::collections::BTreeSet<SpaceId>,
-    last_selected_tab: Option<TabId>,
-    last_selected_space: Option<SpaceId>,
     pending_form: Option<u64>,
-    last_rail: Option<vtabs_core::RailMode>,
-    reveal_selection: bool,
-    foreign_tabs: Vec<ForeignTab>,
-    jobs: Vec<JobEntry>,
+    rect: Rect,
+    /// Sidebar-relative origin for the next context menu; sidebar placement changes
+    /// between the sidebar-only grid and the window viewport.
+    anchor: Option<Position>,
+}
+
+impl Overlays {
+    /// Keeps the current overlay to return to once the next one closes.
+    fn stash(&mut self) {
+        if let Some(overlay) = self.current.take() {
+            self.stack.push(overlay);
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -495,24 +540,6 @@ impl RoundedSurface {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum SidebarRow {
-    Tab {
-        id: TabId,
-        number: usize,
-    },
-    Folder {
-        index: usize,
-        count: usize,
-    },
-    /// Separates the pinned and folder group from the open tabs.
-    Gap,
-    NewTab,
-    Settings {
-        number: usize,
-    },
-}
-
 fn running(process: &str) -> String {
     if process.is_empty() {
         "A process is still running.".into()
@@ -532,92 +559,37 @@ impl Default for SidebarUi {
 impl SidebarUi {
     pub fn new() -> Self {
         Self {
-            buffer: Buffer::empty(Rect::default()),
-            staging: Buffer::empty(Rect::default()),
-            revision: None,
-            frame_revision: 0,
-            dirty: true,
             theme: Theme::default(),
-            rounded_surfaces: Vec::new(),
-            sidebar_columns: None,
-            header_inset: 0,
-            settings_page: false,
-            settings_tab: false,
-            settings_place: None,
-            reveal_settings: false,
-            settings_category: "all".into(),
-            settings_query: TextEditor::default(),
-            settings_selected: 0,
-            settings_scroll: 0,
-            settings_search_focused: false,
-            page_rect: Rect::default(),
-            sidebar_rect: Rect::default(),
-            sidebar_rows: Vec::new(),
-            sidebar_revision: None,
-            anchor: None,
-            pointer_origin: None,
-            dragging: false,
-            hits: Vec::new(),
+            frame: Frame::default(),
+            paint: Paint::default(),
+            host: Host::default(),
             focused: None,
-            hovered: None,
-            drag: None,
-            press: None,
-            drop: None,
-            drop_motion: None,
-            drag_label: String::new(),
-            pointer_fraction: (0.5, 0.5),
-            rename: None,
-            title_rects: Vec::new(),
-            last_click: None,
-            overlay: None,
-            overlay_stack: Vec::new(),
-            restore_focus: None,
-            tab_scroll: 0,
-            space_scroll: 0,
-            tabs_rect: Rect::default(),
-            spaces_rect: Rect::default(),
-            overlay_rect: Rect::default(),
-            editor_rect: Rect::default(),
-            editor_shift: 0.0,
-            cursor: None,
-            effect: None,
-            effect_area: None,
-            motion: None,
-            last_frame: Duration::ZERO,
-            now: Duration::ZERO,
-            visible: true,
-            window_focused: true,
-            caret_visible: true,
-            caret_deadline: None,
-            tooltip_deadline: None,
-            show_tooltip: false,
-            config_owned: Default::default(),
-            space_activity: Default::default(),
-            last_selected_tab: None,
-            last_selected_space: None,
-            pending_form: None,
-            last_rail: None,
-            reveal_selection: true,
-            foreign_tabs: Vec::new(),
-            jobs: Vec::new(),
+            pointer: Pointer::default(),
+            caret: Caret::default(),
+            tooltip: Tooltip::default(),
+            effects: Effects::default(),
+            sidebar: Sidebar::default(),
+            settings: SettingsPage::default(),
+            overlays: Overlays::default(),
+            launchers: Launchers::default(),
         }
     }
     pub fn buffer(&self) -> &Buffer {
-        &self.buffer
+        &self.frame.buffer
     }
     pub fn hit_regions(&self) -> &[HitRegion] {
-        &self.hits
+        &self.paint.hits
     }
     pub fn focused(&self) -> Option<&ElementId> {
         self.focused.as_ref()
     }
     pub fn is_modal(&self) -> bool {
-        self.overlay.is_some() || self.settings_page
+        self.overlays.current.is_some() || self.settings.open
     }
     /// Settings retain a sidebar beside their content page. Transient surfaces use the
     /// window viewport without changing the user's sidebar reservation.
     pub fn needs_expanded_space(&self) -> bool {
-        self.settings_page
+        self.settings.open
     }
     pub fn has_focus(&self) -> bool {
         self.focused.is_some() || self.is_modal()
@@ -625,12 +597,12 @@ impl SidebarUi {
     /// Call when content receives focus; this does not mark the OS window unfocused.
     pub fn release_focus(&mut self) {
         self.hide_settings();
-        if self.rename.take().is_some() {
-            self.caret_deadline = None;
-            self.dirty = true;
+        if self.sidebar.rename.take().is_some() {
+            self.caret.stop();
+            self.frame.dirty = true;
         }
         self.focused = None;
-        self.drag = None;
+        self.pointer.drag = None;
     }
     /// The host found a running process; the prompt names it when known.
     pub fn confirm_close_tab(&mut self, id: TabId, process: &str) {
@@ -659,7 +631,7 @@ impl SidebarUi {
         accept: &str,
         action: Action,
     ) {
-        self.stash_overlay();
+        self.overlays.stash();
         let items = vec![
             MenuItem::new("cancel", "Cancel", Action::Close),
             MenuItem::new("confirm", accept, action),
@@ -672,168 +644,180 @@ impl SidebarUi {
     }
     /// Rows the tab search lists after this window's own tabs.
     pub fn set_foreign_tabs(&mut self, tabs: Vec<ForeignTab>) {
-        self.foreign_tabs = tabs;
+        self.launchers.foreign_tabs = tabs;
     }
     pub fn show_error(&mut self, message: impl Into<String>) {
         let items = vec![MenuItem::new("dismiss", "Dismiss", Action::Close)];
         self.open_overlay(Overlay::Menu(Menu::new(message, items)));
     }
     pub fn set_error(&mut self, message: impl Into<String>) {
-        self.pending_form = None;
-        if let Some(Overlay::Form(form)) = &mut self.overlay {
+        self.overlays.pending_form = None;
+        if let Some(Overlay::Form(form)) = &mut self.overlays.current {
             form.error = Some(message.into());
-            self.dirty = true;
+            self.frame.dirty = true;
         } else {
             self.show_error(message);
         }
     }
     pub fn invalidate(&mut self) {
-        self.dirty = true;
+        self.frame.dirty = true;
     }
     pub fn set_config_owned(&mut self, keys: impl IntoIterator<Item = String>) {
         let keys = keys.into_iter().collect();
-        if self.config_owned != keys {
-            self.config_owned = keys;
+        if self.settings.config_owned != keys {
+            self.settings.config_owned = keys;
             self.invalidate();
         }
     }
     pub fn hit_test(&self, x: u16, y: u16) -> Option<&HitRegion> {
-        self.hits
+        self.paint
+            .hits
             .iter()
             .rev()
             .find(|hit| hit.rect.contains(Position::new(x, y)))
     }
     pub fn next_deadline(&self) -> Option<Duration> {
-        if !self.visible || !self.window_focused || self.buffer.area.is_empty() {
+        if !self.host.visible || !self.host.focused || self.frame.buffer.area.is_empty() {
             return None;
         }
         [
-            self.effect
+            self.effects
+                .cell
                 .as_ref()
-                .map(|_| self.last_frame + motion::FRAME),
-            self.motion.map(|_| self.last_frame + motion::FRAME),
-            self.press
+                .map(|_| self.frame.last + motion::FRAME),
+            self.effects
+                .surface
+                .map(|_| self.frame.last + motion::FRAME),
+            self.pointer
+                .press
                 .as_ref()
                 .filter(|press| press.animating)
-                .map(|_| self.last_frame + motion::FRAME),
-            self.drop_motion
+                .map(|_| self.frame.last + motion::FRAME),
+            self.pointer
+                .drop_motion
                 .filter(|motion| motion.progress < 1.0)
-                .map(|_| self.last_frame + motion::FRAME),
-            self.caret_deadline,
-            self.tooltip_deadline,
+                .map(|_| self.frame.last + motion::FRAME),
+            self.caret.deadline,
+            self.tooltip.deadline,
         ]
         .into_iter()
         .flatten()
         .min()
     }
     pub fn has_animation(&self) -> bool {
-        self.effect.is_some()
-            || self.motion.is_some()
-            || self.press.as_ref().is_some_and(|press| press.animating)
-            || self.drop_motion.is_some_and(|motion| motion.progress < 1.0)
+        self.effects.cell.is_some()
+            || self.effects.surface.is_some()
+            || self
+                .pointer
+                .press
+                .as_ref()
+                .is_some_and(|press| press.animating)
+            || self
+                .pointer
+                .drop_motion
+                .is_some_and(|motion| motion.progress < 1.0)
     }
     /// Hosts report the pointer's place within its cell so short rows can tell edge from middle.
     pub fn set_pointer_fraction(&mut self, x: f32, y: f32) {
-        self.pointer_fraction = (x.clamp(0.0, 1.0), y.clamp(0.0, 1.0));
+        self.pointer.fraction = (x.clamp(0.0, 1.0), y.clamp(0.0, 1.0));
     }
     /// Hosts stamp pointer input so click timing does not depend on repaint cadence.
     pub fn set_clock(&mut self, now: Duration) {
-        self.now = self.now.max(now);
+        self.frame.now = self.frame.now.max(now);
     }
     pub fn cancel_effects(&mut self) {
-        let effect = self.effect.take().is_some();
-        let motion = self.motion.take().is_some();
-        if effect || motion {
-            self.dirty = true;
+        if self.effects.cancel() {
+            self.frame.dirty = true;
         }
-        self.effect_area = None;
     }
     fn start_effect(&mut self, model: &Model) {
-        self.effect = None;
-        self.effect_area = None;
-        if motion::enabled(&model.settings) && self.visible && self.window_focused {
+        self.effects.cell = None;
+        self.effects.cell_area = None;
+        if motion::enabled(&model.settings) && self.host.live() {
             let Some(area) = self
+                .pointer
                 .hovered
                 .as_ref()
                 .or(self.focused.as_ref())
-                .and_then(|id| self.hits.iter().find(|hit| &hit.id == id))
+                .and_then(|id| self.paint.hits.iter().find(|hit| &hit.id == id))
                 .map(|hit| hit.rect)
             else {
                 return;
             };
-            self.effect = Some(fx::fade_from_fg(
+            self.effects.cell = Some(fx::fade_from_fg(
                 self.theme.muted,
                 u32::from(model.settings.animation_ms),
             ));
-            self.effect_area = Some(area);
+            self.effects.cell_area = Some(area);
         }
     }
     /// Animate only the surface. The caller has already committed the final pane
     /// reservation and must not derive content geometry from this visual transform.
     pub fn transition_surface(&mut self, from: f32, to: f32, now: Duration, duration: Duration) {
-        self.motion = (duration > Duration::ZERO).then_some(Motion {
+        self.effects.surface = (duration > Duration::ZERO).then_some(Tween {
             from,
             to,
             start: now,
             duration,
         });
-        self.now = now;
-        self.dirty = true;
+        self.frame.now = now;
+        self.frame.dirty = true;
     }
     pub fn dismiss(&mut self) {
-        self.overlay = None;
-        self.pending_form = None;
-        self.overlay_stack.clear();
-        self.anchor = None;
-        self.focused = self.restore_focus.take();
-        self.caret_deadline = None;
-        self.show_tooltip = false;
-        self.tooltip_deadline = None;
+        self.overlays.current = None;
+        self.overlays.pending_form = None;
+        self.overlays.stack.clear();
+        self.overlays.anchor = None;
+        self.focused = self.overlays.restore_focus.take();
+        self.caret.stop();
+        self.tooltip.hide();
         self.cancel_effects();
-        self.dirty = true;
+        self.frame.dirty = true;
     }
     /// Settings behave like a tab: the row stays listed while another tab is active.
     pub fn open_settings(&mut self) {
         self.dismiss();
-        self.settings_page = true;
-        self.reveal_settings = !self.settings_tab;
-        self.settings_tab = true;
-        self.settings_search_focused = false;
-        self.dirty = true;
+        self.settings.open = true;
+        self.sidebar.reveal_settings = !self.settings.listed;
+        self.settings.listed = true;
+        self.settings.search_focused = false;
+        self.frame.dirty = true;
     }
     pub fn hide_settings(&mut self) {
-        if self.settings_page {
-            self.settings_page = false;
-            self.settings_search_focused = false;
-            self.dirty = true;
+        if self.settings.open {
+            self.settings.open = false;
+            self.settings.search_focused = false;
+            self.frame.dirty = true;
         }
     }
     pub fn close_settings(&mut self) {
-        self.settings_page = false;
-        self.settings_tab = false;
-        self.settings_place = None;
-        self.settings_search_focused = false;
+        self.settings.open = false;
+        self.settings.listed = false;
+        self.sidebar.settings_place = None;
+        self.settings.search_focused = false;
         self.dismiss();
         self.focused = None;
     }
     pub fn has_overlay(&self) -> bool {
-        self.overlay.is_some()
+        self.overlays.current.is_some()
     }
     pub fn content_page(&self) -> bool {
-        self.settings_page
+        self.settings.open
     }
     /// Transient UI uses the window viewport while the terminal remains visible. Reserve
     /// that viewport while a tooltip is pending so it can extend past the sidebar edge.
     pub fn overlay_surface(&self) -> bool {
-        self.overlay.is_some() || self.show_tooltip || self.tooltip_deadline.is_some()
+        self.overlays.current.is_some() || self.tooltip.pending()
     }
     pub fn rounded_surfaces(&self) -> &[RoundedSurface] {
-        &self.rounded_surfaces
+        &self.paint.surfaces
     }
     pub fn set_layout(&mut self, sidebar_columns: u16, header_inset: u16) {
-        if self.sidebar_columns != Some(sidebar_columns) || self.header_inset != header_inset {
-            self.sidebar_columns = Some(sidebar_columns);
-            self.header_inset = header_inset;
+        if self.host.sidebar_columns != Some(sidebar_columns)
+            || self.host.header_inset != header_inset
+        {
+            self.host.sidebar_columns = Some(sidebar_columns);
+            self.host.header_inset = header_inset;
             self.invalidate();
         }
     }
@@ -845,24 +829,17 @@ impl SidebarUi {
     }
     fn open_overlay(&mut self, overlay: Overlay) {
         self.cancel_effects();
-        self.caret_deadline = None;
-        self.caret_visible = true;
-        self.show_tooltip = false;
-        self.tooltip_deadline = None;
-        if self.overlay.is_none() && self.overlay_stack.is_empty() {
-            self.restore_focus = self.focused.clone();
+        self.caret.stop();
+        self.caret.visible = true;
+        self.tooltip.hide();
+        if self.overlays.current.is_none() && self.overlays.stack.is_empty() {
+            self.overlays.restore_focus = self.focused.clone();
         }
-        self.overlay = Some(overlay);
-        self.dirty = true;
-    }
-    /// Keeps the current overlay to return to once the next one closes.
-    fn stash_overlay(&mut self) {
-        if let Some(overlay) = self.overlay.take() {
-            self.overlay_stack.push(overlay);
-        }
+        self.overlays.current = Some(overlay);
+        self.frame.dirty = true;
     }
     fn open_form(&mut self, title: impl Into<String>, kind: FormKind, value: &str) {
-        self.stash_overlay();
+        self.overlays.stash();
         let mut editor = TextEditor::new(value);
         editor.select_all();
         self.open_overlay(Overlay::Form(Form {
@@ -875,17 +852,86 @@ impl SidebarUi {
         self.reset_caret();
     }
     fn reset_caret(&mut self) {
-        self.caret_visible = true;
-        self.caret_deadline =
-            (self.visible && self.window_focused).then_some(self.now + Duration::from_millis(600));
+        self.caret.restart(self.frame.now, self.host.live());
     }
     fn back(&mut self) {
-        if let Some(previous) = self.overlay_stack.pop() {
-            self.overlay = Some(previous);
-            self.caret_deadline = None;
-            self.dirty = true;
+        if let Some(previous) = self.overlays.stack.pop() {
+            self.overlays.current = Some(previous);
+            self.caret.stop();
+            self.frame.dirty = true;
         } else {
             self.dismiss();
         }
+    }
+
+    /// The editor that receives typed text right now.
+    fn active_editor(&self) -> Option<EditorSlot> {
+        match &self.overlays.current {
+            Some(Overlay::Form(_)) => {
+                (self.focused == Some(ElementId::Editor)).then_some(EditorSlot::Form)
+            }
+            Some(Overlay::Menu(menu)) => menu.search.as_ref().map(|_| EditorSlot::Palette),
+            None if self.sidebar.rename.is_some() => Some(EditorSlot::Rename),
+            None => (self.settings.open
+                && self.settings.search_focused
+                && self.focused == Some(ElementId::SettingsSearch))
+            .then_some(EditorSlot::SettingsSearch),
+        }
+    }
+    /// The editor a pointer target belongs to, focused or not.
+    fn editor_slot(&self, id: &ElementId) -> Option<EditorSlot> {
+        match (id, &self.overlays.current) {
+            (ElementId::Editor, Some(Overlay::Form(_))) => Some(EditorSlot::Form),
+            (ElementId::Editor, Some(Overlay::Menu(menu))) => {
+                menu.search.as_ref().map(|_| EditorSlot::Palette)
+            }
+            (ElementId::Editor, None) => self.sidebar.rename.as_ref().map(|_| EditorSlot::Rename),
+            (ElementId::SettingsSearch, None) => {
+                self.settings.open.then_some(EditorSlot::SettingsSearch)
+            }
+            _ => None,
+        }
+    }
+    fn editor(&self, slot: EditorSlot) -> Option<&TextEditor> {
+        match (slot, &self.overlays.current) {
+            (EditorSlot::Form, Some(Overlay::Form(form))) => Some(&form.editor),
+            (EditorSlot::Palette, Some(Overlay::Menu(menu))) => {
+                menu.search.as_ref().map(|search| &search.editor)
+            }
+            (EditorSlot::Rename, _) => self.sidebar.rename.as_ref().map(|rename| &rename.editor),
+            (EditorSlot::SettingsSearch, _) => Some(&self.settings.query),
+            _ => None,
+        }
+    }
+    fn editor_mut(&mut self, slot: EditorSlot) -> Option<&mut TextEditor> {
+        match (slot, &mut self.overlays.current) {
+            (EditorSlot::Form, Some(Overlay::Form(form))) => Some(&mut form.editor),
+            (EditorSlot::Palette, Some(Overlay::Menu(menu))) => {
+                menu.search.as_mut().map(|search| &mut search.editor)
+            }
+            (EditorSlot::Rename, _) => self
+                .sidebar
+                .rename
+                .as_mut()
+                .map(|rename| &mut rename.editor),
+            (EditorSlot::SettingsSearch, _) => Some(&mut self.settings.query),
+            _ => None,
+        }
+    }
+}
+
+/// The four places text is edited; only one receives input at a time.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum EditorSlot {
+    Form,
+    Palette,
+    Rename,
+    SettingsSearch,
+}
+
+impl EditorSlot {
+    /// The palette keeps a steady caret; every other editor blinks.
+    fn blinks(self) -> bool {
+        self != Self::Palette
     }
 }

@@ -4,7 +4,7 @@ use vtabs_core::{Space, Tab};
 
 fn row_text(ui: &SidebarUi, rect: Rect, y: u16) -> String {
     (rect.x..rect.right())
-        .map(|x| ui.buffer[(x, y)].symbol())
+        .map(|x| ui.frame.buffer[(x, y)].symbol())
         .collect()
 }
 
@@ -47,7 +47,7 @@ fn sidebar_cache_preserves_order_numbers_hidden_counts_and_collapsed_reveal() {
     let mut ui = SidebarUi::new();
     ui.ensure_sidebar_entries(&model);
     assert_eq!(
-        ui.sidebar_rows,
+        ui.sidebar.rows,
         [
             SidebarRow::Tab { id: 4, number: 1 },
             SidebarRow::Folder { index: 0, count: 2 },
@@ -65,7 +65,7 @@ fn sidebar_cache_preserves_order_numbers_hidden_counts_and_collapsed_reveal() {
     model.apply_filter_hook(6, false).unwrap();
     ui.ensure_sidebar_entries(&model);
     assert_eq!(
-        ui.sidebar_rows,
+        ui.sidebar.rows,
         [
             SidebarRow::Tab { id: 4, number: 1 },
             SidebarRow::Folder { index: 0, count: 2 },
@@ -79,16 +79,17 @@ fn sidebar_cache_preserves_order_numbers_hidden_counts_and_collapsed_reveal() {
             SidebarRow::Tab { id: 5, number: 5 },
         ]
     );
-    let allocation = ui.sidebar_rows.as_ptr();
+    let allocation = ui.sidebar.rows.as_ptr();
     model
         .dispatch(Intent::ToggleFolder(services.clone()))
         .unwrap();
-    ui.tabs_rect = Rect::new(0, 0, 20, 3);
+    ui.sidebar.list = Rect::new(0, 0, 20, 3);
     ui.ensure_tab_visible(&model, 3);
-    assert_eq!(ui.tab_scroll, 1);
-    assert_eq!(ui.sidebar_rows.as_ptr(), allocation);
+    assert_eq!(ui.sidebar.scroll, 1);
+    assert_eq!(ui.sidebar.rows.as_ptr(), allocation);
     assert!(
-        !ui.sidebar_rows
+        !ui.sidebar
+            .rows
             .iter()
             .any(|row| matches!(row, SidebarRow::Tab { id: 3, .. }))
     );
@@ -101,7 +102,7 @@ fn sidebar_cache_preserves_order_numbers_hidden_counts_and_collapsed_reveal() {
         .unwrap();
     ui.ensure_sidebar_entries(&model);
     assert_eq!(
-        ui.sidebar_rows,
+        ui.sidebar.rows,
         [
             SidebarRow::Tab { id: 4, number: 1 },
             SidebarRow::Folder { index: 0, count: 1 },
@@ -139,12 +140,18 @@ fn metadata_keeps_the_tab_directory_and_close_control_readable() {
     let area = Rect::new(0, 0, 32, 24);
     ui.render(&model, area, Duration::ZERO);
     let tab = ui
+        .paint
         .hits
         .iter()
         .find(|hit| hit.id == ElementId::Tab(1))
         .unwrap()
         .rect;
-    assert!(ui.hits.iter().all(|hit| hit.id != ElementId::CloseTab(1)));
+    assert!(
+        ui.paint
+            .hits
+            .iter()
+            .all(|hit| hit.id != ElementId::CloseTab(1))
+    );
     ui.event(
         &model,
         UiInput::PointerMove {
@@ -154,6 +161,7 @@ fn metadata_keeps_the_tab_directory_and_close_control_readable() {
     );
     ui.render(&model, area, Duration::ZERO);
     let close = ui
+        .paint
         .hits
         .iter()
         .find(|hit| hit.id == ElementId::CloseTab(1))
@@ -198,6 +206,7 @@ fn tab_rows_show_host_icon_index_and_directory() {
     ui.render(&model, Rect::new(0, 0, 32, 24), Duration::ZERO);
     let row = |id: u64| {
         let rect = ui
+            .paint
             .hits
             .iter()
             .find(|hit| hit.id == ElementId::Tab(id))
@@ -247,6 +256,7 @@ fn renamed_tabs_replace_the_directory_and_hidden_indexes_leave_no_gap() {
     ui.render(&model, Rect::new(0, 0, 32, 24), Duration::ZERO);
     let row = |id: u64| {
         let rect = ui
+            .paint
             .hits
             .iter()
             .find(|hit| hit.id == ElementId::Tab(id))
@@ -273,12 +283,14 @@ fn compact_footer_keeps_the_selected_space_beside_new_space() {
     model.revision += 1;
     ui.render(&model, area, Duration::from_millis(1));
     let selected = ui
+        .paint
         .hits
         .iter()
         .find(|hit| hit.id == ElementId::Space(model.selected_space.clone()))
         .unwrap()
         .rect;
     let create = ui
+        .paint
         .hits
         .iter()
         .find(|hit| hit.id == ElementId::CreateSpace)
@@ -298,6 +310,7 @@ fn tooltips_stay_compact_when_settings_uses_the_content_pane() {
     let area = Rect::new(0, 0, 120, 32);
     ui.render(&model, area, Duration::ZERO);
     let refresh = ui
+        .paint
         .hits
         .iter()
         .find(|hit| hit.id == ElementId::Refresh)
@@ -311,7 +324,7 @@ fn tooltips_stay_compact_when_settings_uses_the_content_pane() {
         },
     );
     ui.render(&model, area, Duration::from_millis(700));
-    let tooltip = ui.rounded_surfaces.last().unwrap().rect;
+    let tooltip = ui.paint.surfaces.last().unwrap().rect;
     assert!(tooltip.width <= 44);
     assert_eq!(tooltip.intersection(area), tooltip);
     assert_eq!(tooltip.height, 2);
@@ -355,7 +368,8 @@ fn rows_touch_within_a_group_and_groups_keep_a_gap() {
     let mut ui = SidebarUi::new();
     ui.render(&model, Rect::new(0, 0, 32, 40), Duration::ZERO);
     let rect = |id: ElementId| {
-        ui.hits
+        ui.paint
+            .hits
             .iter()
             .find(|hit| hit.id == id)
             .unwrap_or_else(|| panic!("{id:?} is not reachable"))
@@ -393,7 +407,8 @@ fn tabs(model: &mut Model, tabs: Vec<Tab>) {
 }
 
 fn hit_rect(ui: &SidebarUi, id: &ElementId) -> Rect {
-    ui.hits
+    ui.paint
+        .hits
         .iter()
         .find(|hit| &hit.id == id)
         .unwrap_or_else(|| panic!("{id:?} is not reachable"))
@@ -500,7 +515,12 @@ fn space_title_swaps_its_icon_on_hover_and_collapses_pinned_tabs_and_folders() {
     let title = hit_rect(&ui, &ElementId::SpaceTitle);
     assert_eq!(title.height, hit_rect(&ui, &ElementId::NewTab).height);
     assert!(row_text(&ui, title, title.y).contains(icons::SPACE));
-    assert!(ui.hits.iter().all(|hit| hit.id != ElementId::CreateFolder));
+    assert!(
+        ui.paint
+            .hits
+            .iter()
+            .all(|hit| hit.id != ElementId::CreateFolder)
+    );
 
     ui.event(
         &model,
@@ -512,7 +532,8 @@ fn space_title_swaps_its_icon_on_hover_and_collapses_pinned_tabs_and_folders() {
     ui.render(&model, area, Duration::ZERO);
     assert!(row_text(&ui, title, title.y).contains(icons::EXPANDED));
     let hovered = |ui: &SidebarUi, rect: Rect| {
-        ui.rounded_surfaces
+        ui.paint
+            .surfaces
             .iter()
             .find(|surface| surface.rect == rect)
             .unwrap()
@@ -533,7 +554,10 @@ fn space_title_swaps_its_icon_on_hover_and_collapses_pinned_tabs_and_folders() {
     ui.render(&model, area, Duration::ZERO);
     assert!(row_text(&ui, title, title.y).contains(icons::COLLAPSED));
     for hidden in [ElementId::Tab(2), folder] {
-        assert!(ui.hits.iter().all(|hit| hit.id != hidden), "{hidden:?}");
+        assert!(
+            ui.paint.hits.iter().all(|hit| hit.id != hidden),
+            "{hidden:?}"
+        );
     }
     // Hidden rows keep their index, so the remaining tab is still the second.
     let rect = hit_rect(&ui, &ElementId::Tab(1));
@@ -621,7 +645,8 @@ fn pressing_a_tab_shrinks_its_surface_and_releasing_restores_it() {
     ui.render(&model, area, Duration::ZERO);
     let rect = hit_rect(&ui, &ElementId::Tab(1));
     let inset = |ui: &SidebarUi| {
-        ui.rounded_surfaces
+        ui.paint
+            .surfaces
             .iter()
             .find(|surface| surface.rect == rect)
             .unwrap()
@@ -662,7 +687,7 @@ fn double_clicking_a_title_edits_it_in_place_with_the_text_selected() {
     let area = Rect::new(0, 0, 32, 32);
     let mut ui = SidebarUi::new();
     ui.render(&model, area, Duration::ZERO);
-    let title = ui.title_rects[0].1;
+    let title = ui.sidebar.title_rects[0].1;
     let click = |ui: &mut SidebarUi, at: u64| {
         ui.set_clock(Duration::from_millis(at));
         pointer(ui, &model, title, true);
@@ -744,7 +769,8 @@ fn rows_keep_their_full_width_and_only_icon_buttons_are_squared() {
     ui.render(&model, Rect::new(0, 0, 32, 32), Duration::ZERO);
     let square = |ui: &SidebarUi, id: ElementId| {
         let rect = hit_rect(ui, &id);
-        ui.rounded_surfaces
+        ui.paint
+            .surfaces
             .iter()
             .find(|surface| surface.rect.intersects(rect) && surface.rect.y == rect.y)
             .unwrap()
@@ -788,7 +814,8 @@ fn hovering_the_close_control_adds_no_surface_of_its_own() {
     );
     ui.render(&model, area, Duration::ZERO);
     assert!(
-        ui.rounded_surfaces
+        ui.paint
+            .surfaces
             .iter()
             .all(|surface| surface.rect != close)
     );
@@ -899,9 +926,7 @@ fn panes_gain_a_background_only_while_hovered() {
     ui.render(&model, area, Duration::ZERO);
     let framed = |ui: &SidebarUi, tab, pane| {
         let rect = hit_rect(ui, &ElementId::Pane(tab, pane));
-        ui.rounded_surfaces
-            .iter()
-            .any(|surface| surface.rect == rect)
+        ui.paint.surfaces.iter().any(|surface| surface.rect == rect)
     };
     for (tab, pane) in [(1, 10), (1, 11), (2, 20), (2, 21)] {
         assert!(!framed(&ui, tab, pane), "tab {tab} pane {pane}");
@@ -1021,7 +1046,8 @@ fn split_layout_is_mirrored_as_columns_and_two_text_lines() {
     assert!(row_text(&ui, top, top.y).contains("/top"));
     assert!(row_text(&ui, bottom, bottom.y).contains("/bottom"));
     assert!(
-        ui.rounded_surfaces
+        ui.paint
+            .surfaces
             .iter()
             .any(|surface| surface.stacked && surface.rect.y == row.y && surface.rect.height == 2),
         "stacked lines opt out of the host's vertical centering"
@@ -1176,7 +1202,8 @@ fn drags_preview_where_they_land_and_escape_abandons_them() {
         hit_rect(&ui, &ElementId::Tab(3)),
     );
     let bar = |ui: &SidebarUi| {
-        ui.rounded_surfaces
+        ui.paint
+            .surfaces
             .iter()
             .find(|surface| surface.scale_y < 1.0)
             .map(|surface| f32::from(surface.rect.y) + 0.5 + surface.shift_y)
@@ -1189,7 +1216,7 @@ fn drags_preview_where_they_land_and_escape_abandons_them() {
     );
     assert!(
         !row_text(&ui, source, source.y).is_empty()
-            && ui.buffer[(source.x + 5, source.y)].fg != ui.theme.foreground,
+            && ui.frame.buffer[(source.x + 5, source.y)].fg != ui.theme.foreground,
         "the dragged row fades in place"
     );
 
@@ -1263,7 +1290,7 @@ fn hovering_a_split_reveals_its_own_close_and_hides_the_tabs() {
     let area = Rect::new(0, 0, 48, 32);
     let mut ui = SidebarUi::new();
     ui.render(&model, area, Duration::ZERO);
-    let has = |ui: &SidebarUi, id: ElementId| ui.hits.iter().any(|hit| hit.id == id);
+    let has = |ui: &SidebarUi, id: ElementId| ui.paint.hits.iter().any(|hit| hit.id == id);
     assert!(!has(&ui, ElementId::ClosePane(1, 8)));
 
     let pane = hit_rect(&ui, &ElementId::Pane(1, 8));

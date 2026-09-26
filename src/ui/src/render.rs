@@ -19,31 +19,33 @@ impl SidebarUi {
     /// Returns None when a terminal repaint can reuse the previously committed UI.
     /// Resize publishes one fully composed frame; the previous buffer survives until swap.
     pub fn render(&mut self, model: &Model, area: Rect, now: Duration) -> Option<FrameUpdate> {
-        self.now = now;
-        let resized = self.buffer.area != area;
+        self.frame.now = now;
+        let resized = self.frame.buffer.area != area;
         if resized {
-            self.reveal_selection = true;
-            self.staging.resize(area);
+            self.sidebar.reveal_selection = true;
+            self.frame.staging.resize(area);
             self.cancel_effects();
-            self.press = None;
-            self.dirty = true;
+            self.pointer.press = None;
+            self.frame.dirty = true;
         }
-        if self.revision != Some(model.revision) {
+        if self.frame.revision != Some(model.revision) {
             if self
+                .overlays
                 .pending_form
                 .is_some_and(|revision| revision != model.revision)
             {
                 self.dismiss();
             }
-            self.revision = Some(model.revision);
+            self.frame.revision = Some(model.revision);
             self.update_theme(model);
-            self.config_owned.clone_from(&model.config_owned);
+            self.settings.config_owned.clone_from(&model.config_owned);
             if self
+                .frame
                 .last_rail
                 .is_some_and(|rail| rail != model.settings.rail)
                 && motion::enabled(&model.settings)
-                && self.window_focused
-                && self.visible
+                && self.host.focused
+                && self.host.visible
                 && !self.is_modal()
                 && !area.is_empty()
             {
@@ -59,76 +61,72 @@ impl SidebarUi {
                     Duration::from_millis(u64::from(model.settings.animation_ms)),
                 );
             }
-            self.last_rail = Some(model.settings.rail);
-            self.space_activity.clear();
-            self.space_activity.extend(
+            self.frame.last_rail = Some(model.settings.rail);
+            self.sidebar.space_activity.clear();
+            self.sidebar.space_activity.extend(
                 model
                     .tabs
                     .values()
                     .filter(|tab| tab.unread || tab.bell)
                     .map(|tab| tab.space_id.clone()),
             );
-            if self.last_selected_space.as_ref() != Some(&model.selected_space) {
-                self.reveal_selection = true;
-                self.tab_scroll = 0;
-                self.settings_place = None;
+            if self.sidebar.last_space.as_ref() != Some(&model.selected_space) {
+                self.sidebar.reveal_selection = true;
+                self.sidebar.scroll = 0;
+                self.sidebar.settings_place = None;
                 if let Some(index) = model
                     .spaces
                     .iter()
                     .position(|space| space.id == model.selected_space)
                 {
-                    let rows = usize::from(self.spaces_rect.height).max(1);
-                    self.space_scroll = list::reveal_rows(self.space_scroll, index, rows);
+                    let rows = usize::from(self.sidebar.spaces.height).max(1);
+                    self.sidebar.space_scroll =
+                        list::reveal_rows(self.sidebar.space_scroll, index, rows);
                 }
-                self.last_selected_space = Some(model.selected_space.clone());
+                self.sidebar.last_space = Some(model.selected_space.clone());
             }
-            if self.last_selected_tab != model.selected_tab {
+            if self.sidebar.last_tab != model.selected_tab {
                 // Composition reveals the row once the frame's row capacity is known.
-                self.reveal_selection = true;
-                self.last_selected_tab = model.selected_tab;
+                self.sidebar.reveal_selection = true;
+                self.sidebar.last_tab = model.selected_tab;
             }
-            self.dirty = true;
+            self.frame.dirty = true;
             if !motion::enabled(&model.settings) {
                 self.cancel_effects();
             }
             self.prune_targets(model);
         }
-        if !self.visible {
+        if !self.host.visible {
             return None;
         }
-        if self.caret_deadline.is_some_and(|deadline| now >= deadline) {
-            self.caret_visible = !self.caret_visible;
-            self.caret_deadline = Some(now + Duration::from_millis(600));
-            self.dirty = true;
-        }
-        if self
-            .tooltip_deadline
-            .is_some_and(|deadline| now >= deadline)
-        {
-            self.tooltip_deadline = None;
-            self.show_tooltip = self.hovered.is_some();
-            self.dirty = true;
+        if self.caret.tick(now) | self.tooltip.tick(now, self.pointer.hovered.is_some()) {
+            self.frame.dirty = true;
         }
         self.advance_press(model, now);
         self.advance_drop(model, now);
-        if !self.dirty && self.effect.is_none() {
+        if !self.frame.dirty && self.effects.cell.is_none() {
             return self
-                .motion
+                .effects
+                .surface
                 .is_some()
                 .then(|| self.finish_frame(false, Vec::new(), Vec::new(), now));
         }
-        self.staging.resize(area);
-        self.staging.reset();
-        self.hits.clear();
-        self.rounded_surfaces.clear();
-        self.cursor = None;
-        self.editor_rect = Rect::default();
-        self.editor_shift = 0.0;
+        self.frame.staging.resize(area);
+        self.frame.staging.reset();
+        self.paint.hits.clear();
+        self.paint.surfaces.clear();
+        self.paint.cursor = None;
+        self.paint.editor_rect = Rect::default();
+        self.paint.editor_shift = 0.0;
         Block::default()
             .style(self.theme.base())
-            .render(area, &mut self.staging);
+            .render(area, &mut self.frame.staging);
         if area.width > 0 && area.height > 0 {
-            let width = self.sidebar_columns.unwrap_or(area.width).min(area.width);
+            let width = self
+                .host
+                .sidebar_columns
+                .unwrap_or(area.width)
+                .min(area.width);
             // A successful form can close during this render before the host contracts
             // its viewport. Keep rail targets within the configured width in that frame.
             let sidebar = if area.width > width {
@@ -145,9 +143,9 @@ impl SidebarUi {
             } else {
                 area
             };
-            self.sidebar_rect = sidebar;
+            self.sidebar.rect = sidebar;
             self.compose_sidebar(model, sidebar);
-            if self.settings_page {
+            if self.settings.open {
                 let page = if area.width > sidebar.width {
                     Rect::new(
                         if model.settings.side == vtabs_core::Side::Right {
@@ -162,36 +160,36 @@ impl SidebarUi {
                 } else {
                     area
                 };
-                self.page_rect = page;
+                self.settings.rect = page;
                 if page == area {
-                    self.hits.clear();
+                    self.paint.hits.clear();
                 }
                 self.compose_settings_page(model, page);
             }
-            if let Some(mut overlay) = self.overlay.take() {
+            if let Some(mut overlay) = self.overlays.current.take() {
                 // Modal hit regions replace underlying targets; background clicks dismiss.
-                self.hits.clear();
+                self.paint.hits.clear();
                 self.compose_overlay(model, area, &mut overlay);
-                self.overlay = Some(overlay);
-            } else if self.show_tooltip {
+                self.overlays.current = Some(overlay);
+            } else if self.tooltip.shown {
                 self.compose_tooltip(area);
             }
         }
         let elapsed = now
-            .saturating_sub(self.last_frame)
+            .saturating_sub(self.frame.last)
             .min(Duration::from_millis(1000));
-        if let Some(effect) = self.effect.as_mut() {
-            let effect_area = self.effect_area.unwrap_or(area).intersection(area);
+        if let Some(effect) = self.effects.cell.as_mut() {
+            let effect_area = self.effects.cell_area.unwrap_or(area).intersection(area);
             effect.process(
                 tachyonfx::Duration::from_millis(
                     elapsed.as_millis().min(u128::from(u32::MAX)) as u32
                 ),
-                &mut self.staging,
+                &mut self.frame.staging,
                 effect_area,
             );
             if effect.done() {
-                self.effect = None;
-                self.effect_area = None;
+                self.effects.cell = None;
+                self.effects.cell_area = None;
             }
         }
         let changed_cells = if resized {
@@ -199,8 +197,9 @@ impl SidebarUi {
                 .flat_map(|y| (area.x..area.right()).map(move |x| (x, y)))
                 .collect()
         } else {
-            self.buffer
-                .diff_iter(&self.staging)
+            self.frame
+                .buffer
+                .diff_iter(&self.frame.staging)
                 .map(|(x, y, _)| (x, y))
                 .collect::<Vec<_>>()
         };
@@ -210,14 +209,14 @@ impl SidebarUi {
                 dirty_rows.push(y);
             }
         }
-        std::mem::swap(&mut self.buffer, &mut self.staging);
-        self.dirty = false;
+        std::mem::swap(&mut self.frame.buffer, &mut self.frame.staging);
+        self.frame.dirty = false;
         Some(self.finish_frame(resized, changed_cells, dirty_rows, now))
     }
 
     /// Drop previews move fast enough to keep up with the pointer, never slower than a frame or two.
     fn advance_drop(&mut self, model: &Model, now: Duration) {
-        let Some(motion) = &mut self.drop_motion else {
+        let Some(motion) = &mut self.pointer.drop_motion else {
             return;
         };
         let span = motion::span(&model.settings, 2, 3);
@@ -225,13 +224,13 @@ impl SidebarUi {
         let progress = motion::eased(now, start, span);
         if motion.progress != progress {
             motion.progress = progress;
-            self.dirty = true;
+            self.frame.dirty = true;
         }
     }
 
     /// A press shrinks its surface and a release grows it back, even for a quick click.
     fn advance_press(&mut self, model: &Model, now: Duration) {
-        let Some(press) = &mut self.press else {
+        let Some(press) = &mut self.pointer.press else {
             return;
         };
         let span = motion::span(&model.settings, 1, 2);
@@ -249,10 +248,10 @@ impl SidebarUi {
         press.animating = !finished && (release.is_some() || level < 1.0);
         if press.level != level || finished {
             press.level = level;
-            self.dirty = true;
+            self.frame.dirty = true;
         }
         if finished {
-            self.press = None;
+            self.pointer.press = None;
         }
     }
 
@@ -267,42 +266,38 @@ impl SidebarUi {
             translate_x: 0.0,
             opacity: 1.0,
         };
-        if let Some(surface) = self.motion {
+        if let Some(surface) = self.effects.surface {
             let t = motion::progress(now.saturating_sub(surface.start), surface.duration);
             transform.translate_x = motion::lerp(surface.from, surface.to, motion::ease_out(t));
             if t >= 1.0 {
-                self.motion = None;
+                self.effects.surface = None;
             }
         }
-        self.last_frame = now;
-        self.frame_revision = self.frame_revision.wrapping_add(1);
-        let editor = match &self.overlay {
-            Some(Overlay::Form(form)) if self.focused == Some(ElementId::Editor) => {
-                Some(&form.editor)
-            }
-            Some(Overlay::Menu(menu)) => menu.search.as_ref().map(|search| &search.editor),
-            _ if self.settings_page && self.settings_search_focused => Some(&self.settings_query),
-            _ => self.rename.as_ref().map(|rename| &rename.editor),
-        };
-        let ime_rect = editor.filter(|_| self.editor_rect.width > 0).map(|editor| {
-            Rect::new(
-                self.editor_rect.x
-                    + editor
-                        .cursor_columns()
-                        .saturating_sub(editor.scroll_columns)
-                        .min(usize::from(self.editor_rect.width - 1)) as u16,
-                self.editor_rect.y,
-                1,
-                1,
-            )
-        });
+        self.frame.last = now;
+        self.frame.number = self.frame.number.wrapping_add(1);
+        let editor = self.active_editor().and_then(|slot| self.editor(slot));
+        let ime_rect = editor
+            .filter(|_| self.paint.editor_rect.width > 0)
+            .map(|editor| {
+                Rect::new(
+                    self.paint.editor_rect.x
+                        + editor
+                            .cursor_columns()
+                            .saturating_sub(editor.scroll_columns)
+                            .min(usize::from(self.paint.editor_rect.width - 1))
+                            as u16,
+                    self.paint.editor_rect.y,
+                    1,
+                    1,
+                )
+            });
         FrameUpdate {
-            revision: self.frame_revision,
+            revision: self.frame.number,
             resized,
             changed_cells,
             dirty_rows,
-            cursor: self.cursor,
-            cursor_shift: self.editor_shift,
+            cursor: self.paint.cursor,
+            cursor_shift: self.paint.editor_shift,
             ime_rect,
             transform,
         }
@@ -350,28 +345,34 @@ impl SidebarUi {
             _ => true,
         };
         if self
+            .sidebar
             .rename
             .as_ref()
             .is_some_and(|rename| !model.tabs.contains_key(&rename.id))
         {
-            self.rename = None;
-            self.caret_deadline = None;
+            self.sidebar.rename = None;
+            self.caret.stop();
             if self.focused == Some(ElementId::Editor) {
                 self.focused = None;
             }
         }
-        if self.press.as_ref().is_some_and(|press| !valid(&press.id)) {
-            self.press = None;
+        if self
+            .pointer
+            .press
+            .as_ref()
+            .is_some_and(|press| !valid(&press.id))
+        {
+            self.pointer.press = None;
         }
         if self.focused.as_ref().is_some_and(|id| !valid(id)) {
             self.focused = None;
         }
-        if self.hovered.as_ref().is_some_and(|id| !valid(id)) {
-            self.hovered = None;
-            self.show_tooltip = false;
+        if self.pointer.hovered.as_ref().is_some_and(|id| !valid(id)) {
+            self.pointer.hovered = None;
+            self.tooltip.shown = false;
         }
-        if self.drag.as_ref().is_some_and(|id| !valid(id)) {
-            self.drag = None;
+        if self.pointer.drag.as_ref().is_some_and(|id| !valid(id)) {
+            self.pointer.drag = None;
         }
         let prune = |overlay: &mut Overlay| {
             if let Overlay::Menu(menu) = overlay {
@@ -384,27 +385,32 @@ impl SidebarUi {
                 menu.selected = menu.selected.min(menu.items.len().saturating_sub(1));
             }
         };
-        if let Some(overlay) = &mut self.overlay {
+        if let Some(overlay) = &mut self.overlays.current {
             prune(overlay);
         }
-        for overlay in &mut self.overlay_stack {
+        for overlay in &mut self.overlays.stack {
             prune(overlay);
         }
-        if self.overlay.as_ref().is_some_and(|overlay| match overlay {
-            Overlay::Form(Form {
-                kind: FormKind::RenameTab(id),
-                ..
-            }) => !model.tabs.contains_key(id),
-            Overlay::Form(Form {
-                kind:
-                    FormKind::RenameSpace(id)
-                    | FormKind::SpaceIcon(id)
-                    | FormKind::SpaceAccent(id)
-                    | FormKind::SpaceRules(id),
-                ..
-            }) => !model.spaces.iter().any(|space| &space.id == id),
-            _ => false,
-        }) {
+        if self
+            .overlays
+            .current
+            .as_ref()
+            .is_some_and(|overlay| match overlay {
+                Overlay::Form(Form {
+                    kind: FormKind::RenameTab(id),
+                    ..
+                }) => !model.tabs.contains_key(id),
+                Overlay::Form(Form {
+                    kind:
+                        FormKind::RenameSpace(id)
+                        | FormKind::SpaceIcon(id)
+                        | FormKind::SpaceAccent(id)
+                        | FormKind::SpaceRules(id),
+                    ..
+                }) => !model.spaces.iter().any(|space| &space.id == id),
+                _ => false,
+            })
+        {
             self.dismiss();
         }
     }
@@ -413,12 +419,12 @@ impl SidebarUi {
         if rect.width > 0 && rect.height > 0 {
             Paragraph::new(text.into())
                 .style(style)
-                .render(rect, &mut self.staging);
+                .render(rect, &mut self.frame.staging);
         }
     }
     pub(crate) fn hit(&mut self, id: ElementId, rect: Rect, tooltip: impl Into<String>) {
         if rect.width > 0 && rect.height > 0 {
-            self.hits.push(HitRegion {
+            self.paint.hits.push(HitRegion {
                 id,
                 rect,
                 tooltip: tooltip.into(),
@@ -433,7 +439,7 @@ impl SidebarUi {
                 .fg(self.theme.accent)
                 .add_modifier(Modifier::BOLD);
         }
-        if self.hovered.as_ref() == Some(id) {
+        if self.pointer.hovered.as_ref() == Some(id) {
             style = style.bg(self.theme.card).fg(self.theme.accent);
         }
         style
@@ -471,8 +477,8 @@ impl SidebarUi {
             },
         };
         let rect = self.clear_of_rows(rect, area);
-        self.overlay_rect = rect;
-        Clear.render(rect, &mut self.staging);
+        self.overlays.rect = rect;
+        Clear.render(rect, &mut self.frame.staging);
         self.rounded(rect, self.theme.background);
         let framed = rect.width >= 4 && rect.height >= 3;
         let inner = if framed {
@@ -573,7 +579,7 @@ impl SidebarUi {
                         (ElementId::Cancel, cancel, " Cancel"),
                     ] {
                         let focused = self.focused.as_ref() == Some(&id);
-                        let fill = if focused || self.hovered.as_ref() == Some(&id) {
+                        let fill = if focused || self.pointer.hovered.as_ref() == Some(&id) {
                             self.theme.selected
                         } else {
                             self.theme.card
@@ -591,8 +597,8 @@ impl SidebarUi {
     fn compose_dialog(&mut self, area: Rect, menu: &Menu, message: &str) {
         let explained = !message.is_empty();
         let rect = centered(area, 46, DIALOG_ROWS - u16::from(!explained));
-        self.overlay_rect = rect;
-        Clear.render(rect, &mut self.staging);
+        self.overlays.rect = rect;
+        Clear.render(rect, &mut self.frame.staging);
         self.rounded(rect, self.theme.background);
         let inner = Rect::new(rect.x + 2, rect.y + 1, rect.width - 4, rect.height - 2);
         self.write(
@@ -623,7 +629,7 @@ impl SidebarUi {
             let button = Rect::new(right - width, inner.bottom() - 2, width, 2);
             right = button.x.saturating_sub(1).max(inner.x);
             let id = ElementId::Menu(item.id.clone());
-            let active = at == menu.selected || self.hovered.as_ref() == Some(&id);
+            let active = at == menu.selected || self.pointer.hovered.as_ref() == Some(&id);
             let accepts = !matches!(item.action, Action::Close);
             let fill = match (accepts, active) {
                 (true, true) => self.theme.warn(self.theme.card, 45),
@@ -658,8 +664,8 @@ impl SidebarUi {
         let gap = u16::from(tall);
         let wanted = search.all_items.len().max(1).min(usize::from(u16::MAX / 2)) as u16;
         let rect = centered(area, 64, pad * 2 + line + gap + wanted * line);
-        self.overlay_rect = rect;
-        Clear.render(rect, &mut self.staging);
+        self.overlays.rect = rect;
+        Clear.render(rect, &mut self.frame.staging);
         self.rounded(rect, self.theme.background);
         let inner = Rect::new(
             rect.x + pad,
@@ -682,7 +688,7 @@ impl SidebarUi {
             1,
         );
         // The host centers first-row text of a two-row surface; marks follow it.
-        self.editor_shift = if field.height == 2 { 0.5 } else { 0.0 };
+        self.paint.editor_shift = if field.height == 2 { 0.5 } else { 0.0 };
         self.compose_editor(&mut search.editor, edit, self.theme.card, true);
         if search.editor.display_text().is_empty() {
             self.write(
@@ -754,7 +760,7 @@ impl SidebarUi {
         fill: ratatui::style::Color,
         active: bool,
     ) {
-        self.editor_rect = rect;
+        self.paint.editor_rect = rect;
         editor.keep_cursor_visible(usize::from(rect.width));
         let mut column = 0;
         let text: String = editor
@@ -771,13 +777,13 @@ impl SidebarUi {
             return;
         }
         self.compose_editor_marks(editor, rect);
-        if self.caret_visible && self.window_focused && rect.width > 0 {
+        if self.caret.visible && self.host.focused && rect.width > 0 {
             let x = rect.x
                 + editor
                     .cursor_columns()
                     .saturating_sub(editor.scroll_columns)
                     .min(usize::from(rect.width - 1)) as u16;
-            self.cursor = Some(Position::new(x, rect.y));
+            self.paint.cursor = Some(Position::new(x, rect.y));
         }
     }
 
@@ -797,12 +803,12 @@ impl SidebarUi {
             let columns = visible_columns(selection);
             if !columns.is_empty() {
                 let selection = Rect::new(columns.start, rect.y, columns.end - columns.start, 1);
-                self.rounded_surfaces.push(RoundedSurface {
-                    shift_y: self.editor_shift,
+                self.paint.surfaces.push(RoundedSurface {
+                    shift_y: self.paint.editor_shift,
                     ..RoundedSurface::new(selection, self.theme.accent, 2.0, 0.0)
                 });
                 for x in columns {
-                    self.staging[(x, rect.y)].set_style(
+                    self.frame.staging[(x, rect.y)].set_style(
                         Style::default()
                             .fg(self.theme.background)
                             .bg(self.theme.accent),
@@ -811,20 +817,20 @@ impl SidebarUi {
             }
         }
         for x in visible_columns(editor.preedit_columns()) {
-            self.staging[(x, rect.y)]
+            self.frame.staging[(x, rect.y)]
                 .set_style(Style::default().add_modifier(Modifier::UNDERLINED));
         }
     }
 
     fn compose_tooltip(&mut self, area: Rect) {
         let Some(hit) = self
+            .pointer
             .hovered
             .as_ref()
-            .and_then(|id| self.hits.iter().find(|hit| &hit.id == id))
+            .and_then(|id| self.paint.hits.iter().find(|hit| &hit.id == id))
             .cloned()
         else {
-            self.show_tooltip = false;
-            self.tooltip_deadline = None;
+            self.tooltip.hide();
             return;
         };
         if area.width < 8 || area.height < 4 {
@@ -860,7 +866,7 @@ impl SidebarUi {
         let height = if lines == 1 { 2 } else { lines + 2 }.min(usize::from(area.height)) as u16;
         let width = (width + padding * 2) as u16;
         let rect = self.tooltip_rect(area, hit.rect, width, height);
-        Clear.render(rect, &mut self.staging);
+        Clear.render(rect, &mut self.frame.staging);
         self.rounded(rect, self.theme.card);
         let padding = padding as u16;
         let content = if lines == 1 {
@@ -888,14 +894,14 @@ impl SidebarUi {
         Paragraph::new(text)
             .style(self.theme.base().bg(self.theme.card))
             .wrap(Wrap { trim: true })
-            .render(content, &mut self.staging);
+            .render(content, &mut self.frame.staging);
     }
 }
 
 impl SidebarUi {
     /// Sidebar hints sit beside the rail, level with their control and out of its way.
     fn tooltip_rect(&self, area: Rect, target: Rect, width: u16, height: u16) -> Rect {
-        let sidebar = self.sidebar_rect;
+        let sidebar = self.sidebar.rect;
         let beside = if sidebar.x > area.x {
             sidebar.x.checked_sub(width + 1).filter(|x| *x >= area.x)
         } else {
@@ -922,7 +928,7 @@ impl SidebarUi {
 
     /// A row's centered label reaches into its second cell row; overlays start clear of it.
     fn clear_of_rows(&self, mut rect: Rect, area: Rect) -> Rect {
-        let splits_a_row = self.rounded_surfaces.iter().any(|surface| {
+        let splits_a_row = self.paint.surfaces.iter().any(|surface| {
             surface.rect.height == 2
                 && surface.rect.y + 1 == rect.y
                 && surface.rect.x < rect.right()

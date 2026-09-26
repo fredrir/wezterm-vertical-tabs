@@ -1,5 +1,6 @@
 use crate::*;
 use ratatui::style::{Modifier, Style};
+use std::collections::BTreeSet;
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 use vtabs_core::{SettingDescriptor, SettingKind, settings};
@@ -12,6 +13,35 @@ const CATEGORIES: &[(&str, &str)] = &[
     ("motion", "Motion"),
     ("behavior", "General"),
 ];
+
+pub(crate) struct SettingsPage {
+    /// The page is showing; the sidebar keeps listing it while `listed`.
+    pub open: bool,
+    pub listed: bool,
+    pub category: String,
+    pub query: TextEditor,
+    pub selected: usize,
+    pub scroll: usize,
+    pub search_focused: bool,
+    pub rect: Rect,
+    pub config_owned: BTreeSet<String>,
+}
+
+impl Default for SettingsPage {
+    fn default() -> Self {
+        Self {
+            open: false,
+            listed: false,
+            category: "all".into(),
+            query: TextEditor::default(),
+            selected: 0,
+            scroll: 0,
+            search_focused: false,
+            rect: Rect::default(),
+            config_owned: BTreeSet::new(),
+        }
+    }
+}
 
 fn fields(category: &str, query: &str) -> Vec<&'static SettingDescriptor> {
     let query = query.trim().to_lowercase();
@@ -96,7 +126,7 @@ impl SidebarUi {
         if area.is_empty() {
             return;
         }
-        self.page_rect = area;
+        self.settings.rect = area;
         let spacious = area.height >= 24;
         let area = if spacious && area.width >= 48 {
             self.rounded(area, self.theme.background);
@@ -176,25 +206,25 @@ impl SidebarUi {
             inner.width,
             bottom.saturating_sub(y),
         );
-        let fields = fields(&self.settings_category, self.settings_query.text());
-        self.settings_selected = self.settings_selected.min(fields.len().saturating_sub(1));
+        let fields = fields(&self.settings.category, self.settings.query.text());
+        self.settings.selected = self.settings.selected.min(fields.len().saturating_sub(1));
         let mut height = row_height(area);
         if list.height < height + u16::from(height > 1) {
             height = 1;
         }
         let gap = u16::from(area.height >= 30 && height >= 4);
         let stride = height + gap;
-        self.settings_scroll =
-            list::reveal(self.settings_scroll, self.settings_selected, |start| {
+        self.settings.scroll =
+            list::reveal(self.settings.scroll, self.settings.selected, |start| {
                 visible_end(&fields, start, list.height, stride)
             });
-        let end = visible_end(&fields, self.settings_scroll, list.height, stride);
+        let end = visible_end(&fields, self.settings.scroll, list.height, stride);
         let mut group = "";
         for (index, field) in fields
             .iter()
             .enumerate()
             .take(end)
-            .skip(self.settings_scroll)
+            .skip(self.settings.scroll)
         {
             if height > 1 && field.group != group {
                 self.write(
@@ -251,7 +281,7 @@ impl SidebarUi {
         if required_rows > area.height {
             let selected = CATEGORIES
                 .iter()
-                .position(|(id, _)| *id == self.settings_category)
+                .position(|(id, _)| *id == self.settings.category)
                 .unwrap_or(0);
             let previous = (selected + CATEGORIES.len() - 1) % CATEGORIES.len();
             let next = (selected + 1) % CATEGORIES.len();
@@ -284,7 +314,7 @@ impl SidebarUi {
 
     fn settings_category_chip(&mut self, category: &str, label: &str, rect: Rect) {
         let id = ElementId::SettingsCategory(category.into());
-        let selected = self.settings_category == category;
+        let selected = self.settings.category == category;
         let fill = if selected {
             self.theme.selected
         } else {
@@ -317,11 +347,12 @@ impl SidebarUi {
             rect,
             "Search settings (Command+F or Ctrl+F)",
         );
-        self.editor_rect = edit;
-        self.settings_query
+        self.paint.editor_rect = edit;
+        self.settings
+            .query
             .keep_cursor_visible(usize::from(edit.width));
-        let display = self.settings_query.display_text();
-        let placeholder = display.is_empty() && !self.settings_search_focused;
+        let display = self.settings.query.display_text();
+        let placeholder = display.is_empty() && !self.settings.search_focused;
         let text = if placeholder {
             "Search settings".into()
         } else {
@@ -331,7 +362,7 @@ impl SidebarUi {
                 .filter(|grapheme| {
                     let start = column;
                     column += grapheme.width();
-                    start >= self.settings_query.scroll_columns
+                    start >= self.settings.query.scroll_columns
                 })
                 .collect::<String>()
         };
@@ -344,53 +375,54 @@ impl SidebarUi {
                 self.theme.foreground
             }),
         );
-        if !self.settings_search_focused || self.overlay.is_some() {
+        if !self.settings.search_focused || self.overlays.current.is_some() {
             return;
         }
-        if let Some(selection) = self.settings_query.selection_columns() {
+        if let Some(selection) = self.settings.query.selection_columns() {
             let start = selection
                 .start
-                .saturating_sub(self.settings_query.scroll_columns)
+                .saturating_sub(self.settings.query.scroll_columns)
                 .min(usize::from(edit.width)) as u16;
             let end = selection
                 .end
-                .saturating_sub(self.settings_query.scroll_columns)
+                .saturating_sub(self.settings.query.scroll_columns)
                 .min(usize::from(edit.width)) as u16;
             let selection = Rect::new(edit.x + start, edit.y, end - start, 1);
             let cells: Vec<_> = (selection.x..selection.right())
-                .map(|x| self.staging[(x, edit.y)].clone())
+                .map(|x| self.frame.staging[(x, edit.y)].clone())
                 .collect();
             self.rounded(selection, self.theme.selected);
             for (x, cell) in (selection.x..selection.right()).zip(cells) {
-                self.staging[(x, edit.y)] = cell;
-                self.staging[(x, edit.y)].set_style(
+                self.frame.staging[(x, edit.y)] = cell;
+                self.frame.staging[(x, edit.y)].set_style(
                     Style::default()
                         .fg(self.theme.accent)
                         .bg(self.theme.selected),
                 );
             }
         }
-        let preedit = self.settings_query.preedit_columns();
+        let preedit = self.settings.query.preedit_columns();
         let start = preedit
             .start
-            .saturating_sub(self.settings_query.scroll_columns)
+            .saturating_sub(self.settings.query.scroll_columns)
             .min(usize::from(edit.width)) as u16;
         let end = preedit
             .end
-            .saturating_sub(self.settings_query.scroll_columns)
+            .saturating_sub(self.settings.query.scroll_columns)
             .min(usize::from(edit.width)) as u16;
         for x in edit.x + start..edit.x + end {
-            self.staging[(x, edit.y)]
+            self.frame.staging[(x, edit.y)]
                 .set_style(Style::default().add_modifier(Modifier::UNDERLINED));
         }
-        if self.caret_visible && self.window_focused && edit.width > 0 {
+        if self.caret.visible && self.host.focused && edit.width > 0 {
             let x = edit.x
                 + self
-                    .settings_query
+                    .settings
+                    .query
                     .cursor_columns()
-                    .saturating_sub(self.settings_query.scroll_columns)
+                    .saturating_sub(self.settings.query.scroll_columns)
                     .min(usize::from(edit.width - 1)) as u16;
-            self.cursor = Some(Position::new(x, edit.y));
+            self.paint.cursor = Some(Position::new(x, edit.y));
         }
     }
 
@@ -402,11 +434,12 @@ impl SidebarUi {
         rect: Rect,
     ) {
         let id = ElementId::Setting(field.key.into());
-        let selected = index == self.settings_selected
-            && !self.settings_search_focused
+        let selected = index == self.settings.selected
+            && !self.settings.search_focused
             && self.focused.as_ref().is_none_or(|focused| focused == &id);
-        let hovered = self.hovered.as_ref() == Some(&id);
-        let owned = model.config_owned.contains(field.key) || self.config_owned.contains(field.key);
+        let hovered = self.pointer.hovered.as_ref() == Some(&id);
+        let owned = model.config_owned.contains(field.key)
+            || self.settings.config_owned.contains(field.key);
         let fill = if selected || hovered {
             self.theme.selected
         } else {
@@ -476,48 +509,49 @@ impl SidebarUi {
         if !CATEGORIES.iter().any(|(id, _)| *id == category) {
             return;
         }
-        self.settings_category = category.clone();
-        self.settings_selected = 0;
-        self.settings_scroll = 0;
-        self.settings_search_focused = false;
+        self.settings.category = category.clone();
+        self.settings.selected = 0;
+        self.settings.scroll = 0;
+        self.settings.search_focused = false;
         self.focused = Some(ElementId::SettingsCategory(category));
-        self.caret_deadline = None;
-        self.dirty = true;
+        self.caret.stop();
+        self.frame.dirty = true;
     }
 
     pub(crate) fn settings_input_text(&mut self, text: &str) {
-        self.settings_query.insert(text);
-        self.settings_selected = 0;
-        self.settings_scroll = 0;
-        self.settings_search_focused = true;
+        self.settings.query.insert(text);
+        self.settings.selected = 0;
+        self.settings.scroll = 0;
+        self.settings.search_focused = true;
         self.focused = Some(ElementId::SettingsSearch);
         self.reset_caret();
-        self.dirty = true;
+        self.frame.dirty = true;
     }
 
     pub(crate) fn settings_focus_setting(&mut self, _model: &Model, key: &str) {
-        if let Some(index) = fields(&self.settings_category, self.settings_query.text())
+        if let Some(index) = fields(&self.settings.category, self.settings.query.text())
             .iter()
             .position(|field| field.key == key)
         {
-            self.settings_selected = index;
-            self.settings_search_focused = false;
+            self.settings.selected = index;
+            self.settings.search_focused = false;
             self.focused = Some(ElementId::Setting(key.into()));
-            self.caret_deadline = None;
-            self.dirty = true;
+            self.caret.stop();
+            self.frame.dirty = true;
         }
     }
 
     pub(crate) fn settings_scroll_by(&mut self, model: &Model, rows: i32) {
-        let fields = fields(&self.settings_category, self.settings_query.text());
-        self.settings_selected = self
-            .settings_selected
+        let fields = fields(&self.settings.category, self.settings.query.text());
+        self.settings.selected = self
+            .settings
+            .selected
             .saturating_add_signed(rows as isize)
             .min(fields.len().saturating_sub(1));
-        if let Some(field) = fields.get(self.settings_selected) {
+        if let Some(field) = fields.get(self.settings.selected) {
             self.settings_focus_setting(model, field.key);
         }
-        self.dirty = true;
+        self.frame.dirty = true;
     }
 
     pub(crate) fn settings_key(
@@ -528,63 +562,64 @@ impl SidebarUi {
         intents: &mut Vec<UiIntent>,
     ) {
         if mods.command() && matches!(key, Key::Character('f' | 'F')) {
-            self.settings_search_focused = true;
+            self.settings.search_focused = true;
             self.focused = Some(ElementId::SettingsSearch);
-            self.settings_query.select_all();
+            self.settings.query.select_all();
             self.reset_caret();
-            self.dirty = true;
+            self.frame.dirty = true;
             return;
         }
         if key == Key::Tab {
             let ids: Vec<_> = self
+                .paint
                 .hits
                 .iter()
-                .filter(|hit| self.page_rect.contains(hit.rect.as_position()))
+                .filter(|hit| self.settings.rect.contains(hit.rect.as_position()))
                 .map(|hit| hit.id.clone())
                 .collect();
             if let Some(id) = list::cycle(&ids, self.focused.as_ref(), mods.shift) {
-                self.settings_search_focused = id == ElementId::SettingsSearch;
+                self.settings.search_focused = id == ElementId::SettingsSearch;
                 if let ElementId::Setting(key) = &id {
                     self.settings_focus_setting(model, key);
                 }
                 self.focused = Some(id);
-                if self.settings_search_focused {
+                if self.settings.search_focused {
                     self.reset_caret();
                 } else {
-                    self.caret_deadline = None;
+                    self.caret.stop();
                 }
-                self.dirty = true;
+                self.frame.dirty = true;
             }
             return;
         }
-        if self.settings_search_focused
+        if self.settings.search_focused
             && !matches!(key, Key::Up | Key::Down | Key::PageUp | Key::PageDown)
         {
-            match self.settings_query.key(&key, mods) {
+            match self.settings.query.key(&key, mods) {
                 EditResult::Changed => {
-                    self.settings_selected = 0;
-                    self.settings_scroll = 0;
+                    self.settings.selected = 0;
+                    self.settings.scroll = 0;
                     self.reset_caret();
-                    self.dirty = true;
+                    self.frame.dirty = true;
                 }
                 EditResult::Copy(text) => {
                     intents.push(UiIntent::SetClipboard(text));
-                    self.settings_selected = 0;
-                    self.settings_scroll = 0;
-                    self.dirty = true;
+                    self.settings.selected = 0;
+                    self.settings.scroll = 0;
+                    self.frame.dirty = true;
                 }
                 EditResult::Paste => intents.push(UiIntent::RequestClipboard),
                 EditResult::Submit => {
-                    let fields = fields(&self.settings_category, self.settings_query.text());
+                    let fields = fields(&self.settings.category, self.settings.query.text());
                     if let Some(field) = fields.first() {
                         self.settings_focus_setting(model, field.key);
                     }
                 }
                 EditResult::Cancel => {
-                    self.settings_search_focused = false;
+                    self.settings.search_focused = false;
                     self.focused = None;
-                    self.caret_deadline = None;
-                    self.dirty = true;
+                    self.caret.stop();
+                    self.frame.dirty = true;
                 }
                 EditResult::Unhandled => {}
             }
@@ -605,34 +640,34 @@ impl SidebarUi {
             self.settings_select_category(CATEGORIES[next].0.into());
             return;
         }
-        let fields = fields(&self.settings_category, self.settings_query.text());
+        let fields = fields(&self.settings.category, self.settings.query.text());
         match key {
             Key::Escape => self.close_settings(),
             Key::Down | Key::Up | Key::PageDown | Key::PageUp | Key::Home | Key::End => {
-                self.settings_selected = match key {
+                self.settings.selected = match key {
                     Key::Home => 0,
                     Key::End => fields.len().saturating_sub(1),
-                    Key::Down if self.settings_search_focused => 0,
-                    Key::Down => (self.settings_selected + 1).min(fields.len().saturating_sub(1)),
-                    Key::Up => self.settings_selected.saturating_sub(1),
+                    Key::Down if self.settings.search_focused => 0,
+                    Key::Down => (self.settings.selected + 1).min(fields.len().saturating_sub(1)),
+                    Key::Up => self.settings.selected.saturating_sub(1),
                     Key::PageDown => {
-                        (self.settings_selected + 5).min(fields.len().saturating_sub(1))
+                        (self.settings.selected + 5).min(fields.len().saturating_sub(1))
                     }
-                    Key::PageUp => self.settings_selected.saturating_sub(5),
-                    _ => self.settings_selected,
+                    Key::PageUp => self.settings.selected.saturating_sub(5),
+                    _ => self.settings.selected,
                 };
-                if let Some(field) = fields.get(self.settings_selected) {
+                if let Some(field) = fields.get(self.settings.selected) {
                     self.settings_focus_setting(model, field.key);
                 }
-                self.dirty = true;
+                self.frame.dirty = true;
             }
             Key::Delete | Key::Backspace => {
-                if let Some(field) = fields.get(self.settings_selected)
+                if let Some(field) = fields.get(self.settings.selected)
                     && self.focused.as_ref() == Some(&ElementId::Setting(field.key.into()))
                     && !model.config_owned.contains(field.key)
                 {
                     intents.push(UiIntent::Domain(Intent::ResetSetting(field.key.into())));
-                    self.dirty = true;
+                    self.frame.dirty = true;
                 }
             }
             Key::Enter | Key::Character(' ') | Key::Right => {
@@ -644,7 +679,7 @@ impl SidebarUi {
                 ) = self.focused.clone()
                 {
                     self.activate_element(model, id, intents);
-                } else if let Some(field) = fields.get(self.settings_selected) {
+                } else if let Some(field) = fields.get(self.settings.selected) {
                     self.edit_setting(model, field.key, intents);
                 }
             }

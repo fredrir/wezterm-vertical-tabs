@@ -88,7 +88,7 @@ fn refreshing_jobs_keeps_the_query_and_selected_identity() {
         job(8),
         job(7),
     ]);
-    let Some(Overlay::Menu(menu)) = &ui.overlay else {
+    let Some(Overlay::Menu(menu)) = &ui.overlays.current else {
         panic!("launcher missing")
     };
     assert_eq!(menu.search.as_ref().unwrap().editor.text(), "sleep");

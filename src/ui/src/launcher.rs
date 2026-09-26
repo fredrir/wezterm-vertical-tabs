@@ -16,6 +16,13 @@ pub(crate) struct Launcher {
     pub empty: &'static str,
 }
 
+/// What the tab and job launchers list beyond this window's model.
+#[derive(Default)]
+pub(crate) struct Launchers {
+    pub foreign_tabs: Vec<ForeignTab>,
+    pub jobs: Vec<JobEntry>,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct JobEntry {
     pub target: JobTarget,
@@ -49,13 +56,13 @@ impl SidebarUi {
     }
 
     pub fn jobs_open(&self) -> bool {
-        self.overlay.iter().chain(self.overlay_stack.iter()).any(|overlay| {
+        self.overlays.current.iter().chain(self.overlays.stack.iter()).any(|overlay| {
             matches!(overlay, Overlay::Menu(menu) if menu.search.as_ref().is_some_and(|search| search.kind == LauncherKind::Jobs))
         })
     }
 
     pub fn open_jobs(&mut self, jobs: Vec<JobEntry>) {
-        self.jobs = jobs;
+        self.launchers.jobs = jobs;
         let items = self.job_items();
         self.open_launcher(
             LauncherKind::Jobs,
@@ -67,25 +74,31 @@ impl SidebarUi {
     }
 
     pub fn set_jobs(&mut self, jobs: Vec<JobEntry>) {
-        if self.jobs == jobs {
+        if self.launchers.jobs == jobs {
             return;
         }
-        self.jobs = jobs;
+        self.launchers.jobs = jobs;
         let items = self.job_items();
-        for overlay in self.overlay.iter_mut().chain(self.overlay_stack.iter_mut()) {
+        for overlay in self
+            .overlays
+            .current
+            .iter_mut()
+            .chain(self.overlays.stack.iter_mut())
+        {
             if let Overlay::Menu(menu) = overlay
                 && let Some(search) = &mut menu.search
                 && search.kind == LauncherKind::Jobs
             {
                 search.all_items = items.clone();
                 filter_menu(menu);
-                self.dirty = true;
+                self.frame.dirty = true;
             }
         }
     }
 
     fn job_items(&self) -> Vec<MenuItem> {
-        self.jobs
+        self.launchers
+            .jobs
             .iter()
             .map(|job| {
                 let action = |operation| Action::Host(HostAction::Job(job.target, operation));
@@ -140,7 +153,7 @@ impl SidebarUi {
     }
 
     pub(crate) fn launcher_actions(&mut self, id: Option<&str>) -> bool {
-        let Some(Overlay::Menu(menu)) = &self.overlay else {
+        let Some(Overlay::Menu(menu)) = &self.overlays.current else {
             return false;
         };
         let item = match id {
@@ -201,7 +214,7 @@ impl SidebarUi {
                 items.push(item);
             }
         }
-        items.extend(self.foreign_tabs.iter().map(|tab| {
+        items.extend(self.launchers.foreign_tabs.iter().map(|tab| {
             let mut item = MenuItem::new(
                 format!("window/{}/tab/{}", tab.window, tab.id),
                 &tab.label,

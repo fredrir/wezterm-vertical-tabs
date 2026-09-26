@@ -34,7 +34,7 @@ impl SidebarUi {
         }
         match key {
             Key::Character(',') => {
-                if self.settings_page {
+                if self.settings.open {
                     self.close_settings();
                 } else {
                     self.open_settings();
@@ -52,7 +52,7 @@ impl SidebarUi {
                 }));
             }
             Key::Character('w' | 'W') => {
-                if self.settings_page {
+                if self.settings.open {
                     self.close_settings();
                 } else if let Some(id) = model.selected_tab {
                     self.close_tab(model, id, intents);
