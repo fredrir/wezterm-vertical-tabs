@@ -1,7 +1,13 @@
-use crate::*;
-use ratatui::style::{Modifier, Style};
+use crate::{
+    components::{
+        button::Button,
+        text_input::{Selection, TextInput},
+    },
+    runtime::canvas::Canvas,
+    *,
+};
+use ratatui::style::Modifier;
 use std::collections::BTreeSet;
-use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 use vtabs_core::{SettingDescriptor, SettingKind, settings};
 
@@ -121,20 +127,21 @@ fn visible_end(
     end
 }
 
-impl SidebarUi {
-    pub(crate) fn compose_settings_page(&mut self, model: &Model, area: Rect) {
+impl SettingsPage {
+    pub fn render(&mut self, model: &Model, area: Rect, overlay_open: bool, cx: &mut Canvas) {
         if area.is_empty() {
             return;
         }
-        self.settings.rect = area;
+        let theme = cx.theme;
+        self.rect = area;
         let spacious = area.height >= 24;
         let area = if spacious && area.width >= 48 {
-            self.rounded(area, self.theme.background);
+            cx.rounded(area, theme.background);
             Rect::new(area.x + 1, area.y + 1, area.width - 2, area.height - 2)
         } else {
             area
         };
-        self.rounded(area, self.theme.background);
+        cx.rounded(area, theme.background);
         let margin = if area.width >= 72 {
             4
         } else if area.width >= 40 {
@@ -158,15 +165,10 @@ impl SidebarUi {
             inner.width.min(3),
             1,
         );
-        self.rounded(close, self.theme.card);
-        self.write(
-            close,
-            " ×",
-            self.item_style(&ElementId::CloseSettings, false)
-                .bg(self.theme.card),
-        );
-        self.hit(ElementId::CloseSettings, close, "Close settings (Escape)");
-        self.write(
+        Button::text(ElementId::CloseSettings, "×")
+            .tooltip("Close settings (Escape)")
+            .render(close, cx);
+        cx.write(
             Rect::new(
                 inner.x,
                 inner.y,
@@ -174,7 +176,7 @@ impl SidebarUi {
                 1,
             ),
             "Settings",
-            self.theme.base().add_modifier(Modifier::BOLD),
+            theme.base().add_modifier(Modifier::BOLD),
         );
         let mut y = inner.y + 1;
         let footer_height = u16::from(inner.height >= 9);
@@ -182,7 +184,7 @@ impl SidebarUi {
         if y < bottom.saturating_sub(2) {
             let height = if area.height >= 16 { 3 } else { 1 };
             let search = Rect::new(inner.x, y, inner.width, height.min(bottom - y));
-            self.compose_settings_search(search);
+            self.search(search, overlay_open, cx);
             y = search.bottom();
             if spacious && bottom.saturating_sub(y) > 9 {
                 y += 1;
@@ -190,12 +192,7 @@ impl SidebarUi {
         }
         if y + 2 < bottom && inner.width >= 7 {
             let reserve = (row_height(area) + 1).min(bottom.saturating_sub(y + 1));
-            y = self.compose_settings_categories(Rect::new(
-                inner.x,
-                y,
-                inner.width,
-                bottom - y - reserve,
-            ));
+            y = self.categories(Rect::new(inner.x, y, inner.width, bottom - y - reserve), cx);
             if spacious && bottom.saturating_sub(y) > 9 {
                 y += 1;
             }
@@ -206,68 +203,54 @@ impl SidebarUi {
             inner.width,
             bottom.saturating_sub(y),
         );
-        let fields = fields(&self.settings.category, self.settings.query.text());
-        self.settings.selected = self.settings.selected.min(fields.len().saturating_sub(1));
+        let fields = fields(&self.category, self.query.text());
+        self.selected = self.selected.min(fields.len().saturating_sub(1));
         let mut height = row_height(area);
         if list.height < height + u16::from(height > 1) {
             height = 1;
         }
         let gap = u16::from(area.height >= 30 && height >= 4);
         let stride = height + gap;
-        self.settings.scroll =
-            list::reveal(self.settings.scroll, self.settings.selected, |start| {
-                visible_end(&fields, start, list.height, stride)
-            });
-        let end = visible_end(&fields, self.settings.scroll, list.height, stride);
+        self.scroll = list::reveal(self.scroll, self.selected, |start| {
+            visible_end(&fields, start, list.height, stride)
+        });
+        let end = visible_end(&fields, self.scroll, list.height, stride);
         let mut group = "";
-        for (index, field) in fields
-            .iter()
-            .enumerate()
-            .take(end)
-            .skip(self.settings.scroll)
-        {
+        for (index, field) in fields.iter().enumerate().take(end).skip(self.scroll) {
             if height > 1 && field.group != group {
-                self.write(
+                cx.write(
                     Rect::new(list.x, y, list.width, 1),
                     group_label(field.group),
-                    self.theme.muted(),
+                    theme.muted(),
                 );
                 y += 1;
                 group = field.group;
             }
-            self.compose_setting_row(
+            self.setting(
                 model,
                 field,
                 index,
                 Rect::new(list.x, y, list.width, height),
+                cx,
             );
             y += stride;
         }
         if fields.is_empty() && list.height > 0 {
-            self.write(
+            cx.write(
                 Rect::new(list.x, list.y, list.width, 1),
                 "No results",
-                self.theme.muted(),
+                theme.muted(),
             );
         }
         if footer_height > 0 {
-            let reset = Rect::new(inner.x, bottom, inner.width.min(16), 1);
-            self.rounded(reset, self.theme.card);
-            self.write(
-                reset,
-                " Reset defaults",
-                self.item_style(&ElementId::ResetSettings, false)
-                    .bg(self.theme.card),
-            );
-            self.hit(
-                ElementId::ResetSettings,
-                reset,
-                "Reset saved settings to defaults",
-            );
+            Button::text(ElementId::ResetSettings, "Reset defaults")
+                .tooltip("Reset saved settings to defaults")
+                .render(Rect::new(inner.x, bottom, inner.width.min(16), 1), cx);
         }
     }
 
-    fn compose_settings_categories(&mut self, area: Rect) -> u16 {
+    /// Wraps the chips onto more rows, or pages through them one at a time when they cannot fit.
+    fn categories(&self, area: Rect, cx: &mut Canvas) -> u16 {
         let mut required_rows = 1;
         let mut used = 0;
         for (_, label) in CATEGORIES {
@@ -281,7 +264,7 @@ impl SidebarUi {
         if required_rows > area.height {
             let selected = CATEGORIES
                 .iter()
-                .position(|(id, _)| *id == self.settings.category)
+                .position(|(id, _)| *id == self.category)
                 .unwrap_or(0);
             let previous = (selected + CATEGORIES.len() - 1) % CATEGORIES.len();
             let next = (selected + 1) % CATEGORIES.len();
@@ -294,47 +277,34 @@ impl SidebarUi {
                 ),
                 (next, "›", Rect::new(area.right() - 2, area.y, 2, 1)),
             ] {
-                self.settings_category_chip(CATEGORIES[index].0, text, rect);
+                self.chip(CATEGORIES[index], text, rect, cx);
             }
             return area.y + 1;
         }
         let mut x = area.x;
         let mut y = area.y;
-        for (category, label) in CATEGORIES {
-            let width = (label.width() as u16 + 2).min(area.width);
+        for &category in CATEGORIES {
+            let width = (category.1.width() as u16 + 2).min(area.width);
             if x + width > area.right() {
                 x = area.x;
                 y += 1;
             }
-            self.settings_category_chip(category, label, Rect::new(x, y, width, 1));
+            self.chip(category, category.1, Rect::new(x, y, width, 1), cx);
             x += width + 1;
         }
         y + 1
     }
 
-    fn settings_category_chip(&mut self, category: &str, label: &str, rect: Rect) {
-        let id = ElementId::SettingsCategory(category.into());
-        let selected = self.settings.category == category;
-        let fill = if selected {
-            self.theme.selected
-        } else {
-            self.theme.card
-        };
-        self.rounded(rect, fill);
-        self.write(
-            rect,
-            format!(" {label}"),
-            self.item_style(&id, selected).bg(fill),
-        );
-        let name = CATEGORIES
-            .iter()
-            .find(|(id, _)| *id == category)
-            .map_or(category, |(_, label)| *label);
-        self.hit(id, rect, format!("{name} settings"));
+    fn chip(&self, (category, name): (&str, &str), text: &str, rect: Rect, cx: &mut Canvas) {
+        Button::text(ElementId::SettingsCategory(category.into()), text)
+            .tooltip(format!("{name} settings"))
+            .selected(self.category == category)
+            .render(rect, cx);
     }
 
-    fn compose_settings_search(&mut self, rect: Rect) {
-        self.rounded(rect, self.theme.card);
+    fn search(&mut self, rect: Rect, overlay_open: bool, cx: &mut Canvas) {
+        let theme = cx.theme;
+        cx.rounded(rect, theme.card);
         let inset = u16::from(rect.width >= 4);
         let edit = Rect::new(
             rect.x + inset,
@@ -342,110 +312,38 @@ impl SidebarUi {
             rect.width.saturating_sub(inset * 2),
             1,
         );
-        self.hit(
+        cx.hit(
             ElementId::SettingsSearch,
             rect,
             "Search settings (Command+F or Ctrl+F)",
         );
-        self.paint.editor_rect = edit;
-        self.settings
-            .query
-            .keep_cursor_visible(usize::from(edit.width));
-        let display = self.settings.query.display_text();
-        let placeholder = display.is_empty() && !self.settings.search_focused;
-        let text = if placeholder {
-            "Search settings".into()
-        } else {
-            let mut column = 0;
-            display
-                .graphemes(true)
-                .filter(|grapheme| {
-                    let start = column;
-                    column += grapheme.width();
-                    start >= self.settings.query.scroll_columns
-                })
-                .collect::<String>()
-        };
-        self.write(
-            edit,
-            text,
-            self.theme.base().bg(self.theme.card).fg(if placeholder {
-                self.theme.muted
-            } else {
-                self.theme.foreground
-            }),
-        );
-        if !self.settings.search_focused || self.overlays.current.is_some() {
-            return;
-        }
-        if let Some(selection) = self.settings.query.selection_columns() {
-            let start = selection
-                .start
-                .saturating_sub(self.settings.query.scroll_columns)
-                .min(usize::from(edit.width)) as u16;
-            let end = selection
-                .end
-                .saturating_sub(self.settings.query.scroll_columns)
-                .min(usize::from(edit.width)) as u16;
-            let selection = Rect::new(edit.x + start, edit.y, end - start, 1);
-            let cells: Vec<_> = (selection.x..selection.right())
-                .map(|x| self.frame.staging[(x, edit.y)].clone())
-                .collect();
-            self.rounded(selection, self.theme.selected);
-            for (x, cell) in (selection.x..selection.right()).zip(cells) {
-                self.frame.staging[(x, edit.y)] = cell;
-                self.frame.staging[(x, edit.y)].set_style(
-                    Style::default()
-                        .fg(self.theme.accent)
-                        .bg(self.theme.selected),
-                );
-            }
-        }
-        let preedit = self.settings.query.preedit_columns();
-        let start = preedit
-            .start
-            .saturating_sub(self.settings.query.scroll_columns)
-            .min(usize::from(edit.width)) as u16;
-        let end = preedit
-            .end
-            .saturating_sub(self.settings.query.scroll_columns)
-            .min(usize::from(edit.width)) as u16;
-        for x in edit.x + start..edit.x + end {
-            self.frame.staging[(x, edit.y)]
-                .set_style(Style::default().add_modifier(Modifier::UNDERLINED));
-        }
-        if self.caret.visible && self.host.focused && edit.width > 0 {
-            let x = edit.x
-                + self
-                    .settings
-                    .query
-                    .cursor_columns()
-                    .saturating_sub(self.settings.query.scroll_columns)
-                    .min(usize::from(edit.width - 1)) as u16;
-            self.paint.cursor = Some(Position::new(x, edit.y));
-        }
+        TextInput::new(ElementId::SettingsSearch, &mut self.query, theme.card)
+            .active(self.search_focused && !overlay_open)
+            .placeholder((!self.search_focused).then_some("Search settings"))
+            .selection(Selection::Subtle)
+            .render(edit, cx);
     }
 
-    fn compose_setting_row(
-        &mut self,
+    fn setting(
+        &self,
         model: &Model,
         field: &SettingDescriptor,
         index: usize,
         rect: Rect,
+        cx: &mut Canvas,
     ) {
+        let theme = cx.theme;
         let id = ElementId::Setting(field.key.into());
-        let selected = index == self.settings.selected
-            && !self.settings.search_focused
-            && self.focused.as_ref().is_none_or(|focused| focused == &id);
-        let hovered = self.pointer.hovered.as_ref() == Some(&id);
-        let owned = model.config_owned.contains(field.key)
-            || self.settings.config_owned.contains(field.key);
-        let fill = if selected || hovered {
-            self.theme.selected
+        let selected = index == self.selected
+            && !self.search_focused
+            && cx.focused.is_none_or(|focused| focused == &id);
+        let owned = model.config_owned.contains(field.key) || self.config_owned.contains(field.key);
+        let fill = if selected || cx.hovered(&id) {
+            theme.selected
         } else {
-            self.theme.card
+            theme.card
         };
-        self.rounded(rect, fill);
+        cx.rounded(rect, fill);
         let inset = u16::from(rect.width >= 4);
         let width = rect.width.saturating_sub(inset * 2);
         let y = rect.y + u16::from(rect.height >= 3);
@@ -453,44 +351,42 @@ impl SidebarUi {
         let value = value_label(model, field);
         let value = if toggle { format!(" {value} ") } else { value };
         let value_width = (value.width() as u16).min((width / 3).max(3)).min(width);
-        let style = self.item_style(&id, selected).bg(fill).fg(if owned {
-            self.theme.muted
+        let style = cx.item_style(&id, selected).bg(fill).fg(if owned {
+            theme.muted
         } else {
-            self.theme.foreground
+            theme.foreground
         });
-        self.write(
+        cx.write(
             Rect::new(rect.x + inset, y, width.saturating_sub(value_width + 1), 1),
             field.label,
             style,
         );
         if value_width > 0 {
             let value_rect = Rect::new(rect.right() - inset - value_width, y, value_width, 1);
-            let value_fill = if toggle { self.theme.background } else { fill };
+            let value_fill = if toggle { theme.background } else { fill };
             if toggle {
-                self.rounded(value_rect, value_fill);
+                cx.rounded(value_rect, value_fill);
             }
-            self.write(
+            cx.write(
                 value_rect,
                 value,
-                style.bg(value_fill).fg(if owned {
-                    self.theme.muted
-                } else {
-                    self.theme.accent
-                }),
+                style
+                    .bg(value_fill)
+                    .fg(if owned { theme.muted } else { theme.accent }),
             );
         }
         if rect.height >= 4 {
-            self.write(
+            cx.write(
                 Rect::new(rect.x + inset, y + 1, width, 1),
                 if owned {
                     "Managed in Lua configuration"
                 } else {
                     field.description
                 },
-                self.theme.secondary_on(fill),
+                theme.secondary_on(fill),
             );
         }
-        self.hit(
+        cx.hit(
             id,
             rect,
             format!(
@@ -504,7 +400,9 @@ impl SidebarUi {
             ),
         );
     }
+}
 
+impl SidebarUi {
     pub(crate) fn settings_select_category(&mut self, category: String) {
         if !CATEGORIES.iter().any(|(id, _)| *id == category) {
             return;

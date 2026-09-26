@@ -1,27 +1,29 @@
-use crate::{icons, input::display_text, *};
-use ratatui::{
-    layout::Alignment,
-    text::{Line, Span},
+use crate::{
+    DropTarget, ElementId, Rect, TextEditor,
+    components::{
+        DROP_TINT, ICON_CELLS, NESTED_INSET, TRAILING_CELLS,
+        button::Button,
+        row::{Content, Row, RowLayout, Trailing, trailing_control},
+        text_input::TextInput,
+    },
+    icons,
+    input::display_text,
+    list,
+    runtime::canvas::{Canvas, RoundedSurface},
+    spans_machines, tab_machine, tab_name,
 };
 use ratatui::{
-    style::{Color, Style},
-    widgets::{Block, Clear, Widget},
+    style::Style,
+    text::{Line, Span},
 };
 use std::collections::{BTreeSet, HashMap};
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
-use vtabs_core::{Model, RailMode, SpaceId, Tab, TabPane};
+use vtabs_core::{Model, RailMode, SpaceId, Tab, TabId, TabPane};
 
 const GROUP_GAP: u16 = 1;
-pub(crate) const SURFACE_RADIUS: f32 = 9.0;
-pub(crate) const ROW_INSET: f32 = 1.5;
-const PRESS_INSET: f32 = 3.0;
-const NESTED_INSET: f32 = 4.0;
 const DROP_BAR: f32 = 0.14;
-const DROP_TINT: u16 = 24;
 const OCCLUDER_INSET: f32 = 6.0;
-pub(crate) const ICON_CELLS: u16 = 3;
-const TRAILING_CELLS: u16 = 3;
 const MIN_SEGMENT_CELLS: u16 = 4;
 
 pub(crate) struct Sidebar {
@@ -94,28 +96,6 @@ pub(crate) struct InlineRename {
     pub id: TabId,
     pub initial: String,
     pub editor: TextEditor,
-}
-
-fn icon_rect(mut rect: Rect, label: &str) -> Rect {
-    let width = label.width();
-    if usize::from(rect.width) > width && usize::from(rect.width) % 2 != width % 2 {
-        rect.x += 1;
-        rect.width -= 1;
-    }
-    rect
-}
-
-fn platform_tooltip(tooltip: String) -> String {
-    if cfg!(target_os = "macos") {
-        tooltip
-            .replace("Cmd+Shift+", &format!("⇧{} ", icons::COMMAND))
-            .replace("Cmd+", &format!("{} ", icons::COMMAND))
-            .replace("Opt+", "⌥")
-    } else {
-        tooltip
-            .replace("Cmd+Shift+", "Ctrl+Shift+")
-            .replace("Cmd+", "Ctrl+Shift+")
-    }
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -193,373 +173,28 @@ pub(crate) fn pane_slots(panes: &[TabPane], width: u16, two_lines: bool) -> Vec<
     slots
 }
 
-pub(crate) struct Trailing {
-    id: ElementId,
-    icon: &'static str,
-    tooltip: &'static str,
+/// What the sidebar shows of state it does not own.
+pub(crate) struct SidebarProps {
+    pub header_inset: u16,
+    pub settings_open: bool,
+    pub settings_listed: bool,
 }
 
-pub(crate) enum Content<'a> {
-    Label(&'a str),
-    Panes(&'a Tab, Option<&'a str>),
-    Rename(TabId),
+/// Inputs every part of one sidebar render shares.
+struct View<'a> {
+    model: &'a Model,
+    props: SidebarProps,
+    compact: bool,
 }
 
-pub(crate) struct Row<'a> {
-    pub(crate) id: ElementId,
-    pub(crate) rect: Rect,
-    pub(crate) indent: u16,
-    pub(crate) icon: &'a str,
-    pub(crate) icon_color: Option<Color>,
-    pub(crate) index: Option<usize>,
-    pub(crate) content: Content<'a>,
-    pub(crate) tooltip: Option<String>,
-    pub(crate) selected: bool,
-    pub(crate) muted: bool,
-    pub(crate) compact: bool,
-    pub(crate) trailing: Option<Trailing>,
-    pub(crate) field: bool,
-}
-
-pub(crate) struct RowLayout {
-    pub(crate) fill: Color,
-    pub(crate) style: Style,
-    pub(crate) content: Rect,
-}
-
-impl SidebarUi {
-    pub(crate) fn surface(&mut self, rect: Rect, fill: Color, radius: f32, inset: f32) {
-        self.shape(rect, fill, radius, inset, false);
-    }
-
-    fn shape(&mut self, rect: Rect, fill: Color, radius: f32, inset: f32, square: bool) {
-        let rect = rect.intersection(self.frame.staging.area);
-        if rect.is_empty() {
-            return;
-        }
-        Block::default()
-            .style(Style::default().bg(fill))
-            .render(rect, &mut self.frame.staging);
-        self.paint.surfaces.push(RoundedSurface {
-            square,
-            ..RoundedSurface::new(rect, fill, radius, inset)
-        });
-    }
-
-    pub(crate) fn rounded(&mut self, rect: Rect, fill: Color) {
-        self.surface(rect, fill, SURFACE_RADIUS, 0.0);
-    }
-
-    fn press_inset(&self, id: &ElementId) -> f32 {
-        self.pointer
-            .press
-            .as_ref()
-            .filter(|press| &press.id == id)
-            .map_or(0.0, |press| press.level * PRESS_INSET)
-    }
-
-    fn row_hovered(&self, id: &ElementId) -> bool {
-        self.pointer.hovered.as_ref().map(ElementId::row).as_ref() == Some(id)
-    }
-
-    fn icon_button(
-        &mut self,
-        id: ElementId,
-        rect: Rect,
-        label: &str,
-        tooltip: String,
-        selected: bool,
-    ) {
-        if rect.is_empty() {
-            return;
-        }
-        let active = selected
-            || self.pointer.hovered.as_ref() == Some(&id)
-            || self.focused.as_ref() == Some(&id)
-            || self
-                .pointer
-                .press
-                .as_ref()
-                .is_some_and(|press| press.id == id);
-        let aimed = matches!(
-            (&self.pointer.drop, &id),
-            (Some(DropTarget::Space(space)), ElementId::Space(target)) if space == target
-        );
-        let fill = if aimed {
-            self.theme.tint(self.theme.card, DROP_TINT)
-        } else if self.pointer.hovered.as_ref() == Some(&id) {
-            self.theme.hover
-        } else {
-            self.theme.background
-        };
-        let visual = icon_rect(rect, label);
-        let inset = if rect.width >= 3 && rect.height >= 2 {
-            5.0
-        } else {
-            2.0
-        };
-        self.shape(visual, fill, 8.0, inset + self.press_inset(&id), true);
-        let fg = if active {
-            self.theme.accent
-        } else {
-            self.theme.muted
-        };
-        self.write(
-            Rect::new(visual.x, rect.y, visual.width, 1),
-            Line::from(label.to_owned()).alignment(Alignment::Center),
-            self.theme.base().fg(fg).bg(fill),
-        );
-        self.hit(id, rect, platform_tooltip(tooltip));
-    }
-
-    pub(crate) fn row(&mut self, row: Row<'_>) -> RowLayout {
-        let hovered = self.row_hovered(&row.id);
-        let focused = self.focused.as_ref() == Some(&row.id);
-        let pressed = self
-            .pointer
-            .press
-            .as_ref()
-            .is_some_and(|press| press.id == row.id);
-        let ghost =
-            self.pointer.dragging
-                && self.pointer.drag.as_ref().is_some_and(|drag| {
-                    !matches!(drag, ElementId::Pane(..)) && drag.row() == row.id
-                });
-        let aimed = self
-            .pointer
-            .drop
-            .as_ref()
-            .is_some_and(|drop| match (drop, &row.id) {
-                (DropTarget::Into(tab), ElementId::Tab(id)) => tab == id,
-                (DropTarget::Folder(folder), ElementId::Folder(id)) => folder == id,
-                (DropTarget::NewTab, ElementId::NewTab) => true,
-                _ => false,
-            });
-        let hovered = hovered && !self.pointer.dragging;
-        let fill = match (row.selected && !ghost, hovered || pressed, row.field) {
-            _ if aimed => self.theme.tint(self.theme.card, DROP_TINT),
-            (true, ..) => self.theme.selected,
-            (_, true, true) => self.theme.lift(self.theme.card, 5),
-            (_, true, false) | (_, false, true) => self.theme.card,
-            _ => self.theme.background,
-        };
-        let mut style = self.theme.base().bg(fill);
-        if ghost {
-            style = style.fg(self.theme.lift(self.theme.background, 30));
-        } else if row.selected || aimed || hovered {
-            style = style.fg(self.theme.accent);
-        } else if row.muted && !focused {
-            style = style.fg(self.theme.muted);
-        }
-        self.surface(
-            row.rect,
-            fill,
-            SURFACE_RADIUS,
-            ROW_INSET + self.press_inset(&row.id),
-        );
-        let on_pane = matches!(
-            self.pointer.hovered,
-            Some(ElementId::Pane(..) | ElementId::ClosePane(..))
-        );
-        let trailing = row.trailing.filter(|trailing| {
-            !row.compact
-                && row.rect.width > TRAILING_CELLS + ICON_CELLS
-                && ((hovered && !on_pane) || self.focused.as_ref() == Some(&trailing.id))
-        });
-        let index = icons::index(row.index).filter(|_| hovered);
-        let icon = index.unwrap_or(row.icon);
-        let icon_style = match row.icon_color {
-            Some(color) if index.is_none() && !ghost => style.fg(color),
-            _ => style,
-        };
-        if row.compact {
-            let label = format!("{icon} ");
-            let visual = icon_rect(row.rect, &label);
-            self.write(
-                Rect::new(visual.x, row.rect.y, visual.width, 1),
-                Line::from(label).alignment(Alignment::Center),
-                icon_style,
-            );
-            self.hit(
-                row.id,
-                row.rect,
-                platform_tooltip(row.tooltip.clone().unwrap_or_default()),
-            );
-            return RowLayout {
-                fill,
-                style,
-                content: Rect::default(),
-            };
-        }
-        let x = row.rect.x + 1 + row.indent;
-        let right = row.rect.right().saturating_sub(1);
-        self.write(
-            Rect::new(x, row.rect.y, ICON_CELLS.min(right.saturating_sub(x)), 1),
-            icon.to_owned(),
-            icon_style,
-        );
-        let x = (x + ICON_CELLS).min(right);
-        let layout = RowLayout {
-            fill,
-            style,
-            content: Rect::new(x, row.rect.y, right - x, row.rect.height),
-        };
-        self.hit(
-            row.id,
-            row.rect,
-            platform_tooltip(row.tooltip.clone().unwrap_or_default()),
-        );
-        match row.content {
-            Content::Label(label) => self.write(
-                Rect::new(layout.content.x, layout.content.y, layout.content.width, 1),
-                label.to_owned(),
-                style,
-            ),
-            Content::Panes(tab, home) => self.pane_segments(tab, home, &layout),
-            Content::Rename(id) => self.compose_rename(id, layout.content, fill),
-        }
-        if let Some(trailing) = trailing {
-            self.overlay_control(trailing, row.rect, style);
-        }
-        if aimed && matches!(self.pointer.drop, Some(DropTarget::Into(_))) {
-            self.split_preview(&layout);
-        }
-        layout
-    }
-
-    fn split_preview(&mut self, layout: &RowLayout) {
-        let area = layout.content;
-        let width = (area.width / 2).max(MIN_SEGMENT_CELLS).min(area.width);
-        let rect = Rect::new(area.right() - width, area.y, width, area.height.min(2));
-        let progress = self
-            .pointer
-            .drop_motion
-            .map_or(1.0, |motion| motion.progress);
-        Clear.render(rect, &mut self.frame.staging);
-        let fill = self.theme.tint(layout.fill, DROP_TINT);
-        self.surface(rect, fill, 6.0, NESTED_INSET + (1.0 - progress) * 8.0);
-        self.write(
-            Rect::new(rect.x + 1, rect.y, rect.width.saturating_sub(2), 1),
-            format!("{} {}", icons::PLUS, display_text(&self.pointer.drag_label)),
-            self.theme.accent().bg(fill),
-        );
-    }
-
-    fn overlay_control(&mut self, control: Trailing, row: Rect, style: Style) {
-        let rect = Rect::new(
-            row.right() - TRAILING_CELLS,
-            row.y,
-            TRAILING_CELLS,
-            row.height,
-        );
-        let symbols = [control.icon, " ", " "];
-        for (x, symbol) in (rect.x..rect.right()).zip(symbols) {
-            let cell = &mut self.frame.staging[(x, rect.y)];
-            cell.set_symbol(symbol);
-            if let Some(fg) = style.fg {
-                cell.set_fg(fg);
-            }
-        }
-        self.hit(control.id, rect, platform_tooltip(control.tooltip.into()));
-    }
-
-    fn pane_segments(&mut self, tab: &Tab, home: Option<&str>, layout: &RowLayout) {
-        let area = layout.content;
-        let mixed = spans_machines(tab);
-        let slots = pane_slots(&tab.panes, area.width, area.height >= 2);
-        let mut stacked: Vec<(u16, u16)> = Vec::new();
-        for slot in slots.iter().filter(|slot| !slot.tall) {
-            let span = (slot.x, slot.width);
-            if area.height == 2 && !stacked.contains(&span) {
-                stacked.push(span);
-                let rect = Rect::new(area.x + slot.x, area.y, slot.width, 2);
-                self.shape(rect, layout.fill, 0.0, OCCLUDER_INSET, false);
-                if let Some(surface) = self.paint.surfaces.last_mut() {
-                    surface.stacked = true;
-                }
-            }
-        }
-        for slot in slots {
-            let pane = &tab.panes[slot.pane];
-            let rect = Rect::new(
-                area.x + slot.x,
-                area.y + slot.line,
-                slot.width,
-                if slot.tall { area.height.min(2) } else { 1 },
-            );
-            let id = ElementId::Pane(tab.id, pane.id);
-            let close = ElementId::ClosePane(tab.id, pane.id);
-            let hovered = [Some(&id), Some(&close)].contains(&self.pointer.hovered.as_ref());
-            let fill = if hovered && !self.pointer.dragging {
-                let fill = self.theme.lift(layout.fill, 12);
-                let inset = if slot.tall { NESTED_INSET } else { 1.0 };
-                self.surface(rect, fill, 6.0, inset);
-                fill
-            } else {
-                layout.fill
-            };
-            let ghost = self.pointer.dragging && self.pointer.drag.as_ref() == Some(&id);
-            let style = if ghost {
-                layout.style.fg(self.theme.lift(self.theme.background, 30))
-            } else if pane.active {
-                layout.style
-            } else {
-                layout.style.fg(self.theme.muted)
-            };
-            let pad = u16::from(slot.x > 0);
-            let label = display_text(&pane.label(home));
-            self.write(
-                Rect::new(rect.x + pad, rect.y, rect.width.saturating_sub(pad + 1), 1),
-                if mixed {
-                    // The machine glyph stands in for the home or root prefix: 󰣇/dotfiles.
-                    let glyph = icons::host(pane.remote, &pane.os);
-                    let glyph = match self.theme.host(pane.remote, &pane.os) {
-                        Some(color) if !ghost => Span::styled(glyph, Style::new().fg(color)),
-                        _ => Span::raw(glyph),
-                    };
-                    let name = label
-                        .strip_prefix("~/")
-                        .or_else(|| label.strip_prefix('/'))
-                        .unwrap_or(&label);
-                    Line::from(vec![glyph, Span::raw(format!("/{name}"))])
-                } else {
-                    Line::from(label)
-                },
-                style.bg(fill),
-            );
-            self.hit(id, rect, "");
-            if hovered && !self.pointer.dragging && rect.width >= TRAILING_CELLS * 2 {
-                self.overlay_control(
-                    Trailing {
-                        id: close,
-                        icon: icons::CLOSE,
-                        tooltip: "Close split",
-                    },
-                    rect,
-                    style.bg(fill),
-                );
-            }
-        }
-    }
-
-    fn compose_rename(&mut self, id: TabId, content: Rect, fill: Color) {
-        let Some(mut rename) = self.sidebar.rename.take().filter(|rename| rename.id == id) else {
-            return;
-        };
-        let edit = Rect::new(content.x, content.y, content.width, 1);
-        self.paint.editor_shift = if content.height == 2 { 0.5 } else { 0.0 };
-        self.compose_editor(&mut rename.editor, edit, fill, true);
-        self.hit(ElementId::Editor, edit, "Tab title");
-        self.sidebar.rename = Some(rename);
-    }
-
+impl Sidebar {
     fn place_settings(&mut self, model: &Model) -> usize {
         let visible = model.visible_ids();
         let first_open = visible
             .iter()
             .position(|id| model.tabs.get(id).is_some_and(|tab| !tab.pinned))
             .unwrap_or(visible.len());
-        let slot = match self.sidebar.settings_place {
+        let slot = match self.settings_place {
             None => visible.len(),
             Some(SettingsPlace { anchor: None, .. }) => 0,
             Some(SettingsPlace {
@@ -571,22 +206,21 @@ impl SidebarUi {
                 .map_or(slot.saturating_sub(1), |at| at + 1),
         }
         .clamp(first_open, visible.len());
-        self.sidebar.settings_place = Some(SettingsPlace {
+        self.settings_place = Some(SettingsPlace {
             anchor: slot.checked_sub(1).map(|at| visible[at]),
             slot,
         });
         slot
     }
 
-    pub(crate) fn ensure_sidebar_entries(&mut self, model: &Model) {
-        if self.sidebar.rows_revision == Some((model.revision, self.settings.listed)) {
+    pub fn ensure_rows(&mut self, model: &Model, settings_listed: bool) {
+        if self.rows_revision == Some((model.revision, settings_listed)) {
             return;
         }
-        let slot = self.settings.listed.then(|| self.place_settings(model));
+        let slot = settings_listed.then(|| self.place_settings(model));
         let number = |index: usize| index + 1 + usize::from(slot.is_some_and(|slot| index >= slot));
-        self.sidebar.rows.clear();
-        self.sidebar
-            .rows
+        self.rows.clear();
+        self.rows
             .reserve(model.visible_ids().len() + model.folders.len() + 2);
         let mut folders = HashMap::with_capacity(model.selected_folders().count());
         folders.extend(
@@ -612,7 +246,7 @@ impl SidebarUi {
                 number: number(index),
             };
             if tab.pinned && tab.folder_id.is_none() && !collapsed {
-                self.sidebar.rows.push(row);
+                self.rows.push(row);
             }
             if let Some((_, range)) = tab.folder_id.as_deref().and_then(|id| folders.get_mut(id)) {
                 if range.start == range.end {
@@ -626,38 +260,38 @@ impl SidebarUi {
                 continue;
             }
             let (count, range) = folders.remove(folder.id.as_str()).unwrap_or_default();
-            self.sidebar.rows.push(SidebarRow::Folder { index, count });
+            self.rows.push(SidebarRow::Folder { index, count });
             if !folder.collapsed {
-                self.sidebar.rows.extend(range.map(|index| SidebarRow::Tab {
+                self.rows.extend(range.map(|index| SidebarRow::Tab {
                     id: model.visible_ids()[index],
                     number: number(index),
                 }));
             }
         }
-        if !self.sidebar.rows.is_empty() {
-            self.sidebar.rows.push(SidebarRow::Gap);
+        if !self.rows.is_empty() {
+            self.rows.push(SidebarRow::Gap);
         }
-        self.sidebar.rows.push(SidebarRow::NewTab);
+        self.rows.push(SidebarRow::NewTab);
         let settings = slot.map(|slot| SidebarRow::Settings { number: slot + 1 });
         for (index, id) in model.visible_ids().iter().enumerate() {
             if slot == Some(index) {
-                self.sidebar.rows.extend(settings);
+                self.rows.extend(settings);
             }
             if model.tabs.get(id).is_some_and(|tab| !tab.pinned) {
-                self.sidebar.rows.push(SidebarRow::Tab {
+                self.rows.push(SidebarRow::Tab {
                     id: *id,
                     number: number(index),
                 });
             }
         }
         if slot == Some(model.visible_ids().len()) {
-            self.sidebar.rows.extend(settings);
+            self.rows.extend(settings);
         }
-        self.sidebar.rows_revision = Some((model.revision, self.settings.listed));
+        self.rows_revision = Some((model.revision, settings_listed));
     }
 
-    pub(crate) fn row_height(&self, model: &Model) -> u16 {
-        if self.sidebar.list.width < 12 || !model.settings.cards || self.sidebar.list.height < 4 {
+    pub fn row_height(&self, model: &Model) -> u16 {
+        if self.list.width < 12 || !model.settings.cards || self.list.height < 4 {
             1
         } else if model.settings.show_metadata {
             3
@@ -674,43 +308,75 @@ impl SidebarUi {
         }
     }
 
-    pub(crate) fn rows_fitting(&self, model: &Model, start: usize) -> usize {
+    pub fn rows_fitting(&self, model: &Model, start: usize) -> usize {
         let mut used = 0;
-        self.sidebar
-            .rows
+        self.rows
             .iter()
             .skip(start)
             .take_while(|row| {
                 used += self.row_span(model, **row);
-                used <= self.sidebar.list.height
+                used <= self.list.height
             })
             .count()
             .max(1)
     }
 
-    pub(crate) fn visible_rows(&self, model: &Model) -> usize {
-        self.rows_fitting(model, self.sidebar.scroll)
+    pub fn visible_rows(&self, model: &Model) -> usize {
+        self.rows_fitting(model, self.scroll)
     }
 
     fn max_scroll(&self, model: &Model) -> usize {
         let mut used = 0;
         let hidden = self
-            .sidebar
             .rows
             .iter()
             .rev()
             .take_while(|row| {
                 used += self.row_span(model, **row);
-                used <= self.sidebar.list.height
+                used <= self.list.height
             })
             .count()
             .max(1);
-        self.sidebar.rows.len().saturating_sub(hidden)
+        self.rows.len().saturating_sub(hidden)
     }
 
-    pub(crate) fn compose_sidebar(&mut self, model: &Model, area: Rect) {
-        let reveal_selection = self.sidebar.reveal_selection;
+    pub fn reveal_row(&mut self, model: &Model, at: usize) {
+        self.scroll = list::reveal(self.scroll, at, |start| {
+            start + self.rows_fitting(model, start)
+        });
+    }
+
+    /// Scrolls to the tab, or to its folder while the folder is collapsed.
+    pub fn ensure_tab_visible(&mut self, model: &Model, id: TabId, settings_listed: bool) {
+        self.ensure_rows(model, settings_listed);
+        let collapsed_folder = if let Some(tab) = model.tabs.get(&id)
+            && let Some(folder) = &tab.folder_id
+        {
+            model
+                .folders
+                .iter()
+                .position(|f| &f.id == folder && f.collapsed)
+        } else {
+            None
+        };
+        if let Some(at) = self.rows.iter().position(|row| match row {
+            SidebarRow::Folder { index, .. } => collapsed_folder == Some(*index),
+            SidebarRow::Tab { id: tab, .. } => collapsed_folder.is_none() && *tab == id,
+            SidebarRow::Gap | SidebarRow::NewTab | SidebarRow::Settings { .. } => false,
+        }) {
+            self.reveal_row(model, at);
+        }
+    }
+
+    pub fn render(&mut self, model: &Model, area: Rect, props: SidebarProps, cx: &mut Canvas) {
+        let theme = cx.theme;
+        let reveal_selection = self.reveal_selection;
         let compact = model.settings.rail == RailMode::Collapsed || area.width < 12;
+        let view = View {
+            model,
+            props,
+            compact,
+        };
         let inset = u16::from(area.width >= 8);
         let inner = Rect::new(
             area.x + inset,
@@ -725,14 +391,13 @@ impl SidebarUi {
             inner.width.min(4)
         };
         let plus = Rect::new(inner.right() - plus_width, area.bottom() - 1, plus_width, 1);
+        let create_space = |rect: Rect, cx: &mut Canvas| {
+            Button::icon(ElementId::CreateSpace, &plus_label)
+                .tooltip("New space")
+                .render(rect, cx)
+        };
         if area.height < 5 {
-            self.icon_button(
-                ElementId::CreateSpace,
-                plus,
-                &plus_label,
-                "New space".into(),
-                false,
-            );
+            create_space(plus, cx);
             return;
         }
         let gap = GROUP_GAP;
@@ -743,54 +408,24 @@ impl SidebarUi {
             || spaces_y.saturating_sub(gap),
             |footer| footer.y.saturating_sub(gap),
         );
-        let toolbar_height = 2;
-        let left = (inner.x + self.host.header_inset).min(inner.right());
-        let size = inner.width.min(4);
-        if left + size <= inner.right() {
-            self.icon_button(
-                ElementId::Rail,
-                Rect::new(left, inner.y, size, toolbar_height),
-                &format!("{} ", icons::SIDEBAR),
-                "Toggle sidebar  Cmd+B".into(),
-                false,
-            );
-        }
-        if !compact && inner.width >= self.host.header_inset + 12 {
-            self.icon_button(
-                ElementId::Settings,
-                Rect::new(inner.right() - 8, inner.y, 4, toolbar_height),
-                &format!("{} ", icons::SETTINGS),
-                "Settings  Cmd+,".into(),
-                self.settings.open,
-            );
-            self.icon_button(
-                ElementId::Refresh,
-                Rect::new(inner.right() - 4, inner.y, 4, toolbar_height),
-                &format!("{} ", icons::REFRESH),
-                "Refresh configuration  Cmd+Shift+R".into(),
-                false,
-            );
-        }
-        let search_y = inner.y + toolbar_height + gap;
+        self.toolbar(&view, inner, cx);
+        let search_y = inner.y + TOOLBAR_ROWS + gap;
         let search_height = if area.height >= 12 { 2 } else { 1 };
         let search = Rect::new(inner.x, search_y, inner.width, search_height);
-        self.row(Row {
-            id: ElementId::Search,
-            rect: search,
-            indent: 0,
-            icon: icons::SEARCH,
-            icon_color: None,
-            index: None,
-            content: Content::Label("Search..."),
-            selected: false,
-            tooltip: None,
+        Row {
             muted: true,
             compact,
-            trailing: None,
             field: true,
-        });
+            ..Row::new(
+                ElementId::Search,
+                search,
+                icons::SEARCH,
+                Content::Label("Search..."),
+            )
+        }
+        .render(cx);
         let title_y = search.bottom();
-        self.sidebar.list = Rect::new(
+        self.list = Rect::new(
             inner.x,
             title_y,
             inner.width,
@@ -798,42 +433,45 @@ impl SidebarUi {
         );
         let row_height = self.row_height(model);
         let tabs_y = if !compact && title_y + row_height < list_bottom {
-            self.compose_space_title(model, Rect::new(inner.x, title_y, inner.width, row_height));
+            space_title(
+                model,
+                Rect::new(inner.x, title_y, inner.width, row_height),
+                cx,
+            );
             title_y + row_height
         } else {
             title_y.min(list_bottom)
         };
-        self.sidebar.list = Rect::new(
+        self.list = Rect::new(
             inner.x,
             tabs_y,
             inner.width,
             list_bottom.saturating_sub(tabs_y),
         );
-        self.ensure_sidebar_entries(model);
-        if self.sidebar.reveal_selection {
+        self.ensure_rows(model, view.props.settings_listed);
+        if self.reveal_selection {
             if let Some(id) = model.selected_tab {
-                self.ensure_tab_visible(model, id);
+                self.ensure_tab_visible(model, id, view.props.settings_listed);
             }
-            self.sidebar.reveal_selection = false;
+            self.reveal_selection = false;
         }
-        if self.sidebar.reveal_settings {
+        if self.reveal_settings {
             if let Some(at) = self
-                .sidebar
                 .rows
                 .iter()
                 .position(|row| matches!(row, SidebarRow::Settings { .. }))
             {
                 self.reveal_row(model, at);
             }
-            self.sidebar.reveal_settings = false;
+            self.reveal_settings = false;
         }
-        self.sidebar.scroll = self.sidebar.scroll.min(self.max_scroll(model));
-        self.sidebar.title_rects.clear();
+        self.scroll = self.scroll.min(self.max_scroll(model));
+        self.title_rects.clear();
         let capacity = self.visible_rows(model);
-        let end = (self.sidebar.scroll + capacity).min(self.sidebar.rows.len());
+        let end = (self.scroll + capacity).min(self.rows.len());
         let mut top = tabs_y;
-        for at in self.sidebar.scroll..end {
-            let entry = self.sidebar.rows[at];
+        for at in self.scroll..end {
+            let entry = self.rows[at];
             let span = self.row_span(model, entry);
             let rect = Rect::new(
                 inner.x,
@@ -848,129 +486,139 @@ impl SidebarUi {
             match entry {
                 SidebarRow::Gap => {}
                 SidebarRow::NewTab => {
-                    self.row(Row {
-                        id: ElementId::NewTab,
-                        rect,
-                        indent: 0,
-                        icon: icons::PLUS,
-                        icon_color: None,
-                        index: None,
-                        content: Content::Label("New Tab"),
+                    Row {
                         tooltip: Some("New tab  Cmd+T".into()),
-                        selected: false,
                         muted: true,
                         compact,
-                        trailing: None,
-                        field: false,
-                    });
+                        ..Row::new(
+                            ElementId::NewTab,
+                            rect,
+                            icons::PLUS,
+                            Content::Label("New Tab"),
+                        )
+                    }
+                    .render(cx);
                 }
                 SidebarRow::Settings { number } => {
-                    self.row(Row {
-                        id: ElementId::SettingsTab,
-                        rect,
-                        indent: 0,
-                        icon: icons::SETTINGS,
-                        icon_color: None,
+                    Row {
                         index: model.settings.show_indexes.then_some(number),
-                        content: Content::Label("Settings"),
                         tooltip: Some("Settings  Cmd+,".into()),
-                        selected: self.settings.open,
-                        muted: false,
+                        selected: view.props.settings_open,
                         compact,
                         trailing: model.settings.show_close.then_some(Trailing {
                             id: ElementId::CloseSettingsTab,
                             icon: icons::CLOSE,
                             tooltip: "Close settings  Cmd+W",
                         }),
-                        field: false,
-                    });
+                        ..Row::new(
+                            ElementId::SettingsTab,
+                            rect,
+                            icons::SETTINGS,
+                            Content::Label("Settings"),
+                        )
+                    }
+                    .render(cx);
                 }
                 SidebarRow::Folder { index, count } => {
                     let Some(folder) = model.folders.get(index) else {
                         continue;
                     };
-                    self.row(Row {
-                        id: ElementId::Folder(folder.id.clone()),
-                        rect,
-                        indent: 0,
-                        icon: if folder.collapsed {
-                            icons::FOLDER
-                        } else {
-                            icons::FOLDER_OPEN
-                        },
-                        icon_color: None,
-                        index: None,
-                        content: Content::Label(&format!(
-                            "{}  {count}",
-                            display_text(&folder.name)
-                        )),
+                    let label = format!("{}  {count}", display_text(&folder.name));
+                    Row {
                         tooltip: Some(format!(
                             "{}\nDrop tabs here. Right click to rename or ungroup.",
                             folder.name
                         )),
-                        selected: false,
-                        muted: false,
                         compact,
-                        trailing: None,
-                        field: false,
-                    });
+                        ..Row::new(
+                            ElementId::Folder(folder.id.clone()),
+                            rect,
+                            if folder.collapsed {
+                                icons::FOLDER
+                            } else {
+                                icons::FOLDER_OPEN
+                            },
+                            Content::Label(&label),
+                        )
+                    }
+                    .render(cx);
                 }
                 SidebarRow::Tab { id, number } => {
                     let Some(tab) = model.tabs.get(&id) else {
                         continue;
                     };
-                    self.compose_tab(model, tab, number, rect, compact);
+                    self.tab(&view, tab, number, rect, cx);
                 }
             }
         }
-        if self.sidebar.rows.len() > capacity && self.sidebar.list.width > 2 {
-            let y = self.sidebar.list.y
-                + (self.sidebar.list.height.saturating_sub(1) as usize * self.sidebar.scroll
+        if self.rows.len() > capacity && self.list.width > 2 {
+            let y = self.list.y
+                + (self.list.height.saturating_sub(1) as usize * self.scroll
                     / self.max_scroll(model).max(1)) as u16;
-            self.write(
-                Rect::new(area.right() - 1, y, 1, 1),
-                "▏",
-                self.theme.muted(),
-            );
+            cx.write(Rect::new(area.right() - 1, y, 1, 1), "▏", theme.muted());
         }
+        let pointer = cx.pointer;
         if let (Some(DropTarget::Beside { .. }), Some(motion)) =
-            (&self.pointer.drop, self.pointer.drop_motion)
+            (&pointer.drop, pointer.drop_motion)
         {
             let edge = motion.position();
             let row = (edge.floor() as u16).clamp(
-                self.sidebar.list.y,
-                self.sidebar
-                    .list
-                    .bottom()
-                    .saturating_sub(1)
-                    .max(self.sidebar.list.y),
+                self.list.y,
+                self.list.bottom().saturating_sub(1).max(self.list.y),
             );
             let bar = Rect::new(inner.x + 1, row, inner.width.saturating_sub(2), 1);
-            self.paint.surfaces.push(RoundedSurface {
+            cx.mark(RoundedSurface {
                 scale_y: DROP_BAR,
                 shift_y: edge - f32::from(row) - 0.5,
-                ..RoundedSurface::new(bar, self.theme.accent, 2.0, 0.0)
+                ..RoundedSurface::new(bar, theme.accent, 2.0, 0.0)
             });
         }
         if let Some(footer) = footer {
-            self.write(
+            cx.write(
                 footer,
                 display_text(model.footer.lines().next().unwrap_or("")),
-                self.theme.muted(),
+                theme.muted(),
             );
         }
-        let slots_width = inner.width.saturating_sub(plus_width);
-        let slot_width = if compact {
+        let bar = Rect::new(inner.x, spaces_y, inner.width.saturating_sub(plus_width), 2);
+        self.spaces(&view, bar, reveal_selection, cx);
+        create_space(Rect::new(plus.x, spaces_y, plus.width, 2), cx);
+    }
+
+    fn toolbar(&self, view: &View, inner: Rect, cx: &mut Canvas) {
+        let props = &view.props;
+        let left = (inner.x + props.header_inset).min(inner.right());
+        let size = inner.width.min(4);
+        if left + size <= inner.right() {
+            Button::icon(ElementId::Rail, &format!("{} ", icons::SIDEBAR))
+                .tooltip("Toggle sidebar  Cmd+B")
+                .render(Rect::new(left, inner.y, size, TOOLBAR_ROWS), cx);
+        }
+        if !view.compact && inner.width >= props.header_inset + 12 {
+            Button::icon(ElementId::Settings, &format!("{} ", icons::SETTINGS))
+                .tooltip("Settings  Cmd+,")
+                .selected(props.settings_open)
+                .render(Rect::new(inner.right() - 8, inner.y, 4, TOOLBAR_ROWS), cx);
+            Button::icon(ElementId::Refresh, &format!("{} ", icons::REFRESH))
+                .tooltip("Refresh configuration  Cmd+Shift+R")
+                .render(Rect::new(inner.right() - 4, inner.y, 4, TOOLBAR_ROWS), cx);
+        }
+    }
+
+    /// One button per space along `bar`, scrolled to keep the selected space in view.
+    fn spaces(&mut self, view: &View, bar: Rect, reveal_selection: bool, cx: &mut Canvas) {
+        let model = view.model;
+        let slots_width = bar.width;
+        let slot_width = if view.compact {
             slots_width.max(1)
         } else {
             slots_width.clamp(1, 4)
         };
         let slots = usize::from(slots_width / slot_width);
-        self.sidebar.space_scroll = self
-            .sidebar
+        self.space_scroll = self
             .space_scroll
             .min(model.spaces.len().saturating_sub(slots));
-        self.sidebar.spaces = Rect::new(inner.x, spaces_y, slots_width, 2);
+        self.spaces = bar;
         if slots > 0
             && reveal_selection
             && let Some(index) = model
@@ -978,18 +626,18 @@ impl SidebarUi {
                 .iter()
                 .position(|s| s.id == model.selected_space)
         {
-            self.sidebar.space_scroll = list::reveal_rows(self.sidebar.space_scroll, index, slots);
+            self.space_scroll = list::reveal_rows(self.space_scroll, index, slots);
         }
         for (offset, space) in model
             .spaces
             .iter()
-            .skip(self.sidebar.space_scroll)
+            .skip(self.space_scroll)
             .take(slots)
             .enumerate()
         {
             let rect = Rect::new(
-                inner.x + offset as u16 * slot_width,
-                spaces_y,
+                bar.x + offset as u16 * slot_width,
+                bar.y,
                 slot_width.min(slots_width),
                 2,
             );
@@ -1003,125 +651,230 @@ impl SidebarUi {
             } else {
                 label.to_owned()
             };
-            let activity = self.sidebar.space_activity.contains(&space.id);
-            self.icon_button(
-                ElementId::Space(space.id.clone()),
-                rect,
-                &label,
-                format!(
+            let activity = self.space_activity.contains(&space.id);
+            Button::icon(ElementId::Space(space.id.clone()), &label)
+                .tooltip(format!(
                     "{}{}",
                     space.name,
                     if activity { " (activity)" } else { "" }
-                ),
-                space.id == model.selected_space,
-            );
+                ))
+                .selected(space.id == model.selected_space)
+                .render(rect, cx);
         }
-        self.icon_button(
-            ElementId::CreateSpace,
-            Rect::new(plus.x, spaces_y, plus.width, 2),
-            &plus_label,
-            "New space".into(),
-            false,
-        );
     }
 
-    fn compose_space_title(&mut self, model: &Model, rect: Rect) {
-        let space = model
-            .spaces
-            .iter()
-            .find(|space| space.id == model.selected_space);
-        let collapsed = space.is_some_and(|space| space.collapsed);
-        let icon = if collapsed {
-            icons::COLLAPSED
-        } else if self.row_hovered(&ElementId::SpaceTitle) {
-            icons::EXPANDED
-        } else {
-            icons::SPACE
-        };
-        let name = space.map_or("Space", |space| space.name.as_str());
-        let (label, tooltip) = if model.private {
-            (
-                "Private tabs".to_owned(),
-                "Private tabs and history stay in memory. Spaces and settings are shared.".into(),
-            )
-        } else {
-            (
-                display_text(name),
-                format!(
-                    "{name}\n{} pinned tabs and folders",
-                    if collapsed { "Show" } else { "Hide" }
-                ),
-            )
-        };
-        self.row(Row {
-            id: ElementId::SpaceTitle,
-            rect,
-            indent: 0,
-            icon,
-            icon_color: None,
-            index: None,
-            content: Content::Label(&label),
-            tooltip: Some(tooltip),
-            selected: false,
-            muted: true,
-            compact: false,
-            trailing: Some(Trailing {
-                id: ElementId::CreateFolder,
-                icon: icons::PLUS,
-                tooltip: "New folder",
-            }),
-            field: false,
-        });
-    }
-
-    fn compose_tab(&mut self, model: &Model, tab: &Tab, number: usize, rect: Rect, compact: bool) {
-        let renaming = self
-            .sidebar
-            .rename
-            .as_ref()
-            .is_some_and(|rename| rename.id == tab.id);
-        let name = display_text(&tab_name(tab, model.home.as_deref()).unwrap_or_default());
+    fn tab(&mut self, view: &View, tab: &Tab, number: usize, rect: Rect, cx: &mut Canvas) {
+        let (model, compact) = (view.model, view.compact);
+        let theme = cx.theme;
+        let home = model.home.as_deref();
+        let rename = self.rename.as_mut().filter(|rename| rename.id == tab.id);
+        let renaming = rename.is_some();
+        let name = display_text(&tab_name(tab, home).unwrap_or_default());
         let segmented = !compact
             && tab.panes.len() > 1
             && rect.width.saturating_sub(ICON_CELLS + 2)
                 >= tab.panes.len() as u16 * MIN_SEGMENT_CELLS;
         let (remote, os) = tab_machine(tab);
-        let layout = self.row(Row {
-            id: ElementId::Tab(tab.id),
-            rect,
+        let mut rename = rename;
+        let mut rename_field = |cx: &mut Canvas, layout: &RowLayout| {
+            if let Some(rename) = rename.as_mut() {
+                rename_field(cx, &mut rename.editor, layout);
+            }
+        };
+        let mut panes = |cx: &mut Canvas, layout: &RowLayout| pane_segments(cx, tab, home, layout);
+        let id = ElementId::Tab(tab.id);
+        let layout = Row {
             indent: if tab.folder_id.is_some() { 2 } else { 0 },
-            icon: icons::host(remote, os),
-            icon_color: self.theme.host(remote, os),
+            icon_color: theme.host(remote, os),
             index: (compact || model.settings.show_indexes).then_some(number),
-            content: if renaming {
-                Content::Rename(tab.id)
-            } else if segmented {
-                Content::Panes(tab, model.home.as_deref())
-            } else {
-                Content::Label(&name)
-            },
             tooltip: compact.then(|| name.clone()),
-            selected: model.selected_tab == Some(tab.id) && !self.settings.open,
-            muted: false,
+            selected: model.selected_tab == Some(tab.id) && !view.props.settings_open,
             compact,
             trailing: model.settings.show_close.then_some(Trailing {
                 id: ElementId::CloseTab(tab.id),
                 icon: icons::CLOSE,
                 tooltip: "Close tab  Cmd+W",
             }),
-            field: false,
-        });
+            ..Row::new(
+                id.clone(),
+                rect,
+                icons::host(remote, os),
+                if renaming {
+                    Content::Custom(&mut rename_field)
+                } else if segmented {
+                    Content::Custom(&mut panes)
+                } else {
+                    Content::Label(&name)
+                },
+            )
+        }
+        .render(cx);
         if compact {
             return;
         }
+        if cx.aimed(&id) {
+            split_preview(cx, &layout);
+        }
         if !renaming && !segmented {
-            self.sidebar.title_rects.push((tab.id, layout.content));
+            self.title_rects.push((tab.id, layout.content));
         }
         if rect.height >= 3 {
-            self.write(
+            cx.write(
                 Rect::new(layout.content.x, rect.y + 1, layout.content.width, 1),
                 display_text(&tab.domain),
-                self.theme.secondary_on(layout.fill),
+                theme.secondary_on(layout.fill),
+            );
+        }
+    }
+}
+
+const TOOLBAR_ROWS: u16 = 2;
+
+fn space_title(model: &Model, rect: Rect, cx: &mut Canvas) {
+    let space = model
+        .spaces
+        .iter()
+        .find(|space| space.id == model.selected_space);
+    let collapsed = space.is_some_and(|space| space.collapsed);
+    let icon = if collapsed {
+        icons::COLLAPSED
+    } else if cx.row_hovered(&ElementId::SpaceTitle) {
+        icons::EXPANDED
+    } else {
+        icons::SPACE
+    };
+    let name = space.map_or("Space", |space| space.name.as_str());
+    let (label, tooltip) = if model.private {
+        (
+            "Private tabs".to_owned(),
+            "Private tabs and history stay in memory. Spaces and settings are shared.".into(),
+        )
+    } else {
+        (
+            display_text(name),
+            format!(
+                "{name}\n{} pinned tabs and folders",
+                if collapsed { "Show" } else { "Hide" }
+            ),
+        )
+    };
+    Row {
+        tooltip: Some(tooltip),
+        muted: true,
+        trailing: Some(Trailing {
+            id: ElementId::CreateFolder,
+            icon: icons::PLUS,
+            tooltip: "New folder",
+        }),
+        ..Row::new(ElementId::SpaceTitle, rect, icon, Content::Label(&label))
+    }
+    .render(cx);
+}
+
+fn rename_field(cx: &mut Canvas, editor: &mut TextEditor, layout: &RowLayout) {
+    let content = layout.content;
+    let edit = Rect::new(content.x, content.y, content.width, 1);
+    TextInput::new(ElementId::Editor, editor, layout.fill)
+        .active(true)
+        .shift(if content.height == 2 { 0.5 } else { 0.0 })
+        .render(edit, cx);
+    cx.hit(ElementId::Editor, edit, "Tab title");
+}
+
+/// Where a dragged tab would join as a split, labelled with what is being dropped.
+fn split_preview(cx: &mut Canvas, layout: &RowLayout) {
+    let theme = cx.theme;
+    let area = layout.content;
+    let width = (area.width / 2).max(MIN_SEGMENT_CELLS).min(area.width);
+    let rect = Rect::new(area.right() - width, area.y, width, area.height.min(2));
+    let progress = cx.pointer.drop_motion.map_or(1.0, |motion| motion.progress);
+    cx.clear(rect);
+    let fill = theme.tint(layout.fill, DROP_TINT);
+    cx.surface(rect, fill, 6.0, NESTED_INSET + (1.0 - progress) * 8.0);
+    cx.write(
+        Rect::new(rect.x + 1, rect.y, rect.width.saturating_sub(2), 1),
+        format!("{} {}", icons::PLUS, display_text(&cx.pointer.drag_label)),
+        theme.accent().bg(fill),
+    );
+}
+
+fn pane_segments(cx: &mut Canvas, tab: &Tab, home: Option<&str>, layout: &RowLayout) {
+    let theme = cx.theme;
+    let pointer = cx.pointer;
+    let area = layout.content;
+    let mixed = spans_machines(tab);
+    let slots = pane_slots(&tab.panes, area.width, area.height >= 2);
+    let mut stacked: Vec<(u16, u16)> = Vec::new();
+    for slot in slots.iter().filter(|slot| !slot.tall) {
+        let span = (slot.x, slot.width);
+        if area.height == 2 && !stacked.contains(&span) {
+            stacked.push(span);
+            let rect = Rect::new(area.x + slot.x, area.y, slot.width, 2);
+            cx.fill(RoundedSurface {
+                stacked: true,
+                ..RoundedSurface::new(rect, layout.fill, 0.0, OCCLUDER_INSET)
+            });
+        }
+    }
+    for slot in slots {
+        let pane = &tab.panes[slot.pane];
+        let rect = Rect::new(
+            area.x + slot.x,
+            area.y + slot.line,
+            slot.width,
+            if slot.tall { area.height.min(2) } else { 1 },
+        );
+        let id = ElementId::Pane(tab.id, pane.id);
+        let close = ElementId::ClosePane(tab.id, pane.id);
+        let hovered = [Some(&id), Some(&close)].contains(&pointer.hovered.as_ref());
+        let fill = if hovered && !pointer.dragging {
+            let fill = theme.lift(layout.fill, 12);
+            let inset = if slot.tall { NESTED_INSET } else { 1.0 };
+            cx.surface(rect, fill, 6.0, inset);
+            fill
+        } else {
+            layout.fill
+        };
+        let ghost = pointer.dragging && pointer.drag.as_ref() == Some(&id);
+        let style = if ghost {
+            layout.style.fg(theme.lift(theme.background, 30))
+        } else if pane.active {
+            layout.style
+        } else {
+            layout.style.fg(theme.muted)
+        };
+        let pad = u16::from(slot.x > 0);
+        let label = display_text(&pane.label(home));
+        cx.write(
+            Rect::new(rect.x + pad, rect.y, rect.width.saturating_sub(pad + 1), 1),
+            if mixed {
+                // The machine glyph stands in for the home or root prefix: 󰣇/dotfiles.
+                let glyph = icons::host(pane.remote, &pane.os);
+                let glyph = match theme.host(pane.remote, &pane.os) {
+                    Some(color) if !ghost => Span::styled(glyph, Style::new().fg(color)),
+                    _ => Span::raw(glyph),
+                };
+                let name = label
+                    .strip_prefix("~/")
+                    .or_else(|| label.strip_prefix('/'))
+                    .unwrap_or(&label);
+                Line::from(vec![glyph, Span::raw(format!("/{name}"))])
+            } else {
+                Line::from(label)
+            },
+            style.bg(fill),
+        );
+        cx.hit(id, rect, "");
+        if hovered && !pointer.dragging && rect.width >= TRAILING_CELLS * 2 {
+            trailing_control(
+                cx,
+                Trailing {
+                    id: close,
+                    icon: icons::CLOSE,
+                    tooltip: "Close split",
+                },
+                rect,
+                style.bg(fill),
             );
         }
     }

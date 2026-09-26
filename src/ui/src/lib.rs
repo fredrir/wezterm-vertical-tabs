@@ -1,5 +1,6 @@
 //! Event-driven in-memory Ratatui UI. The host publishes complete frames atomically and
 //! schedules only `next_deadline`; this crate performs no terminal, mux, or storage I/O.
+mod components;
 mod icons;
 mod input;
 mod interaction;
@@ -7,6 +8,7 @@ mod launcher;
 mod list;
 mod motion;
 mod render;
+mod runtime;
 mod settings_page;
 mod shortcuts;
 mod sidebar;
@@ -14,6 +16,7 @@ mod theme;
 
 pub use input::{EditResult, Key, Modifiers, MouseButton, TextEditor, UiInput};
 pub use ratatui::{buffer::Buffer, layout::Rect};
+pub use runtime::canvas::{HitRegion, RoundedSurface};
 pub use shortcuts::is_shortcut;
 pub use theme::Theme;
 
@@ -45,8 +48,9 @@ pub use launcher::JobEntry;
 use launcher::{Launcher, Launchers, filter_menu};
 use motion::{Caret, Effects, Tooltip, Tween};
 use ratatui::layout::Position;
+use runtime::canvas::Paint;
 use settings_page::SettingsPage;
-use sidebar::{InlineRename, Sidebar, SidebarRow};
+use sidebar::{InlineRename, Sidebar};
 use std::time::Duration;
 use tachyonfx::fx;
 use vtabs_core::{Intent, Model, PaneId, SpaceId, Tab, TabId};
@@ -90,13 +94,6 @@ impl ElementId {
             other => other.clone(),
         }
     }
-}
-
-#[derive(Clone, Debug)]
-pub struct HitRegion {
-    pub id: ElementId,
-    pub rect: Rect,
-    pub tooltip: String,
 }
 
 #[derive(Clone, Debug)]
@@ -414,16 +411,6 @@ impl Default for Frame {
     }
 }
 
-/// Everything a composition leaves beside the buffer.
-#[derive(Default)]
-struct Paint {
-    surfaces: Vec<RoundedSurface>,
-    hits: Vec<HitRegion>,
-    cursor: Option<Position>,
-    editor_rect: Rect,
-    editor_shift: f32,
-}
-
 struct Host {
     visible: bool,
     focused: bool,
@@ -505,37 +492,6 @@ impl Overlays {
     fn stash(&mut self) {
         if let Some(overlay) = self.current.take() {
             self.stack.push(overlay);
-        }
-    }
-}
-
-#[derive(Clone, Debug)]
-pub struct RoundedSurface {
-    pub rect: Rect,
-    pub fill: ratatui::style::Color,
-    pub radius: f32,
-    pub inset: f32,
-    /// Icon buttons center a square within their cells; rows keep their full extent.
-    pub square: bool,
-    /// Fraction of the rect's height to draw, about its center; thin bars need less than a cell.
-    pub scale_y: f32,
-    /// Holds one text line per cell row, so the host centers nothing beneath it.
-    pub stacked: bool,
-    /// Rows to move down; marks inside host-centered text follow it by half a row.
-    pub shift_y: f32,
-}
-
-impl RoundedSurface {
-    pub(crate) fn new(rect: Rect, fill: ratatui::style::Color, radius: f32, inset: f32) -> Self {
-        Self {
-            rect,
-            fill,
-            radius,
-            inset,
-            square: false,
-            scale_y: 1.0,
-            stacked: false,
-            shift_y: 0.0,
         }
     }
 }
@@ -933,5 +889,11 @@ impl EditorSlot {
     /// The palette keeps a steady caret; every other editor blinks.
     fn blinks(self) -> bool {
         self != Self::Palette
+    }
+    fn element(self) -> ElementId {
+        match self {
+            Self::SettingsSearch => ElementId::SettingsSearch,
+            Self::Form | Self::Palette | Self::Rename => ElementId::Editor,
+        }
     }
 }

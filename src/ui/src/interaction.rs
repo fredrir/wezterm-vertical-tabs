@@ -252,7 +252,7 @@ impl SidebarUi {
     }
 
     fn settings_slot(&mut self, model: &Model) -> Option<isize> {
-        self.ensure_sidebar_entries(model);
+        self.sidebar.ensure_rows(model, self.settings.listed);
         self.sidebar
             .settings_place
             .filter(|_| self.settings.listed)
@@ -322,7 +322,11 @@ impl SidebarUi {
     }
 
     fn click_editor(&mut self, slot: EditorSlot, x: u16, select: bool) {
-        let column = usize::from(x.saturating_sub(self.paint.editor_rect.x));
+        let left = self
+            .paint
+            .field(&slot.element())
+            .map_or(0, |field| field.rect.x);
+        let column = usize::from(x.saturating_sub(left));
         if let Some(editor) = self.editor_mut(slot) {
             editor.click_column(column, select);
         }
@@ -839,33 +843,6 @@ impl SidebarUi {
             Key::Character('+') => self.open_create_space(),
             _ => {}
         }
-    }
-
-    pub(crate) fn ensure_tab_visible(&mut self, model: &Model, id: TabId) {
-        self.ensure_sidebar_entries(model);
-        let collapsed_folder = if let Some(tab) = model.tabs.get(&id)
-            && let Some(folder) = &tab.folder_id
-        {
-            model
-                .folders
-                .iter()
-                .position(|f| &f.id == folder && f.collapsed)
-        } else {
-            None
-        };
-        if let Some(at) = self.sidebar.rows.iter().position(|row| match row {
-            SidebarRow::Folder { index, .. } => collapsed_folder == Some(*index),
-            SidebarRow::Tab { id: tab, .. } => collapsed_folder.is_none() && *tab == id,
-            SidebarRow::Gap | SidebarRow::NewTab | SidebarRow::Settings { .. } => false,
-        }) {
-            self.reveal_row(model, at);
-        }
-    }
-
-    pub(crate) fn reveal_row(&mut self, model: &Model, at: usize) {
-        self.sidebar.scroll = list::reveal(self.sidebar.scroll, at, |start| {
-            start + self.rows_fitting(model, start)
-        });
     }
 
     fn double_clicked_title(&self, id: TabId, x: u16, y: u16) -> bool {

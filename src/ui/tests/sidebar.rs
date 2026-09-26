@@ -1,4 +1,5 @@
 use super::*;
+use crate::{components::PRESS_INSET, *};
 use std::time::Duration;
 use vtabs_core::{Space, Tab};
 
@@ -45,7 +46,7 @@ fn sidebar_cache_preserves_order_numbers_hidden_counts_and_collapsed_reveal() {
         })
         .unwrap();
     let mut ui = SidebarUi::new();
-    ui.ensure_sidebar_entries(&model);
+    ui.sidebar.ensure_rows(&model, ui.settings.listed);
     assert_eq!(
         ui.sidebar.rows,
         [
@@ -63,7 +64,7 @@ fn sidebar_cache_preserves_order_numbers_hidden_counts_and_collapsed_reveal() {
         ]
     );
     model.apply_filter_hook(6, false).unwrap();
-    ui.ensure_sidebar_entries(&model);
+    ui.sidebar.ensure_rows(&model, ui.settings.listed);
     assert_eq!(
         ui.sidebar.rows,
         [
@@ -84,7 +85,7 @@ fn sidebar_cache_preserves_order_numbers_hidden_counts_and_collapsed_reveal() {
         .dispatch(Intent::ToggleFolder(services.clone()))
         .unwrap();
     ui.sidebar.list = Rect::new(0, 0, 20, 3);
-    ui.ensure_tab_visible(&model, 3);
+    ui.sidebar.ensure_tab_visible(&model, 3, ui.settings.listed);
     assert_eq!(ui.sidebar.scroll, 1);
     assert_eq!(ui.sidebar.rows.as_ptr(), allocation);
     assert!(
@@ -100,7 +101,7 @@ fn sidebar_cache_preserves_order_numbers_hidden_counts_and_collapsed_reveal() {
             index: 0,
         })
         .unwrap();
-    ui.ensure_sidebar_entries(&model);
+    ui.sidebar.ensure_rows(&model, ui.settings.listed);
     assert_eq!(
         ui.sidebar.rows,
         [
