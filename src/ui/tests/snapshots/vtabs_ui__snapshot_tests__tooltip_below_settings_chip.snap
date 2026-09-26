@@ -1,0 +1,264 @@
+---
+source: src/ui/src/../tests/snapshots.rs
+expression: "snapshot(ui, frame)"
+---
+Buffer {
+    area: Rect { x: 0, y: 0, width: 120, height: 40 },
+    content: [
+        "                                                                                  󱂪                             󰒓   󰑐   ",
+        "                                                                                                                        ",
+        "     Settings                                                            ×                                              ",
+        "                                                                                  󰍉  Search...                          ",
+        "      Search settings                                                                                                   ",
+        "                                                                                  󰌨  Home                               ",
+        "                                                                                                                        ",
+        "      All   Layout   Tabs   Colors   Motion   General                               ~/journal                          ",
+        "                            Colors settings                                                                             ",
+        "     Your workspace                                                               󰷏  Docs  2                            ",
+        "                                                                                                                        ",
+        "      Sidebar width                                                    256            ~/guide                          ",
+        "      Expanded width in logical pixels                                                                                  ",
+        "                                                                                      ~/api                            ",
+        "                                                                                                                        ",
+        "                                                                                                                        ",
+        "      Rail width                                                        40        󰐕  New Tab                            ",
+        "      Collapsed width in logical pixels                                                                                 ",
+        "                                                                                  󰒋  /api            /web             ",
+        "                                                                                                      /logs            ",
+        "                                                                                    ~/dotfiles                         ",
+        "      Side                                                           right                                              ",
+        "      Sidebar edge                                                                  Release notes                      ",
+        "                                                                                                                        ",
+        "                                                                                  󰒓  Settings                           ",
+        "                                                                                                                        ",
+        "      Rail                                                        expanded                                              ",
+        "      Sidebar visibility                                                                                                ",
+        "                                                                                                                        ",
+        "                                                                                                                        ",
+        "     Motion and accessibility                                                                                           ",
+        "                                                                                                                        ",
+        "      Animations                                                      Off                                               ",
+        "      Enable finite visual transitions                                                                                  ",
+        "                                                                                                                        ",
+        "                                                                                                                        ",
+        "                                                                                 main ✓ 2 changes                       ",
+        "      Reset defaults                                                                                                    ",
+        "                                                                                  󰻃   󰻃   󰻃                         󰐕   ",
+        "                                                                                                                        ",
+    ],
+    styles: [
+        x: 0, y: 0, fg: Rgb(225, 231, 240), bg: Rgb(25, 34, 49), modifier: NONE,
+        x: 81, y: 0, fg: Rgb(152, 168, 190), bg: Rgb(25, 34, 49), modifier: NONE,
+        x: 85, y: 0, fg: Rgb(225, 231, 240), bg: Rgb(25, 34, 49), modifier: NONE,
+        x: 111, y: 0, fg: Rgb(169, 199, 245), bg: Rgb(25, 34, 49), modifier: NONE,
+        x: 115, y: 0, fg: Rgb(152, 168, 190), bg: Rgb(25, 34, 49), modifier: NONE,
+        x: 119, y: 0, fg: Rgb(225, 231, 240), bg: Rgb(25, 34, 49), modifier: NONE,
+        x: 5, y: 2, fg: Rgb(225, 231, 240), bg: Rgb(25, 34, 49), modifier: BOLD,
+        x: 71, y: 2, fg: Rgb(225, 231, 240), bg: Rgb(25, 34, 49), modifier: NONE,
+        x: 72, y: 2, fg: Rgb(225, 231, 240), bg: Rgb(35, 44, 59), modifier: NONE,
+        x: 75, y: 2, fg: Rgb(225, 231, 240), bg: Rgb(25, 34, 49), modifier: NONE,
+        x: 5, y: 3, fg: Rgb(225, 231, 240), bg: Rgb(35, 44, 59), modifier: NONE,
+        x: 75, y: 3, fg: Rgb(225, 231, 240), bg: Rgb(25, 34, 49), modifier: NONE,
+        x: 81, y: 3, fg: Rgb(225, 231, 240), bg: Rgb(35, 44, 59), modifier: NONE,
+        x: 82, y: 3, fg: Rgb(152, 168, 190), bg: Rgb(35, 44, 59), modifier: NONE,
+        x: 118, y: 3, fg: Rgb(225, 231, 240), bg: Rgb(35, 44, 59), modifier: NONE,
+        x: 119, y: 3, fg: Rgb(225, 231, 240), bg: Rgb(25, 34, 49), modifier: NONE,
+        x: 5, y: 4, fg: Rgb(225, 231, 240), bg: Rgb(35, 44, 59), modifier: NONE,
+        x: 6, y: 4, fg: Rgb(152, 168, 190), bg: Rgb(35, 44, 59), modifier: NONE,
+        x: 74, y: 4, fg: Rgb(225, 231, 240), bg: Rgb(35, 44, 59), modifier: NONE,
+        x: 75, y: 4, fg: Rgb(225, 231, 240), bg: Rgb(25, 34, 49), modifier: NONE,
+        x: 81, y: 4, fg: Rgb(225, 231, 240), bg: Rgb(35, 44, 59), modifier: NONE,
+        x: 119, y: 4, fg: Rgb(225, 231, 240), bg: Rgb(25, 34, 49), modifier: NONE,
+        x: 5, y: 5, fg: Rgb(225, 231, 240), bg: Rgb(35, 44, 59), modifier: NONE,
+        x: 75, y: 5, fg: Rgb(225, 231, 240), bg: Rgb(25, 34, 49), modifier: NONE,
+        x: 82, y: 5, fg: Rgb(152, 168, 190), bg: Rgb(25, 34, 49), modifier: NONE,
+        x: 118, y: 5, fg: Rgb(225, 231, 240), bg: Rgb(25, 34, 49), modifier: NONE,
+        x: 5, y: 7, fg: Rgb(169, 199, 245), bg: Rgb(52, 72, 95), modifier: BOLD,
+        x: 10, y: 7, fg: Rgb(225, 231, 240), bg: Rgb(25, 34, 49), modifier: NONE,
+        x: 11, y: 7, fg: Rgb(225, 231, 240), bg: Rgb(35, 44, 59), modifier: NONE,
+        x: 19, y: 7, fg: Rgb(225, 231, 240), bg: Rgb(25, 34, 49), modifier: NONE,
+        x: 20, y: 7, fg: Rgb(225, 231, 240), bg: Rgb(35, 44, 59), modifier: NONE,
+        x: 26, y: 7, fg: Rgb(225, 231, 240), bg: Rgb(25, 34, 49), modifier: NONE,
+        x: 27, y: 7, fg: Rgb(169, 199, 245), bg: Rgb(52, 72, 95), modifier: NONE,
+        x: 35, y: 7, fg: Rgb(225, 231, 240), bg: Rgb(25, 34, 49), modifier: NONE,
+        x: 36, y: 7, fg: Rgb(225, 231, 240), bg: Rgb(35, 44, 59), modifier: NONE,
+        x: 44, y: 7, fg: Rgb(225, 231, 240), bg: Rgb(25, 34, 49), modifier: NONE,
+        x: 45, y: 7, fg: Rgb(225, 231, 240), bg: Rgb(35, 44, 59), modifier: NONE,
+        x: 54, y: 7, fg: Rgb(225, 231, 240), bg: Rgb(25, 34, 49), modifier: NONE,
+        x: 27, y: 8, fg: Reset, bg: Rgb(35, 44, 59), modifier: NONE,
+        x: 28, y: 8, fg: Rgb(225, 231, 240), bg: Rgb(35, 44, 59), modifier: NONE,
+        x: 43, y: 8, fg: Reset, bg: Rgb(35, 44, 59), modifier: NONE,
+        x: 44, y: 8, fg: Rgb(225, 231, 240), bg: Rgb(25, 34, 49), modifier: NONE,
+        x: 5, y: 9, fg: Rgb(152, 168, 190), bg: Rgb(25, 34, 49), modifier: NONE,
+        x: 27, y: 9, fg: Reset, bg: Rgb(35, 44, 59), modifier: NONE,
+        x: 44, y: 9, fg: Rgb(152, 168, 190), bg: Rgb(25, 34, 49), modifier: NONE,
+        x: 75, y: 9, fg: Rgb(225, 231, 240), bg: Rgb(25, 34, 49), modifier: NONE,
+        x: 5, y: 10, fg: Rgb(225, 231, 240), bg: Rgb(52, 72, 95), modifier: NONE,
+        x: 75, y: 10, fg: Rgb(225, 231, 240), bg: Rgb(25, 34, 49), modifier: NONE,
+        x: 5, y: 11, fg: Rgb(225, 231, 240), bg: Rgb(52, 72, 95), modifier: NONE,
+        x: 6, y: 11, fg: Rgb(225, 231, 240), bg: Rgb(52, 72, 95), modifier: BOLD,
+        x: 70, y: 11, fg: Rgb(225, 231, 240), bg: Rgb(52, 72, 95), modifier: NONE,
+        x: 71, y: 11, fg: Rgb(169, 199, 245), bg: Rgb(52, 72, 95), modifier: BOLD,
+        x: 74, y: 11, fg: Rgb(225, 231, 240), bg: Rgb(52, 72, 95), modifier: NONE,
+        x: 75, y: 11, fg: Rgb(225, 231, 240), bg: Rgb(25, 34, 49), modifier: NONE,
+        x: 5, y: 12, fg: Rgb(225, 231, 240), bg: Rgb(52, 72, 95), modifier: NONE,
+        x: 75, y: 12, fg: Rgb(225, 231, 240), bg: Rgb(25, 34, 49), modifier: NONE,
+        x: 5, y: 13, fg: Rgb(225, 231, 240), bg: Rgb(52, 72, 95), modifier: NONE,
+        x: 75, y: 13, fg: Rgb(225, 231, 240), bg: Rgb(25, 34, 49), modifier: NONE,
+        x: 5, y: 15, fg: Rgb(225, 231, 240), bg: Rgb(35, 44, 59), modifier: NONE,
+        x: 75, y: 15, fg: Rgb(225, 231, 240), bg: Rgb(25, 34, 49), modifier: NONE,
+        x: 5, y: 16, fg: Rgb(225, 231, 240), bg: Rgb(35, 44, 59), modifier: NONE,
+        x: 72, y: 16, fg: Rgb(169, 199, 245), bg: Rgb(35, 44, 59), modifier: NONE,
+        x: 74, y: 16, fg: Rgb(225, 231, 240), bg: Rgb(35, 44, 59), modifier: NONE,
+        x: 75, y: 16, fg: Rgb(225, 231, 240), bg: Rgb(25, 34, 49), modifier: NONE,
+        x: 82, y: 16, fg: Rgb(152, 168, 190), bg: Rgb(25, 34, 49), modifier: NONE,
+        x: 118, y: 16, fg: Rgb(225, 231, 240), bg: Rgb(25, 34, 49), modifier: NONE,
+        x: 5, y: 17, fg: Rgb(225, 231, 240), bg: Rgb(35, 44, 59), modifier: NONE,
+        x: 6, y: 17, fg: Rgb(152, 168, 190), bg: Rgb(35, 44, 59), modifier: NONE,
+        x: 74, y: 17, fg: Rgb(225, 231, 240), bg: Rgb(35, 44, 59), modifier: NONE,
+        x: 75, y: 17, fg: Rgb(225, 231, 240), bg: Rgb(25, 34, 49), modifier: NONE,
+        x: 5, y: 18, fg: Rgb(225, 231, 240), bg: Rgb(35, 44, 59), modifier: NONE,
+        x: 75, y: 18, fg: Rgb(225, 231, 240), bg: Rgb(25, 34, 49), modifier: NONE,
+        x: 82, y: 18, fg: Rgb(255, 233, 168), bg: Rgb(25, 34, 49), modifier: NONE,
+        x: 85, y: 18, fg: Rgb(152, 168, 190), bg: Rgb(25, 34, 49), modifier: NONE,
+        x: 100, y: 18, fg: Rgb(225, 231, 240), bg: Rgb(25, 34, 49), modifier: NONE,
+        x: 102, y: 19, fg: Rgb(255, 160, 94), bg: Rgb(25, 34, 49), modifier: NONE,
+        x: 103, y: 19, fg: Rgb(152, 168, 190), bg: Rgb(25, 34, 49), modifier: NONE,
+        x: 117, y: 19, fg: Rgb(225, 231, 240), bg: Rgb(25, 34, 49), modifier: NONE,
+        x: 5, y: 20, fg: Rgb(225, 231, 240), bg: Rgb(35, 44, 59), modifier: NONE,
+        x: 75, y: 20, fg: Rgb(225, 231, 240), bg: Rgb(25, 34, 49), modifier: NONE,
+        x: 82, y: 20, fg: Rgb(232, 100, 100), bg: Rgb(25, 34, 49), modifier: NONE,
+        x: 85, y: 20, fg: Rgb(225, 231, 240), bg: Rgb(25, 34, 49), modifier: NONE,
+        x: 5, y: 21, fg: Rgb(225, 231, 240), bg: Rgb(35, 44, 59), modifier: NONE,
+        x: 69, y: 21, fg: Rgb(169, 199, 245), bg: Rgb(35, 44, 59), modifier: NONE,
+        x: 74, y: 21, fg: Rgb(225, 231, 240), bg: Rgb(35, 44, 59), modifier: NONE,
+        x: 75, y: 21, fg: Rgb(225, 231, 240), bg: Rgb(25, 34, 49), modifier: NONE,
+        x: 5, y: 22, fg: Rgb(225, 231, 240), bg: Rgb(35, 44, 59), modifier: NONE,
+        x: 6, y: 22, fg: Rgb(152, 168, 190), bg: Rgb(35, 44, 59), modifier: NONE,
+        x: 74, y: 22, fg: Rgb(225, 231, 240), bg: Rgb(35, 44, 59), modifier: NONE,
+        x: 75, y: 22, fg: Rgb(225, 231, 240), bg: Rgb(25, 34, 49), modifier: NONE,
+        x: 5, y: 23, fg: Rgb(225, 231, 240), bg: Rgb(35, 44, 59), modifier: NONE,
+        x: 75, y: 23, fg: Rgb(225, 231, 240), bg: Rgb(25, 34, 49), modifier: NONE,
+        x: 81, y: 24, fg: Rgb(225, 231, 240), bg: Rgb(52, 72, 95), modifier: NONE,
+        x: 82, y: 24, fg: Rgb(169, 199, 245), bg: Rgb(52, 72, 95), modifier: NONE,
+        x: 118, y: 24, fg: Rgb(225, 231, 240), bg: Rgb(52, 72, 95), modifier: NONE,
+        x: 119, y: 24, fg: Rgb(225, 231, 240), bg: Rgb(25, 34, 49), modifier: NONE,
+        x: 5, y: 25, fg: Rgb(225, 231, 240), bg: Rgb(35, 44, 59), modifier: NONE,
+        x: 75, y: 25, fg: Rgb(225, 231, 240), bg: Rgb(25, 34, 49), modifier: NONE,
+        x: 81, y: 25, fg: Rgb(225, 231, 240), bg: Rgb(52, 72, 95), modifier: NONE,
+        x: 119, y: 25, fg: Rgb(225, 231, 240), bg: Rgb(25, 34, 49), modifier: NONE,
+        x: 5, y: 26, fg: Rgb(225, 231, 240), bg: Rgb(35, 44, 59), modifier: NONE,
+        x: 66, y: 26, fg: Rgb(169, 199, 245), bg: Rgb(35, 44, 59), modifier: NONE,
+        x: 74, y: 26, fg: Rgb(225, 231, 240), bg: Rgb(35, 44, 59), modifier: NONE,
+        x: 75, y: 26, fg: Rgb(225, 231, 240), bg: Rgb(25, 34, 49), modifier: NONE,
+        x: 5, y: 27, fg: Rgb(225, 231, 240), bg: Rgb(35, 44, 59), modifier: NONE,
+        x: 6, y: 27, fg: Rgb(152, 168, 190), bg: Rgb(35, 44, 59), modifier: NONE,
+        x: 74, y: 27, fg: Rgb(225, 231, 240), bg: Rgb(35, 44, 59), modifier: NONE,
+        x: 75, y: 27, fg: Rgb(225, 231, 240), bg: Rgb(25, 34, 49), modifier: NONE,
+        x: 5, y: 28, fg: Rgb(225, 231, 240), bg: Rgb(35, 44, 59), modifier: NONE,
+        x: 75, y: 28, fg: Rgb(225, 231, 240), bg: Rgb(25, 34, 49), modifier: NONE,
+        x: 5, y: 30, fg: Rgb(152, 168, 190), bg: Rgb(25, 34, 49), modifier: NONE,
+        x: 75, y: 30, fg: Rgb(225, 231, 240), bg: Rgb(25, 34, 49), modifier: NONE,
+        x: 5, y: 31, fg: Rgb(225, 231, 240), bg: Rgb(35, 44, 59), modifier: NONE,
+        x: 75, y: 31, fg: Rgb(225, 231, 240), bg: Rgb(25, 34, 49), modifier: NONE,
+        x: 5, y: 32, fg: Rgb(225, 231, 240), bg: Rgb(35, 44, 59), modifier: NONE,
+        x: 69, y: 32, fg: Rgb(169, 199, 245), bg: Rgb(25, 34, 49), modifier: NONE,
+        x: 74, y: 32, fg: Rgb(225, 231, 240), bg: Rgb(35, 44, 59), modifier: NONE,
+        x: 75, y: 32, fg: Rgb(225, 231, 240), bg: Rgb(25, 34, 49), modifier: NONE,
+        x: 5, y: 33, fg: Rgb(225, 231, 240), bg: Rgb(35, 44, 59), modifier: NONE,
+        x: 6, y: 33, fg: Rgb(152, 168, 190), bg: Rgb(35, 44, 59), modifier: NONE,
+        x: 74, y: 33, fg: Rgb(225, 231, 240), bg: Rgb(35, 44, 59), modifier: NONE,
+        x: 75, y: 33, fg: Rgb(225, 231, 240), bg: Rgb(25, 34, 49), modifier: NONE,
+        x: 5, y: 34, fg: Rgb(225, 231, 240), bg: Rgb(35, 44, 59), modifier: NONE,
+        x: 75, y: 34, fg: Rgb(225, 231, 240), bg: Rgb(25, 34, 49), modifier: NONE,
+        x: 81, y: 36, fg: Rgb(152, 168, 190), bg: Rgb(25, 34, 49), modifier: NONE,
+        x: 119, y: 36, fg: Rgb(225, 231, 240), bg: Rgb(25, 34, 49), modifier: NONE,
+        x: 5, y: 37, fg: Rgb(225, 231, 240), bg: Rgb(35, 44, 59), modifier: NONE,
+        x: 21, y: 37, fg: Rgb(225, 231, 240), bg: Rgb(25, 34, 49), modifier: NONE,
+        x: 81, y: 38, fg: Rgb(169, 199, 245), bg: Rgb(25, 34, 49), modifier: NONE,
+        x: 85, y: 38, fg: Rgb(152, 168, 190), bg: Rgb(25, 34, 49), modifier: NONE,
+        x: 93, y: 38, fg: Rgb(225, 231, 240), bg: Rgb(25, 34, 49), modifier: NONE,
+        x: 115, y: 38, fg: Rgb(152, 168, 190), bg: Rgb(25, 34, 49), modifier: NONE,
+        x: 119, y: 38, fg: Rgb(225, 231, 240), bg: Rgb(25, 34, 49), modifier: NONE,
+    ]
+}
+surfaces:
+  RoundedSurface { rect: Rect { x: 81, y: 0, width: 4, height: 2 }, fill: Rgb(25, 34, 49), radius: 8.0, inset: 5.0, square: true, scale_y: 1.0, stacked: false, shift_y: 0.0 }
+  RoundedSurface { rect: Rect { x: 111, y: 0, width: 4, height: 2 }, fill: Rgb(25, 34, 49), radius: 8.0, inset: 5.0, square: true, scale_y: 1.0, stacked: false, shift_y: 0.0 }
+  RoundedSurface { rect: Rect { x: 115, y: 0, width: 4, height: 2 }, fill: Rgb(25, 34, 49), radius: 8.0, inset: 5.0, square: true, scale_y: 1.0, stacked: false, shift_y: 0.0 }
+  RoundedSurface { rect: Rect { x: 81, y: 3, width: 38, height: 2 }, fill: Rgb(35, 44, 59), radius: 9.0, inset: 1.5, square: false, scale_y: 1.0, stacked: false, shift_y: 0.0 }
+  RoundedSurface { rect: Rect { x: 81, y: 5, width: 38, height: 2 }, fill: Rgb(25, 34, 49), radius: 9.0, inset: 1.5, square: false, scale_y: 1.0, stacked: false, shift_y: 0.0 }
+  RoundedSurface { rect: Rect { x: 81, y: 7, width: 38, height: 2 }, fill: Rgb(25, 34, 49), radius: 9.0, inset: 1.5, square: false, scale_y: 1.0, stacked: false, shift_y: 0.0 }
+  RoundedSurface { rect: Rect { x: 81, y: 9, width: 38, height: 2 }, fill: Rgb(25, 34, 49), radius: 9.0, inset: 1.5, square: false, scale_y: 1.0, stacked: false, shift_y: 0.0 }
+  RoundedSurface { rect: Rect { x: 81, y: 11, width: 38, height: 2 }, fill: Rgb(25, 34, 49), radius: 9.0, inset: 1.5, square: false, scale_y: 1.0, stacked: false, shift_y: 0.0 }
+  RoundedSurface { rect: Rect { x: 81, y: 13, width: 38, height: 2 }, fill: Rgb(25, 34, 49), radius: 9.0, inset: 1.5, square: false, scale_y: 1.0, stacked: false, shift_y: 0.0 }
+  RoundedSurface { rect: Rect { x: 81, y: 16, width: 38, height: 2 }, fill: Rgb(25, 34, 49), radius: 9.0, inset: 1.5, square: false, scale_y: 1.0, stacked: false, shift_y: 0.0 }
+  RoundedSurface { rect: Rect { x: 81, y: 18, width: 38, height: 2 }, fill: Rgb(25, 34, 49), radius: 9.0, inset: 1.5, square: false, scale_y: 1.0, stacked: false, shift_y: 0.0 }
+  RoundedSurface { rect: Rect { x: 101, y: 18, width: 17, height: 2 }, fill: Rgb(25, 34, 49), radius: 0.0, inset: 6.0, square: false, scale_y: 1.0, stacked: true, shift_y: 0.0 }
+  RoundedSurface { rect: Rect { x: 81, y: 20, width: 38, height: 2 }, fill: Rgb(25, 34, 49), radius: 9.0, inset: 1.5, square: false, scale_y: 1.0, stacked: false, shift_y: 0.0 }
+  RoundedSurface { rect: Rect { x: 81, y: 22, width: 38, height: 2 }, fill: Rgb(25, 34, 49), radius: 9.0, inset: 1.5, square: false, scale_y: 1.0, stacked: false, shift_y: 0.0 }
+  RoundedSurface { rect: Rect { x: 81, y: 24, width: 38, height: 2 }, fill: Rgb(52, 72, 95), radius: 9.0, inset: 1.5, square: false, scale_y: 1.0, stacked: false, shift_y: 0.0 }
+  RoundedSurface { rect: Rect { x: 81, y: 38, width: 4, height: 2 }, fill: Rgb(25, 34, 49), radius: 8.0, inset: 5.0, square: true, scale_y: 1.0, stacked: false, shift_y: 0.0 }
+  RoundedSurface { rect: Rect { x: 85, y: 38, width: 4, height: 2 }, fill: Rgb(25, 34, 49), radius: 8.0, inset: 5.0, square: true, scale_y: 1.0, stacked: false, shift_y: 0.0 }
+  RoundedSurface { rect: Rect { x: 89, y: 38, width: 4, height: 2 }, fill: Rgb(25, 34, 49), radius: 8.0, inset: 5.0, square: true, scale_y: 1.0, stacked: false, shift_y: 0.0 }
+  RoundedSurface { rect: Rect { x: 115, y: 38, width: 4, height: 2 }, fill: Rgb(25, 34, 49), radius: 8.0, inset: 5.0, square: true, scale_y: 1.0, stacked: false, shift_y: 0.0 }
+  RoundedSurface { rect: Rect { x: 0, y: 0, width: 80, height: 40 }, fill: Rgb(25, 34, 49), radius: 9.0, inset: 0.0, square: false, scale_y: 1.0, stacked: false, shift_y: 0.0 }
+  RoundedSurface { rect: Rect { x: 1, y: 1, width: 78, height: 38 }, fill: Rgb(25, 34, 49), radius: 9.0, inset: 0.0, square: false, scale_y: 1.0, stacked: false, shift_y: 0.0 }
+  RoundedSurface { rect: Rect { x: 72, y: 2, width: 3, height: 1 }, fill: Rgb(35, 44, 59), radius: 9.0, inset: 0.0, square: false, scale_y: 1.0, stacked: false, shift_y: 0.0 }
+  RoundedSurface { rect: Rect { x: 5, y: 3, width: 70, height: 3 }, fill: Rgb(35, 44, 59), radius: 9.0, inset: 0.0, square: false, scale_y: 1.0, stacked: false, shift_y: 0.0 }
+  RoundedSurface { rect: Rect { x: 5, y: 7, width: 5, height: 1 }, fill: Rgb(52, 72, 95), radius: 9.0, inset: 0.0, square: false, scale_y: 1.0, stacked: false, shift_y: 0.0 }
+  RoundedSurface { rect: Rect { x: 11, y: 7, width: 8, height: 1 }, fill: Rgb(35, 44, 59), radius: 9.0, inset: 0.0, square: false, scale_y: 1.0, stacked: false, shift_y: 0.0 }
+  RoundedSurface { rect: Rect { x: 20, y: 7, width: 6, height: 1 }, fill: Rgb(35, 44, 59), radius: 9.0, inset: 0.0, square: false, scale_y: 1.0, stacked: false, shift_y: 0.0 }
+  RoundedSurface { rect: Rect { x: 27, y: 7, width: 8, height: 1 }, fill: Rgb(52, 72, 95), radius: 9.0, inset: 0.0, square: false, scale_y: 1.0, stacked: false, shift_y: 0.0 }
+  RoundedSurface { rect: Rect { x: 36, y: 7, width: 8, height: 1 }, fill: Rgb(35, 44, 59), radius: 9.0, inset: 0.0, square: false, scale_y: 1.0, stacked: false, shift_y: 0.0 }
+  RoundedSurface { rect: Rect { x: 45, y: 7, width: 9, height: 1 }, fill: Rgb(35, 44, 59), radius: 9.0, inset: 0.0, square: false, scale_y: 1.0, stacked: false, shift_y: 0.0 }
+  RoundedSurface { rect: Rect { x: 5, y: 10, width: 70, height: 4 }, fill: Rgb(52, 72, 95), radius: 9.0, inset: 0.0, square: false, scale_y: 1.0, stacked: false, shift_y: 0.0 }
+  RoundedSurface { rect: Rect { x: 5, y: 15, width: 70, height: 4 }, fill: Rgb(35, 44, 59), radius: 9.0, inset: 0.0, square: false, scale_y: 1.0, stacked: false, shift_y: 0.0 }
+  RoundedSurface { rect: Rect { x: 5, y: 20, width: 70, height: 4 }, fill: Rgb(35, 44, 59), radius: 9.0, inset: 0.0, square: false, scale_y: 1.0, stacked: false, shift_y: 0.0 }
+  RoundedSurface { rect: Rect { x: 5, y: 25, width: 70, height: 4 }, fill: Rgb(35, 44, 59), radius: 9.0, inset: 0.0, square: false, scale_y: 1.0, stacked: false, shift_y: 0.0 }
+  RoundedSurface { rect: Rect { x: 5, y: 31, width: 70, height: 4 }, fill: Rgb(35, 44, 59), radius: 9.0, inset: 0.0, square: false, scale_y: 1.0, stacked: false, shift_y: 0.0 }
+  RoundedSurface { rect: Rect { x: 69, y: 32, width: 5, height: 1 }, fill: Rgb(25, 34, 49), radius: 9.0, inset: 0.0, square: false, scale_y: 1.0, stacked: false, shift_y: 0.0 }
+  RoundedSurface { rect: Rect { x: 5, y: 37, width: 16, height: 1 }, fill: Rgb(35, 44, 59), radius: 9.0, inset: 0.0, square: false, scale_y: 1.0, stacked: false, shift_y: 0.0 }
+  RoundedSurface { rect: Rect { x: 27, y: 8, width: 17, height: 2 }, fill: Rgb(35, 44, 59), radius: 9.0, inset: 0.0, square: false, scale_y: 1.0, stacked: false, shift_y: 0.0 }
+hits:
+  Rail Rect { x: 81, y: 0, width: 4, height: 2 } "Toggle sidebar  <cmd>B"
+  Settings Rect { x: 111, y: 0, width: 4, height: 2 } "Settings  <cmd>,"
+  Refresh Rect { x: 115, y: 0, width: 4, height: 2 } "Refresh configuration  <cmd>R"
+  Search Rect { x: 81, y: 3, width: 38, height: 2 } ""
+  SpaceTitle Rect { x: 81, y: 5, width: 38, height: 2 } "Home\nHide pinned tabs and folders"
+  Tab(1) Rect { x: 81, y: 7, width: 38, height: 2 } ""
+  Folder("folder-1") Rect { x: 81, y: 9, width: 38, height: 2 } "Docs\nDrop tabs here. Right click to rename or ungroup."
+  Tab(2) Rect { x: 81, y: 11, width: 38, height: 2 } ""
+  Tab(3) Rect { x: 81, y: 13, width: 38, height: 2 } ""
+  NewTab Rect { x: 81, y: 16, width: 38, height: 2 } "New tab  <cmd>T"
+  Tab(4) Rect { x: 81, y: 18, width: 38, height: 2 } ""
+  Pane(4, 7) Rect { x: 85, y: 18, width: 16, height: 2 } ""
+  Pane(4, 8) Rect { x: 101, y: 18, width: 17, height: 1 } ""
+  Pane(4, 9) Rect { x: 101, y: 19, width: 17, height: 1 } ""
+  Tab(5) Rect { x: 81, y: 20, width: 38, height: 2 } ""
+  Tab(6) Rect { x: 81, y: 22, width: 38, height: 2 } ""
+  SettingsTab Rect { x: 81, y: 24, width: 38, height: 2 } "Settings  <cmd>,"
+  Space("home") Rect { x: 81, y: 38, width: 4, height: 2 } "Home"
+  Space("work") Rect { x: 85, y: 38, width: 4, height: 2 } "Work"
+  Space("personal") Rect { x: 89, y: 38, width: 4, height: 2 } "Personal"
+  CreateSpace Rect { x: 115, y: 38, width: 4, height: 2 } "New space"
+  CloseSettings Rect { x: 72, y: 2, width: 3, height: 1 } "Close settings (Escape)"
+  SettingsSearch Rect { x: 5, y: 3, width: 70, height: 3 } "Search settings (Command+F or Ctrl+F)"
+  SettingsCategory("all") Rect { x: 5, y: 7, width: 5, height: 1 } "All settings"
+  SettingsCategory("layout") Rect { x: 11, y: 7, width: 8, height: 1 } "Layout settings"
+  SettingsCategory("appearance") Rect { x: 20, y: 7, width: 6, height: 1 } "Tabs settings"
+  SettingsCategory("theme") Rect { x: 27, y: 7, width: 8, height: 1 } "Colors settings"
+  SettingsCategory("motion") Rect { x: 36, y: 7, width: 8, height: 1 } "Motion settings"
+  SettingsCategory("behavior") Rect { x: 45, y: 7, width: 9, height: 1 } "General settings"
+  Setting("width") Rect { x: 5, y: 10, width: 70, height: 4 } "Expanded width in logical pixels. Click or press Enter to edit. Delete restores the default."
+  Setting("rail_width") Rect { x: 5, y: 15, width: 70, height: 4 } "Collapsed width in logical pixels. Click or press Enter to edit. Delete restores the default."
+  Setting("side") Rect { x: 5, y: 20, width: 70, height: 4 } "Sidebar edge. Click or press Enter to edit. Delete restores the default."
+  Setting("rail") Rect { x: 5, y: 25, width: 70, height: 4 } "Sidebar visibility. Click or press Enter to edit. Delete restores the default."
+  Setting("animations") Rect { x: 5, y: 31, width: 70, height: 4 } "Enable finite visual transitions. Click or press Enter to edit. Delete restores the default."
+  ResetSettings Rect { x: 5, y: 37, width: 16, height: 1 } "Reset saved settings to defaults"
+cursor: None
+cursor_shift: 0
+ime_rect: None
+transform: SurfaceTransform { translate_x: 0.0, opacity: 1.0 }
+focused: None
+modal: true overlay_surface: true content_page: true text_input: false

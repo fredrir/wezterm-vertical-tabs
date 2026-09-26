@@ -617,3 +617,79 @@ fn tooltips_beside_the_sidebar() {
     let frame = draw(&mut ui, &model, WINDOW, 1400);
     assert_screen("tooltip_single_line", &ui, &frame);
 }
+
+#[test]
+fn tooltip_beside_a_right_sidebar_and_below_a_page_control() {
+    let mut model = fixture();
+    model.settings.side = Side::Right;
+    let mut ui = SidebarUi::new();
+    ui.set_layout(40, 0);
+    draw(&mut ui, &model, WINDOW, 0);
+    hover_on(&mut ui, &model, &ElementId::Space("personal".into()));
+    draw(&mut ui, &model, WINDOW, 0);
+    let frame = draw(&mut ui, &model, WINDOW, 700);
+    assert_screen("tooltip_beside_right_sidebar", &ui, &frame);
+
+    ui.open_settings();
+    draw(&mut ui, &model, WINDOW, 700);
+    hover_on(
+        &mut ui,
+        &model,
+        &ElementId::SettingsCategory("theme".into()),
+    );
+    draw(&mut ui, &model, WINDOW, 700);
+    let frame = draw(&mut ui, &model, WINDOW, 1400);
+    assert_screen("tooltip_below_settings_chip", &ui, &frame);
+}
+
+#[test]
+fn focused_empty_settings_search_shows_its_placeholder() {
+    let model = fixture();
+    let mut ui = SidebarUi::new();
+    ui.set_layout(40, 0);
+    ui.open_settings();
+    draw(&mut ui, &model, WINDOW, 0);
+    key(
+        &mut ui,
+        &model,
+        Key::Character('f'),
+        Modifiers {
+            super_key: true,
+            ..Modifiers::default()
+        },
+    );
+    let frame = draw(&mut ui, &model, WINDOW, 0);
+    assert!(ui.text_input_active());
+    assert_screen("settings_search_focused_placeholder", &ui, &frame);
+}
+
+#[test]
+fn dragging_a_pane_into_a_tab() {
+    let model = fixture();
+    let mut ui = SidebarUi::new();
+    draw(&mut ui, &model, SIDEBAR, 0);
+    let target = hit(&ui, &ElementId::Tab(6));
+    down_on(&mut ui, &model, &ElementId::Pane(4, 7), MouseButton::Left);
+    ui.set_pointer_fraction(0.5, 0.9);
+    hover(&mut ui, &model, (target.x + 5, target.y));
+    let frame = draw(&mut ui, &model, SIDEBAR, 0);
+    assert_screen("dragging_a_pane_into_a_tab", &ui, &frame);
+}
+
+#[test]
+fn space_accent_and_activity() {
+    let mut model = fixture();
+    model.dispatch(Intent::SelectSpace("work".into())).unwrap();
+    model.tabs.get_mut(&1).unwrap().bell = true;
+    model.revision += 1;
+    let mut ui = SidebarUi::new();
+    draw(&mut ui, &model, SIDEBAR, 0);
+    assert_eq!(
+        ui.theme().accent,
+        ratatui::style::Color::Rgb(0xf5, 0xa9, 0x7f)
+    );
+    hover_on(&mut ui, &model, &ElementId::Space("home".into()));
+    draw(&mut ui, &model, SIDEBAR, 0);
+    let frame = draw(&mut ui, &model, SIDEBAR, 700);
+    assert_screen("space_accent_and_activity", &ui, &frame);
+}
