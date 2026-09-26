@@ -178,19 +178,16 @@ impl SidebarUi {
         );
         let fields = fields(&self.settings_category, self.settings_query.text());
         self.settings_selected = self.settings_selected.min(fields.len().saturating_sub(1));
-        self.settings_scroll = self.settings_scroll.min(self.settings_selected);
         let mut height = row_height(area);
         if list.height < height + u16::from(height > 1) {
             height = 1;
         }
         let gap = u16::from(area.height >= 30 && height >= 4);
         let stride = height + gap;
-        while self.settings_scroll < self.settings_selected
-            && visible_end(&fields, self.settings_scroll, list.height, stride)
-                <= self.settings_selected
-        {
-            self.settings_scroll += 1;
-        }
+        self.settings_scroll =
+            list::reveal(self.settings_scroll, self.settings_selected, |start| {
+                visible_end(&fields, start, list.height, stride)
+            });
         let end = visible_end(&fields, self.settings_scroll, list.height, stride);
         let mut group = "";
         for (index, field) in fields
@@ -545,17 +542,7 @@ impl SidebarUi {
                 .filter(|hit| self.page_rect.contains(hit.rect.as_position()))
                 .map(|hit| hit.id.clone())
                 .collect();
-            if !ids.is_empty() {
-                let at = self
-                    .focused
-                    .as_ref()
-                    .and_then(|id| ids.iter().position(|candidate| candidate == id));
-                let index = if mods.shift {
-                    at.map_or(ids.len() - 1, |i| (i + ids.len() - 1) % ids.len())
-                } else {
-                    at.map_or(0, |i| (i + 1) % ids.len())
-                };
-                let id = ids[index].clone();
+            if let Some(id) = list::cycle(&ids, self.focused.as_ref(), mods.shift) {
                 self.settings_search_focused = id == ElementId::SettingsSearch;
                 if let ElementId::Setting(key) = &id {
                     self.settings_focus_setting(model, key);

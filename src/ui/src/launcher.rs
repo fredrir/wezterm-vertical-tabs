@@ -42,12 +42,9 @@ impl SidebarUi {
             empty,
         });
         self.open_overlay(Overlay::Menu(Menu {
-            title: title.into(),
-            message: None,
-            items,
             selected,
-            scroll: 0,
             search,
+            ..Menu::new(title, items)
         }));
     }
 

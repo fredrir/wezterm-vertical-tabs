@@ -169,14 +169,8 @@ impl SidebarUi {
             .style(Style::default().bg(fill))
             .render(rect, &mut self.staging);
         self.rounded_surfaces.push(RoundedSurface {
-            rect,
-            fill,
-            radius,
-            inset,
             square,
-            scale_y: 1.0,
-            stacked: false,
-            shift_y: 0.0,
+            ..RoundedSurface::new(rect, fill, radius, inset)
         });
     }
 
@@ -851,7 +845,7 @@ impl SidebarUi {
             );
         }
         if let (Some(DropTarget::Beside { .. }), Some(motion)) = (&self.drop, self.drop_motion) {
-            let edge = motion.from + (motion.to - motion.from) * motion.progress;
+            let edge = motion.position();
             let row = (edge.floor() as u16).clamp(
                 self.tabs_rect.y,
                 self.tabs_rect
@@ -859,15 +853,11 @@ impl SidebarUi {
                     .saturating_sub(1)
                     .max(self.tabs_rect.y),
             );
+            let bar = Rect::new(inner.x + 1, row, inner.width.saturating_sub(2), 1);
             self.rounded_surfaces.push(RoundedSurface {
-                rect: Rect::new(inner.x + 1, row, inner.width.saturating_sub(2), 1),
-                fill: self.theme.accent,
-                radius: 2.0,
-                inset: 0.0,
-                square: false,
                 scale_y: DROP_BAR,
-                stacked: false,
                 shift_y: edge - f32::from(row) - 0.5,
+                ..RoundedSurface::new(bar, self.theme.accent, 2.0, 0.0)
             });
         }
         if let Some(footer) = footer {
@@ -895,11 +885,7 @@ impl SidebarUi {
                 .iter()
                 .position(|s| s.id == model.selected_space)
         {
-            if index < self.space_scroll {
-                self.space_scroll = index;
-            } else if index >= self.space_scroll + slots {
-                self.space_scroll = index + 1 - slots;
-            }
+            self.space_scroll = list::reveal_rows(self.space_scroll, index, slots);
         }
         for (offset, space) in model
             .spaces
@@ -1000,12 +986,7 @@ impl SidebarUi {
             .rename
             .as_ref()
             .is_some_and(|rename| rename.id == tab.id);
-        let name = tab
-            .custom_title()
-            .map(str::to_owned)
-            .or_else(|| tab.location(model.home.as_deref()))
-            .unwrap_or_default();
-        let name = display_text(&name);
+        let name = display_text(&tab_name(tab, model.home.as_deref()).unwrap_or_default());
         let segmented = !compact
             && tab.panes.len() > 1
             && rect.width.saturating_sub(ICON_CELLS + 2)

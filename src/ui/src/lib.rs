@@ -4,6 +4,8 @@ mod icons;
 mod input;
 mod interaction;
 mod launcher;
+mod list;
+mod motion;
 mod render;
 mod settings_page;
 mod shortcuts;
@@ -254,6 +256,19 @@ struct MenuItem {
     actions: Vec<MenuItem>,
 }
 
+impl Menu {
+    fn new(title: impl Into<String>, items: Vec<MenuItem>) -> Self {
+        Self {
+            title: title.into(),
+            message: None,
+            selected: items.iter().position(|item| item.enabled).unwrap_or(0),
+            items,
+            scroll: 0,
+            search: None,
+        }
+    }
+}
+
 impl MenuItem {
     fn new(id: impl Into<String>, label: impl Into<String>, action: Action) -> Self {
         Self {
@@ -342,6 +357,12 @@ struct DropMotion {
     to: f32,
     start: Option<Duration>,
     progress: f32,
+}
+
+impl DropMotion {
+    fn position(&self) -> f32 {
+        motion::lerp(self.from, self.to, self.progress)
+    }
 }
 
 /// The tab Settings follows, and the position that anchor last gave it.
@@ -457,6 +478,21 @@ pub struct RoundedSurface {
     pub stacked: bool,
     /// Rows to move down; marks inside host-centered text follow it by half a row.
     pub shift_y: f32,
+}
+
+impl RoundedSurface {
+    pub(crate) fn new(rect: Rect, fill: ratatui::style::Color, radius: f32, inset: f32) -> Self {
+        Self {
+            rect,
+            fill,
+            radius,
+            inset,
+            square: false,
+            scale_y: 1.0,
+            stacked: false,
+            shift_y: 0.0,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -623,19 +659,15 @@ impl SidebarUi {
         accept: &str,
         action: Action,
     ) {
-        if let Some(overlay) = self.overlay.take() {
-            self.overlay_stack.push(overlay);
-        }
+        self.stash_overlay();
+        let items = vec![
+            MenuItem::new("cancel", "Cancel", Action::Close),
+            MenuItem::new("confirm", accept, action),
+        ];
         self.open_overlay(Overlay::Menu(Menu {
-            title: title.into(),
             message: Some(message.into()),
-            items: vec![
-                MenuItem::new("cancel", "Cancel", Action::Close),
-                MenuItem::new("confirm", accept, action),
-            ],
             selected: 1,
-            scroll: 0,
-            search: None,
+            ..Menu::new(title, items)
         }));
     }
     /// Rows the tab search lists after this window's own tabs.
@@ -643,14 +675,8 @@ impl SidebarUi {
         self.foreign_tabs = tabs;
     }
     pub fn show_error(&mut self, message: impl Into<String>) {
-        self.open_overlay(Overlay::Menu(Menu {
-            message: None,
-            title: message.into(),
-            items: vec![MenuItem::new("dismiss", "Dismiss", Action::Close)],
-            selected: 0,
-            scroll: 0,
-            search: None,
-        }));
+        let items = vec![MenuItem::new("dismiss", "Dismiss", Action::Close)];
+        self.open_overlay(Overlay::Menu(Menu::new(message, items)));
     }
     pub fn set_error(&mut self, message: impl Into<String>) {
         self.pending_form = None;
@@ -684,16 +710,15 @@ impl SidebarUi {
         [
             self.effect
                 .as_ref()
-                .map(|_| self.last_frame + Duration::from_millis(8)),
-            self.motion
-                .map(|_| self.last_frame + Duration::from_millis(8)),
+                .map(|_| self.last_frame + motion::FRAME),
+            self.motion.map(|_| self.last_frame + motion::FRAME),
             self.press
                 .as_ref()
                 .filter(|press| press.animating)
-                .map(|_| self.last_frame + Duration::from_millis(8)),
+                .map(|_| self.last_frame + motion::FRAME),
             self.drop_motion
                 .filter(|motion| motion.progress < 1.0)
-                .map(|_| self.last_frame + Duration::from_millis(8)),
+                .map(|_| self.last_frame + motion::FRAME),
             self.caret_deadline,
             self.tooltip_deadline,
         ]
@@ -726,12 +751,7 @@ impl SidebarUi {
     fn start_effect(&mut self, model: &Model) {
         self.effect = None;
         self.effect_area = None;
-        if model.settings.animations
-            && !model.settings.reduced_motion
-            && model.settings.animation_ms > 0
-            && self.visible
-            && self.window_focused
-        {
+        if motion::enabled(&model.settings) && self.visible && self.window_focused {
             let Some(area) = self
                 .hovered
                 .as_ref()
@@ -835,10 +855,14 @@ impl SidebarUi {
         self.overlay = Some(overlay);
         self.dirty = true;
     }
-    fn open_form(&mut self, title: impl Into<String>, kind: FormKind, value: &str) {
+    /// Keeps the current overlay to return to once the next one closes.
+    fn stash_overlay(&mut self) {
         if let Some(overlay) = self.overlay.take() {
             self.overlay_stack.push(overlay);
         }
+    }
+    fn open_form(&mut self, title: impl Into<String>, kind: FormKind, value: &str) {
+        self.stash_overlay();
         let mut editor = TextEditor::new(value);
         editor.select_all();
         self.open_overlay(Overlay::Form(Form {

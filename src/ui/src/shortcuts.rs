@@ -1,5 +1,5 @@
-use crate::*;
-use vtabs_core::{Intent, Model, RailMode};
+use crate::{interaction::toggle_rail, *};
+use vtabs_core::{Intent, Model};
 
 /// Platform shortcuts avoid intercepting ordinary terminal Control combinations.
 pub fn is_shortcut(key: &Key, mods: Modifiers) -> bool {
@@ -42,15 +42,7 @@ impl SidebarUi {
             }
             Key::Character('k' | 'K') => self.open_tab_navigator(model),
             Key::Character('z' | 'Z') => intents.push(UiIntent::Host(HostAction::OpenJobs)),
-            Key::Character('b' | 'B') => {
-                intents.push(UiIntent::Domain(Intent::SetRail(
-                    if model.settings.rail == RailMode::Expanded {
-                        RailMode::Collapsed
-                    } else {
-                        RailMode::Expanded
-                    },
-                )));
-            }
+            Key::Character('b' | 'B') => intents.push(UiIntent::Domain(toggle_rail(model))),
             Key::Character('t' | 'T') => {
                 self.hide_settings();
                 intents.push(UiIntent::Domain(if mods.shift && mods.super_key {

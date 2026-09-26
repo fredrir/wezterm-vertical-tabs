@@ -41,9 +41,7 @@ impl SidebarUi {
             if self
                 .last_rail
                 .is_some_and(|rail| rail != model.settings.rail)
-                && model.settings.animations
-                && !model.settings.reduced_motion
-                && model.settings.animation_ms > 0
+                && motion::enabled(&model.settings)
                 && self.window_focused
                 && self.visible
                 && !self.is_modal()
@@ -80,11 +78,7 @@ impl SidebarUi {
                     .position(|space| space.id == model.selected_space)
                 {
                     let rows = usize::from(self.spaces_rect.height).max(1);
-                    if index < self.space_scroll {
-                        self.space_scroll = index;
-                    } else if index >= self.space_scroll + rows {
-                        self.space_scroll = index + 1 - rows;
-                    }
+                    self.space_scroll = list::reveal_rows(self.space_scroll, index, rows);
                 }
                 self.last_selected_space = Some(model.selected_space.clone());
             }
@@ -94,7 +88,7 @@ impl SidebarUi {
                 self.last_selected_tab = model.selected_tab;
             }
             self.dirty = true;
-            if !model.settings.animations || model.settings.reduced_motion {
+            if !motion::enabled(&model.settings) {
                 self.cancel_effects();
             }
             self.prune_targets(model);
@@ -226,19 +220,9 @@ impl SidebarUi {
         let Some(motion) = &mut self.drop_motion else {
             return;
         };
-        let settings = &model.settings;
-        let span = if settings.animations && !settings.reduced_motion {
-            Duration::from_millis(u64::from(settings.animation_ms) * 2 / 3)
-        } else {
-            Duration::ZERO
-        };
+        let span = motion::span(&model.settings, 2, 3);
         let start = *motion.start.get_or_insert(now);
-        let progress = if span.is_zero() {
-            1.0
-        } else {
-            let t = (now.saturating_sub(start).as_secs_f32() / span.as_secs_f32()).clamp(0.0, 1.0);
-            1.0 - (1.0 - t).powi(3)
-        };
+        let progress = motion::eased(now, start, span);
         if motion.progress != progress {
             motion.progress = progress;
             self.dirty = true;
@@ -250,19 +234,8 @@ impl SidebarUi {
         let Some(press) = &mut self.press else {
             return;
         };
-        let settings = &model.settings;
-        let span = if settings.animations && !settings.reduced_motion {
-            Duration::from_millis(u64::from(settings.animation_ms) / 2)
-        } else {
-            Duration::ZERO
-        };
-        let eased = |from: Duration| {
-            if span.is_zero() {
-                return 1.0;
-            }
-            let t = (now.saturating_sub(from).as_secs_f32() / span.as_secs_f32()).clamp(0.0, 1.0);
-            1.0 - (1.0 - t).powi(3)
-        };
+        let span = motion::span(&model.settings, 1, 2);
+        let eased = |from: Duration| motion::eased(now, from, span);
         let down = *press.down.get_or_insert(now);
         let release = press
             .up
@@ -294,12 +267,9 @@ impl SidebarUi {
             translate_x: 0.0,
             opacity: 1.0,
         };
-        if let Some(motion) = self.motion {
-            let t = (now.saturating_sub(motion.start).as_secs_f32()
-                / motion.duration.as_secs_f32())
-            .clamp(0.0, 1.0);
-            let eased = 1.0 - (1.0 - t).powi(3);
-            transform.translate_x = motion.from + (motion.to - motion.from) * eased;
+        if let Some(surface) = self.motion {
+            let t = motion::progress(now.saturating_sub(surface.start), surface.duration);
+            transform.translate_x = motion::lerp(surface.from, surface.to, motion::ease_out(t));
             if t >= 1.0 {
                 self.motion = None;
             }
@@ -520,15 +490,7 @@ impl SidebarUi {
                     );
                 }
                 let rows = usize::from(inner.height);
-                if menu.selected < menu.scroll {
-                    menu.scroll = menu.selected;
-                }
-                if menu.selected >= menu.scroll + rows.max(1) {
-                    menu.scroll = menu.selected.saturating_sub(rows.saturating_sub(1));
-                }
-                menu.scroll = menu
-                    .scroll
-                    .min(menu.items.len().saturating_sub(rows.max(1)));
+                menu.scroll = list::scroll_to(menu.scroll, menu.selected, menu.items.len(), rows);
                 for (offset, item) in menu.items.iter().skip(menu.scroll).take(rows).enumerate() {
                     let row = Rect::new(inner.x, inner.y + offset as u16, inner.width, 1);
                     let selected = menu.scroll + offset == menu.selected;
@@ -737,13 +699,7 @@ impl SidebarUi {
             inner.bottom().saturating_sub(field.bottom() + gap),
         );
         let rows = usize::from(list.height / line).max(1);
-        if menu.selected < menu.scroll {
-            menu.scroll = menu.selected;
-        }
-        if menu.selected >= menu.scroll + rows {
-            menu.scroll = menu.selected + 1 - rows;
-        }
-        menu.scroll = menu.scroll.min(menu.items.len().saturating_sub(rows));
+        menu.scroll = list::scroll_to(menu.scroll, menu.selected, menu.items.len(), rows);
         if menu.items.is_empty() && list.height > 0 {
             self.write(
                 Rect::new(list.x + 1, list.y, list.width.saturating_sub(2), 1),
@@ -840,15 +796,10 @@ impl SidebarUi {
         if let Some(selection) = editor.selection_columns() {
             let columns = visible_columns(selection);
             if !columns.is_empty() {
+                let selection = Rect::new(columns.start, rect.y, columns.end - columns.start, 1);
                 self.rounded_surfaces.push(RoundedSurface {
-                    rect: Rect::new(columns.start, rect.y, columns.end - columns.start, 1),
-                    fill: self.theme.accent,
-                    radius: 2.0,
-                    inset: 0.0,
-                    square: false,
-                    scale_y: 1.0,
-                    stacked: false,
                     shift_y: self.editor_shift,
+                    ..RoundedSurface::new(selection, self.theme.accent, 2.0, 0.0)
                 });
                 for x in columns {
                     self.staging[(x, rect.y)].set_style(
