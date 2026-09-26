@@ -1,4 +1,7 @@
-use crate::{interaction::toggle_rail, *};
+use crate::actions::toggle_rail;
+use crate::input::{Key, Modifiers};
+use crate::intent::{HostAction, UiIntent};
+use crate::{SidebarUi, icons};
 use vtabs_core::{Intent, Model};
 
 /// Tooltips spell shortcuts as `Cmd+`; other platforms press Ctrl+Shift instead.

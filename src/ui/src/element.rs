@@ -1,0 +1,42 @@
+use vtabs_core::{PaneId, SpaceId, TabId};
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum ElementId {
+    SpaceTitle,
+    Search,
+    Refresh,
+    CreateFolder,
+    Folder(String),
+    SettingsCategory(String),
+    SettingsSearch,
+    CloseSettings,
+    ResetSettings,
+    CreateSpace,
+    NewTab,
+    Settings,
+    SettingsTab,
+    CloseSettingsTab,
+    Rail,
+    Space(SpaceId),
+    Tab(TabId),
+    Pane(TabId, PaneId),
+    ClosePane(TabId, PaneId),
+    CloseTab(TabId),
+    Menu(String),
+    Setting(String),
+    Editor,
+    Submit,
+    Cancel,
+}
+
+impl ElementId {
+    /// Controls nested in a row share its hover, press and drag identity.
+    pub(crate) fn row(&self) -> ElementId {
+        match self {
+            Self::CloseTab(id) | Self::Pane(id, _) | Self::ClosePane(id, _) => Self::Tab(*id),
+            Self::CloseSettingsTab => Self::SettingsTab,
+            Self::CreateFolder => Self::SpaceTitle,
+            other => other.clone(),
+        }
+    }
+}

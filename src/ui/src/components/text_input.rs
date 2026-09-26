@@ -1,12 +1,9 @@
 //! One painter for forms, search fields and inline renames.
-use crate::{
-    ElementId, TextEditor,
-    runtime::canvas::{Canvas, Field, RoundedSurface},
-};
-use ratatui::{
-    layout::{Position, Rect},
-    style::{Color, Style},
-};
+use crate::element::ElementId;
+use crate::input::TextEditor;
+use crate::runtime::canvas::{Canvas, Field, RoundedSurface};
+use ratatui::layout::{Position, Rect};
+use ratatui::style::{Color, Style};
 use std::ops::Range;
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;

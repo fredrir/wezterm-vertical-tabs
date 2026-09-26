@@ -1,11 +1,12 @@
 //! The list row behind tabs, folders, the search field and launcher entries.
-use super::{DROP_TINT, ICON_CELLS, ROW_INSET, SURFACE_RADIUS, TRAILING_CELLS};
-use crate::{ElementId, icons, runtime::canvas::Canvas, shortcuts::platform_tooltip};
-use ratatui::{
-    layout::{Alignment, Rect},
-    style::{Color, Style},
-    text::Line,
-};
+use crate::components::{DROP_TINT, ICON_CELLS, ROW_INSET, SURFACE_RADIUS, TRAILING_CELLS};
+use crate::element::ElementId;
+use crate::icons;
+use crate::keybinds::platform_tooltip;
+use crate::runtime::canvas::Canvas;
+use ratatui::layout::{Alignment, Rect};
+use ratatui::style::{Color, Style};
+use ratatui::text::Line;
 use unicode_width::UnicodeWidthStr;
 
 /// A control that appears at the row's end while it is hovered or focused.

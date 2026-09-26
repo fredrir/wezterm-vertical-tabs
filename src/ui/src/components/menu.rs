@@ -1,6 +1,9 @@
 //! Context menus: a framed list anchored at the pointer, or centered without one.
-use super::{anchored, centered, panel};
-use crate::{ElementId, Menu, input::display_text, list, runtime::canvas::Canvas};
+use crate::components::{anchored, centered, list, panel};
+use crate::element::ElementId;
+use crate::input::display_text;
+use crate::overlays::Menu;
+use crate::runtime::canvas::Canvas;
 use ratatui::layout::{Position, Rect};
 use unicode_width::UnicodeWidthStr;
 

@@ -1,6 +1,7 @@
 use crate::icons;
 use ratatui::style::{Color, Style};
 use std::collections::BTreeMap;
+use vtabs_core::Model;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Theme {
@@ -36,7 +37,35 @@ impl Default for Theme {
 }
 
 impl Theme {
-    pub(crate) fn sync_surfaces(&mut self) {
+    /// Follows the settings, the selected space's accent and private windows.
+    pub(crate) fn apply(&mut self, model: &Model) {
+        let settings = &model.settings;
+        self.background = Self::parse_color(&settings.background).unwrap_or(self.background);
+        self.foreground = Self::parse_color(&settings.foreground).unwrap_or(self.foreground);
+        self.muted = Self::parse_color(&settings.muted).unwrap_or(self.muted);
+        self.selected = Self::parse_color(&settings.selected_background).unwrap_or(self.selected);
+        self.private = Self::parse_color(&settings.private_accent).unwrap_or(self.private);
+        self.machines = settings
+            .distro_colors
+            .iter()
+            .filter_map(|(os, color)| Some((os.clone(), Self::parse_color(color)?)))
+            .collect();
+        self.accent = if model.private {
+            self.private
+        } else {
+            model
+                .spaces
+                .iter()
+                .find(|space| space.id == model.selected_space)
+                .and_then(|space| space.accent.as_deref())
+                .and_then(Self::parse_color)
+                .or_else(|| Self::parse_color(&settings.accent))
+                .unwrap_or(self.accent)
+        };
+        self.sync_surfaces();
+    }
+
+    fn sync_surfaces(&mut self) {
         if !matches!(
             (self.background, self.foreground),
             (Color::Rgb(..), Color::Rgb(..))

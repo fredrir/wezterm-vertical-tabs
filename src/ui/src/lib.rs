@@ -1,373 +1,53 @@
 //! Event-driven in-memory Ratatui UI. The host publishes complete frames atomically and
 //! schedules only `next_deadline`; this crate performs no terminal, mux, or storage I/O.
+mod actions;
 mod components;
+mod element;
+mod events;
 mod icons;
 mod input;
-mod interaction;
-mod launcher;
-mod list;
-mod motion;
-mod render;
+mod intent;
+mod keybinds;
+mod overlays;
 mod runtime;
-mod settings_page;
-mod shortcuts;
-mod sidebar;
 mod theme;
+mod views;
 
+pub use element::ElementId;
 pub use input::{EditResult, Key, Modifiers, MouseButton, TextEditor, UiInput};
+pub use intent::{HostAction, UiIntent};
+pub use keybinds::is_shortcut;
 pub use ratatui::{buffer::Buffer, layout::Rect};
 pub use runtime::canvas::{HitRegion, RoundedSurface};
-pub use shortcuts::is_shortcut;
+pub use runtime::frame::{FrameUpdate, SurfaceTransform};
 pub use theme::Theme;
+pub use views::launcher::{ForeignTab, JobEntry};
 
-#[cfg(test)]
-#[path = "../tests/input.rs"]
-mod input_tests;
-
-#[cfg(test)]
-#[path = "../tests/interaction_flow.rs"]
-mod interaction_flow_tests;
-
-#[cfg(test)]
-#[path = "../tests/settings_page.rs"]
-mod settings_page_tests;
+use actions::Action;
+use events::Pointer;
+use overlays::{FormKind, Menu, MenuItem, Overlay, Overlays};
+use ratatui::layout::Position;
+use runtime::{
+    canvas::Paint,
+    frame::Frame,
+    motion::{self, Caret, Effects, Tooltip, Tween},
+};
+use std::time::Duration;
+use views::{launcher::Launchers, settings_page::SettingsPage, sidebar::Sidebar};
+use vtabs_core::{Intent, PaneId, TabId};
 
 #[cfg(test)]
 #[path = "../tests/snapshots.rs"]
 mod snapshot_tests;
 
 #[cfg(test)]
-#[path = "../tests/transient_surfaces.rs"]
-mod transient_surfaces_tests;
-
-#[cfg(test)]
 #[path = "../tests/ui.rs"]
 mod ui_tests;
-
-pub use launcher::JobEntry;
-use launcher::{Launcher, Launchers, filter_menu};
-use motion::{Caret, Effects, Tooltip, Tween};
-use ratatui::layout::Position;
-use runtime::canvas::Paint;
-use settings_page::SettingsPage;
-use sidebar::{InlineRename, Sidebar};
-use std::time::Duration;
-use tachyonfx::fx;
-use vtabs_core::{Intent, Model, PaneId, SpaceId, Tab, TabId};
-
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub enum ElementId {
-    SpaceTitle,
-    Search,
-    Refresh,
-    CreateFolder,
-    Folder(String),
-    SettingsCategory(String),
-    SettingsSearch,
-    CloseSettings,
-    ResetSettings,
-    CreateSpace,
-    NewTab,
-    Settings,
-    SettingsTab,
-    CloseSettingsTab,
-    Rail,
-    Space(SpaceId),
-    Tab(TabId),
-    Pane(TabId, PaneId),
-    ClosePane(TabId, PaneId),
-    CloseTab(TabId),
-    Menu(String),
-    Setting(String),
-    Editor,
-    Submit,
-    Cancel,
-}
-
-impl ElementId {
-    /// Controls nested in a row share its hover, press and drag identity.
-    pub(crate) fn row(&self) -> ElementId {
-        match self {
-            Self::CloseTab(id) | Self::Pane(id, _) | Self::ClosePane(id, _) => Self::Tab(*id),
-            Self::CloseSettingsTab => Self::SettingsTab,
-            Self::CreateFolder => Self::SpaceTitle,
-            other => other.clone(),
-        }
-    }
-}
-
-#[derive(Clone, Debug)]
-pub enum HostAction {
-    OpenJobs,
-    Job(vtabs_core::jobs::JobTarget, vtabs_core::jobs::JobOperation),
-    /// Custom menu actions remain semantic; the adapter resolves a registered Lua action.
-    Custom(String),
-    MoveTabToNewWindow(TabId),
-    /// The host closes an idle tab directly and asks `confirm_close_tab` for a busy one.
-    CloseTab(TabId),
-    FocusPane(TabId, PaneId),
-    /// The host closes an idle split directly and asks `confirm_close_pane` for a busy one.
-    ClosePane(TabId, PaneId),
-    KillPane(TabId, PaneId),
-    /// A pane dragged out of its tab becomes a tab of its own, optionally at an index.
-    DetachPane {
-        tab: TabId,
-        pane: PaneId,
-        index: Option<usize>,
-    },
-    /// A pane dropped inside another tab becomes one of its splits.
-    JoinPane {
-        pane: PaneId,
-        tab: TabId,
-    },
-    /// A tab dropped inside another tab hands over every pane it has.
-    JoinTab {
-        source: TabId,
-        tab: TabId,
-    },
-    /// The host asks the owning window to show a tab, reattaching its domain if needed.
-    ShowTab {
-        window: u64,
-        tab: TabId,
-    },
-}
-
-/// A tab outside this window's sidebar: another window's, or one a detached domain took.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ForeignTab {
-    pub window: u64,
-    pub id: TabId,
-    pub label: String,
-    pub title: String,
-    pub place: String,
-    pub remote: bool,
-    pub os: String,
-}
-impl ForeignTab {
-    pub fn new(window: u64, tab: &Tab, home: Option<&str>, place: impl Into<String>) -> Self {
-        Self {
-            window,
-            id: tab.id,
-            label: tab_name(tab, home).unwrap_or_else(|| tab.title.clone()),
-            title: tab.title.clone(),
-            place: place.into(),
-            remote: tab.remote,
-            os: tab.os.clone(),
-        }
-    }
-}
-
-fn spans_machines(tab: &Tab) -> bool {
-    let mut glyphs = tab
-        .panes
-        .iter()
-        .map(|pane| icons::host(pane.remote, &pane.os));
-    glyphs
-        .next()
-        .is_some_and(|first| glyphs.any(|glyph| glyph != first))
-}
-
-/// Splits spanning several machines read as an unknown remote rather than following focus.
-fn tab_machine(tab: &Tab) -> (bool, &str) {
-    if spans_machines(tab) {
-        return (true, "");
-    }
-    tab.panes
-        .iter()
-        .find(|pane| pane.active)
-        .map_or((tab.remote, &tab.os), |pane| (pane.remote, &pane.os))
-}
-
-fn tab_name(tab: &Tab, home: Option<&str>) -> Option<String> {
-    tab.custom_title()
-        .map(str::to_owned)
-        .or_else(|| tab.location(home))
-}
-
-#[derive(Clone, Debug)]
-pub enum UiIntent {
-    Refresh,
-    Domain(Intent),
-    SetClipboard(String),
-    RequestClipboard,
-    Host(HostAction),
-}
-
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub struct SurfaceTransform {
-    /// Fraction of the surface width. Applied by the compositor, never to pane sizes.
-    pub translate_x: f32,
-    pub opacity: f32,
-}
-
-#[derive(Clone, Debug)]
-pub struct FrameUpdate {
-    pub revision: u64,
-    pub resized: bool,
-    pub changed_cells: Vec<(u16, u16)>,
-    pub dirty_rows: Vec<u16>,
-    pub cursor: Option<Position>,
-    /// Rows the caret moves down to follow text the host centers in a two-row surface.
-    pub cursor_shift: f32,
-    pub ime_rect: Option<Rect>,
-    pub transform: SurfaceTransform,
-}
-
-#[derive(Clone, Debug)]
-enum Action {
-    Domain(Intent),
-    NewSpace,
-    NewFolder,
-    RenameFolder(String),
-    MoveToFolder(TabId),
-    RenameSpace(SpaceId),
-    EditSpaceIcon(SpaceId),
-    EditSpaceAccent(SpaceId),
-    EditSpaceRules(SpaceId),
-    DeleteSpace(SpaceId),
-    RenameTab(TabId),
-    MoveTab(TabId),
-    CloseTab(TabId),
-    KillPane(TabId, PaneId),
-    Host(HostAction),
-    Settings,
-    CloseSettings,
-    EditSetting(String),
-    ResetSetting(String),
-    EditorCommand { key: Key, target: ElementId },
-    Submenu { title: String, items: Vec<MenuItem> },
-    Confirm { label: String, action: Box<Action> },
-    Close,
-}
-
-#[derive(Clone, Debug)]
-struct MenuItem {
-    id: String,
-    /// Palette rows share the sidebar's icon slot and index badge.
-    icon: &'static str,
-    icon_color: Option<ratatui::style::Color>,
-    index: Option<usize>,
-    label: String,
-    hint: String,
-    /// Matched by search but not shown.
-    keywords: String,
-    action: Action,
-    enabled: bool,
-    actions: Vec<MenuItem>,
-}
-
-impl Menu {
-    fn new(title: impl Into<String>, items: Vec<MenuItem>) -> Self {
-        Self {
-            title: title.into(),
-            message: None,
-            selected: items.iter().position(|item| item.enabled).unwrap_or(0),
-            items,
-            scroll: 0,
-            search: None,
-        }
-    }
-}
-
-impl MenuItem {
-    fn new(id: impl Into<String>, label: impl Into<String>, action: Action) -> Self {
-        Self {
-            id: id.into(),
-            icon: "",
-            icon_color: None,
-            index: None,
-            label: label.into(),
-            hint: String::new(),
-            keywords: String::new(),
-            action,
-            enabled: true,
-            actions: Vec::new(),
-        }
-    }
-}
-
-#[derive(Clone, Debug)]
-struct Menu {
-    title: String,
-    /// A confirmation: the title asks, this explains, and the items read as buttons.
-    message: Option<String>,
-    items: Vec<MenuItem>,
-    selected: usize,
-    scroll: usize,
-    search: Option<Launcher>,
-}
-
-#[derive(Clone, Debug)]
-enum FormKind {
-    CreateFolder,
-    RenameFolder(String),
-    CreateSpace,
-    RenameSpace(SpaceId),
-    SpaceIcon(SpaceId),
-    SpaceAccent(SpaceId),
-    SpaceRules(SpaceId),
-    RenameTab(TabId),
-    Setting(String),
-}
-
-#[derive(Clone, Debug)]
-struct Form {
-    title: String,
-    kind: FormKind,
-    editor: TextEditor,
-    error: Option<String>,
-}
-
-#[derive(Clone, Debug)]
-enum Overlay {
-    Menu(Menu),
-    Form(Form),
-}
-
-/// Stamps resolve at the next render; input events carry no clock of their own.
-#[derive(Clone, Debug)]
-struct Press {
-    id: ElementId,
-    down: Option<Duration>,
-    up: Option<Option<Duration>>,
-    level: f32,
-    animating: bool,
-}
-
-/// Where a drag would land, resolved on every pointer move so the preview never lies.
-#[derive(Clone, Debug, PartialEq, Eq)]
-enum DropTarget {
-    /// Reorder next to a tab; a dragged pane becomes a tab of its own there.
-    Beside {
-        tab: TabId,
-        after: bool,
-    },
-    /// Become a split of this tab.
-    Into(TabId),
-    Folder(String),
-    /// Leave folders and pins behind; a dragged pane becomes the last tab.
-    NewTab,
-    Space(SpaceId),
-}
-
-/// The drop preview glides between targets instead of jumping.
-#[derive(Clone, Copy, Debug)]
-struct DropMotion {
-    from: f32,
-    to: f32,
-    start: Option<Duration>,
-    progress: f32,
-}
-
-impl DropMotion {
-    fn position(&self) -> f32 {
-        motion::lerp(self.from, self.to, self.progress)
-    }
-}
 
 /// The UI retains allocated buffers and composes only after semantic invalidation.
 /// `Model::revision` must change with model data. `invalidate` handles external style/focus
 /// changes; terminal repaint alone does not invalidate the sidebar.
+#[derive(Default)]
 pub struct SidebarUi {
     pub theme: Theme,
     frame: Frame,
@@ -382,33 +62,6 @@ pub struct SidebarUi {
     settings: SettingsPage,
     overlays: Overlays,
     launchers: Launchers,
-}
-
-/// The published buffer, the one being composed and what they were composed from.
-struct Frame {
-    buffer: Buffer,
-    staging: Buffer,
-    revision: Option<u64>,
-    number: u64,
-    dirty: bool,
-    last: Duration,
-    now: Duration,
-    last_rail: Option<vtabs_core::RailMode>,
-}
-
-impl Default for Frame {
-    fn default() -> Self {
-        Self {
-            buffer: Buffer::default(),
-            staging: Buffer::default(),
-            revision: None,
-            number: 0,
-            dirty: true,
-            last: Duration::ZERO,
-            now: Duration::ZERO,
-            last_rail: None,
-        }
-    }
 }
 
 struct Host {
@@ -435,67 +88,6 @@ impl Host {
     }
 }
 
-struct Pointer {
-    hovered: Option<ElementId>,
-    drag: Option<ElementId>,
-    dragging: bool,
-    origin: Option<(u16, u16)>,
-    /// Where inside its cell the pointer sits; rows are too short to zone by cells alone.
-    fraction: (f32, f32),
-    press: Option<Press>,
-    drop: Option<DropTarget>,
-    drop_motion: Option<DropMotion>,
-    drag_label: String,
-    last_click: Option<(ElementId, Duration)>,
-}
-
-impl Default for Pointer {
-    fn default() -> Self {
-        Self {
-            hovered: None,
-            drag: None,
-            dragging: false,
-            origin: None,
-            fraction: (0.5, 0.5),
-            press: None,
-            drop: None,
-            drop_motion: None,
-            drag_label: String::new(),
-            last_click: None,
-        }
-    }
-}
-
-impl Pointer {
-    fn cancel_drag(&mut self) {
-        self.drag = None;
-        self.dragging = false;
-        self.drop = None;
-        self.drop_motion = None;
-    }
-}
-
-#[derive(Default)]
-struct Overlays {
-    current: Option<Overlay>,
-    stack: Vec<Overlay>,
-    restore_focus: Option<ElementId>,
-    pending_form: Option<u64>,
-    rect: Rect,
-    /// Sidebar-relative origin for the next context menu; sidebar placement changes
-    /// between the sidebar-only grid and the window viewport.
-    anchor: Option<Position>,
-}
-
-impl Overlays {
-    /// Keeps the current overlay to return to once the next one closes.
-    fn stash(&mut self) {
-        if let Some(overlay) = self.current.take() {
-            self.stack.push(overlay);
-        }
-    }
-}
-
 fn running(process: &str) -> String {
     if process.is_empty() {
         "A process is still running.".into()
@@ -506,29 +98,9 @@ fn running(process: &str) -> String {
 
 pub type Ui = SidebarUi;
 
-impl Default for SidebarUi {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl SidebarUi {
     pub fn new() -> Self {
-        Self {
-            theme: Theme::default(),
-            frame: Frame::default(),
-            paint: Paint::default(),
-            host: Host::default(),
-            focused: None,
-            pointer: Pointer::default(),
-            caret: Caret::default(),
-            tooltip: Tooltip::default(),
-            effects: Effects::default(),
-            sidebar: Sidebar::default(),
-            settings: SettingsPage::default(),
-            overlays: Overlays::default(),
-            launchers: Launchers::default(),
-        }
+        Self::default()
     }
     pub fn buffer(&self) -> &Buffer {
         &self.frame.buffer
@@ -578,25 +150,6 @@ impl SidebarUi {
             "Close",
             Action::KillPane(tab, pane),
         );
-    }
-    /// Every confirmation shares one dialog with the accepting button preselected.
-    fn confirm(
-        &mut self,
-        title: impl Into<String>,
-        message: impl Into<String>,
-        accept: &str,
-        action: Action,
-    ) {
-        self.overlays.stash();
-        let items = vec![
-            MenuItem::new("cancel", "Cancel", Action::Close),
-            MenuItem::new("confirm", accept, action),
-        ];
-        self.open_overlay(Overlay::Menu(Menu {
-            message: Some(message.into()),
-            selected: 1,
-            ..Menu::new(title, items)
-        }));
     }
     /// Rows the tab search lists after this window's own tabs.
     pub fn set_foreign_tabs(&mut self, tabs: Vec<ForeignTab>) {
@@ -686,27 +239,6 @@ impl SidebarUi {
             self.frame.dirty = true;
         }
     }
-    fn start_effect(&mut self, model: &Model) {
-        self.effects.cell = None;
-        self.effects.cell_area = None;
-        if motion::enabled(&model.settings) && self.host.live() {
-            let Some(area) = self
-                .pointer
-                .hovered
-                .as_ref()
-                .or(self.focused.as_ref())
-                .and_then(|id| self.paint.hits.iter().find(|hit| &hit.id == id))
-                .map(|hit| hit.rect)
-            else {
-                return;
-            };
-            self.effects.cell = Some(fx::fade_from_fg(
-                self.theme.muted,
-                u32::from(model.settings.animation_ms),
-            ));
-            self.effects.cell_area = Some(area);
-        }
-    }
     /// Animate only the surface. The caller has already committed the final pane
     /// reservation and must not derive content geometry from this visual transform.
     pub fn transition_surface(&mut self, from: f32, to: f32, now: Duration, duration: Duration) {
@@ -783,117 +315,7 @@ impl SidebarUi {
     pub fn open_create_space(&mut self) {
         self.open_form("Create space", FormKind::CreateSpace, "");
     }
-    fn open_overlay(&mut self, overlay: Overlay) {
-        self.cancel_effects();
-        self.caret.stop();
-        self.caret.visible = true;
-        self.tooltip.hide();
-        if self.overlays.current.is_none() && self.overlays.stack.is_empty() {
-            self.overlays.restore_focus = self.focused.clone();
-        }
-        self.overlays.current = Some(overlay);
-        self.frame.dirty = true;
-    }
-    fn open_form(&mut self, title: impl Into<String>, kind: FormKind, value: &str) {
-        self.overlays.stash();
-        let mut editor = TextEditor::new(value);
-        editor.select_all();
-        self.open_overlay(Overlay::Form(Form {
-            title: title.into(),
-            kind,
-            editor,
-            error: None,
-        }));
-        self.focused = Some(ElementId::Editor);
-        self.reset_caret();
-    }
     fn reset_caret(&mut self) {
         self.caret.restart(self.frame.now, self.host.live());
-    }
-    fn back(&mut self) {
-        if let Some(previous) = self.overlays.stack.pop() {
-            self.overlays.current = Some(previous);
-            self.caret.stop();
-            self.frame.dirty = true;
-        } else {
-            self.dismiss();
-        }
-    }
-
-    /// The editor that receives typed text right now.
-    fn active_editor(&self) -> Option<EditorSlot> {
-        match &self.overlays.current {
-            Some(Overlay::Form(_)) => {
-                (self.focused == Some(ElementId::Editor)).then_some(EditorSlot::Form)
-            }
-            Some(Overlay::Menu(menu)) => menu.search.as_ref().map(|_| EditorSlot::Palette),
-            None if self.sidebar.rename.is_some() => Some(EditorSlot::Rename),
-            None => (self.settings.open
-                && self.settings.search_focused
-                && self.focused == Some(ElementId::SettingsSearch))
-            .then_some(EditorSlot::SettingsSearch),
-        }
-    }
-    /// The editor a pointer target belongs to, focused or not.
-    fn editor_slot(&self, id: &ElementId) -> Option<EditorSlot> {
-        match (id, &self.overlays.current) {
-            (ElementId::Editor, Some(Overlay::Form(_))) => Some(EditorSlot::Form),
-            (ElementId::Editor, Some(Overlay::Menu(menu))) => {
-                menu.search.as_ref().map(|_| EditorSlot::Palette)
-            }
-            (ElementId::Editor, None) => self.sidebar.rename.as_ref().map(|_| EditorSlot::Rename),
-            (ElementId::SettingsSearch, None) => {
-                self.settings.open.then_some(EditorSlot::SettingsSearch)
-            }
-            _ => None,
-        }
-    }
-    fn editor(&self, slot: EditorSlot) -> Option<&TextEditor> {
-        match (slot, &self.overlays.current) {
-            (EditorSlot::Form, Some(Overlay::Form(form))) => Some(&form.editor),
-            (EditorSlot::Palette, Some(Overlay::Menu(menu))) => {
-                menu.search.as_ref().map(|search| &search.editor)
-            }
-            (EditorSlot::Rename, _) => self.sidebar.rename.as_ref().map(|rename| &rename.editor),
-            (EditorSlot::SettingsSearch, _) => Some(&self.settings.query),
-            _ => None,
-        }
-    }
-    fn editor_mut(&mut self, slot: EditorSlot) -> Option<&mut TextEditor> {
-        match (slot, &mut self.overlays.current) {
-            (EditorSlot::Form, Some(Overlay::Form(form))) => Some(&mut form.editor),
-            (EditorSlot::Palette, Some(Overlay::Menu(menu))) => {
-                menu.search.as_mut().map(|search| &mut search.editor)
-            }
-            (EditorSlot::Rename, _) => self
-                .sidebar
-                .rename
-                .as_mut()
-                .map(|rename| &mut rename.editor),
-            (EditorSlot::SettingsSearch, _) => Some(&mut self.settings.query),
-            _ => None,
-        }
-    }
-}
-
-/// The four places text is edited; only one receives input at a time.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum EditorSlot {
-    Form,
-    Palette,
-    Rename,
-    SettingsSearch,
-}
-
-impl EditorSlot {
-    /// The palette keeps a steady caret; every other editor blinks.
-    fn blinks(self) -> bool {
-        self != Self::Palette
-    }
-    fn element(self) -> ElementId {
-        match self {
-            Self::SettingsSearch => ElementId::SettingsSearch,
-            Self::Form | Self::Palette | Self::Rename => ElementId::Editor,
-        }
     }
 }

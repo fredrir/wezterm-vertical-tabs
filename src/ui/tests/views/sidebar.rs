@@ -1,6 +1,11 @@
+use super::tab::{PaneSlot, pane_slots};
 use super::*;
-use crate::{components::PRESS_INSET, *};
+use crate::{
+    components::{ICON_CELLS, PRESS_INSET},
+    *,
+};
 use std::time::Duration;
+use unicode_width::UnicodeWidthStr;
 use vtabs_core::{Space, Tab};
 
 fn row_text(ui: &SidebarUi, rect: Rect, y: u16) -> String {

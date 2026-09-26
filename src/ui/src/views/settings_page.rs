@@ -1,15 +1,16 @@
-use crate::{
-    components::{
-        button::Button,
-        text_input::{Selection, TextInput},
-    },
-    runtime::canvas::Canvas,
-    *,
-};
+use crate::SidebarUi;
+use crate::components::button::Button;
+use crate::components::list;
+use crate::components::text_input::{Selection, TextInput};
+use crate::element::ElementId;
+use crate::input::{EditResult, Key, Modifiers, TextEditor, display_text};
+use crate::intent::UiIntent;
+use crate::runtime::canvas::Canvas;
+use ratatui::layout::Rect;
 use ratatui::style::Modifier;
 use std::collections::BTreeSet;
 use unicode_width::UnicodeWidthStr;
-use vtabs_core::{SettingDescriptor, SettingKind, settings};
+use vtabs_core::{Intent, Model, SettingDescriptor, SettingKind, settings};
 
 const CATEGORIES: &[(&str, &str)] = &[
     ("all", "All"),
@@ -49,7 +50,7 @@ impl Default for SettingsPage {
     }
 }
 
-fn fields(category: &str, query: &str) -> Vec<&'static SettingDescriptor> {
+pub(crate) fn fields(category: &str, query: &str) -> Vec<&'static SettingDescriptor> {
     let query = query.trim().to_lowercase();
     settings::descriptors()
         .iter()
@@ -91,11 +92,11 @@ fn value_label(model: &Model, field: &SettingDescriptor) -> String {
         _ if value.is_null() => "Automatic".into(),
         _ => value
             .as_str()
-            .map_or_else(|| value.to_string(), input::display_text),
+            .map_or_else(|| value.to_string(), display_text),
     }
 }
 
-fn row_height(area: Rect) -> u16 {
+pub(crate) fn row_height(area: Rect) -> u16 {
     if area.height >= 18 && area.width >= 22 {
         4
     } else if area.height >= 11 && area.width >= 14 {
@@ -302,7 +303,7 @@ impl SettingsPage {
             .render(rect, cx);
     }
 
-    fn search(&mut self, rect: Rect, overlay_open: bool, cx: &mut Canvas) {
+    pub(crate) fn search(&mut self, rect: Rect, overlay_open: bool, cx: &mut Canvas) {
         let theme = cx.theme;
         cx.rounded(rect, theme.card);
         let inset = u16::from(rect.width >= 4);
@@ -588,3 +589,7 @@ impl SidebarUi {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "../../tests/views/settings_page.rs"]
+mod tests;

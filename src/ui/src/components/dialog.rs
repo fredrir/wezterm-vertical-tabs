@@ -1,11 +1,13 @@
 //! Modal surfaces that ask for a decision or a value.
-use super::{
-    ICON_CELLS,
-    button::{Button, Tone},
-    centered, panel,
-    text_input::TextInput,
-};
-use crate::{Action, ElementId, Form, Menu, icons, input::display_text, runtime::canvas::Canvas};
+use crate::actions::Action;
+use crate::components::button::{Button, Tone};
+use crate::components::text_input::TextInput;
+use crate::components::{ICON_CELLS, centered, panel};
+use crate::element::ElementId;
+use crate::icons;
+use crate::input::display_text;
+use crate::overlays::{Form, Menu};
+use crate::runtime::canvas::Canvas;
 use ratatui::layout::Rect;
 use unicode_width::UnicodeWidthStr;
 

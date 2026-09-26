@@ -1,7 +1,8 @@
+use crate::SidebarUi;
 use ratatui::layout::Rect;
 use std::time::Duration;
-use tachyonfx::Effect;
-use vtabs_core::Settings;
+use tachyonfx::{Effect, fx};
+use vtabs_core::{Model, Settings};
 
 /// Frame cadence while anything animates.
 pub(crate) const FRAME: Duration = Duration::from_millis(8);
@@ -28,7 +29,7 @@ pub(crate) fn ease_out(t: f32) -> f32 {
 }
 
 /// Eased progress of an animation that started at `from`; a zero span finishes at once.
-pub(crate) fn eased(now: Duration, from: Duration, span: Duration) -> f32 {
+fn eased(now: Duration, from: Duration, span: Duration) -> f32 {
     if span.is_zero() {
         1.0
     } else {
@@ -66,7 +67,7 @@ impl Effects {
     }
 }
 
-pub(crate) const CARET_BLINK: Duration = Duration::from_millis(600);
+const CARET_BLINK: Duration = Duration::from_millis(600);
 pub(crate) const TOOLTIP_DELAY: Duration = Duration::from_millis(600);
 
 pub(crate) struct Caret {
@@ -125,5 +126,70 @@ impl Tooltip {
             return true;
         }
         false
+    }
+}
+
+impl SidebarUi {
+    /// A press shrinks its surface and a release grows it back, even for a quick click.
+    pub(crate) fn advance_press(&mut self, model: &Model, now: Duration) {
+        let Some(press) = &mut self.pointer.press else {
+            return;
+        };
+        let span = span(&model.settings, 1, 2);
+        let eased = |from: Duration| eased(now, from, span);
+        let down = *press.down.get_or_insert(now);
+        let release = press
+            .up
+            .as_mut()
+            .map(|up| (*up.get_or_insert(now)).max(down + span));
+        let level = match release {
+            Some(up) if now >= up => 1.0 - eased(up),
+            _ => eased(down),
+        };
+        let finished = release.is_some_and(|up| now >= up + span);
+        press.animating = !finished && (release.is_some() || level < 1.0);
+        if press.level != level || finished {
+            press.level = level;
+            self.frame.dirty = true;
+        }
+        if finished {
+            self.pointer.press = None;
+        }
+    }
+
+    /// Drop previews move fast enough to keep up with the pointer, never slower than a frame or two.
+    pub(crate) fn advance_drop(&mut self, model: &Model, now: Duration) {
+        let Some(motion) = &mut self.pointer.drop_motion else {
+            return;
+        };
+        let span = span(&model.settings, 2, 3);
+        let start = *motion.start.get_or_insert(now);
+        let progress = eased(now, start, span);
+        if motion.progress != progress {
+            motion.progress = progress;
+            self.frame.dirty = true;
+        }
+    }
+
+    pub(crate) fn start_effect(&mut self, model: &Model) {
+        self.effects.cell = None;
+        self.effects.cell_area = None;
+        if enabled(&model.settings) && self.host.live() {
+            let Some(area) = self
+                .pointer
+                .hovered
+                .as_ref()
+                .or(self.focused.as_ref())
+                .and_then(|id| self.paint.hits.iter().find(|hit| &hit.id == id))
+                .map(|hit| hit.rect)
+            else {
+                return;
+            };
+            self.effects.cell = Some(fx::fade_from_fg(
+                self.theme.muted,
+                u32::from(model.settings.animation_ms),
+            ));
+            self.effects.cell_area = Some(area);
+        }
     }
 }

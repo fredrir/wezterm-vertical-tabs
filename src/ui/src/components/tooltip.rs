@@ -1,13 +1,9 @@
-use super::anchored;
-use crate::{
-    input::display_text,
-    runtime::canvas::{Canvas, HitRegion},
-};
-use ratatui::{
-    layout::{Position, Rect},
-    text::Line,
-    widgets::{Paragraph, Widget, Wrap},
-};
+use crate::components::anchored;
+use crate::input::display_text;
+use crate::runtime::canvas::{Canvas, HitRegion};
+use ratatui::layout::{Position, Rect};
+use ratatui::text::Line;
+use ratatui::widgets::{Paragraph, Widget, Wrap};
 use unicode_width::UnicodeWidthStr;
 
 /// The first line reads as a title and the rest as muted detail.

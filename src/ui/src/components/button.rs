@@ -1,13 +1,10 @@
-use super::{DROP_TINT, ROW_INSET, SURFACE_RADIUS, row::icon_rect};
-use crate::{
-    ElementId,
-    runtime::canvas::{Canvas, RoundedSurface},
-    shortcuts::platform_tooltip,
-};
-use ratatui::{
-    layout::{Alignment, Rect},
-    text::Line,
-};
+use crate::components::row::icon_rect;
+use crate::components::{DROP_TINT, ROW_INSET, SURFACE_RADIUS};
+use crate::element::ElementId;
+use crate::keybinds::platform_tooltip;
+use crate::runtime::canvas::{Canvas, RoundedSurface};
+use ratatui::layout::{Alignment, Rect};
+use ratatui::text::Line;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Tone {

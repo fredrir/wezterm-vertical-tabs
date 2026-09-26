@@ -1,6 +1,7 @@
 //! Reusable pieces every surface is drawn from; each reads props and draws into a `Canvas`.
 pub(crate) mod button;
 pub(crate) mod dialog;
+pub(crate) mod list;
 pub(crate) mod menu;
 pub(crate) mod palette;
 pub(crate) mod row;

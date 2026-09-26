@@ -1,12 +1,12 @@
 use crate::components::{PRESS_INSET, SURFACE_RADIUS};
-use crate::{DropTarget, ElementId, Pointer, Theme};
-use ratatui::{
-    buffer::Buffer,
-    layout::{Position, Rect},
-    style::{Color, Modifier, Style},
-    text::Line,
-    widgets::{Block, Clear, Paragraph, Widget},
-};
+use crate::element::ElementId;
+use crate::events::{DropTarget, Pointer};
+use crate::theme::Theme;
+use ratatui::buffer::Buffer;
+use ratatui::layout::{Position, Rect};
+use ratatui::style::{Color, Modifier, Style};
+use ratatui::text::Line;
+use ratatui::widgets::{Block, Clear, Paragraph, Widget};
 
 #[derive(Clone, Debug)]
 pub struct HitRegion {

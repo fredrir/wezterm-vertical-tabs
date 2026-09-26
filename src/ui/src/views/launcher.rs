@@ -1,6 +1,12 @@
 //! Shared searchable launcher for tabs and shell jobs.
-use crate::*;
+use crate::actions::Action;
+use crate::input::TextEditor;
+use crate::intent::HostAction;
+use crate::overlays::{Menu, MenuItem, Overlay};
+use crate::views::{tab_machine, tab_name};
+use crate::{SidebarUi, icons};
 use vtabs_core::jobs::{JobOperation, JobTarget};
+use vtabs_core::{Intent, Model, Tab, TabId};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum LauncherKind {
@@ -21,6 +27,32 @@ pub(crate) struct Launcher {
 pub(crate) struct Launchers {
     pub foreign_tabs: Vec<ForeignTab>,
     pub jobs: Vec<JobEntry>,
+}
+
+/// A tab outside this window's sidebar: another window's, or one a detached domain took.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ForeignTab {
+    pub window: u64,
+    pub id: TabId,
+    pub label: String,
+    pub title: String,
+    pub place: String,
+    pub remote: bool,
+    pub os: String,
+}
+
+impl ForeignTab {
+    pub fn new(window: u64, tab: &Tab, home: Option<&str>, place: impl Into<String>) -> Self {
+        Self {
+            window,
+            id: tab.id,
+            label: tab_name(tab, home).unwrap_or_else(|| tab.title.clone()),
+            title: tab.title.clone(),
+            place: place.into(),
+            remote: tab.remote,
+            os: tab.os.clone(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -284,5 +316,5 @@ pub(crate) fn filter_menu(menu: &mut Menu) {
 }
 
 #[cfg(test)]
-#[path = "../tests/launcher.rs"]
+#[path = "../../tests/views/launcher.rs"]
 mod tests;

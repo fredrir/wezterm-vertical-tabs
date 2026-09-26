@@ -1,10 +1,12 @@
 //! A centered search field over a filtered list of sidebar rows.
-use super::{
-    ICON_CELLS, ROW_INSET, SURFACE_RADIUS, centered,
-    row::{Content, Row},
-    text_input::TextInput,
-};
-use crate::{ElementId, Menu, icons, input::display_text, list, runtime::canvas::Canvas};
+use crate::components::row::{Content, Row};
+use crate::components::text_input::TextInput;
+use crate::components::{ICON_CELLS, ROW_INSET, SURFACE_RADIUS, centered, list};
+use crate::element::ElementId;
+use crate::icons;
+use crate::input::display_text;
+use crate::overlays::Menu;
+use crate::runtime::canvas::Canvas;
 use ratatui::layout::Rect;
 use unicode_width::UnicodeWidthStr;
 

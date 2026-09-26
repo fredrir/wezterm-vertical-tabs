@@ -1,12 +1,64 @@
-use crate::{
-    components::{dialog, menu, palette::palette, tooltip::tooltip},
-    runtime::canvas::Canvas,
-    sidebar::SidebarProps,
-    *,
-};
+use crate::SidebarUi;
+use crate::components::palette::palette;
+use crate::components::tooltip::tooltip;
+use crate::components::{dialog, list, menu};
+use crate::element::ElementId;
+use crate::overlays::{Form, FormKind, Overlay, action_exists};
+use crate::runtime::canvas::Canvas;
+use crate::runtime::motion;
+use crate::views::sidebar::SidebarProps;
+use ratatui::buffer::Buffer;
+use ratatui::layout::{Position, Rect};
 use ratatui::widgets::{Block, Widget};
 use std::time::Duration;
 use vtabs_core::Model;
+
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct SurfaceTransform {
+    /// Fraction of the surface width. Applied by the compositor, never to pane sizes.
+    pub translate_x: f32,
+    pub opacity: f32,
+}
+
+#[derive(Clone, Debug)]
+pub struct FrameUpdate {
+    pub revision: u64,
+    pub resized: bool,
+    pub changed_cells: Vec<(u16, u16)>,
+    pub dirty_rows: Vec<u16>,
+    pub cursor: Option<Position>,
+    /// Rows the caret moves down to follow text the host centers in a two-row surface.
+    pub cursor_shift: f32,
+    pub ime_rect: Option<Rect>,
+    pub transform: SurfaceTransform,
+}
+
+/// The published buffer, the one being composed and what they were composed from.
+pub(crate) struct Frame {
+    pub buffer: Buffer,
+    pub staging: Buffer,
+    pub revision: Option<u64>,
+    pub number: u64,
+    pub dirty: bool,
+    pub last: Duration,
+    pub now: Duration,
+    pub last_rail: Option<vtabs_core::RailMode>,
+}
+
+impl Default for Frame {
+    fn default() -> Self {
+        Self {
+            buffer: Buffer::default(),
+            staging: Buffer::default(),
+            revision: None,
+            number: 0,
+            dirty: true,
+            last: Duration::ZERO,
+            now: Duration::ZERO,
+            last_rail: None,
+        }
+    }
+}
 
 impl SidebarUi {
     /// Returns None when a terminal repaint can reuse the previously committed UI.
@@ -30,7 +82,7 @@ impl SidebarUi {
                 self.dismiss();
             }
             self.frame.revision = Some(model.revision);
-            self.update_theme(model);
+            self.theme.apply(model);
             self.settings.config_owned.clone_from(&model.config_owned);
             if self
                 .frame
@@ -152,47 +204,6 @@ impl SidebarUi {
         Some(self.finish_frame(resized, changed_cells, dirty_rows, now))
     }
 
-    /// Drop previews move fast enough to keep up with the pointer, never slower than a frame or two.
-    fn advance_drop(&mut self, model: &Model, now: Duration) {
-        let Some(motion) = &mut self.pointer.drop_motion else {
-            return;
-        };
-        let span = motion::span(&model.settings, 2, 3);
-        let start = *motion.start.get_or_insert(now);
-        let progress = motion::eased(now, start, span);
-        if motion.progress != progress {
-            motion.progress = progress;
-            self.frame.dirty = true;
-        }
-    }
-
-    /// A press shrinks its surface and a release grows it back, even for a quick click.
-    fn advance_press(&mut self, model: &Model, now: Duration) {
-        let Some(press) = &mut self.pointer.press else {
-            return;
-        };
-        let span = motion::span(&model.settings, 1, 2);
-        let eased = |from: Duration| motion::eased(now, from, span);
-        let down = *press.down.get_or_insert(now);
-        let release = press
-            .up
-            .as_mut()
-            .map(|up| (*up.get_or_insert(now)).max(down + span));
-        let level = match release {
-            Some(up) if now >= up => 1.0 - eased(up),
-            _ => eased(down),
-        };
-        let finished = release.is_some_and(|up| now >= up + span);
-        press.animating = !finished && (release.is_some() || level < 1.0);
-        if press.level != level || finished {
-            press.level = level;
-            self.frame.dirty = true;
-        }
-        if finished {
-            self.pointer.press = None;
-        }
-    }
-
     fn finish_frame(
         &mut self,
         resized: bool,
@@ -236,37 +247,6 @@ impl SidebarUi {
             ime_rect,
             transform,
         }
-    }
-
-    fn update_theme(&mut self, model: &Model) {
-        let settings = &model.settings;
-        self.theme.background =
-            Theme::parse_color(&settings.background).unwrap_or(self.theme.background);
-        self.theme.foreground =
-            Theme::parse_color(&settings.foreground).unwrap_or(self.theme.foreground);
-        self.theme.muted = Theme::parse_color(&settings.muted).unwrap_or(self.theme.muted);
-        self.theme.selected =
-            Theme::parse_color(&settings.selected_background).unwrap_or(self.theme.selected);
-        self.theme.private =
-            Theme::parse_color(&settings.private_accent).unwrap_or(self.theme.private);
-        self.theme.machines = settings
-            .distro_colors
-            .iter()
-            .filter_map(|(os, color)| Some((os.clone(), Theme::parse_color(color)?)))
-            .collect();
-        self.theme.accent = if model.private {
-            self.theme.private
-        } else {
-            model
-                .spaces
-                .iter()
-                .find(|space| space.id == model.selected_space)
-                .and_then(|space| space.accent.as_deref())
-                .and_then(Theme::parse_color)
-                .or_else(|| Theme::parse_color(&settings.accent))
-                .unwrap_or(self.theme.accent)
-        };
-        self.theme.sync_surfaces();
     }
 
     fn prune_targets(&mut self, model: &Model) {
@@ -418,53 +398,5 @@ impl SidebarUi {
                 None => self.tooltip.hide(),
             }
         }
-    }
-}
-
-fn action_exists(model: &Model, action: &Action) -> bool {
-    use vtabs_core::Intent;
-    match action {
-        Action::Domain(
-            Intent::ActivateTab(id)
-            | Intent::CloseTab(id)
-            | Intent::CloseOthers(id)
-            | Intent::ReturnToAuto(id)
-            | Intent::MoveTabToNewWindow(id)
-            | Intent::RenameTab { id, .. }
-            | Intent::PinTab { id, .. }
-            | Intent::MoveTab { id, .. },
-        )
-        | Action::RenameTab(id)
-        | Action::MoveTab(id) => model.tabs.contains_key(id),
-        Action::Domain(Intent::AssignTab { id, space_id }) => {
-            model.tabs.contains_key(id) && model.spaces.iter().any(|space| &space.id == space_id)
-        }
-        Action::Domain(
-            Intent::SelectSpace(id)
-            | Intent::RenameSpace { id, .. }
-            | Intent::EditSpace { id, .. }
-            | Intent::MoveSpace { id, .. },
-        )
-        | Action::RenameSpace(id)
-        | Action::EditSpaceIcon(id)
-        | Action::EditSpaceAccent(id)
-        | Action::EditSpaceRules(id)
-        | Action::DeleteSpace(id) => model.spaces.iter().any(|space| &space.id == id),
-        Action::Domain(Intent::DeleteSpace { id, destination }) => {
-            model.spaces.len() > 1
-                && model.spaces.iter().any(|space| &space.id == id)
-                && destination.as_ref().is_none_or(|destination| {
-                    model.spaces.iter().any(|space| &space.id == destination)
-                })
-        }
-        Action::KillPane(tab, pane) => model
-            .tabs
-            .get(tab)
-            .is_some_and(|tab| tab.panes.iter().any(|entry| entry.id == *pane)),
-        Action::Confirm { action, .. } => action_exists(model, action),
-        Action::Submenu { items, .. } => {
-            items.iter().any(|item| action_exists(model, &item.action))
-        }
-        _ => true,
     }
 }
