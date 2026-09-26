@@ -2,10 +2,10 @@ use crate::SidebarUi;
 use crate::actions::Action;
 use crate::components::list;
 use crate::element::ElementId;
+use crate::events::EditorSlot;
 use crate::input::{EditResult, Key, Modifiers};
 use crate::intent::UiIntent;
-use crate::overlays::{Overlay, next_enabled};
-use crate::views::launcher::filter_menu;
+use crate::overlays::{Menu, Overlay, next_enabled};
 use vtabs_core::Model;
 
 impl SidebarUi {
@@ -19,22 +19,11 @@ impl SidebarUi {
         if self.shortcut(model, &key, modifiers, intents) {
             return;
         }
-        if self.overlays.current.is_none()
-            && let Some(rename) = &mut self.sidebar.rename
-        {
-            match rename.editor.key(&key, modifiers) {
+        if self.overlays.current.is_none() && self.sidebar.rename.is_some() {
+            match self.editor_key(EditorSlot::Rename, &key, modifiers, intents) {
                 EditResult::Submit => self.finish_rename(true, intents),
                 EditResult::Cancel => self.finish_rename(false, intents),
-                EditResult::Copy(text) => {
-                    intents.push(UiIntent::SetClipboard(text));
-                    self.frame.dirty = true;
-                }
-                EditResult::Paste => intents.push(UiIntent::RequestClipboard),
-                EditResult::Changed => {
-                    self.reset_caret();
-                    self.frame.dirty = true;
-                }
-                EditResult::Unhandled => {}
+                _ => {}
             }
             return;
         }
@@ -64,7 +53,7 @@ impl SidebarUi {
             self.context_menu(model, target);
             return;
         }
-        if let Some(Overlay::Form(form)) = &mut self.overlays.current {
+        if matches!(self.overlays.current, Some(Overlay::Form(_))) {
             if key == Key::Tab {
                 let mut order: Vec<_> = [ElementId::Editor, ElementId::Submit, ElementId::Cancel]
                     .into_iter()
@@ -102,26 +91,17 @@ impl SidebarUi {
                 }
                 return;
             }
-            match form.editor.key(&key, modifiers) {
+            match self.editor_key(EditorSlot::Form, &key, modifiers, intents) {
                 EditResult::Submit => self.submit_form(model, intents),
                 EditResult::Cancel => self.back(),
-                EditResult::Copy(text) => {
-                    intents.push(UiIntent::SetClipboard(text));
-                    self.frame.dirty = true;
-                }
-                EditResult::Paste => intents.push(UiIntent::RequestClipboard),
-                EditResult::Changed => {
-                    form.error = None;
-                    self.reset_caret();
-                    self.frame.dirty = true;
-                }
-                EditResult::Unhandled => {}
+                _ => {}
             }
             return;
         }
-        if let Some(Overlay::Menu(menu)) = &mut self.overlays.current {
-            if let Some(search) = &mut menu.search
-                && (matches!(
+        let edits_query = matches!(
+            &self.overlays.current,
+            Some(Overlay::Menu(Menu { search: Some(search), .. }))
+                if matches!(
                     key,
                     Key::Character(_)
                         | Key::Backspace
@@ -130,27 +110,13 @@ impl SidebarUi {
                         | Key::Right
                         | Key::Home
                         | Key::End
-                ) || (key == Key::Escape && !search.editor.preedit().is_empty()))
-            {
-                let previous_query = search.editor.text().to_owned();
-                let result = search.editor.key(&key, modifiers);
-                let query_changed = search.editor.text() != previous_query;
-                if query_changed {
-                    filter_menu(menu);
-                }
-                match result {
-                    EditResult::Changed => {
-                        self.frame.dirty = true;
-                    }
-                    EditResult::Copy(text) => {
-                        intents.push(UiIntent::SetClipboard(text));
-                        self.frame.dirty |= query_changed;
-                    }
-                    EditResult::Paste => intents.push(UiIntent::RequestClipboard),
-                    _ => {}
-                }
-                return;
-            }
+                ) || (key == Key::Escape && !search.editor.preedit().is_empty())
+        );
+        if edits_query {
+            self.editor_key(EditorSlot::Palette, &key, modifiers, intents);
+            return;
+        }
+        if let Some(Overlay::Menu(menu)) = &mut self.overlays.current {
             match key {
                 Key::Left | Key::Right if menu.message.is_some() => {
                     menu.selected = next_enabled(&menu.items, menu.selected, 1);

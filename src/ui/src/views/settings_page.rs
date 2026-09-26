@@ -3,6 +3,7 @@ use crate::components::button::Button;
 use crate::components::list;
 use crate::components::text_input::TextInput;
 use crate::element::ElementId;
+use crate::events::EditorSlot;
 use crate::input::{EditResult, Key, Modifiers, TextEditor, display_text};
 use crate::intent::UiIntent;
 use crate::runtime::canvas::Canvas;
@@ -417,13 +418,10 @@ impl SidebarUi {
     }
 
     pub(crate) fn settings_input_text(&mut self, text: &str) {
-        self.settings.query.insert(text);
-        self.settings.selected = 0;
-        self.settings.scroll = 0;
         self.settings.search_focused = true;
         self.focused = Some(ElementId::SettingsSearch);
-        self.reset_caret();
-        self.frame.dirty = true;
+        self.settings.query.insert(text);
+        self.edited(EditorSlot::SettingsSearch);
     }
 
     pub(crate) fn settings_focus_setting(&mut self, _model: &Model, key: &str) {
@@ -493,20 +491,7 @@ impl SidebarUi {
         if self.settings.search_focused
             && !matches!(key, Key::Up | Key::Down | Key::PageUp | Key::PageDown)
         {
-            match self.settings.query.key(&key, mods) {
-                EditResult::Changed => {
-                    self.settings.selected = 0;
-                    self.settings.scroll = 0;
-                    self.reset_caret();
-                    self.frame.dirty = true;
-                }
-                EditResult::Copy(text) => {
-                    intents.push(UiIntent::SetClipboard(text));
-                    self.settings.selected = 0;
-                    self.settings.scroll = 0;
-                    self.frame.dirty = true;
-                }
-                EditResult::Paste => intents.push(UiIntent::RequestClipboard),
+            match self.editor_key(EditorSlot::SettingsSearch, &key, mods, intents) {
                 EditResult::Submit => {
                     let fields = fields(&self.settings.category, self.settings.query.text());
                     if let Some(field) = fields.first() {
@@ -519,7 +504,7 @@ impl SidebarUi {
                     self.caret.stop();
                     self.frame.dirty = true;
                 }
-                EditResult::Unhandled => {}
+                _ => {}
             }
             return;
         }

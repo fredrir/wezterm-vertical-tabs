@@ -578,3 +578,36 @@ fn command_w_closes_the_settings_tab_and_never_the_tab_beneath_it() {
     draw(&mut ui, &model);
     assert!(!has(&ui, ElementId::SettingsTab));
 }
+
+#[test]
+fn copying_search_text_keeps_the_selected_setting() {
+    let model = Model::default();
+    let mut ui = SidebarUi::new();
+    ui.open_settings();
+    draw(&mut ui, &model);
+    search(&mut ui, &model, "a");
+    let press = |ui: &mut SidebarUi, key: Key, super_key: bool| {
+        ui.event(
+            &model,
+            UiInput::Key {
+                key,
+                modifiers: Modifiers {
+                    super_key,
+                    ..Modifiers::default()
+                },
+            },
+        )
+    };
+    press(&mut ui, Key::Escape, false);
+    press(&mut ui, Key::Down, false);
+    press(&mut ui, Key::Down, false);
+    press(&mut ui, Key::Character('f'), true);
+    assert_eq!(ui.settings.selected, 2);
+
+    let intents = press(&mut ui, Key::Character('c'), true);
+    assert!(matches!(
+        intents.as_slice(),
+        [UiIntent::SetClipboard(text)] if text == "a"
+    ));
+    assert_eq!(ui.settings.selected, 2);
+}

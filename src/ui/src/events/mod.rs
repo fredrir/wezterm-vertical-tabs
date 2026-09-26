@@ -8,7 +8,7 @@ pub(crate) use pointer::{Pointer, Press};
 
 use crate::SidebarUi;
 use crate::element::ElementId;
-use crate::input::{MouseButton, TextEditor, UiInput};
+use crate::input::{EditResult, Key, Modifiers, MouseButton, TextEditor, UiInput};
 use crate::intent::UiIntent;
 use crate::overlays::Overlay;
 use crate::views::launcher::filter_menu;
@@ -82,23 +82,11 @@ impl SidebarUi {
             UiInput::PointerUp { .. } => {}
             UiInput::Scroll { x, y, rows } => self.scroll(model, x, y, rows),
             UiInput::Text(text) | UiInput::Paste(text) | UiInput::ImeCommit(text) => {
-                match self.active_editor() {
-                    Some(EditorSlot::SettingsSearch) => self.settings_input_text(&text),
-                    Some(slot) => {
-                        if let Some(editor) = self.editor_mut(slot) {
-                            editor.insert(&text);
-                        }
-                        match (slot, &mut self.overlays.current) {
-                            (EditorSlot::Form, Some(Overlay::Form(form))) => form.error = None,
-                            (EditorSlot::Palette, Some(Overlay::Menu(menu))) => filter_menu(menu),
-                            _ => {}
-                        }
-                        if slot.blinks() {
-                            self.reset_caret();
-                        }
-                        self.frame.dirty = true;
+                if let Some(slot) = self.active_editor() {
+                    if let Some(editor) = self.editor_mut(slot) {
+                        editor.insert(&text);
                     }
-                    None => {}
+                    self.edited(slot);
                 }
             }
             UiInput::ImePreedit { text, cursor } => {
@@ -106,10 +94,7 @@ impl SidebarUi {
                     if let Some(editor) = self.editor_mut(slot) {
                         editor.set_preedit(&text, cursor);
                     }
-                    if slot.blinks() {
-                        self.reset_caret();
-                    }
-                    self.frame.dirty = true;
+                    self.caret_moved(slot);
                 }
             }
             UiInput::Key { key, modifiers } => self.key(model, key, modifiers, &mut intents),
@@ -143,6 +128,54 @@ impl SidebarUi {
 
     fn caret_blinks(&self) -> bool {
         self.active_editor().is_some_and(EditorSlot::blinks)
+    }
+
+    /// Applies a key to an editor and leaves submit and cancel to the caller.
+    pub(crate) fn editor_key(
+        &mut self,
+        slot: EditorSlot,
+        key: &Key,
+        modifiers: Modifiers,
+        intents: &mut Vec<UiIntent>,
+    ) -> EditResult {
+        let Some(editor) = self.editor_mut(slot) else {
+            return EditResult::Unhandled;
+        };
+        let before = editor.text().to_owned();
+        let result = editor.key(key, modifiers);
+        let changed = editor.text() != before;
+        match &result {
+            EditResult::Copy(text) => intents.push(UiIntent::SetClipboard(text.clone())),
+            EditResult::Paste => intents.push(UiIntent::RequestClipboard),
+            _ => {}
+        }
+        if changed {
+            self.edited(slot);
+        } else if result == EditResult::Changed {
+            self.caret_moved(slot);
+        }
+        result
+    }
+
+    /// What follows a change to an editor's text, however it was made.
+    pub(crate) fn edited(&mut self, slot: EditorSlot) {
+        match (slot, &mut self.overlays.current) {
+            (EditorSlot::Form, Some(Overlay::Form(form))) => form.error = None,
+            (EditorSlot::Palette, Some(Overlay::Menu(menu))) => filter_menu(menu),
+            (EditorSlot::SettingsSearch, _) => {
+                self.settings.selected = 0;
+                self.settings.scroll = 0;
+            }
+            _ => {}
+        }
+        self.caret_moved(slot);
+    }
+
+    fn caret_moved(&mut self, slot: EditorSlot) {
+        if slot.blinks() {
+            self.reset_caret();
+        }
+        self.frame.dirty = true;
     }
 
     pub(crate) fn click_editor(&mut self, slot: EditorSlot, x: u16, select: bool) {

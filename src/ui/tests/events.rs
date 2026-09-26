@@ -1026,3 +1026,26 @@ fn enter_on_a_split_close_button_left_focused_beside_settings_never_edits_a_sett
         "{intents:?}"
     );
 }
+
+#[test]
+fn cutting_form_text_clears_its_error_and_restarts_the_caret_like_typing() {
+    let model = model();
+    let mut ui = SidebarUi::new();
+    ui.open_create_space();
+    draw(&mut ui, &model);
+    ui.event(&model, UiInput::Text("   ".into()));
+    key(&mut ui, &model, Key::Enter);
+    command(&mut ui, &model, 'a');
+    let has_error = |ui: &SidebarUi| matches!(&ui.overlays.current, Some(overlays::Overlay::Form(form)) if form.error.is_some());
+    assert!(has_error(&ui));
+    ui.render(&model, Rect::new(0, 0, 40, 24), Duration::from_millis(700));
+    assert!(!ui.caret.visible);
+
+    let intents = command(&mut ui, &model, 'x');
+    assert!(matches!(
+        intents.as_slice(),
+        [UiIntent::SetClipboard(text)] if text == "   "
+    ));
+    assert!(!has_error(&ui));
+    assert!(ui.caret.visible);
+}
