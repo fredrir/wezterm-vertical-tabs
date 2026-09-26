@@ -15,7 +15,6 @@ pub(crate) fn spans_machines(tab: &Tab) -> bool {
         .is_some_and(|first| glyphs.any(|glyph| glyph != first))
 }
 
-/// Splits spanning several machines read as an unknown remote rather than following focus.
 pub(crate) fn tab_machine(tab: &Tab) -> (bool, &str) {
     if spans_machines(tab) {
         return (true, "");

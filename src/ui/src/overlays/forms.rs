@@ -136,7 +136,7 @@ impl SidebarUi {
 
 fn valid_name(value: &str) -> Result<(), String> {
     if value.is_empty() || value.chars().count() > 128 {
-        Err("Use 1–128 printable characters".into())
+        Err("Use 1128 printable characters".into())
     } else {
         Ok(())
     }

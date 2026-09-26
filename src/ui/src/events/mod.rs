@@ -13,7 +13,6 @@ use crate::overlays::Overlay;
 use crate::views::launcher::filter_menu;
 use vtabs_core::Model;
 
-/// The four places text is edited; only one receives input at a time.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum EditorSlot {
     Form,
@@ -23,7 +22,6 @@ pub(crate) enum EditorSlot {
 }
 
 impl EditorSlot {
-    /// The palette keeps a steady caret; every other editor blinks.
     fn blinks(self) -> bool {
         self != Self::Palette
     }
@@ -101,7 +99,6 @@ impl SidebarUi {
         intents
     }
 
-    /// Report a failed read without replacing an editor's unsaved contents.
     pub fn clipboard_failed(&mut self, message: &str) {
         if matches!(self.overlays.current, Some(Overlay::Form(_))) {
             self.set_error(message);
@@ -115,7 +112,6 @@ impl SidebarUi {
         self.active_editor().is_some() || self.editor_menu_target().is_some()
     }
 
-    /// Hidden or unfocused windows drop every gesture in flight.
     fn suspend(&mut self) {
         self.cancel_effects();
         self.caret.stop();
@@ -129,7 +125,6 @@ impl SidebarUi {
         self.active_editor().is_some_and(EditorSlot::blinks)
     }
 
-    /// Applies a key to an editor and leaves submit and cancel to the caller.
     pub(crate) fn editor_key(
         &mut self,
         slot: EditorSlot,
@@ -156,7 +151,6 @@ impl SidebarUi {
         result
     }
 
-    /// What follows a change to an editor's text, however it was made.
     pub(crate) fn edited(&mut self, slot: EditorSlot) {
         match (slot, &mut self.overlays.current) {
             (EditorSlot::Form, Some(Overlay::Form(form))) => form.error = None,
@@ -192,7 +186,6 @@ impl SidebarUi {
         self.frame.dirty = true;
     }
 
-    /// The editor that receives typed text right now.
     pub(crate) fn active_editor(&self) -> Option<EditorSlot> {
         match &self.overlays.current {
             Some(Overlay::Form(_)) => {
@@ -207,7 +200,6 @@ impl SidebarUi {
         }
     }
 
-    /// The editor a pointer target belongs to, focused or not.
     pub(crate) fn editor_slot(&self, id: &ElementId) -> Option<EditorSlot> {
         match (id, &self.overlays.current) {
             (ElementId::Editor, Some(Overlay::Form(_))) => Some(EditorSlot::Form),

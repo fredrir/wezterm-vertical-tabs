@@ -30,7 +30,6 @@ pub enum ElementId {
 }
 
 impl ElementId {
-    /// Controls nested in a row share its hover, press and drag identity.
     pub(crate) fn row(&self) -> ElementId {
         match self {
             Self::CloseTab(id) | Self::Pane(id, _) | Self::ClosePane(id, _) => Self::Tab(*id),

@@ -565,7 +565,6 @@ fn space_title_swaps_its_icon_on_hover_and_collapses_pinned_tabs_and_folders() {
             "{hidden:?}"
         );
     }
-    // Hidden rows keep their index, so the remaining tab is still the second.
     let rect = hit_rect(&ui, &ElementId::Tab(1));
     ui.event(
         &model,
@@ -856,7 +855,6 @@ fn hovering_a_split_tab_floats_the_close_control_without_moving_its_panes() {
     let resting = panes(&ui);
     let local = row_text(&ui, resting[0], resting[0].y);
     let remote = row_text(&ui, resting[1], resting[1].y);
-    // Panes on different machines each name theirs; the row reads as an unknown remote.
     let solo = hit_rect(&ui, &ElementId::Tab(1));
     assert!(
         row_text(&ui, solo, solo.y)
@@ -999,7 +997,6 @@ fn split_layout_is_mirrored_as_columns_and_two_text_lines() {
         pane(2, 0, 10, 80, 9),
         pane(3, 0, 20, 80, 10),
     ];
-    // Two text lines cannot stack three panes; the extra one shares its line side by side.
     let slots = pane_slots(&three_stacked, 20, true);
     let mut shown: Vec<_> = slots.iter().map(|slot| slot.pane).collect();
     shown.sort_unstable();
@@ -1060,7 +1057,6 @@ fn split_layout_is_mirrored_as_columns_and_two_text_lines() {
     );
 }
 
-/// Presses `from`, drags to `to` at a height within its row, and optionally releases.
 fn drag(
     ui: &mut SidebarUi,
     model: &Model,
@@ -1226,7 +1222,6 @@ fn drags_preview_where_they_land_and_escape_abandons_them() {
         "the dragged row fades in place"
     );
 
-    // The bar glides to the next boundary rather than jumping there.
     ui.set_pointer_fraction(0.5, 0.05);
     ui.event(
         &model,
@@ -1244,7 +1239,6 @@ fn drags_preview_where_they_land_and_escape_abandons_them() {
     assert_eq!(bar(&ui), Some(f32::from(target.y)));
     assert!(!ui.has_animation());
 
-    // Just below the row's midline is its middle zone: the drop joins instead of reordering.
     ui.set_pointer_fraction(0.5, 0.1);
     ui.event(
         &model,
@@ -1331,7 +1325,6 @@ fn hovering_a_split_reveals_its_own_close_and_hides_the_tabs() {
         [UiIntent::Host(HostAction::KillPane(1, 8))]
     ));
 
-    // The icon side of the row still offers the whole tab's close.
     let row = hit_rect(&ui, &ElementId::Tab(1));
     ui.event(
         &model,

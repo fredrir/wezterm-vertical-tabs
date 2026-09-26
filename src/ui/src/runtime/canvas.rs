@@ -21,13 +21,9 @@ pub struct RoundedSurface {
     pub fill: Color,
     pub radius: f32,
     pub inset: f32,
-    /// Icon buttons center a square within their cells; rows keep their full extent.
     pub square: bool,
-    /// Fraction of the rect's height to draw, about its center; thin bars need less than a cell.
     pub scale_y: f32,
-    /// Holds one text line per cell row, so the host centers nothing beneath it.
     pub stacked: bool,
-    /// Rows to move down; marks inside host-centered text follow it by half a row.
     pub shift_y: f32,
 }
 
@@ -46,7 +42,6 @@ impl RoundedSurface {
     }
 }
 
-/// Where a text field was drawn, for pointer columns, the caret and the IME.
 #[derive(Clone, Debug)]
 pub(crate) struct Field {
     pub id: ElementId,
@@ -68,12 +63,10 @@ impl Paint {
         self.hits.clear();
         self.fields.clear();
     }
-    /// Modal surfaces replace every target beneath them.
     pub fn clear_targets(&mut self) {
         self.hits.clear();
         self.fields.clear();
     }
-    /// The first region registered for `id`; `SidebarUi::hit_test` picks the topmost instead.
     pub fn hit(&self, id: &ElementId) -> Option<&HitRegion> {
         self.hits.iter().find(|hit| &hit.id == id)
     }
@@ -88,7 +81,6 @@ pub(crate) struct Canvas<'a> {
     pub theme: &'a Theme,
     pub pointer: &'a Pointer,
     pub focused: Option<&'a ElementId>,
-    /// The blinking caret is in its visible phase and the window has focus.
     pub caret: bool,
 }
 
@@ -128,7 +120,6 @@ impl Canvas<'_> {
     pub fn rounded(&mut self, rect: Rect, fill: Color) {
         self.surface(rect, fill, SURFACE_RADIUS, 0.0);
     }
-    /// Asks the host to draw a surface over cells that keep their own colors.
     pub fn mark(&mut self, surface: RoundedSurface) {
         self.paint.surfaces.push(surface);
     }
@@ -142,7 +133,6 @@ impl Canvas<'_> {
     pub fn hovered(&self, id: &ElementId) -> bool {
         self.pointer.hovered.as_ref() == Some(id)
     }
-    /// Controls nested in a row light the whole row.
     pub fn row_hovered(&self, id: &ElementId) -> bool {
         self.pointer.hovered.as_ref().map(ElementId::row).as_ref() == Some(id)
     }
@@ -184,7 +174,6 @@ impl Canvas<'_> {
         }
         style
     }
-    /// A row's centered label reaches into its second cell row; overlays start clear of it.
     pub fn clear_of_rows(&self, mut rect: Rect, area: Rect) -> Rect {
         let splits_a_row = self.paint.surfaces.iter().any(|surface| {
             surface.rect.height == 2

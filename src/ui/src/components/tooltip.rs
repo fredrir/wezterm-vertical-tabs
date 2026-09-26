@@ -6,7 +6,6 @@ use ratatui::text::Line;
 use ratatui::widgets::{Paragraph, Widget, Wrap};
 use unicode_width::UnicodeWidthStr;
 
-/// The first line reads as a title and the rest as muted detail.
 pub(crate) fn tooltip(cx: &mut Canvas, area: Rect, sidebar: Rect, target: &HitRegion) {
     if area.width < 8 || area.height < 4 {
         return;
@@ -17,14 +16,12 @@ pub(crate) fn tooltip(cx: &mut Canvas, area: Rect, sidebar: Rect, target: &HitRe
     if natural_width == 0 {
         return;
     }
-    // A row is about two cells tall, so one row of padding matches two columns.
     let padding = if text.len() == 1 { 1 } else { 2 };
     let width = natural_width
         .min(42)
         .min(usize::from(area.width).saturating_sub(padding * 2))
         .max(1);
     let lines = wrapped_lines(&text, width);
-    // The host centers a single line inside a two-row pill; longer text pads by a row.
     let height = if lines == 1 { 2 } else { lines + 2 }.min(usize::from(area.height)) as u16;
     let width = (width + padding * 2) as u16;
     let rect = place(cx, area, sidebar, target.rect, width, height);
@@ -59,7 +56,6 @@ pub(crate) fn tooltip(cx: &mut Canvas, area: Rect, sidebar: Rect, target: &HitRe
         .render(content, cx.buf);
 }
 
-/// Lines after word wrapping at `width`, splitting words longer than a line.
 fn wrapped_lines(text: &[String], width: usize) -> usize {
     let mut lines = 0usize;
     for line in text {
@@ -79,7 +75,6 @@ fn wrapped_lines(text: &[String], width: usize) -> usize {
     lines
 }
 
-/// Sidebar hints sit beside the rail, level with their control and out of its way.
 fn place(cx: &Canvas, area: Rect, sidebar: Rect, target: Rect, width: u16, height: u16) -> Rect {
     let beside = if sidebar.x > area.x {
         sidebar.x.checked_sub(width + 1).filter(|x| *x >= area.x)

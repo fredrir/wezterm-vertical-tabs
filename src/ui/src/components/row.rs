@@ -16,7 +16,6 @@ pub(crate) struct Trailing {
 
 pub(crate) enum Content<'a> {
     Label(&'a str),
-    /// Painted by the caller into the row's content area, before the trailing control.
     Custom(&'a mut dyn FnMut(&mut Canvas, &RowLayout)),
 }
 
@@ -62,7 +61,6 @@ pub(crate) struct RowLayout {
     pub content: Rect,
 }
 
-/// Odd-width glyphs shift one cell so they center on the host's pixel grid.
 pub(crate) fn icon_rect(mut rect: Rect, label: &str) -> Rect {
     let width = label.width();
     if usize::from(rect.width) > width && usize::from(rect.width) % 2 != width % 2 {
@@ -166,7 +164,6 @@ impl Row<'_> {
     }
 }
 
-/// Draws over the row's last cells without clearing them, keeping its surface intact.
 pub(crate) fn trailing_control(cx: &mut Canvas, control: Trailing, row: Rect, style: Style) {
     let rect = Rect::new(
         row.right() - TRAILING_CELLS,

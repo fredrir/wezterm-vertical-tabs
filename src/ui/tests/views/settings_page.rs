@@ -484,7 +484,6 @@ fn settings_keeps_its_index_when_later_tabs_open_and_earlier_tabs_close() {
     ui.set_layout(28, 0);
     ui.open_settings();
     draw(&mut ui, &model);
-    // Hovering a row swaps its icon for its index glyph; read every row's that way.
     let numbers = |ui: &mut SidebarUi, model: &Model| -> Vec<String> {
         let mut rows: Vec<_> = ui
             .hit_regions()

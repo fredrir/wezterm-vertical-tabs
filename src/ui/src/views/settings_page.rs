@@ -23,7 +23,6 @@ const CATEGORIES: &[(&str, &str)] = &[
 ];
 
 pub(crate) struct SettingsPage {
-    /// The page is showing; the sidebar keeps listing it while `listed`.
     pub open: bool,
     pub listed: bool,
     pub category: String,
@@ -251,7 +250,6 @@ impl SettingsPage {
         }
     }
 
-    /// Wraps the chips onto more rows, or pages through them one at a time when they cannot fit.
     fn categories(&self, area: Rect, cx: &mut Canvas) -> u16 {
         let mut required_rows = 1;
         let mut used = 0;

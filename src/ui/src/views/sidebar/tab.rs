@@ -247,7 +247,6 @@ fn pane_segments(cx: &mut Canvas, tab: &Tab, home: Option<&str>, layout: &RowLay
         cx.write(
             Rect::new(rect.x + pad, rect.y, rect.width.saturating_sub(pad + 1), 1),
             if mixed {
-                // The machine glyph stands in for the home or root prefix: 󰣇/dotfiles.
                 let glyph = icons::host(pane.remote, &pane.os);
                 let glyph = match theme.host(pane.remote, &pane.os) {
                     Some(color) if !ghost => Span::styled(glyph, Style::new().fg(color)),

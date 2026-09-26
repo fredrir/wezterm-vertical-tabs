@@ -1,5 +1,3 @@
-//! Event-driven in-memory Ratatui UI. The host publishes complete frames atomically and
-//! schedules only `next_deadline`; this crate performs no terminal, mux, or storage I/O.
 mod actions;
 mod components;
 mod element;
@@ -44,9 +42,6 @@ mod snapshot_tests;
 #[path = "../tests/ui.rs"]
 mod ui_tests;
 
-/// The UI retains allocated buffers and composes only after semantic invalidation.
-/// `Model::revision` must change with model data. `invalidate` handles external style/focus
-/// changes; terminal repaint alone does not invalidate the sidebar.
 #[derive(Default)]
 pub struct SidebarUi {
     theme: Theme,
@@ -112,14 +107,12 @@ impl SidebarUi {
     pub fn is_modal(&self) -> bool {
         self.overlays.current.is_some() || self.settings.open
     }
-    /// Colors follow the settings and the selected space as of the last render.
     pub fn theme(&self) -> &Theme {
         &self.theme
     }
     pub fn has_focus(&self) -> bool {
         self.focused.is_some() || self.is_modal()
     }
-    /// Call when content receives focus; this does not mark the OS window unfocused.
     pub fn release_focus(&mut self) {
         self.hide_settings();
         if self.sidebar.rename.take().is_some() {
@@ -129,7 +122,6 @@ impl SidebarUi {
         self.focused = None;
         self.pointer.drag = None;
     }
-    /// The host found a running process; the prompt names it when known.
     pub fn confirm_close_tab(&mut self, id: TabId, process: &str) {
         self.dismiss();
         self.confirm(
@@ -148,7 +140,6 @@ impl SidebarUi {
             Action::KillPane(tab, pane),
         );
     }
-    /// Rows the tab search lists after this window's own tabs.
     pub fn set_foreign_tabs(&mut self, tabs: Vec<ForeignTab>) {
         self.launchers.foreign_tabs = tabs;
     }
@@ -223,11 +214,9 @@ impl SidebarUi {
                 .drop_motion
                 .is_some_and(|motion| motion.progress < 1.0)
     }
-    /// Hosts report the pointer's place within its cell so short rows can tell edge from middle.
     pub fn set_pointer_fraction(&mut self, x: f32, y: f32) {
         self.pointer.fraction = (x.clamp(0.0, 1.0), y.clamp(0.0, 1.0));
     }
-    /// Hosts stamp pointer input so click timing does not depend on repaint cadence.
     pub fn set_clock(&mut self, now: Duration) {
         self.frame.now = self.frame.now.max(now);
     }
@@ -236,8 +225,6 @@ impl SidebarUi {
             self.frame.dirty = true;
         }
     }
-    /// Animate only the surface. The caller has already committed the final pane
-    /// reservation and must not derive content geometry from this visual transform.
     pub fn transition_surface(&mut self, from: f32, to: f32, now: Duration, duration: Duration) {
         self.effects.surface = (duration > Duration::ZERO).then_some(Tween {
             from,
@@ -259,7 +246,6 @@ impl SidebarUi {
         self.cancel_effects();
         self.frame.dirty = true;
     }
-    /// Settings behave like a tab: the row stays listed while another tab is active.
     pub fn open_settings(&mut self) {
         self.dismiss();
         self.settings.open = true;
@@ -286,12 +272,9 @@ impl SidebarUi {
     pub fn has_overlay(&self) -> bool {
         self.overlays.current.is_some()
     }
-    /// Settings keep the sidebar beside a content page, which needs the window's full width.
     pub fn content_page(&self) -> bool {
         self.settings.open
     }
-    /// Transient UI uses the window viewport while the terminal remains visible. Reserve
-    /// that viewport while a tooltip is pending so it can extend past the sidebar edge.
     pub fn overlay_surface(&self) -> bool {
         self.overlays.current.is_some() || self.tooltip.pending()
     }

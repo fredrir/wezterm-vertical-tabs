@@ -13,7 +13,6 @@ use vtabs_core::{Model, TabId};
 
 const DOUBLE_CLICK: Duration = Duration::from_millis(500);
 
-/// Stamps resolve at the next render; input events carry no clock of their own.
 #[derive(Clone, Debug)]
 pub(crate) struct Press {
     pub id: ElementId,
@@ -28,7 +27,6 @@ pub(crate) struct Pointer {
     pub drag: Option<ElementId>,
     pub dragging: bool,
     pub origin: Option<(u16, u16)>,
-    /// Where inside its cell the pointer sits; rows are too short to zone by cells alone.
     pub fraction: (f32, f32),
     pub press: Option<Press>,
     pub drop: Option<DropTarget>,
@@ -197,7 +195,6 @@ impl SidebarUi {
         y: u16,
         intents: &mut Vec<UiIntent>,
     ) {
-        // A fast drag can end without a final move; the release point decides.
         let target = self.drop_target(model, x, y);
         self.pointer.drop = None;
         let down = self.pointer.drag.take();
@@ -258,7 +255,6 @@ impl SidebarUi {
             })
     }
 
-    /// Signed, so content left of a right-side sidebar keeps its own position.
     fn set_anchor(&mut self, x: u16, y: u16) {
         let origin = self.sidebar.rect;
         self.overlays.anchor = Some((

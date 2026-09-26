@@ -42,7 +42,6 @@ pub(crate) fn palette(cx: &mut Canvas, area: Rect, menu: &mut Menu) -> Rect {
         field.width.saturating_sub(lead + 2),
         1,
     );
-    // The host centers first-row text of a two-row surface; marks follow it.
     let shift = if field.height == 2 { 0.5 } else { 0.0 };
     TextInput::new(ElementId::Editor, &mut search.editor, theme.card)
         .active(true)

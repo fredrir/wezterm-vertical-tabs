@@ -289,7 +289,6 @@ impl SidebarUi {
         }
     }
 
-    /// Only a tab with a running process prompts; the host owns that fact.
     pub(crate) fn close_tab(&mut self, model: &Model, id: TabId, intents: &mut Vec<UiIntent>) {
         if !model.tabs.contains_key(&id) {
             return;
@@ -350,7 +349,6 @@ impl SidebarUi {
         }
     }
 
-    /// Settings holds one position in the tab order and answers to that index.
     pub fn activate_index(&mut self, model: &Model, index: isize, intents: &mut Vec<UiIntent>) {
         let Some(slot) = self.settings_slot(model) else {
             self.hide_settings();
@@ -426,7 +424,6 @@ impl SidebarUi {
         self.frame.dirty = true;
     }
 
-    /// An untouched label stays automatic; only an edit becomes a title override.
     pub(crate) fn finish_rename(&mut self, commit: bool, intents: &mut Vec<UiIntent>) {
         let Some(rename) = self.sidebar.rename.take() else {
             return;

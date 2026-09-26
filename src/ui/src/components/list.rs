@@ -1,4 +1,3 @@
-/// Scrolls just far enough to show `at`; `end(start)` is the first row past a view from `start`.
 pub(crate) fn reveal(scroll: usize, at: usize, end: impl Fn(usize) -> usize) -> usize {
     let mut scroll = scroll.min(at);
     while scroll < at && end(scroll) <= at {
@@ -7,7 +6,6 @@ pub(crate) fn reveal(scroll: usize, at: usize, end: impl Fn(usize) -> usize) -> 
     scroll
 }
 
-/// `reveal` for rows of one fixed height; `rows` is at least one.
 pub(crate) fn reveal_rows(scroll: usize, at: usize, rows: usize) -> usize {
     if at < scroll {
         at
@@ -18,7 +16,6 @@ pub(crate) fn reveal_rows(scroll: usize, at: usize, rows: usize) -> usize {
     }
 }
 
-/// Reveals `at` and keeps the last page full.
 pub(crate) fn scroll_to(scroll: usize, at: usize, len: usize, rows: usize) -> usize {
     let rows = rows.max(1);
     reveal_rows(scroll, at, rows).min(len.saturating_sub(rows))

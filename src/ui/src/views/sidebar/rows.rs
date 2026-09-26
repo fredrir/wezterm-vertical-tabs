@@ -15,7 +15,6 @@ pub(crate) enum SidebarRow {
         index: usize,
         count: usize,
     },
-    /// Separates the pinned and folder group from the open tabs.
     Gap,
     NewTab,
     Settings {
@@ -23,7 +22,6 @@ pub(crate) enum SidebarRow {
     },
 }
 
-/// The tab Settings follows, and the position that anchor last gave it.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct SettingsPlace {
     pub anchor: Option<TabId>,
@@ -189,7 +187,6 @@ impl Sidebar {
         });
     }
 
-    /// Scrolls to the tab, or to its folder while the folder is collapsed.
     pub fn ensure_tab_visible(&mut self, model: &Model, id: TabId, settings_listed: bool) {
         self.ensure_rows(model, settings_listed);
         let collapsed_folder = if let Some(tab) = model.tabs.get(&id)

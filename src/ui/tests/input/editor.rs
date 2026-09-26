@@ -2,10 +2,10 @@ use super::*;
 
 #[test]
 fn grapheme_editing_never_splits_combining_emoji_or_cjk() {
-    let mut edit = TextEditor::new("e\u{301}👨‍👩‍👧‍👦界");
+    let mut edit = TextEditor::new("e\u{301}👨👩👧👦界");
     assert_eq!(edit.grapheme_count(), 3);
     edit.key(&Key::Backspace, Modifiers::default());
-    assert_eq!(edit.text(), "e\u{301}👨‍👩‍👧‍👦");
+    assert_eq!(edit.text(), "e\u{301}👨👩👧👦");
     edit.key(&Key::Left, Modifiers::default());
     edit.key(&Key::Delete, Modifiers::default());
     assert_eq!(edit.text(), "e\u{301}");
@@ -94,7 +94,7 @@ fn word_selection_and_combining_insertion_keep_valid_cursor() {
 
 #[test]
 fn command_arrows_move_and_select_to_line_boundaries() {
-    let mut edit = TextEditor::new("one e\u{301} 界 👨‍👩‍👧‍👦");
+    let mut edit = TextEditor::new("one e\u{301} 界 👨👩👧👦");
     let command = Modifiers {
         super_key: true,
         ..Modifiers::default()
@@ -110,7 +110,7 @@ fn command_arrows_move_and_select_to_line_boundaries() {
             ..command
         },
     );
-    assert_eq!(edit.selected_text(), "ne e\u{301} 界 👨‍👩‍👧‍👦");
+    assert_eq!(edit.selected_text(), "ne e\u{301} 界 👨👩👧👦");
     edit.key(&Key::Right, command);
     assert_eq!(edit.cursor(), edit.grapheme_count());
     assert!(edit.selection().is_none());
@@ -130,13 +130,13 @@ fn command_backspace_deletes_prefix_or_selection_and_preserves_suffix() {
         super_key: true,
         ..Modifiers::default()
     };
-    let mut edit = TextEditor::new("one 界👨‍👩‍👧‍👦");
+    let mut edit = TextEditor::new("one 界👨👩👧👦");
     edit.key(&Key::Left, Modifiers::default());
     edit.key(&Key::Backspace, command);
-    assert_eq!(edit.text(), "👨‍👩‍👧‍👦");
+    assert_eq!(edit.text(), "👨👩👧👦");
     assert_eq!(edit.cursor(), 0);
     edit.key(&Key::Backspace, command);
-    assert_eq!(edit.text(), "👨‍👩‍👧‍👦");
+    assert_eq!(edit.text(), "👨👩👧👦");
 
     let mut edit = TextEditor::new("one two");
     edit.key(

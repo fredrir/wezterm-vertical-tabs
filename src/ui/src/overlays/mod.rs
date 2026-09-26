@@ -13,13 +13,11 @@ use vtabs_core::{Model, SpaceId, TabId};
 #[derive(Clone, Debug)]
 pub(crate) struct MenuItem {
     pub id: String,
-    /// Palette rows share the sidebar's icon slot and index badge.
     pub icon: &'static str,
     pub icon_color: Option<ratatui::style::Color>,
     pub index: Option<usize>,
     pub label: String,
     pub hint: String,
-    /// Matched by search but not shown.
     pub keywords: String,
     pub action: Action,
     pub enabled: bool,
@@ -46,7 +44,6 @@ impl MenuItem {
 #[derive(Clone, Debug)]
 pub(crate) struct Menu {
     pub title: String,
-    /// A confirmation: the title asks, this explains, and the items read as buttons.
     pub message: Option<String>,
     pub items: Vec<MenuItem>,
     pub selected: usize,
@@ -101,13 +98,10 @@ pub(crate) struct Overlays {
     pub restore_focus: Option<ElementId>,
     pub pending_form: Option<u64>,
     pub rect: Rect,
-    /// Sidebar-relative origin for the next context menu; sidebar placement changes
-    /// between the sidebar-only grid and the window viewport.
     pub anchor: Option<(i32, i32)>,
 }
 
 impl Overlays {
-    /// Keeps the current overlay to return to once the next one closes.
     pub(crate) fn stash(&mut self) {
         if let Some(overlay) = self.current.take() {
             self.stack.push(overlay);
@@ -138,7 +132,6 @@ impl SidebarUi {
         }
     }
 
-    /// Every confirmation shares one dialog with the accepting button preselected.
     pub(crate) fn confirm(
         &mut self,
         title: impl Into<String>,

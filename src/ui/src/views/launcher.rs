@@ -1,4 +1,3 @@
-//! Shared searchable launcher for tabs and shell jobs.
 use crate::actions::Action;
 use crate::input::TextEditor;
 use crate::intent::HostAction;
@@ -22,14 +21,12 @@ pub(crate) struct Launcher {
     pub empty: &'static str,
 }
 
-/// What the tab and job launchers list beyond this window's model.
 #[derive(Default)]
 pub(crate) struct Launchers {
     pub foreign_tabs: Vec<ForeignTab>,
     pub jobs: Vec<JobEntry>,
 }
 
-/// A tab outside this window's sidebar: another window's, or one a detached domain took.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ForeignTab {
     pub window: u64,
@@ -200,7 +197,6 @@ impl SidebarUi {
         true
     }
 
-    /// The current space leads with its index badges; every other tab this window can reach follows.
     pub fn open_tab_navigator(&mut self, model: &Model) {
         let home = model.home.as_deref();
         let row = |tab: &Tab| {

@@ -99,7 +99,6 @@ fn context_menu_opens_below_the_pointer_and_stays_inside_the_window() {
         model.settings.side = side;
         let mut ui = SidebarUi::new();
         ui.set_layout(28, 0);
-        // Right-clicks arrive on the sidebar-only grid; the menu composes on the viewport.
         let rail = Rect::new(0, 0, 28, 32);
         ui.render(&model, rail, Duration::ZERO);
         let tab = hit(&ui, &ElementId::Tab(7));
@@ -120,9 +119,7 @@ fn context_menu_opens_below_the_pointer_and_stays_inside_the_window() {
             0
         };
         let first = hit(&ui, &ElementId::Menu("activate".into()));
-        // The frame clears the clicked row, whose centered label spans both of its cells.
         assert_eq!(first.y, tab.bottom() + 1);
-        // The frame starts at the pointer column unless the menu would leave the window.
         let frame_x = (sidebar_x + click.0).min(window.right() - (first.width + 2));
         assert_eq!(first.x, frame_x + 1);
         assert!(first.width < 60);

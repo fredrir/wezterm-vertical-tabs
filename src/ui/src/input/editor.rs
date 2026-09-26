@@ -2,9 +2,6 @@ use crate::input::{Key, Modifiers};
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
-/// A bounded single-line editor. Cursor and selection endpoints are grapheme indices;
-/// byte offsets are computed only when applying edits, so UTF-8 is never sliced inside a
-/// grapheme. The adapter owns clipboard I/O and receives explicit requests.
 #[derive(Clone, Debug, Default)]
 pub struct TextEditor {
     text: String,
@@ -87,8 +84,6 @@ impl TextEditor {
         }
         let offset = self.byte_at(self.cursor);
         self.text.insert_str(offset, &insert);
-        // Inserting combining text can merge with an adjacent grapheme. Count from the
-        // actual resulting prefix instead of adding the inserted grapheme count.
         self.cursor = self.text[..offset + insert.len()].graphemes(true).count();
         self.anchor = None;
         self.preedit.clear();
@@ -167,8 +162,6 @@ impl TextEditor {
         if column >= self.scroll_columns + width.max(1) {
             self.scroll_columns = column.saturating_sub(width.saturating_sub(1));
         }
-        // Align horizontal scrolling with a grapheme boundary; never expose half of a
-        // double-width glyph or shift the caret by its clipped continuation cell.
         let mut boundary = 0;
         for grapheme in self.display_text().graphemes(true) {
             if boundary >= self.scroll_columns {

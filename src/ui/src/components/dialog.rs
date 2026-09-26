@@ -10,15 +10,12 @@ use crate::runtime::canvas::Canvas;
 use ratatui::layout::Rect;
 use unicode_width::UnicodeWidthStr;
 
-/// Padding, the question, its explanation, a gap, two-row buttons, padding.
 const DIALOG_ROWS: u16 = 7;
 
-/// Confirmations fall back to a plain menu when the window is too small for buttons.
 pub(crate) fn fits(area: Rect) -> bool {
     area.height >= DIALOG_ROWS && area.width >= 24
 }
 
-/// A question, what it costs, and two buttons: the accepting one preselected and last.
 pub(crate) fn confirm(cx: &mut Canvas, area: Rect, menu: &Menu) -> Rect {
     let theme = cx.theme;
     let message = menu.message.as_deref().unwrap_or_default();

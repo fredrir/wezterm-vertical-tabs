@@ -15,7 +15,6 @@ use vtabs_core::Model;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct SurfaceTransform {
-    /// Fraction of the surface width. Applied by the compositor, never to pane sizes.
     pub translate_x: f32,
     pub opacity: f32,
 }
@@ -27,7 +26,6 @@ pub struct FrameUpdate {
     pub changed_cells: Vec<(u16, u16)>,
     pub dirty_rows: Vec<u16>,
     pub cursor: Option<Position>,
-    /// Rows the caret moves down to follow text the host centers in a two-row surface.
     pub cursor_shift: f32,
     pub ime_rect: Option<Rect>,
     pub transform: SurfaceTransform,
@@ -60,8 +58,6 @@ impl Default for Frame {
 }
 
 impl SidebarUi {
-    /// Returns None when a terminal repaint can reuse the previously committed UI.
-    /// Resize publishes one fully composed frame; the previous buffer survives until swap.
     pub fn render(&mut self, model: &Model, area: Rect, now: Duration) -> Option<FrameUpdate> {
         self.frame.now = now;
         let resized = self.frame.buffer.area != area;
@@ -129,7 +125,6 @@ impl SidebarUi {
                 self.sidebar.last_space = Some(model.selected_space.clone());
             }
             if self.sidebar.last_tab != model.selected_tab {
-                // Composition reveals the row once the frame's row capacity is known.
                 self.sidebar.reveal_selection = true;
                 self.sidebar.last_tab = model.selected_tab;
             }
@@ -335,8 +330,6 @@ impl SidebarUi {
             .unwrap_or(area.width)
             .min(area.width);
         let right = model.settings.side == vtabs_core::Side::Right;
-        // A successful form can close during this render before the host contracts
-        // its viewport. Keep rail targets within the configured width in that frame.
         let sidebar = if area.width > width {
             let x = if right { area.right() - width } else { area.x };
             Rect::new(x, area.y, width, area.height)
@@ -374,7 +367,6 @@ impl SidebarUi {
             self.settings.render(model, page, overlay_open, &mut cx);
         }
         if let Some(overlay) = &mut self.overlays.current {
-            // Modal hit regions replace underlying targets; background clicks dismiss.
             cx.paint.clear_targets();
             self.overlays.rect = match overlay {
                 Overlay::Menu(menu) if menu.search.is_some() => palette(&mut cx, area, menu),

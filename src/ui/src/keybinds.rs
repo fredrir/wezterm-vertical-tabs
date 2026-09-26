@@ -4,7 +4,6 @@ use crate::intent::{HostAction, UiIntent};
 use crate::{SidebarUi, icons};
 use vtabs_core::{Intent, Model};
 
-/// Tooltips spell shortcuts as `Cmd+`; other platforms press Ctrl+Shift instead.
 pub(crate) fn platform_tooltip(tooltip: String) -> String {
     if cfg!(target_os = "macos") {
         tooltip
@@ -18,7 +17,6 @@ pub(crate) fn platform_tooltip(tooltip: String) -> String {
     }
 }
 
-/// Platform shortcuts avoid intercepting ordinary terminal Control combinations.
 pub fn is_shortcut(key: &Key, mods: Modifiers) -> bool {
     let command = if cfg!(target_os = "macos") {
         mods.super_key

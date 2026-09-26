@@ -26,7 +26,6 @@ pub(crate) fn ease_out(t: f32) -> f32 {
     1.0 - (1.0 - t).powi(3)
 }
 
-/// Eased progress of an animation that started at `from`; a zero span finishes at once.
 fn eased(now: Duration, from: Duration, span: Duration) -> f32 {
     if span.is_zero() {
         1.0
@@ -55,7 +54,6 @@ pub(crate) struct Effects {
 }
 
 impl Effects {
-    /// Returns whether anything was running.
     pub fn cancel(&mut self) -> bool {
         let cell = self.cell.take().is_some();
         let surface = self.surface.take().is_some();
@@ -82,7 +80,6 @@ impl Default for Caret {
 }
 
 impl Caret {
-    /// Shows the caret and restarts its blink; a hidden or unfocused window does not blink.
     pub fn restart(&mut self, now: Duration, live: bool) {
         self.visible = true;
         self.deadline = live.then_some(now + CARET_BLINK);
@@ -90,7 +87,6 @@ impl Caret {
     pub fn stop(&mut self) {
         self.deadline = None;
     }
-    /// Returns whether the caret toggled.
     pub fn tick(&mut self, now: Duration) -> bool {
         if self.deadline.is_some_and(|deadline| now >= deadline) {
             self.visible = !self.visible;
@@ -115,7 +111,6 @@ impl Tooltip {
     pub fn pending(&self) -> bool {
         self.shown || self.deadline.is_some()
     }
-    /// Returns whether the delay ran out; the tip shows only if something is still hovered.
     pub fn tick(&mut self, now: Duration, hovering: bool) -> bool {
         if self.deadline.is_some_and(|deadline| now >= deadline) {
             self.deadline = None;
@@ -127,7 +122,6 @@ impl Tooltip {
 }
 
 impl SidebarUi {
-    /// A press shrinks its surface and a release grows it back, even for a quick click.
     pub(crate) fn advance_press(&mut self, model: &Model, now: Duration) {
         let Some(press) = &mut self.pointer.press else {
             return;
@@ -154,7 +148,6 @@ impl SidebarUi {
         }
     }
 
-    /// Drop previews move fast enough to keep up with the pointer, never slower than a frame or two.
     pub(crate) fn advance_drop(&mut self, model: &Model, now: Duration) {
         let Some(motion) = &mut self.pointer.drop_motion else {
             return;

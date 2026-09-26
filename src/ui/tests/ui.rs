@@ -315,8 +315,6 @@ fn resize_and_unicode_replacement_publish_complete_latest_cells() {
     for (x, y) in frame.changed_cells {
         replay[(x, y)] = ui.buffer()[(x, y)].clone();
     }
-    // Wide-cell continuation state is represented by the complete final buffer; changed
-    // rows contain no old CJK/emoji cell after replacement.
     for row in frame.dirty_rows {
         for col in 0..32 {
             assert_eq!(

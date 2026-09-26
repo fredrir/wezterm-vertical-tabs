@@ -41,7 +41,6 @@ impl SidebarUi {
                 self.launcher_actions(Some(&id));
             }
             ElementId::Editor | ElementId::SettingsSearch => {
-                // Inline renames commit on any other click, so they offer no edit menu.
                 let Some(editor) = self
                     .editor_slot(&id)
                     .filter(|slot| *slot != EditorSlot::Rename)

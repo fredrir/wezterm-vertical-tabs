@@ -29,7 +29,6 @@ pub(crate) fn centered(area: Rect, width: u16, height: u16) -> Rect {
     )
 }
 
-/// Opens below the anchor row, flips above it when the bottom edge is closer, and stays in the area.
 pub(crate) fn anchored(area: Rect, anchor: Position, width: u16, height: u16) -> Rect {
     let width = width.min(area.width);
     let height = height.min(area.height);

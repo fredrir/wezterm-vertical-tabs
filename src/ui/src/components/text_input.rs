@@ -27,12 +27,10 @@ impl<'a> TextInput<'a> {
             placeholder: None,
         }
     }
-    /// Draws the selection, preedit and caret.
     pub fn active(mut self, active: bool) -> Self {
         self.active = active;
         self
     }
-    /// Rows the host moves this text down when it centers it in a taller surface.
     pub fn shift(mut self, shift: f32) -> Self {
         self.shift = shift;
         self
@@ -104,7 +102,6 @@ impl<'a> TextInput<'a> {
     }
 }
 
-/// The graphemes from `scroll` columns on; a clipped wide glyph is left out whole.
 fn visible_text(text: &str, scroll: usize) -> String {
     let mut column = 0;
     text.graphemes(true)

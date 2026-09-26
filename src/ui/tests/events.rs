@@ -55,7 +55,6 @@ fn hit(ui: &SidebarUi, id: &ElementId) -> Rect {
         .rect
 }
 
-/// Trailing controls exist only while their row is hovered.
 fn hover(ui: &mut SidebarUi, model: &Model, id: &ElementId) {
     let rect = hit(ui, id);
     ui.event(
@@ -806,7 +805,6 @@ fn host_close_prompt_names_the_process_and_defaults_to_closing() {
         .collect();
     assert!(text.contains("Close tab?"), "{text}");
     assert!(text.contains("vim is still running."), "{text}");
-    // Buttons share a row; the accepting one sits last and starts selected.
     let (cancel, confirm) = (
         hit(&ui, &ElementId::Menu("cancel".into())),
         hit(&ui, &ElementId::Menu("confirm".into())),

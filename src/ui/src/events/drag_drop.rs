@@ -7,23 +7,18 @@ use ratatui::layout::Position;
 use std::time::Duration;
 use vtabs_core::{Intent, Model, SpaceId, TabId};
 
-/// Where a drag would land, resolved on every pointer move so the preview never lies.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum DropTarget {
-    /// Reorder next to a tab; a dragged pane becomes a tab of its own there.
     Beside {
         tab: TabId,
         after: bool,
     },
-    /// Become a split of this tab.
     Into(TabId),
     Folder(String),
-    /// Leave folders and pins behind; a dragged pane becomes the last tab.
     NewTab,
     Space(SpaceId),
 }
 
-/// The drop preview glides between targets instead of jumping.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct DropMotion {
     pub from: f32,
@@ -39,8 +34,6 @@ impl DropMotion {
 }
 
 impl SidebarUi {
-    /// Rows are two cells tall at most, so the pointer's place inside its cell decides
-    /// between landing beside a tab and landing inside it.
     pub(crate) fn drop_target(&self, model: &Model, x: u16, y: u16) -> Option<DropTarget> {
         let source = self.pointer.drag.as_ref()?;
         let pane = matches!(source, ElementId::Pane(..));
@@ -87,7 +80,6 @@ impl SidebarUi {
         if target == self.pointer.drop {
             return;
         }
-        // The insertion bar glides to its new boundary; other previews pop in place.
         let edge = |target: &DropTarget, ui: &Self| match target {
             DropTarget::Beside { tab, after } => ui.paint.hit(&ElementId::Tab(*tab)).map(|hit| {
                 f32::from(if *after {
@@ -124,7 +116,6 @@ impl SidebarUi {
         let place = |tab: TabId, after: bool, from: Option<TabId>| {
             let visible = model.visible_ids();
             let at = visible.iter().position(|id| *id == tab)? + usize::from(after);
-            // Core removes the dragged tab before inserting it again.
             let above = from
                 .and_then(|from| visible.iter().position(|id| *id == from))
                 .is_some_and(|from| from < at);
@@ -209,7 +200,6 @@ impl SidebarUi {
         }
     }
 
-    /// A landed row gives the same quick squeeze as a press, confirming where it went.
     fn settle(&mut self, id: ElementId) {
         self.pointer.press = Some(Press {
             id,

@@ -51,7 +51,6 @@ pub enum UiInput {
     },
     Text(String),
     Paste(String),
-    /// Preedit cursor is a UTF-8 byte offset, as supplied by IME APIs.
     ImePreedit {
         text: String,
         cursor: Option<usize>,
@@ -90,7 +89,6 @@ impl UiInput {
     }
 }
 
-/// UI strings never contain terminal control characters; there is no ANSI transport.
 pub fn display_text(text: &str) -> String {
     text.chars().filter(|c| !c.is_control()).collect()
 }
