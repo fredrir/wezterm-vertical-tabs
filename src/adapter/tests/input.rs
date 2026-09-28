@@ -1,6 +1,6 @@
 use super::*;
 
-fn raw(key: KeyCode, mods: window::Modifiers, down: bool) -> window::RawKeyEvent {
+pub(super) fn raw(key: KeyCode, mods: window::Modifiers, down: bool) -> window::RawKeyEvent {
     window::RawKeyEvent {
         key,
         modifiers: mods,
@@ -14,7 +14,7 @@ fn raw(key: KeyCode, mods: window::Modifiers, down: bool) -> window::RawKeyEvent
         handled: window::Handled::new(),
     }
 }
-fn geometry() -> Geometry {
+pub(super) fn geometry() -> Geometry {
     Geometry {
         sidebar: Bounds {
             x: 0.,
@@ -110,7 +110,7 @@ fn command_palette_shortcut_precedes_bindings_and_only_opens_on_key_down() {
     assert!(adapter.commands().is_empty());
 }
 
-fn logical_key(key: KeyCode, mods: window::Modifiers) -> window::KeyEvent {
+pub(super) fn logical_key(key: KeyCode, mods: window::Modifiers) -> window::KeyEvent {
     window::KeyEvent {
         key,
         modifiers: mods,

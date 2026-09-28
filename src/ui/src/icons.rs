@@ -5,6 +5,7 @@ pub(crate) const SIDEBAR: &str = "\u{f10aa}";
 pub(crate) const SETTINGS: &str = "\u{f0493}";
 pub(crate) const REFRESH: &str = "\u{f0450}";
 pub(crate) const SEARCH: &str = "\u{f0349}";
+pub(crate) const KEYBOARD: &str = "\u{f030c}";
 pub(crate) const PLUS: &str = "\u{f0415}";
 pub(crate) const CLOSE: &str = "\u{f0156}";
 pub(crate) const SPACE: &str = "\u{f0328}";

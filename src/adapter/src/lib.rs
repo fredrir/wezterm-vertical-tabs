@@ -78,6 +78,22 @@ struct Adapter {
 }
 
 impl Adapter {
+    fn record_shortcut(&mut self, key: &KeyCode, mods: window::Modifiers) {
+        let key = match key {
+            KeyCode::Physical(physical) => physical.to_key_code(),
+            key => key.clone(),
+        };
+        if key.is_modifier() || matches!(key, KeyCode::Composed(_) | KeyCode::VoidSymbol) {
+            return;
+        }
+        let shortcut = if key == KeyCode::Char('\u{1b}') {
+            String::new()
+        } else {
+            commands::shortcut_label(&key, mods)
+        };
+        self.ui_input(ui::UiInput::RecordShortcut(shortcut));
+    }
+
     fn new(window_id: usize) -> Self {
         let config = lua::configuration();
         let mut app = WindowApp::new(&config.profile, false);
@@ -455,7 +471,9 @@ impl Adapter {
             | ui::UiInput::Text(_)
             | ui::UiInput::Paste(_)
             | ui::UiInput::ImeCommit(_) => true,
-            ui::UiInput::Focus(_) | ui::UiInput::Visibility(_) => false,
+            ui::UiInput::Focus(_) | ui::UiInput::Visibility(_) | ui::UiInput::RecordShortcut(_) => {
+                false
+            }
         }
     }
 
@@ -1197,6 +1215,12 @@ impl Provider for Adapter {
     fn input(&mut self, input: Input<'_>) -> bool {
         match input {
             Input::RawKey(key) => {
+                if self.app.ui().recording_shortcut() {
+                    if key.key_is_down {
+                        self.record_shortcut(&key.key, key.modifiers);
+                    }
+                    return true;
+                }
                 let mods = modifiers(key.modifiers);
                 let code = self
                     .app
@@ -1225,6 +1249,25 @@ impl Provider for Adapter {
                 true
             }
             Input::Key(key) => {
+                if self.app.ui().recording_shortcut() {
+                    if key.key_is_down {
+                        if let Some(raw) = &key.raw {
+                            self.record_shortcut(&raw.key, raw.modifiers);
+                        } else {
+                            let code = match &key.key {
+                                KeyCode::Char(c)
+                                    if key.modifiers.contains(window::Modifiers::CTRL)
+                                        && ('\u{1}'..='\u{1a}').contains(c) =>
+                                {
+                                    KeyCode::Char(char::from(*c as u8 + b'a' - 1))
+                                }
+                                code => code.clone(),
+                            };
+                            self.record_shortcut(&code, key.modifiers);
+                        }
+                    }
+                    return true;
+                }
                 let mods = modifiers(key.raw.as_ref().map_or(key.modifiers, |raw| raw.modifiers));
                 if let Some(code) = self
                     .app

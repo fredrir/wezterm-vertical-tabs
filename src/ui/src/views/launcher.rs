@@ -1,5 +1,6 @@
 use crate::actions::Action;
 use crate::components::scrollbar::Scrollbar;
+use crate::element::ElementId;
 use crate::input::TextEditor;
 use crate::intent::HostAction;
 use crate::overlays::{Menu, MenuItem, Overlay};
@@ -22,6 +23,7 @@ pub(crate) struct Launcher {
     pub all_items: Vec<MenuItem>,
     pub empty: &'static str,
     pub scrollbar: Option<Scrollbar>,
+    pub recording: bool,
 }
 
 #[derive(Default)]
@@ -67,7 +69,7 @@ pub struct JobEntry {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CommandEntry {
     pub label: String,
-    pub shortcut: String,
+    pub shortcuts: Vec<String>,
     pub description: String,
 }
 
@@ -82,7 +84,8 @@ impl SidebarUi {
                     command.label,
                     Action::Host(HostAction::RunCommand(id)),
                 );
-                item.hint = command.shortcut;
+                item.hint = command.shortcuts.first().cloned().unwrap_or_default();
+                item.shortcuts = command.shortcuts;
                 item.keywords = command.description;
                 item
             })
@@ -95,6 +98,43 @@ impl SidebarUi {
             items,
             0,
         );
+    }
+
+    pub fn recording_shortcut(&self) -> bool {
+        matches!(&self.overlays.current, Some(Overlay::Menu(menu))
+            if menu.search.as_ref().is_some_and(|search| search.recording))
+    }
+
+    pub(crate) fn toggle_shortcut_recording(&mut self) {
+        if let Some(Overlay::Menu(menu)) = &mut self.overlays.current
+            && let Some(search) = &mut menu.search
+            && search.kind == LauncherKind::Commands
+        {
+            search.recording = !search.recording;
+            if search.recording {
+                search.editor = TextEditor::default();
+            }
+            filter_menu(menu);
+            self.focused = Some(ElementId::Editor);
+            self.frame.dirty = true;
+        }
+    }
+
+    pub(crate) fn record_shortcut(&mut self, shortcut: String) {
+        if let Some(Overlay::Menu(menu)) = &mut self.overlays.current
+            && let Some(search) = &mut menu.search
+            && search.recording
+        {
+            if shortcut.is_empty() {
+                // Escape leaves recording but keeps whatever was captured in the
+                // field, so it can be searched and edited like a normal query.
+                search.recording = false;
+            } else {
+                search.editor = TextEditor::new(shortcut);
+            }
+            filter_menu(menu);
+            self.frame.dirty = true;
+        }
     }
 
     fn open_launcher(
@@ -112,6 +152,7 @@ impl SidebarUi {
             all_items: items.clone(),
             empty,
             scrollbar: None,
+            recording: false,
         });
         self.open_overlay(Overlay::Menu(Menu {
             selected,
@@ -331,12 +372,34 @@ pub(crate) fn filter_menu(menu: &mut Menu) {
             .all_items
             .iter()
             .filter(|item| {
+                if search.recording {
+                    return query.is_empty()
+                        || item
+                            .shortcuts
+                            .iter()
+                            .any(|shortcut| shortcut.to_lowercase() == query);
+                }
                 item.label.to_lowercase().contains(&query)
                     || item.hint.to_lowercase().contains(&query)
+                    || item
+                        .shortcuts
+                        .iter()
+                        .any(|shortcut| shortcut.to_lowercase().contains(&query))
                     || item.keywords.to_lowercase().contains(&query)
                     || item.index.is_some_and(|index| index.to_string() == query)
             })
-            .cloned(),
+            .cloned()
+            .map(|mut item| {
+                if search.recording
+                    && let Some(shortcut) = item
+                        .shortcuts
+                        .iter()
+                        .find(|shortcut| shortcut.to_lowercase() == query)
+                {
+                    item.hint = shortcut.clone();
+                }
+                item
+            }),
     );
     menu.selected = selected_id
         .and_then(|id| menu.items.iter().position(|item| item.id == id))

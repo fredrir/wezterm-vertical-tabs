@@ -16,6 +16,12 @@ impl SidebarUi {
         modifiers: Modifiers,
         intents: &mut Vec<UiIntent>,
     ) {
+        if self.recording_shortcut() {
+            if key == Key::Escape {
+                self.record_shortcut(String::new());
+            }
+            return;
+        }
         if self.shortcut(model, &key, modifiers, intents) {
             return;
         }

@@ -36,27 +36,45 @@ pub(super) fn entries(commands: &[ExpandedCommand], shortcuts: bool) -> Vec<Comm
                     ),
                 );
             }
-            let shortcut = keys
-                .first()
-                .map(|(mods, key)| {
-                    let key = crate::inputmap::ui_key(key, config.ui_key_cap_rendering);
-                    let mods = mods.to_string_with_separator(window::ModifierToStringArgs {
-                        separator: "+",
-                        want_none: false,
-                        ui_key_cap_rendering: Some(config.ui_key_cap_rendering),
-                    });
-                    if mods.is_empty() {
-                        key
-                    } else {
-                        format!("{mods}+{key}")
-                    }
-                })
-                .unwrap_or_default();
+            let mut shortcuts = Vec::new();
+            for (mods, key) in keys {
+                let shortcut = shortcut_label(&key, mods);
+                if !shortcuts.contains(&shortcut) {
+                    shortcuts.push(shortcut);
+                }
+            }
             CommandEntry {
                 label: command.brief.to_string(),
-                shortcut,
+                shortcuts,
                 description: format!("{} {}", command.menubar.join(" "), command.doc),
             }
         })
         .collect()
+}
+
+pub(super) fn shortcut_label(key: &KeyCode, mods: Modifiers) -> String {
+    let key = match key {
+        KeyCode::Physical(physical) => physical.to_key_code(),
+        key => key.clone(),
+    };
+    let mut mods = mods.remove_positional_mods();
+    if matches!(key, KeyCode::Char(c) if c.is_ascii_uppercase()) {
+        mods |= Modifiers::SHIFT;
+    }
+    let rendering = config::configuration().ui_key_cap_rendering;
+    let key = match key {
+        KeyCode::Char('\u{7f}') => "Delete".to_owned(),
+        KeyCode::Char('\u{8}') => "Backspace".to_owned(),
+        key => crate::inputmap::ui_key(&key, rendering),
+    };
+    let mods = mods.to_string_with_separator(window::ModifierToStringArgs {
+        separator: "+",
+        want_none: false,
+        ui_key_cap_rendering: Some(rendering),
+    });
+    if mods.is_empty() {
+        key
+    } else {
+        format!("{mods}+{key}")
+    }
 }

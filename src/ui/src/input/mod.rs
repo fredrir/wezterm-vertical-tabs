@@ -50,6 +50,7 @@ pub enum UiInput {
         modifiers: Modifiers,
     },
     Text(String),
+    RecordShortcut(String),
     Paste(String),
     ImePreedit {
         text: String,

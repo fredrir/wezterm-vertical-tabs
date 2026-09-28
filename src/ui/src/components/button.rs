@@ -24,6 +24,7 @@ pub(crate) struct Button<'a> {
     kind: Kind,
     tooltip: String,
     selected: bool,
+    label_right_padding: u16,
 }
 
 impl<'a> Button<'a> {
@@ -43,6 +44,7 @@ impl<'a> Button<'a> {
             kind,
             tooltip: String::new(),
             selected: false,
+            label_right_padding: 0,
         }
     }
     pub fn tooltip(mut self, tooltip: impl Into<String>) -> Self {
@@ -51,6 +53,10 @@ impl<'a> Button<'a> {
     }
     pub fn selected(mut self, selected: bool) -> Self {
         self.selected = selected;
+        self
+    }
+    pub fn label_right_padding(mut self, padding: u16) -> Self {
+        self.label_right_padding = padding;
         self
     }
 
@@ -121,7 +127,12 @@ impl<'a> Button<'a> {
             (_, false) => theme.muted,
         };
         cx.write(
-            Rect::new(rect.x, rect.y, rect.width, 1),
+            Rect::new(
+                rect.x,
+                rect.y,
+                rect.width.saturating_sub(self.label_right_padding),
+                1,
+            ),
             Line::from(self.label.to_owned()).alignment(Alignment::Center),
             theme.base().bg(fill).fg(fg),
         );

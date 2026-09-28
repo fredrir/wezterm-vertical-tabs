@@ -1,0 +1,173 @@
+diff --git a/window/src/os/macos/window.rs b/window/src/os/macos/window.rs
+--- a/window/src/os/macos/window.rs
++++ b/window/src/os/macos/window.rs
+@@ -422,6 +422,43 @@
+     }
+ }
+ 
++fn dispatch_menu_key_equivalent(event: id, mut dispatch: impl FnMut(WindowEvent)) -> bool {
++    if event.is_null() || unsafe { event.eventType() } != appkit::NSEventType::NSKeyDown {
++        return false;
++    }
++    let flags = unsafe { event.modifierFlags() };
++    let virtual_key = unsafe { event.keyCode() };
++    let unmod = unsafe { nsstring_to_str(event.charactersIgnoringModifiers()) };
++    let phys_code = vkey_to_phys(virtual_key);
++    let key = match KeyCode::composed(unmod) {
++        KeyCode::Char(c) => function_key_to_keycode(c),
++        _ if unmod.is_empty() => phys_code
++            .map(KeyCode::Physical)
++            .unwrap_or(KeyCode::RawCode(virtual_key as _)),
++        key => key,
++    };
++    let handled = Handled::new();
++    dispatch(WindowEvent::RawKeyEvent(RawKeyEvent {
++        key,
++        phys_code,
++        raw_code: virtual_key as _,
++        leds: if flags.contains(NSEventModifierFlags::NSAlphaShiftKeyMask) {
++            KeyboardLedStatus::CAPS_LOCK
++        } else {
++            KeyboardLedStatus::empty()
++        },
++        modifiers: key_modifiers(flags),
++        repeat_count: 1,
++        key_is_down: true,
++        handled: handled.clone(),
++    }));
++    handled.is_handled()
++}
++
++#[cfg(test)]
++#[path = "../../../tests/macos/menu.rs"]
++mod menu_tests;
++
+ #[derive(Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd)]
+ pub struct Window {
+     id: usize,
+@@ -2432,10 +2469,14 @@
+         match action {
+             Some(RepresentedItem::KeyAssignment(action)) => {
+                 if let Some(this) = Self::get_this(this) {
+-                    this.inner
+-                        .borrow_mut()
+-                        .events
+-                        .dispatch(WindowEvent::PerformKeyAssignment(action));
++                    let mut inner = this.inner.borrow_mut();
++                    // AppKit menu shortcuts can bypass keyDown entirely. Give input
++                    // consumers the originating chord before executing its assignment.
++                    let event: id = unsafe { msg_send![appkit::NSApp(), currentEvent] };
++                    if dispatch_menu_key_equivalent(event, |event| inner.events.dispatch(event)) {
++                        return;
++                    }
++                    inner.events.dispatch(WindowEvent::PerformKeyAssignment(action));
+                 }
+             }
+             None => {}
+diff --git a/window/tests/macos/menu.rs b/window/tests/macos/menu.rs
+new file mode 100644
+--- /dev/null
++++ b/window/tests/macos/menu.rs
+@@ -0,0 +1,102 @@
++use super::*;
++
++fn key_event(chars: &str, unmod: &str, flags: NSEventModifierFlags, code: u16) -> id {
++    let chars = nsstring(chars);
++    let unmod = nsstring(unmod);
++    unsafe {
++        NSEvent::keyEventWithType_location_modifierFlags_timestamp_windowNumber_context_characters_charactersIgnoringModifiers_isARepeat_keyCode_(
++            nil,
++            appkit::NSEventType::NSKeyDown,
++            NSPoint::new(0., 0.),
++            flags,
++            0.,
++            0,
++            nil,
++            *chars,
++            *unmod,
++            NO,
++            code,
++        )
++    }
++}
++
++#[test]
++fn vtabs_menu_shortcuts_offer_the_actual_chord_before_the_assignment() {
++    let _pool = unsafe { StrongPtr::new(NSAutoreleasePool::new(nil)) };
++    for (chars, unmod, flags, code, key, mods) in [
++        (
++            "1",
++            "1",
++            NSEventModifierFlags::NSCommandKeyMask,
++            kVK_ANSI_1,
++            KeyCode::Char('1'),
++            Modifiers::SUPER,
++        ),
++        (
++            "!",
++            "!",
++            NSEventModifierFlags::NSCommandKeyMask | NSEventModifierFlags::NSShiftKeyMask,
++            kVK_ANSI_1,
++            KeyCode::Char('!'),
++            Modifiers::SUPER | Modifiers::SHIFT,
++        ),
++        (
++            "\u{3}",
++            "c",
++            NSEventModifierFlags::NSControlKeyMask,
++            kVK_ANSI_C,
++            KeyCode::Char('c'),
++            Modifiers::CTRL,
++        ),
++        (
++            "\u{f702}",
++            "\u{f702}",
++            NSEventModifierFlags::NSCommandKeyMask,
++            kVK_LeftArrow,
++            KeyCode::LeftArrow,
++            Modifiers::SUPER,
++        ),
++    ] {
++        let event = key_event(chars, unmod, flags, code);
++        assert!(!event.is_null());
++        let mut calls = 0;
++        assert!(dispatch_menu_key_equivalent(event, |event| {
++            let WindowEvent::RawKeyEvent(event) = event else {
++                panic!("expected raw input before assignment")
++            };
++            calls += 1;
++            assert_eq!(event.key, key);
++            assert_eq!(event.modifiers, mods);
++            assert_eq!(event.phys_code, vkey_to_phys(code));
++            assert!(event.key_is_down);
++            event.set_handled();
++        }));
++        assert_eq!(calls, 1);
++    }
++}
++
++#[test]
++fn vtabs_menu_shortcuts_allow_unclaimed_bindings_to_execute() {
++    let _pool = unsafe { StrongPtr::new(NSAutoreleasePool::new(nil)) };
++    let event = key_event("1", "1", NSEventModifierFlags::NSCommandKeyMask, kVK_ANSI_1);
++    let mut calls = 0;
++    assert!(!dispatch_menu_key_equivalent(event, |_| calls += 1));
++    assert_eq!(calls, 1);
++}
++
++#[test]
++fn vtabs_menu_mouse_clicks_and_programmatic_actions_do_not_synthesize_keys() {
++    let _pool = unsafe { StrongPtr::new(NSAutoreleasePool::new(nil)) };
++    let mouse = unsafe {
++        NSEvent::mouseEventWithType_location_modifierFlags_timestamp_windowNumber_context_eventNumber_clickCount_pressure_(
++            nil, appkit::NSEventType::NSLeftMouseUp, NSPoint::new(0., 0.),
++            NSEventModifierFlags::empty(), 0., 0, nil, 0, 1, 0.,
++        )
++    };
++    assert!(!mouse.is_null());
++    for event in [nil, mouse] {
++        assert!(!dispatch_menu_key_equivalent(event, |_| panic!(
++            "not a keyboard shortcut"
++        )));
++    }
++}

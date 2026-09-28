@@ -44,6 +44,7 @@ impl SidebarUi {
     ) {
         match id {
             ElementId::Search => self.open_tab_navigator(model),
+            ElementId::RecordShortcut => self.toggle_shortcut_recording(),
             ElementId::Refresh => intents.push(UiIntent::Refresh),
             ElementId::CreateFolder => self.open_create_folder(),
             ElementId::Folder(id) => intents.push(UiIntent::Domain(Intent::ToggleFolder(id))),

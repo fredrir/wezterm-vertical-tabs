@@ -1,3 +1,4 @@
+use crate::components::button::{Button, Tone};
 use crate::components::row::{Content, Row};
 use crate::components::scrollbar::Scrollbar;
 use crate::components::text_input::TextInput;
@@ -7,6 +8,7 @@ use crate::icons;
 use crate::input::display_text;
 use crate::overlays::Menu;
 use crate::runtime::canvas::Canvas;
+use crate::views::launcher::LauncherKind;
 use ratatui::layout::Rect;
 use unicode_width::UnicodeWidthStr;
 
@@ -41,19 +43,47 @@ pub(crate) fn palette(cx: &mut Canvas, area: Rect, menu: &mut Menu) -> Rect {
         icons::SEARCH,
         theme.muted().bg(theme.card),
     );
+    let button_width = if search.kind == LauncherKind::Commands {
+        3.min(field.width.saturating_sub(lead + 2))
+    } else {
+        0
+    };
     let edit = Rect::new(
         field.x + 1 + lead,
         field.y,
-        field.width.saturating_sub(lead + 2),
+        field.width.saturating_sub(lead + 2 + button_width),
         1,
     );
     let shift = if field.height == 2 { 0.5 } else { 0.0 };
     TextInput::new(ElementId::Editor, &mut search.editor, theme.card)
-        .active(true)
+        .active(!search.recording)
         .shift(shift)
-        .placeholder(&menu.title)
+        .placeholder(if search.recording {
+            "Recording keys. Press Escape to exit"
+        } else {
+            &menu.title
+        })
         .render(edit, cx);
     cx.hit(ElementId::Editor, field, "");
+    if button_width > 0 {
+        Button::action(ElementId::RecordShortcut, icons::KEYBOARD, Tone::Neutral)
+            .selected(search.recording)
+            .label_right_padding(1)
+            .tooltip(if search.recording {
+                "Stop recording keys"
+            } else {
+                "Record keys"
+            })
+            .render(
+                Rect::new(
+                    field.right() - button_width - 1,
+                    field.y,
+                    button_width + 1,
+                    field.height,
+                ),
+                cx,
+            );
+    }
     let mut list = Rect::new(
         inner.x,
         field.bottom() + gap,

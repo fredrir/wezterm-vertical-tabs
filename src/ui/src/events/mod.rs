@@ -78,6 +78,7 @@ impl SidebarUi {
             } => self.pointer_up(model, x, y, &mut intents),
             UiInput::PointerUp { .. } => {}
             UiInput::Scroll { x, y, rows } => self.scroll(model, x, y, rows),
+            UiInput::RecordShortcut(shortcut) => self.record_shortcut(shortcut),
             UiInput::Text(text) | UiInput::Paste(text) | UiInput::ImeCommit(text) => {
                 if let Some(slot) = self.active_editor() {
                     if let Some(editor) = self.editor_mut(slot) {
@@ -191,7 +192,11 @@ impl SidebarUi {
             Some(Overlay::Form(_)) => {
                 (self.focused == Some(ElementId::Editor)).then_some(EditorSlot::Form)
             }
-            Some(Overlay::Menu(menu)) => menu.search.as_ref().map(|_| EditorSlot::Palette),
+            Some(Overlay::Menu(menu)) => menu
+                .search
+                .as_ref()
+                .filter(|search| !search.recording)
+                .map(|_| EditorSlot::Palette),
             None if self.sidebar.rename.is_some() => Some(EditorSlot::Rename),
             None => (self.settings.open
                 && self.settings.search_focused
@@ -203,9 +208,11 @@ impl SidebarUi {
     pub(crate) fn editor_slot(&self, id: &ElementId) -> Option<EditorSlot> {
         match (id, &self.overlays.current) {
             (ElementId::Editor, Some(Overlay::Form(_))) => Some(EditorSlot::Form),
-            (ElementId::Editor, Some(Overlay::Menu(menu))) => {
-                menu.search.as_ref().map(|_| EditorSlot::Palette)
-            }
+            (ElementId::Editor, Some(Overlay::Menu(menu))) => menu
+                .search
+                .as_ref()
+                .filter(|search| !search.recording)
+                .map(|_| EditorSlot::Palette),
             (ElementId::Editor, None) => self.sidebar.rename.as_ref().map(|_| EditorSlot::Rename),
             (ElementId::SettingsSearch, None) => {
                 self.settings.open.then_some(EditorSlot::SettingsSearch)
