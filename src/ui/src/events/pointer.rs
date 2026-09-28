@@ -1,5 +1,6 @@
 use crate::SidebarUi;
 use crate::components::list;
+use crate::components::scrollbar::Scrollbar;
 use crate::element::ElementId;
 use crate::events::{DropMotion, DropTarget, EditorSlot};
 use crate::input::{Modifiers, MouseButton};
@@ -27,6 +28,7 @@ pub(crate) struct Pointer {
     pub drag: Option<ElementId>,
     pub dragging: bool,
     pub origin: Option<(u16, u16)>,
+    pub scrollbar_grab: u16,
     pub fraction: (f32, f32),
     pub press: Option<Press>,
     pub drop: Option<DropTarget>,
@@ -42,6 +44,7 @@ impl Default for Pointer {
             drag: None,
             dragging: false,
             origin: None,
+            scrollbar_grab: 0,
             fraction: (0.5, 0.5),
             press: None,
             drop: None,
@@ -63,6 +66,10 @@ impl Pointer {
 
 impl SidebarUi {
     pub(crate) fn pointer_move(&mut self, model: &Model, x: u16, y: u16) {
+        if self.pointer.drag == Some(ElementId::Scrollbar) {
+            self.drag_scrollbar(y);
+            return;
+        }
         if let Some(slot) = self
             .pointer
             .drag
@@ -147,6 +154,17 @@ impl SidebarUi {
             self.set_anchor(x, y);
         }
         match (button, hit) {
+            (MouseButton::Left, Some(ElementId::Scrollbar)) => {
+                if let Some(scrollbar) = self.launcher_scrollbar() {
+                    self.pointer.drag = Some(ElementId::Scrollbar);
+                    if scrollbar.thumb.contains(Position::new(x, y)) {
+                        self.pointer.scrollbar_grab = y - scrollbar.thumb.y;
+                    } else {
+                        self.pointer.scrollbar_grab = scrollbar.thumb.height / 2;
+                        self.drag_scrollbar(y);
+                    }
+                }
+            }
             (MouseButton::Right, Some(id)) => self.context_menu(model, id),
             (MouseButton::Middle, Some(ElementId::Tab(id))) => self.close_tab(model, id, intents),
             (MouseButton::Left, Some(id @ (ElementId::Editor | ElementId::SettingsSearch))) => {
@@ -205,6 +223,9 @@ impl SidebarUi {
             press.up.get_or_insert(None);
             press.animating = true;
         }
+        if down == Some(ElementId::Scrollbar) {
+            return;
+        }
         let up = self.hit_test(x, y).map(|hit| hit.id.clone());
         if down.is_some() && down == up {
             let to = up.unwrap();
@@ -241,6 +262,26 @@ impl SidebarUi {
             self.sidebar.scroll = list::offset(self.sidebar.scroll, rows, self.sidebar.rows.len());
         }
         self.frame.dirty = true;
+    }
+
+    fn launcher_scrollbar(&self) -> Option<Scrollbar> {
+        match &self.overlays.current {
+            Some(Overlay::Menu(menu)) => menu.search.as_ref()?.scrollbar,
+            _ => None,
+        }
+    }
+
+    fn drag_scrollbar(&mut self, y: u16) {
+        let Some(scrollbar) = self.launcher_scrollbar() else {
+            return;
+        };
+        if let Some(Overlay::Menu(menu)) = &mut self.overlays.current {
+            menu.scroll = scrollbar.offset(y, self.pointer.scrollbar_grab);
+            menu.selected = menu
+                .selected
+                .clamp(menu.scroll, menu.scroll + scrollbar.visible - 1);
+            self.frame.dirty = true;
+        }
     }
 
     fn double_clicked_title(&self, id: TabId, x: u16, y: u16) -> bool {

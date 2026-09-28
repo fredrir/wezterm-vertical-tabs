@@ -41,6 +41,7 @@ return config
 | Settings              | Gear tab opens last and keeps its index; later tabs follow it (`Cmd+index`, `Ctrl+Tab`); closes with ×, `Cmd+W`, Escape |
 | New tab                             | `Cmd+T`                            | `Ctrl+Shift+T`       |
 | Search tabs                         | `Cmd+K`                            | `Ctrl+Shift+K`       |
+| Command palette                     | `Cmd+P`                            | `Ctrl+Shift+P`       |
 | Search jobs                         | `Cmd+Z`                            | `Ctrl+Shift+Z`       |
 | Toggle sidebar                      | `Cmd+B`                            | `Ctrl+Shift+B`       |
 | Close tab or settings               | `Cmd+W`                            | `Ctrl+Shift+W`       |
@@ -58,6 +59,7 @@ return config
 | Name                  | Value                                                                                                                   |
 | --------------------- | ----------------------------------------------------------------------------------------------------------------------- |
 | Keyboard preference   | Disable `keyboard_shortcuts` to use custom Lua bindings                                                                 |
+| Command palette       | Shared searchable launcher; includes WezTerm commands and `augment-command-palette` entries; custom bindings use `wezterm.action.ActivateCommandPalette` |
 | Terminal Control keys | Ordinary Control shortcuts remain available to the shell                                                                |
 | Settings              | Own tab with a gear icon and the index after the last tab (`Cmd+index`, `Cmd+9`, `Ctrl+Tab`); close with ×, `Cmd+W`, Escape |
 | Search                | Centered palette of sidebar rows; Up/Down select, Left/Right edit the query, Enter opens; matches name, title or index  |

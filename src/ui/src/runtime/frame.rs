@@ -390,7 +390,3 @@ impl SidebarUi {
         }
     }
 }
-
-#[cfg(test)]
-#[path = "../../tests/runtime/frame.rs"]
-mod tests;

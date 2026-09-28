@@ -2,6 +2,8 @@ use vtabs_core::{Intent, PaneId, TabId};
 
 #[derive(Clone, Debug)]
 pub enum HostAction {
+    OpenCommands,
+    RunCommand(usize),
     OpenJobs,
     Job(vtabs_core::jobs::JobTarget, vtabs_core::jobs::JobOperation),
     Custom(String),

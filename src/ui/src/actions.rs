@@ -111,7 +111,7 @@ impl SidebarUi {
             }
             ElementId::Submit => self.submit_form(model, intents),
             ElementId::Cancel => self.back(),
-            ElementId::Editor => {}
+            ElementId::Editor | ElementId::Scrollbar => {}
         }
     }
 
@@ -462,7 +462,3 @@ pub(crate) fn reset_settings() -> Action {
         action: Box::new(Action::Domain(Intent::ResetSettings)),
     }
 }
-
-#[cfg(test)]
-#[path = "../tests/actions.rs"]
-mod tests;

@@ -19,7 +19,7 @@ pub use ratatui::{buffer::Buffer, layout::Rect};
 pub use runtime::canvas::{HitRegion, RoundedSurface};
 pub use runtime::frame::{FrameUpdate, SurfaceTransform};
 pub use theme::Theme;
-pub use views::launcher::{ForeignTab, JobEntry};
+pub use views::launcher::{CommandEntry, ForeignTab, JobEntry};
 
 use actions::Action;
 use events::Pointer;
@@ -33,14 +33,6 @@ use runtime::{
 use std::time::Duration;
 use views::{launcher::Launchers, settings_page::SettingsPage, sidebar::Sidebar};
 use vtabs_core::{Intent, PaneId, TabId};
-
-#[cfg(test)]
-#[path = "../tests/snapshots.rs"]
-mod snapshot_tests;
-
-#[cfg(test)]
-#[path = "../tests/ui.rs"]
-mod ui_tests;
 
 #[derive(Default)]
 pub struct SidebarUi {

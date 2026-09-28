@@ -25,6 +25,7 @@ pub enum ElementId {
     Menu(String),
     Setting(String),
     Editor,
+    Scrollbar,
     Submit,
     Cancel,
 }

@@ -3,10 +3,15 @@ use crate::element::ElementId;
 use crate::input::display_text;
 use crate::overlays::Menu;
 use crate::runtime::canvas::Canvas;
+use crate::views::launcher::LauncherKind;
 use ratatui::layout::{Position, Rect};
 use unicode_width::UnicodeWidthStr;
 
 pub(crate) fn menu(cx: &mut Canvas, area: Rect, anchor: Option<Position>, menu: &mut Menu) -> Rect {
+    let compact = matches!(
+        menu.search.as_ref().map(|search| search.kind),
+        Some(LauncherKind::Commands)
+    );
     let height = menu
         .items
         .len()
@@ -49,13 +54,16 @@ pub(crate) fn menu(cx: &mut Canvas, area: Rect, anchor: Option<Position>, menu: 
             theme.base()
         };
         let hint_width = item.hint.width().min(usize::from(row.width)) as u16;
+        let label = display_text(&item.label);
+        let label = if compact {
+            label
+        } else {
+            format!("{} {}", if selected { "›" } else { " " }, label)
+        };
+
         cx.write(
             Rect::new(row.x, row.y, row.width.saturating_sub(hint_width), 1),
-            format!(
-                "{} {}",
-                if selected { "›" } else { " " },
-                display_text(&item.label)
-            ),
+            label,
             style,
         );
         if hint_width > 0 {
@@ -71,10 +79,18 @@ pub(crate) fn menu(cx: &mut Canvas, area: Rect, anchor: Option<Position>, menu: 
 }
 
 fn width(menu: &Menu) -> u16 {
+    let compact = matches!(
+        menu.search.as_ref().map(|search| search.kind),
+        Some(LauncherKind::Commands)
+    );
+
+    let leading = if compact { 0 } else { 2 };
+
     let rows = menu
         .items
         .iter()
-        .map(|item| display_text(&item.label).width() + item.hint.width() + 5);
+        .map(|item| display_text(&item.label).width() + item.hint.width() + leading + 3);
+
     rows.chain(std::iter::once(display_text(&menu.title).width() + 2))
         .max()
         .unwrap_or(0)

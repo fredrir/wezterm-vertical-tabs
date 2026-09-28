@@ -1,5 +1,6 @@
 //! The only product code coupled to WezTerm's internal APIs.
 mod cells;
+mod commands;
 mod directory;
 mod jobs;
 mod location;
@@ -48,6 +49,7 @@ struct Adapter {
     surface: Surface,
     primitives: Vec<RoundedSurface>,
     commands: Vec<Command>,
+    palette_commands: Vec<crate::commands::ExpandedCommand>,
     cursor: Option<(usize, usize)>,
     geometry: Geometry,
     host_tabs: Vec<usize>,
@@ -98,6 +100,7 @@ impl Adapter {
             },
             primitives: Vec::new(),
             commands: Vec::new(),
+            palette_commands: Vec::new(),
             cursor: None,
             geometry: Geometry::default(),
             host_tabs: Vec::new(),
@@ -273,6 +276,13 @@ impl Adapter {
     fn command(&mut self, command: app::Command) {
         use core::HostCommand as C;
         match command {
+            app::Command::OpenCommands => self.commands.push(Command::OpenCommandPalette),
+            app::Command::RunCommand(id) => {
+                if let Some(command) = self.palette_commands.get(id).cloned() {
+                    self.commands.push(Command::RunPaletteCommand(command));
+                }
+                self.palette_commands.clear();
+            }
             app::Command::OpenJobs => self.open_jobs(),
             app::Command::Job(target, operation) => self.job_action(target, operation),
             app::Command::Refresh => {
@@ -1178,6 +1188,12 @@ impl Provider for Adapter {
         };
         self.dispatch(intent);
     }
+    fn open_command_palette(&mut self, commands: Vec<crate::commands::ExpandedCommand>) {
+        self.cancel_paste();
+        let entries = commands::entries(&commands, self.app.model().settings.keyboard_shortcuts);
+        self.palette_commands = commands;
+        self.app.ui_mut().open_commands(entries);
+    }
     fn input(&mut self, input: Input<'_>) -> bool {
         match input {
             Input::RawKey(key) => {
@@ -1876,3 +1892,7 @@ fn editor_clipboard_key(key: &KeyCode, mods: ui::Modifiers) -> Option<ui::Key> {
 #[cfg(test)]
 #[path = "../tests/input.rs"]
 mod input_tests;
+
+#[cfg(test)]
+#[path = "../tests/commands.rs"]
+mod command_tests;

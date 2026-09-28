@@ -22,6 +22,7 @@ pub(crate) struct Row<'a> {
     pub id: ElementId,
     pub rect: Rect,
     pub indent: u16,
+    pub leading: bool,
     pub icon: &'a str,
     pub icon_color: Option<Color>,
     pub index: Option<usize>,
@@ -39,6 +40,7 @@ impl<'a> Row<'a> {
             id,
             rect,
             indent: 0,
+            leading: true,
             icon,
             icon_color: None,
             index: None,
@@ -118,16 +120,22 @@ impl Row<'_> {
         let tooltip = platform_tooltip(self.tooltip.unwrap_or_default());
         let x = self.rect.x + 1 + self.indent;
         let right = self.rect.right().saturating_sub(1);
-        cx.write(
-            Rect::new(x, self.rect.y, ICON_CELLS.min(right.saturating_sub(x)), 1),
-            icon.to_owned(),
-            icon_style,
-        );
-        let x = (x + ICON_CELLS).min(right);
+        if self.leading {
+            cx.write(
+                Rect::new(x, self.rect.y, ICON_CELLS.min(right.saturating_sub(x)), 1),
+                icon.to_owned(),
+                icon_style,
+            );
+        }
+        let x = if self.leading {
+            (x + ICON_CELLS).min(right)
+        } else {
+            x.min(right)
+        };
         let layout = RowLayout {
             fill,
             style,
-            content: Rect::new(x, self.rect.y, right - x, self.rect.height),
+            content: Rect::new(x, self.rect.y, right.saturating_sub(x), self.rect.height),
         };
         cx.hit(self.id, self.rect, tooltip);
         match self.content {

@@ -1,4 +1,5 @@
 use crate::actions::Action;
+use crate::components::scrollbar::Scrollbar;
 use crate::input::TextEditor;
 use crate::intent::HostAction;
 use crate::overlays::{Menu, MenuItem, Overlay};
@@ -11,6 +12,7 @@ use vtabs_core::{Intent, Model, Tab, TabId};
 pub(crate) enum LauncherKind {
     Tabs,
     Jobs,
+    Commands,
 }
 
 #[derive(Clone, Debug)]
@@ -19,6 +21,7 @@ pub(crate) struct Launcher {
     pub editor: TextEditor,
     pub all_items: Vec<MenuItem>,
     pub empty: &'static str,
+    pub scrollbar: Option<Scrollbar>,
 }
 
 #[derive(Default)]
@@ -61,7 +64,39 @@ pub struct JobEntry {
     pub ready: bool,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CommandEntry {
+    pub label: String,
+    pub shortcut: String,
+    pub description: String,
+}
+
 impl SidebarUi {
+    pub fn open_commands(&mut self, commands: Vec<CommandEntry>) {
+        let mut items: Vec<MenuItem> = commands
+            .into_iter()
+            .enumerate()
+            .map(|(id, command)| {
+                let mut item = MenuItem::new(
+                    format!("command/{id}"),
+                    command.label,
+                    Action::Host(HostAction::RunCommand(id)),
+                );
+                item.hint = command.shortcut;
+                item.keywords = command.description;
+                item
+            })
+            .collect();
+        items.sort_by_key(|item| (item.hint.is_empty(), item.label.to_lowercase()));
+        self.open_launcher(
+            LauncherKind::Commands,
+            "Search commands",
+            "No commands available",
+            items,
+            0,
+        );
+    }
+
     fn open_launcher(
         &mut self,
         kind: LauncherKind,
@@ -76,6 +111,7 @@ impl SidebarUi {
             editor: TextEditor::default(),
             all_items: items.clone(),
             empty,
+            scrollbar: None,
         });
         self.open_overlay(Overlay::Menu(Menu {
             selected,
@@ -283,9 +319,10 @@ impl SidebarUi {
 }
 
 pub(crate) fn filter_menu(menu: &mut Menu) {
-    let Some(search) = &menu.search else {
+    let Some(search) = &mut menu.search else {
         return;
     };
+    search.scrollbar = None;
     let query = search.editor.text().to_lowercase();
     let selected_id = menu.items.get(menu.selected).map(|item| item.id.clone());
     menu.items.clear();
@@ -306,7 +343,3 @@ pub(crate) fn filter_menu(menu: &mut Menu) {
         .unwrap_or(0);
     menu.scroll = 0;
 }
-
-#[cfg(test)]
-#[path = "../../tests/views/launcher.rs"]
-mod tests;

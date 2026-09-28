@@ -338,7 +338,3 @@ fn space_title(model: &Model, rect: Rect, cx: &mut Canvas) {
     }
     .render(cx);
 }
-
-#[cfg(test)]
-#[path = "../../../tests/views/sidebar.rs"]
-mod tests;

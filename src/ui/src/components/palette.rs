@@ -1,4 +1,5 @@
 use crate::components::row::{Content, Row};
+use crate::components::scrollbar::Scrollbar;
 use crate::components::text_input::TextInput;
 use crate::components::{ICON_CELLS, ROW_INSET, SURFACE_RADIUS, centered, list};
 use crate::element::ElementId;
@@ -9,8 +10,11 @@ use crate::runtime::canvas::Canvas;
 use ratatui::layout::Rect;
 use unicode_width::UnicodeWidthStr;
 
+const MAX_VISIBLE_ITEMS: usize = 10;
+
 pub(crate) fn palette(cx: &mut Canvas, area: Rect, menu: &mut Menu) -> Rect {
     let theme = cx.theme;
+    let leading = menu.has_leading_column();
     let Some(search) = &mut menu.search else {
         return Rect::default();
     };
@@ -18,8 +22,9 @@ pub(crate) fn palette(cx: &mut Canvas, area: Rect, menu: &mut Menu) -> Rect {
     let line = if tall { 2 } else { 1 };
     let pad = u16::from(tall);
     let gap = u16::from(tall);
-    let wanted = search.all_items.len().max(1).min(usize::from(u16::MAX / 2)) as u16;
-    let rect = centered(area, 64, pad * 2 + line + gap + wanted * line);
+    let wanted = search.all_items.len().clamp(1, MAX_VISIBLE_ITEMS) as u16;
+    let height = (pad * 2 + line + gap + wanted * line).min(area.height.saturating_sub(2).max(1));
+    let rect = centered(area, 64, height);
     cx.clear(rect);
     cx.rounded(rect, theme.background);
     let inner = Rect::new(
@@ -49,7 +54,7 @@ pub(crate) fn palette(cx: &mut Canvas, area: Rect, menu: &mut Menu) -> Rect {
         .placeholder(&menu.title)
         .render(edit, cx);
     cx.hit(ElementId::Editor, field, "");
-    let list = Rect::new(
+    let mut list = Rect::new(
         inner.x,
         field.bottom() + gap,
         inner.width,
@@ -57,6 +62,21 @@ pub(crate) fn palette(cx: &mut Canvas, area: Rect, menu: &mut Menu) -> Rect {
     );
     let rows = usize::from(list.height / line).max(1);
     menu.scroll = list::scroll_to(menu.scroll, menu.selected, menu.items.len(), rows);
+    search.scrollbar = Scrollbar::new(
+        Rect::new(
+            list.right().saturating_sub(1),
+            list.y,
+            u16::from(list.width > 2),
+            list.height / line * line,
+        ),
+        rows,
+        menu.items.len(),
+        menu.scroll,
+    );
+    if let Some(scrollbar) = search.scrollbar {
+        list.width = list.width.saturating_sub(2);
+        scrollbar.render(cx);
+    }
     if menu.items.is_empty() && list.height > 0 {
         cx.write(
             Rect::new(list.x + 1, list.y, list.width.saturating_sub(2), 1),
@@ -83,6 +103,7 @@ pub(crate) fn palette(cx: &mut Canvas, area: Rect, menu: &mut Menu) -> Rect {
         let layout = Row {
             icon_color: item.icon_color,
             index: item.index,
+            leading,
             selected: menu.scroll + offset == menu.selected,
             muted: !item.enabled,
             ..Row::new(

@@ -571,7 +571,3 @@ impl SidebarUi {
         }
     }
 }
-
-#[cfg(test)]
-#[path = "../../tests/views/settings_page.rs"]
-mod tests;

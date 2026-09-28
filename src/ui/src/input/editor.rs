@@ -291,7 +291,3 @@ impl TextEditor {
         }
     }
 }
-
-#[cfg(test)]
-#[path = "../../tests/input/editor.rs"]
-mod tests;

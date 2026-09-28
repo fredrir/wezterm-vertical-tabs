@@ -4,6 +4,7 @@ pub(crate) mod list;
 pub(crate) mod menu;
 pub(crate) mod palette;
 pub(crate) mod row;
+pub(crate) mod scrollbar;
 pub(crate) mod text_input;
 pub(crate) mod tooltip;
 

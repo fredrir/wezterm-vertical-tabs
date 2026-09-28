@@ -81,6 +81,35 @@ fn shifted_and_control_encoded_keys_resolve_shortcuts() {
     assert_eq!(shortcut_key(&KeyCode::Char('\t'), mods), Some(ui::Key::Tab));
 }
 
+#[test]
+fn command_palette_shortcut_precedes_bindings_and_only_opens_on_key_down() {
+    config::designate_this_as_the_main_thread();
+    let mut adapter = Adapter::new(9893);
+    let mods = if cfg!(target_os = "macos") {
+        window::Modifiers::SUPER
+    } else {
+        window::Modifiers::CTRL | window::Modifiers::SHIFT
+    };
+    assert!(adapter.input(Input::RawKey(&raw(KeyCode::Char('p'), mods, true))));
+    assert!(matches!(
+        adapter.commands().as_slice(),
+        [Command::OpenCommandPalette]
+    ));
+    assert!(adapter.input(Input::RawKey(&raw(KeyCode::Char('p'), mods, false))));
+    assert!(adapter.commands().is_empty());
+    assert!(!adapter.input(Input::RawKey(&raw(
+        KeyCode::Char('p'),
+        window::Modifiers::CTRL,
+        true
+    ))));
+    adapter
+        .app
+        .config(serde_json::json!({"settings": {"keyboard_shortcuts": false}}))
+        .unwrap();
+    assert!(!adapter.input(Input::RawKey(&raw(KeyCode::Char('p'), mods, true))));
+    assert!(adapter.commands().is_empty());
+}
+
 fn logical_key(key: KeyCode, mods: window::Modifiers) -> window::KeyEvent {
     window::KeyEvent {
         key,

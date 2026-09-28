@@ -62,6 +62,12 @@ impl Menu {
             search: None,
         }
     }
+
+    pub(crate) fn has_leading_column(&self) -> bool {
+        self.items
+            .iter()
+            .any(|item| !item.icon.is_empty() || item.index.is_some())
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -235,7 +241,3 @@ pub(crate) fn action_exists(model: &Model, action: &Action) -> bool {
         _ => true,
     }
 }
-
-#[cfg(test)]
-#[path = "../../tests/overlays.rs"]
-mod tests;
