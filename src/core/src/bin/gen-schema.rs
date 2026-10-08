@@ -191,6 +191,7 @@ fn setting_type(kind: &SettingKind) -> String {
             .join("|"),
         SettingKind::Object => "table<string, string>".into(),
         SettingKind::List => "TabsMenuEntry[]".into(),
+        SettingKind::Keybinds => "table<string, string[]>".into(),
     }
 }
 
@@ -281,6 +282,7 @@ fn generate(format: &str) -> Result<String, String> {
                         .join(", "),
                     SettingKind::Object => "Object".into(),
                     SettingKind::List => "List".into(),
+                    SettingKind::Keybinds => "Plugin action shortcuts".into(),
                 };
                 let default = serde_json::to_string(&defaults.get(option.key).unwrap()).unwrap();
                 let cell = |value: &str| value.replace('|', "\\|").replace('\n', "<br>");

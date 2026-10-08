@@ -92,6 +92,11 @@ impl Adapter {
         }
         let shortcut = if key == KeyCode::Char('\u{1b}') {
             String::new()
+        } else if self.app.ui().recording_keybind() {
+            let Some(code) = shortcut_key(&key, modifiers(mods)) else {
+                return;
+            };
+            ui::shortcut_chord(&code, modifiers(mods))
         } else {
             commands::shortcut_label(&key, mods)
         };
@@ -429,8 +434,7 @@ impl Adapter {
         match input {
             ui::UiInput::Key { key, modifiers } => {
                 *key != ui::Key::Escape
-                    && !(self.app.model().settings.keyboard_shortcuts
-                        && ui::is_shortcut(key, *modifiers))
+                    && !ui::matches_shortcut(&self.app.model().settings, key, *modifiers)
             }
             ui::UiInput::PointerDown { x, y, .. } => {
                 self.app
@@ -1340,7 +1344,7 @@ impl Provider for Adapter {
     }
     fn open_command_palette(&mut self, commands: Vec<crate::commands::ExpandedCommand>) {
         self.cancel_paste();
-        let entries = commands::entries(&commands, self.app.model().settings.keyboard_shortcuts);
+        let entries = commands::entries(&commands, &self.app.model().settings);
         self.palette_commands = commands;
         self.app.ui_mut().open_commands(entries);
     }
@@ -1361,13 +1365,9 @@ impl Provider for Adapter {
                     .then(|| editor_clipboard_key(&key.key, mods))
                     .flatten()
                     .or_else(|| {
-                        self.app
-                            .model()
-                            .settings
-                            .keyboard_shortcuts
-                            .then(|| shortcut_key(&key.key, mods))
-                            .flatten()
-                            .filter(|code| ui::is_shortcut(code, mods))
+                        shortcut_key(&key.key, mods).filter(|code| {
+                            ui::matches_shortcut(&self.app.model().settings, code, mods)
+                        })
                     });
                 let Some(code) = code else {
                     return false;
@@ -1386,15 +1386,7 @@ impl Provider for Adapter {
                         if let Some(raw) = &key.raw {
                             self.record_shortcut(&raw.key, raw.modifiers);
                         } else {
-                            let code = match &key.key {
-                                KeyCode::Char(c)
-                                    if key.modifiers.contains(window::Modifiers::CTRL)
-                                        && ('\u{1}'..='\u{1a}').contains(c) =>
-                                {
-                                    KeyCode::Char(char::from(*c as u8 + b'a' - 1))
-                                }
-                                code => code.clone(),
-                            };
+                            let code = logical_shortcut_code(&key.key, modifiers(key.modifiers));
                             self.record_shortcut(&code, key.modifiers);
                         }
                     }
@@ -1416,18 +1408,21 @@ impl Provider for Adapter {
                     }
                     return true;
                 }
-                if self.app.model().settings.keyboard_shortcuts {
-                    if let Some(code) =
-                        shortcut_key(&key.key, mods).filter(|code| ui::is_shortcut(code, mods))
-                    {
-                        if key.key_is_down {
-                            self.ui_input(ui::UiInput::Key {
-                                key: code,
-                                modifiers: mods,
-                            });
-                        }
-                        return true;
+                let shortcut_code = key.raw.as_ref().map_or_else(
+                    || logical_shortcut_key(&key.key, mods),
+                    |raw| shortcut_key(&raw.key, mods),
+                );
+                if let Some(code) = shortcut_code
+                    .as_ref()
+                    .filter(|code| ui::matches_shortcut(&self.app.model().settings, code, mods))
+                {
+                    if key.key_is_down {
+                        self.ui_input(ui::UiInput::Key {
+                            key: code.clone(),
+                            modifiers: mods,
+                        });
                     }
+                    return true;
                 }
                 if !key.key_is_down {
                     return self.keyboard_focus();
@@ -1443,38 +1438,40 @@ impl Provider for Adapter {
                     self.ui_input(ui::UiInput::ImeCommit(text.clone()));
                     return true;
                 }
-                let code = match &key.key {
-                    KeyCode::Char('\r' | '\n') => ui::Key::Enter,
-                    KeyCode::Char('\u{1b}') => ui::Key::Escape,
-                    KeyCode::Char('\u{8}') => ui::Key::Backspace,
-                    KeyCode::Char('\u{7f}') => ui::Key::Delete,
-                    KeyCode::Char('\t') => ui::Key::Tab,
-                    KeyCode::Char(c) => ui::Key::Character(*c),
-                    KeyCode::LeftArrow => ui::Key::Left,
-                    KeyCode::RightArrow => ui::Key::Right,
-                    KeyCode::UpArrow => ui::Key::Up,
-                    KeyCode::DownArrow => ui::Key::Down,
-                    KeyCode::Home => ui::Key::Home,
-                    KeyCode::End => ui::Key::End,
-                    KeyCode::PageUp => ui::Key::PageUp,
-                    KeyCode::PageDown => ui::Key::PageDown,
-                    KeyCode::Function(2) => ui::Key::F2,
-                    KeyCode::Function(10) => ui::Key::F10,
-                    _ => return self.keyboard_focus(),
+                let code = if chord {
+                    let Some(code) = shortcut_code else {
+                        return self.keyboard_focus();
+                    };
+                    code
+                } else {
+                    match &key.key {
+                        KeyCode::Char('\r' | '\n') => ui::Key::Enter,
+                        KeyCode::Char('\u{1b}') => ui::Key::Escape,
+                        KeyCode::Char('\u{8}') => ui::Key::Backspace,
+                        KeyCode::Char('\u{7f}') => ui::Key::Delete,
+                        KeyCode::Char('\t') => ui::Key::Tab,
+                        KeyCode::Char(c) => ui::Key::Character(*c),
+                        KeyCode::LeftArrow => ui::Key::Left,
+                        KeyCode::RightArrow => ui::Key::Right,
+                        KeyCode::UpArrow => ui::Key::Up,
+                        KeyCode::DownArrow => ui::Key::Down,
+                        KeyCode::Home => ui::Key::Home,
+                        KeyCode::End => ui::Key::End,
+                        KeyCode::PageUp => ui::Key::PageUp,
+                        KeyCode::PageDown => ui::Key::PageDown,
+                        KeyCode::Function(2) => ui::Key::F2,
+                        KeyCode::Function(10) => ui::Key::F10,
+                        _ => return self.keyboard_focus(),
+                    }
                 };
-                let shortcut = self.app.model().settings.keyboard_shortcuts
-                    && ui::is_shortcut(&code, modifiers(key.modifiers));
-                if !self.keyboard_focus() && !shortcut {
+                if !self.keyboard_focus() {
                     return false;
                 }
                 if !key.key_is_down {
                     return true;
                 }
                 // Navigation bindings are still when the rail itself has focus.
-                if !shortcut
-                    && chord
-                    && (!self.app.is_modal() || matches!(code, ui::Key::Character(_)))
-                {
+                if chord && (!self.app.is_modal() || matches!(code, ui::Key::Character(_))) {
                     return false;
                 }
                 self.ui_input(ui::UiInput::Key {
@@ -2009,16 +2006,17 @@ fn linear_color(color: ratatui::style::Color) -> window::color::LinearRgba {
     }
 }
 
+// Raw and physical keys have not been encoded as Ctrl-letter bytes.
 fn shortcut_key(key: &KeyCode, mods: ui::Modifiers) -> Option<ui::Key> {
     Some(match key {
         KeyCode::Physical(code) => return shortcut_key(&code.to_key_code(), mods),
         KeyCode::Char('\t') => ui::Key::Tab,
+        KeyCode::Char('\r' | '\n') => ui::Key::Enter,
+        KeyCode::Char('\u{1b}') => ui::Key::Escape,
+        KeyCode::Char('\u{8}') => ui::Key::Backspace,
+        KeyCode::Char('\u{7f}') => ui::Key::Delete,
         KeyCode::Char(c) => {
-            let c = if mods.control && ('\u{1}'..='\u{1a}').contains(c) {
-                char::from(*c as u8 + b'a' - 1)
-            } else {
-                *c
-            };
+            let c = *c;
             let c = if mods.shift {
                 match c {
                     '<' => ',',
@@ -2031,6 +2029,17 @@ fn shortcut_key(key: &KeyCode, mods: ui::Modifiers) -> Option<ui::Key> {
                     '&' => '7',
                     '*' => '8',
                     '(' => '9',
+                    ')' => '0',
+                    '>' => '.',
+                    '?' => '/',
+                    ':' => ';',
+                    '"' => '\'',
+                    '_' => '-',
+                    '+' => '=',
+                    '{' => '[',
+                    '}' => ']',
+                    '|' => '\\',
+                    '~' => '`',
                     _ => c,
                 }
             } else {
@@ -2040,15 +2049,43 @@ fn shortcut_key(key: &KeyCode, mods: ui::Modifiers) -> Option<ui::Key> {
         }
         KeyCode::LeftArrow => ui::Key::Left,
         KeyCode::RightArrow => ui::Key::Right,
+        KeyCode::UpArrow => ui::Key::Up,
+        KeyCode::DownArrow => ui::Key::Down,
+        KeyCode::Home => ui::Key::Home,
+        KeyCode::End => ui::Key::End,
+        KeyCode::PageUp => ui::Key::PageUp,
+        KeyCode::PageDown => ui::Key::PageDown,
+        KeyCode::Function(2) => ui::Key::F2,
+        KeyCode::Function(10) => ui::Key::F10,
+        KeyCode::Function(n) => ui::Key::Function(*n),
         _ => return None,
     })
+}
+
+fn logical_shortcut_code(key: &KeyCode, mods: ui::Modifiers) -> KeyCode {
+    // Without raw metadata, Ctrl+H arrives as BS. Keep the host's Tab/Enter
+    // conventions while decoding other processed Ctrl-letter bytes.
+    match key {
+        KeyCode::Char(c)
+            if mods.control
+                && ('\u{1}'..='\u{1a}').contains(c)
+                && !matches!(c, '\t' | '\r' | '\n') =>
+        {
+            KeyCode::Char(char::from(*c as u8 + b'a' - 1))
+        }
+        _ => key.clone(),
+    }
+}
+
+fn logical_shortcut_key(key: &KeyCode, mods: ui::Modifiers) -> Option<ui::Key> {
+    shortcut_key(&logical_shortcut_code(key, mods), mods)
 }
 
 fn editor_clipboard_key(key: &KeyCode, mods: ui::Modifiers) -> Option<ui::Key> {
     if !mods.command() || mods.alt {
         return None;
     }
-    shortcut_key(key, mods).filter(|key| {
+    logical_shortcut_key(key, mods).filter(|key| {
         matches!(
             key,
             ui::Key::Character('a' | 'A' | 'c' | 'C' | 'x' | 'X' | 'v' | 'V')

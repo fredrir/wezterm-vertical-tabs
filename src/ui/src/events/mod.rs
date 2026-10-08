@@ -195,7 +195,10 @@ impl SidebarUi {
             Some(Overlay::Menu(menu)) => menu
                 .search
                 .as_ref()
-                .filter(|search| !search.recording)
+                .filter(|search| {
+                    !search.recording
+                        && search.kind != crate::views::launcher::LauncherKind::Keybind
+                })
                 .map(|_| EditorSlot::Palette),
             None if self.sidebar.rename.is_some() => Some(EditorSlot::Rename),
             None => (self.settings.open
@@ -211,7 +214,10 @@ impl SidebarUi {
             (ElementId::Editor, Some(Overlay::Menu(menu))) => menu
                 .search
                 .as_ref()
-                .filter(|search| !search.recording)
+                .filter(|search| {
+                    !search.recording
+                        && search.kind != crate::views::launcher::LauncherKind::Keybind
+                })
                 .map(|_| EditorSlot::Palette),
             (ElementId::Editor, None) => self.sidebar.rename.as_ref().map(|_| EditorSlot::Rename),
             (ElementId::SettingsSearch, None) => {

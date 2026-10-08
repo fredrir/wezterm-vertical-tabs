@@ -133,7 +133,7 @@ impl Sidebar {
             trailing: model.settings.show_close.then_some(Trailing {
                 id: ElementId::CloseTab(tab.id),
                 icon: icons::CLOSE,
-                tooltip: "Close tab  Cmd+W",
+                tooltip: "Close tab",
             }),
             ..Row::new(
                 id.clone(),

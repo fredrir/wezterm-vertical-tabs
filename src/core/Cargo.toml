@@ -12,3 +12,8 @@ path = "tests/schema.rs"
 serde.workspace      = true
 serde_json.workspace = true
 schemars.workspace   = true
+
+
+[[test]]
+name = "keybinds"
+path = "tests/keybinds.rs"

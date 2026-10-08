@@ -5,7 +5,7 @@ use crate::components::text_input::TextInput;
 use crate::components::{ICON_CELLS, ROW_INSET, SURFACE_RADIUS, centered, list};
 use crate::element::ElementId;
 use crate::icons;
-use crate::input::display_text;
+use crate::input::{TextEditor, display_text};
 use crate::overlays::Menu;
 use crate::runtime::canvas::Canvas;
 use crate::views::launcher::LauncherKind;
@@ -43,7 +43,7 @@ pub(crate) fn palette(cx: &mut Canvas, area: Rect, menu: &mut Menu) -> Rect {
         icons::SEARCH,
         theme.muted().bg(theme.card),
     );
-    let button_width = if search.kind == LauncherKind::Commands {
+    let button_width = if matches!(search.kind, LauncherKind::Commands | LauncherKind::Keybind) {
         3.min(field.width.saturating_sub(lead + 2))
     } else {
         0
@@ -55,8 +55,15 @@ pub(crate) fn palette(cx: &mut Canvas, area: Rect, menu: &mut Menu) -> Rect {
         1,
     );
     let shift = if field.height == 2 { 0.5 } else { 0.0 };
-    TextInput::new(ElementId::Editor, &mut search.editor, theme.card)
-        .active(!search.recording)
+    let mut recorded;
+    let editor = if search.kind == LauncherKind::Keybind {
+        recorded = TextEditor::new(crate::keybinds::display_chord(search.editor.text()));
+        &mut recorded
+    } else {
+        &mut search.editor
+    };
+    TextInput::new(ElementId::Editor, editor, theme.card)
+        .active(!search.recording && search.kind != LauncherKind::Keybind)
         .shift(shift)
         .placeholder(if search.recording {
             "Recording keys. Press Escape to exit"
@@ -64,7 +71,7 @@ pub(crate) fn palette(cx: &mut Canvas, area: Rect, menu: &mut Menu) -> Rect {
             &menu.title
         })
         .render(edit, cx);
-    cx.hit(ElementId::Editor, field, "");
+    cx.hit(ElementId::Editor, field, &menu.title);
     if button_width > 0 {
         Button::action(ElementId::RecordShortcut, icons::KEYBOARD, Tone::Neutral)
             .selected(search.recording)

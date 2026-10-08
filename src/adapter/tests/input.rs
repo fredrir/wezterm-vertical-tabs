@@ -75,10 +75,16 @@ fn shifted_and_control_encoded_keys_resolve_shortcuts() {
         Some(ui::Key::Character('1'))
     );
     assert_eq!(
-        shortcut_key(&KeyCode::Char('\u{7}'), mods),
+        logical_shortcut_key(&KeyCode::Char('\u{7}'), mods),
         Some(ui::Key::Character('g'))
     );
     assert_eq!(shortcut_key(&KeyCode::Char('\t'), mods), Some(ui::Key::Tab));
+    for (shifted, base) in [('+', '='), ('?', '/'), ('_', '-'), ('~', '`')] {
+        assert_eq!(
+            shortcut_key(&KeyCode::Char(shifted), mods),
+            shortcut_key(&KeyCode::Char(base), mods)
+        );
+    }
 }
 
 #[test]
@@ -596,4 +602,242 @@ fn unclaimed_command_chords_reach_host_bindings_while_search_is_open() {
         window::Modifiers::NONE
     ))));
     assert!(adapter.app.ui().is_modal());
+}
+
+#[test]
+fn saved_shortcuts_are_claimed_without_sidebar_focus_and_release_does_not_execute() {
+    config::designate_this_as_the_main_thread();
+    let mut adapter = Adapter::new(9910);
+    adapter
+        .app
+        .dispatch(core::Intent::SetSetting {
+            key: "keybinds".into(),
+            value: serde_json::json!({"commands": ["Ctrl+Alt+p", "F12"]}),
+        })
+        .unwrap();
+    assert!(!adapter.keyboard_focus());
+    let old = if cfg!(target_os = "macos") {
+        window::Modifiers::SUPER
+    } else {
+        window::Modifiers::CTRL | window::Modifiers::SHIFT
+    };
+    assert!(!adapter.input(Input::RawKey(&raw(KeyCode::Char('p'), old, true))));
+    for key in [
+        KeyCode::Char('p'),
+        KeyCode::Physical(window::PhysKeyCode::P),
+    ] {
+        let mods = window::Modifiers::CTRL | window::Modifiers::ALT;
+        assert!(adapter.input(Input::RawKey(&raw(key.clone(), mods, true))));
+        assert!(matches!(
+            adapter.commands().as_slice(),
+            [Command::OpenCommandPalette]
+        ));
+        assert!(adapter.input(Input::RawKey(&raw(key, mods, false))));
+        assert!(adapter.commands().is_empty());
+    }
+    assert!(adapter.input(Input::Key(&logical_key(
+        KeyCode::Function(12),
+        window::Modifiers::NONE
+    ))));
+    assert!(matches!(
+        adapter.commands().as_slice(),
+        [Command::OpenCommandPalette]
+    ));
+}
+
+#[test]
+fn settings_recorder_saves_a_physical_key_without_executing_it() {
+    config::designate_this_as_the_main_thread();
+    let mut adapter = Adapter::new(9911);
+    adapter.app.ui_mut().open_settings();
+
+    click(
+        &mut adapter,
+        ui::ElementId::SettingsCategory("keybinds".into()),
+    );
+    // Search keeps this action visible even in a short settings viewport.
+    click(&mut adapter, ui::ElementId::SettingsSearch);
+    adapter.ui_input(ui::UiInput::Text("Command palette".into()));
+    click(
+        &mut adapter,
+        ui::ElementId::Setting("shortcut.commands".into()),
+    );
+    click(&mut adapter, ui::ElementId::Menu("add".into()));
+    assert!(adapter.app.ui().recording_keybind());
+    assert!(adapter.input(Input::RawKey(&raw(
+        KeyCode::Physical(window::PhysKeyCode::F12),
+        window::Modifiers::NONE,
+        true
+    ))));
+    assert!(adapter.commands().is_empty());
+    assert!(adapter.app.model().settings.keybinds.is_empty());
+    click(&mut adapter, ui::ElementId::Menu("save-keybind".into()));
+    assert!(
+        core::keybinds::bindings(&adapter.app.model().settings, "commands").contains(&"F12".into())
+    );
+    assert!(!adapter.app.ui().recording_shortcut());
+}
+
+fn click(adapter: &mut Adapter, id: ui::ElementId) {
+    adapter.render(geometry(), Instant::now());
+    let rect = adapter
+        .app
+        .ui()
+        .hit_regions()
+        .iter()
+        .find(|hit| hit.id == id)
+        .unwrap()
+        .rect;
+    adapter.ui_input(ui::UiInput::PointerDown {
+        x: rect.x,
+        y: rect.y,
+        button: ui::MouseButton::Left,
+        modifiers: ui::Modifiers::default(),
+    });
+    adapter.ui_input(ui::UiInput::PointerUp {
+        x: rect.x,
+        y: rect.y,
+        button: ui::MouseButton::Left,
+    });
+}
+
+fn control_shortcut_events() -> Vec<(window::KeyEvent, &'static str)> {
+    let mut events = Vec::new();
+    for (key, physical, expected) in [
+        (
+            KeyCode::Char('\u{8}'),
+            window::PhysKeyCode::Backspace,
+            "Ctrl+Backspace",
+        ),
+        (
+            KeyCode::Physical(window::PhysKeyCode::Backspace),
+            window::PhysKeyCode::Backspace,
+            "Ctrl+Backspace",
+        ),
+        (KeyCode::Char('h'), window::PhysKeyCode::H, "Ctrl+h"),
+    ] {
+        let mut event = logical_key(KeyCode::Char('\u{8}'), window::Modifiers::CTRL);
+        let mut raw = raw(key, window::Modifiers::CTRL, true);
+        raw.phys_code = Some(physical);
+        event.raw = Some(raw);
+        events.push((event, expected));
+    }
+    events.push((
+        logical_key(
+            KeyCode::Physical(window::PhysKeyCode::Backspace),
+            window::Modifiers::CTRL,
+        ),
+        "Ctrl+Backspace",
+    ));
+    events.push((
+        logical_key(KeyCode::Char('\u{8}'), window::Modifiers::CTRL),
+        "Ctrl+h",
+    ));
+    for (key, expected) in [
+        (KeyCode::Char('\t'), "Ctrl+Alt+Tab"),
+        (KeyCode::Char('\r'), "Ctrl+Alt+Enter"),
+    ] {
+        events.push((
+            logical_key(key, window::Modifiers::CTRL | window::Modifiers::ALT),
+            expected,
+        ));
+    }
+    events
+}
+
+#[test]
+fn control_backspace_and_h_dispatch_distinct_shortcuts() {
+    config::designate_this_as_the_main_thread();
+    for (event, expected) in control_shortcut_events() {
+        for raw_path in [false, true] {
+            if raw_path && event.raw.is_none() {
+                continue;
+            }
+            let mut adapter = Adapter::new(9912);
+            adapter.app.dispatch(core::Intent::SetSetting {
+                key: "keybinds".into(),
+                value: serde_json::json!({"commands": [if expected == "Ctrl+h" { "Ctrl+Backspace" } else { expected }], "settings": ["Ctrl+h"]}),
+            }).unwrap();
+            let input = if raw_path {
+                Input::RawKey(event.raw.as_ref().unwrap())
+            } else {
+                Input::Key(&event)
+            };
+            assert!(adapter.input(input));
+            if expected != "Ctrl+h" {
+                assert!(matches!(
+                    adapter.commands().as_slice(),
+                    [Command::OpenCommandPalette]
+                ));
+                assert!(!adapter.content_page());
+            } else {
+                assert!(adapter.commands().is_empty());
+                assert!(adapter.content_page());
+            }
+        }
+    }
+}
+
+#[test]
+fn settings_recorder_keeps_control_backspace_and_h_distinct() {
+    config::designate_this_as_the_main_thread();
+    for (event, expected) in control_shortcut_events() {
+        for raw_path in [false, true] {
+            if raw_path && event.raw.is_none() {
+                continue;
+            }
+            let mut adapter = Adapter::new(9913);
+            adapter.app.ui_mut().open_settings();
+            click(
+                &mut adapter,
+                ui::ElementId::SettingsCategory("keybinds".into()),
+            );
+            click(&mut adapter, ui::ElementId::SettingsSearch);
+            adapter.ui_input(ui::UiInput::Text("Command palette".into()));
+            click(
+                &mut adapter,
+                ui::ElementId::Setting("shortcut.commands".into()),
+            );
+            click(&mut adapter, ui::ElementId::Menu("add".into()));
+            assert!(adapter.app.ui().recording_keybind());
+            let input = if raw_path {
+                Input::RawKey(event.raw.as_ref().unwrap())
+            } else {
+                Input::Key(&event)
+            };
+            assert!(adapter.input(input));
+            assert!(adapter.commands().is_empty());
+            click(&mut adapter, ui::ElementId::Menu("save-keybind".into()));
+            assert!(
+                core::keybinds::bindings(&adapter.app.model().settings, "commands")
+                    .contains(&expected.into()),
+                "failed to record {}, raw={}",
+                expected,
+                raw_path
+            );
+        }
+    }
+}
+
+#[test]
+fn unbound_processed_control_h_does_not_dispatch_control_backspace() {
+    config::designate_this_as_the_main_thread();
+    for modal in [false, true] {
+        let mut adapter = Adapter::new(9914);
+        adapter
+            .app
+            .dispatch(core::Intent::SetSetting {
+                key: "keybinds".into(),
+                value: serde_json::json!({"commands": ["Ctrl+Backspace"]}),
+            })
+            .unwrap();
+        if modal {
+            adapter.app.open_tab_navigator();
+        }
+        assert!(!adapter.input(Input::Key(&logical_key(
+            KeyCode::Char('\u{8}'),
+            window::Modifiers::CTRL
+        ))));
+        assert!(adapter.commands().is_empty());
+    }
 }

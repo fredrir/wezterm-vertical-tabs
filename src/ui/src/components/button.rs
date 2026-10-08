@@ -1,7 +1,6 @@
 use crate::components::row::icon_rect;
 use crate::components::{DROP_TINT, ROW_INSET, SURFACE_RADIUS};
 use crate::element::ElementId;
-use crate::keybinds::platform_tooltip;
 use crate::runtime::canvas::{Canvas, RoundedSurface};
 use ratatui::layout::{Alignment, Rect};
 use ratatui::text::Line;
@@ -98,7 +97,7 @@ impl<'a> Button<'a> {
             Line::from(self.label.to_owned()).alignment(Alignment::Center),
             theme.base().fg(fg).bg(fill),
         );
-        cx.hit(self.id, rect, platform_tooltip(self.tooltip));
+        cx.hit(self.id, rect, self.tooltip);
     }
 
     fn render_text(self, rect: Rect, cx: &mut Canvas) {

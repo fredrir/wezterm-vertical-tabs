@@ -29,6 +29,9 @@ pub(crate) enum Action {
     CloseSettings,
     EditSetting(String),
     ResetSetting(String),
+    RecordKeybind(String, Option<usize>),
+    SaveKeybind(String, Option<usize>),
+    RemoveKeybind(String, String),
     EditorCommand { key: Key, target: ElementId },
     Submenu { title: String, items: Vec<MenuItem> },
     Confirm { label: String, action: Box<Action> },
@@ -257,13 +260,13 @@ impl SidebarUi {
             Action::CloseTab(id) => self.close_tab(model, id, intents),
             Action::Settings => self.open_settings(),
             Action::CloseSettings => self.close_settings(),
-            Action::EditSetting(key) => self.edit_setting(model, &key, intents),
-            Action::ResetSetting(key) => {
-                if !model.config_owned.contains(&key) {
-                    intents.push(UiIntent::Domain(Intent::ResetSetting(key)));
-                    self.frame.dirty = true;
-                }
+            Action::RecordKeybind(action, index) => self.open_keybind_recorder(&action, index),
+            Action::SaveKeybind(action, index) => self.save_keybind(model, &action, index, intents),
+            Action::RemoveKeybind(action, chord) => {
+                self.remove_keybind(model, &action, &chord, intents)
             }
+            Action::EditSetting(key) => self.edit_setting(model, &key, intents),
+            Action::ResetSetting(key) => self.reset_setting(model, &key, intents),
             Action::EditorCommand { key, target } => {
                 self.restore_editor(target);
                 self.key(
@@ -303,7 +306,11 @@ impl SidebarUi {
     }
 
     pub(crate) fn edit_setting(&mut self, model: &Model, key: &str, intents: &mut Vec<UiIntent>) {
-        if model.config_owned.contains(key) {
+        if let Some(action) = key.strip_prefix("shortcut.") {
+            self.edit_keybind(model, action);
+            return;
+        }
+        if self.settings.managed_in_lua(model, key) {
             return;
         }
         let Some(descriptor) = settings::descriptor(key) else {

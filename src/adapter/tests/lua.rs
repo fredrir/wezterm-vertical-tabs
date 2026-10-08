@@ -86,3 +86,27 @@ fn managed_file_tables_round_trip_through_the_registry() {
         std::path::Path::new("/tmp/vtabs_settings.lua")
     );
 }
+
+#[test]
+fn saved_keybinds_round_trip_through_lua_including_unbound_actions() {
+    let lua = Lua::new();
+    let mut app = WindowApp::default();
+    app.config(json!({"managed": {}})).unwrap();
+    app.dispatch(core::Intent::SetSetting {
+        key: "keybinds".into(),
+        value: json!({"commands": ["F12"], "refresh": []}),
+    })
+    .unwrap();
+    let source = app.take_managed_write().unwrap();
+    let managed = lua.load(&source).eval::<mlua::Value>().unwrap();
+    let table = lua.create_table().unwrap();
+    table.set("managed", managed).unwrap();
+    let config: Configuration = lua.from_value(mlua::Value::Table(table)).unwrap();
+    let mut restored = WindowApp::default();
+    restored.config(config.value()).unwrap();
+    assert_eq!(
+        core::keybinds::action(&restored.model().settings, "F12"),
+        Some("commands")
+    );
+    assert!(core::keybinds::bindings(&restored.model().settings, "refresh").is_empty());
+}

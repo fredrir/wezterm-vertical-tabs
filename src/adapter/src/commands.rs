@@ -1,10 +1,14 @@
 use crate::commands::ExpandedCommand;
 use crate::inputmap::InputMap;
 use config::keyassignment::KeyAssignment;
+use std::convert::TryFrom;
 use vtabs_app::ui::CommandEntry;
 use window::{KeyCode, Modifiers};
 
-pub(super) fn entries(commands: &[ExpandedCommand], shortcuts: bool) -> Vec<CommandEntry> {
+pub(super) fn entries(
+    commands: &[ExpandedCommand],
+    settings: &vtabs_app::core::Settings,
+) -> Vec<CommandEntry> {
     let config = config::configuration();
     let input = InputMap::new(&config);
     commands
@@ -23,25 +27,26 @@ pub(super) fn entries(commands: &[ExpandedCommand], shortcuts: bool) -> Vec<Comm
                     mods.bits().count_ones(),
                 )
             });
-            if shortcuts && command.action == KeyAssignment::ActivateCommandPalette {
-                keys.insert(
-                    0,
-                    (
-                        if cfg!(target_os = "macos") {
-                            Modifiers::SUPER
-                        } else {
-                            Modifiers::CTRL | Modifiers::SHIFT
-                        },
-                        KeyCode::Char('p'),
-                    ),
-                );
-            }
             let mut shortcuts = Vec::new();
             for (mods, key) in keys {
                 let shortcut = shortcut_label(&key, mods);
                 if !shortcuts.contains(&shortcut) {
                     shortcuts.push(shortcut);
                 }
+            }
+            if settings.keyboard_shortcuts
+                && command.action == KeyAssignment::ActivateCommandPalette
+            {
+                let mut plugin = vtabs_app::core::keybinds::bindings(settings, "commands")
+                    .iter()
+                    .filter_map(|chord| binding_label(chord))
+                    .collect::<Vec<_>>();
+                for key in shortcuts {
+                    if !plugin.contains(&key) {
+                        plugin.push(key);
+                    }
+                }
+                shortcuts = plugin;
             }
             CommandEntry {
                 label: command.brief.to_string(),
@@ -77,4 +82,29 @@ pub(super) fn shortcut_label(key: &KeyCode, mods: Modifiers) -> String {
     } else {
         format!("{mods}+{key}")
     }
+}
+
+fn binding_label(chord: &str) -> Option<String> {
+    let mut key = chord;
+    let mut mods = Modifiers::NONE;
+    for (prefix, modifier) in [
+        ("Super+", Modifiers::SUPER),
+        ("Ctrl+", Modifiers::CTRL),
+        ("Alt+", Modifiers::ALT),
+        ("Shift+", Modifiers::SHIFT),
+    ] {
+        if let Some(rest) = key.strip_prefix(prefix) {
+            key = rest;
+            mods |= modifier;
+        }
+    }
+    let key = match key {
+        "Space" => " ",
+        "Left" => "LeftArrow",
+        "Right" => "RightArrow",
+        "Up" => "UpArrow",
+        "Down" => "DownArrow",
+        key => key,
+    };
+    Some(shortcut_label(&KeyCode::try_from(key).ok()?, mods))
 }

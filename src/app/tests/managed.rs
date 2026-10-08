@@ -173,3 +173,31 @@ fn invalid_file_content_is_rejected_before_anything_is_published() {
     );
     assert_eq!(app.model().settings.width, 300);
 }
+
+#[test]
+fn keybind_edits_survive_managed_file_reload_and_reset_to_defaults() {
+    let mut app = configured(json!({"managed": {}}));
+    let bindings = json!({"commands": ["F12", "Ctrl+Alt+p"], "refresh": []});
+    set(&mut app, "keybinds", bindings.clone());
+    let source = app.take_managed_write().unwrap();
+    assert!(source.contains("keybinds"));
+    assert!(source.contains("F12"));
+    app.complete_managed_write(Ok(()));
+    let mut restored = configured(json!({"managed": {"settings": {"keybinds": bindings}}}));
+    assert_eq!(
+        restored.model().settings.keybinds,
+        app.model().settings.keybinds
+    );
+    assert_eq!(
+        core::keybinds::action(&restored.model().settings, "F12"),
+        Some("commands")
+    );
+    restored
+        .dispatch(Intent::ResetSetting("keybinds".into()))
+        .unwrap();
+    assert!(restored.model().settings.keybinds.is_empty());
+    assert_eq!(
+        core::keybinds::action(&restored.model().settings, "F12"),
+        None
+    );
+}

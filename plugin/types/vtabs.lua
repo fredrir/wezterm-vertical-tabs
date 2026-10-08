@@ -2,6 +2,7 @@
 ---@meta
 
 ---@class TabsSettings
+---@field keybinds? table<string, string[]> Shortcuts supplied by this plugin
 ---@field width? integer Width in logical pixels
 ---@field side? 'left'|'right' Sidebar edge
 ---@field rail? 'expanded'|'hidden' Sidebar visibility
@@ -67,7 +68,7 @@
 ---@field fields? { [1]: TabsMatchField, [2]: string[] }[]
 ---@field remote? boolean
 
----@alias TabsSettingKey 'width'|'side'|'rail'|'animations'|'reduced_motion'|'animation_ms'|'cards'|'show_indexes'|'show_metadata'|'show_close'|'confirm_close'|'accent'|'background'|'foreground'|'muted'|'selected_background'|'private_accent'|'distro_colors'|'keyboard_shortcuts'|'reopen_limit'|'default_domain'|'private_env'|'menus'
+---@alias TabsSettingKey 'keybinds'|'width'|'side'|'rail'|'animations'|'reduced_motion'|'animation_ms'|'cards'|'show_indexes'|'show_metadata'|'show_close'|'confirm_close'|'accent'|'background'|'foreground'|'muted'|'selected_background'|'private_accent'|'distro_colors'|'keyboard_shortcuts'|'reopen_limit'|'default_domain'|'private_env'|'menus'
 
 ---@class TabsSpace
 ---@field accent? string

@@ -14,6 +14,7 @@ pub(crate) enum LauncherKind {
     Tabs,
     Jobs,
     Commands,
+    Keybind,
 }
 
 #[derive(Clone, Debug)]
@@ -100,6 +101,10 @@ impl SidebarUi {
         );
     }
 
+    pub fn recording_keybind(&self) -> bool {
+        matches!(&self.overlays.current, Some(Overlay::Menu(menu)) if menu.search.as_ref().is_some_and(|s| s.kind == LauncherKind::Keybind && s.recording))
+    }
+
     pub fn recording_shortcut(&self) -> bool {
         matches!(&self.overlays.current, Some(Overlay::Menu(menu))
             if menu.search.as_ref().is_some_and(|search| search.recording))
@@ -108,7 +113,7 @@ impl SidebarUi {
     pub(crate) fn toggle_shortcut_recording(&mut self) {
         if let Some(Overlay::Menu(menu)) = &mut self.overlays.current
             && let Some(search) = &mut menu.search
-            && search.kind == LauncherKind::Commands
+            && matches!(search.kind, LauncherKind::Commands | LauncherKind::Keybind)
         {
             search.recording = !search.recording;
             if search.recording {
@@ -126,8 +131,7 @@ impl SidebarUi {
             && search.recording
         {
             if shortcut.is_empty() {
-                // Escape leaves recording but keeps whatever was captured in the
-                // field, so it can be searched and edited like a normal query.
+                // Keep the captured chord when leaving recording mode.
                 search.recording = false;
             } else {
                 search.editor = TextEditor::new(shortcut);
@@ -137,7 +141,7 @@ impl SidebarUi {
         }
     }
 
-    fn open_launcher(
+    pub(crate) fn open_launcher(
         &mut self,
         kind: LauncherKind,
         title: &str,
@@ -363,6 +367,13 @@ pub(crate) fn filter_menu(menu: &mut Menu) {
     let Some(search) = &mut menu.search else {
         return;
     };
+    if search.kind == LauncherKind::Keybind {
+        menu.items = search.all_items.clone();
+        if let Some(save) = menu.items.first_mut() {
+            save.enabled = !search.editor.text().is_empty();
+        }
+        return;
+    }
     search.scrollbar = None;
     let query = search.editor.text().to_lowercase();
     let selected_id = menu.items.get(menu.selected).map(|item| item.id.clone());

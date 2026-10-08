@@ -16,3 +16,7 @@ tachyonfx            = { version = "0.25.1", default-features = false, features 
 unicode-segmentation = "1.12"
 unicode-width        = "0.2"
 serde_json           = "1"
+
+[[test]]
+name = "keybinds"
+path = "tests/keybinds.rs"

@@ -14,7 +14,7 @@ mod views;
 pub use element::ElementId;
 pub use input::{EditResult, Key, Modifiers, MouseButton, TextEditor, UiInput};
 pub use intent::{HostAction, UiIntent};
-pub use keybinds::is_shortcut;
+pub use keybinds::{matches_shortcut, shortcut_chord};
 pub use ratatui::{buffer::Buffer, layout::Rect};
 pub use runtime::canvas::{HitRegion, RoundedSurface};
 pub use runtime::frame::{FrameUpdate, SurfaceTransform};

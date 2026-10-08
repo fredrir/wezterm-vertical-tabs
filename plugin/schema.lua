@@ -10,6 +10,7 @@ return {
     default_domain = nil,
     distro_colors = {},
     foreground = "#e1e7f0",
+    keybinds = {},
     keyboard_shortcuts = true,
     menus = {},
     muted = "#98a8be",
@@ -26,6 +27,13 @@ return {
     width = 256,
   },
   options = {
+    {
+      description = "Shortcuts supplied by this plugin",
+      group = "keybinds",
+      key = "keybinds",
+      kind = "keybinds",
+      label = "Plugin keybinds",
+    },
     {
       description = "Width in logical pixels",
       group = "layout",

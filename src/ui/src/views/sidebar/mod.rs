@@ -180,7 +180,7 @@ impl Sidebar {
                 SidebarRow::Gap => {}
                 SidebarRow::NewTab => {
                     Row {
-                        tooltip: Some("New tab  Cmd+T".into()),
+                        tooltip: Some("New tab".into()),
                         muted: true,
                         ..Row::new(
                             ElementId::NewTab,
@@ -194,12 +194,12 @@ impl Sidebar {
                 SidebarRow::Settings { number } => {
                     Row {
                         index: model.settings.show_indexes.then_some(number),
-                        tooltip: Some("Settings  Cmd+,".into()),
+                        tooltip: Some("Settings".into()),
                         selected: view.props.settings_open,
                         trailing: model.settings.show_close.then_some(Trailing {
                             id: ElementId::CloseSettingsTab,
                             icon: icons::CLOSE,
-                            tooltip: "Close settings  Cmd+W",
+                            tooltip: "Close settings",
                         }),
                         ..Row::new(
                             ElementId::SettingsTab,
@@ -281,16 +281,16 @@ impl Sidebar {
         let size = inner.width.min(TOGGLE_WIDTH);
         if left + size <= inner.right() {
             Button::icon(ElementId::Rail, &format!("{} ", icons::SIDEBAR))
-                .tooltip("Toggle sidebar  Cmd+B")
+                .tooltip("Toggle sidebar")
                 .render(Rect::new(left, inner.y, size, TOOLBAR_ROWS), cx);
         }
         if inner.width >= props.header_inset + 12 {
             Button::icon(ElementId::Settings, &format!("{} ", icons::SETTINGS))
-                .tooltip("Settings  Cmd+,")
+                .tooltip("Settings")
                 .selected(props.settings_open)
                 .render(Rect::new(inner.right() - 8, inner.y, 4, TOOLBAR_ROWS), cx);
             Button::icon(ElementId::Refresh, &format!("{} ", icons::REFRESH))
-                .tooltip("Refresh configuration  Cmd+Shift+R")
+                .tooltip("Refresh configuration")
                 .render(Rect::new(inner.right() - 4, inner.y, 4, TOOLBAR_ROWS), cx);
         }
     }

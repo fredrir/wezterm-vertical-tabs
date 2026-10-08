@@ -34,6 +34,7 @@ pub enum Key {
     PageDown,
     F2,
     F10,
+    Function(u8),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

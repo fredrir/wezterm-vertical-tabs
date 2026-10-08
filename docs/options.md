@@ -2,6 +2,7 @@
 
 | Name                  | Default                                                       | Value                                                                              |
 | --------------------- | ------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
+| `keybinds`            | `{}`                                                          | Plugin action shortcuts. Shortcuts supplied by this plugin                         |
 | `width`               | `256`                                                         | Integer 32–1024. Width in logical pixels                                           |
 | `side`                | `"left"`                                                      | `left`, `right`. Sidebar edge                                                      |
 | `rail`                | `"expanded"`                                                  | `expanded`, `hidden`. Sidebar visibility                                           |

@@ -11,7 +11,7 @@ use ratatui::layout::Rect;
 use ratatui::style::Modifier;
 use std::collections::BTreeSet;
 use unicode_width::UnicodeWidthStr;
-use vtabs_core::{Intent, Model, SettingDescriptor, SettingKind, settings};
+use vtabs_core::{Model, SettingDescriptor, SettingKind, settings};
 
 const CATEGORIES: &[(&str, &str)] = &[
     ("all", "All"),
@@ -20,6 +20,7 @@ const CATEGORIES: &[(&str, &str)] = &[
     ("theme", "Colors"),
     ("motion", "Motion"),
     ("behavior", "General"),
+    ("keybinds", "Keybinds"),
 ];
 
 pub(crate) struct SettingsPage {
@@ -54,6 +55,8 @@ fn fields(category: &str, query: &str) -> Vec<&'static SettingDescriptor> {
     let query = query.trim().to_lowercase();
     settings::descriptors()
         .iter()
+        .filter(|field| field.key != "keybinds")
+        .chain(vtabs_core::keybinds::DESCRIPTORS.iter())
         .filter(|field| category == "all" || field.group == category)
         .filter(|field| {
             query.is_empty()
@@ -71,11 +74,23 @@ fn group_label(group: &str) -> &'static str {
         "theme" => "Color and atmosphere",
         "motion" => "Motion and accessibility",
         "behavior" => "General behavior",
+        "keybinds" => "Plugin keybinds",
         _ => "Preferences",
     }
 }
 
 fn value_label(model: &Model, field: &SettingDescriptor) -> String {
+    if let Some(action) = field.key.strip_prefix("shortcut.") {
+        let keys = vtabs_core::keybinds::bindings(&model.settings, action);
+        return if keys.is_empty() {
+            "Unbound".into()
+        } else {
+            keys.iter()
+                .map(|key| crate::keybinds::display_chord(key))
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+    }
     let value = model.settings.get(field.key).unwrap_or_default();
     match field.kind {
         SettingKind::Bool => {
@@ -129,6 +144,15 @@ fn visible_end(
 }
 
 impl SettingsPage {
+    pub(crate) fn managed_in_lua(&self, model: &Model, key: &str) -> bool {
+        let key = if key.starts_with("shortcut.") {
+            "keybinds"
+        } else {
+            key
+        };
+        model.config_owned.contains(key) || self.config_owned.contains(key)
+    }
+
     pub fn render(&mut self, model: &Model, area: Rect, overlay_open: bool, cx: &mut Canvas) {
         if area.is_empty() {
             return;
@@ -336,7 +360,7 @@ impl SettingsPage {
         let selected = index == self.selected
             && !self.search_focused
             && cx.focused.is_none_or(|focused| focused == &id);
-        let owned = model.config_owned.contains(field.key) || self.config_owned.contains(field.key);
+        let owned = self.managed_in_lua(model, field.key);
         let fill = if selected || cx.hovered(&id) {
             theme.selected
         } else {
@@ -389,8 +413,13 @@ impl SettingsPage {
             id,
             rect,
             format!(
-                "{}{}",
+                "{}{}{}",
                 field.description,
+                if field.group == "keybinds" {
+                    format!(" ({})", value_label(model, field))
+                } else {
+                    String::new()
+                },
                 if owned {
                     " (controlled by Lua configuration)"
                 } else {
@@ -545,9 +574,8 @@ impl SidebarUi {
             Key::Delete | Key::Backspace => {
                 if let Some(field) = fields.get(self.settings.selected)
                     && self.focused.as_ref() == Some(&ElementId::Setting(field.key.into()))
-                    && !model.config_owned.contains(field.key)
                 {
-                    intents.push(UiIntent::Domain(Intent::ResetSetting(field.key.into())));
+                    self.reset_setting(model, field.key, intents);
                     self.frame.dirty = true;
                 }
             }

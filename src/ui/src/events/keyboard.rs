@@ -107,7 +107,7 @@ impl SidebarUi {
         let edits_query = matches!(
             &self.overlays.current,
             Some(Overlay::Menu(Menu { search: Some(search), .. }))
-                if matches!(
+                if search.kind != crate::views::launcher::LauncherKind::Keybind && matches!(
                     key,
                     Key::Character(_)
                         | Key::Backspace

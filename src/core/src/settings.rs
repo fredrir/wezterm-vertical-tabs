@@ -34,6 +34,8 @@ pub struct Settings {
     pub show_close: bool,
     pub confirm_close: bool,
     pub keyboard_shortcuts: bool,
+    #[serde(deserialize_with = "crate::keybinds::deserialize")]
+    pub keybinds: BTreeMap<String, Vec<String>>,
     pub accent: String,
     pub background: String,
     pub foreground: String,
@@ -74,6 +76,7 @@ impl Default for Settings {
             show_close: true,
             confirm_close: true,
             keyboard_shortcuts: true,
+            keybinds: BTreeMap::new(),
             accent: "#a9c7f5".into(),
             background: "#192231".into(),
             foreground: "#e1e7f0".into(),
@@ -108,6 +111,7 @@ pub enum SettingKind {
     Choice(&'static [&'static str]),
     Object,
     List,
+    Keybinds,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -120,6 +124,13 @@ pub struct SettingDescriptor {
 }
 
 pub const DESCRIPTORS: &[SettingDescriptor] = &[
+    SettingDescriptor {
+        key: "keybinds",
+        label: "Plugin keybinds",
+        group: "keybinds",
+        kind: SettingKind::Keybinds,
+        description: "Shortcuts supplied by this plugin",
+    },
     SettingDescriptor {
         key: "width",
         label: "Sidebar width",
@@ -296,6 +307,7 @@ pub fn valid_color(value: &str) -> bool {
 pub fn validate_value(key: &str, value: &Value) -> Result<(), String> {
     let d = descriptor(key).ok_or_else(|| format!("Unknown setting: {key}"))?;
     let valid = match d.kind {
+        SettingKind::Keybinds => return crate::keybinds::validate(&crate::keybinds::parse(value)?),
         SettingKind::Bool => value.is_boolean(),
         SettingKind::Number { min, max } => value
             .as_u64()

@@ -260,7 +260,7 @@ impl SidebarUi {
                     ),
                 ];
                 for item in &mut items {
-                    item.enabled = !model.config_owned.contains(&key);
+                    item.enabled = !self.settings.managed_in_lua(model, &key);
                 }
                 self.overlays.stash();
                 self.menu(key, items);

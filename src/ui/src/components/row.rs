@@ -1,7 +1,6 @@
 use crate::components::{DROP_TINT, ICON_CELLS, ROW_INSET, SURFACE_RADIUS, TRAILING_CELLS};
 use crate::element::ElementId;
 use crate::icons;
-use crate::keybinds::platform_tooltip;
 use crate::runtime::canvas::Canvas;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Style};
@@ -117,7 +116,7 @@ impl Row<'_> {
             Some(color) if index.is_none() && !ghost => style.fg(color),
             _ => style,
         };
-        let tooltip = platform_tooltip(self.tooltip.unwrap_or_default());
+        let tooltip = self.tooltip.unwrap_or_default();
         let x = self.rect.x + 1 + self.indent;
         let right = self.rect.right().saturating_sub(1);
         if self.leading {
@@ -168,5 +167,5 @@ pub(crate) fn trailing_control(cx: &mut Canvas, control: Trailing, row: Rect, st
             cell.set_fg(fg);
         }
     }
-    cx.hit(control.id, rect, platform_tooltip(control.tooltip.into()));
+    cx.hit(control.id, rect, control.tooltip);
 }
