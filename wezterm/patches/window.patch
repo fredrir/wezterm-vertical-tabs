@@ -16,10 +16,20 @@ index 22de40ad1da5c015cbcf438768657006f9f4185d..802db8e81b425af22f1eaaaf9260e358
      /// The coordinates are of the top left pixel of the
      /// client area.
 diff --git a/window/src/os/macos/window.rs b/window/src/os/macos/window.rs
-index 1193d398d910c5da761c1ab18d9f024f57610884..164a3073a6d7be1fcce0a72e5892c67d0947fbb2 100644
+index 1193d398d910c5da761c1ab18d9f024f57610884..3c2cba4de9b731887a9c5105b6aaf37acdf19ac4 100644
 --- a/window/src/os/macos/window.rs
 +++ b/window/src/os/macos/window.rs
-@@ -391,6 +391,7 @@ pub(crate) struct WindowInner {
+@@ -1,6 +1,9 @@
+ // let () = msg_send! is a common pattern for objc
+ #![allow(clippy::let_unit_value)]
+ 
++#[path = "title_buttons.rs"]
++mod title_buttons;
++
+ use super::keycodes::*;
+ use super::{from_yes_no, nsstring, nsstring_to_str, to_yes_no};
+ use crate::clipboard::Clipboard as ClipboardContext;
+@@ -391,6 +394,7 @@ pub(crate) struct WindowInner {
      view: StrongPtr,
      window: StrongPtr,
      config: ConfigHandle,
@@ -27,7 +37,7 @@ index 1193d398d910c5da761c1ab18d9f024f57610884..164a3073a6d7be1fcce0a72e5892c67d
  }
  
  fn function_key_to_keycode(function_key: char) -> KeyCode {
-@@ -421,6 +422,43 @@ fn function_key_to_keycode(function_key: char) -> KeyCode {
+@@ -421,6 +425,43 @@ fn function_key_to_keycode(function_key: char) -> KeyCode {
      }
  }
  
@@ -71,7 +81,7 @@ index 1193d398d910c5da761c1ab18d9f024f57610884..164a3073a6d7be1fcce0a72e5892c67d
  #[derive(Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd)]
  pub struct Window {
      id: usize,
-@@ -507,6 +545,7 @@ impl Window {
+@@ -507,6 +548,7 @@ impl Window {
                  invalidated: true,
                  gl_context_pair: None,
                  text_cursor_position: Rect::new(Point::new(0, 0), Size::new(0, 0)),
@@ -79,7 +89,7 @@ index 1193d398d910c5da761c1ab18d9f024f57610884..164a3073a6d7be1fcce0a72e5892c67d
                  tracking_rect_tag: 0,
                  hscroll_remainder: 0.,
                  vscroll_remainder: 0.,
-@@ -534,6 +573,7 @@ impl Window {
+@@ -534,6 +576,7 @@ impl Window {
                  &window,
                  config.window_decorations,
                  config.integrated_title_button_style,
@@ -87,7 +97,7 @@ index 1193d398d910c5da761c1ab18d9f024f57610884..164a3073a6d7be1fcce0a72e5892c67d
              );
  
              // Prevent Cocoa native tabs from being used
-@@ -604,6 +644,12 @@ impl Window {
+@@ -604,6 +647,12 @@ impl Window {
              window.setTitle_(*nsstring(&name));
              window.setAcceptsMouseMovedEvents_(YES);
  
@@ -100,7 +110,7 @@ index 1193d398d910c5da761c1ab18d9f024f57610884..164a3073a6d7be1fcce0a72e5892c67d
              let view = WindowView::init_with_frame(&inner, rect)?;
              view.setAutoresizingMask_(NSViewHeightSizable | NSViewWidthSizable);
  
-@@ -652,6 +698,7 @@ impl Window {
+@@ -652,6 +701,7 @@ impl Window {
                  window,
                  view,
                  config: config.clone(),
@@ -108,7 +118,7 @@ index 1193d398d910c5da761c1ab18d9f024f57610884..164a3073a6d7be1fcce0a72e5892c67d
              }));
              inner.borrow_mut().window.replace(weak_window);
              conn.windows
-@@ -837,6 +884,20 @@ impl WindowOps for Window {
+@@ -837,6 +887,20 @@ impl WindowOps for Window {
          });
      }
  
@@ -129,7 +139,7 @@ index 1193d398d910c5da761c1ab18d9f024f57610884..164a3073a6d7be1fcce0a72e5892c67d
      fn get_clipboard(&self, _clipboard: Clipboard) -> Future<String> {
          Future::result(
              ClipboardContext::new()
-@@ -1056,6 +1117,7 @@ impl WindowInner {
+@@ -1056,6 +1120,7 @@ impl WindowInner {
                  &self.window,
                  self.config.window_decorations,
                  self.config.integrated_title_button_style,
@@ -137,7 +147,7 @@ index 1193d398d910c5da761c1ab18d9f024f57610884..164a3073a6d7be1fcce0a72e5892c67d
              );
          }
      }
-@@ -1109,6 +1171,7 @@ impl WindowInner {
+@@ -1109,6 +1174,7 @@ impl WindowInner {
                          &self.window,
                          self.config.window_decorations,
                          self.config.integrated_title_button_style,
@@ -145,7 +155,7 @@ index 1193d398d910c5da761c1ab18d9f024f57610884..164a3073a6d7be1fcce0a72e5892c67d
                      );
                      self.window.setFrame_display_(saved_rect, YES);
                      self.window.makeKeyAndOrderFront_(nil);
-@@ -1244,6 +1307,7 @@ impl WindowInner {
+@@ -1244,6 +1310,7 @@ impl WindowInner {
                  &self.window,
                  self.config.window_decorations,
                  self.config.integrated_title_button_style,
@@ -153,7 +163,7 @@ index 1193d398d910c5da761c1ab18d9f024f57610884..164a3073a6d7be1fcce0a72e5892c67d
              );
  
              self.update_titlebar_background();
-@@ -1353,6 +1417,25 @@ impl WindowInner {
+@@ -1353,6 +1420,25 @@ impl WindowInner {
          }
      }
  
@@ -179,7 +189,7 @@ index 1193d398d910c5da761c1ab18d9f024f57610884..164a3073a6d7be1fcce0a72e5892c67d
      fn is_zoomed(&self) -> bool {
          unsafe { msg_send![*self.window, isZoomed] }
      }
-@@ -1433,10 +1516,24 @@ fn effective_decorations(
+@@ -1433,10 +1519,25 @@ fn effective_decorations(
      decorations
  }
  
@@ -193,6 +203,7 @@ index 1193d398d910c5da761c1ab18d9f024f57610884..164a3073a6d7be1fcce0a72e5892c67d
 +            let button = window.standardWindowButton_(*titlebar_button);
 +            let _: () = msg_send![button, setHidden: to_yes_no(hidden)];
 +        }
++        title_buttons::update(**window, None);
 +    }
 +}
 +
@@ -204,7 +215,7 @@ index 1193d398d910c5da761c1ab18d9f024f57610884..164a3073a6d7be1fcce0a72e5892c67d
  ) {
      let mask = decoration_to_mask(decorations, integrated_title_button_style);
      let decorations = effective_decorations(decorations, integrated_title_button_style);
-@@ -1446,14 +1543,7 @@ fn apply_decorations_to_window(
+@@ -1446,14 +1547,7 @@ fn apply_decorations_to_window(
          let has_decorations = decorations.contains(WindowDecorations::TITLE)
              || decorations.contains(WindowDecorations::INTEGRATED_BUTTONS);
  
@@ -220,7 +231,7 @@ index 1193d398d910c5da761c1ab18d9f024f57610884..164a3073a6d7be1fcce0a72e5892c67d
  
          window.setTitleVisibility_(if decorations.contains(WindowDecorations::TITLE) {
              appkit::NSWindowTitleVisibility::NSWindowTitleVisible
-@@ -1614,6 +1704,7 @@ struct Inner {
+@@ -1614,6 +1708,7 @@ struct Inner {
      invalidated: bool,
      gl_context_pair: Option<GlContextPair>,
      text_cursor_position: Rect,
@@ -228,7 +239,45 @@ index 1193d398d910c5da761c1ab18d9f024f57610884..164a3073a6d7be1fcce0a72e5892c67d
      tracking_rect_tag: NSInteger,
      hscroll_remainder: f64,
      vscroll_remainder: f64,
-@@ -2352,6 +2443,20 @@ impl WindowView {
+@@ -1972,7 +2067,37 @@ fn get_window_class() -> &'static Class {
+             YES
+         }
+ 
++        extern "C" fn send_event(this: &mut Object, _sel: Sel, event: id) {
++            unsafe {
++                use appkit::NSEventType::*;
++                // Window-level events cover the native titlebar and the gaps
++                // between buttons, outside the terminal content view.
++                if matches!(
++                    event.eventType(),
++                    NSMouseMoved
++                        | NSMouseEntered
++                        | NSMouseExited
++                        | NSLeftMouseDown
++                        | NSLeftMouseUp
++                        | NSLeftMouseDragged
++                        | NSRightMouseDown
++                        | NSRightMouseUp
++                        | NSRightMouseDragged
++                        | NSOtherMouseDown
++                        | NSOtherMouseUp
++                        | NSOtherMouseDragged
++                ) {
++                    title_buttons::update(this as *mut Object, Some(event.locationInWindow()));
++                }
++                let _: () = msg_send![super(this, class!(NSWindow)), sendEvent: event];
++            }
++        }
++
+         unsafe {
++            cls.add_method(
++                sel!(sendEvent:),
++                send_event as extern "C" fn(&mut Object, Sel, id),
++            );
+             cls.add_method(
+                 sel!(canBecomeKeyWindow),
+                 yes as extern "C" fn(&mut Object, Sel) -> BOOL,
+@@ -2352,6 +2477,20 @@ impl WindowView {
          NO
      }
  
@@ -249,7 +298,7 @@ index 1193d398d910c5da761c1ab18d9f024f57610884..164a3073a6d7be1fcce0a72e5892c67d
      extern "C" fn wezterm_perform_key_assignment(
          this: &mut Object,
          _sel: Sel,
-@@ -2364,10 +2469,13 @@ impl WindowView {
+@@ -2364,10 +2503,13 @@ impl WindowView {
          match action {
              Some(RepresentedItem::KeyAssignment(action)) => {
                  if let Some(this) = Self::get_this(this) {
@@ -267,7 +316,7 @@ index 1193d398d910c5da761c1ab18d9f024f57610884..164a3073a6d7be1fcce0a72e5892c67d
                  }
              }
              None => {}
-@@ -2388,22 +2496,27 @@ impl WindowView {
+@@ -2388,22 +2530,27 @@ impl WindowView {
          }
      }
  
@@ -303,7 +352,7 @@ index 1193d398d910c5da761c1ab18d9f024f57610884..164a3073a6d7be1fcce0a72e5892c67d
              mouse_buttons = decode_mouse_buttons(NSEvent::pressedMouseButtons(nsevent));
              modifiers = key_modifiers(nsevent.modifierFlags());
              screen_coords = NSEvent::mouseLocation(nsevent);
-@@ -3335,6 +3448,11 @@ impl WindowView {
+@@ -3335,6 +3482,11 @@ impl WindowView {
                  Self::allow_automatic_tabbing as extern "C" fn(&Object, Sel) -> BOOL,
              );
  
