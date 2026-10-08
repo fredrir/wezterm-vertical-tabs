@@ -1,0 +1,318 @@
+diff --git a/window/src/lib.rs b/window/src/lib.rs
+index 22de40ad1da5c015cbcf438768657006f9f4185d..802db8e81b425af22f1eaaaf9260e3589862255e 100644
+--- a/window/src/lib.rs
++++ b/window/src/lib.rs
+@@ -292,6 +292,12 @@ pub trait WindowOps {
+     /// click before forwarding the event (Windows).
+     fn set_window_drag_position(&self, _coords: ScreenPoint) {}
+ 
++    /// Content that a mouse down never drags, even under a transparent macOS titlebar
++    fn set_window_drag_exclusion(&self, _content: Rect) {}
++
++    /// Hides the native macOS title buttons while keeping the window's decorations
++    fn set_title_buttons_hidden(&self, _hidden: bool) {}
++
+     /// Changes the location of the window on the screen.
+     /// The coordinates are of the top left pixel of the
+     /// client area.
+diff --git a/window/src/os/macos/window.rs b/window/src/os/macos/window.rs
+index 1193d398d910c5da761c1ab18d9f024f57610884..7db6dcbaadd00c3db19cc9d90091b3f8aedc6b5f 100644
+--- a/window/src/os/macos/window.rs
++++ b/window/src/os/macos/window.rs
+@@ -391,6 +391,7 @@ pub(crate) struct WindowInner {
+     view: StrongPtr,
+     window: StrongPtr,
+     config: ConfigHandle,
++    title_buttons_hidden: bool,
+ }
+ 
+ fn function_key_to_keycode(function_key: char) -> KeyCode {
+@@ -421,6 +422,43 @@ fn function_key_to_keycode(function_key: char) -> KeyCode {
+     }
+ }
+ 
++fn dispatch_menu_key_equivalent(event: id, mut dispatch: impl FnMut(WindowEvent)) -> bool {
++    if event.is_null() || unsafe { event.eventType() } != appkit::NSEventType::NSKeyDown {
++        return false;
++    }
++    let flags = unsafe { event.modifierFlags() };
++    let virtual_key = unsafe { event.keyCode() };
++    let unmod = unsafe { nsstring_to_str(event.charactersIgnoringModifiers()) };
++    let phys_code = vkey_to_phys(virtual_key);
++    let key = match KeyCode::composed(unmod) {
++        KeyCode::Char(c) => function_key_to_keycode(c),
++        _ if unmod.is_empty() => phys_code
++            .map(KeyCode::Physical)
++            .unwrap_or(KeyCode::RawCode(virtual_key as _)),
++        key => key,
++    };
++    let handled = Handled::new();
++    dispatch(WindowEvent::RawKeyEvent(RawKeyEvent {
++        key,
++        phys_code,
++        raw_code: virtual_key as _,
++        leds: if flags.contains(NSEventModifierFlags::NSAlphaShiftKeyMask) {
++            KeyboardLedStatus::CAPS_LOCK
++        } else {
++            KeyboardLedStatus::empty()
++        },
++        modifiers: key_modifiers(flags),
++        repeat_count: 1,
++        key_is_down: true,
++        handled: handled.clone(),
++    }));
++    handled.is_handled()
++}
++
++#[cfg(test)]
++#[path = "../../../tests/macos/menu.rs"]
++mod menu_tests;
++
+ #[derive(Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd)]
+ pub struct Window {
+     id: usize,
+@@ -507,6 +545,7 @@ impl Window {
+                 invalidated: true,
+                 gl_context_pair: None,
+                 text_cursor_position: Rect::new(Point::new(0, 0), Size::new(0, 0)),
++                drag_exclusion: None,
+                 tracking_rect_tag: 0,
+                 hscroll_remainder: 0.,
+                 vscroll_remainder: 0.,
+@@ -534,6 +573,7 @@ impl Window {
+                 &window,
+                 config.window_decorations,
+                 config.integrated_title_button_style,
++                false,
+             );
+ 
+             // Prevent Cocoa native tabs from being used
+@@ -604,6 +644,12 @@ impl Window {
+             window.setTitle_(*nsstring(&name));
+             window.setAcceptsMouseMovedEvents_(YES);
+ 
++            if std::env::var_os("WEZ_VTABS_DEV").is_some() {
++                let autosave_name = *nsstring("vtabs-dev");
++                let _: bool = msg_send![*window, setFrameUsingName: autosave_name];
++                let _: bool = msg_send![*window, setFrameAutosaveName: autosave_name];
++            }
++
+             let view = WindowView::init_with_frame(&inner, rect)?;
+             view.setAutoresizingMask_(NSViewHeightSizable | NSViewWidthSizable);
+ 
+@@ -652,6 +698,7 @@ impl Window {
+                 window,
+                 view,
+                 config: config.clone(),
++                title_buttons_hidden: false,
+             }));
+             inner.borrow_mut().window.replace(weak_window);
+             conn.windows
+@@ -837,6 +884,20 @@ impl WindowOps for Window {
+         });
+     }
+ 
++    fn set_window_drag_exclusion(&self, content: Rect) {
++        Connection::with_window_inner(self.id, move |inner| {
++            inner.set_window_drag_exclusion(content);
++            Ok(())
++        });
++    }
++
++    fn set_title_buttons_hidden(&self, hidden: bool) {
++        Connection::with_window_inner(self.id, move |inner| {
++            inner.set_title_buttons_hidden(hidden);
++            Ok(())
++        });
++    }
++
+     fn get_clipboard(&self, _clipboard: Clipboard) -> Future<String> {
+         Future::result(
+             ClipboardContext::new()
+@@ -1056,6 +1117,7 @@ impl WindowInner {
+                 &self.window,
+                 self.config.window_decorations,
+                 self.config.integrated_title_button_style,
++                self.title_buttons_hidden,
+             );
+         }
+     }
+@@ -1109,6 +1171,7 @@ impl WindowInner {
+                         &self.window,
+                         self.config.window_decorations,
+                         self.config.integrated_title_button_style,
++                        self.title_buttons_hidden,
+                     );
+                     self.window.setFrame_display_(saved_rect, YES);
+                     self.window.makeKeyAndOrderFront_(nil);
+@@ -1244,6 +1307,7 @@ impl WindowInner {
+                 &self.window,
+                 self.config.window_decorations,
+                 self.config.integrated_title_button_style,
++                self.title_buttons_hidden,
+             );
+ 
+             self.update_titlebar_background();
+@@ -1353,6 +1417,25 @@ impl WindowInner {
+         }
+     }
+ 
++    fn set_window_drag_exclusion(&mut self, content: Rect) {
++        if let Some(window_view) = WindowView::get_this(unsafe { &**self.view }) {
++            window_view.inner.borrow_mut().drag_exclusion = Some(content);
++        }
++    }
++
++    fn set_title_buttons_hidden(&mut self, hidden: bool) {
++        if self.title_buttons_hidden != hidden {
++            self.title_buttons_hidden = hidden;
++            let decorations = effective_decorations(
++                self.config.window_decorations,
++                self.config.integrated_title_button_style,
++            );
++            let decorated = decorations
++                .intersects(WindowDecorations::TITLE | WindowDecorations::INTEGRATED_BUTTONS);
++            hide_title_buttons(&self.window, hidden || !decorated);
++        }
++    }
++
+     fn is_zoomed(&self) -> bool {
+         unsafe { msg_send![*self.window, isZoomed] }
+     }
+@@ -1433,10 +1516,24 @@ fn effective_decorations(
+     decorations
+ }
+ 
++fn hide_title_buttons(window: &StrongPtr, hidden: bool) {
++    unsafe {
++        for titlebar_button in &[
++            appkit::NSWindowButton::NSWindowMiniaturizeButton,
++            appkit::NSWindowButton::NSWindowCloseButton,
++            appkit::NSWindowButton::NSWindowZoomButton,
++        ] {
++            let button = window.standardWindowButton_(*titlebar_button);
++            let _: () = msg_send![button, setHidden: to_yes_no(hidden)];
++        }
++    }
++}
++
+ fn apply_decorations_to_window(
+     window: &StrongPtr,
+     decorations: WindowDecorations,
+     integrated_title_button_style: IntegratedTitleButtonStyle,
++    title_buttons_hidden: bool,
+ ) {
+     let mask = decoration_to_mask(decorations, integrated_title_button_style);
+     let decorations = effective_decorations(decorations, integrated_title_button_style);
+@@ -1446,14 +1543,7 @@ fn apply_decorations_to_window(
+         let has_decorations = decorations.contains(WindowDecorations::TITLE)
+             || decorations.contains(WindowDecorations::INTEGRATED_BUTTONS);
+ 
+-        for titlebar_button in &[
+-            appkit::NSWindowButton::NSWindowMiniaturizeButton,
+-            appkit::NSWindowButton::NSWindowCloseButton,
+-            appkit::NSWindowButton::NSWindowZoomButton,
+-        ] {
+-            let button = window.standardWindowButton_(*titlebar_button);
+-            let _: () = msg_send![button, setHidden: to_yes_no(!has_decorations)];
+-        }
++        hide_title_buttons(window, !has_decorations || title_buttons_hidden);
+ 
+         window.setTitleVisibility_(if decorations.contains(WindowDecorations::TITLE) {
+             appkit::NSWindowTitleVisibility::NSWindowTitleVisible
+@@ -1614,6 +1704,7 @@ struct Inner {
+     invalidated: bool,
+     gl_context_pair: Option<GlContextPair>,
+     text_cursor_position: Rect,
++    drag_exclusion: Option<Rect>,
+     tracking_rect_tag: NSInteger,
+     hscroll_remainder: f64,
+     vscroll_remainder: f64,
+@@ -2352,6 +2443,20 @@ impl WindowView {
+         NO
+     }
+ 
++    // Keeps a transparent titlebar from dragging or zooming the window over excluded content
++    extern "C" fn mouse_down_can_move_window(this: &Object, _sel: Sel) -> BOOL {
++        let content =
++            Self::get_this(this).and_then(|myself| myself.inner.try_borrow().ok()?.drag_exclusion);
++        let event: id = unsafe { msg_send![appkit::NSApp(), currentEvent] };
++        match content {
++            Some(content) if !event.is_null() => {
++                let point = Self::backing_point(this as *const Object as id, event);
++                to_yes_no(!content.contains(Point::new(point.x as isize, point.y as isize)))
++            }
++            _ => YES,
++        }
++    }
++
+     extern "C" fn wezterm_perform_key_assignment(
+         this: &mut Object,
+         _sel: Sel,
+@@ -2364,10 +2469,14 @@ impl WindowView {
+         match action {
+             Some(RepresentedItem::KeyAssignment(action)) => {
+                 if let Some(this) = Self::get_this(this) {
+-                    this.inner
+-                        .borrow_mut()
+-                        .events
+-                        .dispatch(WindowEvent::PerformKeyAssignment(action));
++                    let mut inner = this.inner.borrow_mut();
++                    // AppKit menu shortcuts can bypass keyDown entirely. Give input
++                    // consumers the originating chord before executing its assignment.
++                    let event: id = unsafe { msg_send![appkit::NSApp(), currentEvent] };
++                    if dispatch_menu_key_equivalent(event, |event| inner.events.dispatch(event)) {
++                        return;
++                    }
++                    inner.events.dispatch(WindowEvent::PerformKeyAssignment(action));
+                 }
+             }
+             None => {}
+@@ -2388,22 +2497,27 @@ impl WindowView {
+         }
+     }
+ 
+-    fn mouse_common(this: &mut Object, nsevent: id, kind: MouseEventKind) {
+-        let view = this as id;
+-        let coords;
+-        let mouse_buttons;
+-        let modifiers;
+-        let screen_coords;
++    fn backing_point(view: id, nsevent: id) -> NSPoint {
+         unsafe {
+             let point = NSView::convertPoint_fromView_(view, nsevent.locationInWindow(), nil);
+             let rect = NSRect::new(NSPoint::new(0., 0.), NSSize::new(point.x, point.y));
+             let backing_rect = NSView::convertRectToBacking(view, rect);
+             // backing_rect computes abs() values, so we need to restore the sign
+             // from the original point
+-            coords = NSPoint::new(
++            NSPoint::new(
+                 f64::copysign(backing_rect.size.width, point.x),
+                 f64::copysign(backing_rect.size.height, point.y),
+-            );
++            )
++        }
++    }
++
++    fn mouse_common(this: &mut Object, nsevent: id, kind: MouseEventKind) {
++        let view = this as id;
++        let coords = Self::backing_point(view, nsevent);
++        let mouse_buttons;
++        let modifiers;
++        let screen_coords;
++        unsafe {
+             mouse_buttons = decode_mouse_buttons(NSEvent::pressedMouseButtons(nsevent));
+             modifiers = key_modifiers(nsevent.modifierFlags());
+             screen_coords = NSEvent::mouseLocation(nsevent);
+@@ -3335,6 +3449,11 @@ impl WindowView {
+                 Self::allow_automatic_tabbing as extern "C" fn(&Object, Sel) -> BOOL,
+             );
+ 
++            cls.add_method(
++                sel!(mouseDownCanMoveWindow),
++                Self::mouse_down_can_move_window as extern "C" fn(&Object, Sel) -> BOOL,
++            );
++
+             cls.add_method(
+                 sel!(windowWillStartLiveResize:),
+                 Self::will_start_live_resize as extern "C" fn(&mut Object, Sel, id),

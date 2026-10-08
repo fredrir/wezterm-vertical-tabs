@@ -1,0 +1,56 @@
+diff --git a/config/src/ssh.rs b/config/src/ssh.rs
+index f1cac1a9effb346c6f8d3fde49499285ce2634ac..f2adbf2a658a265fd3bd7b73b9a4a7286a2609b6 100644
+--- a/config/src/ssh.rs
++++ b/config/src/ssh.rs
+@@ -68,6 +68,11 @@ pub struct SshDomain {
+     #[dynamic(default)]
+     pub connect_automatically: bool,
+ 
++    /// Keep layouts on this mux and spawn independent remote shells.
++    /// Existing remote tabs and windows are not imported.
++    #[dynamic(default)]
++    pub local_pane_layout: bool,
++
+     #[dynamic(default = "default_read_timeout")]
+     pub timeout: Duration,
+ 
+diff --git a/config/src/tls.rs b/config/src/tls.rs
+index 2c9adf57f8ec6a99b0938c4d02d8bb60e1851d7c..3b148578eb1c298325f62956c1ffc7710616a89e 100644
+--- a/config/src/tls.rs
++++ b/config/src/tls.rs
+@@ -76,6 +76,11 @@ pub struct TlsDomainClient {
+     #[dynamic(default)]
+     pub connect_automatically: bool,
+ 
++    /// Keep layouts on this mux and spawn independent remote shells.
++    /// Existing remote tabs and windows are not imported.
++    #[dynamic(default)]
++    pub local_pane_layout: bool,
++
+     #[dynamic(default = "default_read_timeout")]
+     pub read_timeout: Duration,
+ 
+diff --git a/config/src/unix.rs b/config/src/unix.rs
+index 123691987ce30093bead1ccee0110c3145fcabd5..d4382bbd501b787c96a7833a9beeb25f3b55d865 100644
+--- a/config/src/unix.rs
++++ b/config/src/unix.rs
+@@ -20,6 +20,11 @@ pub struct UnixDomain {
+     #[dynamic(default)]
+     pub connect_automatically: bool,
+ 
++    /// Keep layouts on this mux and spawn independent remote shells.
++    /// Existing remote tabs and windows are not imported.
++    #[dynamic(default)]
++    pub local_pane_layout: bool,
++
+     /// If true, do not attempt to start this server if we try and fail to
+     /// connect to it.
+     #[dynamic(default)]
+@@ -70,6 +75,7 @@ impl Default for UnixDomain {
+             name: String::new(),
+             socket_path: None,
+             connect_automatically: false,
++            local_pane_layout: false,
+             no_serve_automatically: false,
+             serve_command: None,
+             skip_permissions_check: false,

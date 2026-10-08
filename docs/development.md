@@ -5,7 +5,7 @@
 | Toolchain   | Stable Rust, Git and platform C/C++ tools; uv/Python 3.12+ for tests             |
 | Upstream    | `main` resolved once; `--upstream SHA` pins; `dev`/`deploy` reuse the last build |
 | Tooling     | `cargo xtask` uses the `xtask` profile: optimized hashing, incremental rebuilds  |
-| GUI         | WezTerm renderer with the patch series and project Rust application              |
+| GUI         | WezTerm renderer with per-crate patches, overlay and the project application     |
 | UI          | Retained Ratatui text, rounded geometry and finite TachyonFX effects             |
 | Persistence | `wez-vtabs-store`; bundled SQLite for runtime state; settings in a Lua file      |
 | Lua         | Source of truth for settings/spaces, schemars-generated types, semantic hooks    |
@@ -51,7 +51,8 @@ Recipes invoke `cargo xtask`. Installed launch entries invoke the bundled Rust b
 | `update --check` / `--manifest PATH_OR_URL`    | Installed updater: availability / verified prebuilt release                                  |
 | `launch -- ARGS`                               | Promote completed pending version and forward GUI arguments                                  |
 | `plan dev --json`                              | Inputs and execution decisions without fetch/build                                           |
-| `patch check --upstream SHA`                   | Check ordered patches in an isolated worktree                                                |
+| `patch check --upstream SHA`                   | Apply patches and overlay in an isolated worktree; 3-way merge on drift                      |
+| `patch export`                                 | Write the prepared worktree back to `wezterm/`; see **Patches**                              |
 | `cache inspect` / `cache gc --dry-run --keep N`| Owned run/bundle sizes; pruning preview                                                      |
 | `repro RUN_JSON [--execute]`                   | Inspect or replay a failure report                                                           |
 
@@ -121,7 +122,8 @@ role = "mux"
 | `src/adapter/src`        | Private WezTerm API integration; entry point `lib.rs`                     |
 | `src/adapter/tests`      | Unit modules compiled inside `wezterm-gui`; run with `just build`         |
 | `src/adapter/Cargo.toml` | `vtabs-adapter` source package; dependencies merged into the GUI manifest |
-| `wezterm-patches`        | Generic layout, surfaces, input and navigation hooks                      |
+| `wezterm/patches`        | `<crate>.patch` hooks into upstream WezTerm files                         |
+| `wezterm/overlay`        | Project files copied into WezTerm at the same upstream paths              |
 | `plugin`                 | Optional Lua configuration and generated contracts                        |
 | `tools/src`              | Rust CLI, process runner, source/build state, packaging and updates       |
 | `tests/tools`            | pytest/tui-test tooling behavior through the compiled CLI                 |
@@ -135,6 +137,19 @@ cargo build --release --locked -p vtabs-store --features sqlite
 cargo run --quiet --locked -p vtabs-core --bin gen-schema -- json
 ```
 
+**Patches**
+
+| Name         | Value                                                                                                  |
+| ------------ | ------------------------------------------------------------------------------------------------------ |
+| Patch        | `wezterm/patches/<entry>.patch`: one per top-level upstream directory or root file; any order          |
+| Overlay      | `wezterm/overlay/<path>`, copied to the same upstream path; must not exist upstream                    |
+| Tool-managed | `Cargo.toml`, `Cargo.lock`, `wezterm-gui/Cargo.toml`, `wezterm-gui/src/vtabs/`; never in `wezterm/`    |
+| Hook edit    | Edit `cache/worktree`, then `cargo xtask patch export`                                                 |
+| Overlay edit | Edit `wezterm/overlay/<path>`; prepare copies changed files without reapplying patches                 |
+| Export       | Refused if `wezterm/` changed since prepare; the next prepare reuses the worktree                      |
+| Drift        | `git apply --3way` from the patch's blob IDs; a conflict fails naming the patch                        |
+| Format       | `git diff --full-index --diff-algorithm=myers -U3` against the prepared revision; Git config ignored   |
+
 **Build state and installation**
 
 | Name                         | Value                                                                                                |
@@ -144,7 +159,7 @@ cargo run --quiet --locked -p vtabs-core --bin gen-schema -- json
 | `WEZ_VTABS_APP`              | `deploy --app`: `/Applications/WezTerm.app`, or the XDG `org.wezfurlong.wezterm.desktop` entry       |
 | `WEZ_VTABS_BIN`              | `deploy --bin`: `~/.local/bin`                                                                       |
 | `cache/upstream`             | Tool-owned upstream clone and Cargo target cache                                                     |
-| `cache/worktree`             | Owned patched checkout; adapter changes synchronize in place                                         |
+| `cache/worktree`             | Owned patched checkout; overlay and adapter files synchronize in place                               |
 | `cache/project`              | Installed updater's separate dev-branch checkout; an ownership marker is required before replacement |
 | `cache/build.json`           | Separate source/compile/validation identities, toolchain/configuration and Cargo artifact paths      |
 | `install/versions`           | Immutable bundles; install/deploy/update keep active, pending, previous and running versions only    |
@@ -236,7 +251,7 @@ uv run --locked pytest -n 2 tests/integration --run-gui --run-container \
 | ---------------- | ------------------------------------------------------------------------- |
 | Unit modules     | `cargo test --workspace --all-features`; bodies in `src/<crate>/tests`    |
 | Process boundary | `schema.rs` and `helper.rs` `[[test]]` targets; need `CARGO_BIN_EXE_*`    |
-| Patched WezTerm  | `wezterm-patches` place `<crate>/tests/vtabs/*.rs`; run with `just build` |
+| Patched WezTerm  | `wezterm/overlay/<crate>/tests/vtabs/*.rs`; run with `just build`         |
 
 **Extended GUI scenarios**
 

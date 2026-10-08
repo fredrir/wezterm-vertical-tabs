@@ -36,7 +36,7 @@ pub fn plan(ctx: &Context, operation: &str) -> Result<Value> {
         steps.clear();
         steps.push(json!({"name":"validate","action":"run","reason":"run project format, lint, schema and behavioral checks"}));
     } else {
-        steps.push(json!({"name":"prepare","action":"check","reason":"compare upstream, ordered patches and adapter inputs separately"}));
+        steps.push(json!({"name":"prepare","action":"check","reason":"compare upstream, patches, overlay and adapter inputs separately"}));
         if operation != "prepare" {
             steps.push(json!({"name":"compile","action":"check","reason":if compile_changed{"Rust/inputs changed or no previous build; Cargo checks required compilation"}else{"Rust/inputs unchanged; Cargo checks toolchain and dependency freshness"}}));
             steps.push(json!({"name":"validate","action":if validation_changed{"run"}else{"check"},"reason":if validation_changed{"validation inputs changed or no previous build"}else{"reuse only if compiled artifact hashes also match"}}));

@@ -1,8 +1,9 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
+use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context as _, Result, ensure};
+use anyhow::{Context as _, Result, bail, ensure};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use walkdir::WalkDir;
@@ -30,7 +31,7 @@ pub const SOURCE_ITEMS: &[&str] = &[
     "README.md",
     "justfile",
     "src",
-    "wezterm-patches",
+    "wezterm",
     "plugin",
     "docs",
     "tools",
@@ -45,6 +46,15 @@ pub const IGNORED: &[&str] = &[
     ".mypy_cache",
     ".venv",
     "node_modules",
+];
+const PATCHES: &str = "wezterm/patches";
+const OVERLAY: &str = "wezterm/overlay";
+/// Upstream paths the tool rewrites; patches and the overlay never contain them.
+const TOOL_MANAGED: &[&str] = &[
+    "Cargo.toml",
+    "Cargo.lock",
+    "wezterm-gui/Cargo.toml",
+    "wezterm-gui/src/vtabs",
 ];
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -67,6 +77,8 @@ struct Prepared {
     patch_digest: String,
     adapter_digest: String,
     root: PathBuf,
+    #[serde(default)]
+    overlay: BTreeMap<String, String>,
 }
 
 pub fn upstream_url() -> String {
@@ -91,6 +103,25 @@ pub fn git(ctx: &Context, cwd: &Path) -> CommandSpec {
     command
 }
 
+fn walk_files(path: &Path, files: &mut BTreeSet<PathBuf>) -> Result<()> {
+    for entry in WalkDir::new(path)
+        .follow_links(false)
+        .into_iter()
+        .filter_entry(|entry| !IGNORED.iter().any(|ignored| entry.file_name() == *ignored))
+    {
+        let entry = entry.with_context(|| format!("read source {}", path.display()))?;
+        ensure!(
+            !entry.file_type().is_symlink(),
+            "source symlinks are unsupported: {}",
+            entry.path().display()
+        );
+        if entry.file_type().is_file() {
+            files.insert(entry.into_path());
+        }
+    }
+    Ok(())
+}
+
 pub fn source_files(root: &Path) -> Result<Vec<PathBuf>> {
     let mut files = BTreeSet::new();
     for item in SOURCE_ITEMS {
@@ -98,23 +129,16 @@ pub fn source_files(root: &Path) -> Result<Vec<PathBuf>> {
         if !path.exists() {
             continue;
         }
-        for entry in WalkDir::new(&path)
-            .follow_links(false)
-            .into_iter()
-            .filter_entry(|entry| !IGNORED.iter().any(|ignored| entry.file_name() == *ignored))
-        {
-            let entry = entry.with_context(|| format!("read source {}", path.display()))?;
-            ensure!(
-                !entry.file_type().is_symlink(),
-                "source symlinks are unsupported: {}",
-                entry.path().display()
-            );
-            if entry.file_type().is_file() {
-                files.insert(entry.into_path());
-            }
-        }
+        walk_files(&path, &mut files)?;
     }
     Ok(files.into_iter().collect())
+}
+
+fn digest_entry(digest: &mut Sha256, relative: &str, contents: &[u8]) {
+    digest.update(relative.as_bytes());
+    digest.update([0]);
+    digest.update(contents);
+    digest.update([0]);
 }
 
 fn digest_paths<'a>(root: &Path, files: impl IntoIterator<Item = &'a PathBuf>) -> Result<String> {
@@ -124,10 +148,8 @@ fn digest_paths<'a>(root: &Path, files: impl IntoIterator<Item = &'a PathBuf>) -
             .strip_prefix(root)?
             .to_string_lossy()
             .replace('\\', "/");
-        digest.update(relative.as_bytes());
-        digest.update([0]);
-        digest.update(fs::read(path).with_context(|| format!("read {}", path.display()))?);
-        digest.update([0]);
+        let contents = fs::read(path).with_context(|| format!("read {}", path.display()))?;
+        digest_entry(&mut digest, &relative, &contents);
     }
     Ok(format!("{:x}", digest.finalize()))
 }
@@ -149,7 +171,7 @@ pub fn compile_digest(root: &Path) -> Result<String> {
                 || relative == Path::new("rust-toolchain")
                 || relative == Path::new("rust-toolchain.toml")
                 || relative.starts_with(".cargo")
-                || relative.starts_with("wezterm-patches")
+                || relative.starts_with("wezterm")
             {
                 return true;
             }
@@ -177,7 +199,7 @@ pub fn validation_digest(root: &Path) -> Result<String> {
                 .strip_prefix(root)
                 .expect("source file belongs to root");
             relative.starts_with("src")
-                || relative.starts_with("wezterm-patches")
+                || relative.starts_with("wezterm")
                 || relative.starts_with("tests")
                 || relative.starts_with("plugin")
                 || relative.starts_with("tools")
@@ -634,13 +656,134 @@ pub fn refresh_project(ctx: &Context, branch: &str) -> Result<PathBuf> {
 }
 
 fn patches(root: &Path) -> Result<Vec<PathBuf>> {
-    let mut patches = fs::read_dir(root.join("wezterm-patches"))?
+    let mut patches = fs::read_dir(root.join(PATCHES))?
         .map(|entry| entry.map(|entry| entry.path()))
         .collect::<std::io::Result<Vec<_>>>()?;
     patches.retain(|path| path.is_file() && path.extension().is_some_and(|v| v == "patch"));
     patches.sort();
     ensure!(!patches.is_empty(), "patches missing");
     Ok(patches)
+}
+
+fn tool_managed(path: &str) -> bool {
+    TOOL_MANAGED.iter().any(|managed| {
+        path.strip_prefix(managed)
+            .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
+    })
+}
+
+/// Overlay files keyed by their upstream path.
+fn overlay_files(root: &Path) -> Result<BTreeMap<String, Vec<u8>>> {
+    let directory = root.join(OVERLAY);
+    let mut files = BTreeSet::new();
+    if directory.exists() {
+        walk_files(&directory, &mut files)?;
+    }
+    let mut overlay = BTreeMap::new();
+    for path in files {
+        let relative = path
+            .strip_prefix(&directory)?
+            .to_str()
+            .with_context(|| format!("non-UTF-8 path: {}", path.display()))?
+            .replace('\\', "/");
+        ensure!(
+            !tool_managed(&relative),
+            "overlay file in tool-managed path: {relative}"
+        );
+        overlay.insert(relative, fs::read(&path)?);
+    }
+    Ok(overlay)
+}
+
+fn content_digests<'a>(
+    files: impl IntoIterator<Item = (&'a String, &'a Vec<u8>)>,
+) -> BTreeMap<String, String> {
+    files
+        .into_iter()
+        .map(|(path, contents)| (path.clone(), state::hash_bytes(contents)))
+        .collect()
+}
+
+/// The given paths that exist in `revision`, as a file or a directory.
+fn upstream_paths<'a>(
+    ctx: &Context,
+    worktree: &Path,
+    revision: &str,
+    paths: &BTreeSet<&'a str>,
+) -> Result<BTreeSet<&'a str>> {
+    if paths.is_empty() {
+        return Ok(BTreeSet::new());
+    }
+    let listed = ctx.runner.capture(
+        git(ctx, worktree)
+            .args(["ls-tree", "-r", "--name-only", "-z", revision, "--"])
+            .args(paths),
+    )?;
+    let listed = listed.split('\0').collect::<Vec<_>>();
+    Ok(paths
+        .iter()
+        .copied()
+        .filter(|path| {
+            listed.iter().any(|entry| {
+                entry
+                    .strip_prefix(path)
+                    .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
+            })
+        })
+        .collect())
+}
+
+fn write_changed(destination: &Path, contents: &[u8]) -> Result<()> {
+    if fs::symlink_metadata(destination).is_ok_and(|v| v.file_type().is_symlink()) {
+        fs::remove_file(destination)?;
+    }
+    if fs::read(destination).ok().as_deref() != Some(contents) {
+        fs::create_dir_all(destination.parent().context("destination has no parent")?)?;
+        fs::write(destination, contents)?;
+    }
+    Ok(())
+}
+
+fn remove_empty_parents(stop: &Path, path: &Path) {
+    for parent in path.ancestors().skip(1).take_while(|v| *v != stop) {
+        if fs::remove_dir(parent).is_err() {
+            break;
+        }
+    }
+}
+
+/// Copies overlay files and removes previously synced ones the project no longer has.
+fn sync_overlay(
+    ctx: &Context,
+    worktree: &Path,
+    revision: &str,
+    overlay: &BTreeMap<String, Vec<u8>>,
+    previous: &BTreeMap<String, String>,
+) -> Result<()> {
+    let stale = previous
+        .keys()
+        .filter(|path| !overlay.contains_key(*path))
+        .collect::<Vec<_>>();
+    let paths = overlay
+        .keys()
+        .chain(stale.iter().copied())
+        .map(String::as_str)
+        .collect();
+    let upstream = upstream_paths(ctx, worktree, revision, &paths)?;
+    if let Some(path) = overlay.keys().find(|path| upstream.contains(path.as_str())) {
+        bail!("overlay file tracked upstream: {path}");
+    }
+    for path in stale {
+        let target = worktree.join(path);
+        if !upstream.contains(path.as_str()) && target.is_file() {
+            fs::remove_file(&target)?;
+            remove_empty_parents(worktree, &target);
+        }
+    }
+    for (path, contents) in overlay {
+        write_changed(&worktree.join(path), contents)?;
+    }
+    Ok(())
 }
 
 fn copy_changed(source: &Path, destination: &Path) -> Result<()> {
@@ -762,11 +905,50 @@ fn configure_dev_profile(worktree: &Path) -> Result<()> {
     Ok(())
 }
 
+fn apply_patches(ctx: &Context, worktree: &Path, patches: &[PathBuf]) -> Result<Vec<String>> {
+    let mut merged = Vec::new();
+    for patch in patches {
+        if ctx
+            .runner
+            .run(git(ctx, worktree).args(["apply", "--check"]).arg(patch))
+            .is_ok()
+        {
+            ctx.runner.run(git(ctx, worktree).arg("apply").arg(patch))?;
+            continue;
+        }
+        let name = patch
+            .file_name()
+            .context("patch has no name")?
+            .to_string_lossy()
+            .into_owned();
+        // --3way implies --index, which must match files earlier patches changed.
+        ctx.runner
+            .run(git(ctx, worktree).args(["add", "--update"]))?;
+        ctx.runner
+            .run(git(ctx, worktree).args(["apply", "--3way"]).arg(patch))
+            .with_context(|| format!("{name} does not apply"))?;
+        merged.push(name);
+    }
+    if !merged.is_empty() {
+        ctx.runner
+            .run(git(ctx, worktree).args(["reset", "--quiet"]))?;
+    }
+    Ok(merged)
+}
+
+/// Git whose output ignores user and system configuration.
+fn plain_git(ctx: &Context, cwd: &Path) -> CommandSpec {
+    git(ctx, cwd)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+}
+
 pub fn prepare(ctx: &Context, resolved: &ResolvedSource) -> Result<PathBuf> {
     let _stage = ctx.runner.stage("prepare");
     let worktree = ctx.cache.join("worktree");
     let patch_files = patches(&ctx.root)?;
     let patch_digest = digest_paths(&ctx.root, &patch_files)?;
+    let overlay = overlay_files(&ctx.root)?;
     let adapter_files = source_files(&ctx.root)?
         .into_iter()
         .filter(|v| v.starts_with(ctx.root.join("src/adapter")))
@@ -778,6 +960,7 @@ pub fn prepare(ctx: &Context, resolved: &ResolvedSource) -> Result<PathBuf> {
     let previous = raw.and_then(|value| serde_json::from_value::<Prepared>(value).ok());
     let root = fs::canonicalize(&ctx.root)?;
     let mut reuse = false;
+    let mut merged = Vec::new();
     if worktree.exists() {
         verify_worktree(ctx, &resolved.checkout, &worktree)?;
         reuse = previous.as_ref().is_some_and(|previous| {
@@ -823,14 +1006,11 @@ pub fn prepare(ctx: &Context, resolved: &ResolvedSource) -> Result<PathBuf> {
         ctx.runner.run(submodules).with_context(|| if ctx.offline {
             "required submodule revision is unavailable offline; prepare this revision online once"
         } else { "initialize upstream submodules" })?;
-        for patch in &patch_files {
-            ctx.runner
-                .run(git(ctx, &worktree).args(["apply", "--check"]).arg(patch))?;
-            ctx.runner
-                .run(git(ctx, &worktree).arg("apply").arg(patch))?;
-        }
+        merged = apply_patches(ctx, &worktree, &patch_files)?;
     }
     // Always compare contents: preserves mtimes and repairs interrupted staging.
+    let synced = previous.map(|v| v.overlay).unwrap_or_default();
+    sync_overlay(ctx, &worktree, &resolved.revision, &overlay, &synced)?;
     stage_adapter(&ctx.root, &worktree)?;
     state::write_json(
         &ctx.cache.join("prepared.json"),
@@ -840,15 +1020,21 @@ pub fn prepare(ctx: &Context, resolved: &ResolvedSource) -> Result<PathBuf> {
             patch_digest,
             adapter_digest,
             root,
+            overlay: content_digests(&overlay),
         },
     )?;
     if ctx.explain {
         eprintln!(
             "prepare: {}",
             if reuse {
-                "reuse patches; synchronize changed adapter files"
+                "reuse patches; synchronize changed overlay and adapter files".into()
+            } else if merged.is_empty() {
+                "created patched worktree".into()
             } else {
-                "created patched worktree"
+                format!(
+                    "created patched worktree; 3-way merged {}",
+                    merged.join(", ")
+                )
             }
         );
     }
@@ -857,6 +1043,8 @@ pub fn prepare(ctx: &Context, resolved: &ResolvedSource) -> Result<PathBuf> {
 
 pub fn patch_check(ctx: &Context) -> Result<serde_json::Value> {
     let resolved = resolve(ctx)?;
+    let patch_files = patches(&ctx.root)?;
+    let overlay = overlay_files(&ctx.root)?;
     let temporary = tempfile::Builder::new()
         .prefix("patch-check-")
         .tempdir_in(&ctx.cache)?;
@@ -867,24 +1055,180 @@ pub fn patch_check(ctx: &Context) -> Result<serde_json::Value> {
             .arg(&checkout)
             .arg(&resolved.revision),
     )?;
-    let checked = (|| -> Result<()> {
-        for patch in patches(&ctx.root)? {
-            ctx.runner
-                .run(git(ctx, &checkout).args(["apply", "--check"]).arg(&patch))?;
-            ctx.runner
-                .run(git(ctx, &checkout).arg("apply").arg(&patch))?;
-        }
+    let checked = (|| -> Result<Vec<String>> {
+        let merged = apply_patches(ctx, &checkout, &patch_files)?;
+        sync_overlay(
+            ctx,
+            &checkout,
+            &resolved.revision,
+            &overlay,
+            &BTreeMap::new(),
+        )?;
         stage_adapter(&ctx.root, &checkout)?;
-        Ok(())
+        Ok(merged)
     })();
     let removed = ctx.runner.run(
         git(ctx, &resolved.checkout)
             .args(["worktree", "remove", "--force", "--force"])
             .arg(&checkout),
     );
-    checked?;
+    let merged = checked?;
     removed?;
     Ok(
-        serde_json::json!({"upstream":resolved.revision,"patches":patches(&ctx.root)?.len(),"status":"compatible"}),
+        serde_json::json!({"upstream":resolved.revision,"patches":patch_files.len(),"overlay":overlay.len(),"merged":merged,"status":"compatible"}),
+    )
+}
+
+/// Writes the prepared worktree back as one patch per top-level upstream entry plus the overlay.
+pub fn patch_export(ctx: &Context) -> Result<serde_json::Value> {
+    let _stage = ctx.runner.stage("export");
+    let worktree = ctx.cache.join("worktree");
+    let record = ctx.cache.join("prepared.json");
+    let raw: Option<serde_json::Value> = state::read_json(&record)?;
+    let mut prepared = raw
+        .and_then(|value| serde_json::from_value::<Prepared>(value).ok())
+        .filter(|v| v.version == PREPARATION_VERSION && worktree.join(".git").is_file())
+        .context("no prepared worktree")?;
+    ensure!(
+        prepared.root == fs::canonicalize(&ctx.root)?,
+        "worktree prepared for {}",
+        prepared.root.display()
+    );
+    verify_worktree(ctx, &ctx.cache.join("upstream"), &worktree)?;
+    let revision = prepared.upstream.clone();
+    ensure!(
+        resolve_commit(ctx, &worktree, "HEAD")? == revision,
+        "worktree moved from the prepared revision"
+    );
+    let existing = patches(&ctx.root)?;
+    let overlay = overlay_files(&ctx.root)?;
+    ensure!(
+        digest_paths(&ctx.root, &existing)? == prepared.patch_digest
+            && content_digests(&overlay) == prepared.overlay,
+        "patches or overlay changed since prepare"
+    );
+    // Unstage everything so additions stay untracked and diffs cover upstream files only.
+    ctx.runner
+        .run(git(ctx, &worktree).args(["reset", "--quiet"]))?;
+    let changed = ctx.runner.capture(plain_git(ctx, &worktree).args([
+        "diff",
+        "--name-only",
+        "-z",
+        "--no-renames",
+        "--ignore-submodules=all",
+        &revision,
+    ]))?;
+    let entries = changed
+        .split('\0')
+        .filter(|path| !path.is_empty() && !tool_managed(path))
+        .map(|path| path.split('/').next().unwrap_or(path))
+        .collect::<BTreeSet<_>>();
+    let mut patch_outputs = BTreeMap::new();
+    for entry in entries {
+        let patch = ctx.runner.capture_bytes(
+            plain_git(ctx, &worktree)
+                .args([
+                    "diff",
+                    "--no-color",
+                    "--no-ext-diff",
+                    "--no-textconv",
+                    "--no-renames",
+                    "--ignore-submodules=all",
+                    "--full-index",
+                    "--diff-algorithm=myers",
+                    "--indent-heuristic",
+                    "-U3",
+                    "--inter-hunk-context=0",
+                    "--src-prefix=a/",
+                    "--dst-prefix=b/",
+                    &revision,
+                    "--",
+                    entry,
+                ])
+                .args(TOOL_MANAGED.iter().map(|path| format!(":(exclude){path}"))),
+        )?;
+        if !patch.is_empty() {
+            patch_outputs.insert(format!("{PATCHES}/{entry}.patch"), patch);
+        }
+    }
+    ensure!(
+        !patch_outputs.is_empty(),
+        "worktree has no upstream changes"
+    );
+    let untracked = ctx.runner.capture(git(ctx, &worktree).args([
+        "ls-files",
+        "--others",
+        "--exclude-standard",
+        "-z",
+    ]))?;
+    let additions = untracked.split('\0').filter(|path| {
+        !path.is_empty()
+            && !tool_managed(path)
+            && !path.split('/').any(|part| IGNORED.contains(&part))
+    });
+    let mut overlay_outputs = BTreeMap::new();
+    for path in additions.chain(prepared.overlay.keys().map(String::as_str)) {
+        let source = worktree.join(path);
+        if source.is_file() {
+            overlay_outputs.insert(path.to_owned(), fs::read(source)?);
+        }
+    }
+    let outputs = patch_outputs
+        .iter()
+        .map(|(path, contents)| (path.clone(), contents))
+        .chain(
+            overlay_outputs
+                .iter()
+                .map(|(path, contents)| (format!("{OVERLAY}/{path}"), contents)),
+        )
+        .collect::<BTreeMap<_, _>>();
+    // Stage every file before replacing any, so a failure leaves no partial file.
+    let mut staged = Vec::new();
+    for (path, contents) in &outputs {
+        let target = ctx.root.join(path);
+        if fs::read(&target).ok().as_deref() == Some(contents.as_slice()) {
+            continue;
+        }
+        let parent = target.parent().context("export path has no parent")?;
+        fs::create_dir_all(parent)?;
+        let mut builder = tempfile::Builder::new();
+        if let Ok(metadata) = fs::metadata(&target) {
+            builder.permissions(metadata.permissions());
+        } else {
+            #[cfg(unix)]
+            builder.permissions(std::os::unix::fs::PermissionsExt::from_mode(0o666));
+        }
+        let mut temporary = builder.tempfile_in(parent)?;
+        temporary.write_all(contents)?;
+        staged.push((path, temporary));
+    }
+    let removed = existing
+        .iter()
+        .filter_map(|path| Some(format!("{PATCHES}/{}", path.file_name()?.to_str()?)))
+        .chain(overlay.into_keys().map(|path| format!("{OVERLAY}/{path}")))
+        .filter(|path| !outputs.contains_key(path))
+        .collect::<Vec<_>>();
+    let mut written = Vec::new();
+    for (path, temporary) in staged {
+        temporary
+            .persist(ctx.root.join(path))
+            .with_context(|| format!("write {path}"))?;
+        written.push(path.clone());
+    }
+    for path in &removed {
+        let target = ctx.root.join(path);
+        fs::remove_file(&target)?;
+        remove_empty_parents(&ctx.root.join(OVERLAY), &target);
+    }
+    // By construction the worktree is upstream plus these files, so prepare can reuse it.
+    let mut digest = Sha256::new();
+    for (path, contents) in &patch_outputs {
+        digest_entry(&mut digest, path, contents);
+    }
+    prepared.patch_digest = format!("{:x}", digest.finalize());
+    prepared.overlay = content_digests(&overlay_outputs);
+    state::write_json(&record, &prepared)?;
+    Ok(
+        serde_json::json!({"upstream":revision,"patches":patch_outputs.len(),"overlay":overlay_outputs.len(),"written":written,"removed":removed}),
     )
 }

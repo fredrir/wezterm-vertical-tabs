@@ -1,0 +1,16 @@
+diff --git a/lua-api-crates/mux/src/lib.rs b/lua-api-crates/mux/src/lib.rs
+index 93e995a6c75a0f078915c3e654ce15d55410b239..8e7c534b30521aeff6d7f0644bd4a574f96f4faa 100644
+--- a/lua-api-crates/mux/src/lib.rs
++++ b/lua-api-crates/mux/src/lib.rs
+@@ -30,6 +30,11 @@ fn get_mux() -> mlua::Result<Arc<Mux>> {
+ 
+ pub fn register(lua: &Lua) -> anyhow::Result<()> {
+     let mux_mod = get_or_create_sub_module(lua, "mux")?;
++    mux_mod.set("supports_local_pane_layout", true)?;
++    mux_mod.set(
++        "local_pane_layout_domains",
++        lua.create_sequence_from(["tls", "unix", "ssh"])?,
++    )?;
+ 
+     mux_mod.set(
+         "get_active_workspace",

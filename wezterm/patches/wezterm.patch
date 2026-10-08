@@ -1,0 +1,106 @@
+diff --git a/wezterm/src/cli/list.rs b/wezterm/src/cli/list.rs
+index 35ab4fc2181dff39f260b09daae9ff5e20df9324..be4087e6c84dca831f5f88929692591db9bd8988 100644
+--- a/wezterm/src/cli/list.rs
++++ b/wezterm/src/cli/list.rs
+@@ -15,10 +15,14 @@ pub struct ListCommand {
+ 
+ impl ListCommand {
+     pub async fn run(&self, client: Client) -> anyhow::Result<()> {
++        self.print(client.list_panes().await?)
++    }
++
++    /// Prints panes in this command's format.
++    pub(crate) fn print(&self, panes: codec::ListPanesResponse) -> anyhow::Result<()> {
+         let out = std::io::stdout();
+ 
+         let mut output_items = vec![];
+-        let panes = client.list_panes().await?;
+ 
+         for (tabroot, tab_title) in panes.tabs.into_iter().zip(panes.tab_titles.iter()) {
+             let mut cursor = tabroot.into_tree().cursor();
+diff --git a/wezterm/src/cli/mod.rs b/wezterm/src/cli/mod.rs
+index b9325957b1ec065f091bf0c4a860c7b5a8fce272..72f31e31a159e921f008082f1086c9c9bfdf097e 100644
+--- a/wezterm/src/cli/mod.rs
++++ b/wezterm/src/cli/mod.rs
+@@ -7,6 +7,7 @@ mod activate_pane;
+ mod activate_pane_direction;
+ mod activate_tab;
+ mod adjust_pane_size;
++mod adopt_pane;
+ mod get_pane_direction;
+ mod get_text;
+ mod kill_pane;
+@@ -15,6 +16,7 @@ mod list_clients;
+ mod move_pane_to_new_tab;
+ mod proxy;
+ mod rename_workspace;
++mod replace_pane;
+ mod send_text;
+ mod set_tab_title;
+ mod set_window_title;
+@@ -94,6 +96,14 @@ enum CliSubCommand {
+     )]
+     MovePaneToNewTab(move_pane_to_new_tab::MovePaneToNewTab),
+ 
++    #[command(
++        name = "adopt-pane",
++        rename_all = "kebab",
++        about = "Show an existing remote pane of a local_pane_layout domain in a new tab.
++Outputs the pane-id for the new local pane on success"
++    )]
++    AdoptPane(adopt_pane::AdoptPane),
++
+     #[command(
+         name = "split-pane",
+         rename_all = "kebab",
+@@ -103,6 +113,13 @@ Outputs the pane-id for the newly created pane on success"
+     )]
+     SplitPane(split_pane::SplitPane),
+ 
++    #[command(
++        name = "replace-pane",
++        trailing_var_arg = true,
++        about = "Replace a pane with a fresh shell without changing its layout.\nOutputs the new pane-id on success"
++    )]
++    ReplacePane(replace_pane::ReplacePane),
++
+     #[command(
+         name = "spawn",
+         trailing_var_arg = true,
+@@ -183,7 +200,9 @@ async fn run_cli_async(opts: &crate::Opt, cli: CliCommand) -> anyhow::Result<()>
+         CliSubCommand::ListClients(cmd) => cmd.run(client).await,
+         CliSubCommand::List(cmd) => cmd.run(client).await,
+         CliSubCommand::MovePaneToNewTab(cmd) => cmd.run(client).await,
++        CliSubCommand::AdoptPane(cmd) => cmd.run(client).await,
+         CliSubCommand::SplitPane(cmd) => cmd.run(client).await,
++        CliSubCommand::ReplacePane(cmd) => cmd.run(client).await,
+         CliSubCommand::SendText(cmd) => cmd.run(client).await,
+         CliSubCommand::GetText(cmd) => cmd.run(client).await,
+         CliSubCommand::SpawnCommand(cmd) => cmd.run(client, &crate::init_config(opts)?).await,
+diff --git a/wezterm/src/cli/split_pane.rs b/wezterm/src/cli/split_pane.rs
+index e51f508203921278147c5d9050b08c4bff7a54b0..6e4e0a5f484b654179dd55341bcc622f33ca5d9e 100644
+--- a/wezterm/src/cli/split_pane.rs
++++ b/wezterm/src/cli/split_pane.rs
+@@ -14,6 +14,10 @@ pub struct SplitPane {
+     #[arg(long)]
+     pane_id: Option<PaneId>,
+ 
++    /// Spawn in this domain while retaining the target pane's tab.
++    #[arg(long, conflicts_with = "move_pane_id")]
++    domain_name: Option<String>,
++
+     /// Equivalent to `--right`. If neither this nor any other direction
+     /// is specified, the default is equivalent to `--bottom`.
+     #[arg(long, conflicts_with_all=&["left", "right", "top", "bottom"])]
+@@ -96,7 +100,10 @@ impl SplitPane {
+             .split_pane(codec::SplitPane {
+                 pane_id,
+                 split_request,
+-                domain: config::keyassignment::SpawnTabDomain::CurrentPaneDomain,
++                domain: self.domain_name.map_or(
++                    config::keyassignment::SpawnTabDomain::CurrentPaneDomain,
++                    config::keyassignment::SpawnTabDomain::DomainName,
++                ),
+                 command: if self.prog.is_empty() {
+                     None
+                 } else {

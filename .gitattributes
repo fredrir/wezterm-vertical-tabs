@@ -1,2 +1,2 @@
 * text=auto eol=lf
-wezterm-patches/*.patch -whitespace
+wezterm/patches/*.patch -whitespace

@@ -1,0 +1,18 @@
+diff --git a/wezterm-mux-server/src/main.rs b/wezterm-mux-server/src/main.rs
+index 5c9c22009d7b7713e0ad993acdd33e6772ac2344..8019e367af7ee8a77a7954663e4e1a176a163f38 100644
+--- a/wezterm-mux-server/src/main.rs
++++ b/wezterm-mux-server/src/main.rs
+@@ -309,7 +309,12 @@ mod ossl;
+ 
+ pub fn spawn_listener() -> anyhow::Result<()> {
+     let config = configuration();
+-    for unix_dom in &config.unix_domains {
++    // A proxied domain is reached through its command and has no socket to serve.
++    let served = config
++        .unix_domains
++        .iter()
++        .filter(|dom| dom.proxy_command.is_none());
++    for unix_dom in served {
+         std::env::set_var("WEZTERM_UNIX_SOCKET", unix_dom.socket_path());
+         let mut listener = wezterm_mux_server_impl::local::LocalListener::with_domain(unix_dom)?;
+         thread::spawn(move || {

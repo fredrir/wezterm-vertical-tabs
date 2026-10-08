@@ -1,228 +1,64 @@
-diff --git a/wezterm-client/src/domain.rs b/wezterm-client/src/domain.rs
-index 02fac8cb..399092e5 100644
---- a/wezterm-client/src/domain.rs
-+++ b/wezterm-client/src/domain.rs
-@@ -26,6 +26,7 @@ pub struct ClientInner {
-     remote_to_local_tab: Mutex<HashMap<TabId, TabId>>,
-     remote_to_local_pane: Mutex<HashMap<PaneId, PaneId>>,
-     pub focused_remote_pane_id: Mutex<Option<PaneId>>,
-+    pub(crate) topology: crate::topology::TopologySync,
- }
+diff --git a/wezterm-gui/build.rs b/wezterm-gui/build.rs
+index 6ffb3c0853f569ff6f1b40acefe3931c4b41da49..40b7b45f5ecc2695168b4e56f56b1fe312157587 100644
+--- a/wezterm-gui/build.rs
++++ b/wezterm-gui/build.rs
+@@ -1,3 +1,12 @@
++fn executable_output_dir() -> std::path::PathBuf {
++    let out_dir = std::path::PathBuf::from(std::env::var_os("OUT_DIR").unwrap());
++    out_dir
++        .ancestors()
++        .nth(3)
++        .expect("Cargo OUT_DIR must be inside a profile build directory")
++        .to_path_buf()
++}
++
+ fn main() {
+     println!("cargo:rerun-if-changed=build.rs");
  
- impl ClientInner {
-@@ -246,6 +247,7 @@ impl ClientInner {
-             remote_to_local_tab: Mutex::new(HashMap::new()),
-             remote_to_local_pane: Mutex::new(HashMap::new()),
-             focused_remote_pane_id: Mutex::new(None),
-+            topology: crate::topology::TopologySync::default(),
-         }
-     }
- }
-@@ -466,8 +468,7 @@ impl ClientDomain {
-     pub async fn reattach(domain_id: DomainId, ui: ConnectionUI) -> anyhow::Result<()> {
-         let inner = Self::get_client_inner_for_domain(domain_id)?;
+@@ -6,12 +15,12 @@ fn main() {
+         use anyhow::Context as _;
+         use std::io::Write;
+         use std::path::Path;
+-        let profile = std::env::var("PROFILE").unwrap();
+         let repo_dir = std::env::current_dir()
+             .ok()
+             .and_then(|cwd| cwd.parent().map(|p| p.to_path_buf()))
+             .unwrap();
+-        let exe_output_dir = repo_dir.join("target").join(profile);
++        let exe_output_dir = executable_output_dir();
++        std::fs::create_dir_all(&exe_output_dir).unwrap();
+         let windows_dir = repo_dir.join("assets").join("windows");
  
--        let panes = inner.client.list_panes().await?;
--        Self::process_pane_list(inner, panes, None)?;
-+        Self::resync_inner(inner).await?;
- 
-         ui.close();
-         Ok(())
-@@ -475,12 +476,31 @@ impl ClientDomain {
- 
-     pub async fn resync(&self) -> anyhow::Result<()> {
-         if let Some(inner) = self.inner() {
--            let panes = inner.client.list_panes().await?;
--            Self::process_pane_list(inner, panes, None)?;
-+            Self::resync_inner(inner).await?;
-         }
-         Ok(())
+         let conhost_dir = windows_dir.join("conhost");
+@@ -151,10 +160,8 @@ END
+         embed_resource::compile(rcfile_name);
      }
  
-+    async fn resync_inner(inner: Arc<ClientInner>) -> anyhow::Result<()> {
-+        let request = inner.topology.request();
-+        let _serial = inner.topology.serial.lock().await;
-+        if inner.topology.completed(request) {
-+            return Ok(());
-+        }
-+        loop {
-+            let (epoch, included) = inner.topology.ready().await;
-+            let panes = inner.client.list_panes().await?;
-+            if !inner.topology.accepts(epoch) {
-+                log::trace!("discard topology snapshot superseded by a local resize");
-+                continue;
-+            }
-+            Self::process_pane_list(Arc::clone(&inner), panes, None)?;
-+            if inner.topology.finish(included) {
-+                return Ok(());
-+            }
-+        }
-+    }
-+
-     pub fn process_remote_window_title_change(&self, remote_window_id: WindowId, title: String) {
-         if let Some(inner) = self.inner() {
-             if let Some(local_window_id) = inner.remote_to_local_window(remote_window_id) {
-@@ -506,6 +526,7 @@ impl ClientDomain {
-         panes: ListPanesResponse,
-         mut primary_window_id: Option<WindowId>,
-     ) -> anyhow::Result<()> {
-+        let _applying = inner.topology.applying();
-         let mux = Mux::get();
-         log::debug!(
-             "domain {}: ListPanes result {:#?}",
-@@ -536,6 +557,7 @@ impl ClientDomain {
-             .keys()
-             .copied()
-             .collect();
-+        let mut relocated_sources = HashSet::new();
+-    #[cfg(target_os = "macos")]
+-    {
++    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos") {
+         use anyhow::Context as _;
+-        let profile = std::env::var("PROFILE").unwrap();
+         let repo_dir = std::env::current_dir()
+             .ok()
+             .and_then(|cwd| cwd.parent().map(|p| p.to_path_buf()))
+@@ -168,11 +175,10 @@ END
+             .join("WezTerm.app")
+             .join("Contents")
+             .join("Info.plist");
+-        let build_target_dir = std::env::var("CARGO_TARGET_DIR")
+-            .and_then(|s| Ok(std::path::PathBuf::from(s)))
+-            .unwrap_or(repo_dir.join("target").join(profile));
++        let build_target_dir = executable_output_dir();
++        std::fs::create_dir_all(&build_target_dir).unwrap();
+         let dest_plist = build_target_dir.join("Info.plist");
+-        println!("cargo:rerun-if-changed=assets/macos/WezTerm.app/Contents/Info.plist");
++        println!("cargo:rerun-if-changed=../assets/macos/WezTerm.app/Contents/Info.plist");
  
-         for (tabroot, tab_title) in panes.tabs.into_iter().zip(panes.tab_titles.iter()) {
-             let root_size = match tabroot.root_size() {
-@@ -582,7 +604,32 @@ impl ClientDomain {
-                     remote_panes_to_forget.remove(&entry.pane_id);
-                     if let Some(pane_id) = inner.remote_to_local_pane_id(entry.pane_id) {
-                         match mux.get_pane(pane_id) {
--                            Some(pane) => pane,
-+                            Some(pane) => {
-+                                if let Some(client_pane) = pane.downcast_ref::<ClientPane>() {
-+                                    let prior_remote_tab = client_pane.remote_tab_id();
-+                                    if prior_remote_tab != entry.tab_id {
-+                                        if let Some(source) = inner
-+                                            .remote_to_local_tab_id(prior_remote_tab)
-+                                            .filter(|id| *id != tab.tab_id())
-+                                            .and_then(|id| mux.get_tab(id))
-+                                        {
-+                                            // The pane remains live in its new tab. Detach
-+                                            // only its old ownership, without killing it or
-+                                            // removing other panes from a mixed source tab.
-+                                            if source
-+                                                .iter_panes_ignoring_zoom()
-+                                                .iter()
-+                                                .any(|p| p.pane.pane_id() == pane_id)
-+                                            {
-+                                                source.remove_pane(pane_id);
-+                                                relocated_sources.insert(source.tab_id());
-+                                            }
-+                                        }
-+                                    }
-+                                    client_pane.update_remote_tab_id(entry.tab_id);
-+                                }
-+                                pane
-+                            }
-                             None => {
-                                 // We likely decided that we hit EOF on the tab and
-                                 // removed it from the mux.  Let's add it back, but
-@@ -704,6 +751,18 @@ impl ClientDomain {
-             }
-         }
- 
-+        // Tree application holds the destination tab's lock. Prune only after
-+        // every tree and mapping is complete so mux pruning cannot reacquire
-+        // that lock or leave a removed source window's mapping behind.
-+        for source_id in relocated_sources {
-+            if mux
-+                .get_tab(source_id)
-+                .is_some_and(|source| source.iter_panes_ignoring_zoom().is_empty())
-+            {
-+                mux.remove_tab(source_id);
-+            }
-+        }
-+
-         Ok(())
-     }
- 
-diff --git a/wezterm-client/src/lib.rs b/wezterm-client/src/lib.rs
-index 07352115..edbd954b 100644
---- a/wezterm-client/src/lib.rs
-+++ b/wezterm-client/src/lib.rs
-@@ -2,3 +2,4 @@ pub mod client;
- pub mod discovery;
- pub mod domain;
- pub mod pane;
-+mod topology;
-diff --git a/wezterm-client/src/pane/clientpane.rs b/wezterm-client/src/pane/clientpane.rs
-index aad21a54..b4dc9c9f 100644
---- a/wezterm-client/src/pane/clientpane.rs
-+++ b/wezterm-client/src/pane/clientpane.rs
-@@ -20,6 +20,7 @@ use ratelim::RateLimiter;
- use std::cell::RefCell;
- use std::collections::{BTreeMap, HashMap};
- use std::ops::Range;
-+use std::sync::atomic::{AtomicUsize, Ordering};
- use std::sync::Arc;
- use termwiz::input::KeyEvent;
- use termwiz::surface::SequenceNo;
-@@ -35,7 +36,7 @@ pub struct ClientPane {
-     client: Arc<ClientInner>,
-     local_pane_id: PaneId,
-     pub remote_pane_id: PaneId,
--    pub remote_tab_id: TabId,
-+    remote_tab_id: AtomicUsize,
-     pub renderable: Mutex<RenderableState>,
-     configured_palette: Mutex<ColorPalette>,
-     palette: Mutex<ColorPalette>,
-@@ -118,7 +119,7 @@ impl ClientPane {
-             mouse,
-             remote_pane_id,
-             local_pane_id,
--            remote_tab_id,
-+            remote_tab_id: AtomicUsize::new(remote_tab_id),
-             application_palette: Mutex::new(false),
-             renderable: Mutex::new(render),
-             writer: Mutex::new(writer),
-@@ -134,6 +135,14 @@ impl ClientPane {
-         }
-     }
- 
-+    pub(crate) fn update_remote_tab_id(&self, tab_id: TabId) {
-+        self.remote_tab_id.store(tab_id, Ordering::Relaxed);
-+    }
-+
-+    pub(crate) fn remote_tab_id(&self) -> TabId {
-+        self.remote_tab_id.load(Ordering::Relaxed)
-+    }
-+
-     pub async fn process_unilateral(&self, pdu: Pdu) -> anyhow::Result<()> {
-         match pdu {
-             Pdu::GetPaneRenderChangesResponse(mut delta) => {
-@@ -369,7 +378,7 @@ impl Pane for ClientPane {
-         let mut inner = render.inner.borrow_mut();
-         let client = Arc::clone(&self.client);
-         let remote_pane_id = self.remote_pane_id;
--        let remote_tab_id = self.remote_tab_id;
-+        let remote_tab_id = self.remote_tab_id();
-         // Invalidate any cached rows on a resize
-         inner.make_all_stale();
-         promise::spawn::spawn(async move {
-@@ -408,16 +417,23 @@ impl Pane for ClientPane {
- 
-             let client = Arc::clone(&self.client);
-             let remote_pane_id = self.remote_pane_id;
--            let remote_tab_id = self.remote_tab_id;
-+            let remote_tab_id = self.remote_tab_id();
-+            // Register before the async RPC is scheduled, so a concurrent ListPanes
-+            // cannot read a partially resized split tree or overwrite optimistic sizes.
-+            let Some(resize) = client.topology.begin_resize() else {
-+                return Ok(());
-+            };
-             promise::spawn::spawn(async move {
--                client
-+                let result = client
-                     .client
-                     .resize(Resize {
-                         containing_tab_id: remote_tab_id,
-                         pane_id: remote_pane_id,
-                         size,
-                     })
--                    .await
-+                    .await;
-+                drop(resize);
-+                result
-             })
-             .detach();
-             inner.update_last_send();
+         std::fs::copy(&src_plist, &dest_plist)
+             .context(format!(
 diff --git a/wezterm-gui/src/frontend.rs b/wezterm-gui/src/frontend.rs
-index 04c84260..5e970c46 100644
+index 04c842606f4a8e815c20feda3e78697dc7a7e39d..9970c32f7a56f65992629dcf1d5ff22858564e68 100644
 --- a/wezterm-gui/src/frontend.rs
 +++ b/wezterm-gui/src/frontend.rs
 @@ -301,7 +301,7 @@ impl GuiFrontEnd {
@@ -234,8 +70,100 @@ index 04c84260..5e970c46 100644
                  }
  
                  match action {
+@@ -370,12 +370,15 @@ impl GuiFrontEnd {
+                 return promise.get_future().unwrap();
+             }
+             for workspace in mux.iter_workspaces() {
+-                if !mux.is_workspace_empty(&workspace) {
++                if !mux::is_hidden_workspace(&workspace) && !mux.is_workspace_empty(&workspace) {
+                     mux.set_active_workspace_for_client(&self.client_id, &workspace);
+                     log::debug!("using {} instead, as it is not empty", workspace);
+                     break;
+                 }
+             }
++            if self.only_detached_windows_remain() {
++                self.quit_once_idle();
++            }
+         }
+ 
+         let workspace = mux.active_workspace_for_client(&self.client_id);
+@@ -453,6 +456,34 @@ impl GuiFrontEnd {
+         future
+     }
+ 
++    fn only_detached_windows_remain(&self) -> bool {
++        let mux = Mux::get();
++        let workspace = mux.active_workspace_for_client(&self.client_id);
++        !mux.is_empty()
++            && mux.iter_windows_in_workspace(&workspace).is_empty()
++            && mux
++                .iter_workspaces()
++                .iter()
++                .all(|w| mux::is_hidden_workspace(w) || mux.is_workspace_empty(w))
++    }
++
++    /// Quits as if the last window closed, once closing windows finish their own work.
++    fn quit_once_idle(&self) {
++        if !config::configuration().quit_when_all_windows_are_closed {
++            return;
++        }
++        promise::spawn::spawn_into_main_thread(async move {
++            while mux::activity::Activity::count() > 0 {
++                smol::Timer::after(std::time::Duration::from_millis(50)).await;
++            }
++            if front_end().only_detached_windows_remain() {
++                log::trace!("Only detached windows remain, terminate gui");
++                Connection::get().unwrap().terminate_message_loop();
++            }
++        })
++        .detach();
++    }
++
+     fn has_mux_window(&self, mux_window_id: MuxWindowId) -> bool {
+         for &mux_id in self.known_windows.borrow().values() {
+             if mux_id == mux_window_id {
+diff --git a/wezterm-gui/src/main.rs b/wezterm-gui/src/main.rs
+index 5e7ca47b34740368a5d3847761b645e635e7157c..c3cc3a9be7895f302729d0e86cffac5e12146558 100644
+--- a/wezterm-gui/src/main.rs
++++ b/wezterm-gui/src/main.rs
+@@ -52,6 +52,8 @@ mod shapecache;
+ mod spawn;
+ mod stats;
+ mod tabbar;
++#[path = "vtabs/src/lib.rs"]
++mod vtabs;
+ mod termwindow;
+ mod unicode_names;
+ mod uniforms;
+@@ -263,7 +265,7 @@ fn have_panes_in_domain_and_ws(domain: &Arc<dyn Domain>, workspace: &Option<Stri
+         return false;
+     }
+ 
+-    if let Some(ws) = &workspace {
++    let in_workspace = |ws: &str| {
+         for window_id in mux.iter_windows_in_workspace(ws) {
+             if let Some(win) = mux.get_window(window_id) {
+                 for t in win.iter_tabs() {
+@@ -276,8 +278,15 @@ fn have_panes_in_domain_and_ws(domain: &Arc<dyn Domain>, workspace: &Option<Stri
+             }
+         }
+         false
+-    } else {
+-        true
++    };
++
++    match workspace {
++        Some(ws) => in_workspace(ws),
++        None => mux
++            .iter_workspaces()
++            .iter()
++            .filter(|ws| !mux::is_hidden_workspace(ws))
++            .any(|ws| in_workspace(ws)),
+     }
+ }
+ 
 diff --git a/wezterm-gui/src/overlay/launcher.rs b/wezterm-gui/src/overlay/launcher.rs
-index d2cbd982..bf869553 100644
+index d2cbd9823bc186a0e92e5b60f6f05687c9480fe4..bf8695533e4715bde9707e1010954a98f2e78c90 100644
 --- a/wezterm-gui/src/overlay/launcher.rs
 +++ b/wezterm-gui/src/overlay/launcher.rs
 @@ -33,11 +33,12 @@ pub use config::keyassignment::LauncherFlags;
@@ -377,8 +305,74 @@ index d2cbd982..bf869553 100644
              let assignment = entry.action.clone();
              self.window.notify(TermWindowNotif::PerformAssignment {
                  pane_id: self.pane_id,
+diff --git a/wezterm-gui/src/quad.rs b/wezterm-gui/src/quad.rs
+index d51f897810923b53d385e72a38ed62eeb5a6179b..2dd8dfaeb4150fefed22ba333508e873cf0be443 100644
+--- a/wezterm-gui/src/quad.rs
++++ b/wezterm-gui/src/quad.rs
+@@ -322,6 +322,49 @@ impl std::fmt::Debug for HeapQuadAllocator {
+ }
+ 
+ impl HeapQuadAllocator {
++    pub fn remove_solid_backgrounds(&mut self) {
++        self.layer0.retain(|quad| quad.has_color != IS_SOLID_COLOR);
++    }
++
++    pub fn offset_glyphs_in_ranges(&mut self, ranges: &[(f32, f32)], origin_x: f32, dy: f32) {
++        if ranges.is_empty() || !origin_x.is_finite() || !dy.is_finite() || dy == 0. {
++            return;
++        }
++        for quads in [&mut self.layer0, &mut self.layer1, &mut self.layer2] {
++            for quad in quads {
++                if quad.has_color == IS_SOLID_COLOR || quad.has_color == IS_BG_IMAGE {
++                    continue;
++                }
++                let center = (quad.position.0 + quad.position.2) / 2. - origin_x;
++                // Nested button and drag-target surfaces can overlap the same glyph.
++                if ranges.iter().any(|(left, right)| center >= *left && center < *right) {
++                    quad.position.1 += dy;
++                    quad.position.3 += dy;
++                }
++            }
++        }
++    }
++
++    pub fn apply_transformed(&self, other: &mut TripleLayerQuadAllocator,
++        offset: (f32, f32), opacity: f32, clip: (f32, f32, f32, f32)) {
++        for (layer, quads) in [(0, &self.layer0), (1, &self.layer1), (2, &self.layer2)] {
++            for quad in quads {
++                let mut vertices = quad.to_vertices();
++                let (left, top, right, bottom) = quad.position;
++                let (left, top, right, bottom) = (left + offset.0, top + offset.1, right + offset.0, bottom + offset.1);
++                let (x1, y1, x2, y2) = (left.max(clip.0), top.max(clip.1), right.min(clip.2), bottom.min(clip.3));
++                if x1 >= x2 || y1 >= y2 { continue; }
++                let (u1, u2, v1, v2) = quad.tex;
++                let uv = |x: f32, y: f32| [u1 + (u2-u1) * (x-left)/(right-left), v1 + (v2-v1) * (y-top)/(bottom-top)];
++                for (vertex, (x,y)) in vertices.iter_mut().zip([(x1,y1),(x2,y1),(x1,y2),(x2,y2)]) {
++                    vertex.position = [x,y]; vertex.tex = uv(x,y);
++                    vertex.fg_color[3] *= opacity; vertex.alt_color[3] *= opacity;
++                }
++                other.extend_with(layer, &vertices);
++            }
++        }
++    }
++
+     pub fn apply_to(&self, other: &mut TripleLayerQuadAllocator) -> anyhow::Result<()> {
+         let start = std::time::Instant::now();
+         for (layer_num, quads) in [(0, &self.layer0), (1, &self.layer1), (2, &self.layer2)] {
+diff --git a/wezterm-gui/src/scripting/mod.rs b/wezterm-gui/src/scripting/mod.rs
+index 7188ca213f3259ae7affef37a5fc1dfabbc6f023..008a0ee0769f0fbedf0b6a716750ee25c770f387 100644
+--- a/wezterm-gui/src/scripting/mod.rs
++++ b/wezterm-gui/src/scripting/mod.rs
+@@ -16,6 +16,7 @@ fn luaerr(err: anyhow::Error) -> mlua::Error {
+ }
+ 
+ pub fn register(lua: &Lua) -> anyhow::Result<()> {
++    crate::vtabs::register(lua)?;
+     let window_mod = get_or_create_sub_module(lua, "gui")?;
+ 
+     window_mod.set(
 diff --git a/wezterm-gui/src/spawn.rs b/wezterm-gui/src/spawn.rs
-index 28b9db9a..7c940d23 100644
+index 28b9db9a5233be9a368c0df317e593eef8833c6a..7c940d23850edbee6b9236bea6bad52a1a13edff 100644
 --- a/wezterm-gui/src/spawn.rs
 +++ b/wezterm-gui/src/spawn.rs
 @@ -23,14 +23,16 @@ pub fn spawn_command_impl(
@@ -426,8 +420,42 @@ index 28b9db9a..7c940d23 100644
              // If it was created in this window, it copies our handlers.
              // Otherwise, we'll pick them up when we later respond to
              // the new window being created.
+diff --git a/wezterm-gui/src/termwindow/keyevent.rs b/wezterm-gui/src/termwindow/keyevent.rs
+index d66908074090d5a2b541a5a5065c3311a78906f5..0502132a63e21ca29e6f9b9289bc2e367f1160bb 100644
+--- a/wezterm-gui/src/termwindow/keyevent.rs
++++ b/wezterm-gui/src/termwindow/keyevent.rs
+@@ -428,6 +428,12 @@ impl super::TermWindow {
+     }
+ 
+     pub fn raw_key_event_impl(&mut self, key: RawKeyEvent, context: &dyn WindowOps) {
++        // accelerators must run before terminal key bindings consume the raw event.
++        if self.vtabs_input(crate::termwindow::ui_host::Input::RawKey(&key)) {
++            key.set_handled();
++            return;
++        }
++        if self.ui_host.as_ref().map_or(false, |ui| ui.provider.keyboard_focus()) { return; }
+         // The leader key is a kind of modal modifier key.
+         // It is allowed to be active for up to the leader timeout duration,
+         // after which it auto-deactivates.
+@@ -597,6 +603,7 @@ impl super::TermWindow {
+     }
+ 
+     pub fn key_event_impl(&mut self, window_key: KeyEvent, context: &dyn WindowOps) {
++        if self.vtabs_input(crate::termwindow::ui_host::Input::Key(&window_key)) { return; }
+         let pane = match self.get_active_pane_or_overlay() {
+             Some(pane) => pane,
+             None => return,
+@@ -642,6 +649,8 @@ impl super::TermWindow {
+             return;
+         }
+ 
++        if self.vtabs_content_hidden() { return; }
++
+         // If we get here, then none of the keys matched
+         // any key table rules. Therefore, we should pop all `until_unknown`
+         // entries from the stack.
 diff --git a/wezterm-gui/src/termwindow/mod.rs b/wezterm-gui/src/termwindow/mod.rs
-index 27567d9d..ddb4c5bc 100644
+index 27567d9dd36028a6de7b943a35a791532340cfe3..ebd53a70bb6dff06751be1764be0fc0bd8289106 100644
 --- a/wezterm-gui/src/termwindow/mod.rs
 +++ b/wezterm-gui/src/termwindow/mod.rs
 @@ -1,5 +1,6 @@
@@ -475,15 +503,16 @@ index 27567d9d..ddb4c5bc 100644
          let tab_bar_height = if show_tab_bar {
              Self::tab_bar_pixel_height_impl(&config, &fontconfig, &render_metrics)? as usize
          } else {
-@@ -644,14 +651,17 @@ impl TermWindow {
+@@ -644,15 +651,19 @@ impl TermWindow {
              pixel_max: terminal_size.pixel_width as f32,
              pixel_cell: render_metrics.cell_size.width as f32,
          };
 -        let padding_left = config.window_padding.left.evaluate_as_pixels(h_context) as usize;
 -        let padding_right = resize::effective_right_padding(&config, h_context) as usize;
-+        let padding_left = config.window_padding.left.evaluate_as_pixels(h_context) as usize
++        let frame_gutter = Self::vtabs_frame_gutter_impl(dpi as f32) as usize;
++        let padding_left = frame_gutter + config.window_padding.left.evaluate_as_pixels(h_context) as usize
 +            + if reservation.right { 0 } else { vtabs_width };
-+        let padding_right = resize::effective_right_padding(&config, h_context)
++        let padding_right = frame_gutter + resize::effective_right_padding(&config, h_context)
 +            + if reservation.right { vtabs_width } else { 0 };
          let v_context = DimensionContext {
              dpi: dpi as f32,
@@ -491,12 +520,14 @@ index 27567d9d..ddb4c5bc 100644
              pixel_cell: render_metrics.cell_size.height as f32,
          };
 -        let padding_top = config.window_padding.top.evaluate_as_pixels(v_context) as usize;
-+        let padding_top = config.window_padding.top.evaluate_as_pixels(v_context) as usize
+-        let padding_bottom = config.window_padding.bottom.evaluate_as_pixels(v_context) as usize;
++        let padding_top = frame_gutter + config.window_padding.top.evaluate_as_pixels(v_context) as usize
 +            + Self::vtabs_titlebar_height_impl(&config, &fontconfig, dpi as f32, false) as usize;
-         let padding_bottom = config.window_padding.bottom.evaluate_as_pixels(v_context) as usize;
++        let padding_bottom = frame_gutter + config.window_padding.bottom.evaluate_as_pixels(v_context) as usize;
  
          let mut dimensions = Dimensions {
-@@ -713,6 +723,8 @@ impl TermWindow {
+             pixel_width: (terminal_size.pixel_width + padding_left + padding_right) as usize,
+@@ -713,6 +724,8 @@ impl TermWindow {
              input_map: InputMap::new(&config),
              leader_is_down: None,
              dead_key_status: DeadKeyStatus::None,
@@ -505,7 +536,7 @@ index 27567d9d..ddb4c5bc 100644
              show_tab_bar,
              show_scroll_bar: config.enable_scroll_bar,
              tab_bar: TabBarState::default(),
-@@ -890,6 +902,16 @@ impl TermWindow {
+@@ -890,6 +903,16 @@ impl TermWindow {
              myself.load_os_parameters();
              window.show();
              myself.subscribe_to_pane_updates();
@@ -522,7 +553,7 @@ index 27567d9d..ddb4c5bc 100644
              myself.emit_window_event("window-config-reloaded", None);
              myself.emit_status_event();
          }
-@@ -945,6 +967,7 @@ impl TermWindow {
+@@ -945,6 +968,7 @@ impl TermWindow {
              }
              WindowEvent::FocusChanged(focused) => {
                  self.focus_changed(focused, window);
@@ -530,7 +561,7 @@ index 27567d9d..ddb4c5bc 100644
                  Ok(true)
              }
              WindowEvent::MouseEvent(event) => {
-@@ -996,6 +1019,7 @@ impl TermWindow {
+@@ -996,6 +1020,7 @@ impl TermWindow {
                  } else {
                      log::trace!("DeadKeyStatus now: {:?}", status);
                  }
@@ -538,7 +569,7 @@ index 27567d9d..ddb4c5bc 100644
                  self.dead_key_status = status;
                  self.update_title();
                  // Ensure that we repaint so that any composing
-@@ -1199,7 +1223,11 @@ impl TermWindow {
+@@ -1199,7 +1224,11 @@ impl TermWindow {
              TermWindowNotif::CancelOverlayForTab { tab_id, pane_id } => {
                  self.cancel_overlay_for_tab(tab_id, pane_id);
              }
@@ -551,7 +582,7 @@ index 27567d9d..ddb4c5bc 100644
                  MuxNotification::Alert {
                      alert: Alert::SetUserVar { name, value },
                      pane_id,
-@@ -1244,6 +1272,7 @@ impl TermWindow {
+@@ -1244,6 +1273,7 @@ impl TermWindow {
                          AudibleBell::Disabled => {}
                      }
  
@@ -559,7 +590,7 @@ index 27567d9d..ddb4c5bc 100644
                      log::trace!("Ding! (this is the bell) in pane {}", pane_id);
                      self.emit_window_event("bell", Some(pane_id));
  
-@@ -1255,36 +1284,10 @@ impl TermWindow {
+@@ -1255,36 +1285,10 @@ impl TermWindow {
                      alert: Alert::ToastNotification { .. },
                      ..
                  } => {}
@@ -600,7 +631,7 @@ index 27567d9d..ddb4c5bc 100644
                  }
                  MuxNotification::PaneOutput(pane_id) => {
                      self.mux_pane_output_event(pane_id);
-@@ -1293,8 +1296,8 @@ impl TermWindow {
+@@ -1293,8 +1297,8 @@ impl TermWindow {
                      window.invalidate();
                      self.update_title_post_status();
                  }
@@ -611,7 +642,7 @@ index 27567d9d..ddb4c5bc 100644
                  }
                  MuxNotification::AssignClipboard { .. } => {
                      // Handled by frontend
-@@ -1306,10 +1309,7 @@ impl TermWindow {
+@@ -1306,10 +1310,7 @@ impl TermWindow {
                      // Also handled by clientpane
                      self.update_title_post_status();
                  }
@@ -623,7 +654,7 @@ index 27567d9d..ddb4c5bc 100644
                  MuxNotification::TabTitleChanged { .. } => {
                      self.update_title_post_status();
                  }
-@@ -1320,7 +1320,8 @@ impl TermWindow {
+@@ -1320,7 +1321,8 @@ impl TermWindow {
                  | MuxNotification::ActiveWorkspaceChanged(_)
                  | MuxNotification::Empty
                  | MuxNotification::WindowCreated(_) => {}
@@ -633,7 +664,7 @@ index 27567d9d..ddb4c5bc 100644
              TermWindowNotif::EmitStatusUpdate => {
                  self.emit_status_event();
              }
-@@ -1338,6 +1339,14 @@ impl TermWindow {
+@@ -1338,6 +1340,14 @@ impl TermWindow {
                  func(self);
              }
              TermWindowNotif::SwitchToMuxWindow(mux_window_id) => {
@@ -648,7 +679,7 @@ index 27567d9d..ddb4c5bc 100644
                  self.mux_window_id = mux_window_id;
                  *self.mux_window_id_for_subscriptions.lock().unwrap() = mux_window_id;
  
-@@ -1346,12 +1355,11 @@ impl TermWindow {
+@@ -1346,12 +1356,11 @@ impl TermWindow {
                  self.invalidate_fancy_tab_bar();
                  self.invalidate_modal();
  
@@ -666,7 +697,7 @@ index 27567d9d..ddb4c5bc 100644
                  self.update_title();
                  window.invalidate();
              }
-@@ -1743,6 +1751,8 @@ impl TermWindow {
+@@ -1743,6 +1752,8 @@ impl TermWindow {
              }
          };
          self.config = config.clone();
@@ -675,7 +706,7 @@ index 27567d9d..ddb4c5bc 100644
          self.palette.take();
  
          let mux = Mux::get();
-@@ -1751,9 +1761,9 @@ impl TermWindow {
+@@ -1751,9 +1762,9 @@ impl TermWindow {
              _ => return,
          };
          if window.count_tabs() == 1 {
@@ -687,7 +718,7 @@ index 27567d9d..ddb4c5bc 100644
          }
          *self.cursor_blink_state.borrow_mut() = ColorEase::new(
              config.cursor_blink_rate,
-@@ -1970,46 +1980,49 @@ impl TermWindow {
+@@ -1970,46 +1981,49 @@ impl TermWindow {
          let active_tab = tabs.iter().find(|t| t.is_active).cloned();
          let active_pane = panes.iter().find(|p| p.is_active).cloned();
  
@@ -773,7 +804,7 @@ index 27567d9d..ddb4c5bc 100644
          }
  
          let tabs_count = window.count_tabs();
-@@ -2075,11 +2088,7 @@ impl TermWindow {
+@@ -2075,11 +2089,7 @@ impl TermWindow {
          if let Some(window) = self.window.as_ref() {
              window.set_title(&title);
  
@@ -786,7 +817,38 @@ index 27567d9d..ddb4c5bc 100644
  
              // If the number of tabs changed and caused the tab bar to
              // hide/show, then we'll need to resize things.  It is simplest
-@@ -2178,101 +2187,19 @@ impl TermWindow {
+@@ -2136,6 +2146,30 @@ impl TermWindow {
+         }
+     }
+ 
++    /// Mirrors how mouse_event_impl maps window coordinates onto terminal cells
++    fn update_window_drag_exclusion(&self) {
++        if let Some(win) = self.window.as_ref() {
++            let border = self.get_os_border();
++            let tab_bar_height = if self.show_tab_bar && !self.config.tab_bar_at_bottom {
++                self.tab_bar_pixel_height().unwrap_or(0.)
++            } else {
++                0.
++            };
++            let (padding_left, padding_top) = self.padding_left_top();
++            let content = Rect::new(
++                Point::new(
++                    (padding_left + border.left.get() as f32) as isize,
++                    (padding_top + tab_bar_height + border.top.get() as f32) as isize,
++                ),
++                Size::new(
++                    self.terminal_size.pixel_width as isize,
++                    self.terminal_size.pixel_height as isize,
++                ),
++            );
++            win.set_window_drag_exclusion(content);
++        }
++    }
++
+     fn activate_window(&mut self, window_idx: usize) -> anyhow::Result<()> {
+         let windows = front_end().gui_windows();
+         if let Some(win) = windows.get(window_idx) {
+@@ -2178,101 +2212,19 @@ impl TermWindow {
      }
  
      fn activate_tab(&mut self, tab_idx: isize) -> anyhow::Result<()> {
@@ -892,7 +954,7 @@ index 27567d9d..ddb4c5bc 100644
      }
  
      fn show_input_selector(&mut self, args: &config::keyassignment::InputSelector) {
-@@ -2369,20 +2296,7 @@ impl TermWindow {
+@@ -2369,20 +2321,7 @@ impl TermWindow {
      }
  
      fn show_tab_navigator(&mut self) {
@@ -914,7 +976,7 @@ index 27567d9d..ddb4c5bc 100644
      }
  
      fn show_launcher(&mut self) {
-@@ -2403,6 +2317,7 @@ impl TermWindow {
+@@ -2403,6 +2342,7 @@ impl TermWindow {
  
      fn show_launcher_impl(&mut self, args: LauncherActionArgs, initial_choice_idx: usize) {
          let mux_window_id = self.mux_window_id;
@@ -922,7 +984,7 @@ index 27567d9d..ddb4c5bc 100644
          let window = self.window.as_ref().unwrap().clone();
  
          let mux = Mux::get();
-@@ -2441,6 +2356,7 @@ impl TermWindow {
+@@ -2441,6 +2381,7 @@ impl TermWindow {
                  &title,
                  flags,
                  mux_window_id,
@@ -930,7 +992,7 @@ index 27567d9d..ddb4c5bc 100644
                  pane_id,
                  domain_id_of_current_pane,
                  &help_text,
-@@ -2559,26 +2475,7 @@ impl TermWindow {
+@@ -2559,26 +2500,7 @@ impl TermWindow {
      }
  
      fn move_tab_relative(&mut self, delta: isize) -> anyhow::Result<()> {
@@ -958,7 +1020,7 @@ index 27567d9d..ddb4c5bc 100644
      }
  
      pub fn perform_key_assignment(
-@@ -2587,6 +2484,17 @@ impl TermWindow {
+@@ -2587,6 +2509,17 @@ impl TermWindow {
          assignment: &KeyAssignment,
      ) -> anyhow::Result<PerformAssignmentResult> {
          use KeyAssignment::*;
@@ -967,7 +1029,7 @@ index 27567d9d..ddb4c5bc 100644
 +        if self.vtabs_empty() && !matches!(assignment,
 +            ActivateTab(_) | ActivateTabRelative(_) | ActivateTabRelativeNoWrap(_) | ActivateLastTab
 +            | SpawnTab(_) | SpawnWindow | SpawnCommandInNewTab(_) | SpawnCommandInNewWindow(_)
-+            | ShowTabNavigator | ShowLauncher | ShowLauncherArgs(_) | SwitchToWorkspace { .. } | SwitchWorkspaceRelative(_) | EmitEvent(_) | Multiple(_)
++            | ShowTabNavigator | ActivateCommandPalette | ShowLauncher | ShowLauncherArgs(_) | SwitchToWorkspace { .. } | SwitchWorkspaceRelative(_) | EmitEvent(_) | Multiple(_)
 +            | ActivateKeyTable { .. } | PopKeyTable | ClearKeyTableStack | Nop | DisableDefaultAssignment
 +            | QuitApplication | Hide | HideApplication | Show | ToggleFullScreen
 +            | IncreaseFontSize | DecreaseFontSize | ResetFontSize | ReloadConfiguration
@@ -976,7 +1038,26 @@ index 27567d9d..ddb4c5bc 100644
  
          if let Some(modal) = self.get_modal() {
              if modal.perform_assignment(assignment, self) {
-@@ -3042,6 +2950,7 @@ impl TermWindow {
+@@ -2764,7 +2697,17 @@ impl TermWindow {
+                     w.show();
+                 }
+             }
+-            CloseCurrentTab { confirm } => self.close_current_tab(*confirm),
++            CloseCurrentTab { confirm } => {
++                if self
++                    .ui_host
++                    .as_ref()
++                    .is_some_and(|ui| ui.provider.content_page())
++                {
++                    self.vtabs_navigation(crate::termwindow::ui_host::Navigation::ClosePage)?;
++                } else {
++                    self.close_current_tab(*confirm);
++                }
++            }
+             CloseCurrentPane { confirm } => self.close_current_pane(*confirm),
+             Nop | DisableDefaultAssignment => {}
+             ReloadConfiguration => config::reload(),
+@@ -3042,6 +2985,7 @@ impl TermWindow {
                              size,
                              Some(src_window_id),
                              term_config,
@@ -984,7 +1065,17 @@ index 27567d9d..ddb4c5bc 100644
                          )
                          .await
                          {
-@@ -3211,6 +3120,7 @@ impl TermWindow {
+@@ -3157,8 +3101,7 @@ impl TermWindow {
+                 wezterm_open_url::open_url(link);
+             }
+             ActivateCommandPalette => {
+-                let modal = crate::termwindow::palette::CommandPalette::new(self);
+-                self.set_modal(Rc::new(modal));
++                self.vtabs_open_command_palette();
+             }
+             PromptInputLine(args) => self.show_prompt_input_line(args),
+             InputSelector(args) => self.show_input_selector(args),
+@@ -3211,6 +3154,7 @@ impl TermWindow {
          }
      }
      fn close_current_pane(&mut self, confirm: bool) {
@@ -992,7 +1083,7 @@ index 27567d9d..ddb4c5bc 100644
          let mux_window_id = self.mux_window_id;
          let mux = Mux::get();
          let tab = match mux.get_active_tab_for_window(mux_window_id) {
-@@ -3251,9 +3161,11 @@ impl TermWindow {
+@@ -3251,9 +3195,11 @@ impl TermWindow {
  
          let tab_id = tab.tab_id();
          if confirm && !tab.can_close_without_prompting(CloseReason::Tab) {
@@ -1006,7 +1097,7 @@ index 27567d9d..ddb4c5bc 100644
  
              let window = self.window.clone().unwrap();
              let (overlay, future) = start_overlay(self, &tab, move |tab_id, term| {
-@@ -3267,6 +3179,7 @@ impl TermWindow {
+@@ -3267,6 +3213,7 @@ impl TermWindow {
      }
  
      fn close_current_tab(&mut self, confirm: bool) {
@@ -1014,7 +1105,7 @@ index 27567d9d..ddb4c5bc 100644
          let mux = Mux::get();
          let tab = match mux.get_active_tab_for_window(self.mux_window_id) {
              Some(tab) => tab,
-@@ -3421,6 +3334,7 @@ impl TermWindow {
+@@ -3421,6 +3368,7 @@ impl TermWindow {
      }
  
      fn get_splits(&mut self) -> Vec<PositionedSplit> {
@@ -1022,7 +1113,7 @@ index 27567d9d..ddb4c5bc 100644
          let mux = Mux::get();
          let tab = match mux.get_active_tab_for_window(self.mux_window_id) {
              Some(tab) => tab,
-@@ -3457,35 +3371,18 @@ impl TermWindow {
+@@ -3457,35 +3405,18 @@ impl TermWindow {
  
      fn get_tab_information(&mut self) -> Vec<TabInformation> {
          let mux = Mux::get();
@@ -1069,7 +1160,7 @@ index 27567d9d..ddb4c5bc 100644
      }
  
      fn get_pane_information(&self) -> Vec<PaneInformation> {
-@@ -3529,6 +3426,7 @@ impl TermWindow {
+@@ -3529,6 +3460,7 @@ impl TermWindow {
      }
  
      fn get_panes_to_render(&self) -> Vec<PositionedPane> {
@@ -1077,7 +1168,7 @@ index 27567d9d..ddb4c5bc 100644
          let mux = Mux::get();
          let tab = match mux.get_active_tab_for_window(self.mux_window_id) {
              Some(tab) => tab,
-@@ -3621,6 +3519,10 @@ impl TermWindow {
+@@ -3621,6 +3553,10 @@ impl TermWindow {
  
  impl Drop for TermWindow {
      fn drop(&mut self) {
@@ -1088,63 +1179,196 @@ index 27567d9d..ddb4c5bc 100644
          // Mark the mux subscription as dead.
          // (will actually unsubscribe on the next notif from mux)
          self.mux_subscription_dead.store(true, Ordering::Relaxed);
+diff --git a/wezterm-gui/src/termwindow/mouseevent.rs b/wezterm-gui/src/termwindow/mouseevent.rs
+index f7fefd06834f66838acd9a40b47a10aa64caaf66..4fccd678c9cc0fc1763fdeb1a6225bd12fb4b1c0 100644
+--- a/wezterm-gui/src/termwindow/mouseevent.rs
++++ b/wezterm-gui/src/termwindow/mouseevent.rs
+@@ -60,6 +60,13 @@ impl super::TermWindow {
+ 
+     pub fn mouse_event_impl(&mut self, event: MouseEvent, context: &dyn WindowOps) {
+         log::trace!("{:?}", event);
++        if self.vtabs_input(crate::termwindow::ui_host::Input::Mouse(
++            &event,
++            self.vtabs_geometry(),
++        )) || self.vtabs_content_hidden()
++        {
++            return;
++        }
+         let pane = match self.get_active_pane_or_overlay() {
+             Some(pane) => pane,
+             None => return,
+@@ -307,7 +314,10 @@ impl super::TermWindow {
+         };
+ 
+         let border = self.get_os_border();
+-        let y_offset = top_bar_height + border.top.get() as f32;
++        let y_offset = top_bar_height
++            + border.top.get() as f32
++            + self.vtabs_content_top()
++            + self.vtabs_frame_gutter();
+ 
+         let from_top = start_event.coords.y.saturating_sub(item.y as isize);
+         let effective_thumb_top = event
+@@ -323,7 +333,10 @@ impl super::TermWindow {
+             &*pane,
+             current_viewport,
+             self.dimensions.pixel_height.saturating_sub(
+-                y_offset as usize + border.bottom.get() + bottom_bar_height as usize,
++                y_offset as usize
++                    + border.bottom.get()
++                    + bottom_bar_height as usize
++                    + self.vtabs_frame_gutter() as usize,
+             ),
+             self.min_scroll_bar_height() as usize,
+         );
+diff --git a/wezterm-gui/src/termwindow/palette.rs b/wezterm-gui/src/termwindow/palette.rs
+index 7b0a5ffec1ef48ca7707c6e5663be6b3af86daa3..91f4b12ab00b0611b75422121d6bd320a884ddd5 100644
+--- a/wezterm-gui/src/termwindow/palette.rs
++++ b/wezterm-gui/src/termwindow/palette.rs
+@@ -59,7 +59,7 @@ fn load_recents() -> anyhow::Result<Vec<Recent>> {
+     Ok(recents)
+ }
+ 
+-fn save_recent(command: &ExpandedCommand) -> anyhow::Result<()> {
++pub(crate) fn save_recent(command: &ExpandedCommand) -> anyhow::Result<()> {
+     let mut recents = load_recents().unwrap_or_else(|_| vec![]);
+     if let Some(recent_idx) = recents.iter().position(|r| r.brief == command.brief) {
+         let recent = recents.get_mut(recent_idx).unwrap();
+@@ -216,6 +216,10 @@ fn compute_matches(selection: &str, commands: &[ExpandedCommand]) -> Vec<usize>
+ }
+ 
+ impl CommandPalette {
++    pub(crate) fn into_commands(self) -> Vec<ExpandedCommand> {
++        self.commands
++    }
++
+     pub fn new(term_window: &mut TermWindow) -> Self {
+         // Showing the CopyMode actions in the palette is useless
+         // if the CopyOverlay isn't active, so figure out if that
 diff --git a/wezterm-gui/src/termwindow/render/mod.rs b/wezterm-gui/src/termwindow/render/mod.rs
-index 1cb777d7..0da7dec6 100644
+index 1cb777d76d0b2cbdbfda617f8f40725713d3c30b..70e287a36ad15d5f9957e4f4c31f5c6e6900a229 100644
 --- a/wezterm-gui/src/termwindow/render/mod.rs
 +++ b/wezterm-gui/src/termwindow/render/mod.rs
-@@ -356,7 +356,7 @@ impl crate::TermWindow {
+@@ -356,16 +356,19 @@ impl crate::TermWindow {
              .left
              .evaluate_as_pixels(h_context);
          let padding_right = self.config.window_padding.right;
 -        let padding_top = self.config.window_padding.top.evaluate_as_pixels(v_context);
-+        let padding_top = self.config.window_padding.top.evaluate_as_pixels(v_context) + self.vtabs_titlebar_height();
++        let padding_top = self.config.window_padding.top.evaluate_as_pixels(v_context) + self.vtabs_content_top();
          let padding_bottom = self
              .config
              .window_padding
-@@ -366,6 +366,7 @@ impl crate::TermWindow {
+             .bottom
+             .evaluate_as_pixels(v_context);
+ 
++        let gutter = self.vtabs_frame_gutter();
          let horizontal_gap = self.dimensions.pixel_width as f32
              - self.terminal_size.pixel_width as f32
              - padding_left
 +            - self.vtabs_reserved_width()
++            - 2. * gutter
              - if self.show_scroll_bar && padding_right.is_zero() {
                  h_context.pixel_cell
              } else {
-@@ -391,7 +392,7 @@ impl crate::TermWindow {
+@@ -375,6 +378,7 @@ impl crate::TermWindow {
+             - self.terminal_size.pixel_height as f32
+             - padding_top
+             - padding_bottom
++            - 2. * gutter
+             - if self.show_tab_bar {
+                 self.tab_bar_pixel_height().unwrap_or(0.)
+             } else {
+@@ -391,7 +395,7 @@ impl crate::TermWindow {
              VerticalWindowContentAlignment::Bottom => vertical_gap,
          };
  
 -        (padding_left + left_gap, padding_top + top_gap)
-+        (padding_left + left_gap + self.vtabs_left_width(), padding_top + top_gap)
++        (padding_left + left_gap + self.vtabs_left_width() + gutter, padding_top + top_gap + gutter)
      }
  
      fn resolve_lock_glyph(
+diff --git a/wezterm-gui/src/termwindow/render/paint.rs b/wezterm-gui/src/termwindow/render/paint.rs
+index 3136f28e23d85c70d903a4a8b87d24f09b002c18..964d89fadab6e48f807ee8f83b367883e00da854 100644
+--- a/wezterm-gui/src/termwindow/render/paint.rs
++++ b/wezterm-gui/src/termwindow/render/paint.rs
+@@ -134,7 +134,9 @@ impl crate::TermWindow {
+                             window.notify(TermWindowNotif::Apply(Box::new(move |tw| {
+                                 tw.scheduled_animation.borrow_mut().take();
+                                 if tw.tab_bar.next_progress_frame_due().is_some() {
+-                                    tw.update_title_post_status();
++                                    if tw.show_tab_bar {
++                                        tw.update_title_post_status();
++                                    }
+                                 }
+                                 win.invalidate();
+                             })));
+@@ -162,6 +164,7 @@ impl crate::TermWindow {
+     }
+ 
+     pub fn paint_pass(&mut self) -> anyhow::Result<()> {
++        self.vtabs_sync();
+         {
+             let gl_state = self.render_state.as_ref().unwrap();
+             for layer in gl_state.layers.borrow().iter() {
+@@ -249,6 +252,8 @@ impl crate::TermWindow {
+             .context("filled_rectangle for window background")?;
+         }
+ 
++        self.update_window_drag_exclusion();
++        self.update_vtabs_title_buttons();
+         for pos in panes {
+             if pos.is_active {
+                 self.update_text_cursor(&pos);
+@@ -260,7 +265,10 @@ impl crate::TermWindow {
+             self.paint_pane(&pos, &mut layers).context("paint_pane")?;
+         }
+ 
+-        if let Some(pane) = self.get_active_pane_or_overlay() {
++        if let Some(pane) = self
++            .get_active_pane_or_overlay()
++            .filter(|_| !self.vtabs_content_hidden())
++        {
+             let splits = self.get_splits();
+             for split in &splits {
+                 self.paint_split(&mut layers, split, &pane)
+@@ -272,6 +280,8 @@ impl crate::TermWindow {
+             self.paint_tab_bar(&mut layers).context("paint_tab_bar")?;
+         }
+ 
++        self.paint_vtabs_ui().context("UI")?;
++
+         self.paint_window_borders(&mut layers)
+             .context("paint_window_borders")?;
+         drop(layers);
 diff --git a/wezterm-gui/src/termwindow/render/pane.rs b/wezterm-gui/src/termwindow/render/pane.rs
-index 4af46389..30cc54d8 100644
+index 4af46389d8cf8479f1de450902f95bfb9ff6f4d7..42535f9b315ee2218c13487c222b1b85130a3a82 100644
 --- a/wezterm-gui/src/termwindow/render/pane.rs
 +++ b/wezterm-gui/src/termwindow/render/pane.rs
-@@ -111,8 +111,8 @@ impl crate::TermWindow {
+@@ -111,8 +111,10 @@ impl crate::TermWindow {
              // We want to fill out to the edges of the splits
              let (x, width_delta) = if pos.left == 0 {
                  (
 -                    0.,
 -                    padding_left + border.left.get() as f32 + (cell_width / 2.0),
 +                    self.vtabs_left_width(),
-+                    padding_left - self.vtabs_left_width() + border.left.get() as f32 + (cell_width / 2.0),
++                    padding_left - self.vtabs_left_width()
++                        + border.left.get() as f32
++                        + (cell_width / 2.0),
                  )
              } else {
                  (
-@@ -124,8 +124,8 @@ impl crate::TermWindow {
+@@ -124,8 +126,8 @@ impl crate::TermWindow {
  
              let (y, height_delta) = if pos.top == 0 {
                  (
 -                    (top_pixel_y - padding_top),
 -                    padding_top + (cell_height / 2.0),
-+                    (top_pixel_y - padding_top + self.vtabs_titlebar_height()),
-+                    padding_top - self.vtabs_titlebar_height() + (cell_height / 2.0),
++                    (top_pixel_y - padding_top + self.vtabs_content_top()),
++                    padding_top - self.vtabs_content_top() + (cell_height / 2.0),
                  )
              } else {
                  (
-@@ -138,7 +138,7 @@ impl crate::TermWindow {
+@@ -138,7 +140,7 @@ impl crate::TermWindow {
                  y,
                  // Go all the way to the right edge if we're right-most
                  if pos.left + pos.width >= self.terminal_size.cols as usize {
@@ -1153,47 +1377,82 @@ index 4af46389..30cc54d8 100644
                  } else {
                      (pos.width as f32 * cell_width) + width_delta
                  },
-@@ -227,7 +227,7 @@ impl crate::TermWindow {
+@@ -227,16 +229,21 @@ impl crate::TermWindow {
          // changes to ScrollHit, mouse positioning, PositionedPane
          // and tab size calculation.
          if pos.is_active && self.show_scroll_bar {
 -            let thumb_y_offset = top_bar_height as usize + border.top.get();
-+            let thumb_y_offset = top_bar_height as usize + border.top.get() + self.vtabs_titlebar_height() as usize;
++            let gutter = self.vtabs_frame_gutter() as usize;
++            let thumb_y_offset = top_bar_height as usize
++                + border.top.get()
++                + self.vtabs_content_top() as usize
++                + gutter;
++            let bottom_inset = border.bottom.get() + bottom_bar_height as usize + gutter;
  
              let min_height = self.min_scroll_bar_height();
  
-@@ -247,7 +247,7 @@ impl crate::TermWindow {
+             let info = ScrollHit::thumb(
+                 &*pos.pane,
+                 current_viewport,
+-                self.dimensions.pixel_height.saturating_sub(
+-                    thumb_y_offset + border.bottom.get() + bottom_bar_height as usize,
+-                ),
++                self.dimensions
++                    .pixel_height
++                    .saturating_sub(thumb_y_offset + bottom_inset),
+                 min_height as usize,
+             );
+             let abs_thumb_top = thumb_y_offset + info.top;
+@@ -245,9 +252,13 @@ impl crate::TermWindow {
+ 
+             // Adjust the scrollbar thumb position
              let config = &self.config;
-             let padding = self.effective_right_padding(&config) as f32;
+-            let padding = self.effective_right_padding(&config) as f32;
++            let padding = self.effective_right_padding(&config).saturating_sub(gutter) as f32;
  
 -            let thumb_x = self.dimensions.pixel_width - padding as usize - border.right.get();
-+            let thumb_x = self.dimensions.pixel_width - padding as usize - border.right.get() - self.vtabs_right_width() as usize;
++            let thumb_x = self.dimensions.pixel_width
++                - padding as usize
++                - border.right.get()
++                - self.vtabs_right_width() as usize
++                - gutter;
  
              // Register the scroll bar location
              self.ui_items.push(UIItem {
-@@ -605,8 +605,8 @@ impl crate::TermWindow {
+@@ -271,7 +282,7 @@ impl crate::TermWindow {
+                 height: self
+                     .dimensions
+                     .pixel_height
+-                    .saturating_sub(abs_thumb_top + thumb_size),
++                    .saturating_sub(abs_thumb_top + thumb_size + bottom_inset),
+                 item_type: UIItemType::BelowScrollThumb,
+             });
+ 
+@@ -605,8 +616,10 @@ impl crate::TermWindow {
          // We want to fill out to the edges of the splits
          let (x, width_delta) = if pos.left == 0 {
              (
 -                0.,
 -                padding_left + border.left.get() as f32 + (cell_width / 2.0),
 +                self.vtabs_left_width(),
-+                padding_left - self.vtabs_left_width() + border.left.get() as f32 + (cell_width / 2.0),
++                padding_left - self.vtabs_left_width()
++                    + border.left.get() as f32
++                    + (cell_width / 2.0),
              )
          } else {
              (
-@@ -618,8 +618,8 @@ impl crate::TermWindow {
+@@ -618,8 +631,8 @@ impl crate::TermWindow {
  
          let (y, height_delta) = if pos.top == 0 {
              (
 -                (top_pixel_y - padding_top),
 -                padding_top + (cell_height / 2.0),
-+                (top_pixel_y - padding_top + self.vtabs_titlebar_height()),
-+                padding_top - self.vtabs_titlebar_height() + (cell_height / 2.0),
++                (top_pixel_y - padding_top + self.vtabs_content_top()),
++                padding_top - self.vtabs_content_top() + (cell_height / 2.0),
              )
          } else {
              (
-@@ -633,7 +633,7 @@ impl crate::TermWindow {
+@@ -633,7 +646,7 @@ impl crate::TermWindow {
              y,
              // Go all the way to the right edge if we're right-most
              if pos.left + pos.width >= self.terminal_size.cols as usize {
@@ -1203,7 +1462,7 @@ index 4af46389..30cc54d8 100644
                  (pos.width as f32 * cell_width) + width_delta
              },
 diff --git a/wezterm-gui/src/termwindow/resize.rs b/wezterm-gui/src/termwindow/resize.rs
-index 86de9b8b..919fe5dd 100644
+index 86de9b8bcf7ad2798963def6f7d6715659936c26..e23c16e3a5147224b43ed88e0d8c46b721eb55bf 100644
 --- a/wezterm-gui/src/termwindow/resize.rs
 +++ b/wezterm-gui/src/termwindow/resize.rs
 @@ -195,11 +195,11 @@ impl super::TermWindow {
@@ -1212,12 +1471,13 @@ index 86de9b8b..919fe5dd 100644
              };
 -            let padding_left = config.window_padding.left.evaluate_as_pixels(h_context) as usize;
 -            let padding_top = config.window_padding.top.evaluate_as_pixels(v_context) as usize;
-+            let padding_left = config.window_padding.left.evaluate_as_pixels(h_context) as usize + self.vtabs_left_width() as usize;
-+            let padding_top = config.window_padding.top.evaluate_as_pixels(v_context) as usize + self.vtabs_titlebar_height() as usize;
++            let padding_left = config.window_padding.left.evaluate_as_pixels(h_context) as usize + self.vtabs_left_width() as usize + self.vtabs_frame_gutter() as usize;
++            let padding_top = config.window_padding.top.evaluate_as_pixels(v_context) as usize + self.vtabs_content_top() as usize + self.vtabs_frame_gutter() as usize;
              let padding_bottom =
-                 config.window_padding.bottom.evaluate_as_pixels(v_context) as usize;
+-                config.window_padding.bottom.evaluate_as_pixels(v_context) as usize;
 -            let padding_right = effective_right_padding(&config, h_context);
-+            let padding_right = effective_right_padding(&config, h_context) + self.vtabs_right_width() as usize;
++                config.window_padding.bottom.evaluate_as_pixels(v_context) as usize + self.vtabs_frame_gutter() as usize;
++            let padding_right = effective_right_padding(&config, h_context) + self.vtabs_right_width() as usize + self.vtabs_frame_gutter() as usize;
  
              let pixel_height = (rows * self.render_metrics.cell_size.height as usize)
                  + (padding_top + padding_bottom)
@@ -1227,12 +1487,13 @@ index 86de9b8b..919fe5dd 100644
              };
 -            let padding_left = config.window_padding.left.evaluate_as_pixels(h_context) as usize;
 -            let padding_top = config.window_padding.top.evaluate_as_pixels(v_context) as usize;
-+            let padding_left = config.window_padding.left.evaluate_as_pixels(h_context) as usize + self.vtabs_left_width() as usize;
-+            let padding_top = config.window_padding.top.evaluate_as_pixels(v_context) as usize + self.vtabs_titlebar_height() as usize;
++            let padding_left = config.window_padding.left.evaluate_as_pixels(h_context) as usize + self.vtabs_left_width() as usize + self.vtabs_frame_gutter() as usize;
++            let padding_top = config.window_padding.top.evaluate_as_pixels(v_context) as usize + self.vtabs_content_top() as usize + self.vtabs_frame_gutter() as usize;
              let padding_bottom =
-                 config.window_padding.bottom.evaluate_as_pixels(v_context) as usize;
+-                config.window_padding.bottom.evaluate_as_pixels(v_context) as usize;
 -            let padding_right = effective_right_padding(&config, h_context);
-+            let padding_right = effective_right_padding(&config, h_context) + self.vtabs_right_width() as usize;
++                config.window_padding.bottom.evaluate_as_pixels(v_context) as usize + self.vtabs_frame_gutter() as usize;
++            let padding_right = effective_right_padding(&config, h_context) + self.vtabs_right_width() as usize + self.vtabs_frame_gutter() as usize;
  
              let avail_width = dimensions.pixel_width.saturating_sub(
                  (padding_left + padding_right) as usize
@@ -1271,20 +1532,30 @@ index 86de9b8b..919fe5dd 100644
          };
 -        let padding_left = config.window_padding.left.evaluate_as_pixels(h_context) as usize;
 -        let padding_top = config.window_padding.top.evaluate_as_pixels(v_context) as usize;
-+        let padding_left = config.window_padding.left.evaluate_as_pixels(h_context) as usize + self.vtabs_left_width() as usize;
-+        let padding_top = config.window_padding.top.evaluate_as_pixels(v_context) as usize + self.vtabs_titlebar_height() as usize;
-         let padding_bottom = config.window_padding.bottom.evaluate_as_pixels(v_context) as usize;
+-        let padding_bottom = config.window_padding.bottom.evaluate_as_pixels(v_context) as usize;
++        let padding_left = config.window_padding.left.evaluate_as_pixels(h_context) as usize + self.vtabs_left_width() as usize + self.vtabs_frame_gutter() as usize;
++        let padding_top = config.window_padding.top.evaluate_as_pixels(v_context) as usize + self.vtabs_content_top() as usize + self.vtabs_frame_gutter() as usize;
++        let padding_bottom = config.window_padding.bottom.evaluate_as_pixels(v_context) as usize + self.vtabs_frame_gutter() as usize;
  
          let dimensions = Dimensions {
              pixel_width: ((terminal_size.cols as usize * render_metrics.cell_size.width as usize)
                  + padding_left
 -                + effective_right_padding(&config, h_context)),
-+                + effective_right_padding(&config, h_context) + self.vtabs_right_width() as usize),
++                + effective_right_padding(&config, h_context) + self.vtabs_right_width() as usize + self.vtabs_frame_gutter() as usize),
              pixel_height: ((terminal_size.rows as usize * render_metrics.cell_size.height as usize)
                  + padding_top
                  + padding_bottom) as usize
+@@ -551,7 +551,7 @@ impl super::TermWindow {
+                 dpi: self.dimensions.dpi as f32,
+                 pixel_max: self.dimensions.pixel_width as f32,
+             },
+-        )
++        ) + self.vtabs_frame_gutter() as usize
+     }
+ }
+ 
 diff --git a/wezterm-gui/src/termwindow/spawn.rs b/wezterm-gui/src/termwindow/spawn.rs
-index 1395afc3..c0afe4b6 100644
+index 1395afc30e1cde1646ee7586eba455e7b9078665..c0afe4b61e7db6001daa008433538cf032da1767 100644
 --- a/wezterm-gui/src/termwindow/spawn.rs
 +++ b/wezterm-gui/src/termwindow/spawn.rs
 @@ -4,7 +4,7 @@ use config::TermConfig;
@@ -1318,98 +1589,3 @@ index 1395afc3..c0afe4b6 100644
          )
      }
  
-diff --git a/wezterm-client/src/topology.rs b/wezterm-client/src/topology.rs
-new file mode 100644
-index 00000000..f3a9a24b
---- /dev/null
-+++ b/wezterm-client/src/topology.rs
-@@ -0,0 +1,89 @@
-+//! Order topology snapshots after local resize acknowledgements.
-+use std::sync::{Arc, Mutex};
-+use std::task::{Poll, Waker};
-+
-+#[derive(Default)]
-+struct State {
-+    epoch: u64,
-+    pending: usize,
-+    requested: u64,
-+    completed: u64,
-+    applying: usize,
-+    waiter: Option<Waker>,
-+}
-+
-+#[derive(Default)]
-+pub(crate) struct TopologySync {
-+    state: Arc<Mutex<State>>,
-+    pub serial: smol::lock::Mutex<()>,
-+}
-+
-+impl TopologySync {
-+    pub fn begin_resize(&self) -> Option<ResizeGuard> {
-+        let mut state = self.state.lock().unwrap();
-+        // Applying remote geometry must not echo a new resize back to its source.
-+        if state.applying != 0 {
-+            return None;
-+        }
-+        state.epoch = state.epoch.wrapping_add(1);
-+        state.pending += 1;
-+        Some(ResizeGuard(Arc::clone(&self.state)))
-+    }
-+    pub fn request(&self) -> u64 {
-+        let mut state = self.state.lock().unwrap();
-+        state.requested += 1;
-+        state.requested
-+    }
-+    pub fn completed(&self, request: u64) -> bool {
-+        self.state.lock().unwrap().completed >= request
-+    }
-+    pub async fn ready(&self) -> (u64, u64) {
-+        futures::future::poll_fn(|cx| {
-+            let mut state = self.state.lock().unwrap();
-+            if state.pending == 0 {
-+                Poll::Ready((state.epoch, state.requested))
-+            } else {
-+                state.waiter = Some(cx.waker().clone());
-+                Poll::Pending
-+            }
-+        })
-+        .await
-+    }
-+    pub fn accepts(&self, epoch: u64) -> bool {
-+        let state = self.state.lock().unwrap();
-+        state.pending == 0 && state.epoch == epoch
-+    }
-+    pub fn finish(&self, request: u64) -> bool {
-+        let mut state = self.state.lock().unwrap();
-+        state.completed = request;
-+        state.completed == state.requested
-+    }
-+    pub fn applying(&self) -> SnapshotGuard {
-+        self.state.lock().unwrap().applying += 1;
-+        SnapshotGuard(Arc::clone(&self.state))
-+    }
-+}
-+
-+pub(crate) struct ResizeGuard(Arc<Mutex<State>>);
-+impl Drop for ResizeGuard {
-+    fn drop(&mut self) {
-+        let wake = {
-+            let mut state = self.0.lock().unwrap();
-+            state.pending -= 1;
-+            if state.pending == 0 {
-+                state.waiter.take()
-+            } else {
-+                None
-+            }
-+        };
-+        if let Some(waker) = wake {
-+            waker.wake();
-+        }
-+    }
-+}
-+pub(crate) struct SnapshotGuard(Arc<Mutex<State>>);
-+impl Drop for SnapshotGuard {
-+    fn drop(&mut self) {
-+        self.0.lock().unwrap().applying -= 1;
-+    }
-+}

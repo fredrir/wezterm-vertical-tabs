@@ -299,7 +299,7 @@ struct FileStat {
 
 fn scan_source_stats(root: &Path) -> BTreeMap<PathBuf, FileStat> {
     let mut stats = BTreeMap::new();
-    let dirs = ["src", "plugin", "wezterm-patches"];
+    let dirs = ["src", "plugin", "wezterm"];
     for dir_name in dirs {
         let dir = root.join(dir_name);
         if !dir.is_dir() {

@@ -18,7 +18,7 @@ def test_repro_preserves_failed_source_revision_configuration_and_logs(
     tools_sandbox, local_upstream
 ):
     _, revision = local_upstream
-    patch = tools_sandbox.root / "wezterm-patches/0002-second.patch"
+    patch = tools_sandbox.root / "wezterm/patches/0002-second.patch"
     patch.write_text(patch.read_text().replace("-first", "-incompatible"))
     tools_sandbox.env["RUSTFLAGS"] = "-C debuginfo=1"
     tools_sandbox.env["UNRELATED_SECRET_TOKEN"] = "must-not-be-recorded"
@@ -28,7 +28,7 @@ def test_repro_preserves_failed_source_revision_configuration_and_logs(
     report = json.loads(report_path.read_text())
     snapshot = report_path.parent / "source"
     assert report["metadata"]["source_snapshot"] == "source"
-    assert (snapshot / "wezterm-patches/0002-second.patch").read_text() == patch.read_text()
+    assert (snapshot / "wezterm/patches/0002-second.patch").read_text() == patch.read_text()
     assert report["configuration"]["RUSTFLAGS"] == "-C debuginfo=1"
     assert "UNRELATED_SECRET_TOKEN" not in report["configuration"]
     assert "must-not-be-recorded" not in report_path.read_text()
@@ -231,7 +231,7 @@ def test_offline_replay_uses_owned_cached_objects_after_origin_becomes_unavailab
     revision = commit(upstream, "Upstream with replay submodule")
     tools_sandbox.env["GIT_ALLOW_PROTOCOL"] = "file"
     tools_sandbox.run("--upstream", revision, "prepare")
-    patch = tools_sandbox.root / "wezterm-patches/0002-second.patch"
+    patch = tools_sandbox.root / "wezterm/patches/0002-second.patch"
     patch.write_text(patch.read_text().replace("-first", "-incompatible"))
     failed = tools_sandbox.run("--offline", "--upstream", revision, "prepare", check=False)
     assert failed.returncode != 0

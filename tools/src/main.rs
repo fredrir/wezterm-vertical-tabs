@@ -453,11 +453,12 @@ fn dispatch(ctx: &Context, cli: &Cli) -> Result<(Value, i32)> {
                 diagnostics::cache(ctx, true, *dry_run, diagnostics::Retention::uniform(*keep))?
             }
         },
-        Commands::Patch {
-            command: cli::PatchCommand::Check,
-        } => {
+        Commands::Patch { command } => {
             let _lock = Lock::acquire(&ctx.cache.join("build.lock"))?;
-            source::patch_check(ctx)?
+            match command {
+                cli::PatchCommand::Check => source::patch_check(ctx)?,
+                cli::PatchCommand::Export => source::patch_export(ctx)?,
+            }
         }
         Commands::Repro { report, execute } => {
             diagnostics::reproduce(ctx, report, *execute, cli.project_root.is_some())?

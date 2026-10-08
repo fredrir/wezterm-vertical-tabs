@@ -159,7 +159,7 @@ def local_upstream(tools_sandbox: ToolSandbox, tmp_path: Path) -> tuple[Path, st
     ):
         write_file(
             tools_sandbox.root,
-            f"wezterm-patches/{name}",
+            f"wezterm/patches/{name}",
             "diff --git a/patch-target.txt b/patch-target.txt\n"
             "--- a/patch-target.txt\n+++ b/patch-target.txt\n@@ -1 +1 @@\n"
             f"-{before}\n+{after}\n",

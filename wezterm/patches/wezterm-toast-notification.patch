@@ -1,0 +1,11 @@
+diff --git a/wezterm-toast-notification/build.rs b/wezterm-toast-notification/build.rs
+index 5ecc6da67e0bcb596a7d5bde55fb4f0442d0a39f..1d94bd38698881c8cb3084f5cf7c3d3c541d8063 100644
+--- a/wezterm-toast-notification/build.rs
++++ b/wezterm-toast-notification/build.rs
+@@ -1,5 +1,5 @@
+ fn main() {
+-    if cfg!(target_os = "macos") {
++    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos") {
+         println!("cargo:rustc-link-lib=framework=UserNotifications");
+     }
+ }

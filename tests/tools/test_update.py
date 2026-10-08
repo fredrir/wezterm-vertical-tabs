@@ -62,7 +62,7 @@ def test_installed_update_preserves_recorded_branch_and_refreshes_legacy_single_
     assert result.returncode != 0
     assert "fixture compiler failure" in result.stderr
     assert git(checkout, "rev-parse", "HEAD") == expected
-    assert (checkout / "wezterm-patches/0001-first.patch").is_file()
+    assert (checkout / "wezterm/patches/0001-first.patch").is_file()
     commands = [json.loads(line) for line in failing_cargo.read_text().splitlines()]
     assert commands
     assert any("tools/Cargo.toml" in " ".join(arguments) for arguments in commands)

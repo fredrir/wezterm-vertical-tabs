@@ -245,10 +245,17 @@ impl Runner {
         self.execute(spec, false).map(|_| ())
     }
     pub fn capture(&self, spec: CommandSpec) -> Result<String> {
+        let output = self.execute(spec, true)?;
+        Ok(String::from_utf8_lossy(&output)
+            .trim_end_matches(['\r', '\n'])
+            .into())
+    }
+    /// Exact stdout bytes, untrimmed.
+    pub fn capture_bytes(&self, spec: CommandSpec) -> Result<Vec<u8>> {
         self.execute(spec, true)
     }
 
-    fn execute(&self, spec: CommandSpec, capture: bool) -> Result<String> {
+    fn execute(&self, spec: CommandSpec, capture: bool) -> Result<Vec<u8>> {
         ensure!(!self.cancelled(), "operation cancelled");
         let index = self.0.next.fetch_add(1, Ordering::SeqCst);
         let stdout_path = PathBuf::from(format!("commands/{index:04}.stdout.log"));
@@ -280,7 +287,7 @@ impl Runner {
         };
         self.0.report.lock().unwrap().commands.push(record.clone());
         self.save()?;
-        let result = (|| -> Result<(std::process::ExitStatus, String, String)> {
+        let result = (|| -> Result<(std::process::ExitStatus, Vec<u8>, String)> {
             let stdout_file = File::create(self.0.dir.join(stdout_path))?;
             let stderr_file = File::create(self.0.dir.join(stderr_path))?;
             let mut command = Command::new(&spec.program);
@@ -384,7 +391,7 @@ impl Runner {
             }
             Ok((
                 status,
-                String::from_utf8_lossy(&output).into_owned(),
+                output,
                 String::from_utf8_lossy(&err_bytes).into_owned(),
             ))
         })();
@@ -410,7 +417,9 @@ impl Runner {
         self.save()?;
         let (status, output, stderr_output) = result?;
         if !status.success() {
-            if let Some(diagnostics) = format_compiler_diagnostics(&output) {
+            if let Some(diagnostics) =
+                format_compiler_diagnostics(&String::from_utf8_lossy(&output))
+            {
                 bail!("{diagnostics}");
             }
             let err_trimmed = stderr_output.trim();
@@ -422,7 +431,7 @@ impl Runner {
                 spec.program.to_string_lossy()
             );
         }
-        Ok(output.trim_end_matches(['\r', '\n']).into())
+        Ok(output)
     }
 
     pub fn timings(&self) -> Value {

@@ -267,4 +267,6 @@ pub enum CacheCommand {
 #[derive(Debug, Subcommand)]
 pub enum PatchCommand {
     Check,
+    /// Write the prepared worktree back to wezterm/patches and wezterm/overlay.
+    Export,
 }
