@@ -302,6 +302,91 @@ def test_failed_remote_connection_preserves_the_source(mux_pair):
 
 
 @pytest.mark.parametrize("domain", ["local", "peer", "proxied"])
+def test_replacement_keeps_old_screen_until_prompt_ready(mux_pair, tmp_path, domain):
+    local, _ = mux_pair
+    source = int(local.cli("spawn", "--new-window"))
+    if domain != "local":
+        # Connect first: the authentication UI is separate from a warm host switch.
+        local.adoptable(domain)
+        wait_for(lambda: {p["pane_id"] for p in local.panes()} == {source})
+    before = local.panes()
+    started, gate = tmp_path / "started", tmp_path / "gate"
+    command = (
+        'touch "$1"; while [ ! -f "$2" ]; do sleep 0.01; done; '
+        "printf 'READY_PROMPT\\033]1337;SetUserVar=WEZTERM_PANE_READY=MQ==\\007'; "
+        "exec sleep 30"
+    )
+    with concurrent.futures.ThreadPoolExecutor() as pool:
+        result = pool.submit(
+            local.cli,
+            "replace-pane",
+            "--pane-id",
+            source,
+            "--domain-name",
+            domain,
+            "--wait-for-ready",
+            "--",
+            "/bin/sh",
+            "-c",
+            command,
+            "sh",
+            started,
+            gate,
+        )
+        try:
+            wait_for(started.exists)
+            observed = local.panes()
+            assert {p["pane_id"]: geometry(p) for p in observed} == {
+                p["pane_id"]: geometry(p) for p in before
+            }, observed
+            assert not result.done()
+        finally:
+            # Release the shell even when an assertion fails.
+            gate.touch()
+        fresh = int(result.result(timeout=10))
+    assert "READY_PROMPT" in local.cli("get-text", "--pane-id", fresh)
+    panes = local.panes()
+    assert len(panes) == 1
+    assert panes[0]["pane_id"] == fresh
+    assert geometry(panes[0]) == geometry(before[0])
+
+
+def test_replacement_readiness_falls_back_for_older_shells(mux_pair):
+    local, _ = mux_pair
+    source = int(local.cli("spawn", "--new-window"))
+    fresh = int(
+        local.cli(
+            "replace-pane",
+            "--pane-id",
+            source,
+            "--wait-for-ready",
+            "--",
+            "/bin/sh",
+            "-c",
+            "printf LEGACY_PROMPT; exec sleep 30",
+        )
+    )
+    assert "LEGACY_PROMPT" in local.cli("get-text", "--pane-id", fresh)
+
+
+def test_replacement_exiting_before_readiness_preserves_source(mux_pair):
+    local, _ = mux_pair
+    source = int(local.cli("spawn", "--new-window"))
+    with pytest.raises(subprocess.CalledProcessError):
+        local.cli(
+            "replace-pane",
+            "--pane-id",
+            source,
+            "--wait-for-ready",
+            "--",
+            "/bin/sh",
+            "-c",
+            "exit 1",
+        )
+    assert {p["pane_id"] for p in local.panes()} == {source}
+
+
+@pytest.mark.parametrize("domain", ["local", "peer", "proxied"])
 @pytest.mark.parametrize("zoomed", [False, True])
 def test_replacement_starts_at_full_size_and_retains_focus(mux_pair, domain, zoomed):
     local, _ = mux_pair
@@ -362,12 +447,29 @@ def test_shared_client_removal_does_not_resize_an_unaffected_sibling(mux_pair):
 
     # Remote notifications can reach a shared client before its replacement
     # tree. Pruning the old proxy must not send its interim expansion upstream.
-    for _ in range(6):
+    for iteration in range(6):
         prior = {p["pane_id"] for p in local.panes()}
-        replacement = int(remote("replace-pane", "--pane-id", source))
-        wait_for(
-            lambda prior=prior: len(p := local.panes()) == 3 and {v["pane_id"] for v in p} != prior
+        prompt = f"READY_{iteration}"
+        replacement = int(
+            remote(
+                "replace-pane",
+                "--pane-id",
+                source,
+                "--wait-for-ready",
+                "--",
+                "/bin/sh",
+                "-c",
+                f"printf '{prompt}\\033]1337;SetUserVar=WEZTERM_PANE_READY=MQ==\\007'; exec sleep 30",
+            )
         )
+        updated = wait_for(
+            lambda prior=prior: (
+                len(p := local.panes()) == 3 and {v["pane_id"] for v in p} != prior and p
+            )
+        )
+        (proxy,) = {p["pane_id"] for p in updated} - prior
+        # The first read after the tree changes must already contain the prompt.
+        assert prompt in local.cli("get-text", "--pane-id", proxy)
         source = replacement
         panes = json.loads(remote("list", "--format", "json"))
         assert geometry(next(p for p in panes if p["pane_id"] == sibling)) == expected
