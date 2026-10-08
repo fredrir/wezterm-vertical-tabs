@@ -1,5 +1,5 @@
 diff --git a/codec/src/lib.rs b/codec/src/lib.rs
-index 0c230e95500d43ad4ca9613112ebbb2093d9cc57..2b79921d8ccad79d7766c7644406686f4ba8ea24 100644
+index 0c230e95500d43ad4ca9613112ebbb2093d9cc57..cc83daf06de4fecd81c5553af13453d20a6ae945 100644
 --- a/codec/src/lib.rs
 +++ b/codec/src/lib.rs
 @@ -17,7 +17,7 @@ use config::keyassignment::{PaneDirection, ScrollbackEraseMode};
@@ -11,25 +11,24 @@ index 0c230e95500d43ad4ca9613112ebbb2093d9cc57..2b79921d8ccad79d7766c7644406686f
  use mux::window::WindowId;
  use portable_pty::CommandBuilder;
  use rangeset::*;
-@@ -503,6 +503,17 @@ pdu! {
+@@ -503,6 +503,16 @@ pdu! {
      GetPaneDirection: 60,
      GetPaneDirectionResponse: 61,
      AdjustPaneSize: 62,
-+    GetHostInfo: 63,
-+    GetHostInfoResponse: 64,
++    // Retired, never to be reused: 63, 64, 67, 68.
 +    GetPaneCloseInfo: 65,
 +    GetPaneCloseInfoResponse: 66,
-+    GetPaneLocation: 67,
-+    GetPaneLocationResponse: 68,
 +    ListAdoptablePanes: 69,
 +    ListAdoptablePanesResponse: 70,
 +    AdoptPane: 71,
 +    AdoptPaneResponse: 72,
 +    ReplacePane: 73,
++    GetPaneLocation: 74,
++    GetPaneLocationResponse: 75,
  }
  
  impl Pdu {
-@@ -650,6 +661,15 @@ pub struct ListPanesResponse {
+@@ -650,6 +660,15 @@ pub struct ListPanesResponse {
      pub window_titles: HashMap<WindowId, String>,
  }
  
@@ -45,18 +44,10 @@ index 0c230e95500d43ad4ca9613112ebbb2093d9cc57..2b79921d8ccad79d7766c7644406686f
  #[derive(Deserialize, Serialize, PartialEq, Debug)]
  pub struct SplitPane {
      pub pane_id: PaneId,
-@@ -882,6 +902,75 @@ pub struct GetPaneDirectionResponse {
+@@ -882,6 +901,65 @@ pub struct GetPaneDirectionResponse {
      pub pane_id: Option<PaneId>,
  }
  
-+/// Which machine runs a pane, relayed hop by hop the way its working directory is.
-+/// A new PDU rather than a new field: stock servers reject it and stay compatible.
-+#[derive(Deserialize, Serialize, PartialEq, Debug)]
-+pub struct GetHostInfo {
-+    /// `None` asks about the server itself.
-+    pub pane_id: Option<PaneId>,
-+}
-+
 +/// A client cannot see what runs in a remote pane, so its owner judges the close.
 +#[derive(Deserialize, Serialize, PartialEq, Debug)]
 +pub struct GetPaneCloseInfo {
@@ -70,10 +61,12 @@ index 0c230e95500d43ad4ca9613112ebbb2093d9cc57..2b79921d8ccad79d7766c7644406686f
 +    pub process: String,
 +}
 +
-+/// Only the machine that owns a pane can see its home and Git work tree.
++/// Only the machine that owns a pane can see its host, home and Git work tree.
++/// Relayed hop by hop; stock servers reject it and keep upstream labels.
 +#[derive(Deserialize, Serialize, PartialEq, Debug)]
 +pub struct GetPaneLocation {
-+    pub pane_id: PaneId,
++    /// `None` asks about the server itself.
++    pub pane_id: Option<PaneId>,
 +}
 +
 +#[derive(Deserialize, Serialize, PartialEq, Eq, Debug, Clone, Default)]
@@ -82,6 +75,9 @@ index 0c230e95500d43ad4ca9613112ebbb2093d9cc57..2b79921d8ccad79d7766c7644406686f
 +    pub cwd: String,
 +    pub home: String,
 +    pub repo_root: Option<String>,
++    /// The os-release `ID`, or the platform name where no such file exists.
++    pub os: String,
++    pub hostname: String,
 +}
 +
 +/// The remote panes of a `local_pane_layout` domain that its mux could show.
@@ -109,13 +105,6 @@ index 0c230e95500d43ad4ca9613112ebbb2093d9cc57..2b79921d8ccad79d7766c7644406686f
 +    pub pane_id: PaneId,
 +    pub tab_id: TabId,
 +    pub window_id: WindowId,
-+}
-+
-+#[derive(Deserialize, Serialize, PartialEq, Eq, Debug, Clone, Default)]
-+pub struct GetHostInfoResponse {
-+    /// The os-release `ID`, or the platform name where no such file exists.
-+    pub os: String,
-+    pub hostname: String,
 +}
 +
  #[derive(Deserialize, Serialize, PartialEq, Debug)]

@@ -237,7 +237,7 @@ def test_unix_proxy_replacement_preserves_siblings_and_closes_independently(mux_
     assert len(json.loads(remote("list", "--format", "json"))) == 1
 
     # A second proxied shell reuses the attachment instead of importing the first.
-    second = int(local.cli("split-pane", "--pane-id", left, "--domain-name", "proxied"))
+    second = int(local.cli("split-pane", "--pane-id", fresh, "--right"))
     panes = wait_for(lambda: len(p := local.panes()) == 3 and p)
     assert {p["pane_id"] for p in panes} == {left, fresh, second}
     assert len(json.loads(remote("list", "--format", "json"))) == 2
@@ -484,7 +484,7 @@ def workspace_of(remote, pane_id):
 def test_restarted_mux_restores_its_backing_tabs_as_detached(mux_pair, domain, alternate):
     local, remote = mux_pair
     source = int(local.cli("spawn", "--new-window"))
-    backed = int(local.cli("split-pane", "--pane-id", source, "--domain-name", domain))
+    backed = int(local.cli("replace-pane", "--pane-id", source, "--domain-name", domain))
     local.cli("send-text", "--pane-id", backed, "--no-paste", "echo restored-marker\n")
     (backing,) = wait_for(
         lambda: len(p := json.loads(remote("list", "--format", "json"))) == 1 and p

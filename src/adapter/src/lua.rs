@@ -187,7 +187,7 @@ pub fn register(lua: &Lua) -> anyhow::Result<()> {
                 json!({"visible":ui.projection.tabs,"active":ui.projection.active,
                     "sidebar":{"x":geometry.sidebar.x,"y":geometry.sidebar.y,"width":geometry.sidebar.width,"height":geometry.sidebar.height},
                     "content":{"x":geometry.content.x,"y":geometry.content.y,"width":geometry.content.width,"height":geometry.content.height},
-                    "model":ui.provider.inspect(),"paint":ui.stats.inspect(),"frame_cpu_us":tw.vtabs_last_frame_us()})
+                    "model":ui.provider.inspect()})
             } else { Value::Null };
             tx.try_send(value).ok();
         })));

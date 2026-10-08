@@ -11,10 +11,10 @@ index 27a21788c6ce7ccd519f846bc4aa2cd8182c39aa..c7bdd0a4d80a67a080a21248562ad5ce
  url.workspace = true
  wezterm-client.workspace = true
 diff --git a/wezterm-mux-server-impl/src/sessionhandler.rs b/wezterm-mux-server-impl/src/sessionhandler.rs
-index b645b827af2c1b608101a9092caacacc09d81141..28e957181466eb992f4e10edf15e56b95ef17d2f 100644
+index b645b827af2c1b608101a9092caacacc09d81141..6fd6ffeb0bbaa7e7d67a86d5d0f51a0453b3ed07 100644
 --- a/wezterm-mux-server-impl/src/sessionhandler.rs
 +++ b/wezterm-mux-server-impl/src/sessionhandler.rs
-@@ -3,10 +3,11 @@ use anyhow::{anyhow, Context};
+@@ -3,7 +3,7 @@ use anyhow::{anyhow, Context};
  use codec::*;
  use config::TermConfig;
  use mux::client::ClientId;
@@ -22,13 +22,8 @@ index b645b827af2c1b608101a9092caacacc09d81141..28e957181466eb992f4e10edf15e56b9
 +use mux::domain::{Domain, DomainState, SplitSource};
  use mux::pane::{CachePolicy, Pane, PaneId};
  use mux::renderable::{RenderableDimensions, StableCursorPosition};
--use mux::tab::TabId;
-+use mux::tab::{PaneEntry, Tab, TabId};
-+use mux::window::WindowId;
- use mux::{Mux, MuxNotification};
- use promise::spawn::spawn_into_main_thread;
- use std::collections::HashMap;
-@@ -43,6 +44,7 @@ pub(crate) struct PerPane {
+ use mux::tab::TabId;
+@@ -43,6 +43,7 @@ pub(crate) struct PerPane {
      dimensions: RenderableDimensions,
      mouse_grabbed: bool,
      sent_initial_palette: bool,
@@ -36,7 +31,7 @@ index b645b827af2c1b608101a9092caacacc09d81141..28e957181466eb992f4e10edf15e56b9
      seqno: SequenceNo,
      config_generation: usize,
      pub(crate) notifications: Vec<Alert>,
-@@ -171,6 +173,16 @@ fn maybe_push_pane_changes(
+@@ -171,6 +172,16 @@ fn maybe_push_pane_changes(
          per_pane.notifications.push(Alert::PaletteChanged);
          per_pane.sent_initial_palette = true;
      }
@@ -53,70 +48,19 @@ index b645b827af2c1b608101a9092caacacc09d81141..28e957181466eb992f4e10edf15e56b9
      for alert in per_pane.notifications.drain(..) {
          match alert {
              Alert::PaletteChanged => {
-@@ -276,6 +288,71 @@ impl SessionHandler {
+@@ -276,6 +287,20 @@ impl SessionHandler {
  
          match decoded.pdu {
              Pdu::Ping(Ping {}) => send_response(Ok(Pdu::Pong(Pong {}))),
-+            Pdu::GetPaneCloseInfo(GetPaneCloseInfo { pane_id }) => {
++            pdu @ (Pdu::GetPaneCloseInfo(_)
++            | Pdu::GetPaneLocation(_)
++            | Pdu::ListAdoptablePanes(_)
++            | Pdu::AdoptPane(_)
++            | Pdu::ReplacePane(_)) => {
++                let client_id = self.client_id.clone();
 +                spawn_into_main_thread(async move {
 +                    promise::spawn::spawn(async move {
-+                        send_response(Ok(Pdu::GetPaneCloseInfoResponse(
-+                            close_info(pane_id).await,
-+                        )))
-+                    })
-+                    .detach();
-+                })
-+                .detach();
-+            }
-+            Pdu::ListAdoptablePanes(ListAdoptablePanes { domain }) => {
-+                spawn_into_main_thread(async move {
-+                    promise::spawn::spawn(async move {
-+                        send_response(adoptable_panes(&domain).await.map(|panes| {
-+                            Pdu::ListAdoptablePanesResponse(ListAdoptablePanesResponse { panes })
-+                        }))
-+                    })
-+                    .detach();
-+                })
-+                .detach();
-+            }
-+            Pdu::AdoptPane(AdoptPane {
-+                domain,
-+                remote_pane_id,
-+                window_id,
-+            }) => {
-+                spawn_into_main_thread(async move {
-+                    promise::spawn::spawn(async move {
-+                        send_response(adopt_pane(&domain, remote_pane_id, window_id).await.map(
-+                            |(tab, window_id, pane)| {
-+                                Pdu::AdoptPaneResponse(AdoptPaneResponse {
-+                                    pane_id: pane.pane_id(),
-+                                    tab_id: tab.tab_id(),
-+                                    window_id,
-+                                })
-+                            },
-+                        ))
-+                    })
-+                    .detach();
-+                })
-+                .detach();
-+            }
-+            Pdu::GetPaneLocation(GetPaneLocation { pane_id }) => {
-+                spawn_into_main_thread(async move {
-+                    promise::spawn::spawn(async move {
-+                        send_response(
-+                            pane_location(pane_id)
-+                                .await
-+                                .map(Pdu::GetPaneLocationResponse),
-+                        )
-+                    })
-+                    .detach();
-+                })
-+                .detach();
-+            }
-+            Pdu::GetHostInfo(GetHostInfo { pane_id }) => {
-+                spawn_into_main_thread(async move {
-+                    promise::spawn::spawn(async move {
-+                        send_response(Ok(Pdu::GetHostInfoResponse(host_info(pane_id).await)))
++                        send_response(vtabs_request(pdu, client_id).await)
 +                    })
 +                    .detach();
 +                })
@@ -125,29 +69,10 @@ index b645b827af2c1b608101a9092caacacc09d81141..28e957181466eb992f4e10edf15e56b9
              Pdu::SetWindowWorkspace(SetWindowWorkspace {
                  window_id,
                  workspace,
-@@ -718,6 +795,17 @@ impl SessionHandler {
-                 .detach();
-             }
- 
-+            Pdu::ReplacePane(request) => {
-+                let client_id = self.client_id.clone();
-+                spawn_into_main_thread(async move {
-+                    promise::spawn::spawn(async move {
-+                        send_response(replace_pane(request, client_id).await)
-+                    })
-+                    .detach();
-+                })
-+                .detach();
-+            }
-+
-             Pdu::SplitPane(split) => {
-                 let client_id = self.client_id.clone();
-                 spawn_into_main_thread(async move {
-@@ -998,6 +1086,11 @@ impl SessionHandler {
+@@ -998,6 +1023,10 @@ impl SessionHandler {
              | Pdu::UnitResponse { .. }
              | Pdu::LivenessResponse { .. }
              | Pdu::GetPaneDirectionResponse { .. }
-+            | Pdu::GetHostInfoResponse { .. }
 +            | Pdu::GetPaneCloseInfoResponse { .. }
 +            | Pdu::GetPaneLocationResponse { .. }
 +            | Pdu::ListAdoptablePanesResponse { .. }
@@ -155,7 +80,7 @@ index b645b827af2c1b608101a9092caacacc09d81141..28e957181466eb992f4e10edf15e56b9
              | Pdu::SearchScrollbackResponse { .. }
              | Pdu::GetLinesResponse { .. }
              | Pdu::GetCodecVersionResponse { .. }
-@@ -1033,6 +1126,129 @@ fn schedule_domain_spawn_v2<SND>(
+@@ -1033,6 +1062,127 @@ fn schedule_domain_spawn_v2<SND>(
          .detach();
  }
  
@@ -186,74 +111,72 @@ index b645b827af2c1b608101a9092caacacc09d81141..28e957181466eb992f4e10edf15e56b9
 +    GetPaneCloseInfoResponse { prompt, process }
 +}
 +
-+/// The named client domain, attached first when needed.
-+async fn client_domain(name: &str) -> anyhow::Result<Arc<dyn Domain>> {
++async fn vtabs_request(pdu: Pdu, client_id: Option<Arc<ClientId>>) -> anyhow::Result<Pdu> {
++    let (name, adopt) = match pdu {
++        Pdu::GetPaneCloseInfo(GetPaneCloseInfo { pane_id }) => {
++            return Ok(Pdu::GetPaneCloseInfoResponse(close_info(pane_id).await))
++        }
++        Pdu::GetPaneLocation(GetPaneLocation { pane_id }) => {
++            return pane_location(pane_id)
++                .await
++                .map(Pdu::GetPaneLocationResponse)
++        }
++        Pdu::ReplacePane(request) => return replace_pane(request, client_id).await,
++        Pdu::ListAdoptablePanes(ListAdoptablePanes { domain }) => (domain, None),
++        Pdu::AdoptPane(AdoptPane {
++            domain,
++            remote_pane_id,
++            window_id,
++        }) => (domain, Some((remote_pane_id, window_id))),
++        pdu => anyhow::bail!("unexpected {}", pdu.pdu_name()),
++    };
 +    let domain = Mux::get()
-+        .get_domain_by_name(name)
++        .get_domain_by_name(&name)
 +        .ok_or_else(|| anyhow!("no such domain {name}"))?;
-+    anyhow::ensure!(
-+        domain
-+            .downcast_ref::<wezterm_client::domain::ClientDomain>()
-+            .is_some(),
-+        "{name} is not a client domain"
-+    );
-+    if domain.state() == DomainState::Detached {
-+        domain.attach(None).await?;
++    let client = domain
++        .downcast_ref::<wezterm_client::domain::ClientDomain>()
++        .ok_or_else(|| anyhow!("{name} is not a client domain"))?;
++    if client.state() == DomainState::Detached {
++        client.attach(None).await?;
 +    }
-+    Ok(domain)
++    Ok(match adopt {
++        None => Pdu::ListAdoptablePanesResponse(ListAdoptablePanesResponse {
++            panes: client.adoptable_panes().await?,
++        }),
++        Some((remote_pane_id, window_id)) => {
++            let (tab, window_id, pane) = client.adopt_pane(remote_pane_id, window_id).await?;
++            Pdu::AdoptPaneResponse(AdoptPaneResponse {
++                pane_id: pane.pane_id(),
++                tab_id: tab.tab_id(),
++                window_id,
++            })
++        }
++    })
 +}
 +
-+async fn adoptable_panes(name: &str) -> anyhow::Result<Vec<PaneEntry>> {
-+    let domain = client_domain(name).await?;
-+    let client = domain
-+        .downcast_ref::<wezterm_client::domain::ClientDomain>()
-+        .expect("checked by client_domain");
-+    client.adoptable_panes().await
-+}
-+
-+async fn adopt_pane(
-+    name: &str,
-+    remote_pane_id: PaneId,
-+    window_id: Option<WindowId>,
-+) -> anyhow::Result<(Arc<Tab>, WindowId, Arc<dyn Pane>)> {
-+    let domain = client_domain(name).await?;
-+    let client = domain
-+        .downcast_ref::<wezterm_client::domain::ClientDomain>()
-+        .expect("checked by client_domain");
-+    client.adopt_pane(remote_pane_id, window_id).await
-+}
-+
-+async fn pane_location(pane_id: PaneId) -> anyhow::Result<GetPaneLocationResponse> {
-+    let pane = Mux::get()
-+        .get_pane(pane_id)
-+        .ok_or_else(|| anyhow!("no such pane {}", pane_id))?;
-+    if let Some(relayed) = pane.downcast_ref::<wezterm_client::pane::ClientPane>() {
++/// A pane this server merely relays belongs to the machine further along the chain.
++async fn pane_location(pane_id: Option<PaneId>) -> anyhow::Result<GetPaneLocationResponse> {
++    let mux = Mux::get();
++    let pane = pane_id
++        .map(|id| mux.get_pane(id).ok_or_else(|| anyhow!("no such pane {id}")))
++        .transpose()?;
++    if let Some(relayed) = pane
++        .as_ref()
++        .and_then(|pane| pane.downcast_ref::<wezterm_client::pane::ClientPane>())
++    {
 +        return relayed.relay_location().await;
 +    }
 +    let cwd = pane
-+        .get_current_working_dir(CachePolicy::AllowStale)
++        .and_then(|pane| pane.get_current_working_dir(CachePolicy::AllowStale))
 +        .map(|url| url.path().to_owned())
 +        .unwrap_or_default();
 +    Ok(GetPaneLocationResponse {
 +        home: mux::location::home(),
 +        repo_root: mux::location::repo_root(&cwd),
 +        cwd,
-+    })
-+}
-+
-+/// A pane this server merely relays belongs to the machine further along the chain.
-+async fn host_info(pane_id: Option<PaneId>) -> GetHostInfoResponse {
-+    if let Some(pane) = pane_id.and_then(|id| Mux::get().get_pane(id)) {
-+        if let Some(relayed) = pane.downcast_ref::<wezterm_client::pane::ClientPane>() {
-+            if let Ok(info) = relayed.relay_host_info().await {
-+                return info;
-+            }
-+        }
-+    }
-+    GetHostInfoResponse {
 +        os: sysinfo::System::distribution_id(),
 +        hostname: sysinfo::System::host_name().unwrap_or_default(),
-+    }
++    })
 +}
 +
 +async fn replace_pane(
@@ -285,7 +208,7 @@ index b645b827af2c1b608101a9092caacacc09d81141..28e957181466eb992f4e10edf15e56b9
  fn schedule_split_pane<SND>(split: SplitPane, send_response: SND, client_id: Option<Arc<ClientId>>)
  where
      SND: Fn(anyhow::Result<Pdu>) + 'static,
-@@ -1126,3 +1342,7 @@ async fn move_pane(
+@@ -1126,3 +1276,7 @@ async fn move_pane(
          window_id,
      }))
  }

@@ -17,7 +17,7 @@
 | Multiple GUI clients | Normal upstream shared-mux focus and resize semantics still apply                                                                                                                                                                     |
 | Remote servers       | Compatible upstream mux servers; distro glyphs and remote home/repository labels need a patched mux server                                                                                                                            |
 | Windows              | Local, SSH and TLS mux; Unix-domain mux only where upstream supports it                                                                                                                                                               |
-| GUI scenario samples | State/geometry/CPU instrumentation; not physical input-to-display or display frame pacing                                                                                                                                             |
+| GUI scenario samples | State/geometry instrumentation; not physical input-to-display or display frame pacing                                                                                                                                                 |
 | MacOS capture        | Opt-in fixture-window screenshots require available OS screen-capture access                                                                                                                                                          |
 
 Private windows exclude live-tab persistence and reopen history. Catalog/settings changes are explicit shared edits. The sidebar never acquires a pane identity or changes split topology.
@@ -33,7 +33,8 @@ Private windows exclude live-tab persistence and reopen history. Catalog/setting
 | Attachment                         | Fresh remote shells; existing remote tabs/windows are not imported, only adopted                                                                    |
 | Ownership                          | Local tabs and splits; each remote shell has an independent backing tab in the remote's `__backing:<host>` workspace                                |
 | Hidden workspaces                  | `__detached`, `__backing:*`; a GUI never switches to them on its own                                                                                |
-| CLI                                | `wezterm cli split-pane --pane-id ID --domain-name DOMAIN`                                                                                          |
+| Replace                            | `wezterm cli replace-pane --pane-id ID --domain-name DOMAIN [--wait-for-ready]`; same slot, fresh shell                                             |
+| Split                              | `wezterm cli split-pane --pane-id ID`; stays in the pane's domain                                                                                   |
 | Adopt                              | `wezterm cli adopt-pane --domain-name DOMAIN --remote-pane-id ID [--window-id ID]`; moves the backing tab to `__backing:<host>`                     |
 | Adoptable                          | `wezterm cli adopt-pane --domain-name DOMAIN --list`; not shown by any route, not relayed, not another host's backing tab                           |
 | Lua capability                     | `wezterm.mux.supports_local_pane_layout`; `wezterm.mux.local_pane_layout_domains` = `{ "tls", "unix", "ssh" }`                                      |

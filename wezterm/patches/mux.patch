@@ -1,157 +1,58 @@
 diff --git a/mux/src/domain.rs b/mux/src/domain.rs
-index 12109666e23dbc36ced1f2cf4d39c60ac9dfa18e..b278aee7f59256e102fe089dcbb641ca2e9082ea 100644
+index 12109666e23dbc36ced1f2cf4d39c60ac9dfa18e..9fc94f2f94b33135ab367d6f67c47c35dc077628 100644
 --- a/mux/src/domain.rs
 +++ b/mux/src/domain.rs
-@@ -78,67 +78,7 @@ pub trait Domain: Downcast + Send + Sync {
+@@ -77,6 +77,18 @@ pub trait Domain: Downcast + Send + Sync {
+         tab: TabId,
          pane_id: PaneId,
          split_request: SplitRequest,
++    ) -> anyhow::Result<Arc<dyn Pane>> {
++        self.split_pane_locally(source, tab, pane_id, split_request)
++            .await
++    }
++
++    /// Change a locally owned split tree, even when the process lives in a client domain.
++    async fn split_pane_locally(
++        &self,
++        source: SplitSource,
++        tab: TabId,
++        pane_id: PaneId,
++        split_request: SplitRequest,
      ) -> anyhow::Result<Arc<dyn Pane>> {
--        let mux = Mux::get();
--        let tab = match mux.get_tab(tab) {
--            Some(t) => t,
--            None => anyhow::bail!("Invalid tab id {}", tab),
--        };
--
--        let pane_index = match tab
--            .iter_panes_ignoring_zoom()
--            .iter()
--            .find(|p| p.pane.pane_id() == pane_id)
--        {
--            Some(p) => p.index,
--            None => anyhow::bail!("invalid pane id {}", pane_id),
--        };
--
--        let split_size = match tab.compute_split_size(pane_index, split_request) {
--            Some(s) => s,
--            None => anyhow::bail!("invalid pane index {}", pane_index),
--        };
--
--        let pane = match source {
--            SplitSource::Spawn {
--                command,
--                command_dir,
--            } => {
--                self.spawn_pane(split_size.second, command, command_dir)
--                    .await?
--            }
--            SplitSource::MovePane(src_pane_id) => {
--                let (_domain, _window, src_tab) = mux
--                    .resolve_pane_id(src_pane_id)
--                    .ok_or_else(|| anyhow::anyhow!("pane {} not found", src_pane_id))?;
--                let src_tab = match mux.get_tab(src_tab) {
--                    Some(t) => t,
--                    None => anyhow::bail!("Invalid tab id {}", src_tab),
--                };
--
--                let pane = src_tab.remove_pane(src_pane_id).ok_or_else(|| {
--                    anyhow::anyhow!("pane {} not found in its containing tab!?", src_pane_id)
--                })?;
--
--                if src_tab.is_dead() {
--                    mux.remove_tab(src_tab.tab_id());
--                }
--
--                pane
--            }
--        };
--
--        // pane_index may have changed if src_pane was also in the same tab
+         let mux = Mux::get();
+         let tab = match mux.get_tab(tab) {
+@@ -98,6 +110,7 @@ pub trait Domain: Downcast + Send + Sync {
+             None => anyhow::bail!("invalid pane index {}", pane_index),
+         };
+ 
++        let spawned = matches!(source, SplitSource::Spawn { .. });
+         let pane = match source {
+             SplitSource::Spawn {
+                 command,
+@@ -128,16 +141,18 @@ pub trait Domain: Downcast + Send + Sync {
+         };
+ 
+         // pane_index may have changed if src_pane was also in the same tab
 -        let final_pane_index = match tab
--            .iter_panes_ignoring_zoom()
--            .iter()
--            .find(|p| p.pane.pane_id() == pane_id)
--        {
++        let inserted = match tab
+             .iter_panes_ignoring_zoom()
+             .iter()
+             .find(|p| p.pane.pane_id() == pane_id)
+         {
 -            Some(p) => p.index,
 -            None => anyhow::bail!("invalid pane id {}", pane_id),
--        };
++            Some(p) => tab.split_and_insert(p.index, split_request, Arc::clone(&pane)),
++            None => Err(anyhow::anyhow!("invalid pane id {}", pane_id)),
+         };
 -
 -        tab.split_and_insert(final_pane_index, split_request, Arc::clone(&pane))?;
--        Ok(pane)
-+        split_pane_locally(self, source, tab, pane_id, split_request).await
-     }
- 
-     async fn spawn_pane(
-@@ -730,3 +670,80 @@ impl Domain for LocalDomain {
-         DomainState::Attached
-     }
- }
-+
-+/// Change a locally owned split tree, even when the process lives in a client domain.
-+pub async fn split_pane_locally<D: Domain + ?Sized>(
-+    domain: &D,
-+    source: SplitSource,
-+    tab: TabId,
-+    pane_id: PaneId,
-+    split_request: SplitRequest,
-+) -> anyhow::Result<Arc<dyn Pane>> {
-+    let mux = Mux::get();
-+    let tab = match mux.get_tab(tab) {
-+        Some(t) => t,
-+        None => anyhow::bail!("Invalid tab id {}", tab),
-+    };
-+
-+    let pane_index = match tab
-+        .iter_panes_ignoring_zoom()
-+        .iter()
-+        .find(|p| p.pane.pane_id() == pane_id)
-+    {
-+        Some(p) => p.index,
-+        None => anyhow::bail!("invalid pane id {}", pane_id),
-+    };
-+
-+    let split_size = match tab.compute_split_size(pane_index, split_request) {
-+        Some(s) => s,
-+        None => anyhow::bail!("invalid pane index {}", pane_index),
-+    };
-+
-+    let spawned = matches!(source, SplitSource::Spawn { .. });
-+    let pane = match source {
-+        SplitSource::Spawn {
-+            command,
-+            command_dir,
-+        } => {
-+            domain
-+                .spawn_pane(split_size.second, command, command_dir)
-+                .await?
-+        }
-+        SplitSource::MovePane(src_pane_id) => {
-+            let (_domain, _window, src_tab) = mux
-+                .resolve_pane_id(src_pane_id)
-+                .ok_or_else(|| anyhow::anyhow!("pane {} not found", src_pane_id))?;
-+            let src_tab = match mux.get_tab(src_tab) {
-+                Some(t) => t,
-+                None => anyhow::bail!("Invalid tab id {}", src_tab),
-+            };
-+
-+            let pane = src_tab.remove_pane(src_pane_id).ok_or_else(|| {
-+                anyhow::anyhow!("pane {} not found in its containing tab!?", src_pane_id)
-+            })?;
-+
-+            if src_tab.is_dead() {
-+                mux.remove_tab(src_tab.tab_id());
-+            }
-+
-+            pane
-+        }
-+    };
-+
-+    // pane_index may have changed if src_pane was also in the same tab
-+    let result = tab
-+        .iter_panes_ignoring_zoom()
-+        .iter()
-+        .find(|p| p.pane.pane_id() == pane_id)
-+        .ok_or_else(|| anyhow::anyhow!("invalid pane id {}", pane_id))
-+        .and_then(|position| {
-+            tab.split_and_insert(position.index, split_request, Arc::clone(&pane))
-+        });
-+    if let Err(error) = result {
-+        if spawned {
++        if inserted.is_err() && spawned {
 +            mux.remove_pane(pane.pane_id());
 +        }
-+        return Err(error);
-+    }
-+    Ok(pane)
-+}
++        inserted?;
+         Ok(pane)
+     }
+ 
 diff --git a/mux/src/lib.rs b/mux/src/lib.rs
 index 6d1a74619b512fdad47918b11bcd690158dd223b..2881cf4148b88a2e58612c4323e285a125c17d78 100644
 --- a/mux/src/lib.rs

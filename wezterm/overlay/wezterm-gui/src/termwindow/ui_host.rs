@@ -10,7 +10,7 @@ use crate::termwindow::render::RenderScreenLineParams;
 use crate::termwindow::{TermWindow, TermWindowNotif, UIItem, UIItemType};
 use config::keyassignment::SpawnCommand;
 use mux::renderable::RenderableDimensions;
-use mux::{tab::TabId, Mux};
+use mux::{tab::TabId, Mux, MuxNotification};
 use std::{
     collections::{HashMap, HashSet},
     rc::Rc,
@@ -186,7 +186,6 @@ pub struct TabInfo {
     pub process: String,
     pub unread: bool,
     pub bell: bool,
-    pub remote: bool,
     pub user_vars: std::collections::HashMap<String, String>,
 }
 pub struct Snapshot {
@@ -242,12 +241,8 @@ pub struct Surface {
 pub trait Provider {
     fn initialize(&mut self) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + '_>>;
     fn reservation(&self) -> Reservation;
-    fn metadata_interval(&self) -> Option<Duration> {
-        None
-    }
-    fn text_input_active(&self) -> bool {
-        false
-    }
+    fn metadata_interval(&self) -> Option<Duration>;
+    fn text_input_active(&self) -> bool;
     fn bind(&mut self, window: Window);
     fn snapshot(&mut self, snapshot: Snapshot);
     fn navigation(&mut self, navigation: Navigation);
@@ -258,18 +253,10 @@ pub trait Provider {
     fn commands(&mut self) -> Vec<Command>;
     fn render(&mut self, geometry: Geometry, now: Instant);
     fn surface(&self) -> &Surface;
-    fn background(&self) -> Option<LinearRgba> {
-        None
-    }
-    fn content_page(&self) -> bool {
-        false
-    }
-    fn overlay_surface(&self) -> bool {
-        false
-    }
-    fn primitives(&self) -> &[RoundedSurface] {
-        &[]
-    }
+    fn background(&self) -> Option<LinearRgba>;
+    fn content_page(&self) -> bool;
+    fn overlay_surface(&self) -> bool;
+    fn primitives(&self) -> &[RoundedSurface];
     fn deadline(&self) -> Option<Instant>;
     fn caret(&self) -> Option<(usize, usize)>;
     fn keyboard_focus(&self) -> bool;
@@ -301,115 +288,7 @@ pub fn spawn_failed(window: usize, context: serde_json::Value) {
     }
 }
 
-#[derive(Default)]
-pub struct PaintStats {
-    samples: std::collections::VecDeque<(u64, u64, u64, u64)>,
-    pub rows_shaped: u64,
-}
-impl PaintStats {
-    fn record(&mut self, compose: u64, shape: u64, submit: u64, total: u64) {
-        if self.samples.len() == 4096 {
-            self.samples.pop_front();
-        }
-        self.samples.push_back((compose, shape, submit, total));
-    }
-    pub fn inspect(&self) -> serde_json::Value {
-        let stages = [
-            "compose_and_convert_us",
-            "shape_us",
-            "quad_copy_us",
-            "vtabs_paint_us",
-        ];
-        let mut result =
-            serde_json::json!({"samples":self.samples.len(),"rows_shaped":self.rows_shaped});
-        for (index, stage) in stages.iter().enumerate() {
-            let mut values = self
-                .samples
-                .iter()
-                .map(|sample| [sample.0, sample.1, sample.2, sample.3][index])
-                .collect::<Vec<_>>();
-            values.sort_unstable();
-            let percentile = |n: usize| {
-                values
-                    .get(values.len().saturating_sub(1) * n / 100)
-                    .copied()
-                    .unwrap_or(0)
-            };
-            result[*stage] =
-                serde_json::json!({"p50":percentile(50),"p95":percentile(95),"p99":percentile(99)});
-        }
-        result
-    }
-}
 const VTABS_UI_ZINDEX: i8 = 5;
-#[derive(Debug)]
-struct FrameGeometry {
-    strips: [Bounds; 4],
-    corners: [(f32, f32); 4],
-    radius: f32,
-}
-fn vtabs_frame_geometry(content: Bounds, dpi: f32) -> Option<FrameGeometry> {
-    if ![content.x, content.y, content.width, content.height, dpi]
-        .iter()
-        .all(|value| value.is_finite())
-        || content.width <= 0.
-        || content.height <= 0.
-        || dpi <= 0.
-    {
-        return None;
-    }
-    let edge = (8. * dpi / 96.)
-        .round()
-        .max(0.)
-        .min(content.width / 2.)
-        .min(content.height / 2.);
-    let radius = (TermWindow::vtabs_frame_gutter_impl(dpi) - edge)
-        .max(0.)
-        .min((content.width / 2. - edge).max(0.))
-        .min((content.height / 2. - edge).max(0.));
-    Some(FrameGeometry {
-        strips: [
-            Bounds {
-                x: content.x,
-                y: content.y,
-                width: content.width,
-                height: edge,
-            },
-            Bounds {
-                x: content.x,
-                y: content.y + content.height - edge,
-                width: content.width,
-                height: edge,
-            },
-            Bounds {
-                x: content.x,
-                y: content.y + edge,
-                width: edge,
-                height: content.height - edge * 2.,
-            },
-            Bounds {
-                x: content.x + content.width - edge,
-                y: content.y + edge,
-                width: edge,
-                height: content.height - edge * 2.,
-            },
-        ],
-        corners: [
-            (content.x + edge, content.y + edge),
-            (content.x + content.width - edge - radius, content.y + edge),
-            (content.x + edge, content.y + content.height - edge - radius),
-            (
-                content.x + content.width - edge - radius,
-                content.y + content.height - edge - radius,
-            ),
-        ],
-        radius,
-    })
-}
-fn vtabs_background_bounds(geometry: Geometry, content_page: bool) -> Bounds {
-    // Transient surfaces leave the terminal visible beneath their own rounded shapes.
-    geometry.ui_bounds(content_page)
-}
 fn vtabs_inset_bounds(mut bounds: Bounds, inset: f32, square: bool) -> Bounds {
     let inset = if inset.is_finite() { inset.max(0.) } else { 0. };
     if square {
@@ -426,38 +305,6 @@ fn vtabs_inset_bounds(mut bounds: Bounds, inset: f32, square: bool) -> Bounds {
     bounds.width = (bounds.width - x * 2.).max(0.);
     bounds.height = (bounds.height - y * 2.).max(0.);
     bounds
-}
-type PrimitiveCacheKey = (usize, usize, usize, u32, u32, u32, u32, u32);
-fn vtabs_primitive_key(
-    shape_generation: usize,
-    window_width: usize,
-    window_height: usize,
-    geometry: Geometry,
-    bounds: Bounds,
-) -> PrimitiveCacheKey {
-    (
-        shape_generation,
-        window_width,
-        window_height,
-        geometry.cell_width.to_bits(),
-        geometry.cell_height.to_bits(),
-        geometry.dpi.to_bits(),
-        bounds.x.to_bits(),
-        bounds.y.to_bits(),
-    )
-}
-fn invalidate_vtabs_primitives(
-    cache: &mut Vec<PrimitiveCache>,
-    prior: &mut PrimitiveCacheKey,
-    next: PrimitiveCacheKey,
-) -> bool {
-    if *prior == next {
-        return false;
-    }
-    // Corner glyph UVs belong to one atlas, even when all surface geometry is unchanged.
-    cache.clear();
-    *prior = next;
-    true
 }
 struct PrimitiveCache {
     surface: RoundedSurface,
@@ -528,38 +375,16 @@ fn vtabs_caret_rect(
     whole_window: bool,
 ) -> Option<window::Rect> {
     let bounds = geometry.ui_bounds(whole_window);
-    if bounds.width <= 0.
-        || bounds.height <= 0.
-        || geometry.cell_width <= 0.
-        || geometry.cell_height <= 0.
-    {
-        return None;
-    }
     let x = bounds.x + offset.0 + caret.0 as f32 * geometry.cell_width;
     let y = bounds.y + offset.1 + caret.1 as f32 * geometry.cell_height;
-    if !x.is_finite() || !y.is_finite() {
-        return None;
-    }
-    let left = x.max(bounds.x).floor();
-    let top = y.max(bounds.y).floor();
-    let right = (x + geometry.cell_width)
-        .min(bounds.x + bounds.width)
-        .ceil();
-    let bottom = (y + geometry.cell_height)
-        .min(bounds.y + bounds.height)
-        .ceil();
-    if right <= left || bottom <= top {
-        return None;
-    }
-    Some(window::Rect::new(
-        window::Point::new(left as isize, top as isize),
-        window::Size::new((right - left) as isize, (bottom - top) as isize),
-    ))
+    let bounds: window::RectF = euclid::rect(bounds.x, bounds.y, bounds.width, bounds.height);
+    // Bounds lead so a NaN caret coordinate yields an empty intersection.
+    let caret = euclid::rect(x, y, geometry.cell_width, geometry.cell_height);
+    bounds.intersection(&caret)?.round_out().try_cast()
 }
 pub struct UiHost {
     pub provider: Box<dyn Provider>,
     pub projection: Projection,
-    pub stats: PaintStats,
     pub dirty: bool,
     needs_commit: bool,
     revision: u64,
@@ -571,7 +396,7 @@ pub struct UiHost {
     cache: Vec<RowCache>,
     primitive_cache: Vec<PrimitiveCache>,
     centered_ranges: Vec<Vec<(f32, f32)>>,
-    primitive_cache_key: PrimitiveCacheKey,
+    primitive_cache_key: (usize, usize, usize, u32, u32, u32, u32, u32),
     cache_key: (usize, usize, usize, usize, usize, bool),
     chrome: Option<ComputedElement>,
     chrome_items: Vec<UIItem>,
@@ -588,22 +413,9 @@ pub struct UiHost {
 }
 impl UiHost {
     pub fn new(window_id: usize) -> Self {
-        let mut provider = crate::vtabs::create(window_id);
-        let mut initialized = false;
-        ARRIVALS.with(|arrivals| {
-            if let Some(messages) = arrivals.borrow().get(&window_id) {
-                for message in messages {
-                    if message["spawned"]["context"]["new_window"] == true {
-                        provider.message(serde_json::json!({"initialize":message["spawned"]["context"],"tab_id":message["spawned"]["tab_id"]}));
-                        initialized = true;
-                    }
-                }
-            }
-        });
-        Self {
-            provider,
+        let mut host = Self {
+            provider: crate::vtabs::create(window_id),
             projection: Projection::default(),
-            stats: PaintStats::default(),
             dirty: true,
             needs_commit: true,
             revision: 0,
@@ -611,11 +423,11 @@ impl UiHost {
             known: HashSet::new(),
             bells: HashSet::new(),
             bound: false,
-            initialized,
+            initialized: false,
             cache: Vec::new(),
             primitive_cache: Vec::new(),
             centered_ranges: Vec::new(),
-            primitive_cache_key: (0, 0, 0, 0, 0, 0, 0, 0),
+            primitive_cache_key: Default::default(),
             cache_key: (0, 0, 0, 0, 0, false),
             chrome: None,
             chrome_items: Vec::new(),
@@ -629,6 +441,20 @@ impl UiHost {
             deadline_task: None,
             deadline_schedule: None,
             deadline_token: 0,
+        };
+        ARRIVALS.with(|arrivals| {
+            if let Some(arrivals) = arrivals.borrow().get(&window_id) {
+                host.initialize(arrivals);
+            }
+        });
+        host
+    }
+    fn initialize(&mut self, arrivals: &[serde_json::Value]) {
+        for arrival in arrivals {
+            if arrival["spawned"]["context"]["new_window"] == true {
+                self.provider.message(serde_json::json!({"initialize":arrival["spawned"]["context"],"tab_id":arrival["spawned"]["tab_id"]}));
+                self.initialized = true;
+            }
         }
     }
     pub fn cancel_metadata_refresh(&mut self) {
@@ -771,20 +597,19 @@ impl TermWindow {
             self.vtabs_schedule_metadata_refresh();
         }
     }
-    pub fn vtabs_last_frame_us(&self) -> u64 {
-        self.last_frame_duration.as_micros() as u64
+    fn vtabs_host_mut(&mut self, window_id: usize) -> Option<&mut UiHost> {
+        if window_id == self.mux_window_id {
+            self.ui_host.as_mut()
+        } else {
+            self.vtabs_suspended.get_mut(&window_id)
+        }
     }
     /// Provider deadlines include durable writes, which must run when unfocused or minimized.
     fn vtabs_schedule_provider(&mut self, window_id: usize) {
         let Some(window) = self.window.clone() else {
             return;
         };
-        let ui = if window_id == self.mux_window_id {
-            self.ui_host.as_mut()
-        } else {
-            self.vtabs_suspended.get_mut(&window_id)
-        };
-        let Some(ui) = ui else {
+        let Some(ui) = self.vtabs_host_mut(window_id) else {
             return;
         };
         let deadline = ui.provider.deadline();
@@ -809,12 +634,7 @@ impl TermWindow {
                 } else {
                     geometry
                 };
-                let ui = if active {
-                    tw.ui_host.as_mut()
-                } else {
-                    tw.vtabs_suspended.get_mut(&window_id)
-                };
-                let Some(ui) = ui else {
+                let Some(ui) = tw.vtabs_host_mut(window_id) else {
                     return;
                 };
                 if ui.deadline_token != token {
@@ -1096,27 +916,13 @@ impl TermWindow {
             .chrome_items
             .iter()
             .rev()
-            .find(|item| {
-                Bounds {
-                    x: item.x as f32,
-                    y: item.y as f32,
-                    width: item.width as f32,
-                    height: item.height as f32,
-                }
-                .contains(event.coords.x as f32, event.coords.y as f32)
-            })
+            .find(|item| item.hit_test(event.coords.x, event.coords.y))
             .cloned();
         if item.is_none() && !ui.chrome_dragging {
             let was_hovered = self.current_mouse_event.as_ref().map_or(false, |old| {
-                ui.chrome_items.iter().any(|item| {
-                    Bounds {
-                        x: item.x as f32,
-                        y: item.y as f32,
-                        width: item.width as f32,
-                        height: item.height as f32,
-                    }
-                    .contains(old.coords.x as f32, old.coords.y as f32)
-                })
+                ui.chrome_items
+                    .iter()
+                    .any(|item| item.hit_test(old.coords.x, old.coords.y))
             });
             if was_hovered {
                 self.current_mouse_event = Some(event.clone());
@@ -1251,8 +1057,26 @@ impl TermWindow {
             ui.dirty = true;
         }
     }
+    fn vtabs_reservation(&self) -> (f32, f32) {
+        (self.vtabs_reserved_width(), self.vtabs_left_width())
+    }
+    fn vtabs_apply_reservation(&mut self, before: (f32, f32)) {
+        if before != self.vtabs_reservation() {
+            if let Some(window) = self.window.clone() {
+                self.apply_dimensions(&self.dimensions.clone(), None, &window);
+            }
+        }
+    }
+    /// Syncs, re-lays out a changed reservation and repaints.
+    fn vtabs_relayout(&mut self, before: (f32, f32)) {
+        self.vtabs_sync();
+        self.vtabs_apply_reservation(before);
+        if let Some(window) = &self.window {
+            window.invalidate();
+        }
+    }
     pub fn vtabs_sync(&mut self) {
-        let old_reservation = (self.vtabs_reserved_width(), self.vtabs_left_width());
+        let before = self.vtabs_reservation();
         let Some(mut ui) = self.ui_host.take() else {
             return;
         };
@@ -1272,12 +1096,7 @@ impl TermWindow {
             return;
         }
         if !ui.initialized {
-            for arrival in &arrivals {
-                if arrival["spawned"]["context"]["new_window"] == true {
-                    ui.provider.message(serde_json::json!({"initialize":arrival["spawned"]["context"],"tab_id":arrival["spawned"]["tab_id"]}));
-                    ui.initialized = true;
-                }
-            }
+            ui.initialize(&arrivals);
         }
         if !ui.bound {
             if let Some(window) = self.window.clone() {
@@ -1348,12 +1167,6 @@ impl TermWindow {
                                 .unwrap_or_default(),
                             unread: pane.as_ref().map_or(false, |p| p.has_unseen_output()),
                             bell: bells.contains(&tab.tab_id()),
-                            remote: pane
-                                .as_ref()
-                                .and_then(|p| mux.get_domain(p.domain_id()))
-                                .map_or(false, |domain| {
-                                    domain.downcast_ref::<mux::domain::LocalDomain>().is_none()
-                                }),
                             user_vars: pane
                                 .as_ref()
                                 .map(|p| p.copy_user_vars())
@@ -1404,11 +1217,7 @@ impl TermWindow {
         self.vtabs_commands(commands);
         self.vtabs_schedule_metadata_refresh();
         self.vtabs_schedule_provider(self.mux_window_id);
-        if old_reservation != (self.vtabs_reserved_width(), self.vtabs_left_width()) {
-            if let Some(window) = self.window.clone() {
-                self.apply_dimensions(&self.dimensions.clone(), None, &window);
-            }
-        }
+        self.vtabs_apply_reservation(before);
     }
     pub fn vtabs_activate_visible(&mut self, id: TabId) {
         self.vtabs_sync();
@@ -1417,37 +1226,104 @@ impl TermWindow {
             .as_ref()
             .and_then(|ui| ui.projection.tabs.iter().position(|tab| *tab == id))
         {
-            let _ = self.vtabs_navigation(Navigation::Index(index as isize));
+            self.vtabs_navigation(Navigation::Index(index as isize));
         }
     }
-    pub fn vtabs_navigation(&mut self, navigation: Navigation) -> anyhow::Result<()> {
+    /// Returns true when upstream must not handle the notification.
+    pub fn vtabs_notif(&mut self, notif: &TermWindowNotif) -> bool {
+        match notif {
+            TermWindowNotif::MuxNotification(notification) => {
+                if !matches!(
+                    notification,
+                    MuxNotification::PaneOutput(_) | MuxNotification::TabResized(_)
+                ) {
+                    self.vtabs_mark_dirty();
+                }
+                match notification {
+                    MuxNotification::Alert {
+                        alert: wezterm_term::Alert::Bell,
+                        pane_id,
+                    } => self.vtabs_bell(*pane_id),
+                    // The window owns content dimensions; new tabs adopt them without resizing it.
+                    MuxNotification::TabAddedToWindow { tab_id, .. } => {
+                        if let Some(tab) = Mux::get().get_tab(*tab_id) {
+                            tab.resize(self.terminal_size);
+                        }
+                        return true;
+                    }
+                    MuxNotification::TabResized(_) => return true,
+                    MuxNotification::WindowRemoved(window_id) => {
+                        if let Some(ui) = self.vtabs_suspended.remove(window_id) {
+                            ui.shutdown();
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            TermWindowNotif::SwitchToMuxWindow(window_id) => {
+                if let Some(mut ui) = self.ui_host.take() {
+                    ui.cancel_metadata_refresh();
+                    ui.provider.input(Input::Focus(false));
+                    ui.dirty = true;
+                    self.vtabs_suspended.insert(self.mux_window_id, ui);
+                }
+                self.ui_host = Some(
+                    self.vtabs_suspended
+                        .remove(window_id)
+                        .unwrap_or_else(|| UiHost::new(*window_id)),
+                );
+            }
+            _ => {}
+        }
+        false
+    }
+    /// Tab actions follow the sidebar's visible order, not the window's tab indices.
+    pub fn vtabs_assignment(&mut self, assignment: &config::keyassignment::KeyAssignment) -> bool {
+        use config::keyassignment::KeyAssignment::*;
+        let navigation = match assignment {
+            ActivateTab(index) => Navigation::Index(*index),
+            ActivateTabRelative(delta) => Navigation::Relative(*delta, true),
+            ActivateTabRelativeNoWrap(delta) => Navigation::Relative(*delta, false),
+            ActivateLastTab => Navigation::Last,
+            MoveTab(index) => Navigation::Move(*index),
+            MoveTabRelative(delta) => Navigation::MoveRelative(*delta),
+            ShowTabNavigator => Navigation::Navigator,
+            CloseCurrentTab { .. }
+                if self
+                    .ui_host
+                    .as_ref()
+                    .is_some_and(|ui| ui.provider.content_page()) =>
+            {
+                Navigation::ClosePage
+            }
+            ActivateCommandPalette => {
+                self.vtabs_open_command_palette();
+                return true;
+            }
+            _ => return false,
+        };
+        self.vtabs_navigation(navigation);
+        true
+    }
+    pub fn vtabs_navigation(&mut self, navigation: Navigation) {
         self.vtabs_sync();
-        let before = (self.vtabs_reserved_width(), self.vtabs_left_width());
+        let before = self.vtabs_reservation();
         if let Some(ui) = self.ui_host.as_mut() {
             ui.provider.navigation(navigation);
             ui.needs_commit = true;
         }
-        self.vtabs_sync();
-        if let Some(window) = self.window.clone() {
-            if before != (self.vtabs_reserved_width(), self.vtabs_left_width()) {
-                self.apply_dimensions(&self.dimensions.clone(), None, &window);
-            }
-            window.invalidate();
-        }
-        Ok(())
+        self.vtabs_relayout(before);
     }
     pub fn vtabs_open_command_palette(&mut self) {
         self.vtabs_sync();
+        let before = self.vtabs_reservation();
         let commands = super::palette::CommandPalette::new(self).into_commands();
         self.cancel_modal();
         if let Some(ui) = self.ui_host.as_mut() {
             ui.provider.open_command_palette(commands);
             ui.needs_commit = true;
         }
-        self.vtabs_sync();
-        if let Some(window) = self.window.as_ref() {
-            window.invalidate();
-        }
+        self.vtabs_relayout(before);
     }
     pub fn vtabs_message_for(&mut self, window_id: usize, message: serde_json::Value) {
         if window_id == self.mux_window_id {
@@ -1459,31 +1335,19 @@ impl TermWindow {
         }
     }
     pub fn vtabs_message(&mut self, message: serde_json::Value) {
-        let before = self.vtabs_reserved_width();
-        let side = self.vtabs_left_width();
+        let before = self.vtabs_reservation();
         if let Some(ui) = self.ui_host.as_mut() {
             ui.provider.message(message);
             ui.needs_commit = true;
         }
-        self.vtabs_sync();
-        if let Some(window) = self.window.clone() {
-            if before != self.vtabs_reserved_width() || side != self.vtabs_left_width() {
-                self.apply_dimensions(&self.dimensions.clone(), None, &window);
-            }
-            window.invalidate();
-        }
+        self.vtabs_relayout(before);
     }
     pub fn vtabs_input(&mut self, input: Input<'_>) -> bool {
         self.vtabs_sync();
-        let before = (self.vtabs_reserved_width(), self.vtabs_left_width());
+        let before = self.vtabs_reservation();
         if let Input::Mouse(event, _) = &input {
             if self.vtabs_titlebar_mouse(event) {
-                self.vtabs_sync();
-                if before != (self.vtabs_reserved_width(), self.vtabs_left_width()) {
-                    if let Some(window) = self.window.clone() {
-                        self.apply_dimensions(&self.dimensions.clone(), None, &window);
-                    }
-                }
+                self.vtabs_relayout(before);
                 return true;
             }
         }
@@ -1496,14 +1360,10 @@ impl TermWindow {
             ui.needs_commit |= consumed;
             consumed
         });
-        self.vtabs_sync();
         if consumed {
-            if let Some(window) = self.window.clone() {
-                if before != (self.vtabs_reserved_width(), self.vtabs_left_width()) {
-                    self.apply_dimensions(&self.dimensions.clone(), None, &window);
-                }
-                window.invalidate();
-            }
+            self.vtabs_relayout(before);
+        } else {
+            self.vtabs_sync();
         }
         consumed
     }
@@ -1703,24 +1563,6 @@ impl TermWindow {
             }
         }
     }
-    fn paint_vtabs_surface(
-        &self,
-        layers: &mut TripleLayerQuadAllocator,
-        rect: Bounds,
-        radius: f32,
-        fill: LinearRgba,
-    ) -> anyhow::Result<()> {
-        if ![rect.x, rect.y, rect.width, rect.height, radius]
-            .iter()
-            .all(|value| value.is_finite())
-            || rect.width <= 0.
-            || rect.height <= 0.
-        {
-            return Ok(());
-        }
-        let radius = radius.max(0.).min(rect.width / 2.).min(rect.height / 2.);
-        self.paint_vtabs_rounded_fill(layers, rect, radius, fill)
-    }
     fn paint_vtabs_rounded_fill(
         &self,
         layers: &mut TripleLayerQuadAllocator,
@@ -1728,9 +1570,16 @@ impl TermWindow {
         radius: f32,
         color: LinearRgba,
     ) -> anyhow::Result<()> {
-        if rect.width <= 0. || rect.height <= 0. || color.tuple().3 <= 0. {
+        if ![rect.x, rect.y, rect.width, rect.height, radius]
+            .iter()
+            .all(|value| value.is_finite())
+            || rect.width <= 0.
+            || rect.height <= 0.
+            || color.tuple().3 <= 0.
+        {
             return Ok(());
         }
+        let radius = radius.max(0.).min(rect.width / 2.).min(rect.height / 2.);
         if radius < 1. {
             self.filled_rectangle(
                 layers,
@@ -1797,33 +1646,59 @@ impl TermWindow {
         content: Bounds,
         color: LinearRgba,
     ) -> anyhow::Result<()> {
-        let Some(frame) = vtabs_frame_geometry(content, self.dimensions.dpi as f32) else {
+        let dpi = self.dimensions.dpi as f32;
+        let Bounds {
+            x,
+            y,
+            width,
+            height,
+        } = content;
+        if ![x, y, width, height, dpi]
+            .iter()
+            .all(|value| value.is_finite())
+            || width <= 0.
+            || height <= 0.
+            || dpi <= 0.
+        {
             return Ok(());
-        };
-        for rect in frame.strips {
-            if rect.width > 0. && rect.height > 0. {
-                self.filled_rectangle(
-                    layers,
-                    0,
-                    euclid::rect(rect.x, rect.y, rect.width, rect.height),
-                    color,
-                )?;
+        }
+        let edge = (8. * dpi / 96.)
+            .round()
+            .max(0.)
+            .min(width / 2.)
+            .min(height / 2.);
+        let radius = (Self::vtabs_frame_gutter_impl(dpi) - edge)
+            .max(0.)
+            .min((width / 2. - edge).max(0.))
+            .min((height / 2. - edge).max(0.));
+        for (x, y, width, height) in [
+            (x, y, width, edge),
+            (x, y + height - edge, width, edge),
+            (x, y + edge, edge, height - edge * 2.),
+            (x + width - edge, y + edge, edge, height - edge * 2.),
+        ] {
+            if width > 0. && height > 0. {
+                self.filled_rectangle(layers, 0, euclid::rect(x, y, width, height), color)?;
             }
         }
-        if frame.radius >= 1. {
-            for ((x, y), corner) in frame.corners.iter().copied().zip([
-                FRAME_TOP_LEFT,
-                FRAME_TOP_RIGHT,
-                FRAME_BOTTOM_LEFT,
-                FRAME_BOTTOM_RIGHT,
-            ]) {
+        if radius >= 1. {
+            for (x, y, corner) in [
+                (x + edge, y + edge, FRAME_TOP_LEFT),
+                (x + width - edge - radius, y + edge, FRAME_TOP_RIGHT),
+                (x + edge, y + height - edge - radius, FRAME_BOTTOM_LEFT),
+                (
+                    x + width - edge - radius,
+                    y + height - edge - radius,
+                    FRAME_BOTTOM_RIGHT,
+                ),
+            ] {
                 self.poly_quad(
                     layers,
                     0,
                     euclid::point2(x, y),
                     corner,
                     0,
-                    euclid::size2(frame.radius, frame.radius),
+                    euclid::size2(radius, radius),
                     color,
                 )?
                 .set_grayscale();
@@ -1852,18 +1727,19 @@ impl TermWindow {
             }
             ui.geometry = geometry;
             ui.provider.render(geometry, start);
-            let composed = start.elapsed().as_micros() as u64;
-            let mut shaped = 0;
-            let mut copied = 0;
             let surface = ui.provider.surface();
             let bounds =
                 geometry.ui_bounds(ui.provider.content_page() || ui.provider.overlay_surface());
-            let background_bounds = vtabs_background_bounds(geometry, ui.provider.content_page());
+            // Transient surfaces leave the terminal visible beneath their own rounded shapes.
+            let background_bounds = geometry.ui_bounds(ui.provider.content_page());
             let rounded = !ui.provider.primitives().is_empty();
-            let origin = (
+            let clip = (
                 bounds.x - self.dimensions.pixel_width as f32 / 2.,
                 bounds.y - self.dimensions.pixel_height as f32 / 2.,
+                bounds.x + bounds.width - self.dimensions.pixel_width as f32 / 2.,
+                bounds.y + bounds.height - self.dimensions.pixel_height as f32 / 2.,
             );
+            let origin = (clip.0, clip.1);
             let grid_width = surface.columns as f32 * geometry.cell_width;
             let key = (
                 self.shape_generation,
@@ -1919,18 +1795,22 @@ impl TermWindow {
                 ),
                 background,
             )?;
-            let primitive_key = vtabs_primitive_key(
+            let primitive_key = (
                 self.shape_generation,
                 self.dimensions.pixel_width,
                 self.dimensions.pixel_height,
-                geometry,
-                bounds,
+                geometry.cell_width.to_bits(),
+                geometry.cell_height.to_bits(),
+                geometry.dpi.to_bits(),
+                bounds.x.to_bits(),
+                bounds.y.to_bits(),
             );
-            let invalidated = invalidate_vtabs_primitives(
-                &mut ui.primitive_cache,
-                &mut ui.primitive_cache_key,
-                primitive_key,
-            );
+            let invalidated = ui.primitive_cache_key != primitive_key;
+            if invalidated {
+                // Corner glyph UVs belong to one atlas, even when surface geometry is unchanged.
+                ui.primitive_cache.clear();
+                ui.primitive_cache_key = primitive_key;
+            }
             let recenter = invalidated
                 || ui.centered_ranges.len() != surface.rows.len()
                 || ui.primitive_cache.len() != ui.provider.primitives().len()
@@ -1964,12 +1844,6 @@ impl TermWindow {
                 }
             }
             ui.primitive_cache.truncate(ui.provider.primitives().len());
-            let clip = (
-                bounds.x - self.dimensions.pixel_width as f32 / 2.,
-                bounds.y - self.dimensions.pixel_height as f32 / 2.,
-                bounds.x + bounds.width - self.dimensions.pixel_width as f32 / 2.,
-                bounds.y + bounds.height - self.dimensions.pixel_height as f32 / 2.,
-            );
             for (index, primitive) in ui.provider.primitives().iter().enumerate() {
                 if ui
                     .primitive_cache
@@ -1986,7 +1860,7 @@ impl TermWindow {
                     let rect =
                         vtabs_inset_bounds(rect, primitive.inset * scale, primitive.square);
                     let mut quads = HeapQuadAllocator::default();
-                    self.paint_vtabs_surface(
+                    self.paint_vtabs_rounded_fill(
                         &mut TripleLayerQuadAllocator::Heap(&mut quads),
                         rect,
                         primitive.radius * scale,
@@ -2025,7 +1899,6 @@ impl TermWindow {
                     .get(y)
                     .is_none_or(|cached| !cached.matches(line, centered_ranges))
                 {
-                    let shape_start = Instant::now();
                     let mut quads = HeapQuadAllocator::default();
                     self.render_screen_line(
                         RenderScreenLineParams {
@@ -2080,8 +1953,6 @@ impl TermWindow {
                             geometry.cell_height / 2.,
                         );
                     }
-                    shaped += shape_start.elapsed().as_micros() as u64;
-                    ui.stats.rows_shaped += 1;
                     let cached = RowCache {
                         line: Rc::clone(line),
                         centered_ranges: centered_ranges.clone(),
@@ -2094,7 +1965,6 @@ impl TermWindow {
                         ui.cache.push(cached);
                     }
                 }
-                let copy_start = Instant::now();
                 ui.cache[y].quads.apply_transformed(
                     layers,
                     (
@@ -2102,14 +1972,8 @@ impl TermWindow {
                         surface.offset.1 + origin.1 - ui.cache[y].origin.1,
                     ),
                     surface.opacity,
-                    (
-                        bounds.x - self.dimensions.pixel_width as f32 / 2.,
-                        bounds.y - self.dimensions.pixel_height as f32 / 2.,
-                        bounds.x + bounds.width - self.dimensions.pixel_width as f32 / 2.,
-                        bounds.y + bounds.height - self.dimensions.pixel_height as f32 / 2.,
-                    ),
+                    clip,
                 );
-                copied += copy_start.elapsed().as_micros() as u64;
             }
             if ui.provider.keyboard_focus() {
                 if let (Some(window), Some(caret)) = (&self.window, ui.provider.caret()) {
@@ -2130,8 +1994,6 @@ impl TermWindow {
                     }
                 }
             }
-            ui.stats
-                .record(composed, shaped, copied, start.elapsed().as_micros() as u64);
             metrics::histogram!("ui_host.paint").record(start.elapsed());
             Ok(())
         })();

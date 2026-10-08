@@ -1002,9 +1002,7 @@ impl Provider for Adapter {
                 let host_tab = mux.get_tab(tab.id);
                 let location = match host_tab.as_ref().and_then(|host| host.get_active_pane()) {
                     Some(pane) => location::Location::of(&pane, &tab.cwd, local_host, repos),
-                    None => {
-                        location::Location::unanswered(tab.remote, String::new(), &tab.cwd, repos)
-                    }
+                    None => location::Location::unanswered(false, String::new(), &tab.cwd, repos),
                 };
                 let panes = host_tab
                     .map(|host| host.iter_panes_ignoring_zoom())

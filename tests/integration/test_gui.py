@@ -28,7 +28,6 @@ def test_start_render_and_shutdown(wezterm_binaries, headless_display, tmp_path,
         state = probe.start()
         assert state["visible"]
         assert state["content"]["width"] > 0
-        assert state["paint"]["samples"] > 0
         assert state["model"]["can_reopen"] is False
         probe.intent({"SetSetting": {"key": "width", "value": 300}})
         probe.wait(lambda current: current["model"]["settings"]["width"] == 300)

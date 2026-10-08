@@ -1,4 +1,4 @@
-//! The owning server resolves a pane's home and Git work tree whenever its directory changes.
+//! The owner reports its host, home and the pane's Git work tree whenever the directory changes.
 use crate::domain::ClientInner;
 use codec::{GetPaneLocation, GetPaneLocationResponse};
 use mux::pane::PaneId;
@@ -39,7 +39,7 @@ impl PaneLocation {
             let Ok(location) = client
                 .client
                 .get_pane_location(GetPaneLocation {
-                    pane_id: remote_pane_id,
+                    pane_id: Some(remote_pane_id),
                 })
                 .await
             else {
@@ -47,7 +47,7 @@ impl PaneLocation {
             };
             {
                 let mut state = state.lock();
-                // An answer overtaken by a later directory change is already stale.
+                // Overtaken answers are stale; the last one keeps the host until the next lands.
                 if state.requests != request {
                     return;
                 }

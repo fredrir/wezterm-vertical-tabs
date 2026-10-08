@@ -19,17 +19,19 @@ impl Location {
         let Some(client) = pane.downcast_ref::<ClientPane>() else {
             return Self::unanswered(false, String::new(), cwd, repos);
         };
-        let (remote, os) = client.host_info().map_or((true, String::new()), |owner| {
-            (!owner.hostname.eq_ignore_ascii_case(local_host), owner.os)
-        });
-        match client.location() {
-            Some(owner) => Self {
-                remote,
-                os,
-                home: Some(owner.home),
-                repo_root: owner.repo_root,
-            },
-            None => Self::unanswered(remote, os, cwd, repos),
+        let Some(owner) = client.location() else {
+            return Self::unanswered(true, String::new(), cwd, repos);
+        };
+        let remote = !owner.hostname.eq_ignore_ascii_case(local_host);
+        // The host outlives a directory change; home and repository wait for the next answer.
+        if owner.cwd != cwd {
+            return Self::unanswered(remote, owner.os, cwd, repos);
+        }
+        Self {
+            remote,
+            os: owner.os,
+            home: Some(owner.home),
+            repo_root: owner.repo_root,
         }
     }
 

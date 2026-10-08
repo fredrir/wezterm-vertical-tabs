@@ -1,18 +1,15 @@
 diff --git a/wezterm-input-types/src/lib.rs b/wezterm-input-types/src/lib.rs
-index f5673f600d8a06b4239a9a3c1146fc387123d8a8..2c8c0f5f337ad1713edfa9454b41b957c552c698 100644
+index f5673f600d8a06b4239a9a3c1146fc387123d8a8..8af3c434ac1c00009bd19b8506027924e2f19322 100644
 --- a/wezterm-input-types/src/lib.rs
 +++ b/wezterm-input-types/src/lib.rs
-@@ -2122,7 +2122,14 @@ impl TryFrom<String> for WindowDecorations {
+@@ -2122,7 +2122,11 @@ impl TryFrom<String> for WindowDecorations {
  
  impl Default for WindowDecorations {
      fn default() -> Self {
 -        WindowDecorations::TITLE | WindowDecorations::RESIZE
-+        #[cfg(target_os = "macos")]
-+        {
++        if cfg!(target_os = "macos") {
 +            Self::INTEGRATED_BUTTONS | Self::RESIZE
-+        }
-+        #[cfg(not(target_os = "macos"))]
-+        {
++        } else {
 +            Self::TITLE | Self::RESIZE
 +        }
      }

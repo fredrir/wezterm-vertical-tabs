@@ -77,30 +77,3 @@ index b9325957b1ec065f091bf0c4a860c7b5a8fce272..72f31e31a159e921f008082f1086c9c9
          CliSubCommand::SendText(cmd) => cmd.run(client).await,
          CliSubCommand::GetText(cmd) => cmd.run(client).await,
          CliSubCommand::SpawnCommand(cmd) => cmd.run(client, &crate::init_config(opts)?).await,
-diff --git a/wezterm/src/cli/split_pane.rs b/wezterm/src/cli/split_pane.rs
-index e51f508203921278147c5d9050b08c4bff7a54b0..6e4e0a5f484b654179dd55341bcc622f33ca5d9e 100644
---- a/wezterm/src/cli/split_pane.rs
-+++ b/wezterm/src/cli/split_pane.rs
-@@ -14,6 +14,10 @@ pub struct SplitPane {
-     #[arg(long)]
-     pane_id: Option<PaneId>,
- 
-+    /// Spawn in this domain while retaining the target pane's tab.
-+    #[arg(long, conflicts_with = "move_pane_id")]
-+    domain_name: Option<String>,
-+
-     /// Equivalent to `--right`. If neither this nor any other direction
-     /// is specified, the default is equivalent to `--bottom`.
-     #[arg(long, conflicts_with_all=&["left", "right", "top", "bottom"])]
-@@ -96,7 +100,10 @@ impl SplitPane {
-             .split_pane(codec::SplitPane {
-                 pane_id,
-                 split_request,
--                domain: config::keyassignment::SpawnTabDomain::CurrentPaneDomain,
-+                domain: self.domain_name.map_or(
-+                    config::keyassignment::SpawnTabDomain::CurrentPaneDomain,
-+                    config::keyassignment::SpawnTabDomain::DomainName,
-+                ),
-                 command: if self.prog.is_empty() {
-                     None
-                 } else {

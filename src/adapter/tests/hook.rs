@@ -18,7 +18,6 @@ fn snapshot(revision: u64, config_epoch: usize, process: &str) -> Snapshot {
             user: String::new(),
             unread: false,
             bell: false,
-            remote: false,
             user_vars: HashMap::new(),
         }],
     }

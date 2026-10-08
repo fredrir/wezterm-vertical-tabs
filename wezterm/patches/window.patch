@@ -16,7 +16,7 @@ index 22de40ad1da5c015cbcf438768657006f9f4185d..802db8e81b425af22f1eaaaf9260e358
      /// The coordinates are of the top left pixel of the
      /// client area.
 diff --git a/window/src/os/macos/window.rs b/window/src/os/macos/window.rs
-index 1193d398d910c5da761c1ab18d9f024f57610884..7db6dcbaadd00c3db19cc9d90091b3f8aedc6b5f 100644
+index 1193d398d910c5da761c1ab18d9f024f57610884..164a3073a6d7be1fcce0a72e5892c67d0947fbb2 100644
 --- a/window/src/os/macos/window.rs
 +++ b/window/src/os/macos/window.rs
 @@ -391,6 +391,7 @@ pub(crate) struct WindowInner {
@@ -249,7 +249,7 @@ index 1193d398d910c5da761c1ab18d9f024f57610884..7db6dcbaadd00c3db19cc9d90091b3f8
      extern "C" fn wezterm_perform_key_assignment(
          this: &mut Object,
          _sel: Sel,
-@@ -2364,10 +2469,14 @@ impl WindowView {
+@@ -2364,10 +2469,13 @@ impl WindowView {
          match action {
              Some(RepresentedItem::KeyAssignment(action)) => {
                  if let Some(this) = Self::get_this(this) {
@@ -258,8 +258,7 @@ index 1193d398d910c5da761c1ab18d9f024f57610884..7db6dcbaadd00c3db19cc9d90091b3f8
 -                        .events
 -                        .dispatch(WindowEvent::PerformKeyAssignment(action));
 +                    let mut inner = this.inner.borrow_mut();
-+                    // AppKit menu shortcuts can bypass keyDown entirely. Give input
-+                    // consumers the originating chord before executing its assignment.
++                    // AppKit menu shortcuts bypass keyDown; input consumers see the chord first.
 +                    let event: id = unsafe { msg_send![appkit::NSApp(), currentEvent] };
 +                    if dispatch_menu_key_equivalent(event, |event| inner.events.dispatch(event)) {
 +                        return;
@@ -268,7 +267,7 @@ index 1193d398d910c5da761c1ab18d9f024f57610884..7db6dcbaadd00c3db19cc9d90091b3f8
                  }
              }
              None => {}
-@@ -2388,22 +2497,27 @@ impl WindowView {
+@@ -2388,22 +2496,27 @@ impl WindowView {
          }
      }
  
@@ -304,7 +303,7 @@ index 1193d398d910c5da761c1ab18d9f024f57610884..7db6dcbaadd00c3db19cc9d90091b3f8
              mouse_buttons = decode_mouse_buttons(NSEvent::pressedMouseButtons(nsevent));
              modifiers = key_modifiers(nsevent.modifierFlags());
              screen_coords = NSEvent::mouseLocation(nsevent);
-@@ -3335,6 +3449,11 @@ impl WindowView {
+@@ -3335,6 +3448,11 @@ impl WindowView {
                  Self::allow_automatic_tabbing as extern "C" fn(&Object, Sel) -> BOOL,
              );
  
