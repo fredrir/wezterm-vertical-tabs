@@ -1,0 +1,343 @@
+diff --git a/codec/src/lib.rs b/codec/src/lib.rs
+--- a/codec/src/lib.rs
++++ b/codec/src/lib.rs
+@@ -513,6 +513,7 @@
+     ListAdoptablePanesResponse: 70,
+     AdoptPane: 71,
+     AdoptPaneResponse: 72,
++    ReplacePane: 73,
+ }
+ 
+ impl Pdu {
+@@ -658,6 +659,14 @@
+     pub tabs: Vec<PaneNode>,
+     pub tab_titles: Vec<String>,
+     pub window_titles: HashMap<WindowId, String>,
++}
++
++#[derive(Deserialize, Serialize, PartialEq, Debug)]
++pub struct ReplacePane {
++    pub pane_id: PaneId,
++    pub command: Option<CommandBuilder>,
++    pub command_dir: Option<String>,
++    pub domain: config::keyassignment::SpawnTabDomain,
+ }
+ 
+ #[derive(Deserialize, Serialize, PartialEq, Debug)]
+diff --git a/mux/src/lib.rs b/mux/src/lib.rs
+--- a/mux/src/lib.rs
++++ b/mux/src/lib.rs
+@@ -1212,6 +1212,55 @@
+         })
+     }
+ 
++    pub async fn replace_pane(
++        &self,
++        pane_id: PaneId,
++        command: Option<CommandBuilder>,
++        command_dir: Option<String>,
++        domain: config::keyassignment::SpawnTabDomain,
++    ) -> anyhow::Result<(Arc<dyn Pane>, TerminalSize)> {
++        let _activity = Activity::new();
++        let (_, window_id, tab_id) = self
++            .resolve_pane_id(pane_id)
++            .ok_or_else(|| anyhow!("pane_id {pane_id} invalid"))?;
++        let domain = self.resolve_spawn_tab_domain(Some(pane_id), &domain)?;
++        if domain.state() == DomainState::Detached {
++            domain.attach(Some(window_id)).await?;
++        }
++        let tab = self
++            .get_tab(tab_id)
++            .ok_or_else(|| anyhow!("tab {tab_id} disappeared"))?;
++        let current = self
++            .get_pane(pane_id)
++            .ok_or_else(|| anyhow!("pane {pane_id} disappeared"))?;
++        let size = tab.pane_size(pane_id)?;
++        let cwd = self.resolve_cwd(
++            command_dir,
++            Some(Arc::clone(&current)),
++            domain.domain_id(),
++            CachePolicy::FetchImmediate,
++        );
++        let pane = domain.spawn_pane(size, command, cwd).await?;
++        if let Some(config) = current.get_config() {
++            pane.set_config(config);
++        }
++        let result = self.add_pane(&pane).and_then(|()| {
++            anyhow::ensure!(self.get_tab(tab_id).is_some(), "tab {tab_id} disappeared");
++            anyhow::ensure!(self.get_pane(pane_id).is_some(), "pane {pane_id} disappeared");
++            tab.replace_pane(pane_id, Arc::clone(&pane))
++        });
++        match result {
++            Ok(size) => {
++                self.remove_pane(pane_id);
++                Ok((pane, size))
++            }
++            Err(error) => {
++                self.remove_pane(pane.pane_id());
++                Err(error)
++            }
++        }
++    }
++
+     pub async fn split_pane(
+         &self,
+         // TODO: disambiguate with TabId
+diff --git a/mux/src/tab.rs b/mux/src/tab.rs
+--- a/mux/src/tab.rs
++++ b/mux/src/tab.rs
+@@ -681,6 +681,18 @@
+         self.inner.lock().remove_pane(pane_id)
+     }
+ 
++    pub fn pane_size(&self, pane_id: PaneId) -> anyhow::Result<TerminalSize> {
++        self.inner.lock().pane_size(pane_id)
++    }
++
++    pub fn replace_pane(
++        &self,
++        pane_id: PaneId,
++        pane: Arc<dyn Pane>,
++    ) -> anyhow::Result<TerminalSize> {
++        self.inner.lock().replace_pane(pane_id, pane)
++    }
++
+     pub fn can_close_without_prompting(&self, reason: CloseReason) -> bool {
+         self.inner.lock().can_close_without_prompting(reason)
+     }
+@@ -1810,6 +1822,59 @@
+ 
+     fn cell_dimensions(&self) -> TerminalSize {
+         cell_dimensions(&self.size)
++    }
++
++    fn pane_size(&mut self, pane_id: PaneId) -> anyhow::Result<TerminalSize> {
++        let position = self
++            .iter_panes_ignoring_zoom()
++            .into_iter()
++            .find(|p| p.pane.pane_id() == pane_id)
++            .ok_or_else(|| anyhow::anyhow!("pane {pane_id} is no longer in this tab"))?;
++        if position.is_zoomed {
++            return Ok(self.size);
++        }
++        Ok(TerminalSize {
++            rows: position.height,
++            cols: position.width,
++            pixel_width: position.pixel_width,
++            pixel_height: position.pixel_height,
++            dpi: self.size.dpi,
++        })
++    }
++
++    fn replace_pane(
++        &mut self,
++        pane_id: PaneId,
++        pane: Arc<dyn Pane>,
++    ) -> anyhow::Result<TerminalSize> {
++        let size = self.pane_size(pane_id)?;
++        // The tab may have been resized while the shell was spawning.
++        pane.resize(size)?;
++        let prior = self.get_active_pane();
++        let mut cursor = self.pane.take().unwrap().cursor();
++        loop {
++            if let Some(leaf) = cursor.leaf_mut() {
++                if leaf.pane_id() == pane_id {
++                    *leaf = Arc::clone(&pane);
++                    self.pane = Some(cursor.tree());
++                    break;
++                }
++            }
++            match cursor.preorder_next() {
++                Ok(next) => cursor = next,
++                Err(cursor) => {
++                    self.pane = Some(cursor.tree());
++                    anyhow::bail!("pane {pane_id} is no longer in this tab");
++                }
++            }
++        }
++        if self.zoomed.as_ref().is_some_and(|p| p.pane_id() == pane_id) {
++            pane.set_zoomed(true);
++            self.zoomed = Some(pane);
++        }
++        self.advise_focus_change(prior);
++        Mux::get().notify(MuxNotification::TabResized(self.id));
++        Ok(size)
+     }
+ 
+     fn swap_active_with_index(&mut self, pane_index: usize, keep_focus: bool) -> Option<()> {
+diff --git a/wezterm-client/src/client.rs b/wezterm-client/src/client.rs
+--- a/wezterm-client/src/client.rs
++++ b/wezterm-client/src/client.rs
+@@ -141,6 +141,24 @@
+         .downcast_ref::<ClientDomain>()
+         .ok_or_else(|| anyhow!("domain {} is not a ClientDomain instance", local_domain_id))?;
+ 
++    if matches!(&decoded.pdu, Pdu::PaneRemoved(_)) && !client_domain.local_pane_layout() {
++        // A preceding TabResized may already have forgotten the ID mapping.
++        let removed = mux.iter_panes().into_iter().find(|pane| {
++            pane.domain_id() == local_domain_id
++                && pane
++                    .downcast_ref::<ClientPane>()
++                    .is_some_and(|client| client.remote_pane_id == pane_id)
++        });
++        client_domain.resync().await?;
++        if let Some(pane) = removed {
++            if let Some(client) = pane.downcast_ref::<ClientPane>() {
++                client.ignore_next_kill();
++            }
++            mux.remove_pane(pane.pane_id());
++        }
++        return Ok(());
++    }
++
+     // If we get a push for a pane that we don't yet know about,
+     // it means that some other client has manipulated the mux
+     // topology; we need to re-sync.
+@@ -1356,6 +1374,7 @@
+     rpc!(adopt_pane, AdoptPane, AdoptPaneResponse);
+     rpc!(spawn_v2, SpawnV2, SpawnResponse);
+     rpc!(split_pane, SplitPane, SpawnResponse);
++    rpc!(replace_pane, ReplacePane, SpawnResponse);
+     rpc!(
+         move_pane_to_new_tab,
+         MovePaneToNewTab,
+diff --git a/wezterm-mux-server-impl/src/sessionhandler.rs b/wezterm-mux-server-impl/src/sessionhandler.rs
+--- a/wezterm-mux-server-impl/src/sessionhandler.rs
++++ b/wezterm-mux-server-impl/src/sessionhandler.rs
+@@ -791,6 +791,17 @@
+                 let client_id = self.client_id.clone();
+                 spawn_into_main_thread(async move {
+                     schedule_domain_spawn_v2(spawn, send_response, client_id);
++                })
++                .detach();
++            }
++
++            Pdu::ReplacePane(request) => {
++                let client_id = self.client_id.clone();
++                spawn_into_main_thread(async move {
++                    promise::spawn::spawn(async move {
++                        send_response(replace_pane(request, client_id).await)
++                    })
++                    .detach();
+                 })
+                 .detach();
+             }
+@@ -1212,6 +1223,31 @@
+     }
+ }
+ 
++async fn replace_pane(
++    request: ReplacePane,
++    client_id: Option<Arc<ClientId>>,
++) -> anyhow::Result<Pdu> {
++    let mux = Mux::get();
++    let _identity = mux.with_identity(client_id);
++    let (_domain, window_id, tab_id) = mux
++        .resolve_pane_id(request.pane_id)
++        .ok_or_else(|| anyhow!("pane_id {} invalid", request.pane_id))?;
++    let (pane, size) = mux
++        .replace_pane(
++            request.pane_id,
++            request.command,
++            request.command_dir,
++            request.domain,
++        )
++        .await?;
++    Ok(Pdu::SpawnResponse(SpawnResponse {
++        pane_id: pane.pane_id(),
++        tab_id,
++        window_id,
++        size,
++    }))
++}
++
+ fn schedule_split_pane<SND>(split: SplitPane, send_response: SND, client_id: Option<Arc<ClientId>>)
+ where
+     SND: Fn(anyhow::Result<Pdu>) + 'static,
+diff --git a/wezterm/src/cli/mod.rs b/wezterm/src/cli/mod.rs
+--- a/wezterm/src/cli/mod.rs
++++ b/wezterm/src/cli/mod.rs
+@@ -16,6 +16,7 @@
+ mod move_pane_to_new_tab;
+ mod proxy;
+ mod rename_workspace;
++mod replace_pane;
+ mod send_text;
+ mod set_tab_title;
+ mod set_window_title;
+@@ -111,6 +112,13 @@
+ Outputs the pane-id for the newly created pane on success"
+     )]
+     SplitPane(split_pane::SplitPane),
++
++    #[command(
++        name = "replace-pane",
++        trailing_var_arg = true,
++        about = "Replace a pane with a fresh shell without changing its layout.\nOutputs the new pane-id on success"
++    )]
++    ReplacePane(replace_pane::ReplacePane),
+ 
+     #[command(
+         name = "spawn",
+@@ -194,6 +202,7 @@
+         CliSubCommand::MovePaneToNewTab(cmd) => cmd.run(client).await,
+         CliSubCommand::AdoptPane(cmd) => cmd.run(client).await,
+         CliSubCommand::SplitPane(cmd) => cmd.run(client).await,
++        CliSubCommand::ReplacePane(cmd) => cmd.run(client).await,
+         CliSubCommand::SendText(cmd) => cmd.run(client).await,
+         CliSubCommand::GetText(cmd) => cmd.run(client).await,
+         CliSubCommand::SpawnCommand(cmd) => cmd.run(client, &crate::init_config(opts)?).await,
+diff --git a/wezterm/src/cli/replace_pane.rs b/wezterm/src/cli/replace_pane.rs
+new file mode 100644
+--- /dev/null
++++ b/wezterm/src/cli/replace_pane.rs
+@@ -0,0 +1,49 @@
++use crate::cli::resolve_relative_cwd;
++use clap::{Parser, ValueHint};
++use config::keyassignment::SpawnTabDomain;
++use mux::pane::PaneId;
++use portable_pty::cmdbuilder::CommandBuilder;
++use std::ffi::OsString;
++use wezterm_client::client::Client;
++
++#[derive(Debug, Parser, Clone)]
++pub struct ReplacePane {
++    /// Pane to replace; defaults to WEZTERM_PANE.
++    #[arg(long)]
++    pane_id: Option<PaneId>,
++
++    /// Domain for the new shell; defaults to the current pane's domain.
++    #[arg(long)]
++    domain_name: Option<String>,
++
++    /// Working directory for the new shell.
++    #[arg(long, value_hint = ValueHint::DirPath)]
++    cwd: Option<OsString>,
++
++    /// Command to run instead of the domain's default shell.
++    #[arg(value_hint = ValueHint::CommandWithArguments, num_args = 1..)]
++    prog: Vec<OsString>,
++}
++
++impl ReplacePane {
++    pub async fn run(self, client: Client) -> anyhow::Result<()> {
++        let pane_id = client.resolve_pane_id(self.pane_id).await?;
++        let spawned = client
++            .replace_pane(codec::ReplacePane {
++                pane_id,
++                domain: self.domain_name.map_or(
++                    SpawnTabDomain::CurrentPaneDomain,
++                    SpawnTabDomain::DomainName,
++                ),
++                command: if self.prog.is_empty() {
++                    None
++                } else {
++                    Some(CommandBuilder::from_argv(self.prog))
++                },
++                command_dir: resolve_relative_cwd(self.cwd)?,
++            })
++            .await?;
++        println!("{}", spawned.pane_id);
++        Ok(())
++    }
++}

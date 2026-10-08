@@ -77,6 +77,8 @@ def generate_certificates(root: Path, username: str) -> None:
         extensions.write_text(
             "basicConstraints=critical,CA:FALSE\n"
             "keyUsage=critical,digitalSignature,keyEncipherment\n"
+            "subjectKeyIdentifier=hash\n"
+            "authorityKeyIdentifier=keyid,issuer\n"
             f"extendedKeyUsage={usage}\n{alternatives}",
             encoding="utf-8",
         )

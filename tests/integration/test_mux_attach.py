@@ -188,8 +188,7 @@ def test_tls_replacement_preserves_siblings_and_closes_independently(mux_pair):
     before = {p["pane_id"]: p for p in local.panes()}
     original_tab = before[left]["tab_id"]
     original_window = before[left]["window_id"]
-    fresh = int(local.cli("split-pane", "--pane-id", right, "--domain-name", "peer"))
-    local.cli("kill-pane", "--pane-id", right)
+    fresh = int(local.cli("replace-pane", "--pane-id", right, "--domain-name", "peer"))
     panes = wait_for(lambda: len(p := local.panes()) == 2 and p)
     assert {p["tab_id"] for p in panes} == {original_tab}
     assert {p["window_id"] for p in panes} == {original_window}
@@ -198,8 +197,7 @@ def test_tls_replacement_preserves_siblings_and_closes_independently(mux_pair):
     assert len(json.loads(remote("list", "--format", "json"))) == 2
 
     # A second route to the same server must not import another copy of its panes.
-    second = int(local.cli("split-pane", "--pane-id", left, "--domain-name", "peer-alt"))
-    local.cli("kill-pane", "--pane-id", left)
+    second = int(local.cli("replace-pane", "--pane-id", left, "--domain-name", "peer-alt"))
     sibling = int(local.cli("split-pane", "--pane-id", fresh, "--right"))
     local.cli("adjust-pane-size", "--pane-id", sibling, "--amount", 3, "Left")
     panes = wait_for(lambda: len(p := local.panes()) == 3 and p)
@@ -215,8 +213,7 @@ def test_tls_replacement_preserves_siblings_and_closes_independently(mux_pair):
 
     # Returning to this computer creates a local shell in the same slot.
     before_return = next(p for p in panes if p["pane_id"] == second)
-    returned = int(local.cli("split-pane", "--pane-id", second, "--domain-name", "local"))
-    local.cli("kill-pane", "--pane-id", second)
+    returned = int(local.cli("replace-pane", "--pane-id", second, "--domain-name", "local"))
     panes = wait_for(lambda: len(p := local.panes()) == 2 and p)
     assert {p["pane_id"] for p in panes} == {returned, sibling}
     assert geometry(next(p for p in panes if p["pane_id"] == returned)) == geometry(before_return)
@@ -227,8 +224,7 @@ def test_unix_proxy_replacement_preserves_siblings_and_closes_independently(mux_
     left = int(local.cli("spawn", "--new-window"))
     right = int(local.cli("split-pane", "--pane-id", left, "--right"))
     before = {p["pane_id"]: p for p in local.panes()}
-    fresh = int(local.cli("split-pane", "--pane-id", right, "--domain-name", "proxied"))
-    local.cli("kill-pane", "--pane-id", right)
+    fresh = int(local.cli("replace-pane", "--pane-id", right, "--domain-name", "proxied"))
     panes = wait_for(lambda: len(p := local.panes()) == 2 and p)
     assert {p["tab_id"] for p in panes} == {before[left]["tab_id"]}
     assert geometry(next(p for p in panes if p["pane_id"] == left)) == geometry(before[left])
@@ -298,11 +294,60 @@ def test_failed_remote_connection_preserves_the_source(mux_pair):
     source = int(local.cli("spawn", "--new-window"))
     before = local.panes()
     with pytest.raises(subprocess.CalledProcessError):
-        local.cli("split-pane", "--pane-id", source, "--domain-name", "offline")
+        local.cli("replace-pane", "--pane-id", source, "--domain-name", "offline")
     after = local.panes()
     assert source in {p["pane_id"] for p in after}
     assert geometry(next(p for p in after if p["pane_id"] == source)) == geometry(before[0])
     assert json.loads(remote("list", "--format", "json")) == []
+
+
+@pytest.mark.parametrize("domain", ["local", "peer", "proxied"])
+@pytest.mark.parametrize("zoomed", [False, True])
+def test_replacement_starts_at_full_size_and_retains_focus(mux_pair, domain, zoomed):
+    local, _ = mux_pair
+    left = int(local.cli("spawn", "--new-window"))
+    source = int(local.cli("split-pane", "--pane-id", left, "--right"))
+    before = {p["pane_id"]: p for p in local.panes()}
+    local.cli("activate-pane", "--pane-id", source)
+    if zoomed:
+        local.cli("zoom-pane", "--pane-id", source, "--zoom")
+    expected = next(p for p in local.panes() if p["pane_id"] == source)
+    fresh = int(
+        local.cli(
+            "replace-pane",
+            "--pane-id",
+            source,
+            "--domain-name",
+            domain,
+            "--",
+            "/bin/sh",
+            "-c",
+            'printf "INITIAL:"; stty size; exec sleep 30',
+        )
+    )
+    rows, cols = expected["size"]["rows"], expected["size"]["cols"]
+    wait_for(lambda: f"INITIAL:{rows} {cols}" in local.cli("get-text", "--pane-id", fresh))
+    panes = {p["pane_id"]: p for p in local.panes()}
+    assert set(panes) == {left, fresh}
+    assert panes[fresh]["tab_id"] == before[source]["tab_id"]
+    assert panes[fresh]["is_active"]
+    assert geometry(panes[fresh]) == geometry(expected)
+    if zoomed:
+        local.cli("zoom-pane", "--pane-id", fresh, "--unzoom")
+        panes = {p["pane_id"]: p for p in local.panes()}
+    assert geometry(panes[left]) == geometry(before[left])
+    assert geometry(panes[fresh]) == geometry(before[source])
+
+
+@pytest.mark.parametrize("domain", ["missing-domain", "shared"])
+def test_unsupported_replacement_domain_preserves_source_and_sibling(mux_pair, domain):
+    local, _ = mux_pair
+    source = int(local.cli("spawn", "--new-window"))
+    local.cli("split-pane", "--pane-id", source, "--right")
+    before = {p["pane_id"]: geometry(p) for p in local.panes()}
+    with pytest.raises(subprocess.CalledProcessError):
+        local.cli("replace-pane", "--pane-id", source, "--domain-name", domain)
+    assert {p["pane_id"]: geometry(p) for p in local.panes()} == before
 
 
 def test_shared_client_removal_does_not_resize_an_unaffected_sibling(mux_pair):
@@ -319,8 +364,7 @@ def test_shared_client_removal_does_not_resize_an_unaffected_sibling(mux_pair):
     # tree. Pruning the old proxy must not send its interim expansion upstream.
     for _ in range(6):
         prior = {p["pane_id"] for p in local.panes()}
-        replacement = int(remote("split-pane", "--pane-id", source))
-        remote("kill-pane", "--pane-id", source)
+        replacement = int(remote("replace-pane", "--pane-id", source))
         wait_for(
             lambda prior=prior: len(p := local.panes()) == 3 and {v["pane_id"] for v in p} != prior
         )
