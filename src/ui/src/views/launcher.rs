@@ -218,13 +218,13 @@ impl SidebarUi {
                 );
                 item.icon = icons::COMMAND;
                 item.hint = format!(
-                    "{}{} · {}",
+                    "{}{}  {}",
                     if job.suspended {
                         "suspended"
                     } else {
                         "running"
                     },
-                    if job.ready { "" } else { " · shell busy" },
+                    if job.ready { "" } else { "  shell busy" },
                     job.place
                 );
                 item.keywords = format!("%{} {}", job.target.number, job.target.pid);
@@ -312,7 +312,7 @@ impl SidebarUi {
                 }
                 let mut item = row(&model.tabs[&id]);
                 item.hint = if hidden {
-                    format!("{} · hidden", space.name)
+                    format!("{}  hidden", space.name)
                 } else {
                     space.name.clone()
                 };

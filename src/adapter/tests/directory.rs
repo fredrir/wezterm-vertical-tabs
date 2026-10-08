@@ -25,7 +25,7 @@ fn other_reachable_windows_are_numbered_and_detached_tabs_follow() {
     publish(2, vec![listing(2, 20, "Work")]);
     publish(3, vec![listing(3, 30, "Home")]);
     let record = DetachedTab {
-        listing: listing(9, 90, "devbox · detached"),
+        listing: listing(9, 90, "devbox  detached"),
         tab: tab(90),
         domain: 4,
         remote: 1,
@@ -36,14 +36,14 @@ fn other_reachable_windows_are_numbered_and_detached_tabs_follow() {
     assert_eq!(
         places(&foreign(1, |_| true)),
         [
-            (20, "Work · window 2"),
-            (30, "Home · window 3"),
-            (90, "devbox · detached"),
+            (20, "Work  window 2"),
+            (30, "Home  window 3"),
+            (90, "devbox  detached"),
         ]
     );
     assert_eq!(
         places(&foreign(1, |window| window != 2)),
-        [(30, "Home · window 2"), (90, "devbox · detached")]
+        [(30, "Home  window 2"), (90, "devbox  detached")]
     );
 }
 

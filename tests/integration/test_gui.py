@@ -161,7 +161,10 @@ def test_detaching_the_last_pane_quits_and_reconnecting_starts_fresh(
             ],
             "reconnect.log",
         )
-        state = probe.wait(lambda state: state.get("tabs"), timeout=25, any_window=True)
+        window = probe.wait(lambda state: state.get("tabs"), timeout=25, any_window=True)["window"]
+        # The connection UI's tab closes once the domain attaches.
+        probe.sample_for(0.5)
+        state = probe.latest[window]
         assert state["workspace"] not in ["__detached", *hidden]
         assert len(state["tabs"]) == 1
         assert workspaces() == sorted(["__detached", "default", *hidden])

@@ -9,10 +9,7 @@ use vtabs_core::{Intent, Model, SpaceId, TabId};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum DropTarget {
-    Beside {
-        tab: TabId,
-        after: bool,
-    },
+    Beside { tab: TabId, after: bool },
     Into(TabId),
     Folder(String),
     NewTab,

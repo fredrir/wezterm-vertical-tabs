@@ -85,6 +85,23 @@ pub fn update(surface: &mut Surface, buffer: &Buffer, frame: &FrameUpdate, geome
     surface.opacity = frame.transform.opacity;
 }
 
+/// A full-window grid shifts so the sidebar's columns stay where the sidebar draws them.
+pub fn grid_offset(geometry: Geometry, whole_window: bool, columns: usize) -> (f32, f32) {
+    let sidebar = geometry.sidebar;
+    if !whole_window || sidebar.width <= 0. || sidebar.x <= geometry.content.x {
+        return (0., 0.);
+    }
+    let cell_width = geometry.cell_width.max(1.);
+    let sidebar_columns = (sidebar.width / cell_width).floor().max(0.) as usize;
+    // Keep the rail anchored when a full-window grid rounds fractional cells differently.
+    (
+        sidebar.x
+            - geometry.ui_bounds(true).x
+            - columns.saturating_sub(sidebar_columns) as f32 * cell_width,
+        0.,
+    )
+}
+
 fn assign_cell(
     line: &mut Line,
     index: usize,

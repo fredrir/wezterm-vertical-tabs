@@ -75,7 +75,7 @@ impl Sidebar {
         let theme = cx.theme;
         let reveal_selection = self.reveal_selection;
         let view = View { model, props };
-        let inset = u16::from(area.width >= 8);
+        let inset = side_inset(area.width);
         let inner = Rect::new(
             area.x + inset,
             area.y,
@@ -278,7 +278,7 @@ impl Sidebar {
     fn toolbar(&self, view: &View, inner: Rect, cx: &mut Canvas) {
         let props = &view.props;
         let left = (inner.x + props.header_inset).min(inner.right());
-        let size = inner.width.min(4);
+        let size = inner.width.min(TOGGLE_WIDTH);
         if left + size <= inner.right() {
             Button::icon(ElementId::Rail, &format!("{} ", icons::SIDEBAR))
                 .tooltip("Toggle sidebar  Cmd+B")
@@ -297,6 +297,17 @@ impl Sidebar {
 }
 
 const TOOLBAR_ROWS: u16 = 2;
+const TOGGLE_WIDTH: u16 = 4;
+
+fn side_inset(width: u16) -> u16 {
+    u16::from(width >= 8)
+}
+
+/// Whether the toolbar's toggle fits after a header inset, as `toolbar` places it.
+pub fn header_fits(width: u16, header_inset: u16) -> bool {
+    let inner = width.saturating_sub(side_inset(width) * 2);
+    inner > 0 && u32::from(header_inset) + u32::from(inner.min(TOGGLE_WIDTH)) <= u32::from(inner)
+}
 
 fn space_title(model: &Model, rect: Rect, cx: &mut Canvas) {
     let space = model

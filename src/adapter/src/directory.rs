@@ -54,7 +54,7 @@ pub fn foreign(window: usize, reachable: impl Fn(usize) -> bool) -> Vec<ForeignT
             .filter(|(_, (id, _))| **id != window)
             .flat_map(|(number, (_, tabs))| {
                 tabs.iter().map(move |tab| ForeignTab {
-                    place: format!("{} · window {}", tab.place, number + 1),
+                    place: format!("{}  window {}", tab.place, number + 1),
                     ..tab.clone()
                 })
             })

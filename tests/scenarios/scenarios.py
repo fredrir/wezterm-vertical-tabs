@@ -77,7 +77,10 @@ elseif os.getenv('WEZ_VTABS_SCENARIO_DOMAIN') == 'tls' then
   domain.name='scenario-tls'
   cfg.tls_clients={domain}
 end
-local seen, started, sequence, current_step, requested, env_probe = {}, false, 0, 0, nil, false
+-- Settings writes reload the config; executed commands and the sample count outlive it.
+wezterm.GLOBAL.scenario = wezterm.GLOBAL.scenario or {seen={},sequence=0}
+local shared = wezterm.GLOBAL.scenario
+local started, current_step, requested, env_probe = false, 0, nil, false
 local closing = {}
 local function execute(window,pane,command)
   if command.kind=='action' then
@@ -135,8 +138,8 @@ sample=function(window)
     if f then
       local text=f:read('*a'); f:close()
       local parsed,command=pcall(wezterm.json_parse,text)
-      if parsed and command.window==id and command.id~=(seen[id] or 0) then
-        seen[id]=command.id
+      if parsed and command.window==id and command.id~=(shared.seen[tostring(id)] or 0) then
+        shared.seen[tostring(id)]=command.id
         execute(window,pane,command)
       end
     end
@@ -156,8 +159,8 @@ sample=function(window)
       end
       table.insert(state.tabs,tab)
     end
-    sequence=sequence+1; state.sequence=sequence
-    state.command=seen[id] or 0; state.step=current_step; state.requested=requested
+    shared.sequence=shared.sequence+1; state.sequence=shared.sequence
+    state.command=shared.seen[tostring(id)] or 0; state.step=current_step; state.requested=requested
     local output=assert(io.open(root..'/samples.jsonl','a'))
     output:write(wezterm.json_encode(state),'\n'); output:close()
   end)
@@ -174,9 +177,11 @@ local function tick()
   for _,window in ipairs(wezterm.gui.gui_windows()) do sample(window) end
   wezterm.time.call_after(0.016,tick)
 end
-wezterm.on('update-status',function()
+local function start()
   if not started then started=true; tick() end
-end)
+end
+wezterm.on('update-status',start)
+wezterm.on('window-config-reloaded',start)
 return cfg
 """
 

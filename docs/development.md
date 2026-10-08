@@ -261,7 +261,7 @@ uv run --locked python -m tests.scenarios.scenarios \
   --workspace --chrome --edge-cases --hooks --effects --capture
 
 uv run --locked python -m tests.scenarios.scenarios \
-  --gui /path/to/wezterm-gui --domain unix
+  --gui /path/to/wezterm-gui --helper /path/to/wez-vtabs-store --domain unix
 
 uv run --locked python -m tests.scenarios.ui_scenarios \
   --gui /path/to/wezterm-gui --helper /path/to/wez-vtabs-store \

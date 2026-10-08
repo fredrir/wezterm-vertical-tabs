@@ -15,6 +15,7 @@ fn surface() -> Surface {
         revision: 0,
         offset: (0., 0.),
         opacity: 1.,
+        centered: Vec::new(),
     }
 }
 fn frame(previous: Option<&Buffer>, next: &Buffer, revision: u64) -> FrameUpdate {

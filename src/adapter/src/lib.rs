@@ -1,10 +1,13 @@
 //! The only product code coupled to WezTerm's internal APIs.
 mod cells;
+mod centering;
 mod commands;
 mod directory;
+mod facts;
 mod jobs;
 mod location;
 mod lua;
+mod metadata;
 mod repos;
 mod settings_file;
 mod shutdown;
@@ -13,7 +16,7 @@ mod update;
 
 use crate::termwindow::ui_host::{
     Bounds, Command, Geometry, Input, Navigation, Projection, Provider, Reservation,
-    RoundedSurface, Snapshot, Surface,
+    RoundedSurface, Snapshot, Surface, spawn_completed,
 };
 use mux::{BACKING_WORKSPACE_PREFIX, DETACHED_WORKSPACE};
 use std::{
@@ -75,6 +78,7 @@ struct Adapter {
     published: Option<u64>,
     pending_show: Option<core::TabId>,
     jobs_refresh: Option<Instant>,
+    metadata: metadata::Refresh,
 }
 
 impl Adapter {
@@ -113,6 +117,7 @@ impl Adapter {
                 revision: 0,
                 offset: (0., 0.),
                 opacity: 1.,
+                centered: Vec::new(),
             },
             primitives: Vec::new(),
             commands: Vec::new(),
@@ -142,6 +147,7 @@ impl Adapter {
             published: None,
             pending_show: None,
             jobs_refresh: None,
+            metadata: metadata::Refresh::default(),
         }
     }
     fn apply(&mut self, result: Result<app::Update, core::Error>) {
@@ -321,7 +327,11 @@ impl Adapter {
             app::Command::Host(command) => match command {
                 C::Activate(id) => self.commands.push(Command::Activate(id as usize)),
                 C::Close(id) => self.commands.push(Command::Close(id as usize, false)),
-                C::Rename { id, title } => self.commands.push(Command::Rename(id as usize, title)),
+                C::Rename { id, title } => {
+                    if let Some(tab) = mux::Mux::get().get_tab(id as usize) {
+                        tab.set_title(&title);
+                    }
+                }
                 C::Spawn {
                     space_id,
                     launch,
@@ -335,26 +345,8 @@ impl Adapter {
                     self.next_private = private;
                     self.commands.push(Command::Spawn(spawn(launch), true));
                 }
-                C::Reorder { visible_order } => {
-                    let visible: std::collections::HashSet<_> =
-                        visible_order.iter().map(|id| *id as usize).collect();
-                    let mut next = visible_order.into_iter();
-                    let order = self
-                        .host_tabs
-                        .iter()
-                        .map(|id| {
-                            if visible.contains(id) {
-                                next.next().unwrap() as usize
-                            } else {
-                                *id
-                            }
-                        })
-                        .collect();
-                    self.commands.push(Command::Reorder(order));
-                }
-                C::MoveTabToNewWindow(id) => {
-                    self.commands.push(Command::MoveToNewWindow(id as usize))
-                }
+                C::Reorder { visible_order } => self.reorder(visible_order),
+                C::MoveTabToNewWindow(id) => self.move_to_new_window(id as usize),
                 C::KillPane(pane) => {
                     let mux = mux::Mux::get();
                     if let Some((_, _, tab)) = mux.resolve_pane_id(pane as usize) {
@@ -772,7 +764,7 @@ impl Adapter {
                 self.window_id as u64,
                 tab,
                 model.home.as_deref(),
-                format!("{} · detached", tab.domain),
+                format!("{}  detached", tab.domain),
             ),
             tab: tab.clone(),
             domain,
@@ -888,68 +880,7 @@ impl Adapter {
             dpi: geometry.dpi.max(1.),
         }
     }
-}
-
-impl Provider for Adapter {
-    fn initialize(&mut self) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + '_>> {
-        Box::pin(async move {
-            // Restore public preferences before the host computes its first reservation.
-            // The helper runs asynchronously and has its own bounded timeout; failures
-            // remain in the coordinator's retry queue for the ordinary bound lifecycle.
-            let Some(request) = self.app.take_storage_request(self.epoch.elapsed()) else {
-                return;
-            };
-            let request_id = request.request_id;
-            match storage::invoke(request).await {
-                Ok(response) => {
-                    let result = self.app.complete_storage(response);
-                    self.apply(result);
-                }
-                Err(error) => self.app.storage_failed(request_id, error.to_string()),
-            }
-        })
-    }
-    fn reservation(&self) -> Reservation {
-        let settings = &self.app.model().settings;
-        Reservation {
-            width: settings.logical_width() as f32,
-            right: settings.side == core::Side::Right,
-        }
-    }
-    fn metadata_interval(&self) -> Option<std::time::Duration> {
-        let model = self.app.model();
-        let process_rules = model
-            .spaces
-            .iter()
-            .flat_map(|space| &space.rules)
-            .chain(model.templates.iter().flat_map(|template| &template.rules))
-            .any(|rule| {
-                rule.fields
-                    .iter()
-                    .any(|(field, _)| *field == core::MatchField::Process)
-            });
-        // Lua callbacks may inspect process facts. Notification-only configurations have
-        // no refresh timer and no corresponding idle wakeups.
-        let process_templates = model.templates.iter().any(|template| {
-            [&template.id, &template.name].iter().any(|text| {
-                text.split('$').skip(1).any(|suffix| {
-                    let token = suffix
-                        .split(|character: char| !character.is_ascii_alphabetic())
-                        .next()
-                        .unwrap_or_default();
-                    matches!(token, "proc" | "process")
-                })
-            })
-        });
-        (self.hooks_enabled || process_rules || process_templates)
-            .then_some(std::time::Duration::from_secs(2))
-    }
-    fn bind(&mut self, window: Window) {
-        self.window = Some(window);
-        update::schedule();
-        self.storage();
-    }
-    fn snapshot(&mut self, snapshot: Snapshot) {
+    fn apply_facts(&mut self, snapshot: facts::Facts) {
         if !snapshot.focused {
             self.cancel_paste();
         }
@@ -1165,6 +1096,209 @@ impl Provider for Adapter {
         self.schedule_hooks();
         self.storage();
         self.publish();
+    }
+    fn metadata_interval(&self) -> Option<std::time::Duration> {
+        let model = self.app.model();
+        let process_rules = model
+            .spaces
+            .iter()
+            .flat_map(|space| &space.rules)
+            .chain(model.templates.iter().flat_map(|template| &template.rules))
+            .any(|rule| {
+                rule.fields
+                    .iter()
+                    .any(|(field, _)| *field == core::MatchField::Process)
+            });
+        // Lua callbacks may inspect process facts. Notification-only configurations have
+        // no refresh timer and no corresponding idle wakeups.
+        let process_templates = model.templates.iter().any(|template| {
+            [&template.id, &template.name].iter().any(|text| {
+                text.split('$').skip(1).any(|suffix| {
+                    let token = suffix
+                        .split(|character: char| !character.is_ascii_alphabetic())
+                        .next()
+                        .unwrap_or_default();
+                    matches!(token, "proc" | "process")
+                })
+            })
+        });
+        (self.hooks_enabled || process_rules || process_templates)
+            .then_some(std::time::Duration::from_secs(2))
+    }
+    /// Applies the sidebar's order to every tab of the mux window, keeping its active tab.
+    fn reorder(&mut self, visible_order: Vec<core::TabId>) {
+        let visible: std::collections::HashSet<_> =
+            visible_order.iter().map(|id| *id as usize).collect();
+        let mut next = visible_order.into_iter();
+        let order: Vec<usize> = self
+            .host_tabs
+            .iter()
+            .map(|id| {
+                if visible.contains(id) {
+                    next.next().unwrap() as usize
+                } else {
+                    *id
+                }
+            })
+            .collect();
+        if let Some(mut window) = mux::Mux::get().get_window_mut(self.window_id) {
+            let active = window.get_active_tab().map(|t| t.tab_id());
+            let known: std::collections::HashSet<_> =
+                window.iter_tabs().map(|t| t.tab_id()).collect();
+            if order.len() == known.len()
+                && order
+                    .iter()
+                    .copied()
+                    .collect::<std::collections::HashSet<_>>()
+                    == known
+            {
+                for (index, id) in order.iter().enumerate() {
+                    let old = window.iter_tabs().position(|t| t.tab_id() == *id).unwrap();
+                    if old != index {
+                        let tab = window.remove_tab_idx(old);
+                        window.insert_tab_at_idx(index, &tab);
+                    }
+                }
+                let index = window.iter_tabs().position(|t| Some(t.tab_id()) == active);
+                if let Some(index) = index {
+                    window.set_active_tab_idx_without_saving(index);
+                }
+            }
+        }
+        self.commands.push(Command::Resync);
+    }
+    /// The new window restores the tab's sidebar state from the exported transfer.
+    fn move_to_new_window(&mut self, id: usize) {
+        let mux = mux::Mux::get();
+        let Some(tab) = mux.get_tab(id) else { return };
+        let context = match self.app.export_transfer(id as u64) {
+            Ok(transfer) => serde_json::json!({"new_window":true,"transfer":transfer}),
+            Err(error) => {
+                log::warn!("tabs move: {error}");
+                serde_json::Value::Null
+            }
+        };
+        if let Some(pane) = tab.get_active_pane() {
+            if pane
+                .downcast_ref::<wezterm_client::pane::ClientPane>()
+                .is_some()
+            {
+                if tab.count_panes() != Some(1) {
+                    self.message(serde_json::json!({"error":"WezTerm mux supports moving single-pane tabs; this split tab stays in its window"}));
+                    return;
+                }
+                let pane_id = pane.pane_id();
+                let source_id = self.window_id;
+                let workspace = mux
+                    .get_window(source_id)
+                    .map(|w| w.get_workspace().to_owned());
+                let source_window = self.window.clone();
+                promise::spawn::spawn(async move {
+                    match mux::Mux::get()
+                        .move_pane_to_new_tab(pane_id, None, workspace)
+                        .await
+                    {
+                        Ok((tab, window)) => {
+                            spawn_completed(window, tab.tab_id(), context);
+                            if let Some(source) = source_window {
+                                source.notify(crate::termwindow::TermWindowNotif::Apply(Box::new(
+                                    move |tw| {
+                                        tw.vtabs_message_for(
+                                            source_id,
+                                            serde_json::json!({"tab_departed":id}),
+                                        );
+                                    },
+                                )));
+                            }
+                        }
+                        Err(error) => log::error!("move tab: {error}"),
+                    }
+                })
+                .detach();
+                return;
+            }
+        }
+        // This operation retains the tab and its entire split tree.
+        let builder = mux.new_empty_window(Some(mux.active_workspace()), None);
+        let destination = *builder;
+        if let Some(mut source) = mux.get_window_mut(self.window_id) {
+            source.remove_tab_id(id);
+        }
+        if let Err(error) = mux.add_tab_to_window(&tab, destination) {
+            let _ = mux.add_tab_to_window(&tab, self.window_id);
+            self.message(serde_json::json!({"error":format!("move tab: {error}")}));
+            return;
+        }
+        spawn_completed(destination, id, context);
+        self.message(serde_json::json!({"tab_departed":id}));
+        drop(builder);
+        mux.prune_dead_windows();
+        self.commands.push(Command::Resync);
+    }
+    fn schedule_metadata(&mut self) {
+        let schedule = self
+            .metadata_interval()
+            .filter(|_| !self.host_tabs.is_empty())
+            .map(|interval| {
+                (
+                    interval.clamp(Duration::from_millis(500), Duration::from_secs(2)),
+                    self.config_generation,
+                )
+            });
+        if let Some(window) = &self.window {
+            self.metadata.schedule(window, self.window_id, schedule);
+        }
+    }
+}
+
+impl Provider for Adapter {
+    fn initialize(&mut self) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + '_>> {
+        Box::pin(async move {
+            // Restore public preferences before the host computes its first reservation.
+            // The helper runs asynchronously and has its own bounded timeout; failures
+            // remain in the coordinator's retry queue for the ordinary bound lifecycle.
+            let Some(request) = self.app.take_storage_request(self.epoch.elapsed()) else {
+                return;
+            };
+            let request_id = request.request_id;
+            match storage::invoke(request).await {
+                Ok(response) => {
+                    let result = self.app.complete_storage(response);
+                    self.apply(result);
+                }
+                Err(error) => self.app.storage_failed(request_id, error.to_string()),
+            }
+        })
+    }
+    fn reservation(&self) -> Reservation {
+        let settings = &self.app.model().settings;
+        Reservation {
+            width: settings.logical_width() as f32,
+            right: settings.side == core::Side::Right,
+        }
+    }
+    fn header_fits(&self, sidebar_width: f32, cell_width: f32, inset: f32) -> bool {
+        let cell_width = cell_width.max(1.);
+        ui::header_fits(
+            (sidebar_width / cell_width)
+                .floor()
+                .clamp(0., u16::MAX as f32) as u16,
+            (inset / cell_width).ceil().clamp(0., u16::MAX as f32) as u16,
+        )
+    }
+    fn bind(&mut self, window: Window) {
+        self.window = Some(window);
+        update::schedule();
+        self.storage();
+    }
+    fn snapshot(&mut self, snapshot: Snapshot) {
+        let facts = facts::Facts::of(snapshot);
+        self.metadata
+            .observe(facts.tabs.iter().map(|tab| (tab.id, tab.process.clone())));
+        self.apply_facts(facts);
+    }
+    fn suspend(&mut self) {
+        self.metadata.cancel();
     }
     fn navigation(&mut self, navigation: Navigation) {
         let intent = match navigation {
@@ -1606,6 +1740,7 @@ impl Provider for Adapter {
         }
     }
     fn commands(&mut self) -> Vec<Command> {
+        self.schedule_metadata();
         std::mem::take(&mut self.commands)
     }
     fn render(&mut self, geometry: Geometry, now: Instant) {
@@ -1640,7 +1775,8 @@ impl Provider for Adapter {
         }
         if let Some(frame) = frame {
             cells::update(&mut self.surface, self.app.buffer(), &frame, geometry);
-            let grid_offset = geometry.grid_offset(
+            let grid_offset = cells::grid_offset(
+                geometry,
                 self.content_page() || self.overlay_surface(),
                 self.surface.columns,
             );
@@ -1648,28 +1784,28 @@ impl Provider for Adapter {
             self.surface.offset.1 += grid_offset.1;
             self.cursor = frame.ime_rect.map(|r| (r.x as usize, r.y as usize));
             self.primitives.clear();
-            self.primitives
-                .extend(
-                    self.app
-                        .ui()
-                        .rounded_surfaces()
-                        .iter()
-                        .map(|shape| RoundedSurface {
-                            bounds: Bounds {
-                                x: shape.rect.x as f32,
-                                y: shape.rect.y as f32
-                                    + shape.shift_y
-                                    + shape.rect.height as f32 * (1. - shape.scale_y) / 2.,
-                                width: shape.rect.width as f32,
-                                height: shape.rect.height as f32 * shape.scale_y,
-                            },
-                            radius: shape.radius,
-                            inset: shape.inset,
-                            square: shape.square,
-                            stacked: shape.stacked,
-                            fill: linear_color(shape.fill),
-                        }),
-                );
+            let rows = self.surface.rows.len();
+            let centered = &mut self.surface.centered;
+            centered.resize_with(rows, Vec::new);
+            centered.iter_mut().for_each(Vec::clear);
+            for shape in self.app.ui().rounded_surfaces() {
+                let bounds = Bounds {
+                    x: shape.rect.x as f32,
+                    y: shape.rect.y as f32
+                        + shape.shift_y
+                        + shape.rect.height as f32 * (1. - shape.scale_y) / 2.,
+                    width: shape.rect.width as f32,
+                    height: shape.rect.height as f32 * shape.scale_y,
+                };
+                centering::add(centered, bounds, shape.stacked, geometry.cell_width);
+                self.primitives.push(RoundedSurface {
+                    bounds,
+                    radius: shape.radius,
+                    inset: shape.inset,
+                    square: shape.square,
+                    fill: linear_color(shape.fill),
+                });
+            }
             if let Some(cursor) = frame.cursor {
                 self.primitives.push(RoundedSurface {
                     bounds: Bounds {
@@ -1681,7 +1817,6 @@ impl Provider for Adapter {
                     radius: 0.,
                     inset: 0.,
                     square: false,
-                    stacked: false,
                     fill: linear_color(self.app.ui().theme().accent),
                 });
             }
@@ -1722,15 +1857,6 @@ impl Provider for Adapter {
         }
         directory::withdraw(self.window_id);
         Box::pin(shutdown::drain(self.app, self.outstanding))
-    }
-    fn move_context(&self, tab: usize) -> serde_json::Value {
-        match self.app.export_transfer(tab as u64) {
-            Ok(transfer) => serde_json::json!({"new_window":true,"transfer":transfer}),
-            Err(error) => {
-                log::warn!("tabs move: {error}");
-                serde_json::Value::Null
-            }
-        }
     }
     fn prepare_command(&self, new_window: bool, command: &mut config::keyassignment::SpawnCommand) {
         if (self.app.model().private && !new_window) || self.next_private {

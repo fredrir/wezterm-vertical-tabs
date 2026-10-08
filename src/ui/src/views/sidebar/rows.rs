@@ -7,19 +7,11 @@ pub(crate) const GROUP_GAP: u16 = 1;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum SidebarRow {
-    Tab {
-        id: TabId,
-        number: usize,
-    },
-    Folder {
-        index: usize,
-        count: usize,
-    },
+    Tab { id: TabId, number: usize },
+    Folder { index: usize, count: usize },
     Gap,
     NewTab,
-    Settings {
-        number: usize,
-    },
+    Settings { number: usize },
 }
 
 #[derive(Clone, Copy, Debug)]

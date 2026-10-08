@@ -7,14 +7,15 @@ use crate::termwindow::box_model::{
 };
 use crate::termwindow::render::corners::*;
 use crate::termwindow::render::RenderScreenLineParams;
-use crate::termwindow::{TermWindow, TermWindowNotif, UIItem, UIItemType};
+use crate::termwindow::{TabInformation, TermWindow, TermWindowNotif, UIItem, UIItemType};
 use config::keyassignment::SpawnCommand;
 use mux::renderable::RenderableDimensions;
 use mux::{tab::TabId, Mux, MuxNotification};
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashSet,
     rc::Rc,
-    time::{Duration, Instant},
+    sync::Arc,
+    time::Instant,
 };
 use termwiz::surface::Line;
 use wezterm_term::color::ColorAttribute;
@@ -129,37 +130,6 @@ impl Geometry {
             self.ui_bounds(true).width
         }
     }
-    pub fn grid_offset(self, whole_window: bool, columns: usize) -> (f32, f32) {
-        if !whole_window || self.sidebar.width <= 0. || self.sidebar.x <= self.content.x {
-            return (0., 0.);
-        }
-        let cell_width = self.cell_width.max(1.);
-        let sidebar_columns = (self.sidebar.width / cell_width).floor().max(0.) as usize;
-        // Keep the rail anchored when a full-window grid rounds fractional cells differently.
-        (
-            self.sidebar.x
-                - self.ui_bounds(true).x
-                - columns.saturating_sub(sidebar_columns) as f32 * cell_width,
-            0.,
-        )
-    }
-}
-fn vtabs_sidebar_header_inset(
-    integrated: bool,
-    sidebar_width: f32,
-    cell_width: f32,
-    traffic_inset: f32,
-) -> Option<f32> {
-    if !integrated {
-        return None;
-    }
-    let cell_width = cell_width.max(1.);
-    let columns = (sidebar_width / cell_width).floor().max(0.);
-    let inner = (columns - if columns >= 8. { 2. } else { 0. }).max(0.);
-    let reserved = (traffic_inset / cell_width).ceil();
-    // Match the sidebar's horizontal padding and four-cell toggle hit target.
-    // Narrow left rails put their controls below AppKit's traffic buttons.
-    (inner > 0. && reserved + inner.min(4.) <= inner).then_some(traffic_inset)
 }
 /// A rounded shape in cell coordinates relative to `Geometry::ui_bounds`.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -171,30 +141,18 @@ pub struct RoundedSurface {
     pub inset: f32,
     /// Icon buttons center a square; rows keep their full extent.
     pub square: bool,
-    /// Holds one text line per cell row, so nothing beneath it centers that text.
-    pub stacked: bool,
     pub fill: LinearRgba,
-}
-#[derive(Clone, Debug)]
-pub struct TabInfo {
-    pub id: TabId,
-    pub title: String,
-    pub cwd: String,
-    pub domain: String,
-    pub host: String,
-    pub user: String,
-    pub process: String,
-    pub unread: bool,
-    pub bell: bool,
-    pub user_vars: std::collections::HashMap<String, String>,
 }
 pub struct Snapshot {
     pub revision: u64,
     pub window_id: usize,
-    pub tabs: Vec<TabInfo>,
+    pub tabs: Vec<Arc<mux::tab::Tab>>,
+    /// Tabs whose bell rang since they were last active.
+    pub bells: HashSet<TabId>,
     pub active: Option<TabId>,
     pub focused: bool,
-    pub config_epoch: usize,
+    /// The window's effective configuration, including its overrides.
+    pub config: config::ConfigHandle,
 }
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Projection {
@@ -221,12 +179,11 @@ pub enum Input<'a> {
 pub enum Command {
     OpenCommandPalette,
     RunPaletteCommand(crate::commands::ExpandedCommand),
-    MoveToNewWindow(TabId),
     Activate(TabId),
     Close(TabId, bool),
-    Rename(TabId, String),
     Spawn(SpawnCommand, bool),
-    Reorder(Vec<TabId>),
+    /// The provider changed the mux; the next sync reads it again.
+    Resync,
     Clipboard(String),
     Paste(u64),
     Semantic(String),
@@ -237,13 +194,18 @@ pub struct Surface {
     pub revision: u64,
     pub offset: (f32, f32),
     pub opacity: f32,
+    /// Per row, pixel spans from the grid's left whose text sits half a cell lower.
+    pub centered: Vec<Vec<(f32, f32)>>,
 }
 pub trait Provider {
     fn initialize(&mut self) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + '_>>;
     fn reservation(&self) -> Reservation;
-    fn metadata_interval(&self) -> Option<Duration>;
+    /// Whether the sidebar's own header controls fit after `inset` pixels of title buttons.
+    fn header_fits(&self, sidebar_width: f32, cell_width: f32, inset: f32) -> bool;
     fn text_input_active(&self) -> bool;
     fn bind(&mut self, window: Window);
+    /// The window shows another mux window, or closes; background refreshes stop.
+    fn suspend(&mut self);
     fn snapshot(&mut self, snapshot: Snapshot);
     fn navigation(&mut self, navigation: Navigation);
     fn open_command_palette(&mut self, commands: Vec<crate::commands::ExpandedCommand>);
@@ -262,7 +224,6 @@ pub trait Provider {
     fn keyboard_focus(&self) -> bool;
     fn inspect(&self) -> serde_json::Value;
     fn shutdown(self: Box<Self>) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()>>>;
-    fn move_context(&self, tab: TabId) -> serde_json::Value;
     fn prepare_command(&self, new_window: bool, command: &mut SpawnCommand);
     fn reserve_spawn(&mut self, new_window: bool, command: &SpawnCommand) -> serde_json::Value;
 }
@@ -321,53 +282,6 @@ impl RowCache {
         Rc::ptr_eq(&self.line, line) && self.centered_ranges == centered_ranges
     }
 }
-fn vtabs_centered_range(bounds: Bounds, cell_width: f32) -> Option<(usize, (f32, f32))> {
-    if bounds.height != 2. || bounds.y < 0. || bounds.y.fract() != 0. {
-        return None;
-    }
-    Some((
-        bounds.y as usize,
-        (
-            bounds.x * cell_width,
-            (bounds.x + bounds.width) * cell_width,
-        ),
-    ))
-}
-/// Menus, forms and long hints paint over the rows beneath them. Chips nested in a
-/// row are at most as tall as the row and leave its centering alone.
-fn vtabs_overlay_cover(
-    bounds: Bounds,
-    stacked: bool,
-    cell_width: f32,
-) -> Option<(std::ops::Range<usize>, (f32, f32))> {
-    if (bounds.height <= 2. && !stacked) || bounds.y < 0. || bounds.y.fract() != 0. {
-        return None;
-    }
-    Some((
-        bounds.y as usize..(bounds.y + bounds.height).ceil() as usize,
-        (
-            bounds.x * cell_width,
-            (bounds.x + bounds.width) * cell_width,
-        ),
-    ))
-}
-/// Text under an overlay belongs to the overlay, not to the centered row it covers.
-fn vtabs_occlude(ranges: &mut Vec<(f32, f32)>, (left, right): (f32, f32)) {
-    let mut kept = Vec::with_capacity(ranges.len() + 1);
-    for &(start, end) in ranges.iter() {
-        if right <= start || left >= end {
-            kept.push((start, end));
-            continue;
-        }
-        if start < left {
-            kept.push((start, left));
-        }
-        if right < end {
-            kept.push((right, end));
-        }
-    }
-    *ranges = kept;
-}
 fn vtabs_caret_rect(
     geometry: Geometry,
     offset: (f32, f32),
@@ -395,17 +309,12 @@ pub struct UiHost {
     initialized: bool,
     cache: Vec<RowCache>,
     primitive_cache: Vec<PrimitiveCache>,
-    centered_ranges: Vec<Vec<(f32, f32)>>,
     primitive_cache_key: (usize, usize, usize, u32, u32, u32, u32, u32),
     cache_key: (usize, usize, usize, usize, usize, bool),
     chrome: Option<ComputedElement>,
     chrome_items: Vec<UIItem>,
     chrome_key: (usize, usize, usize, usize, usize, bool),
     chrome_dragging: bool,
-    metadata_task: Option<promise::spawn::Task<()>>,
-    metadata_schedule: Option<(Duration, usize)>,
-    metadata_token: u64,
-    metadata_processes: HashMap<TabId, String>,
     geometry: Geometry,
     deadline_task: Option<promise::spawn::Task<()>>,
     deadline_schedule: Option<Instant>,
@@ -426,17 +335,12 @@ impl UiHost {
             initialized: false,
             cache: Vec::new(),
             primitive_cache: Vec::new(),
-            centered_ranges: Vec::new(),
             primitive_cache_key: Default::default(),
             cache_key: (0, 0, 0, 0, 0, false),
             chrome: None,
             chrome_items: Vec::new(),
             chrome_key: (0, 0, 0, 0, 0, false),
             chrome_dragging: false,
-            metadata_task: None,
-            metadata_schedule: None,
-            metadata_token: 0,
-            metadata_processes: HashMap::new(),
             geometry: Geometry::default(),
             deadline_task: None,
             deadline_schedule: None,
@@ -457,14 +361,9 @@ impl UiHost {
             }
         }
     }
-    pub fn cancel_metadata_refresh(&mut self) {
-        drop(self.metadata_task.take());
-        self.metadata_schedule = None;
-        self.metadata_token = 0;
-    }
     pub fn shutdown(mut self) {
         drop(self.deadline_task.take());
-        self.cancel_metadata_refresh();
+        self.provider.suspend();
         let activity = mux::activity::Activity::new();
         promise::spawn::spawn(async move {
             self.provider.shutdown().await;
@@ -489,114 +388,6 @@ impl UiHost {
 }
 
 impl TermWindow {
-    /// Optional process metadata refresh; independent of geometry and frame deadlines.
-    fn vtabs_schedule_metadata_refresh(&mut self) {
-        let Some(window) = self.window.clone() else {
-            return;
-        };
-        let generation = self.config.generation();
-        let Some(ui) = self.ui_host.as_mut() else {
-            return;
-        };
-        let schedule = ui
-            .provider
-            .metadata_interval()
-            .filter(|_| !ui.known.is_empty())
-            .map(|interval| {
-                (
-                    interval.clamp(Duration::from_millis(500), Duration::from_secs(2)),
-                    generation,
-                )
-            });
-        if schedule.is_some() && ui.metadata_task.is_some() && ui.metadata_schedule == schedule {
-            return;
-        }
-        ui.cancel_metadata_refresh();
-        let Some((interval, _)) = schedule else {
-            return;
-        };
-        let window_id = self.mux_window_id;
-        let panes = {
-            let mux = Mux::get();
-            let Some(window) = mux.get_window(window_id) else {
-                return;
-            };
-            window
-                .iter_tabs()
-                .filter_map(|tab| tab.get_active_pane().map(|pane| (tab.tab_id(), pane)))
-                .collect::<Vec<_>>()
-        };
-        if panes.is_empty() {
-            return;
-        }
-        static NEXT_TOKEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
-        let token = NEXT_TOKEN.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        ui.metadata_token = token;
-        ui.metadata_schedule = schedule;
-        ui.metadata_task = Some(promise::spawn::spawn(async move {
-            smol::Timer::after(interval).await;
-            // Process discovery can inspect the OS process table. Keep it off the GUI
-            // thread and release all mux guards before the refresh begins.
-            let samples = smol::unblock(move || {
-                panes
-                    .into_iter()
-                    .map(|(tab, pane)| {
-                        (
-                            tab,
-                            pane.pane_id(),
-                            pane.get_foreground_process_name(
-                                mux::pane::CachePolicy::FetchImmediate,
-                            )
-                            .unwrap_or_default(),
-                        )
-                    })
-                    .collect::<Vec<_>>()
-            })
-            .await;
-            window.notify(TermWindowNotif::Apply(Box::new(move |tw| {
-                tw.vtabs_metadata_refreshed(window_id, token, samples);
-            })));
-        }));
-    }
-    fn vtabs_metadata_refreshed(
-        &mut self,
-        window_id: usize,
-        token: u64,
-        samples: Vec<(TabId, usize, String)>,
-    ) {
-        if window_id != self.mux_window_id {
-            return;
-        }
-        let Some(ui) = self.ui_host.as_mut() else {
-            return;
-        };
-        if ui.metadata_token != token {
-            return;
-        }
-        drop(ui.metadata_task.take());
-        let changed = {
-            let mux = Mux::get();
-            samples.iter().any(|(tab, pane, process)| {
-                ui.known.contains(tab)
-                    && ui.metadata_processes.get(tab) != Some(process)
-                    && mux
-                        .get_tab(*tab)
-                        .and_then(|tab| tab.get_active_pane())
-                        .map_or(false, |active| active.pane_id() == *pane)
-            })
-        };
-        if changed {
-            ui.dirty = true;
-            self.vtabs_sync();
-            if let Some(window) = &self.window {
-                window.invalidate();
-            }
-        } else {
-            // An unchanged sample schedules only another optional metadata check, never
-            // a frame, projection transaction, hook call, or layout correction.
-            self.vtabs_schedule_metadata_refresh();
-        }
-    }
     fn vtabs_host_mut(&mut self, window_id: usize) -> Option<&mut UiHost> {
         if window_id == self.mux_window_id {
             self.ui_host.as_mut()
@@ -713,16 +504,21 @@ impl TermWindow {
     }
     /// A left sidebar wide enough for the native buttons carries the header itself.
     fn vtabs_native_header_inset(&self) -> Option<f32> {
-        vtabs_sidebar_header_inset(
-            self.vtabs_integrated_macos(),
-            self.vtabs_reserved_width(),
-            self.render_metrics.cell_size.width as f32,
-            if self.vtabs_right_width() > 0. {
-                0.
-            } else {
-                80. * self.dimensions.dpi as f32 / 96.
-            },
-        )
+        if !self.vtabs_integrated_macos() {
+            return None;
+        }
+        let width = self.vtabs_reserved_width();
+        let cell_width = self.render_metrics.cell_size.width as f32;
+        let inset = if self.vtabs_right_width() > 0. {
+            0.
+        } else {
+            80. * self.dimensions.dpi as f32 / 96.
+        };
+        // Narrow left rails put their controls below AppKit's traffic buttons.
+        self.ui_host
+            .as_ref()
+            .is_some_and(|ui| ui.provider.header_fits(width, cell_width, inset))
+            .then_some(inset)
     }
     /// Without a sidebar, or beside a left one too narrow for them, the native buttons hide.
     fn vtabs_title_buttons_hidden(&self) -> bool {
@@ -736,10 +532,32 @@ impl TermWindow {
         self.vtabs_native_header_inset()
             .or_else(|| self.vtabs_title_buttons_hidden().then_some(0.))
     }
-    pub fn update_vtabs_title_buttons(&self) {
+    fn update_vtabs_title_buttons(&self) {
         if let Some(window) = self.window.as_ref() {
             window.set_title_buttons_hidden(self.vtabs_title_buttons_hidden());
         }
+    }
+    /// Mirrors how mouse_event_impl maps window coordinates onto terminal cells.
+    fn update_vtabs_drag_exclusion(&self) {
+        if let Some(window) = self.window.as_ref() {
+            let border = self.get_os_border();
+            let (padding_left, padding_top) = self.padding_left_top();
+            window.set_window_drag_exclusion(window::Rect::new(
+                window::Point::new(
+                    (padding_left + border.left.get() as f32) as isize,
+                    (padding_top + border.top.get() as f32) as isize,
+                ),
+                window::Size::new(
+                    self.terminal_size.pixel_width as isize,
+                    self.terminal_size.pixel_height as isize,
+                ),
+            ));
+        }
+    }
+    pub fn vtabs_begin_paint(&mut self) {
+        self.vtabs_sync();
+        self.update_vtabs_drag_exclusion();
+        self.update_vtabs_title_buttons();
     }
     /// Content then starts at the frame gutter, matching its other three sides.
     pub fn vtabs_content_top(&self) -> f32 {
@@ -1105,93 +923,27 @@ impl TermWindow {
             }
         }
         if ui.dirty {
-            let mux = Mux::get();
-            let (tabs, active) = if let Some(window) = mux.get_window(self.mux_window_id) {
-                let active = window.get_active_tab().map(|tab| tab.tab_id());
-                if let Some(id) = active {
-                    ui.bells.remove(&id);
-                }
-                let bells = &ui.bells;
-                let tabs = window
-                    .iter_tabs()
-                    .map(|tab| {
-                        let pane = tab.get_active_pane();
-                        let title = tab.get_title();
-                        let cwd = pane.as_ref().and_then(|p| {
-                            p.get_current_working_dir(mux::pane::CachePolicy::AllowStale)
-                        });
-                        let domain = pane
-                            .as_ref()
-                            .and_then(|p| mux.get_domain(p.domain_id()))
-                            .map(|d| d.domain_name().to_string())
-                            .unwrap_or_default();
-                        let ssh = self
-                            .config
-                            .ssh_domains
-                            .iter()
-                            .flatten()
-                            .find(|ssh| ssh.name == domain);
-                        TabInfo {
-                            id: tab.tab_id(),
-                            title: if title.is_empty() {
-                                pane.as_ref().map(|p| p.get_title()).unwrap_or_default()
-                            } else {
-                                title
-                            },
-                            cwd: cwd
-                                .as_ref()
-                                .map(|u| u.path().to_string())
-                                .unwrap_or_default(),
-                            host: cwd
-                                .as_ref()
-                                .and_then(|u| u.host_str())
-                                .filter(|h| !h.is_empty())
-                                .map(str::to_string)
-                                .or_else(|| ssh.map(|s| s.remote_address.clone()))
-                                .unwrap_or_default(),
-                            user: cwd
-                                .as_ref()
-                                .map(|u| u.username())
-                                .filter(|u| !u.is_empty())
-                                .map(str::to_string)
-                                .or_else(|| ssh.and_then(|s| s.username.clone()))
-                                .unwrap_or_default(),
-                            domain,
-                            process: pane
-                                .as_ref()
-                                .and_then(|p| {
-                                    p.get_foreground_process_name(
-                                        mux::pane::CachePolicy::AllowStale,
-                                    )
-                                })
-                                .unwrap_or_default(),
-                            unread: pane.as_ref().map_or(false, |p| p.has_unseen_output()),
-                            bell: bells.contains(&tab.tab_id()),
-                            user_vars: pane
-                                .as_ref()
-                                .map(|p| p.copy_user_vars())
-                                .unwrap_or_default(),
-                        }
-                    })
-                    .collect::<Vec<_>>();
-                (tabs, active)
-            } else {
-                (Vec::new(), None)
+            let (tabs, active) = match Mux::get().get_window(self.mux_window_id) {
+                Some(window) => (
+                    window.iter_tabs().cloned().collect::<Vec<_>>(),
+                    window.get_active_tab().map(|tab| tab.tab_id()),
+                ),
+                None => (Vec::new(), None),
             };
+            if let Some(id) = active {
+                ui.bells.remove(&id);
+            }
             ui.actual_active = active;
             ui.revision += 1;
-            ui.known = tabs.iter().map(|t| t.id).collect();
-            ui.metadata_processes = tabs
-                .iter()
-                .map(|tab| (tab.id, tab.process.clone()))
-                .collect();
+            ui.known = tabs.iter().map(|tab| tab.tab_id()).collect();
             ui.provider.snapshot(Snapshot {
                 revision: ui.revision,
                 window_id: self.mux_window_id,
                 tabs,
+                bells: ui.bells.clone(),
                 active,
                 focused: self.focused.is_some(),
-                config_epoch: self.config.generation(),
+                config: self.config.clone(),
             });
             ui.dirty = false;
         }
@@ -1215,9 +967,37 @@ impl TermWindow {
         }
         self.ui_host = Some(ui);
         self.vtabs_commands(commands);
-        self.vtabs_schedule_metadata_refresh();
         self.vtabs_schedule_provider(self.mux_window_id);
         self.vtabs_apply_reservation(before);
+    }
+    /// Tabs in the sidebar's visible order; None only without a mux window.
+    pub fn vtabs_tab_information(&self) -> Option<Vec<TabInformation>> {
+        let mux = Mux::get();
+        let window = mux.get_window(self.mux_window_id)?;
+        let Some(ui) = self.ui_host.as_ref() else {
+            return Some(vec![]);
+        };
+        let last = window
+            .get_last_active_tab_idx()
+            .and_then(|idx| window.iter_tabs().nth(idx))
+            .map(|tab| tab.tab_id());
+        let tabs = ui.projection.tabs.iter().enumerate().filter_map(|(index, id)| {
+            let tab = mux.get_tab(*id)?;
+            let panes = self.get_pos_panes_for_tab(&tab);
+            Some(TabInformation {
+                tab_index: index,
+                tab_id: *id,
+                is_active: ui.projection.active == Some(*id),
+                is_last_active: last == Some(*id),
+                window_id: self.mux_window_id,
+                tab_title: tab.get_title(),
+                active_pane: panes
+                    .iter()
+                    .find(|p| p.is_active)
+                    .map(Self::pos_pane_to_pane_info),
+            })
+        });
+        Some(tabs.collect())
     }
     pub fn vtabs_activate_visible(&mut self, id: TabId) {
         self.vtabs_sync();
@@ -1227,6 +1007,24 @@ impl TermWindow {
             .and_then(|ui| ui.projection.tabs.iter().position(|tab| *tab == id))
         {
             self.vtabs_navigation(Navigation::Index(index as isize));
+        }
+    }
+    /// Tabs that arrived before subscribing missed TabAddedToWindow; they adopt this size.
+    pub fn vtabs_adopt_tab_sizes(&self) {
+        if let Some(window) = Mux::get().get_window(self.mux_window_id) {
+            for tab in window.iter_tabs() {
+                if tab.get_size() != self.terminal_size {
+                    tab.resize(self.terminal_size);
+                }
+            }
+        }
+    }
+    pub fn vtabs_shutdown(&mut self) {
+        if let Some(ui) = self.ui_host.take() {
+            ui.shutdown();
+        }
+        for (_, ui) in self.vtabs_suspended.drain() {
+            ui.shutdown();
         }
     }
     /// Returns true when upstream must not handle the notification.
@@ -1262,7 +1060,7 @@ impl TermWindow {
             }
             TermWindowNotif::SwitchToMuxWindow(window_id) => {
                 if let Some(mut ui) = self.ui_host.take() {
-                    ui.cancel_metadata_refresh();
+                    ui.provider.suspend();
                     ui.provider.input(Input::Focus(false));
                     ui.dirty = true;
                     self.vtabs_suspended.insert(self.mux_window_id, ui);
@@ -1276,6 +1074,52 @@ impl TermWindow {
             _ => {}
         }
         false
+    }
+    /// Runs before modals: sidebar clipboard edits, and only window actions without a tab.
+    pub fn vtabs_preempt_assignment(
+        &mut self,
+        assignment: &config::keyassignment::KeyAssignment,
+    ) -> bool {
+        use config::keyassignment::KeyAssignment::*;
+        self.vtabs_sync();
+        self.vtabs_clipboard_assignment(assignment)
+            || (self.vtabs_empty()
+                && !matches!(
+                    assignment,
+                    ActivateTab(_)
+                        | ActivateTabRelative(_)
+                        | ActivateTabRelativeNoWrap(_)
+                        | ActivateLastTab
+                        | SpawnTab(_)
+                        | SpawnWindow
+                        | SpawnCommandInNewTab(_)
+                        | SpawnCommandInNewWindow(_)
+                        | ShowTabNavigator
+                        | ActivateCommandPalette
+                        | ShowLauncher
+                        | ShowLauncherArgs(_)
+                        | SwitchToWorkspace { .. }
+                        | SwitchWorkspaceRelative(_)
+                        | EmitEvent(_)
+                        | Multiple(_)
+                        | ActivateKeyTable { .. }
+                        | PopKeyTable
+                        | ClearKeyTableStack
+                        | Nop
+                        | DisableDefaultAssignment
+                        | QuitApplication
+                        | Hide
+                        | HideApplication
+                        | Show
+                        | ToggleFullScreen
+                        | IncreaseFontSize
+                        | DecreaseFontSize
+                        | ResetFontSize
+                        | ReloadConfiguration
+                        | ActivateWindow(_)
+                        | ActivateWindowRelative(_)
+                        | ActivateWindowRelativeNoWrap(_)
+                ))
     }
     /// Tab actions follow the sidebar's visible order, not the window's tab indices.
     pub fn vtabs_assignment(&mut self, assignment: &config::keyassignment::KeyAssignment) -> bool {
@@ -1368,7 +1212,7 @@ impl TermWindow {
         consumed
     }
     /// macOS menu key equivalents run clipboard assignments without any key event.
-    pub fn vtabs_clipboard_assignment(&mut self, assignment: &config::keyassignment::KeyAssignment) -> bool {
+    fn vtabs_clipboard_assignment(&mut self, assignment: &config::keyassignment::KeyAssignment) -> bool {
         use config::keyassignment::KeyAssignment::{CopyTo, PasteFrom};
         let key = match assignment {
             CopyTo(_) => 'c',
@@ -1394,6 +1238,27 @@ impl TermWindow {
             win32_uni_char: None,
         };
         self.vtabs_input(Input::Key(&event))
+    }
+    /// The provider adjusts the command and reserves a sidebar place for its tab.
+    pub fn vtabs_prepare_spawn(
+        &mut self,
+        spawn: &SpawnCommand,
+        spawn_where: crate::spawn::SpawnWhere,
+    ) -> (SpawnCommand, Option<serde_json::Value>) {
+        use crate::spawn::SpawnWhere;
+        let new_window = spawn_where == SpawnWhere::NewWindow;
+        let mut spawn = spawn.clone();
+        if let Some(ui) = self.ui_host.as_ref() {
+            ui.provider.prepare_command(new_window, &mut spawn);
+        }
+        let context = if matches!(spawn_where, SpawnWhere::NewTab | SpawnWhere::NewWindow) {
+            self.ui_host
+                .as_mut()
+                .map(|ui| ui.provider.reserve_spawn(new_window, &spawn))
+        } else {
+            None
+        };
+        (spawn, context)
     }
     fn vtabs_commands(&mut self, commands: Vec<Command>) {
         for command in commands {
@@ -1423,77 +1288,6 @@ impl TermWindow {
                     }
                     self.vtabs_mark_dirty();
                 }
-                Command::MoveToNewWindow(id) => {
-                    let Some(tab) = mux.get_tab(id) else { continue };
-                    let context = self
-                        .ui_host
-                        .as_ref()
-                        .map(|ui| ui.provider.move_context(id))
-                        .unwrap_or_default();
-                    if let Some(pane) = tab.get_active_pane() {
-                        if pane
-                            .downcast_ref::<wezterm_client::pane::ClientPane>()
-                            .is_some()
-                        {
-                            if tab.count_panes() != Some(1) {
-                                self.vtabs_message(serde_json::json!({"error":"WezTerm mux supports moving single-pane tabs; this split tab stays in its window"}));
-                                continue;
-                            }
-                            let pane_id = pane.pane_id();
-                            let source_id = self.mux_window_id;
-                            let workspace = mux
-                                .get_window(source_id)
-                                .map(|w| w.get_workspace().to_owned());
-                            let source_window = self.window.clone();
-                            promise::spawn::spawn(async move {
-                                match Mux::get()
-                                    .move_pane_to_new_tab(pane_id, None, workspace)
-                                    .await
-                                {
-                                    Ok((tab, window)) => {
-                                        spawn_completed(window, tab.tab_id(), context);
-                                        if let Some(source) = source_window {
-                                            source.notify(TermWindowNotif::Apply(Box::new(
-                                                move |tw| {
-                                                    tw.vtabs_message_for(
-                                                        source_id,
-                                                        serde_json::json!({"tab_departed":id}),
-                                                    );
-                                                },
-                                            )));
-                                        }
-                                    }
-                                    Err(error) => log::error!("move tab: {error}"),
-                                }
-                            })
-                            .detach();
-                            continue;
-                        }
-                    }
-                    // This operation retains the tab and its entire split tree.
-                    let builder = mux.new_empty_window(Some(mux.active_workspace().clone()), None);
-                    let destination = *builder;
-                    if let Some(mut source) = mux.get_window_mut(self.mux_window_id) {
-                        source.remove_tab_id(id);
-                    }
-                    if let Err(error) = mux.add_tab_to_window(&tab, destination) {
-                        let _ = mux.add_tab_to_window(&tab, self.mux_window_id);
-                        self.vtabs_message(
-                            serde_json::json!({"error":format!("move tab: {error}")}),
-                        );
-                        continue;
-                    }
-                    spawn_completed(destination, id, context);
-                    self.vtabs_message(serde_json::json!({"tab_departed":id}));
-                    drop(builder);
-                    mux.prune_dead_windows();
-                    self.vtabs_mark_dirty();
-                }
-                Command::Rename(id, name) => {
-                    if let Some(tab) = mux.get_tab(id) {
-                        tab.set_title(&name);
-                    }
-                }
                 Command::Spawn(command, new_window) => self.spawn_command(
                     &command,
                     if new_window {
@@ -1502,29 +1296,7 @@ impl TermWindow {
                         crate::spawn::SpawnWhere::NewTab
                     },
                 ),
-                Command::Reorder(order) => {
-                    if let Some(mut window) = mux.get_window_mut(self.mux_window_id) {
-                        let active = window.get_active_tab().map(|t| t.tab_id());
-                        let known: HashSet<_> = window.iter_tabs().map(|t| t.tab_id()).collect();
-                        if order.len() == known.len()
-                            && order.iter().copied().collect::<HashSet<_>>() == known
-                        {
-                            for (index, id) in order.iter().enumerate() {
-                                let old =
-                                    window.iter_tabs().position(|t| t.tab_id() == *id).unwrap();
-                                if old != index {
-                                    let tab = window.remove_tab_idx(old);
-                                    window.insert_tab_at_idx(index, &tab);
-                                }
-                            }
-                            let index = window.iter_tabs().position(|t| Some(t.tab_id()) == active);
-                            if let Some(index) = index {
-                                window.set_active_tab_idx_without_saving(index);
-                            }
-                        }
-                    }
-                    self.vtabs_mark_dirty();
-                }
+                Command::Resync => self.vtabs_mark_dirty(),
                 Command::Clipboard(text) => {
                     if let Some(window) = &self.window {
                         window.set_clipboard(window::Clipboard::Clipboard, text);
@@ -1805,43 +1577,10 @@ impl TermWindow {
                 bounds.x.to_bits(),
                 bounds.y.to_bits(),
             );
-            let invalidated = ui.primitive_cache_key != primitive_key;
-            if invalidated {
+            if ui.primitive_cache_key != primitive_key {
                 // Corner glyph UVs belong to one atlas, even when surface geometry is unchanged.
                 ui.primitive_cache.clear();
                 ui.primitive_cache_key = primitive_key;
-            }
-            let recenter = invalidated
-                || ui.centered_ranges.len() != surface.rows.len()
-                || ui.primitive_cache.len() != ui.provider.primitives().len()
-                || ui
-                    .primitive_cache
-                    .iter()
-                    .zip(ui.provider.primitives())
-                    .any(|(cached, next)| cached.surface.bounds != next.bounds);
-            if recenter {
-                ui.centered_ranges.resize_with(surface.rows.len(), Vec::new);
-                for ranges in &mut ui.centered_ranges {
-                    ranges.clear();
-                }
-                for primitive in ui.provider.primitives() {
-                    if let Some((row, range)) = (!primitive.stacked)
-                        .then(|| vtabs_centered_range(primitive.bounds, geometry.cell_width))
-                        .flatten()
-                    {
-                        if let Some(ranges) = ui.centered_ranges.get_mut(row) {
-                            ranges.push(range);
-                        }
-                    } else if let Some((rows, covered)) =
-                        vtabs_overlay_cover(primitive.bounds, primitive.stacked, geometry.cell_width)
-                    {
-                        for row in rows {
-                            if let Some(ranges) = ui.centered_ranges.get_mut(row) {
-                                vtabs_occlude(ranges, covered);
-                            }
-                        }
-                    }
-                }
             }
             ui.primitive_cache.truncate(ui.provider.primitives().len());
             for (index, primitive) in ui.provider.primitives().iter().enumerate() {
@@ -1893,7 +1632,7 @@ impl TermWindow {
                 self.fonts.resolve_font(&style).ok()
             };
             for (y, line) in surface.rows.iter().enumerate() {
-                let centered_ranges = &ui.centered_ranges[y];
+                let centered_ranges = surface.centered.get(y).map_or(&[][..], Vec::as_slice);
                 if ui
                     .cache
                     .get(y)
@@ -1955,7 +1694,7 @@ impl TermWindow {
                     }
                     let cached = RowCache {
                         line: Rc::clone(line),
-                        centered_ranges: centered_ranges.clone(),
+                        centered_ranges: centered_ranges.to_vec(),
                         quads,
                         origin,
                     };
@@ -1979,7 +1718,7 @@ impl TermWindow {
                 if let (Some(window), Some(caret)) = (&self.window, ui.provider.caret()) {
                     let mut offset = surface.offset;
                     let x = (caret.0 as f32 + 0.5) * geometry.cell_width;
-                    if ui.centered_ranges.get(caret.1).is_some_and(|ranges| {
+                    if surface.centered.get(caret.1).is_some_and(|ranges| {
                         ranges.iter().any(|(left, right)| x >= *left && x < *right)
                     }) {
                         offset.1 += geometry.cell_height / 2.;

@@ -1,4 +1,4 @@
-//! Order topology snapshots after local resize acknowledgements.
+//! Order topology snapshots after local resize and kill acknowledgements.
 use std::sync::{Arc, Mutex};
 use std::task::{Poll, Waker};
 
@@ -19,15 +19,22 @@ pub(crate) struct TopologySync {
 }
 
 impl TopologySync {
-    pub fn begin_resize(&self) -> Option<ResizeGuard> {
+    pub fn begin_resize(&self) -> Option<PendingGuard> {
         let mut state = self.state.lock().unwrap();
         // Applying remote geometry must not echo a new resize back to its source.
         if state.applying != 0 {
             return None;
         }
+        Some(self.begin(&mut state))
+    }
+    // A snapshot taken before the server removes the pane would resurrect it.
+    pub fn begin_kill(&self) -> PendingGuard {
+        self.begin(&mut self.state.lock().unwrap())
+    }
+    fn begin(&self, state: &mut State) -> PendingGuard {
         state.epoch = state.epoch.wrapping_add(1);
         state.pending += 1;
-        Some(ResizeGuard(Arc::clone(&self.state)))
+        PendingGuard(Arc::clone(&self.state))
     }
     pub fn request(&self) -> u64 {
         let mut state = self.state.lock().unwrap();
@@ -64,8 +71,8 @@ impl TopologySync {
     }
 }
 
-pub(crate) struct ResizeGuard(Arc<Mutex<State>>);
-impl Drop for ResizeGuard {
+pub(crate) struct PendingGuard(Arc<Mutex<State>>);
+impl Drop for PendingGuard {
     fn drop(&mut self) {
         let wake = {
             let mut state = self.0.lock().unwrap();

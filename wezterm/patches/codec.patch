@@ -1,17 +1,18 @@
 diff --git a/codec/src/lib.rs b/codec/src/lib.rs
-index 0c230e95500d43ad4ca9613112ebbb2093d9cc57..cc83daf06de4fecd81c5553af13453d20a6ae945 100644
+index 0c230e95500d43ad4ca9613112ebbb2093d9cc57..6348a6d744e8011981d110fc7543810f168b8e08 100644
 --- a/codec/src/lib.rs
 +++ b/codec/src/lib.rs
-@@ -17,7 +17,7 @@ use config::keyassignment::{PaneDirection, ScrollbackEraseMode};
- use mux::client::{ClientId, ClientInfo};
- use mux::pane::PaneId;
- use mux::renderable::{RenderableDimensions, StableCursorPosition};
--use mux::tab::{PaneNode, SerdeUrl, SplitRequest, TabId};
-+use mux::tab::{PaneEntry, PaneNode, SerdeUrl, SplitRequest, TabId};
- use mux::window::WindowId;
- use portable_pty::CommandBuilder;
- use rangeset::*;
-@@ -503,6 +503,16 @@ pdu! {
+@@ -37,6 +37,9 @@ use thiserror::Error;
+ use wezterm_term::color::ColorPalette;
+ use wezterm_term::{Alert, ClipboardSelection, StableRowIndex, TerminalSize};
+ 
++mod vtabs;
++pub use vtabs::*;
++
+ #[derive(Error, Debug)]
+ #[error("Corrupt Response: {0}")]
+ pub struct CorruptResponse(String);
+@@ -503,6 +506,16 @@ pdu! {
      GetPaneDirection: 60,
      GetPaneDirectionResponse: 61,
      AdjustPaneSize: 62,
@@ -28,85 +29,3 @@ index 0c230e95500d43ad4ca9613112ebbb2093d9cc57..cc83daf06de4fecd81c5553af13453d2
  }
  
  impl Pdu {
-@@ -650,6 +660,15 @@ pub struct ListPanesResponse {
-     pub window_titles: HashMap<WindowId, String>,
- }
- 
-+#[derive(Deserialize, Serialize, PartialEq, Debug)]
-+pub struct ReplacePane {
-+    pub pane_id: PaneId,
-+    pub command: Option<CommandBuilder>,
-+    pub command_dir: Option<String>,
-+    pub domain: config::keyassignment::SpawnTabDomain,
-+    pub wait_for_ready: bool,
-+}
-+
- #[derive(Deserialize, Serialize, PartialEq, Debug)]
- pub struct SplitPane {
-     pub pane_id: PaneId,
-@@ -882,6 +901,65 @@ pub struct GetPaneDirectionResponse {
-     pub pane_id: Option<PaneId>,
- }
- 
-+/// A client cannot see what runs in a remote pane, so its owner judges the close.
-+#[derive(Deserialize, Serialize, PartialEq, Debug)]
-+pub struct GetPaneCloseInfo {
-+    pub pane_id: PaneId,
-+}
-+
-+#[derive(Deserialize, Serialize, PartialEq, Eq, Debug, Clone, Default)]
-+pub struct GetPaneCloseInfoResponse {
-+    /// The owner's own close policy: skip list, `mux-is-process-stateful`, process tree.
-+    pub prompt: bool,
-+    pub process: String,
-+}
-+
-+/// Only the machine that owns a pane can see its host, home and Git work tree.
-+/// Relayed hop by hop; stock servers reject it and keep upstream labels.
-+#[derive(Deserialize, Serialize, PartialEq, Debug)]
-+pub struct GetPaneLocation {
-+    /// `None` asks about the server itself.
-+    pub pane_id: Option<PaneId>,
-+}
-+
-+#[derive(Deserialize, Serialize, PartialEq, Eq, Debug, Clone, Default)]
-+pub struct GetPaneLocationResponse {
-+    /// The directory this answer describes; a stale answer names an older one.
-+    pub cwd: String,
-+    pub home: String,
-+    pub repo_root: Option<String>,
-+    /// The os-release `ID`, or the platform name where no such file exists.
-+    pub os: String,
-+    pub hostname: String,
-+}
-+
-+/// The remote panes of a `local_pane_layout` domain that its mux could show.
-+#[derive(Deserialize, Serialize, PartialEq, Debug)]
-+pub struct ListAdoptablePanes {
-+    pub domain: String,
-+}
-+
-+#[derive(Deserialize, Serialize, PartialEq, Debug)]
-+pub struct ListAdoptablePanesResponse {
-+    pub panes: Vec<PaneEntry>,
-+}
-+
-+/// Shows an existing remote pane in a new tab and takes over its backing tab.
-+#[derive(Deserialize, Serialize, PartialEq, Debug)]
-+pub struct AdoptPane {
-+    pub domain: String,
-+    pub remote_pane_id: PaneId,
-+    /// A new detached window when omitted.
-+    pub window_id: Option<WindowId>,
-+}
-+
-+#[derive(Deserialize, Serialize, PartialEq, Debug)]
-+pub struct AdoptPaneResponse {
-+    pub pane_id: PaneId,
-+    pub tab_id: TabId,
-+    pub window_id: WindowId,
-+}
-+
- #[derive(Deserialize, Serialize, PartialEq, Debug)]
- pub struct ActivatePaneDirection {
-     pub pane_id: PaneId,

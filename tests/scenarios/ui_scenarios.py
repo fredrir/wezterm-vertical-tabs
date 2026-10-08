@@ -73,13 +73,13 @@ class GuiInput:
             None,
         )
 
-    def hit_position(self, identifier):
+    def hit_position(self, identifier, y_fraction=0.5):
         state = self.probe.wait(lambda state: self.hit(state, identifier) is not None)
         hit = self.hit(state, identifier)
         grid = state["model"]["grid"]
         return (
             round(grid["x"] + (hit["x"] + hit["width"] / 2) * grid["cell_width"]),
-            round(grid["y"] + (hit["y"] + hit["height"] / 2) * grid["cell_height"]),
+            round(grid["y"] + (hit["y"] + hit["height"] * y_fraction) * grid["cell_height"]),
         )
 
     def point(self, x, y):
@@ -92,8 +92,8 @@ class GuiInput:
         self.hover(identifier)
         self.command("click", "1")
 
-    def drag(self, source, target):
-        start, end = self.hit_position(source), self.hit_position(target)
+    def drag(self, source, target, y_fraction=0.5):
+        start, end = self.hit_position(source), self.hit_position(target, y_fraction)
         self.point(*start)
         self.command("mousedown", "1")
         try:
@@ -224,7 +224,8 @@ def scenarios(probe: Probe, gui: GuiInput):
     created = next(tab["id"] for tab in state["tabs"] if tab["id"] not in ids)
     ids.append(created)
     intent(probe, {"RenameTab": {"id": created, "title": "Build"}})
-    gui.drag(f"Tab({ids[3]})", f"Tab({ids[2]})")
+    # A row's middle joins the tabs as a split; its top edge reorders.
+    gui.drag(f"Tab({ids[3]})", f"Tab({ids[2]})", y_fraction=0.15)
     probe.wait(
         lambda state: (
             ids[3] in state.get("visible", [])
@@ -232,6 +233,7 @@ def scenarios(probe: Probe, gui: GuiInput):
             and state["visible"].index(ids[3]) < state["visible"].index(ids[2])
         )
     )
+    gui.hover("SpaceTitle")
     gui.click("CreateFolder")
     probe.wait(lambda state: gui.hit(state, "Editor") is not None)
     gui.text("Project")
@@ -263,7 +265,8 @@ def scenarios(probe: Probe, gui: GuiInput):
     probe.wait(lambda state: state.get("active") == first)
     capture = gui.start_input_capture()
     terminal_pixels = gui.terminal_text_pixels(gui.capture("sidebar"))
-    gui.hover("Settings")
+    # Tooltips open beside the sidebar, level with their control; this one clears the text.
+    gui.hover(f"Space({json.dumps(home)})")
     assert gui.terminal_text_pixels(gui.capture("tooltip", pause=0.9)) == terminal_pixels, (
         "Tooltip changed uncovered terminal text"
     )

@@ -22,6 +22,7 @@ def wezterm_binaries(pytestconfig):
             "wezterm",
             "wezterm-mux-server",
             "wez-vtabs-store",
+            "strip-ansi-escapes",
         )
     }
     missing = [str(path) for path in binaries.values() if not path.is_file()]

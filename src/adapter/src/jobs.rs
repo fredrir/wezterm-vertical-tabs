@@ -58,7 +58,7 @@ impl Adapter {
                     },
                     command: job.command,
                     place: format!(
-                        "{} · {} · pane {} · %{}",
+                        "{}  {}  pane {}  %{}",
                         shell.host,
                         domain.domain_name(),
                         pane.pane_id(),

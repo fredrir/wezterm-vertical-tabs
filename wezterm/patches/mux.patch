@@ -54,119 +54,31 @@ index 12109666e23dbc36ced1f2cf4d39c60ac9dfa18e..9fc94f2f94b33135ab367d6f67c47c35
      }
  
 diff --git a/mux/src/lib.rs b/mux/src/lib.rs
-index 6d1a74619b512fdad47918b11bcd690158dd223b..2881cf4148b88a2e58612c4323e285a125c17d78 100644
+index 6d1a74619b512fdad47918b11bcd690158dd223b..85fb91a7f444a8b0b90e38fc385aa16ba5b22106 100644
 --- a/mux/src/lib.rs
 +++ b/mux/src/lib.rs
-@@ -38,6 +38,7 @@ pub mod client;
+@@ -38,8 +38,10 @@ pub mod client;
  pub mod connui;
  pub mod domain;
  pub mod localpane;
 +pub mod location;
  pub mod pane;
  pub mod renderable;
++mod replace;
  pub mod ssh;
-@@ -52,6 +53,24 @@ pub mod window;
+ pub mod ssh_agent;
+ pub mod tab;
+@@ -48,8 +50,10 @@ pub mod tmux;
+ pub mod tmux_commands;
+ mod tmux_pty;
+ pub mod window;
++mod workspace;
+ 
  use crate::activity::Activity;
++pub use crate::workspace::*;
  
  pub const DEFAULT_WORKSPACE: &str = "default";
-+/// Holds detached panes; the GUI never switches to it on its own.
-+pub const DETACHED_WORKSPACE: &str = "__detached";
-+/// Prefixes the workspace in which a mux keeps the tabs backing another host's panes.
-+pub const BACKING_WORKSPACE_PREFIX: &str = "__backing:";
-+
-+/// The workspace a remote mux puts this host's backing tabs in, so it can hand them back.
-+pub fn backing_workspace() -> String {
-+    let host = hostname::get()
-+        .map(|name| name.to_string_lossy().into_owned())
-+        .unwrap_or_default();
-+    let host = host.split('.').next().unwrap_or_default();
-+    format!("{BACKING_WORKSPACE_PREFIX}{host}")
-+}
-+
-+/// Workspaces a GUI never switches to on its own.
-+pub fn is_hidden_workspace(workspace: &str) -> bool {
-+    workspace == DETACHED_WORKSPACE || workspace.starts_with(BACKING_WORKSPACE_PREFIX)
-+}
  
- #[derive(Clone, Debug)]
- pub enum MuxNotification {
-@@ -1193,6 +1212,76 @@ impl Mux {
-         })
-     }
- 
-+    pub async fn replace_pane(
-+        &self,
-+        pane_id: PaneId,
-+        command: Option<CommandBuilder>,
-+        command_dir: Option<String>,
-+        domain: config::keyassignment::SpawnTabDomain,
-+        wait_for_ready: bool,
-+    ) -> anyhow::Result<(Arc<dyn Pane>, TerminalSize)> {
-+        let _activity = Activity::new();
-+        let (_, window_id, tab_id) = self
-+            .resolve_pane_id(pane_id)
-+            .ok_or_else(|| anyhow!("pane_id {pane_id} invalid"))?;
-+        let domain = self.resolve_spawn_tab_domain(Some(pane_id), &domain)?;
-+        if domain.state() == DomainState::Detached {
-+            domain.attach(Some(window_id)).await?;
-+        }
-+        let tab = self
-+            .get_tab(tab_id)
-+            .ok_or_else(|| anyhow!("tab {tab_id} disappeared"))?;
-+        let current = self
-+            .get_pane(pane_id)
-+            .ok_or_else(|| anyhow!("pane {pane_id} disappeared"))?;
-+        let size = tab.pane_size(pane_id)?;
-+        let cwd = self.resolve_cwd(
-+            command_dir,
-+            Some(Arc::clone(&current)),
-+            domain.domain_id(),
-+            CachePolicy::FetchImmediate,
-+        );
-+        let pane = domain.spawn_pane(size, command, cwd).await?;
-+        if let Some(config) = current.get_config() {
-+            pane.set_config(config);
-+        }
-+        let result = async {
-+            self.add_pane(&pane)?;
-+            if wait_for_ready {
-+                // Keep the old screen until the replacement has drawn its first
-+                // prompt. Older shells still work: the wait is bounded.
-+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
-+                while !pane.copy_user_vars().contains_key("WEZTERM_PANE_READY")
-+                    && !pane.is_dead()
-+                    && std::time::Instant::now() < deadline
-+                {
-+                    smol::Timer::after(std::time::Duration::from_millis(5)).await;
-+                }
-+                anyhow::ensure!(
-+                    !pane.is_dead(),
-+                    "replacement pane exited before it was ready"
-+                );
-+            }
-+            anyhow::ensure!(self.get_tab(tab_id).is_some(), "tab {tab_id} disappeared");
-+            anyhow::ensure!(
-+                self.get_pane(pane_id).is_some(),
-+                "pane {pane_id} disappeared"
-+            );
-+            tab.replace_pane(pane_id, Arc::clone(&pane))
-+        }
-+        .await;
-+        match result {
-+            Ok(size) => {
-+                self.remove_pane(pane_id);
-+                Ok((pane, size))
-+            }
-+            Err(error) => {
-+                self.remove_pane(pane.pane_id());
-+                Err(error)
-+            }
-+        }
-+    }
-+
-     pub async fn split_pane(
-         &self,
-         // TODO: disambiguate with TabId
 diff --git a/mux/src/localpane.rs b/mux/src/localpane.rs
 index bffc5213cd9bf963ae521a6d79f0af124cea8e77..8b774de0654ce39680aa141d5ef8378928e880b6 100644
 --- a/mux/src/localpane.rs
@@ -282,85 +194,15 @@ index bffc5213cd9bf963ae521a6d79f0af124cea8e77..8b774de0654ce39680aa141d5ef83789
  
      #[allow(dead_code)]
 diff --git a/mux/src/tab.rs b/mux/src/tab.rs
-index e100bdb95af96f5e6c3f304ecd24dca0cb3e4762..36ce46cf4e5a1af4850bb076b1446f2fe222348b 100644
+index e100bdb95af96f5e6c3f304ecd24dca0cb3e4762..b3a03b9b22cdec85ec0bf7aca95941e40a8ff381 100644
 --- a/mux/src/tab.rs
 +++ b/mux/src/tab.rs
-@@ -681,6 +681,18 @@ impl Tab {
-         self.inner.lock().remove_pane(pane_id)
-     }
+@@ -14,6 +14,8 @@ use std::sync::Arc;
+ use url::Url;
+ use wezterm_term::{StableRowIndex, TerminalSize};
  
-+    pub fn pane_size(&self, pane_id: PaneId) -> anyhow::Result<TerminalSize> {
-+        self.inner.lock().pane_size(pane_id)
-+    }
++mod replace;
 +
-+    pub fn replace_pane(
-+        &self,
-+        pane_id: PaneId,
-+        pane: Arc<dyn Pane>,
-+    ) -> anyhow::Result<TerminalSize> {
-+        self.inner.lock().replace_pane(pane_id, pane)
-+    }
-+
-     pub fn can_close_without_prompting(&self, reason: CloseReason) -> bool {
-         self.inner.lock().can_close_without_prompting(reason)
-     }
-@@ -1812,6 +1824,59 @@ impl TabInner {
-         cell_dimensions(&self.size)
-     }
+ pub type Tree = bintree::Tree<Arc<dyn Pane>, SplitDirectionAndSize>;
+ pub type Cursor = bintree::Cursor<Arc<dyn Pane>, SplitDirectionAndSize>;
  
-+    fn pane_size(&mut self, pane_id: PaneId) -> anyhow::Result<TerminalSize> {
-+        let position = self
-+            .iter_panes_ignoring_zoom()
-+            .into_iter()
-+            .find(|p| p.pane.pane_id() == pane_id)
-+            .ok_or_else(|| anyhow::anyhow!("pane {pane_id} is no longer in this tab"))?;
-+        if position.is_zoomed {
-+            return Ok(self.size);
-+        }
-+        Ok(TerminalSize {
-+            rows: position.height,
-+            cols: position.width,
-+            pixel_width: position.pixel_width,
-+            pixel_height: position.pixel_height,
-+            dpi: self.size.dpi,
-+        })
-+    }
-+
-+    fn replace_pane(
-+        &mut self,
-+        pane_id: PaneId,
-+        pane: Arc<dyn Pane>,
-+    ) -> anyhow::Result<TerminalSize> {
-+        let size = self.pane_size(pane_id)?;
-+        // The tab may have been resized while the shell was spawning.
-+        pane.resize(size)?;
-+        let prior = self.get_active_pane();
-+        let mut cursor = self.pane.take().unwrap().cursor();
-+        loop {
-+            if let Some(leaf) = cursor.leaf_mut() {
-+                if leaf.pane_id() == pane_id {
-+                    *leaf = Arc::clone(&pane);
-+                    self.pane = Some(cursor.tree());
-+                    break;
-+                }
-+            }
-+            match cursor.preorder_next() {
-+                Ok(next) => cursor = next,
-+                Err(cursor) => {
-+                    self.pane = Some(cursor.tree());
-+                    anyhow::bail!("pane {pane_id} is no longer in this tab");
-+                }
-+            }
-+        }
-+        if self.zoomed.as_ref().is_some_and(|p| p.pane_id() == pane_id) {
-+            pane.set_zoomed(true);
-+            self.zoomed = Some(pane);
-+        }
-+        self.advise_focus_change(prior);
-+        Mux::get().notify(MuxNotification::TabResized(self.id));
-+        Ok(size)
-+    }
-+
-     fn swap_active_with_index(&mut self, pane_index: usize, keep_focus: bool) -> Option<()> {
-         let active_idx = self.get_active_idx();
-         let mut pane = self.get_active_pane()?;

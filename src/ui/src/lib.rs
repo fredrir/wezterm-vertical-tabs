@@ -20,6 +20,7 @@ pub use runtime::canvas::{HitRegion, RoundedSurface};
 pub use runtime::frame::{FrameUpdate, SurfaceTransform};
 pub use theme::Theme;
 pub use views::launcher::{CommandEntry, ForeignTab, JobEntry};
+pub use views::sidebar::header_fits;
 
 use actions::Action;
 use events::Pointer;
