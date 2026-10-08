@@ -22,7 +22,6 @@
 ---@field private_accent? string Private window accent
 ---@field distro_colors? table<string, string> Remote glyph colors by os-release ID, `remote` when unknown
 ---@field keyboard_shortcuts? boolean Enable tab, search, settings and sidebar shortcuts
----@field reopen_limit? integer Maximum in-memory launch intents
 ---@field default_domain? string Spawn domain used in an empty space; null retains the host default
 ---@field private_env? table<string, string> Environment additions for explicitly created private windows
 ---@field menus? TabsMenuEntry[] Nested semantic action menus
@@ -39,7 +38,7 @@
 --- Argument to `vtabs.action` and `wezterm.vtabs.dispatch`.
 ---@alias TabsAction TabsUiAction|TabsIntent
 
----@alias TabsIntent 'ActivateLast'|'NewTab'|'Reopen'|'ResetSettings'|'PrivateWindow'|{ SelectSpace: string }|{ CreateSpace: { name: string } }|{ RenameSpace: { id: string, name: string } }|{ EditSpace: { accent?: string, icon: string, id: string, rules: TabsRoutingRule[] } }|{ DeleteSpace: { destination?: string, id: string } }|{ MoveSpace: { id: string, index: integer } }|{ ToggleSpace: string }|{ CreateFolder: { name: string } }|{ RenameFolder: { id: string, name: string } }|{ ToggleFolder: string }|{ DeleteFolder: string }|{ AssignFolder: { folder_id?: string, tab_id: integer } }|{ MoveFolder: { id: string, index: integer } }|{ ActivateTab: integer }|{ ActivateIndex: integer }|{ ActivateRelative: { delta: integer, wrap: boolean } }|{ NewTabInFolder: string }|{ CloseTab: integer }|{ CloseOthers: integer }|{ RenameTab: { id: integer, title: string } }|{ PinTab: { id: integer, pinned: boolean } }|{ MoveTab: { id: integer, index: integer } }|{ AssignTab: { id: integer, space_id: string } }|{ ReturnToAuto: integer }|{ SetSetting: { key: TabsSettingKey, value: any } }|{ ResetSetting: TabsSettingKey }|{ SetRail: TabsRailMode }|{ MoveTabToNewWindow: integer }|{ CustomAction: string }
+---@alias TabsIntent 'ActivateLast'|'NewTab'|'ResetSettings'|'PrivateWindow'|{ SelectSpace: string }|{ CreateSpace: { name: string } }|{ RenameSpace: { id: string, name: string } }|{ EditSpace: { accent?: string, icon: string, id: string, rules: TabsRoutingRule[] } }|{ DeleteSpace: { destination?: string, id: string } }|{ MoveSpace: { id: string, index: integer } }|{ ToggleSpace: string }|{ CreateFolder: { name: string } }|{ RenameFolder: { id: string, name: string } }|{ ToggleFolder: string }|{ DeleteFolder: string }|{ AssignFolder: { folder_id?: string, tab_id: integer } }|{ MoveFolder: { id: string, index: integer } }|{ ActivateTab: integer }|{ ActivateIndex: integer }|{ ActivateRelative: { delta: integer, wrap: boolean } }|{ NewTabInFolder: string }|{ CloseTab: integer }|{ CloseOthers: integer }|{ RenameTab: { id: integer, title: string } }|{ PinTab: { id: integer, pinned: boolean } }|{ MoveTab: { id: integer, index: integer } }|{ AssignTab: { id: integer, space_id: string } }|{ ReturnToAuto: integer }|{ SetSetting: { key: TabsSettingKey, value: any } }|{ ResetSetting: TabsSettingKey }|{ SetRail: TabsRailMode }|{ MoveTabToNewWindow: integer }|{ CustomAction: string }
 
 ---@class TabsLaunchSpec
 ---@field args? string[]
@@ -68,7 +67,7 @@
 ---@field fields? { [1]: TabsMatchField, [2]: string[] }[]
 ---@field remote? boolean
 
----@alias TabsSettingKey 'keybinds'|'width'|'side'|'rail'|'animations'|'reduced_motion'|'animation_ms'|'cards'|'show_indexes'|'show_metadata'|'show_close'|'confirm_close'|'accent'|'background'|'foreground'|'muted'|'selected_background'|'private_accent'|'distro_colors'|'keyboard_shortcuts'|'reopen_limit'|'default_domain'|'private_env'|'menus'
+---@alias TabsSettingKey 'keybinds'|'width'|'side'|'rail'|'animations'|'reduced_motion'|'animation_ms'|'cards'|'show_indexes'|'show_metadata'|'show_close'|'confirm_close'|'accent'|'background'|'foreground'|'muted'|'selected_background'|'private_accent'|'distro_colors'|'keyboard_shortcuts'|'default_domain'|'private_env'|'menus'
 
 ---@class TabsSpace
 ---@field accent? string

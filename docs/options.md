@@ -22,7 +22,6 @@
 | `private_accent`      | `"#cba6f7"`                                                   | Hex color `#RRGGBB`. Private window accent                                         |
 | `distro_colors`       | `{}`                                                          | Object of hex colors. Remote glyph colors by os-release ID, `remote` when unknown  |
 | `keyboard_shortcuts`  | `true`                                                        | Boolean. Enable tab, search, settings and sidebar shortcuts                        |
-| `reopen_limit`        | `20`                                                          | Integer 0–100. Maximum in-memory launch intents                                    |
 | `default_domain`      | `null`                                                        | String or null. Spawn domain used in an empty space; null retains the host default |
 | `private_env`         | `{"HISTFILE":"","VTABS_PRIVATE":"1","fish_private_mode":"1"}` | Object. Environment additions for explicitly created private windows               |
 | `menus`               | `[]`                                                          | List. Nested semantic action menus                                                 |

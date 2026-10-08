@@ -43,7 +43,6 @@ pub struct Settings {
     pub selected_background: String,
     pub private_accent: String,
     pub distro_colors: BTreeMap<String, String>,
-    pub reopen_limit: u16,
     pub default_domain: Option<String>,
     pub private_env: BTreeMap<String, String>,
     pub menus: Vec<MenuEntry>,
@@ -84,7 +83,6 @@ impl Default for Settings {
             selected_background: "#34485f".into(),
             private_accent: "#cba6f7".into(),
             distro_colors: BTreeMap::new(),
-            reopen_limit: 20,
             default_domain: None,
             private_env: BTreeMap::from([
                 ("HISTFILE".into(), "".into()),
@@ -263,13 +261,6 @@ pub const DESCRIPTORS: &[SettingDescriptor] = &[
         group: "behavior",
         kind: SettingKind::Bool,
         description: "Enable tab, search, settings and sidebar shortcuts",
-    },
-    SettingDescriptor {
-        key: "reopen_limit",
-        label: "Reopen history",
-        group: "behavior",
-        kind: SettingKind::Number { min: 0, max: 100 },
-        description: "Maximum in-memory launch intents",
     },
     SettingDescriptor {
         key: "default_domain",

@@ -37,7 +37,3 @@ mod projection_tests;
 #[cfg(test)]
 #[path = "../tests/reconcile.rs"]
 mod reconcile_tests;
-
-#[cfg(test)]
-#[path = "../tests/reopen.rs"]
-mod reopen_tests;

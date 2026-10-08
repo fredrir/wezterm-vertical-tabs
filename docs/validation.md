@@ -17,7 +17,7 @@
 | PTY                 | Real management CLI and installed `wez-vtabs` launcher output and exit status                                                       |
 | Startup             | Local and Unix mux render content; attached remote tabs use the current viewport without a physical resize                          |
 | Shutdown            | Owned application quits through its public action and exits successfully before fixture cleanup                                     |
-| SSH mux             | Containerized loopback transport, temporary keys, rejected unknown key, new/close/reopen lifecycle                                  |
+| SSH mux             | Containerized loopback transport, temporary keys, rejected unknown key, new/close lifecycle                                        |
 | TLS mux             | Certificate and hostname verification, mutual authentication, tab lifecycle and key cleanup                                         |
 | Geometry            | Resizing, left/right sidebar, expanded/hidden sidebar, integrated chrome, tiny windows, fonts, zoom and fullscreen                  |
 | Splits              | Pane identities and topology retained; active and background tabs remain sized consistently                                         |

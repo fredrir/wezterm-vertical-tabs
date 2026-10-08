@@ -176,18 +176,6 @@ fn routing_templates_and_manual_return_to_auto() {
     assert_eq!(m.tabs[&4].space_id, "remote-server");
 }
 #[test]
-fn private_windows_do_not_retain_reopen_launch_history() {
-    let mut m = Model::new("default", true);
-    let t = Tab {
-        launch: Some(LaunchSpec::default()),
-        ..tab(1)
-    };
-    m.reconcile(vec![t], Some(1), true).unwrap();
-    m.reconcile(vec![], None, true).unwrap();
-    assert!(!m.can_reopen());
-    assert!(m.dispatch(Intent::Reopen).unwrap().commands.is_empty());
-}
-#[test]
 fn settings_precedence_and_atomic_validation() {
     let mut m = model();
     m.load_managed_settings(BTreeMap::from([("width".into(), json!(300))]))
@@ -216,32 +204,4 @@ fn schema_defaults_validate_every_field() {
     for d in settings::descriptors() {
         settings::validate_value(d.key, &defaults.get(d.key).unwrap()).unwrap();
     }
-}
-#[test]
-fn metadata_updates_do_not_erase_exact_reopen_launch() {
-    let mut m = model();
-    let launch = LaunchSpec {
-        args: vec!["fish".into(), "--login".into()],
-        ..LaunchSpec::default()
-    };
-    m.set_launch(1, launch.clone()).unwrap();
-    m.reconcile(
-        vec![
-            Tab {
-                launch: Some(LaunchSpec {
-                    cwd: Some("/newcwd".into()),
-                    ..LaunchSpec::default()
-                }),
-                ..tab(1)
-            },
-            tab(2),
-            tab(3),
-        ],
-        Some(1),
-        false,
-    )
-    .unwrap();
-    m.reconcile(vec![tab(2), tab(3)], Some(2), true).unwrap();
-    let out = m.dispatch(Intent::Reopen).unwrap();
-    assert!(matches!(&out.commands[0],HostCommand::Spawn{launch:actual,..}if actual==&launch));
 }

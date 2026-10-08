@@ -16,11 +16,6 @@ impl SidebarUi {
                 "New private window",
                 Action::Domain(Intent::PrivateWindow),
             ),
-            MenuItem::new(
-                "reopen",
-                "Reopen closed tab",
-                Action::Domain(Intent::Reopen),
-            ),
             MenuItem::new("settings", "Settings", Action::Settings),
             MenuItem::new("reset-settings", "Reset settings", reset_settings()),
             MenuItem::new(
@@ -29,7 +24,6 @@ impl SidebarUi {
                 Action::Domain(Intent::SetRail(RailMode::Hidden)),
             ),
         ];
-        items[3].enabled = model.can_reopen();
         items.push(MenuItem::new("new-folder", "New folder", Action::NewFolder));
         items.extend(custom_menu(&model.settings.menus, "custom"));
         self.menu("Vertical tabs", items);

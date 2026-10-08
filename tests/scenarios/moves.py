@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Real tab moves, remote pane ownership, resize, and reopen regression."""
+"""Real tab moves, remote pane ownership, and resize."""
 
 import argparse
 import json
@@ -110,20 +110,8 @@ def run(probe, cli, external):
             "destination resize did not reach remote mux",
         )
 
-    state = probe.wait(
-        lambda s: len(s.get("tabs", [])) == 1 and s.get("model", {}).get("can_reopen") is False
-    )
+    state = probe.wait(lambda s: len(s.get("tabs", [])) == 1)
     assert all(t["id"] != moved for t in state["tabs"]), "moved tab remained in source"
-    probe.action("new_tab")
-    probe.wait(lambda s: len(s.get("tabs", [])) == 2)
-    probe.action("close")
-    probe.wait(
-        lambda s: len(s.get("tabs", [])) == 1 and s.get("model", {}).get("can_reopen") is True
-    )
-    probe.intent("Reopen")
-    probe.wait(
-        lambda s: len(s.get("tabs", [])) == 2 and s.get("model", {}).get("can_reopen") is False
-    )
     sequence = probe.latest[destination_id]["sequence"]
     probe.send("close_window")
     probe.sample_for(0.3)
@@ -151,8 +139,6 @@ def run(probe, cli, external):
         # CLI pane moves allocate a new tab without plugin transfer context.
         "pin_preserved": None if external else True,
         "pin_transfer_checked": not external,
-        "move_did_not_enter_history": True,
-        "close_and_reopen": True,
         "destination_resize": [cols, rows],
         "source_close_preserved_destination": True,
     }

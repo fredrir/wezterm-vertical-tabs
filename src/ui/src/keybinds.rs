@@ -78,13 +78,9 @@ impl SidebarUi {
             "commands" => intents.push(UiIntent::Host(HostAction::OpenCommands)),
             "jobs" => intents.push(UiIntent::Host(HostAction::OpenJobs)),
             "rail" => intents.push(UiIntent::Domain(toggle_rail(model))),
-            "new_tab" | "reopen" => {
+            "new_tab" => {
                 self.hide_settings();
-                intents.push(UiIntent::Domain(if action == "reopen" {
-                    Intent::Reopen
-                } else {
-                    Intent::NewTab
-                }));
+                intents.push(UiIntent::Domain(Intent::NewTab));
             }
             "close" => {
                 if self.settings.open {

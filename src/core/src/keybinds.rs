@@ -35,8 +35,6 @@ shortcuts! {
         &["Super+b", "Super+Shift+b"], &["Ctrl+Shift+b", "Super+b", "Super+Shift+b"]),
     ("new_tab", "New tab", "Create a tab in the current space",
         &["Super+t"], &["Ctrl+Shift+t", "Super+t"]),
-    ("reopen", "Reopen closed tab", "Reopen the last closed tab",
-        &["Super+Shift+t"], &["Super+Shift+t"]),
     ("close", "Close tab or settings", "Close the current tab or settings page",
         &["Super+w", "Super+Shift+w"], &["Ctrl+Shift+w", "Super+w", "Super+Shift+w"]),
     ("refresh", "Refresh", "Refresh the configuration",

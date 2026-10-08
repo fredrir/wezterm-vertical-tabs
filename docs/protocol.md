@@ -108,4 +108,4 @@
 | Legacy fields        | `settings`, `catalog.order`, `catalog.templates`, other `space:*` ignored    |
 | Write coalescing     | 100 ms; memory stays authoritative for rendering/navigation                  |
 | Other windows        | Notified after commit; independent GUI clients refresh on focus              |
-| Private windows      | Live-tab state and reopen history excluded; shared catalog edits kept        |
+| Private windows      | Live-tab state excluded; shared catalog edits kept                           |

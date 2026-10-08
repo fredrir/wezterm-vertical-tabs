@@ -12,7 +12,6 @@
 | Animation            | TachyonFX modifies cells; it is not a GPU shader language                                                                                                                                                                             |
 | Live restoration     | Current upstream integration cannot verify a persistent mux incarnation; discovered tabs are rerouted after GUI restart/reconnect. Folder catalogs/settings persist; in-GUI workspace switches retain selection, assignments and pins |
 | Tab tearoff          | Local moves preserve the whole split tree. Remote single-pane tabs can move; remote split-tab moves are rejected because upstream only exposes pane moves                                                                             |
-| Reopen               | Launch metadata only; does not recover a dead process's execution state                                                                                                                                                               |
 | Repository marker    | Owning mux resolves home and repository root; stock servers label remote directories as `/NAME`                                                                                                                                       |
 | Multiple GUI clients | Normal upstream shared-mux focus and resize semantics still apply                                                                                                                                                                     |
 | Remote servers       | Compatible upstream mux servers; distro glyphs and remote home/repository labels need a patched mux server                                                                                                                            |
@@ -20,7 +19,7 @@
 | GUI scenario samples | State/geometry instrumentation; not physical input-to-display or display frame pacing                                                                                                                                                 |
 | MacOS capture        | Opt-in fixture-window screenshots require available OS screen-capture access                                                                                                                                                          |
 
-Private windows exclude live-tab persistence and reopen history. Catalog/settings changes are explicit shared edits. The sidebar never acquires a pane identity or changes split topology.
+Private windows exclude live-tab persistence. Catalog/settings changes are explicit shared edits. The sidebar never acquires a pane identity or changes split topology.
 
 ## Remote panes in local layouts
 

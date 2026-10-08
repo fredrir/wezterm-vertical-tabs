@@ -208,11 +208,6 @@ impl WindowApp {
     pub fn set_launch(&mut self, tab_id: TabId, launch: core::LaunchSpec) -> Result<(), Error> {
         self.model.set_launch(tab_id, launch)
     }
-    pub fn acknowledge_tab_departure(&mut self, tab_id: TabId) {
-        if self.model.acknowledge_tab_departure(tab_id) {
-            self.ui.invalidate();
-        }
-    }
     pub fn set_home(&mut self, home: Option<String>) {
         self.model.set_home(home);
     }

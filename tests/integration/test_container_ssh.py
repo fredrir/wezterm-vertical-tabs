@@ -25,16 +25,13 @@ def test_container_ssh_mux_domain(
             server=wezterm_binaries["wezterm-mux-server"],
             display=headless_display,
         )
-        initial = probe.start()
-        assert initial["model"]["can_reopen"] is False
+        probe.start()
         probe.action("new_tab")
         probe.wait(lambda state: len(state["tabs"]) == 2)
         remote = [pane for pane in fixture.panes() if pane["workspace"] == probe.identity]
         assert len(remote) == 2
         probe.action("close")
-        probe.wait(lambda state: len(state["tabs"]) == 1 and state["model"]["can_reopen"])
-        probe.intent("Reopen")
-        probe.wait(lambda state: len(state["tabs"]) == 2 and not state["model"]["can_reopen"])
+        probe.wait(lambda state: len(state["tabs"]) == 1)
     finally:
         try:
             if probe is not None:

@@ -18,7 +18,6 @@ return {
     private_env = { HISTFILE = "", VTABS_PRIVATE = "1", fish_private_mode = "1" },
     rail = "expanded",
     reduced_motion = false,
-    reopen_limit = 20,
     selected_background = "#34485f",
     show_close = true,
     show_indexes = true,
@@ -142,13 +141,6 @@ return {
       key = "keyboard_shortcuts",
       kind = "bool",
       label = "Keyboard shortcuts",
-    },
-    {
-      description = "Maximum in-memory launch intents",
-      group = "behavior",
-      key = "reopen_limit",
-      kind = { number = { max = 100, min = 0 } },
-      label = "Reopen history",
     },
     {
       description = "Spawn domain used in an empty space; null retains the host default",

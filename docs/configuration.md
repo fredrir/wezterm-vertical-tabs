@@ -46,7 +46,6 @@ return config
 | Toggle sidebar                      | `Cmd+B`                            | `Ctrl+Shift+B`       |
 | Close tab or settings               | `Cmd+W`                            | `Ctrl+Shift+W`       |
 | Refresh configuration               | `Cmd+Shift+R`                      | `Ctrl+Shift+R`       |
-| Restore closed tab                  | `Cmd+Shift+T`                      | Sidebar context menu |
 | Tab 1 through 8 / last              | `Cmd+1..9`                         | `Ctrl+Shift+1..9`    |
 | Next / previous tab                 | `Ctrl+Tab` / `Ctrl+Shift+Tab`      | Same                 |
 | Previous / next space               | `Ctrl+Alt+Left` / `Ctrl+Alt+Right` | Same                 |
@@ -208,7 +207,6 @@ vtabs.apply_to_config(config, {
 | `{ SetSetting = { key = 'width', value = 300 } }`               | Write a setting to `settings_file`     |
 | `{ SetRail = 'hidden' }`                                        | Change rail mode for this session      |
 | `'PrivateWindow'`                                               | Create a private window                |
-| `'Reopen'`                                                      | Reopen an available launch description |
 
 The full typed action set is `TabsAction` in `plugin/types/vtabs.lua`, generated from `Action` in `src/core/src/contract.rs`; `dispatch` rejects unknown actions. Pane/split actions remain ordinary WezTerm actions.
 

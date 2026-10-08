@@ -1004,7 +1004,7 @@ impl Adapter {
             .map(|id| *id as u64)
             .collect::<std::collections::HashSet<_>>();
         self.hook_metadata.retain(|id, _| host_tabs.contains(id));
-        let departed = {
+        let detached = {
             let mux = mux::Mux::get();
             self.app
                 .model()
@@ -1017,37 +1017,12 @@ impl Adapter {
                     let detached = mux.get_domain_by_name(&tab.domain).map_or(true, |domain| {
                         domain.state() == mux::domain::DomainState::Detached
                     });
-                    let remapped = self
-                        .remote_tabs
-                        .get(id)
-                        .and_then(|(domain, remote, _)| {
-                            wezterm_client::domain::ClientDomain::get_client_inner_for_domain(
-                                *domain,
-                            )
-                            .ok()
-                            .and_then(|inner| inner.remote_to_local_tab_id(*remote))
-                        })
-                        .is_some_and(|current| current as u64 != *id);
-                    // A tab in another window, a pane reparented into another tab,
-                    // a detached domain, or a remote-ID remap is a departure.
-                    let moved = mux
-                        .window_containing_tab(*id as usize)
-                        .is_some_and(|window| window != self.window_id)
-                        || self.remote_tabs.get(id).is_some_and(|(_, _, panes)| {
-                            panes.iter().any(|pane| {
-                                mux.resolve_pane_id(*pane)
-                                    .is_some_and(|(_, _, tab)| tab as u64 != *id)
-                            })
-                        });
-                    (detached || remapped || moved).then_some((*id, detached))
+                    detached.then_some(*id)
                 })
                 .collect::<Vec<_>>()
         };
-        for (id, detached) in departed {
-            if detached {
-                self.remember_detached(id);
-            }
-            self.app.acknowledge_tab_departure(id);
+        for id in detached {
+            self.remember_detached(id);
         }
         self.remote_tabs = {
             let mux = mux::Mux::get();
@@ -1196,7 +1171,6 @@ impl Adapter {
                 let workspace = mux
                     .get_window(source_id)
                     .map(|w| w.get_workspace().to_owned());
-                let source_window = self.window.clone();
                 promise::spawn::spawn(async move {
                     match mux::Mux::get()
                         .move_pane_to_new_tab(pane_id, None, workspace)
@@ -1204,16 +1178,6 @@ impl Adapter {
                     {
                         Ok((tab, window)) => {
                             spawn_completed(window, tab.tab_id(), context);
-                            if let Some(source) = source_window {
-                                source.notify(crate::termwindow::TermWindowNotif::Apply(Box::new(
-                                    move |tw| {
-                                        tw.vtabs_message_for(
-                                            source_id,
-                                            serde_json::json!({"tab_departed":id}),
-                                        );
-                                    },
-                                )));
-                            }
                         }
                         Err(error) => log::error!("move tab: {error}"),
                     }
@@ -1234,7 +1198,6 @@ impl Adapter {
             return;
         }
         spawn_completed(destination, id, context);
-        self.message(serde_json::json!({"tab_departed":id}));
         drop(builder);
         mux.prune_dead_windows();
         self.commands.push(Command::Resync);
@@ -1644,8 +1607,6 @@ impl Provider for Adapter {
             } else {
                 self.pending_show = Some(id);
             }
-        } else if let Some(id) = message.get("tab_departed").and_then(|id| id.as_u64()) {
-            self.app.acknowledge_tab_departure(id);
         } else if let Some(context) = message.get("spawn_failed") {
             if let Ok(token) = serde_json::from_value::<app::SpawnToken>(context["token"].clone()) {
                 self.app.cancel_spawn(&token);
@@ -1933,7 +1894,7 @@ impl Provider for Adapter {
         let bounds = self
             .geometry
             .ui_bounds(self.content_page() || self.overlay_surface());
-        serde_json::json!({"folders":self.app.model().folders,"settings_page":self.content_page(),"overlay_surface":self.overlay_surface(),"grid":{"x":bounds.x+self.surface.offset.0,"y":bounds.y+self.surface.offset.1,"columns":self.surface.columns,"rows":self.surface.rows.len(),"cell_width":self.geometry.cell_width,"cell_height":self.geometry.cell_height},"hits":self.app.ui().hit_regions().iter().map(|h|serde_json::json!({"id":format!("{:?}",h.id),"x":h.rect.x,"y":h.rect.y,"width":h.rect.width,"height":h.rect.height})).collect::<Vec<_>>(),"spaces":self.app.model().spaces,"selected_space":self.app.model().selected_space,"settings":self.app.model().settings,"surface_revision":self.surface.revision,"private":self.app.model().private,"can_reopen":self.app.model().can_reopen(), "tabs":self.app.model().tabs.values().map(|tab|serde_json::json!({"id":tab.id,"pinned":tab.pinned,"space_id":tab.space_id,"folder_id":tab.folder_id})).collect::<Vec<_>>()})
+        serde_json::json!({"folders":self.app.model().folders,"settings_page":self.content_page(),"overlay_surface":self.overlay_surface(),"grid":{"x":bounds.x+self.surface.offset.0,"y":bounds.y+self.surface.offset.1,"columns":self.surface.columns,"rows":self.surface.rows.len(),"cell_width":self.geometry.cell_width,"cell_height":self.geometry.cell_height},"hits":self.app.ui().hit_regions().iter().map(|h|serde_json::json!({"id":format!("{:?}",h.id),"x":h.rect.x,"y":h.rect.y,"width":h.rect.width,"height":h.rect.height})).collect::<Vec<_>>(),"spaces":self.app.model().spaces,"selected_space":self.app.model().selected_space,"settings":self.app.model().settings,"surface_revision":self.surface.revision,"private":self.app.model().private, "tabs":self.app.model().tabs.values().map(|tab|serde_json::json!({"id":tab.id,"pinned":tab.pinned,"space_id":tab.space_id,"folder_id":tab.folder_id})).collect::<Vec<_>>()})
     }
     fn keyboard_focus(&self) -> bool {
         self.app.is_modal() || (self.reservation().width > 0. && self.app.ui().focused().is_some())

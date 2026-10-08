@@ -305,7 +305,6 @@ pub enum Intent {
         space_id: SpaceId,
     },
     ReturnToAuto(TabId),
-    Reopen,
     SetSetting {
         #[schemars(with = "settings::Key")]
         key: String,
@@ -404,8 +403,6 @@ pub struct Model {
     visible: Vec<TabId>,
     last_tabs: BTreeMap<SpaceId, TabId>,
     mru: VecDeque<TabId>,
-    reopened: VecDeque<(TabId, SpaceId, LaunchSpec)>,
-    departed: BTreeSet<TabId>,
     managed_settings: BTreeMap<String, Value>,
     lua_settings: BTreeMap<String, Value>,
     rail_override: Option<RailMode>,
@@ -442,8 +439,6 @@ impl Model {
             visible: Vec::new(),
             last_tabs: BTreeMap::new(),
             mru: VecDeque::new(),
-            reopened: VecDeque::new(),
-            departed: BTreeSet::new(),
             managed_settings: BTreeMap::new(),
             lua_settings: BTreeMap::new(),
             rail_override: None,
@@ -503,23 +498,6 @@ impl Model {
     }
     pub fn configured_settings(&self) -> &BTreeMap<String, Value> {
         &self.lua_settings
-    }
-    pub fn can_reopen(&self) -> bool {
-        !self.reopened.is_empty() && !self.private
-    }
-    /// A move/detach is not a closed tab. Acknowledgements may precede or follow
-    /// the topology snapshot, so also remove any already-recorded history for this ID.
-    pub fn acknowledge_tab_departure(&mut self, id: TabId) -> bool {
-        if self.tabs.contains_key(&id) {
-            self.departed.insert(id);
-        }
-        let before = self.reopened.len();
-        self.reopened.retain(|(tab, _, _)| *tab != id);
-        let changed = before != self.reopened.len();
-        if changed {
-            self.touch();
-        }
-        changed
     }
     pub fn space_activity(&self, id: &str) -> (usize, bool, bool) {
         self.tabs
@@ -777,14 +755,7 @@ impl Model {
             let mut removed = false;
             for id in self.order.iter().copied().filter(|id| !ids.contains(id)) {
                 removed = true;
-                let departed = self.departed.remove(&id);
-                if let Some(tab) = self.tabs.remove(&id)
-                    && !self.private
-                    && !departed
-                    && let Some(launch) = tab.launch
-                {
-                    self.reopened.push_front((id, tab.space_id, launch));
-                }
+                self.tabs.remove(&id);
                 self.hook_routes.remove(&id);
                 self.hidden.remove(&id);
             }
@@ -795,8 +766,6 @@ impl Model {
             self.order.clear();
             self.order.extend(incoming.iter().map(|tab| tab.id));
         }
-        self.reopened
-            .truncate(usize::from(self.settings.reopen_limit));
         for mut tab in incoming {
             if Some(tab.id) == self.selected_tab {
                 tab.unread = false;
@@ -1219,24 +1188,6 @@ impl Model {
                 self.route_tab(id);
                 out.durable_changed = true;
             }
-            Intent::Reopen => {
-                if self.private {
-                    return Ok(out);
-                }
-                if let Some((_, space_id, launch)) = self.reopened.pop_front() {
-                    let space_id = if self.spaces.iter().any(|s| s.id == space_id) {
-                        space_id
-                    } else {
-                        self.selected_space.clone()
-                    };
-                    out.commands.push(HostCommand::Spawn {
-                        space_id,
-                        launch,
-                        folder_id: None,
-                    });
-                }
-                return Ok(out);
-            }
             Intent::SetSetting { key, value } => {
                 if self.config_owned.contains(&key) {
                     return Err(Error(format!("{key} is configured in Lua")));
@@ -1325,7 +1276,6 @@ impl Model {
     pub fn set_private(&mut self, private: bool) {
         if self.private != private {
             self.private = private;
-            self.reopened.clear();
             self.touch();
         }
     }
