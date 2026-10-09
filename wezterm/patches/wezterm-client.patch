@@ -479,7 +479,7 @@ index 073521152252924465dc4914ea4c7313d3b7357c..edbd954b9342e1e040ef5fa96fa48a6b
  pub mod pane;
 +mod topology;
 diff --git a/wezterm-client/src/pane/clientpane.rs b/wezterm-client/src/pane/clientpane.rs
-index aad21a54cc47781e39a62c4c99220c0733211e1c..802087ab0adc8bc9f7aa930593dcc7c88327be70 100644
+index aad21a54cc47781e39a62c4c99220c0733211e1c..ecff5db013af24ae67f1a4b778e6cf933f4a78f7 100644
 --- a/wezterm-client/src/pane/clientpane.rs
 +++ b/wezterm-client/src/pane/clientpane.rs
 @@ -20,6 +20,7 @@ use ratelim::RateLimiter;
@@ -529,7 +529,16 @@ index aad21a54cc47781e39a62c4c99220c0733211e1c..802087ab0adc8bc9f7aa930593dcc7c8
      pub async fn process_unilateral(&self, pdu: Pdu) -> anyhow::Result<()> {
          match pdu {
              Pdu::GetPaneRenderChangesResponse(mut delta) => {
-@@ -240,6 +251,13 @@ impl ClientPane {
+@@ -225,6 +236,8 @@ impl ClientPane {
+                 // has been changed on the server, so we work to apply
+                 // it here.
+                 log::trace!("advised of remote pane focus: {pane_id}");
++                // Advising it back would race stale echoes into an endless focus ping-pong.
++                self.client.focused_remote_pane_id.lock().unwrap().replace(pane_id);
+ 
+                 let mux = Mux::get();
+                 if let Err(err) = mux.focus_pane_and_containing_tab(self.local_pane_id) {
+@@ -240,6 +253,13 @@ impl ClientPane {
          self.remote_pane_id
      }
  
@@ -543,7 +552,7 @@ index aad21a54cc47781e39a62c4c99220c0733211e1c..802087ab0adc8bc9f7aa930593dcc7c8
      /// Arrange to suppress the next Pane::kill call.
      /// This is a bit of a hack that we use when closing a window;
      /// our Domain::local_window_is_closing impl calls this for each
-@@ -263,6 +281,10 @@ impl Pane for ClientPane {
+@@ -263,6 +283,10 @@ impl Pane for ClientPane {
          let inner = renderable.inner.borrow();
  
          let mut map: BTreeMap<Value, Value> = BTreeMap::new();
@@ -554,7 +563,7 @@ index aad21a54cc47781e39a62c4c99220c0733211e1c..802087ab0adc8bc9f7aa930593dcc7c8
          map.insert(
              Value::String("is_tardy".to_string()),
              Value::Bool(inner.is_tardy()),
-@@ -369,7 +391,7 @@ impl Pane for ClientPane {
+@@ -369,7 +393,7 @@ impl Pane for ClientPane {
          let mut inner = render.inner.borrow_mut();
          let client = Arc::clone(&self.client);
          let remote_pane_id = self.remote_pane_id;
@@ -563,7 +572,7 @@ index aad21a54cc47781e39a62c4c99220c0733211e1c..802087ab0adc8bc9f7aa930593dcc7c8
          // Invalidate any cached rows on a resize
          inner.make_all_stale();
          promise::spawn::spawn(async move {
-@@ -408,16 +430,23 @@ impl Pane for ClientPane {
+@@ -408,16 +432,23 @@ impl Pane for ClientPane {
  
              let client = Arc::clone(&self.client);
              let remote_pane_id = self.remote_pane_id;
@@ -590,7 +599,7 @@ index aad21a54cc47781e39a62c4c99220c0733211e1c..802087ab0adc8bc9f7aa930593dcc7c8
              })
              .detach();
              inner.update_last_send();
-@@ -509,13 +538,16 @@ impl Pane for ClientPane {
+@@ -509,13 +540,16 @@ impl Pane for ClientPane {
          }
  
          if send_kill {

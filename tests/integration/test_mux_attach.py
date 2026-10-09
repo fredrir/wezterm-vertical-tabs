@@ -103,6 +103,29 @@ class MuxServer:
             self.log.close()
 
 
+class RemoteCli:
+    def __init__(self, remote, binaries, environment):
+        self.process = remote.process
+        self.command = [
+            str(binaries["wezterm"]),
+            "--config-file",
+            str(remote.config),
+            "cli",
+            "--no-auto-start",
+        ]
+        self.env = {**environment, "WEZTERM_UNIX_SOCKET": str(remote.root / "mux.sock")}
+
+    def __call__(self, *args):
+        return subprocess.run(
+            [*self.command, *map(str, args)],
+            env=self.env,
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=20,
+        ).stdout.strip()
+
+
 def wait_for(condition):
     deadline = time.monotonic() + 10
     while time.monotonic() < deadline:
@@ -146,23 +169,7 @@ def mux_pair(wezterm_binaries, isolated_env):
             proxied = {"name": "proxied", "proxy_command": proxy, "local_pane_layout": True}
             local = MuxServer(root / "local", wezterm_binaries, isolated_env, clients, [proxied])
 
-            def remote_cli(*args):
-                return subprocess.run(
-                    [
-                        str(wezterm_binaries["wezterm"]),
-                        "--config-file",
-                        str(remote.config),
-                        "cli",
-                        "--no-auto-start",
-                        *map(str, args),
-                    ],
-                    env={**isolated_env, "WEZTERM_UNIX_SOCKET": str(remote.root / "mux.sock")},
-                    check=True,
-                    capture_output=True,
-                    text=True,
-                    timeout=20,
-                ).stdout.strip()
-
+            remote_cli = RemoteCli(remote, wezterm_binaries, isolated_env)
             for pane in local.panes():
                 local.cli("kill-pane", "--pane-id", pane["pane_id"])
             for pane in json.loads(remote_cli("list", "--format", "json")):
@@ -422,6 +429,31 @@ def test_replacement_starts_at_full_size_and_retains_focus(mux_pair, domain, zoo
         panes = {p["pane_id"]: p for p in local.panes()}
     assert geometry(panes[left]) == geometry(before[left])
     assert geometry(panes[fresh]) == geometry(before[source])
+
+
+@pytest.mark.parametrize("domain", ["peer", "proxied"])
+def test_racing_focus_changes_settle(mux_pair, domain):
+    local, remote = mux_pair
+    left = int(local.cli("spawn", "--new-window"))
+    right = int(local.cli("split-pane", "--pane-id", left, "--right"))
+    panes = [
+        int(local.cli("replace-pane", "--pane-id", pane, "--domain-name", domain))
+        for pane in (left, right)
+    ]
+    local.cli("activate-pane", "--pane-id", panes[-1])
+    # Stale echoes of both requests used to flip focus between the panes forever.
+    os.kill(remote.process.pid, signal.SIGSTOP)
+    try:
+        for pane in panes:
+            local.cli("activate-pane", "--pane-id", pane)
+    finally:
+        os.kill(remote.process.pid, signal.SIGCONT)
+    time.sleep(0.5)
+    active = set()
+    for _ in range(20):
+        active |= {p["pane_id"] for p in local.panes() if p["is_active"] and p["pane_id"] in panes}
+        time.sleep(0.05)
+    assert active == {panes[-1]}
 
 
 @pytest.mark.parametrize("domain", ["missing-domain", "shared"])
