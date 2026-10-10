@@ -529,7 +529,10 @@ fn package_from(
     };
     state::write_json(
         &marker_dir.join("bundle.json"),
-        &serde_json::json!({"root":relative_root,"capability":1,"updater_protocol":1,"tool":relative_tool}),
+        &serde_json::json!({
+            "root":relative_root,"capability":1,"updater_protocol":1,"tool":relative_tool,
+            "mux_digest":metadata.mux_digest,
+        }),
     )?;
     let is_dev = ctx.profile == "iterate" || ctx.profile == "dev";
     if cfg!(target_os = "macos") && !is_dev {

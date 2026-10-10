@@ -136,6 +136,15 @@ def local_upstream(tools_sandbox: ToolSandbox, tmp_path: Path) -> tuple[Path, st
         "termwiz.workspace = true\n",
     )
     write_file(root, "wezterm-gui/src/main.rs", "fn main() {}\n")
+    write_file(
+        root,
+        "wezterm-mux-server/Cargo.toml",
+        '[package]\nname = "wezterm-mux-server"\nversion = "0.1.0"\n[dependencies]\n'
+        'mux = { path = "../mux" }\n',
+    )
+    write_file(root, "wezterm-mux-server/src/main.rs", "fn main() {}\n")
+    write_file(root, "mux/Cargo.toml", '[package]\nname = "mux"\nversion = "0.1.0"\n')
+    write_file(root, "mux/src/lib.rs", "pub const VERSION: u32 = 1;\n")
     write_file(root, "patch-target.txt", "initial\n")
     for name in (
         "LICENSE.md",
@@ -218,6 +227,19 @@ def recording_cargo(tools_sandbox: ToolSandbox, tmp_path: Path) -> Path:
         "arguments = sys.argv[1:]\n"
         "if arguments == ['-V']:\n"
         "    print('cargo 1.99.0 (fixture)')\n"
+        "elif arguments[0] == 'metadata':\n"
+        "    import tomllib\n"
+        "    packages = []\n"
+        "    for manifest in sorted(pathlib.Path.cwd().glob('*/Cargo.toml')):\n"
+        "        data = tomllib.loads(manifest.read_text())\n"
+        "        dependencies = [\n"
+        "            {'name': name, 'kind': None, 'path': str(manifest.parent / spec['path'])}\n"
+        "            for name, spec in data.get('dependencies', {}).items()\n"
+        "            if isinstance(spec, dict) and 'path' in spec\n"
+        "        ]\n"
+        "        packages.append({'name': data['package']['name'], "
+        "'manifest_path': str(manifest), 'dependencies': dependencies})\n"
+        "    print(json.dumps({'packages': packages}))\n"
         "elif arguments[0] == 'build':\n"
         f"    if pathlib.Path({str(directory / 'fail-build')!r}).exists():\n"
         "        print('fixture watch compiler failure', file=sys.stderr)\n"

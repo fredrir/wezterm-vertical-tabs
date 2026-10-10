@@ -161,7 +161,8 @@ cargo run --quiet --locked -p vtabs-core --bin gen-schema -- json
 | `cache/upstream`             | Tool-owned upstream clone and Cargo target cache                                                     |
 | `cache/worktree`             | Owned patched checkout; overlay and adapter files synchronize in place                               |
 | `cache/project`              | Installed updater's separate dev-branch checkout; an ownership marker is required before replacement |
-| `cache/build.json`           | Separate source/compile/validation identities, toolchain/configuration and Cargo artifact paths      |
+| `cache/build.json`           | Separate source/compile/validation/mux identities, toolchain/configuration and Cargo artifact paths  |
+| `mux_digest`                 | Upstream revision, patches and overlay in `wezterm-mux-server`'s path closure; also bundle marker    |
 | `install/versions`           | Immutable bundles; install/deploy/update keep active, pending, previous and running versions only    |
 | `install/active.json`        | Selected installed bundle                                                                            |
 | `install/pending.json`       | Completed update selected by the next managed launch                                                 |

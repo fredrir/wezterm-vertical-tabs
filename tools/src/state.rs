@@ -80,6 +80,8 @@ pub struct BuildMetadata {
     #[serde(default)]
     pub validation_digest: String,
     #[serde(default)]
+    pub mux_digest: String,
+    #[serde(default)]
     pub target: String,
     #[serde(default)]
     pub profile: String,

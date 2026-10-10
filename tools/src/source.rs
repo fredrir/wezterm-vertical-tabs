@@ -704,6 +704,107 @@ fn content_digests<'a>(
         .collect()
 }
 
+/// Top-level upstream directories in the path-dependency closure of `wezterm-mux-server`.
+fn mux_directories(ctx: &Context, worktree: &Path) -> Result<BTreeSet<String>> {
+    let output = ctx.runner.capture(
+        CommandSpec::new("cargo")
+            .args([
+                "metadata",
+                "--no-deps",
+                "--offline",
+                "--format-version",
+                "1",
+            ])
+            .cwd(worktree),
+    )?;
+    let metadata: serde_json::Value =
+        serde_json::from_str(&output).context("invalid cargo metadata")?;
+    let worktree = worktree.canonicalize()?;
+    let mut packages = BTreeMap::new();
+    for package in metadata["packages"]
+        .as_array()
+        .context("cargo metadata packages missing")?
+    {
+        let manifest = package["manifest_path"]
+            .as_str()
+            .context("package manifest missing")?;
+        let directory = Path::new(manifest)
+            .parent()
+            .context("manifest parent missing")?
+            .canonicalize()?;
+        packages.insert(directory, package);
+    }
+    let server = packages
+        .iter()
+        .find(|(_, package)| package["name"] == "wezterm-mux-server")
+        .map(|(directory, _)| directory.clone())
+        .context("wezterm-mux-server package missing")?;
+    let mut pending = vec![server];
+    let mut visited = BTreeSet::new();
+    let mut directories = BTreeSet::new();
+    while let Some(directory) = pending.pop() {
+        if !visited.insert(directory.clone()) {
+            continue;
+        }
+        let relative = directory.strip_prefix(&worktree).with_context(|| {
+            format!(
+                "wezterm-mux-server depends on {} outside upstream",
+                directory.display()
+            )
+        })?;
+        if let Some(top) = relative.components().next() {
+            directories.insert(top.as_os_str().to_string_lossy().into_owned());
+        }
+        let Some(package) = packages.get(&directory) else {
+            continue;
+        };
+        for dependency in package["dependencies"].as_array().into_iter().flatten() {
+            if dependency["kind"] == "dev" {
+                continue;
+            }
+            if let Some(path) = dependency["path"].as_str() {
+                pending.push(Path::new(path).canonicalize()?);
+            }
+        }
+    }
+    Ok(directories)
+}
+
+/// Identity of the upstream sources compiled into `wezterm-mux-server`; GUI-only patches keep it.
+pub fn mux_digest(ctx: &Context, worktree: &Path, revision: &str) -> Result<String> {
+    let directories = mux_directories(ctx, worktree)?;
+    let mux_side = |path: &str| {
+        path.split_once('/')
+            .is_none_or(|(top, _)| directories.contains(top))
+    };
+    let mut selected = BTreeMap::new();
+    for patch in patches(&ctx.root)? {
+        let contents = fs::read(&patch)?;
+        let touched = String::from_utf8_lossy(&contents)
+            .lines()
+            .filter_map(|line| line.strip_prefix("diff --git a/"))
+            .any(|paths| {
+                paths
+                    .split_once(" b/")
+                    .is_some_and(|(path, _)| mux_side(path))
+            });
+        if touched {
+            let name = patch.file_name().context("patch name missing")?;
+            selected.insert(
+                name.to_string_lossy().into_owned(),
+                state::hash_bytes(&contents),
+            );
+        }
+    }
+    let overlay = overlay_files(&ctx.root)?;
+    let overlay = content_digests(overlay.iter().filter(|(path, _)| mux_side(path)));
+    Ok(state::hash_bytes(&serde_json::to_vec(
+        &serde_json::json!({
+            "upstream": revision, "directories": directories, "patches": selected, "overlay": overlay,
+        }),
+    )?))
+}
+
 /// The given paths that exist in `revision`, as a file or a directory.
 fn upstream_paths<'a>(
     ctx: &Context,

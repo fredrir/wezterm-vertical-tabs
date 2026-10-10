@@ -53,6 +53,47 @@ def test_build_reuses_validation_for_docs_but_rechecks_test_and_toolchain_change
     assert len(cargo_commands(recording_cargo, "test")) == 12
 
 
+def replacement_patch(path, before, after):
+    return (
+        f"diff --git a/{path} b/{path}\n--- a/{path}\n+++ b/{path}\n"
+        f"@@ -1 +1 @@\n-{before}\n+{after}\n"
+    )
+
+
+def test_mux_digest_changes_only_for_mux_server_sources(
+    tools_sandbox, local_upstream, recording_cargo
+):
+    _, revision = local_upstream
+    tools_sandbox.run("--upstream", revision, "build")
+    first = metadata(tools_sandbox)["mux_digest"]
+    assert first
+
+    write_file(
+        tools_sandbox.root,
+        "wezterm/patches/wezterm-gui.patch",
+        replacement_patch("wezterm-gui/src/main.rs", "fn main() {}", "fn main() { gui(); }"),
+    )
+    write_file(tools_sandbox.root, "wezterm/overlay/wezterm-gui/src/sidebar.rs", "// gui\n")
+    tools_sandbox.run("--upstream", revision, "--offline", "build")
+    gui = metadata(tools_sandbox)["mux_digest"]
+    assert gui == first
+
+    write_file(tools_sandbox.root, "wezterm/overlay/mux/src/replace.rs", "// mux\n")
+    tools_sandbox.run("--upstream", revision, "--offline", "build")
+    overlay = metadata(tools_sandbox)["mux_digest"]
+    assert overlay != gui
+
+    write_file(
+        tools_sandbox.root,
+        "wezterm/patches/mux.patch",
+        replacement_patch(
+            "mux/src/lib.rs", "pub const VERSION: u32 = 1;", "pub const VERSION: u32 = 2;"
+        ),
+    )
+    tools_sandbox.run("--upstream", revision, "--offline", "build")
+    assert metadata(tools_sandbox)["mux_digest"] != overlay
+
+
 def test_build_rejects_source_changes_during_compilation(
     tools_sandbox, local_upstream, recording_cargo
 ):

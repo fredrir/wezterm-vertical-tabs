@@ -105,6 +105,8 @@ def test_package_assembles_platform_runtime_assets_tool_and_reproducible_source(
     marker = json.loads((marker_dir / "bundle.json").read_text())
     assert (marker_dir / marker["root"]).resolve() == bundle.resolve()
     assert bundle / marker["tool"] == binaries / executable_name("wez-vtabs")
+    assert marker["mux_digest"] == json.loads((bundle / "build.json").read_text())["mux_digest"]
+    assert marker["mux_digest"]
     assert (resources / "licenses/WezTerm-LICENSE.md").is_file()
     assert (resources / "plugin/init.lua").is_file()
     for name, contents in fixtures.items():

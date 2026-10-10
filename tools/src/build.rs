@@ -451,6 +451,7 @@ pub fn restage(ctx: &Context, previous: &BuildMetadata) -> Result<Option<BuildMe
         &ctx.profile
     };
     if previous.profile != profile
+        || previous.mux_digest.is_empty()
         || previous.role != ctx.role
         || ctx
             .upstream
@@ -710,6 +711,7 @@ pub fn build(ctx: &Context) -> Result<BuildMetadata> {
     }
 
     configuration["worktree_digest"] = json!(worktree_digest(ctx, &worktree)?);
+    let mux_digest = source::mux_digest(ctx, &worktree, &resolved.revision)?;
     drop(compile_stage);
     // Network availability changes resolution policy, not compiled output.
     let mut identity_configuration = configuration.clone();
@@ -752,6 +754,7 @@ pub fn build(ctx: &Context) -> Result<BuildMetadata> {
         source_digest,
         compile_digest,
         validation_digest,
+        mux_digest,
         target,
         profile: profile.into(),
         role: ctx.role,
