@@ -841,3 +841,79 @@ fn unbound_processed_control_h_does_not_dispatch_control_backspace() {
         assert!(adapter.commands().is_empty());
     }
 }
+
+#[test]
+fn quick_terminal_shortcut_opens_from_settings_and_leaves_terminal_keys_alone() {
+    config::designate_this_as_the_main_thread();
+    let mut adapter = Adapter::new(9915);
+    adapter.app.ui_mut().open_settings();
+    let toggle = raw(KeyCode::Char('`'), window::Modifiers::CTRL, true);
+    assert!(adapter.input(Input::RawKey(&toggle)));
+    assert!(matches!(
+        adapter.commands().as_slice(),
+        [Command::ToggleTerminalOverlay]
+    ));
+    assert!(!adapter.content_page());
+    assert!(!adapter.keyboard_focus());
+    assert!(adapter.terminal_input(Input::RawKey(&raw(
+        KeyCode::Char('`'),
+        window::Modifiers::CTRL,
+        false
+    ))));
+    assert!(adapter.commands().is_empty());
+    for (key, mods) in [
+        (KeyCode::Char('a'), window::Modifiers::NONE),
+        (KeyCode::Char('\u{1b}'), window::Modifiers::NONE),
+        (KeyCode::Char('c'), window::Modifiers::CTRL),
+        (KeyCode::Char('t'), window::Modifiers::SUPER),
+    ] {
+        assert!(!adapter.terminal_input(Input::RawKey(&raw(key, mods, true))));
+    }
+    assert!(adapter.commands().is_empty());
+    assert!(adapter.terminal_input(Input::RawKey(&toggle)));
+    assert!(matches!(
+        adapter.commands().as_slice(),
+        [Command::ToggleTerminalOverlay]
+    ));
+}
+
+#[test]
+fn quick_terminal_respects_remapping_and_disabled_shortcuts() {
+    config::designate_this_as_the_main_thread();
+    let mut adapter = Adapter::new(9916);
+    adapter
+        .app
+        .dispatch(core::Intent::SetSetting {
+            key: "keybinds".into(),
+            value: serde_json::json!({"quick_terminal": ["F12"]}),
+        })
+        .unwrap();
+    let original = raw(KeyCode::Char('`'), window::Modifiers::CTRL, true);
+    let replacement = raw(KeyCode::Function(12), window::Modifiers::NONE, true);
+    assert!(!adapter.input(Input::RawKey(&original)));
+    assert!(!adapter.terminal_input(Input::RawKey(&original)));
+    assert!(adapter.input(Input::RawKey(&replacement)));
+    assert!(matches!(
+        adapter.commands().as_slice(),
+        [Command::ToggleTerminalOverlay]
+    ));
+    assert!(adapter.terminal_input(Input::RawKey(&replacement)));
+    assert!(matches!(
+        adapter.commands().as_slice(),
+        [Command::ToggleTerminalOverlay]
+    ));
+    adapter
+        .app
+        .dispatch(core::Intent::SetSetting {
+            key: "keyboard_shortcuts".into(),
+            value: serde_json::json!(false),
+        })
+        .unwrap();
+    assert!(!adapter.input(Input::RawKey(&replacement)));
+    assert!(!adapter.terminal_input(Input::RawKey(&replacement)));
+    adapter.message(serde_json::json!({"action": "quick_terminal"}));
+    assert!(matches!(
+        adapter.commands().as_slice(),
+        [Command::ToggleTerminalOverlay]
+    ));
+}

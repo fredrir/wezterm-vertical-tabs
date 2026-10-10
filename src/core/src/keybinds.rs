@@ -31,6 +31,8 @@ shortcuts! {
         &["Super+p", "Super+Shift+p"], &["Ctrl+Shift+p", "Super+p", "Super+Shift+p"]),
     ("jobs", "Search jobs", "Find running and suspended jobs",
         &["Super+z", "Super+Shift+z"], &["Ctrl+Shift+z", "Super+z", "Super+Shift+z"]),
+    ("quick_terminal", "Quick terminal", "Show or hide the floating terminal",
+        &["Ctrl+`"], &["Ctrl+`"]),
     ("rail", "Toggle sidebar", "Show or hide the sidebar",
         &["Super+b", "Super+Shift+b"], &["Ctrl+Shift+b", "Super+b", "Super+Shift+b"]),
     ("new_tab", "New tab", "Create a tab in the current space",

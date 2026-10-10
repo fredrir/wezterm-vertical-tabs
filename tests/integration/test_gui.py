@@ -198,3 +198,109 @@ def test_unix_attach_and_new_tab_agree_without_a_window_resize(
             )
     finally:
         probe.close()
+
+
+@pytest.mark.gui
+@pytest.mark.parametrize("domain", ["local", "unix"])
+def test_quick_terminal_preserves_its_shell_without_creating_a_tab(
+    wezterm_binaries, headless_display, tmp_path, domain
+):
+    probe = Probe(
+        tmp_path / domain,
+        wezterm_binaries["wezterm-gui"],
+        wezterm_binaries["wez-vtabs-store"],
+        domain,
+        server=wezterm_binaries["wezterm-mux-server"],
+        initial_size={"cols": 110, "rows": 40},
+        display=headless_display,
+    )
+    gui = GuiInput(probe, headless_display, tmp_path)
+    probe.config.write_text(
+        probe.config.read_text().replace(
+            "cfg.exit_behavior = 'Close'", "cfg.exit_behavior = 'CloseOnCleanExit'"
+        )
+    )
+    try:
+        initial = probe.start()
+        gui.attach()
+        gui.key("ctrl+grave")
+        opened = probe.wait(
+            lambda state: (
+                state["quick_terminal"]["visible"] and state["quick_terminal"]["pane"] is not None
+            )
+        )
+        terminal = opened["quick_terminal"]
+        pane = terminal["pane"]
+        assert opened["tabs"] == initial["tabs"]
+        assert opened["active"] == initial["active"]
+        width = opened["sidebar"]["width"] + opened["content"]["width"]
+        assert terminal["bounds"]["width"] == pytest.approx(width * 0.75)
+        gui.text(
+            'QT_SESSION=retained; (sleep 0.3; printf alive > "$WEZ_VTABS_SCENARIO/quick-alive") &'
+        )
+        gui.key("Return")
+        gui.key("ctrl+grave")
+        probe.wait(lambda state: not state["quick_terminal"]["visible"])
+        probe.wait(lambda state: (probe.root / "quick-alive").exists())
+        gui.key("ctrl+grave")
+        probe.wait(lambda state: state["quick_terminal"]["visible"])
+        gui.text('printf "%s" "$QT_SESSION" > "$WEZ_VTABS_SCENARIO/quick-session"')
+        gui.key("Return")
+        probe.wait(lambda state: (probe.root / "quick-session").exists())
+        assert (probe.root / "quick-session").read_text() == "retained"
+        assert gui.state()["quick_terminal"]["pane"] == pane
+        gui.capture(f"quick-terminal-{domain}")
+
+        # A sidebar click dismisses the overlay without creating a tab beneath it.
+        gui.click("NewTab")
+        hidden = probe.wait(lambda state: not state["quick_terminal"]["visible"])
+        assert hidden["tabs"] == initial["tabs"]
+        assert hidden["quick_terminal"]["pane"] == pane
+        probe.intent("quick_terminal")
+        probe.wait(lambda state: state["quick_terminal"]["visible"])
+        gui.command("windowminimize", gui.window)
+        probe.wait(lambda state: not state["quick_terminal"]["visible"])
+        gui.command("windowactivate", "--sync", gui.window)
+        gui.key("ctrl+grave")
+        probe.wait(lambda state: state["quick_terminal"]["visible"])
+        probe.send("resize", {"width": 900, "height": 600})
+        resized = probe.wait(
+            lambda state: (
+                state["dimensions"]["pixel_width"] == 900
+                and state["quick_terminal"]["cols"] != terminal["cols"]
+            )
+        )
+        assert resized["quick_terminal"]["pane"] == pane
+        gui.text('stty size > "$WEZ_VTABS_SCENARIO/quick-size"')
+        gui.key("Return")
+        probe.wait(lambda state: (probe.root / "quick-size").exists())
+        assert [int(n) for n in (probe.root / "quick-size").read_text().split()] == [
+            resized["quick_terminal"]["rows"],
+            resized["quick_terminal"]["cols"],
+        ]
+
+        probe.action("navigator")
+        probe.wait(
+            lambda state: (
+                not state["quick_terminal"]["visible"] and gui.hit(state, "Editor") is not None
+            )
+        )
+        gui.key("Escape")
+        gui.key("ctrl+grave")
+        probe.wait(lambda state: state["quick_terminal"]["visible"])
+        assert gui.state()["quick_terminal"]["pane"] == pane
+
+        # Exiting the shell hides the surface; the next invocation starts a new shell.
+        gui.text("exit")
+        gui.key("Return")
+        probe.wait(lambda state: not state["quick_terminal"]["visible"])
+        gui.key("ctrl+grave")
+        probe.wait(
+            lambda state: (
+                state["quick_terminal"]["visible"]
+                and state["quick_terminal"]["pane"] not in (None, pane)
+            )
+        )
+        assert len(gui.state()["tabs"]) == len(initial["tabs"])
+    finally:
+        probe.close()

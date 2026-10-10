@@ -43,6 +43,7 @@ return config
 | Search tabs                         | `Cmd+K`                            | `Ctrl+Shift+K`       |
 | Command palette                     | `Cmd+P`                            | `Ctrl+Shift+P`       |
 | Search jobs                         | `Cmd+Z`                            | `Ctrl+Shift+Z`       |
+| Quick terminal                      | Ctrl + backtick                    | Ctrl + backtick      |
 | Toggle sidebar                      | `Cmd+B`                            | `Ctrl+Shift+B`       |
 | Close tab or settings               | `Cmd+W`                            | `Ctrl+Shift+W`       |
 | Refresh configuration               | `Cmd+Shift+R`                      | `Ctrl+Shift+R`       |
@@ -85,6 +86,16 @@ return config
 | Closing tabs          | Idle tabs close at once; only a running process prompts, judged by the pane's owning mux (`confirm_close`, skip list)   |
 | Closing splits        | Hovering a split reveals its own ×; the tab's × shows over the icon side of the row                                     |
 | Menus and prompts     | Context menus open under the pointer or focused control; confirmations are a dialog with the accepting button selected  |
+
+**Quick terminal**
+
+| Name | Value |
+| --- | --- |
+| Surface | Centered inside the current window, 75% width and height, without a sidebar |
+| Shortcut | Ctrl + backtick; configurable as `quick_terminal` in Settings → Keybinds |
+| Hide | Repeat shortcut, click outside, close-tab shortcut, or window loses focus |
+| Session | One local shell per window; continues running while hidden; ends when its window closes |
+| Lua action | `vtabs.action("quick_terminal")`; available with plugin shortcuts disabled |
 
 **Shell jobs**
 

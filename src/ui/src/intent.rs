@@ -5,6 +5,7 @@ pub enum HostAction {
     OpenCommands,
     RunCommand(usize),
     OpenJobs,
+    QuickTerminal,
     Job(vtabs_core::jobs::JobTarget, vtabs_core::jobs::JobOperation),
     Custom(String),
     MoveTabToNewWindow(TabId),

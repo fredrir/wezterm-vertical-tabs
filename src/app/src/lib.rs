@@ -51,6 +51,7 @@ pub enum Command {
     OpenCommands,
     RunCommand(usize),
     OpenJobs,
+    QuickTerminal,
     Job(core::jobs::JobTarget, core::jobs::JobOperation),
     Refresh,
     Host(HostCommand),
@@ -461,6 +462,9 @@ impl WindowApp {
                     update.commands.push(Command::RunCommand(id))
                 }
                 UiIntent::Host(HostAction::OpenJobs) => update.commands.push(Command::OpenJobs),
+                UiIntent::Host(HostAction::QuickTerminal) => {
+                    update.commands.push(Command::QuickTerminal)
+                }
                 UiIntent::Host(HostAction::Job(target, operation)) => {
                     update.commands.push(Command::Job(target, operation))
                 }

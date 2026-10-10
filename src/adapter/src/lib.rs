@@ -311,6 +311,11 @@ impl Adapter {
                 self.palette_commands.clear();
             }
             app::Command::OpenJobs => self.open_jobs(),
+            app::Command::QuickTerminal => {
+                self.cancel_paste();
+                self.app.ui_mut().close_settings();
+                self.commands.push(Command::ToggleTerminalOverlay);
+            }
             app::Command::Job(target, operation) => self.job_action(target, operation),
             app::Command::Refresh => {
                 std::thread::spawn(config::reload);
@@ -1311,6 +1316,33 @@ impl Provider for Adapter {
         self.palette_commands = commands;
         self.app.ui_mut().open_commands(entries);
     }
+    fn terminal_input(&mut self, input: Input<'_>) -> bool {
+        let (code, mods, down) = match input {
+            Input::RawKey(key) => {
+                let mods = modifiers(key.modifiers);
+                (shortcut_key(&key.key, mods), mods, key.key_is_down)
+            }
+            Input::Key(key) => {
+                let mods = modifiers(key.raw.as_ref().map_or(key.modifiers, |raw| raw.modifiers));
+                let code = key.raw.as_ref().map_or_else(
+                    || logical_shortcut_key(&key.key, mods),
+                    |raw| shortcut_key(&raw.key, mods),
+                );
+                (code, mods, key.key_is_down)
+            }
+            _ => return false,
+        };
+        let Some(code) = code else { return false };
+        let action =
+            core::keybinds::action(&self.app.model().settings, &ui::shortcut_chord(&code, mods));
+        if !matches!(action, Some("quick_terminal" | "close")) {
+            return false;
+        }
+        if down {
+            self.commands.push(Command::ToggleTerminalOverlay);
+        }
+        true
+    }
     fn input(&mut self, input: Input<'_>) -> bool {
         match input {
             Input::RawKey(key) => {
@@ -1660,6 +1692,9 @@ impl Provider for Adapter {
                 Ok(core::Action::Ui(core::UiAction::CreateSpace)) => self.app.open_create_space(),
                 Ok(core::Action::Ui(core::UiAction::Navigator)) => self.open_tab_navigator(),
                 Ok(core::Action::Ui(core::UiAction::Jobs)) => self.open_jobs(),
+                Ok(core::Action::Ui(core::UiAction::QuickTerminal)) => {
+                    self.command(app::Command::QuickTerminal)
+                }
                 Ok(core::Action::Ui(core::UiAction::RetryStorage)) => self.app.retry_storage(),
                 Ok(core::Action::Intent(intent)) => self.dispatch(intent),
                 Err(err) => log::warn!("tabs action: {err}"),

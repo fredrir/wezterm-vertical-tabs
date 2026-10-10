@@ -177,6 +177,7 @@ pub enum Input<'a> {
     Focus(bool),
 }
 pub enum Command {
+    ToggleTerminalOverlay,
     OpenCommandPalette,
     RunPaletteCommand(crate::commands::ExpandedCommand),
     Activate(TabId),
@@ -210,6 +211,7 @@ pub trait Provider {
     fn navigation(&mut self, navigation: Navigation);
     fn open_command_palette(&mut self, commands: Vec<crate::commands::ExpandedCommand>);
     fn input(&mut self, input: Input<'_>) -> bool;
+    fn terminal_input(&mut self, input: Input<'_>) -> bool;
     fn message(&mut self, message: serde_json::Value);
     fn projection(&self) -> Projection;
     fn commands(&mut self) -> Vec<Command>;
@@ -297,6 +299,7 @@ fn vtabs_caret_rect(
     bounds.intersection(&caret)?.round_out().try_cast()
 }
 pub struct UiHost {
+    pub(super) terminal: super::terminal_overlay::TerminalOverlay,
     pub provider: Box<dyn Provider>,
     pub projection: Projection,
     pub dirty: bool,
@@ -323,6 +326,7 @@ pub struct UiHost {
 impl UiHost {
     pub fn new(window_id: usize) -> Self {
         let mut host = Self {
+            terminal: Default::default(),
             provider: crate::vtabs::create(window_id),
             projection: Projection::default(),
             dirty: true,
@@ -540,6 +544,14 @@ impl TermWindow {
     /// Mirrors how mouse_event_impl maps window coordinates onto terminal cells.
     fn update_vtabs_drag_exclusion(&self) {
         if let Some(window) = self.window.as_ref() {
+            if self.terminal_overlay_visible() {
+                let bounds = self.terminal_overlay_bounds();
+                window.set_window_drag_exclusion(window::Rect::new(
+                    window::Point::new(bounds.x as isize, bounds.y as isize),
+                    window::Size::new(bounds.width as isize, bounds.height as isize),
+                ));
+                return;
+            }
             let border = self.get_os_border();
             let (padding_left, padding_top) = self.padding_left_top();
             window.set_window_drag_exclusion(window::Rect::new(
@@ -556,6 +568,7 @@ impl TermWindow {
     }
     pub fn vtabs_begin_paint(&mut self) {
         self.vtabs_sync();
+        self.resize_terminal_overlay();
         self.update_vtabs_drag_exclusion();
         self.update_vtabs_title_buttons();
     }
@@ -1059,6 +1072,7 @@ impl TermWindow {
                 }
             }
             TermWindowNotif::SwitchToMuxWindow(window_id) => {
+                self.hide_terminal_overlay();
                 if let Some(mut ui) = self.ui_host.take() {
                     ui.provider.suspend();
                     ui.provider.input(Input::Focus(false));
@@ -1082,6 +1096,22 @@ impl TermWindow {
     ) -> bool {
         use config::keyassignment::KeyAssignment::*;
         self.vtabs_sync();
+        if self.terminal_overlay_visible() {
+            if matches!(assignment, CloseCurrentTab { .. } | CloseCurrentPane { .. }) {
+                self.hide_terminal_overlay();
+                return true;
+            }
+            // Structural actions refer to mux tabs, which don't own this pane.
+            if matches!(assignment,
+                SplitHorizontal(_) | SplitVertical(_) | SplitPane(_) |
+                ActivatePaneDirection(_) | ActivatePaneByIndex(_) | AdjustPaneSize(_, _) |
+                TogglePaneZoomState | RotatePanes(_) | PaneSelect(_) |
+                ActivateTab(_) | ActivateTabRelative(_) | ActivateTabRelativeNoWrap(_) |
+                ActivateLastTab | MoveTab(_) | MoveTabRelative(_) |
+                SpawnTab(_) | SpawnCommandInNewTab(_)
+            ) { return true; }
+            return false;
+        }
         self.vtabs_clipboard_assignment(assignment)
             || (self.vtabs_empty()
                 && !matches!(
@@ -1150,6 +1180,7 @@ impl TermWindow {
         true
     }
     pub fn vtabs_navigation(&mut self, navigation: Navigation) {
+        self.hide_terminal_overlay();
         self.vtabs_sync();
         let before = self.vtabs_reservation();
         if let Some(ui) = self.ui_host.as_mut() {
@@ -1159,6 +1190,7 @@ impl TermWindow {
         self.vtabs_relayout(before);
     }
     pub fn vtabs_open_command_palette(&mut self) {
+        self.hide_terminal_overlay();
         self.vtabs_sync();
         let before = self.vtabs_reservation();
         let commands = super::palette::CommandPalette::new(self).into_commands();
@@ -1179,6 +1211,9 @@ impl TermWindow {
         }
     }
     pub fn vtabs_message(&mut self, message: serde_json::Value) {
+        if message.get("action").is_some_and(|action| action != "quick_terminal") {
+            self.hide_terminal_overlay();
+        }
         let before = self.vtabs_reservation();
         if let Some(ui) = self.ui_host.as_mut() {
             ui.provider.message(message);
@@ -1188,6 +1223,35 @@ impl TermWindow {
     }
     pub fn vtabs_input(&mut self, input: Input<'_>) -> bool {
         self.vtabs_sync();
+        if self.terminal_overlay_visible() {
+            match &input {
+                Input::Focus(false) => self.hide_terminal_overlay(),
+                Input::Mouse(event, _) => {
+                    if !self.terminal_overlay_bounds().contains(event.coords.x as f32, event.coords.y as f32) {
+                        if matches!(self.current_mouse_capture, Some(super::MouseCapture::TerminalPane(_)))
+                            && matches!(event.kind, window::MouseEventKind::Move | window::MouseEventKind::Release(_))
+                        {
+                            return false;
+                        }
+                        if matches!(event.kind, window::MouseEventKind::Press(_)) {
+                            self.hide_terminal_overlay();
+                        }
+                        return true;
+                    }
+                    return false;
+                }
+                Input::Key(_) | Input::RawKey(_) => {
+                    let consumed = self.ui_host.as_mut().is_some_and(|ui| ui.provider.terminal_input(input));
+                    if consumed {
+                        let commands = self.ui_host.as_mut().unwrap().provider.commands();
+                        self.vtabs_commands(commands);
+                    }
+                    return consumed || self.terminal_overlay_pane().is_none();
+                }
+                Input::Composition(_) => return false,
+                _ => {}
+            }
+        }
         let before = self.vtabs_reservation();
         if let Input::Mouse(event, _) = &input {
             if self.vtabs_titlebar_mouse(event) {
@@ -1264,6 +1328,7 @@ impl TermWindow {
         for command in commands {
             let mux = Mux::get();
             match command {
+                Command::ToggleTerminalOverlay => self.toggle_terminal_overlay(),
                 Command::Activate(id) => {
                     if let Some(mut window) = mux.get_window_mut(self.mux_window_id) {
                         let idx = window.iter_tabs().position(|tab| tab.tab_id() == id);
@@ -1335,7 +1400,7 @@ impl TermWindow {
             }
         }
     }
-    fn paint_vtabs_rounded_fill(
+    pub(super) fn paint_vtabs_rounded_fill(
         &self,
         layers: &mut TripleLayerQuadAllocator,
         rect: Bounds,

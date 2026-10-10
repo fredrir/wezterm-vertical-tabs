@@ -11,6 +11,7 @@ pub enum UiAction {
     CreateSpace,
     Navigator,
     Jobs,
+    QuickTerminal,
     RetryStorage,
 }
 
