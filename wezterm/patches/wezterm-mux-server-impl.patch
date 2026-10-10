@@ -23,18 +23,19 @@ index bc0b6968a101ab827af15c23ba076d694fe864c6..0d154a0cf300511ed38a34fc854035c2
  fn client_domains(config: &config::ConfigHandle) -> Vec<ClientDomainConfig> {
      let mut domains = vec![];
 diff --git a/wezterm-mux-server-impl/src/sessionhandler.rs b/wezterm-mux-server-impl/src/sessionhandler.rs
-index b645b827af2c1b608101a9092caacacc09d81141..205c93d1170bcb95135f7d2a99be4d3024c732f6 100644
+index b645b827af2c1b608101a9092caacacc09d81141..55c85e1cba9ca045db22a704c9cd84acdb86e7c8 100644
 --- a/wezterm-mux-server-impl/src/sessionhandler.rs
 +++ b/wezterm-mux-server-impl/src/sessionhandler.rs
-@@ -43,6 +43,7 @@ pub(crate) struct PerPane {
+@@ -43,6 +43,8 @@ pub(crate) struct PerPane {
      dimensions: RenderableDimensions,
      mouse_grabbed: bool,
      sent_initial_palette: bool,
 +    sent_initial_user_vars: bool,
++    listed: bool,
      seqno: SequenceNo,
      config_generation: usize,
      pub(crate) notifications: Vec<Alert>,
-@@ -171,6 +172,16 @@ fn maybe_push_pane_changes(
+@@ -171,6 +173,16 @@ fn maybe_push_pane_changes(
          per_pane.notifications.push(Alert::PaletteChanged);
          per_pane.sent_initial_palette = true;
      }
@@ -51,7 +52,24 @@ index b645b827af2c1b608101a9092caacacc09d81141..205c93d1170bcb95135f7d2a99be4d30
      for alert in per_pane.notifications.drain(..) {
          match alert {
              Alert::PaletteChanged => {
-@@ -276,6 +287,13 @@ impl SessionHandler {
+@@ -238,6 +250,16 @@ impl SessionHandler {
+             let pane = mux
+                 .get_pane(pane_id)
+                 .ok_or_else(|| anyhow!("no such pane {}", pane_id))?;
++            // Clients learn panes from ListPanes and drop deltas for others, which would mark them sent.
++            {
++                let mut per_pane = per_pane.lock().unwrap();
++                if !per_pane.listed {
++                    if mux.resolve_pane_id(pane_id).is_none() {
++                        return Ok(());
++                    }
++                    per_pane.listed = true;
++                }
++            }
+             maybe_push_pane_changes(&pane, sender, per_pane)?;
+             Ok::<(), anyhow::Error>(())
+         })
+@@ -276,6 +298,13 @@ impl SessionHandler {
  
          match decoded.pdu {
              Pdu::Ping(Ping {}) => send_response(Ok(Pdu::Pong(Pong {}))),
@@ -65,7 +83,7 @@ index b645b827af2c1b608101a9092caacacc09d81141..205c93d1170bcb95135f7d2a99be4d30
              Pdu::SetWindowWorkspace(SetWindowWorkspace {
                  window_id,
                  workspace,
-@@ -998,6 +1016,10 @@ impl SessionHandler {
+@@ -998,6 +1027,10 @@ impl SessionHandler {
              | Pdu::UnitResponse { .. }
              | Pdu::LivenessResponse { .. }
              | Pdu::GetPaneDirectionResponse { .. }
@@ -76,7 +94,7 @@ index b645b827af2c1b608101a9092caacacc09d81141..205c93d1170bcb95135f7d2a99be4d30
              | Pdu::SearchScrollbackResponse { .. }
              | Pdu::GetLinesResponse { .. }
              | Pdu::GetCodecVersionResponse { .. }
-@@ -1126,3 +1148,7 @@ async fn move_pane(
+@@ -1126,3 +1159,7 @@ async fn move_pane(
          window_id,
      }))
  }

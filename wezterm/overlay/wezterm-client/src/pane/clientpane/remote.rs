@@ -7,11 +7,29 @@ use codec::{
 };
 use mux::pane::{CachePolicy, Pane};
 use std::sync::Arc;
+use url::Url;
 use wezterm_term::StableRowIndex;
 
 impl ClientPane {
-    /// Load the visible screen before this proxy enters the local split tree.
-    pub(crate) async fn prefetch(&self) -> anyhow::Result<()> {
+    /// Load the visible screen, directory and owner before this proxy enters the local split tree.
+    pub(crate) async fn prefetch(&self, working_dir: Option<Url>) -> anyhow::Result<()> {
+        let location = {
+            let renderable = self.renderable.lock();
+            let mut inner = renderable.inner.borrow_mut();
+            let known = working_dir.is_some();
+            inner.working_dir = working_dir;
+            known.then(|| inner.location.clone())
+        };
+        let screen = self.prefetch_screen();
+        let Some(location) = location else {
+            return screen.await;
+        };
+        futures::future::join(screen, location.load(&self.client, self.remote_pane_id))
+            .await
+            .0
+    }
+
+    async fn prefetch_screen(&self) -> anyhow::Result<()> {
         let state = self
             .client
             .client

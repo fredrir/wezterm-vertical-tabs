@@ -2,7 +2,7 @@
 use crate::activity::Activity;
 use crate::domain::DomainState;
 use crate::pane::{CachePolicy, Pane, PaneId};
-use crate::Mux;
+use crate::{Mux, MuxNotification};
 use anyhow::anyhow;
 use portable_pty::CommandBuilder;
 use std::sync::Arc;
@@ -70,6 +70,8 @@ impl Mux {
         match result {
             Ok(size) => {
                 self.remove_pane(pane_id);
+                // Servers held its deltas while it was outside the tab; clients get them now.
+                self.notify(MuxNotification::PaneOutput(pane.pane_id()));
                 Ok((pane, size))
             }
             Err(error) => {

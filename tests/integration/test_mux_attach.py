@@ -632,3 +632,39 @@ def test_relayed_scrollback_reaches_a_client_of_the_relaying_mux(
         )
     finally:
         observer.close()
+
+
+@pytest.mark.parametrize("domain", ["local", "peer"])
+def test_idle_replacement_reports_its_directory_to_a_client_of_the_owning_mux(
+    mux_pair, wezterm_binaries, isolated_env, domain
+):
+    local, _ = mux_pair
+    observer = observer_of(local, wezterm_binaries, isolated_env, local_pane_layout=False)
+    try:
+        observer.cli("spawn", "--new-window", "--domain-name", "hop")
+        (source,) = wait_for(lambda: [p["pane_id"] for p in local.panes()])
+        # The directory is reported before readiness; afterwards the shell stays silent.
+        shell = (
+            'mkdir -p "$1" && cd "$1"'
+            ' && printf "\\033]7;file://%s%s\\033\\\\" "$(hostname)" "$PWD"'
+            ' && printf "\\033]1337;SetUserVar=WEZTERM_PANE_READY=MQ==\\007"'
+            " && exec sleep 60"
+        )
+        directory = local.root.parent / f"idle-{domain}"
+        local.cli(
+            "replace-pane",
+            "--pane-id",
+            source,
+            "--wait-for-ready",
+            "--domain-name",
+            domain,
+            "--",
+            "/bin/sh",
+            "-c",
+            shell,
+            "sh",
+            directory,
+        )
+        wait_for(lambda: any(p["cwd"].endswith(directory.name) for p in observer.panes()))
+    finally:
+        observer.close()

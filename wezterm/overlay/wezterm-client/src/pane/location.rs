@@ -28,37 +28,42 @@ impl PaneLocation {
         remote_pane_id: PaneId,
         local_pane_id: PaneId,
     ) {
+        let location = self.clone();
+        let client = Arc::clone(client);
+        promise::spawn::spawn(async move {
+            if location.load(&client, remote_pane_id).await {
+                // Consumers re-read pane metadata on this alert.
+                Mux::get().notify(MuxNotification::Alert {
+                    pane_id: local_pane_id,
+                    alert: Alert::CurrentWorkingDirectoryChanged,
+                });
+            }
+        })
+        .detach();
+    }
+
+    /// Whether this request's answer became the location.
+    pub(crate) async fn load(&self, client: &Arc<ClientInner>, remote_pane_id: PaneId) -> bool {
         let request = {
             let mut state = self.0.lock();
             state.requests += 1;
             state.requests
         };
-        let state = Arc::clone(&self.0);
-        let client = Arc::clone(client);
-        promise::spawn::spawn(async move {
-            let Ok(location) = client
-                .client
-                .get_pane_location(GetPaneLocation {
-                    pane_id: Some(remote_pane_id),
-                })
-                .await
-            else {
-                return;
-            };
-            {
-                let mut state = state.lock();
-                // Overtaken answers are stale; the last one keeps the host until the next lands.
-                if state.requests != request {
-                    return;
-                }
-                state.resolved = Some(location);
-            }
-            // Consumers re-read pane metadata on this alert.
-            Mux::get().notify(MuxNotification::Alert {
-                pane_id: local_pane_id,
-                alert: Alert::CurrentWorkingDirectoryChanged,
-            });
-        })
-        .detach();
+        let Ok(location) = client
+            .client
+            .get_pane_location(GetPaneLocation {
+                pane_id: Some(remote_pane_id),
+            })
+            .await
+        else {
+            return false;
+        };
+        let mut state = self.0.lock();
+        // Overtaken answers are stale; the last one keeps the host until the next lands.
+        if state.requests != request {
+            return false;
+        }
+        state.resolved = Some(location);
+        true
     }
 }

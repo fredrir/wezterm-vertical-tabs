@@ -39,8 +39,9 @@ impl ClientDomain {
                     entry.size,
                     &entry.title,
                 ));
+                let working_dir = entry.working_dir.clone().map(Into::into);
                 async move {
-                    if let Err(err) = pane.prefetch().await {
+                    if let Err(err) = pane.prefetch(working_dir).await {
                         log::debug!("initial pane screen unavailable: {err:#}");
                     }
                     (pane.remote_pane_id, pane as Arc<dyn Pane>)
