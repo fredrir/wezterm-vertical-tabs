@@ -108,20 +108,17 @@ impl Drop for State {
     }
 }
 
-/// Client domains spawn panes outside tabs only with `local_pane_layout`.
-fn spawns_untabbed(domain: &Arc<dyn Domain>) -> bool {
-    if domain
-        .downcast_ref::<wezterm_client::domain::ClientDomain>()
-        .is_none()
-    {
-        return true;
-    }
-    let config = config::configuration();
-    let name = domain.domain_name();
-    config
-        .unix_domains
-        .iter()
-        .any(|unix| unix.name == name && unix.local_pane_layout)
+#[derive(Debug, PartialEq)]
+enum Host {
+    Domain,
+    Local,
+}
+
+/// Client domains spawn panes outside tabs only with `local_pane_layout`; a unix socket
+/// without a proxy shares this machine, so its programs run locally.
+fn client_host(config: &config::Config, name: &str) -> Option<Host> {
+    let unix = config.unix_domains.iter().find(|unix| unix.name == name);
+    if unix.is_some_and(|unix| unix.local_pane_layout)
         || config
             .tls_clients
             .iter()
@@ -130,6 +127,24 @@ fn spawns_untabbed(domain: &Arc<dyn Domain>) -> bool {
             .ssh_domains()
             .iter()
             .any(|ssh| ssh.name == name && ssh.local_pane_layout)
+    {
+        return Some(Host::Domain);
+    }
+    unix.filter(|unix| unix.proxy_command.is_none())
+        .map(|_| Host::Local)
+}
+
+fn program_domain(domain: Arc<dyn Domain>) -> Option<Arc<dyn Domain>> {
+    if domain
+        .downcast_ref::<wezterm_client::domain::ClientDomain>()
+        .is_none()
+    {
+        return Some(domain);
+    }
+    match client_host(&config::configuration(), domain.domain_name())? {
+        Host::Domain => Some(domain),
+        Host::Local => Mux::get().get_domain_by_name("local"),
+    }
 }
 
 /// Remote panes report their host, which a decoded path doesn't need.
@@ -344,8 +359,7 @@ impl TermWindow {
         let domain = mux
             .resolve_spawn_tab_domain(current.as_ref().map(|pane| pane.pane_id()), &spawn.domain)
             .map_err(|error| log::warn!("Quick terminal: {error:#}"))
-            .ok()
-            .filter(spawns_untabbed)?;
+            .ok()?;
         let cwd = match spawn.cwd {
             Some(cwd) => Some(cwd.to_string_lossy().into_owned()),
             None => current
@@ -353,6 +367,7 @@ impl TermWindow {
                 .and_then(|pane| pane.get_current_working_dir(CachePolicy::FetchImmediate))
                 .and_then(|url| directory(&url)),
         };
+        let domain = program_domain(domain)?;
         let (args, env) = (spawn.args, spawn.set_environment_variables);
         let command = (args.is_some() || !env.is_empty()).then(|| {
             let mut command = args

@@ -415,7 +415,7 @@ return cfg
 
 def quick_programs_probe(wezterm_binaries, headless_display, tmp_path, domain, local_pane_layout):
     probe = Probe(
-        tmp_path / domain,
+        tmp_path / f"{domain}-{local_pane_layout}",
         wezterm_binaries["wezterm-gui"],
         wezterm_binaries["wez-vtabs-store"],
         domain,
@@ -440,11 +440,16 @@ def alive(pid):
 
 
 @pytest.mark.gui
-@pytest.mark.parametrize("domain", ["local", "unix"])
+@pytest.mark.parametrize(
+    ("domain", "local_pane_layout"), [("local", False), ("unix", True), ("unix", False)]
+)
 def test_quick_programs_start_fresh_in_the_active_pane_directory(
-    wezterm_binaries, headless_display, tmp_path, domain
+    wezterm_binaries, headless_display, tmp_path, domain, local_pane_layout
 ):
-    probe, gui = quick_programs_probe(wezterm_binaries, headless_display, tmp_path, domain, True)
+    # Without local_pane_layout, a unix socket on this machine runs the program locally.
+    probe, gui = quick_programs_probe(
+        wezterm_binaries, headless_display, tmp_path, domain, local_pane_layout
+    )
     project = probe.root / "project dir"
     project.mkdir()
 
@@ -532,24 +537,5 @@ def test_quick_programs_start_fresh_in_the_active_pane_directory(
         gui.key("ctrl+d")
         probe.wait(lambda state: not quick(state)["visible"] and quick(state)["program"] is None)
         assert gui.state()["tabs"] == initial["tabs"]
-    finally:
-        probe.close()
-
-
-@pytest.mark.gui
-def test_quick_programs_do_nothing_where_the_domain_keeps_remote_layouts(
-    wezterm_binaries, headless_display, tmp_path
-):
-    probe, gui = quick_programs_probe(wezterm_binaries, headless_display, tmp_path, "unix", False)
-    try:
-        probe.start()
-        gui.attach()
-        gui.key("F5")
-        assert not any(
-            state["quick_terminal"]["visible"]
-            for state in probe.sample_for(1)
-            if state["window"] == probe.window
-        )
-        assert not (probe.root / "program-starts").exists()
     finally:
         probe.close()

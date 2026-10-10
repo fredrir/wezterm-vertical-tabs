@@ -112,7 +112,7 @@ config.keys = {
 | `cwd` | Default the active pane's directory |
 | `set_environment_variables` | Added to the program's environment |
 | `width`, `height` | Window fraction above 0, at most 1; default `0.75` |
-| Domain | Active pane's; unix, TLS and SSH mux domains need `local_pane_layout`, otherwise nothing opens |
+| Domain | Active pane's; local unix sockets run it locally; remote mux domains need `local_pane_layout`, otherwise nothing opens |
 | Session | Starts fresh on each opening; ends when hidden or when the program exits |
 | Toggle | Same binding hides; another binding or the quick terminal shortcut replaces it |
 | Hide | Repeat binding, click outside, close-tab shortcut; Escape goes to the program; stays open on focus loss |

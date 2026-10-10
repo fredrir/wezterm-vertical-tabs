@@ -72,3 +72,33 @@ fn programs_choose_their_share_of_the_window() {
         assert!(layout.content.y + layout.content.height <= layout.frame.y + layout.frame.height);
     }
 }
+
+#[test]
+fn client_domains_host_programs_where_their_files_are() {
+    let mut config = config::Config::default_config();
+    let unix = |name: &str, proxy: bool, local_pane_layout: bool| config::UnixDomain {
+        name: name.into(),
+        proxy_command: proxy.then(|| vec!["ssh".into(), "-T".into(), "host".into()]),
+        local_pane_layout,
+        ..Default::default()
+    };
+    config.unix_domains = vec![
+        unix("localmux", false, false),
+        unix("proxied", true, false),
+        unix("laid-out", true, true),
+    ];
+    config.tls_clients = vec![config::TlsDomainClient {
+        name: "tls".into(),
+        local_pane_layout: true,
+        ..Default::default()
+    }];
+    config.ssh_domains = Some(vec![config::SshDomain {
+        name: "ssh".into(),
+        ..Default::default()
+    }]);
+    assert_eq!(client_host(&config, "localmux"), Some(Host::Local));
+    assert_eq!(client_host(&config, "laid-out"), Some(Host::Domain));
+    assert_eq!(client_host(&config, "tls"), Some(Host::Domain));
+    assert_eq!(client_host(&config, "proxied"), None);
+    assert_eq!(client_host(&config, "ssh"), None);
+}
