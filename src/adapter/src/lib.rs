@@ -4,7 +4,6 @@ mod centering;
 mod commands;
 mod directory;
 mod facts;
-mod jobs;
 mod location;
 mod lua;
 mod metadata;
@@ -53,6 +52,7 @@ struct Adapter {
     primitives: Vec<RoundedSurface>,
     commands: Vec<Command>,
     palette_commands: Vec<crate::commands::ExpandedCommand>,
+    launcher_entries: Vec<crate::overlay::launcher::Entry>,
     cursor: Option<(usize, usize)>,
     geometry: Geometry,
     host_tabs: Vec<usize>,
@@ -77,7 +77,6 @@ struct Adapter {
     placement: Option<(usize, Instant)>,
     published: Option<u64>,
     pending_show: Option<core::TabId>,
-    jobs_refresh: Option<Instant>,
     metadata: metadata::Refresh,
 }
 
@@ -127,6 +126,7 @@ impl Adapter {
             primitives: Vec::new(),
             commands: Vec::new(),
             palette_commands: Vec::new(),
+            launcher_entries: Vec::new(),
             cursor: None,
             geometry: Geometry::default(),
             host_tabs: Vec::new(),
@@ -151,7 +151,6 @@ impl Adapter {
             placement: None,
             published: None,
             pending_show: None,
-            jobs_refresh: None,
             metadata: metadata::Refresh::default(),
         }
     }
@@ -305,18 +304,19 @@ impl Adapter {
         match command {
             app::Command::OpenCommands => self.commands.push(Command::OpenCommandPalette),
             app::Command::RunCommand(id) => {
-                if let Some(command) = self.palette_commands.get(id).cloned() {
+                if let Some(entry) = self.launcher_entries.get(id).cloned() {
+                    self.commands.push(Command::RunLauncherEntry(entry));
+                } else if let Some(command) = self.palette_commands.get(id).cloned() {
                     self.commands.push(Command::RunPaletteCommand(command));
                 }
                 self.palette_commands.clear();
+                self.launcher_entries.clear();
             }
-            app::Command::OpenJobs => self.open_jobs(),
             app::Command::QuickTerminal => {
                 self.cancel_paste();
                 self.app.ui_mut().close_settings();
                 self.commands.push(Command::ToggleTerminalOverlay);
             }
-            app::Command::Job(target, operation) => self.job_action(target, operation),
             app::Command::Refresh => {
                 std::thread::spawn(config::reload);
                 self.app.ui_mut().invalidate();
@@ -1312,9 +1312,55 @@ impl Provider for Adapter {
     }
     fn open_command_palette(&mut self, commands: Vec<crate::commands::ExpandedCommand>) {
         self.cancel_paste();
+        self.launcher_entries.clear();
         let entries = commands::entries(&commands, &self.app.model().settings);
         self.palette_commands = commands;
         self.app.ui_mut().open_commands(entries);
+    }
+    fn open_launcher(
+        &mut self,
+        args: config::keyassignment::LauncherActionArgs,
+        launcher: crate::overlay::launcher::LauncherEntries,
+    ) {
+        self.cancel_paste();
+        self.palette_commands.clear();
+        let entries = launcher
+            .entries
+            .iter()
+            .map(|entry| ui::CommandEntry {
+                label: entry.label.clone(),
+                shortcuts: Vec::new(),
+                description: String::new(),
+            })
+            .collect();
+        self.launcher_entries = launcher.entries;
+        self.app.ui_mut().open_launch_menu(
+            ui::LaunchMenuConfig {
+                title: args.title.unwrap_or_else(|| "Launcher".into()),
+                help_text: args
+                    .help_text
+                    .unwrap_or_else(|| "Enter=launch  Esc=cancel  /=filter".into()),
+                fuzzy_help_text: args
+                    .fuzzy_help_text
+                    .unwrap_or_else(|| "Fuzzy matching: ".into()),
+                alphabet: args
+                    .alphabet
+                    .unwrap_or_else(|| config::configuration().launcher_alphabet.clone()),
+                fuzzy: args
+                    .flags
+                    .contains(config::keyassignment::LauncherFlags::FUZZY),
+                labels:
+                    crate::overlay::quickselect::compute_labels_for_alphabet_with_preserved_case,
+                matches: |query, label| {
+                    crate::overlay::selector::matcher_score(
+                        &crate::overlay::selector::matcher_pattern(query),
+                        label,
+                    )
+                },
+            },
+            entries,
+            launcher.selected,
+        );
     }
     fn terminal_input(&mut self, input: Input<'_>) -> bool {
         let (code, mods, down) = match input {
@@ -1333,6 +1379,12 @@ impl Provider for Adapter {
             _ => return false,
         };
         let Some(code) = code else { return false };
+        if code == ui::Key::Escape && mods == ui::Modifiers::default() {
+            if down {
+                self.commands.push(Command::ToggleTerminalOverlay);
+            }
+            return true;
+        }
         let action =
             core::keybinds::action(&self.app.model().settings, &ui::shortcut_chord(&code, mods));
         if !matches!(action, Some("quick_terminal" | "close")) {
@@ -1691,7 +1743,6 @@ impl Provider for Adapter {
                 Ok(core::Action::Ui(core::UiAction::Settings)) => self.app.open_settings(),
                 Ok(core::Action::Ui(core::UiAction::CreateSpace)) => self.app.open_create_space(),
                 Ok(core::Action::Ui(core::UiAction::Navigator)) => self.open_tab_navigator(),
-                Ok(core::Action::Ui(core::UiAction::Jobs)) => self.open_jobs(),
                 Ok(core::Action::Ui(core::UiAction::QuickTerminal)) => {
                     self.command(app::Command::QuickTerminal)
                 }
@@ -1738,7 +1789,6 @@ impl Provider for Adapter {
     }
     fn render(&mut self, geometry: Geometry, now: Instant) {
         self.expire_paste(now);
-        self.poll_jobs(now);
         if self.geometry != geometry {
             self.app.ui_mut().invalidate();
         }
@@ -1837,7 +1887,6 @@ impl Provider for Adapter {
             .map(|duration| self.epoch + duration)
             .into_iter()
             .chain(self.pending_paste.as_ref().map(|pending| pending.deadline))
-            .chain(self.jobs_refresh.filter(|_| self.app.ui().jobs_open()))
             .min()
     }
     fn caret(&self) -> Option<(usize, usize)> {

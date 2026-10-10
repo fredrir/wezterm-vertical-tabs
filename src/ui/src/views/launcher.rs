@@ -1,20 +1,39 @@
 use crate::actions::Action;
 use crate::components::scrollbar::Scrollbar;
 use crate::element::ElementId;
-use crate::input::TextEditor;
-use crate::intent::HostAction;
+use crate::input::{Key, Modifiers, TextEditor};
+use crate::intent::{HostAction, UiIntent};
 use crate::overlays::{Menu, MenuItem, Overlay};
 use crate::views::{tab_machine, tab_name};
 use crate::{SidebarUi, icons};
-use vtabs_core::jobs::{JobOperation, JobTarget};
 use vtabs_core::{Intent, Model, Tab, TabId};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum LauncherKind {
     Tabs,
-    Jobs,
     Commands,
     Keybind,
+    LaunchMenu,
+}
+
+/// The host supplies its matching and label rules to preserve native launcher behavior.
+#[derive(Clone, Debug)]
+pub struct LaunchMenuConfig {
+    pub title: String,
+    pub help_text: String,
+    pub fuzzy_help_text: String,
+    pub alphabet: String,
+    pub fuzzy: bool,
+    pub labels: fn(&str, usize) -> Vec<String>,
+    pub matches: fn(&str, &str) -> Option<u32>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct LaunchMenu {
+    pub config: LaunchMenuConfig,
+    pub filtering: bool,
+    pub selection: String,
+    pub labels: Vec<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -25,12 +44,20 @@ pub(crate) struct Launcher {
     pub empty: &'static str,
     pub scrollbar: Option<Scrollbar>,
     pub recording: bool,
+    pub launch_menu: Option<Box<LaunchMenu>>,
+}
+
+impl Launcher {
+    pub fn edits_query(&self) -> bool {
+        !self.recording
+            && self.kind != LauncherKind::Keybind
+            && self.launch_menu.as_ref().is_none_or(|menu| menu.filtering)
+    }
 }
 
 #[derive(Default)]
 pub(crate) struct Launchers {
     pub foreign_tabs: Vec<ForeignTab>,
-    pub jobs: Vec<JobEntry>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -59,15 +86,6 @@ impl ForeignTab {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct JobEntry {
-    pub target: JobTarget,
-    pub command: String,
-    pub place: String,
-    pub suspended: bool,
-    pub ready: bool,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CommandEntry {
     pub label: String,
     pub shortcuts: Vec<String>,
@@ -75,6 +93,110 @@ pub struct CommandEntry {
 }
 
 impl SidebarUi {
+    pub fn open_launch_menu(
+        &mut self,
+        config: LaunchMenuConfig,
+        commands: Vec<CommandEntry>,
+        selected: usize,
+    ) {
+        let items = commands
+            .into_iter()
+            .enumerate()
+            .map(|(id, command)| {
+                MenuItem::new(
+                    format!("command/{id}"),
+                    command.label,
+                    Action::Host(HostAction::RunCommand(id)),
+                )
+            })
+            .collect();
+        self.open_launcher(
+            LauncherKind::LaunchMenu,
+            &config.title,
+            "No launcher entries",
+            items,
+            selected,
+        );
+        if let Some(Overlay::Menu(menu)) = &mut self.overlays.current {
+            menu.selected = menu.selected.min(menu.items.len().saturating_sub(1));
+            menu.search.as_mut().unwrap().launch_menu = Some(Box::new(LaunchMenu {
+                filtering: config.fuzzy,
+                config,
+                selection: String::new(),
+                labels: Vec::new(),
+            }));
+        }
+    }
+
+    pub(crate) fn launch_menu_key(
+        &mut self,
+        model: &Model,
+        key: &Key,
+        modifiers: Modifiers,
+        intents: &mut Vec<UiIntent>,
+    ) -> bool {
+        let Some(Overlay::Menu(menu)) = &mut self.overlays.current else {
+            return false;
+        };
+        let Some(search) = &mut menu.search else {
+            return false;
+        };
+        let Some(launcher) = &mut search.launch_menu else {
+            return false;
+        };
+        if modifiers.command() || modifiers.alt {
+            return false;
+        }
+        if launcher.filtering {
+            if *key == Key::Backspace && search.editor.text().is_empty() && !launcher.config.fuzzy {
+                launcher.filtering = false;
+                self.frame.dirty = true;
+                return true;
+            }
+            return false;
+        }
+        match key {
+            Key::Character(c) if launcher.config.alphabet.contains(*c) => {
+                launcher.selection.push(*c);
+                let action = launcher
+                    .labels
+                    .iter()
+                    .position(|label| *label == launcher.selection)
+                    .and_then(|index| menu.items.get(menu.scroll + index))
+                    .map(|item| item.action.clone());
+                if !launcher
+                    .labels
+                    .iter()
+                    .any(|label| label.starts_with(&launcher.selection))
+                {
+                    launcher.selection.clear();
+                }
+                if let Some(action) = action {
+                    self.run_action(model, action, intents);
+                }
+            }
+            Key::Character('/') => {
+                launcher.filtering = true;
+                launcher.selection.clear();
+            }
+            Key::Character('j' | 'k') => {
+                menu.selected = crate::overlays::next_enabled(
+                    &menu.items,
+                    menu.selected,
+                    if *key == Key::Character('j') { 1 } else { -1 },
+                );
+                launcher.selection.clear();
+            }
+            Key::Backspace => {
+                launcher.selection.pop();
+            }
+            Key::Character(_) => {}
+            _ => return false,
+        }
+        self.frame.dirty = true;
+        true
+    }
+
     pub fn open_commands(&mut self, commands: Vec<CommandEntry>) {
         let mut items: Vec<MenuItem> = commands
             .into_iter()
@@ -157,125 +279,13 @@ impl SidebarUi {
             empty,
             scrollbar: None,
             recording: false,
+            launch_menu: None,
         });
         self.open_overlay(Overlay::Menu(Menu {
             selected,
             search,
             ..Menu::new(title, items)
         }));
-    }
-
-    pub fn jobs_open(&self) -> bool {
-        self.overlays.current.iter().chain(self.overlays.stack.iter()).any(|overlay| {
-            matches!(overlay, Overlay::Menu(menu) if menu.search.as_ref().is_some_and(|search| search.kind == LauncherKind::Jobs))
-        })
-    }
-
-    pub fn open_jobs(&mut self, jobs: Vec<JobEntry>) {
-        self.launchers.jobs = jobs;
-        let items = self.job_items();
-        self.open_launcher(
-            LauncherKind::Jobs,
-            "Search jobs",
-            "No running or suspended jobs",
-            items,
-            0,
-        );
-    }
-
-    pub fn set_jobs(&mut self, jobs: Vec<JobEntry>) {
-        if self.launchers.jobs == jobs {
-            return;
-        }
-        self.launchers.jobs = jobs;
-        let items = self.job_items();
-        for overlay in self
-            .overlays
-            .current
-            .iter_mut()
-            .chain(self.overlays.stack.iter_mut())
-        {
-            if let Overlay::Menu(menu) = overlay
-                && let Some(search) = &mut menu.search
-                && search.kind == LauncherKind::Jobs
-            {
-                search.all_items = items.clone();
-                filter_menu(menu);
-                self.frame.dirty = true;
-            }
-        }
-    }
-
-    fn job_items(&self) -> Vec<MenuItem> {
-        self.launchers
-            .jobs
-            .iter()
-            .map(|job| {
-                let action = |operation| Action::Host(HostAction::Job(job.target, operation));
-                let mut item = MenuItem::new(
-                    format!(
-                        "job/{}/{}/{}/{}",
-                        job.target.pane, job.target.shell, job.target.number, job.target.pid
-                    ),
-                    &job.command,
-                    action(JobOperation::Foreground),
-                );
-                item.icon = icons::COMMAND;
-                item.hint = format!(
-                    "{}{}  {}",
-                    if job.suspended {
-                        "suspended"
-                    } else {
-                        "running"
-                    },
-                    if job.ready { "" } else { "  shell busy" },
-                    job.place
-                );
-                item.keywords = format!("%{} {}", job.target.number, job.target.pid);
-                item.enabled = job.ready;
-                item.actions = vec![
-                    MenuItem::new(
-                        "fg",
-                        "Bring to foreground",
-                        action(JobOperation::Foreground),
-                    ),
-                    MenuItem::new(
-                        "bg",
-                        "Resume in background",
-                        action(JobOperation::Background),
-                    ),
-                    MenuItem::new(
-                        "terminate",
-                        "Terminate",
-                        Action::Confirm {
-                            label: format!("Terminate {}?", job.command),
-                            action: Box::new(action(JobOperation::Terminate)),
-                        },
-                    ),
-                ];
-                item.actions[1].enabled = job.suspended;
-                for action in &mut item.actions {
-                    action.enabled &= job.ready;
-                }
-                item
-            })
-            .collect()
-    }
-
-    pub(crate) fn launcher_actions(&mut self, id: Option<&str>) -> bool {
-        let Some(Overlay::Menu(menu)) = &self.overlays.current else {
-            return false;
-        };
-        let item = match id {
-            Some(id) => menu.items.iter().find(|item| item.id == id),
-            None => menu.items.get(menu.selected),
-        };
-        let Some(item) = item.filter(|item| !item.actions.is_empty()) else {
-            return false;
-        };
-        let (title, actions) = (item.label.clone(), item.actions.clone());
-        self.push_menu(title, actions);
-        true
     }
 
     pub fn open_tab_navigator(&mut self, model: &Model) {
@@ -375,6 +385,23 @@ pub(crate) fn filter_menu(menu: &mut Menu) {
         return;
     }
     search.scrollbar = None;
+    if let Some(launcher) = &search.launch_menu {
+        let query = search.editor.text();
+        let mut matches: Vec<_> = search
+            .all_items
+            .iter()
+            .filter_map(|item| {
+                (launcher.config.matches)(query, &item.label).map(|score| (score, item.clone()))
+            })
+            .collect();
+        if !query.is_empty() {
+            matches.sort_by_key(|(score, _)| std::cmp::Reverse(*score));
+        }
+        menu.items = matches.into_iter().map(|(_, item)| item).collect();
+        menu.selected = 0;
+        menu.scroll = 0;
+        return;
+    }
     let query = search.editor.text().to_lowercase();
     let selected_id = menu.items.get(menu.selected).map(|item| item.id.clone());
     menu.items.clear();

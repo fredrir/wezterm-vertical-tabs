@@ -31,9 +31,6 @@ impl SidebarUi {
 
     pub(crate) fn context_menu(&mut self, model: &Model, id: ElementId) {
         match id {
-            ElementId::Menu(id) => {
-                self.launcher_actions(Some(&id));
-            }
             ElementId::Editor | ElementId::SettingsSearch => {
                 let Some(editor) = self
                     .editor_slot(&id)

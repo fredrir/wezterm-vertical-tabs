@@ -42,7 +42,6 @@ return config
 | New tab                             | `Cmd+T`                            | `Ctrl+Shift+T`       |
 | Search tabs                         | `Cmd+K`                            | `Ctrl+Shift+K`       |
 | Command palette                     | `Cmd+P`                            | `Ctrl+Shift+P`       |
-| Search jobs                         | `Cmd+Z`                            | `Ctrl+Shift+Z`       |
 | Quick terminal                      | Ctrl + backtick                    | Ctrl + backtick      |
 | Toggle sidebar                      | `Cmd+B`                            | `Ctrl+Shift+B`       |
 | Close tab or settings               | `Cmd+W`                            | `Ctrl+Shift+W`       |
@@ -60,6 +59,7 @@ return config
 | --------------------- | ----------------------------------------------------------------------------------------------------------------------- |
 | Keyboard preference   | Disable `keyboard_shortcuts` to use custom Lua bindings                                                                 |
 | Command palette       | Shared searchable launcher; includes WezTerm commands and `augment-command-palette` entries; custom bindings use `wezterm.action.ActivateCommandPalette` |
+| Launcher              | `ShowLauncher` and `ShowLauncherArgs` open the sidebar launcher; configure entries with standard `config.launch_menu` |
 | Terminal Control keys | Ordinary Control shortcuts remain available to the shell                                                                |
 | Settings              | Own tab with a gear icon and the index after the last tab (`Cmd+index`, `Cmd+9`, `Ctrl+Tab`); close with ×, `Cmd+W`, Escape |
 | Search                | Centered palette of sidebar rows; Up/Down select, Left/Right edit the query, Enter opens; matches name, title or index  |
@@ -93,30 +93,46 @@ return config
 | --- | --- |
 | Surface | Centered inside the current window, 75% width and height, without a sidebar |
 | Shortcut | Ctrl + backtick; configurable as `quick_terminal` in Settings → Keybinds |
-| Hide | Repeat shortcut, click outside, close-tab shortcut, or window loses focus |
+| Hide | Escape, repeat shortcut, click outside, close-tab shortcut, or window loses focus |
 | Session | One local shell per window; continues running while hidden; ends when its window closes |
 | Lua action | `vtabs.action("quick_terminal")`; available with plugin shortcuts disabled |
 
-**Shell jobs**
+**Launcher**
 
-Source the helper from `.zshrc` on each participating machine, then open a new shell:
+```lua
+local wezterm = require 'wezterm'
+local config = wezterm.config_builder()
 
-```zsh
-source /path/to/vertical-tabs/plugin/vtabs.zsh
-# Deployed macOS app:
-# source /Applications/WezTerm.app/Contents/Resources/plugin/vtabs.zsh
+config.launch_menu = {
+  { label = 'System monitor', args = { 'top' } },
+  {
+    label = 'Project shell',
+    cwd = wezterm.home_dir .. '/projects',
+    set_environment_variables = { PROJECT = 'example' },
+  },
+}
+config.keys = {
+  {
+    key = 'l', mods = 'ALT',
+    action = wezterm.action.ShowLauncherArgs {
+      title = 'My launcher',
+      flags = 'FUZZY|LAUNCH_MENU_ITEMS',
+    },
+  },
+}
+
+return config
 ```
 
 | Name | Value |
 | --- | --- |
-| Shell | Zsh with interactive job control; helper also ships in the bundle's `plugin` directory |
-| Scope | Shell jobs in panes of connected Local, SSH, mux and TLS domains, across windows/workspaces |
-| Enter / click | Focus the owning window/tab/pane and run `fg`; unfinished prompt input is restored afterward |
-| F10 / right click | Bring to foreground, Resume in background (`bg`), Terminate (`kill -TERM`, confirmed) |
-| Search | Command, host, domain, pane, job number or state; refreshes while open |
-| Busy shell | Jobs remain listed; actions become available at the owning shell's prompt |
-| Lifetime | Running and suspended jobs only; no completed-job history, detached domains or unrelated processes |
-| Lua action | `vtabs.action("jobs")`; `keyboard_shortcuts = false` permits custom bindings |
+| Entries | Standard WezTerm [`launch_menu`](https://wezterm.org/config/lua/config/launch_menu.html) `SpawnCommand` values; Lua order, arguments, cwd, environment and domain preserved |
+| Categories | [`ShowLauncherArgs`](https://wezterm.org/config/lua/keyassignment/ShowLauncherArgs.html): `LAUNCH_MENU_ITEMS`, `DOMAINS`, `WORKSPACES`, `TABS`, `KEY_ASSIGNMENTS`, `COMMANDS` |
+| Default action | `ShowLauncher` includes every category except `TABS` |
+| Filtering | `FUZZY` starts filtering; otherwise `/` enters filtering and empty Backspace leaves it; `FUZZY` alone has no entries |
+| Selection | Up/Down, Enter, Escape; alphabet shortcuts and j/k outside filtering |
+| Presentation | `title`, `help_text`, `fuzzy_help_text`, `alphabet`; alphabet defaults to `config.launcher_alphabet` |
+| Configuration | Read from effective window config on each opening; supports reloads and window overrides; no plugin-specific launcher options |
 
 **Settings file**
 

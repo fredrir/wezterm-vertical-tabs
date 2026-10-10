@@ -863,12 +863,31 @@ fn quick_terminal_shortcut_opens_from_settings_and_leaves_terminal_keys_alone() 
     assert!(adapter.commands().is_empty());
     for (key, mods) in [
         (KeyCode::Char('a'), window::Modifiers::NONE),
-        (KeyCode::Char('\u{1b}'), window::Modifiers::NONE),
         (KeyCode::Char('c'), window::Modifiers::CTRL),
         (KeyCode::Char('t'), window::Modifiers::SUPER),
     ] {
         assert!(!adapter.terminal_input(Input::RawKey(&raw(key, mods, true))));
     }
+    assert!(adapter.commands().is_empty());
+    // Escape dismisses the overlay instead of reaching the pane inside it.
+    let escape = raw(KeyCode::Char('\u{1b}'), window::Modifiers::NONE, true);
+    assert!(adapter.terminal_input(Input::RawKey(&escape)));
+    assert!(matches!(
+        adapter.commands().as_slice(),
+        [Command::ToggleTerminalOverlay]
+    ));
+    assert!(adapter.terminal_input(Input::RawKey(&raw(
+        KeyCode::Char('\u{1b}'),
+        window::Modifiers::NONE,
+        false
+    ))));
+    assert!(adapter.commands().is_empty());
+    // Escape keeps its terminal meaning when modified.
+    assert!(!adapter.terminal_input(Input::RawKey(&raw(
+        KeyCode::Char('\u{1b}'),
+        window::Modifiers::SHIFT,
+        true
+    ))));
     assert!(adapter.commands().is_empty());
     assert!(adapter.terminal_input(Input::RawKey(&toggle)));
     assert!(matches!(

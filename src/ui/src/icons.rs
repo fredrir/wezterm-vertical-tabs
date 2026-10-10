@@ -15,7 +15,6 @@ pub(crate) const FOLDER: &str = "\u{f0256}";
 pub(crate) const FOLDER_OPEN: &str = "\u{f0dcf}";
 pub(crate) const LOCAL: &str = "\u{f120}";
 pub(crate) const REMOTE: &str = "\u{f048b}";
-pub(crate) const COMMAND: &str = "\u{f0633}";
 pub(crate) const ALERT: &str = "\u{f05d6}";
 const SPACE_DOT: &str = "\u{f0ec3}";
 

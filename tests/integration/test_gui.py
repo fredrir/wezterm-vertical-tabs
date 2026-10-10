@@ -12,6 +12,93 @@ from tests.scenarios.ui_scenarios import GuiInput, scenarios
 
 
 @pytest.mark.gui
+def test_native_launcher_configuration_uses_sidebar_and_preserves_spawn_options(
+    wezterm_binaries, headless_display, tmp_path
+):
+    probe = Probe(
+        tmp_path / "launcher",
+        wezterm_binaries["wezterm-gui"],
+        wezterm_binaries["wez-vtabs-store"],
+        "local",
+        display=headless_display,
+    )
+    gui = GuiInput(probe, headless_display, tmp_path)
+    working_directory = probe.root / "launch-cwd"
+    working_directory.mkdir()
+    probe.config.write_text(
+        probe.config.read_text().replace(
+            "return cfg",
+            r"""
+cfg.launch_menu = {
+  {label='Unused tool', args={'/bin/sh'}},
+  {
+    label='Build server shell',
+    args={'/bin/sh','-c','printf "%s\n%s\n" "$PWD" "$LAUNCH_MARKER" > "$LAUNCH_RESULT"; exec /bin/sh'},
+    cwd=root..'/launch-cwd',
+    domain={DomainName='local'},
+    set_environment_variables={LAUNCH_MARKER='configured',LAUNCH_RESULT=root..'/launcher-result'},
+  },
+}
+table.insert(cfg.keys,{key='F6',action=wezterm.action.ShowLauncher})
+table.insert(cfg.keys,{key='F7',action=wezterm.action.ShowLauncherArgs{
+  flags='FUZZY|LAUNCH_MENU_ITEMS',title='My tools',fuzzy_help_text='Find a tool',
+}})
+table.insert(cfg.keys,{key='F8',action=wezterm.action.ShowLauncherArgs{flags='FUZZY'}})
+table.insert(cfg.keys,{key='F9',action=wezterm.action_callback(function(window,pane)
+  window:set_config_overrides{launch_menu={{label='Window tool',args={'/bin/sh'}}}}
+  window:perform_action(wezterm.action.ShowLauncherArgs{flags='FUZZY|LAUNCH_MENU_ITEMS'},pane)
+end)})
+return cfg
+""",
+        )
+    )
+
+    def entries(state):
+        return [
+            hit["id"]
+            for hit in state.get("model", {}).get("hits", [])
+            if hit["id"].startswith('Menu("command/')
+        ]
+
+    def dismiss():
+        gui.key("Escape")
+        probe.wait(lambda state: GuiInput.hit(state, "Editor") is None)
+
+    try:
+        initial = probe.start()
+        gui.attach()
+        # Both native actions open our UI, whose hit regions are observable here.
+        gui.key("F6")
+        probe.wait(lambda state: len(entries(state)) > 2)
+        dismiss()
+        gui.key("F8")
+        empty = probe.wait(lambda state: GuiInput.hit(state, "Editor") is not None)
+        assert entries(empty) == []  # FUZZY alone never adds categories.
+        dismiss()
+        gui.key("F7")
+        probe.wait(lambda state: len(entries(state)) == 2)
+        gui.text("bsvsh")
+        probe.wait(lambda state: entries(state) == ['Menu("command/1")'])
+        gui.capture("configured-launcher")
+        gui.key("Return")
+        probe.wait(lambda state: (probe.root / "launcher-result").exists())
+        assert (probe.root / "launcher-result").read_text().splitlines() == [
+            str(working_directory),
+            "configured",
+        ]
+        probe.wait(lambda state: len(state["tabs"]) == len(initial["tabs"]) + 1)
+        probe.wait(lambda state: GuiInput.hit(state, "Editor") is None)
+        # Read effective window configuration each time, including Lua overrides.
+        gui.key("F9")
+        probe.wait(lambda state: entries(state) == ['Menu("command/0")'])
+        gui.text("Window tool")
+        probe.wait(lambda state: entries(state) == ['Menu("command/0")'])
+        dismiss()
+    finally:
+        probe.close()
+
+
+@pytest.mark.gui
 @pytest.mark.parametrize("domain", ["local", "unix"])
 def test_start_render_and_shutdown(wezterm_binaries, headless_display, tmp_path, domain):
     probe = Probe(
@@ -278,6 +365,13 @@ def test_quick_terminal_preserves_its_shell_without_creating_a_tab(
             resized["quick_terminal"]["rows"],
             resized["quick_terminal"]["cols"],
         ]
+
+        # Escape dismisses the overlay and keeps its shell running.
+        gui.key("Escape")
+        probe.wait(lambda state: not state["quick_terminal"]["visible"])
+        assert gui.state()["quick_terminal"]["pane"] == pane
+        gui.key("ctrl+grave")
+        probe.wait(lambda state: state["quick_terminal"]["visible"])
 
         probe.action("navigator")
         probe.wait(

@@ -76,7 +76,6 @@ impl SidebarUi {
             }
             "tabs" => self.open_tab_navigator(model),
             "commands" => intents.push(UiIntent::Host(HostAction::OpenCommands)),
-            "jobs" => intents.push(UiIntent::Host(HostAction::OpenJobs)),
             "quick_terminal" => intents.push(UiIntent::Host(HostAction::QuickTerminal)),
             "rail" => intents.push(UiIntent::Domain(toggle_rail(model))),
             "new_tab" => {

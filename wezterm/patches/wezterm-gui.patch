@@ -119,11 +119,45 @@ index 5e7ca47b34740368a5d3847761b645e635e7157c..748713e3dde37a0f016139ed0cc1e1c0
  }
  
 diff --git a/wezterm-gui/src/overlay/launcher.rs b/wezterm-gui/src/overlay/launcher.rs
-index d2cbd9823bc186a0e92e5b60f6f05687c9480fe4..bf8695533e4715bde9707e1010954a98f2e78c90 100644
+index d2cbd9823bc186a0e92e5b60f6f05687c9480fe4..e472c6b5401e86a271a86b41f851ecaf7f86b846 100644
 --- a/wezterm-gui/src/overlay/launcher.rs
 +++ b/wezterm-gui/src/overlay/launcher.rs
-@@ -33,11 +33,12 @@ pub use config::keyassignment::LauncherFlags;
- struct Entry {
+@@ -1,47 +1,26 @@
+-//! The launcher is a menu that presents a list of activities that can
+-//! be launched, such as spawning a new tab in various domains or attaching
+-//! ssh/tls domains.
+-//! The launcher is implemented here as an overlay, but could potentially
+-//! be rendered as a popup/context menu if the system supports it; at the
+-//! time of writing our window layer doesn't provide an API for context
+-//! menus.
++//! WezTerm launcher entries, presented by the sidebar UI.
+ use crate::commands::derive_command_from_key_assignment;
+ use crate::inputmap::InputMap;
+-use crate::overlay::quickselect;
+-use crate::overlay::selector::{matcher_pattern, matcher_score};
+-use crate::termwindow::TermWindowNotif;
+-use config::configuration;
+ use config::keyassignment::{KeyAssignment, SpawnCommand, SpawnTabDomain};
+ use mux::domain::{DomainId, DomainState};
+-use mux::pane::PaneId;
+-use mux::termwiztermtab::TermWizTerminal;
+-use mux::window::WindowId;
+ use mux::Mux;
+-use rayon::prelude::*;
+ use std::collections::BTreeMap;
+-use termwiz::cell::{AttributeChange, CellAttributes};
+-use termwiz::color::ColorAttribute;
+-use termwiz::input::{InputEvent, KeyCode, KeyEvent, Modifiers, MouseButtons, MouseEvent};
+-use termwiz::surface::{Change, Position};
+-use termwiz::terminal::Terminal;
+-use termwiz_funcs::truncate_right;
+-use window::WindowOps;
+ 
+ pub use config::keyassignment::LauncherFlags;
+ 
+ #[derive(Clone)]
+-struct Entry {
++pub struct Entry {
      pub label: String,
      pub action: KeyAssignment,
 +    pub tab_id: Option<mux::tab::TabId>,
@@ -136,20 +170,61 @@ index d2cbd9823bc186a0e92e5b60f6f05687c9480fe4..bf8695533e4715bde9707e1010954a98
      pub pane_count: Option<usize>,
  }
  
-@@ -68,7 +69,8 @@ impl LauncherArgs {
+-#[derive(Debug)]
+ pub struct LauncherDomainEntry {
+     pub domain_id: DomainId,
+     pub name: String,
+@@ -50,30 +29,25 @@ pub struct LauncherDomainEntry {
+ }
+ 
+ pub struct LauncherArgs {
+-    flags: LauncherFlags,
+-    domains: Vec<LauncherDomainEntry>,
+-    tabs: Vec<LauncherTabEntry>,
+-    pane_id: PaneId,
+-    domain_id_of_current_tab: DomainId,
+-    title: String,
+-    active_workspace: String,
+-    workspaces: Vec<String>,
+-    help_text: String,
+-    fuzzy_help_text: String,
+-    alphabet: String,
++    pub flags: LauncherFlags,
++    pub domains: Vec<LauncherDomainEntry>,
++    pub tabs: Vec<LauncherTabEntry>,
++    pub domain_id_of_current_tab: DomainId,
++    pub active_workspace: String,
++    pub workspaces: Vec<String>,
++}
++
++pub struct LauncherEntries {
++    pub entries: Vec<Entry>,
++    pub selected: usize,
+ }
+ 
+ impl LauncherArgs {
+     /// Must be called on the Mux thread!
      pub async fn new(
-         title: &str,
+-        title: &str,
          flags: LauncherFlags,
 -        mux_window_id: WindowId,
-+        _mux_window_id: WindowId,
+-        pane_id: PaneId,
 +        visible_tabs: Vec<mux::tab::TabId>,
-         pane_id: PaneId,
          domain_id_of_current_tab: DomainId,
-         help_text: &str,
-@@ -90,26 +92,13 @@ impl LauncherArgs {
-             // overlay, but since the overlay runs in a different thread, accessing
-             // the mux list is a bit awkward.  To get the ball rolling we capture
-             // the list of tabs up front and live with a static list.
+-        help_text: &str,
+-        fuzzy_help_text: &str,
+-        alphabet: &str,
+     ) -> Self {
+         let mux = Mux::get();
+ 
+@@ -86,28 +60,21 @@ impl LauncherArgs {
+         };
+ 
+         let tabs = if flags.contains(LauncherFlags::TABS) {
+-            // Ideally we'd resolve the tabs on the fly once we've started the
+-            // overlay, but since the overlay runs in a different thread, accessing
+-            // the mux list is a bit awkward.  To get the ball rolling we capture
+-            // the list of tabs up front and live with a static list.
 -            let window = mux
 -                .get_window(mux_window_id)
 -                .expect("to resolve my own window_id");
@@ -157,74 +232,191 @@ index d2cbd9823bc186a0e92e5b60f6f05687c9480fe4..bf8695533e4715bde9707e1010954a98
 -                .iter_tabs()
 -                .enumerate()
 -                .map(|(tab_idx, tab)| {
-+            visible_tabs.into_iter().filter_map(|id| mux.get_tab(id))
++            visible_tabs
++                .into_iter()
++                .filter_map(|id| mux.get_tab(id))
 +                .map(|tab| {
                      let tab_title = tab.get_title();
                      let title = if tab_title.is_empty() {
--                        tab.get_active_pane()
+                         tab.get_active_pane()
 -                            .expect("tab to have a pane")
 -                            .get_title()
--                    } else {
--                        tab_title
--                    };
--                    LauncherTabEntry {
--                        title,
++                            .map(|pane| pane.get_title())
++                            .unwrap_or_default()
+                     } else {
+                         tab_title
+                     };
+                     LauncherTabEntry {
+                         title,
 -                        tab_idx,
--                        pane_count: tab.count_panes(),
--                    }
-+                        tab.get_active_pane().map(|pane| pane.get_title()).unwrap_or_default()
-+                    } else { tab_title };
-+                    LauncherTabEntry { title, tab_id: tab.tab_id(), pane_count: tab.count_panes() }
++                        tab_id: tab.tab_id(),
+                         pane_count: tab.count_panes(),
+                     }
                  })
-                 .collect()
-         } else {
-@@ -233,6 +222,7 @@ impl LauncherState {
-         if args.flags.contains(LauncherFlags::LAUNCH_MENU_ITEMS) {
+@@ -157,82 +124,27 @@ impl LauncherArgs {
+             flags,
+             domains,
+             tabs,
+-            pane_id,
+             domain_id_of_current_tab,
+-            title: title.to_string(),
+-            workspaces,
+             active_workspace,
+-            help_text: help_text.to_string(),
+-            fuzzy_help_text: fuzzy_help_text.to_string(),
+-            alphabet: alphabet.to_string(),
+-        }
+-    }
+-}
+-
+-const ROW_OVERHEAD: usize = 3;
+-
+-struct LauncherState {
+-    active_idx: usize,
+-    max_items: usize,
+-    top_row: usize,
+-    entries: Vec<Entry>,
+-    filter_term: String,
+-    filtered_entries: Vec<Entry>,
+-    pane_id: PaneId,
+-    window: ::window::Window,
+-    filtering: bool,
+-    help_text: String,
+-    fuzzy_help_text: String,
+-    labels: Vec<String>,
+-    alphabet: String,
+-    selection: String,
+-    always_fuzzy: bool,
+-}
+-
+-impl LauncherState {
+-    fn update_filter(&mut self) {
+-        if self.filter_term.is_empty() {
+-            self.filtered_entries = self.entries.clone();
+-            return;
+-        }
+-
+-        self.filtered_entries.clear();
+-
+-        let pattern = matcher_pattern(&self.filter_term);
+-
+-        struct MatchResult {
+-            row_idx: usize,
+-            score: u32,
+-        }
+-
+-        let mut scores: Vec<MatchResult> = self
+-            .entries
+-            .par_iter()
+-            .enumerate()
+-            .filter_map(|(row_idx, entry)| {
+-                let score = matcher_score(&pattern, &entry.label)?;
+-                Some(MatchResult { row_idx, score })
+-            })
+-            .collect();
+-
+-        scores.sort_by(|a, b| a.score.cmp(&b.score).reverse());
+-
+-        for result in scores {
+-            self.filtered_entries
+-                .push(self.entries[result.row_idx].clone());
++            workspaces,
+         }
+-
+-        self.active_idx = 0;
+-        self.top_row = 0;
+     }
+ 
+-    fn build_entries(&mut self, args: LauncherArgs) {
+-        let config = configuration();
++    pub fn build_entries(
++        &self,
++        config: &config::ConfigHandle,
++        initial_choice_idx: usize,
++    ) -> LauncherEntries {
++        let mut result = LauncherEntries {
++            entries: vec![],
++            selected: initial_choice_idx,
++        };
+         // Pull in the user defined entries from the launch_menu
+         // section of the configuration.
+-        if args.flags.contains(LauncherFlags::LAUNCH_MENU_ITEMS) {
++        if self.flags.contains(LauncherFlags::LAUNCH_MENU_ITEMS) {
              for item in &config.launch_menu {
-                 self.entries.push(Entry {
+-                self.entries.push(Entry {
++                result.entries.push(Entry {
 +                    tab_id: None,
                      label: match item.label.as_ref() {
                          Some(label) => label.to_string(),
                          None => match item.args.as_ref() {
-@@ -248,7 +238,7 @@ impl LauncherState {
-         for domain in &args.domains {
+@@ -245,9 +157,10 @@ impl LauncherState {
+             }
+         }
+ 
+-        for domain in &args.domains {
++        for domain in &self.domains {
              let entry = if domain.state == DomainState::Attached {
                  Entry {
--                    label: format!("New Tab ({})", domain.label),
-+                    tab_id: None,                    label: format!("New Tab ({})", domain.label),
++                    tab_id: None,
+                     label: format!("New Tab ({})", domain.label),
                      action: KeyAssignment::SpawnCommandInNewTab(SpawnCommand {
                          domain: SpawnTabDomain::DomainName(domain.name.to_string()),
-                         ..SpawnCommand::default()
-@@ -256,7 +246,7 @@ impl LauncherState {
+@@ -256,6 +169,7 @@ impl LauncherState {
                  }
              } else {
                  Entry {
--                    label: format!("Attach {}", domain.label),
-+                    tab_id: None,                    label: format!("Attach {}", domain.label),
++                    tab_id: None,
+                     label: format!("Attach {}", domain.label),
                      action: KeyAssignment::AttachDomain(domain.name.to_string()),
                  }
-             };
-@@ -274,6 +264,7 @@ impl LauncherState {
-             for ws in &args.workspaces {
-                 if *ws != args.active_workspace {
-                     self.entries.push(Entry {
-+                    tab_id: None,
+@@ -264,16 +178,17 @@ impl LauncherState {
+             // Preselect the entry that corresponds to the active tab
+             // at the time that the launcher was set up, so that pressing
+             // Enter immediately afterwards spawns a tab in the same domain.
+-            if domain.domain_id == args.domain_id_of_current_tab {
+-                self.active_idx = self.entries.len();
++            if domain.domain_id == self.domain_id_of_current_tab {
++                result.selected = result.entries.len();
+             }
+-            self.entries.push(entry);
++            result.entries.push(entry);
+         }
+ 
+-        if args.flags.contains(LauncherFlags::WORKSPACES) {
+-            for ws in &args.workspaces {
+-                if *ws != args.active_workspace {
+-                    self.entries.push(Entry {
++        if self.flags.contains(LauncherFlags::WORKSPACES) {
++            for ws in &self.workspaces {
++                if *ws != self.active_workspace {
++                    result.entries.push(Entry {
++                        tab_id: None,
                          label: format!("Switch to workspace: `{}`", ws),
                          action: KeyAssignment::SwitchToWorkspace {
                              name: Some(ws.clone()),
-@@ -283,6 +274,7 @@ impl LauncherState {
+@@ -282,10 +197,11 @@ impl LauncherState {
+                     });
                  }
              }
-             self.entries.push(Entry {
-+                    tab_id: None,
+-            self.entries.push(Entry {
++            result.entries.push(Entry {
++                tab_id: None,
                  label: format!(
                      "Create new Workspace (current is `{}`)",
-                     args.active_workspace
-@@ -296,11 +288,12 @@ impl LauncherState {
+-                    args.active_workspace
++                    self.active_workspace
+                 ),
+                 action: KeyAssignment::SwitchToWorkspace {
+                     name: None,
+@@ -294,18 +210,19 @@ impl LauncherState {
+             });
+         }
  
-         for tab in &args.tabs {
-             self.entries.push(Entry {
-+                    tab_id: Some(tab.tab_id),
+-        for tab in &args.tabs {
+-            self.entries.push(Entry {
++        for tab in &self.tabs {
++            result.entries.push(Entry {
++                tab_id: Some(tab.tab_id),
                  label: match tab.pane_count {
                      Some(pane_count) => format!("{}. {pane_count} panes", tab.title),
                      None => format!("{}.", tab.title),
@@ -234,15 +426,35 @@ index d2cbd9823bc186a0e92e5b60f6f05687c9480fe4..bf8695533e4715bde9707e1010954a98
              });
          }
  
-@@ -315,6 +308,7 @@ impl LauncherState {
+-        if args.flags.contains(LauncherFlags::COMMANDS) {
+-            let commands = crate::commands::CommandDef::expanded_commands(&config);
++        if self.flags.contains(LauncherFlags::COMMANDS) {
++            let commands = crate::commands::CommandDef::expanded_commands(config);
+             for cmd in commands {
+                 if matches!(
+                     &cmd.action,
+@@ -314,7 +231,8 @@ impl LauncherState {
+                     // Filter out some noisy, repetitive entries
                      continue;
                  }
-                 self.entries.push(Entry {
+-                self.entries.push(Entry {
++                result.entries.push(Entry {
 +                    tab_id: None,
                      label: format!("{}. {}", cmd.brief, cmd.doc),
                      action: cmd.action,
                  });
-@@ -355,6 +349,7 @@ impl LauncherState {
+@@ -322,8 +240,8 @@ impl LauncherState {
+         }
+ 
+         // Grab interesting key assignments and show those as a kind of command palette
+-        if args.flags.contains(LauncherFlags::KEY_ASSIGNMENTS) {
+-            let input_map = InputMap::new(&config);
++        if self.flags.contains(LauncherFlags::KEY_ASSIGNMENTS) {
++            let input_map = InputMap::new(config);
+             let mut key_entries: Vec<Entry> = vec![];
+             // Give a consistent order to the entries
+             let keys: BTreeMap<_, _> = input_map.keys.default.into_iter().collect();
+@@ -355,324 +273,14 @@ impl LauncherState {
                  };
  
                  key_entries.push(Entry {
@@ -250,17 +462,339 @@ index d2cbd9823bc186a0e92e5b60f6f05687c9480fe4..bf8695533e4715bde9707e1010954a98
                      label,
                      action: entry.action,
                  });
-@@ -476,6 +471,10 @@ impl LauncherState {
+             }
+             key_entries.sort_by(|a, b| a.label.cmp(&b.label));
+-            self.entries.append(&mut key_entries);
+-        }
+-    }
+-
+-    fn render(&mut self, term: &mut TermWizTerminal) -> termwiz::Result<()> {
+-        let size = term.get_screen_size()?;
+-        let max_width = size.cols.saturating_sub(6);
+-        let max_items = size.rows.saturating_sub(ROW_OVERHEAD);
+-        if max_items != self.max_items {
+-            self.labels = quickselect::compute_labels_for_alphabet_with_preserved_case(
+-                &self.alphabet,
+-                self.filtered_entries.len().min(max_items + 1),
+-            );
+-            self.max_items = max_items;
+-        }
+-
+-        let mut changes = vec![
+-            Change::ClearScreen(ColorAttribute::Default),
+-            Change::CursorPosition {
+-                x: Position::Absolute(0),
+-                y: Position::Absolute(0),
+-            },
+-            Change::Text(format!(
+-                "{}\r\n",
+-                truncate_right(&self.help_text, max_width)
+-            )),
+-            Change::AllAttributes(CellAttributes::default()),
+-        ];
+-
+-        let labels = &self.labels;
+-        let max_label_len = labels.iter().map(|s| s.len()).max().unwrap_or(0);
+-        let mut labels_iter = labels.into_iter();
+-
+-        let config = configuration();
+-        let colors = &config.resolved_palette;
+-        let launcher_label_fg = colors.launcher_label_fg;
+-        let launcher_label_bg = colors.launcher_label_bg;
+-
+-        for (row_num, (entry_idx, entry)) in self
+-            .filtered_entries
+-            .iter()
+-            .enumerate()
+-            .skip(self.top_row)
+-            .enumerate()
+-        {
+-            if row_num > max_items {
+-                break;
+-            }
+-
+-            let mut attr = CellAttributes::blank();
+-
+-            if entry_idx == self.active_idx {
+-                changes.push(AttributeChange::Reverse(true).into());
+-                attr.set_reverse(true);
+-            }
+-
+-            // from above we know that row_num <= max_items
+-            // show labels as long as we have more labels left
+-            // and we are not filtering
+-            if !self.filtering {
+-                if let Some(label) = labels_iter.next() {
+-                    if let Some(launcher_label_bg) = launcher_label_bg {
+-                        changes.push(AttributeChange::Background(launcher_label_bg.into()).into());
+-                    }
+-                    if let Some(launcher_label_fg) = launcher_label_fg {
+-                        changes.push(AttributeChange::Foreground(launcher_label_fg.into()).into());
+-                    }
+-                    changes.push(Change::Text(format!(" {label:>max_label_len$}. ")));
+-                    if launcher_label_bg.is_some() {
+-                        changes.push(AttributeChange::Background(ColorAttribute::Default).into());
+-                    }
+-                    if launcher_label_fg.is_some() {
+-                        changes.push(AttributeChange::Foreground(ColorAttribute::Default).into());
+-                    }
+-                } else {
+-                    changes.push(Change::Text(" ".repeat(max_label_len + 3)));
+-                }
+-            } else if !self.always_fuzzy {
+-                changes.push(Change::Text(" ".repeat(max_label_len + 3)));
+-            } else {
+-                changes.push(Change::Text("    ".to_string()));
+-            }
+-
+-            let mut line = crate::tabbar::parse_status_text(&entry.label, attr.clone());
+-            if line.len() > max_width {
+-                line.resize(max_width, termwiz::surface::SEQ_ZERO);
+-            }
+-            changes.append(&mut line.changes(&attr));
+-            changes.push(Change::Text(" ".to_string()));
+-
+-            if entry_idx == self.active_idx {
+-                changes.push(AttributeChange::Reverse(false).into());
+-            }
+-            changes.push(Change::AllAttributes(CellAttributes::default()));
+-            changes.push(Change::Text("\r\n".to_string()));
+-        }
+-
+-        if self.filtering || !self.filter_term.is_empty() {
+-            changes.append(&mut vec![
+-                Change::CursorPosition {
+-                    x: Position::Absolute(0),
+-                    y: Position::Absolute(0),
+-                },
+-                Change::ClearToEndOfLine(ColorAttribute::Default),
+-                Change::Text(truncate_right(
+-                    &format!("{}{}", &self.fuzzy_help_text, self.filter_term),
+-                    max_width,
+-                )),
+-            ]);
+-        }
+-
+-        term.render(&changes)
+-    }
+-
+-    fn launch(&self, active_idx: usize) -> bool {
+-        if let Some(entry) = self.filtered_entries.get(active_idx) {
+-            let assignment = entry.action.clone();
+-            self.window.notify(TermWindowNotif::PerformAssignment {
+-                pane_id: self.pane_id,
+-                assignment,
+-                tx: None,
+-            });
+-            true
+-        } else {
+-            false
+-        }
+-    }
+-
+-    fn move_up(&mut self) {
+-        self.active_idx = self.active_idx.saturating_sub(1);
+-        if self.active_idx < self.top_row {
+-            self.top_row = self.active_idx;
+-        }
+-    }
+-
+-    fn move_down(&mut self) {
+-        self.active_idx = (self.active_idx + 1).min(self.filtered_entries.len() - 1);
+-        if self.active_idx > self.top_row + self.max_items {
+-            self.top_row = self.active_idx.saturating_sub(self.max_items);
++            result.entries.append(&mut key_entries);
+         }
++        result
+     }
+-
+-    fn run_loop(&mut self, term: &mut TermWizTerminal) -> anyhow::Result<()> {
+-        while let Ok(Some(event)) = term.poll_input(None) {
+-            match event {
+-                InputEvent::Key(KeyEvent {
+-                    key: KeyCode::Char(c),
+-                    modifiers: Modifiers::NONE,
+-                }) if !self.filtering && self.alphabet.contains(c) => {
+-                    self.selection.push(c);
+-                    if let Some(pos) = self.labels.iter().position(|x| *x == self.selection) {
+-                        // since the number of labels is always <= self.max_items
+-                        // by construction, we have pos as usize <= self.max_items
+-                        // for free
+-                        self.active_idx = self.top_row + pos as usize;
+-                        if self.launch(self.active_idx) {
+-                            break;
+-                        }
+-                    }
+-                }
+-                InputEvent::Key(KeyEvent {
+-                    key: KeyCode::Char('j'),
+-                    ..
+-                }) if !self.filtering => {
+-                    self.move_down();
+-                }
+-                InputEvent::Key(KeyEvent {
+-                    key: KeyCode::Char('k'),
+-                    ..
+-                }) if !self.filtering => {
+-                    self.move_up();
+-                }
+-                InputEvent::Key(KeyEvent {
+-                    key: KeyCode::Char('P' | 'K'),
+-                    modifiers: Modifiers::CTRL,
+-                }) => {
+-                    self.move_up();
+-                }
+-                InputEvent::Key(KeyEvent {
+-                    key: KeyCode::Char('N' | 'J'),
+-                    modifiers: Modifiers::CTRL,
+-                }) => {
+-                    self.move_down();
+-                }
+-                InputEvent::Key(KeyEvent {
+-                    key: KeyCode::Char('/'),
+-                    ..
+-                }) if !self.filtering => {
+-                    self.filtering = true;
+-                }
+-                InputEvent::Key(KeyEvent {
+-                    key: KeyCode::Backspace,
+-                    ..
+-                }) => {
+-                    if !self.filtering {
+-                        self.selection.pop();
+-                    } else {
+-                        if self.filter_term.pop().is_none() && !self.always_fuzzy {
+-                            self.filtering = false;
+-                        }
+-                        self.update_filter();
+-                    }
+-                }
+-                InputEvent::Key(KeyEvent {
+-                    key: KeyCode::Char('G') | KeyCode::Char('['),
+-                    modifiers: Modifiers::CTRL,
+-                })
+-                | InputEvent::Key(KeyEvent {
+-                    key: KeyCode::Escape,
+-                    ..
+-                }) => {
+-                    break;
+-                }
+-                InputEvent::Key(KeyEvent {
+-                    key: KeyCode::Char(c),
+-                    ..
+-                }) if self.filtering => {
+-                    self.filter_term.push(c);
+-                    self.update_filter();
+-                }
+-                InputEvent::Key(KeyEvent {
+-                    key: KeyCode::UpArrow,
+-                    ..
+-                }) => {
+-                    self.move_up();
+-                }
+-                InputEvent::Key(KeyEvent {
+-                    key: KeyCode::DownArrow,
+-                    ..
+-                }) => {
+-                    self.move_down();
+-                }
+-                InputEvent::Mouse(MouseEvent {
+-                    y, mouse_buttons, ..
+-                }) if mouse_buttons.contains(MouseButtons::VERT_WHEEL) => {
+-                    if mouse_buttons.contains(MouseButtons::WHEEL_POSITIVE) {
+-                        self.top_row = self.top_row.saturating_sub(1);
+-                    } else {
+-                        self.top_row += 1;
+-                        self.top_row = self.top_row.min(
+-                            self.filtered_entries
+-                                .len()
+-                                .saturating_sub(self.max_items)
+-                                .saturating_sub(1),
+-                        );
+-                    }
+-                    if y > 0 && y as usize <= self.filtered_entries.len() {
+-                        self.active_idx = self.top_row + y as usize - 1;
+-                    }
+-                }
+-                InputEvent::Mouse(MouseEvent {
+-                    y, mouse_buttons, ..
+-                }) => {
+-                    if y > 0 && y as usize <= self.filtered_entries.len() {
+-                        self.active_idx = self.top_row + y as usize - 1;
+-
+-                        if mouse_buttons == MouseButtons::LEFT {
+-                            if self.launch(self.active_idx) {
+-                                break;
+-                            }
+-                        }
+-                    }
+-                    if mouse_buttons != MouseButtons::NONE {
+-                        // Treat any other mouse button as cancel
+-                        break;
+-                    }
+-                }
+-                InputEvent::Key(KeyEvent {
+-                    key: KeyCode::Enter,
+-                    ..
+-                }) => {
+-                    if self.launch(self.active_idx) {
+-                        break;
+-                    }
+-                }
+-                _ => {}
+-            }
+-            self.render(term)?;
+-        }
+-
+-        Ok(())
+-    }
+-}
+-
+-pub fn launcher(
+-    args: LauncherArgs,
+-    mut term: TermWizTerminal,
+-    window: ::window::Window,
+-    initial_choice_idx: usize,
+-) -> anyhow::Result<()> {
+-    let filtering = args.flags.contains(LauncherFlags::FUZZY);
+-    let mut state = LauncherState {
+-        active_idx: initial_choice_idx,
+-        max_items: 0,
+-        pane_id: args.pane_id,
+-        top_row: 0,
+-        entries: vec![],
+-        filter_term: String::new(),
+-        filtered_entries: vec![],
+-        window,
+-        filtering,
+-        help_text: args.help_text.clone(),
+-        fuzzy_help_text: args.fuzzy_help_text.clone(),
+-        labels: vec![],
+-        selection: String::new(),
+-        alphabet: args.alphabet.clone(),
+-        always_fuzzy: filtering,
+-    };
+-
+-    term.set_raw_mode()?;
+-    term.render(&[Change::Title(args.title.to_string())])?;
+-    state.build_entries(args);
+-    state.update_filter();
+-    state.render(&mut term)?;
+-    state.run_loop(&mut term)
+ }
+diff --git a/wezterm-gui/src/overlay/mod.rs b/wezterm-gui/src/overlay/mod.rs
+index 788712191b305ed7c780f73e523bbc08e8e062a7..5c8525502707b657d7a25073beff124486905996 100644
+--- a/wezterm-gui/src/overlay/mod.rs
++++ b/wezterm-gui/src/overlay/mod.rs
+@@ -20,7 +20,7 @@ pub use confirm_close_pane::{
+ };
+ pub use copy::{CopyModeParams, CopyOverlay};
+ pub use debug::show_debug_overlay;
+-pub use launcher::{launcher, LauncherArgs, LauncherFlags};
++pub use launcher::LauncherFlags;
+ pub use quickselect::QuickSelectOverlay;
  
-     fn launch(&self, active_idx: usize) -> bool {
-         if let Some(entry) = self.filtered_entries.get(active_idx) {
-+            if let Some(id) = entry.tab_id {
-+                self.window.notify(TermWindowNotif::Apply(Box::new(move |tw|tw.vtabs_activate_visible(id))));
-+                return true;
-+            }
-             let assignment = entry.action.clone();
-             self.window.notify(TermWindowNotif::PerformAssignment {
-                 pane_id: self.pane_id,
+ pub fn start_overlay<T, F>(
 diff --git a/wezterm-gui/src/quad.rs b/wezterm-gui/src/quad.rs
 index d51f897810923b53d385e72a38ed62eeb5a6179b..0b648ec7b7ac3c72e374412ec687a8958c2c2488 100644
 --- a/wezterm-gui/src/quad.rs
@@ -370,10 +904,10 @@ index d66908074090d5a2b541a5a5065c3311a78906f5..9ed208743675e95eb3e2a1dabe8da323
          // any key table rules. Therefore, we should pop all `until_unknown`
          // entries from the stack.
 diff --git a/wezterm-gui/src/termwindow/mod.rs b/wezterm-gui/src/termwindow/mod.rs
-index 27567d9dd36028a6de7b943a35a791532340cfe3..fb16772c11fe267630cab0627338194b43642e93 100644
+index 27567d9dd36028a6de7b943a35a791532340cfe3..1c66ce26575480996a4db97661ee1cbc03979b1d 100644
 --- a/wezterm-gui/src/termwindow/mod.rs
 +++ b/wezterm-gui/src/termwindow/mod.rs
-@@ -1,5 +1,7 @@
+@@ -1,13 +1,15 @@
  #![allow(clippy::range_plus_one)]
  
 +pub mod ui_host;
@@ -381,6 +915,16 @@ index 27567d9dd36028a6de7b943a35a791532340cfe3..fb16772c11fe267630cab0627338194b
  use super::renderstate::*;
  use super::utilsprites::RenderMetrics;
  use crate::colorease::ColorEase;
+ use crate::frontend::{front_end, try_front_end};
+ use crate::inputmap::InputMap;
+ use crate::overlay::{
+-    confirm_close_pane, confirm_close_tab, confirm_close_window, confirm_quit_program, launcher,
+-    start_overlay, start_overlay_pane, CopyModeParams, CopyOverlay, LauncherArgs, LauncherFlags,
++    confirm_close_pane, confirm_close_tab, confirm_close_window, confirm_quit_program,
++    start_overlay, start_overlay_pane, CopyModeParams, CopyOverlay, LauncherFlags,
+     QuickSelectOverlay,
+ };
+ use crate::resize_increment_calculator::ResizeIncrementCalculator;
 @@ -391,6 +393,8 @@ pub struct TermWindow {
      leader_is_down: Option<std::time::Instant>,
      dead_key_status: DeadKeyStatus,
@@ -572,23 +1116,78 @@ index 27567d9dd36028a6de7b943a35a791532340cfe3..fb16772c11fe267630cab0627338194b
  
              let r = Rect::new(
                  Point::new(
-@@ -2403,6 +2424,7 @@ impl TermWindow {
+@@ -2402,69 +2423,7 @@ impl TermWindow {
+     }
  
      fn show_launcher_impl(&mut self, args: LauncherActionArgs, initial_choice_idx: usize) {
-         let mux_window_id = self.mux_window_id;
-+        let visible_tabs = self.ui_host.as_ref().map(|ui|ui.projection.tabs.clone()).unwrap_or_default();
-         let window = self.window.as_ref().unwrap().clone();
+-        let mux_window_id = self.mux_window_id;
+-        let window = self.window.as_ref().unwrap().clone();
+-
+-        let mux = Mux::get();
+-        let tab = match mux.get_active_tab_for_window(self.mux_window_id) {
+-            Some(tab) => tab,
+-            None => return,
+-        };
+-
+-        let pane = match self.get_active_pane_or_overlay() {
+-            Some(pane) => pane,
+-            None => return,
+-        };
+-
+-        let domain_id_of_current_pane = tab
+-            .get_active_pane()
+-            .expect("tab has no panes!")
+-            .domain_id();
+-        let pane_id = pane.pane_id();
+-        let tab_id = tab.tab_id();
+-        let title = args.title.unwrap();
+-        let flags = args.flags;
+-        let help_text = args.help_text.unwrap_or(
+-            "Select an item and press Enter=launch  \
+-             Esc=cancel  /=filter"
+-                .to_string(),
+-        );
+-        let fuzzy_help_text = args
+-            .fuzzy_help_text
+-            .unwrap_or("Fuzzy matching: ".to_string());
+-
+-        let config = &self.config;
+-        let alphabet = args.alphabet.unwrap_or(config.launcher_alphabet.clone());
+-
+-        promise::spawn::spawn(async move {
+-            let args = LauncherArgs::new(
+-                &title,
+-                flags,
+-                mux_window_id,
+-                pane_id,
+-                domain_id_of_current_pane,
+-                &help_text,
+-                &fuzzy_help_text,
+-                &alphabet,
+-            )
+-            .await;
+-
+-            let win = window.clone();
+-            win.notify(TermWindowNotif::Apply(Box::new(move |term_window| {
+-                let mux = Mux::get();
+-                if let Some(tab) = mux.get_tab(tab_id) {
+-                    let window = window.clone();
+-                    let (overlay, future) =
+-                        start_overlay(term_window, &tab, move |_tab_id, term| {
+-                            launcher(args, term, window, initial_choice_idx)
+-                        });
+-
+-                    term_window.assign_overlay(tab_id, overlay);
+-                    promise::spawn::spawn(future).detach();
+-                }
+-            })));
+-        })
+-        .detach();
++        self.vtabs_open_launcher(args, initial_choice_idx);
+     }
  
-         let mux = Mux::get();
-@@ -2441,6 +2463,7 @@ impl TermWindow {
-                 &title,
-                 flags,
-                 mux_window_id,
-+                visible_tabs,
-                 pane_id,
-                 domain_id_of_current_pane,
-                 &help_text,
-@@ -2587,6 +2610,7 @@ impl TermWindow {
+     /// Returns the Prompt semantic zones
+@@ -2587,6 +2546,7 @@ impl TermWindow {
          assignment: &KeyAssignment,
      ) -> anyhow::Result<PerformAssignmentResult> {
          use KeyAssignment::*;
@@ -596,7 +1195,7 @@ index 27567d9dd36028a6de7b943a35a791532340cfe3..fb16772c11fe267630cab0627338194b
  
          if let Some(modal) = self.get_modal() {
              if modal.perform_assignment(assignment, self) {
-@@ -2601,6 +2625,9 @@ impl TermWindow {
+@@ -2601,6 +2561,9 @@ impl TermWindow {
  
          let window = self.window.as_ref().map(|w| w.clone());
  
@@ -606,7 +1205,7 @@ index 27567d9dd36028a6de7b943a35a791532340cfe3..fb16772c11fe267630cab0627338194b
          match assignment {
              ActivateKeyTable {
                  name,
-@@ -3042,6 +3069,7 @@ impl TermWindow {
+@@ -3042,6 +3005,7 @@ impl TermWindow {
                              size,
                              Some(src_window_id),
                              term_config,
@@ -614,7 +1213,7 @@ index 27567d9dd36028a6de7b943a35a791532340cfe3..fb16772c11fe267630cab0627338194b
                          )
                          .await
                          {
-@@ -3211,6 +3239,7 @@ impl TermWindow {
+@@ -3211,6 +3175,7 @@ impl TermWindow {
          }
      }
      fn close_current_pane(&mut self, confirm: bool) {
@@ -622,7 +1221,7 @@ index 27567d9dd36028a6de7b943a35a791532340cfe3..fb16772c11fe267630cab0627338194b
          let mux_window_id = self.mux_window_id;
          let mux = Mux::get();
          let tab = match mux.get_active_tab_for_window(mux_window_id) {
-@@ -3251,9 +3280,11 @@ impl TermWindow {
+@@ -3251,9 +3216,11 @@ impl TermWindow {
  
          let tab_id = tab.tab_id();
          if confirm && !tab.can_close_without_prompting(CloseReason::Tab) {
@@ -636,7 +1235,7 @@ index 27567d9dd36028a6de7b943a35a791532340cfe3..fb16772c11fe267630cab0627338194b
  
              let window = self.window.clone().unwrap();
              let (overlay, future) = start_overlay(self, &tab, move |tab_id, term| {
-@@ -3267,6 +3298,7 @@ impl TermWindow {
+@@ -3267,6 +3234,7 @@ impl TermWindow {
      }
  
      fn close_current_tab(&mut self, confirm: bool) {
@@ -644,7 +1243,7 @@ index 27567d9dd36028a6de7b943a35a791532340cfe3..fb16772c11fe267630cab0627338194b
          let mux = Mux::get();
          let tab = match mux.get_active_tab_for_window(self.mux_window_id) {
              Some(tab) => tab,
-@@ -3394,6 +3426,9 @@ impl TermWindow {
+@@ -3394,6 +3362,9 @@ impl TermWindow {
      /// an active overlay (such as search or copy mode) then that will
      /// be returned.
      pub fn get_active_pane_or_overlay(&self) -> Option<Arc<dyn Pane>> {
@@ -654,7 +1253,7 @@ index 27567d9dd36028a6de7b943a35a791532340cfe3..fb16772c11fe267630cab0627338194b
          let mux = Mux::get();
          let tab = match mux.get_active_tab_for_window(self.mux_window_id) {
              Some(tab) => tab,
-@@ -3421,6 +3456,7 @@ impl TermWindow {
+@@ -3421,6 +3392,7 @@ impl TermWindow {
      }
  
      fn get_splits(&mut self) -> Vec<PositionedSplit> {
@@ -662,7 +1261,7 @@ index 27567d9dd36028a6de7b943a35a791532340cfe3..fb16772c11fe267630cab0627338194b
          let mux = Mux::get();
          let tab = match mux.get_active_tab_for_window(self.mux_window_id) {
              Some(tab) => tab,
-@@ -3456,6 +3492,7 @@ impl TermWindow {
+@@ -3456,6 +3428,7 @@ impl TermWindow {
      }
  
      fn get_tab_information(&mut self) -> Vec<TabInformation> {
@@ -670,7 +1269,7 @@ index 27567d9dd36028a6de7b943a35a791532340cfe3..fb16772c11fe267630cab0627338194b
          let mux = Mux::get();
          let window = match mux.get_window(self.mux_window_id) {
              Some(window) => window,
-@@ -3529,6 +3566,12 @@ impl TermWindow {
+@@ -3529,6 +3502,12 @@ impl TermWindow {
      }
  
      fn get_panes_to_render(&self) -> Vec<PositionedPane> {
@@ -683,7 +1282,7 @@ index 27567d9dd36028a6de7b943a35a791532340cfe3..fb16772c11fe267630cab0627338194b
          let mux = Mux::get();
          let tab = match mux.get_active_tab_for_window(self.mux_window_id) {
              Some(tab) => tab,
-@@ -3592,6 +3635,7 @@ impl TermWindow {
+@@ -3592,6 +3571,7 @@ impl TermWindow {
      }
  
      pub fn assign_overlay(&mut self, tab_id: TabId, overlay: Arc<dyn Pane>) {
@@ -691,7 +1290,7 @@ index 27567d9dd36028a6de7b943a35a791532340cfe3..fb16772c11fe267630cab0627338194b
          self.cancel_overlay_for_tab(tab_id, None);
          self.tab_state(tab_id).overlay.replace(OverlayState {
              pane: overlay,
-@@ -3621,6 +3665,7 @@ impl TermWindow {
+@@ -3621,6 +3601,7 @@ impl TermWindow {
  
  impl Drop for TermWindow {
      fn drop(&mut self) {

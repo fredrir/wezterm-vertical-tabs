@@ -22,6 +22,9 @@ impl SidebarUi {
             }
             return;
         }
+        if self.launch_menu_key(model, &key, modifiers, intents) {
+            return;
+        }
         if self.shortcut(model, &key, modifiers, intents) {
             return;
         }
@@ -47,8 +50,6 @@ impl SidebarUi {
             {
                 self.restore_editor(target);
             }
-        } else if key == Key::F10 && self.launcher_actions(None) {
-            return;
         } else if key == Key::F10 && self.text_input_active() {
             let target = if self.overlays.current.is_some() {
                 ElementId::Editor
@@ -107,7 +108,7 @@ impl SidebarUi {
         let edits_query = matches!(
             &self.overlays.current,
             Some(Overlay::Menu(Menu { search: Some(search), .. }))
-                if search.kind != crate::views::launcher::LauncherKind::Keybind && matches!(
+                if search.edits_query() && matches!(
                     key,
                     Key::Character(_)
                         | Key::Backspace

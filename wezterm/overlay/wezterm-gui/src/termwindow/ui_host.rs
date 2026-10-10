@@ -180,6 +180,7 @@ pub enum Command {
     ToggleTerminalOverlay,
     OpenCommandPalette,
     RunPaletteCommand(crate::commands::ExpandedCommand),
+    RunLauncherEntry(crate::overlay::launcher::Entry),
     Activate(TabId),
     Close(TabId, bool),
     Spawn(SpawnCommand, bool),
@@ -210,6 +211,11 @@ pub trait Provider {
     fn snapshot(&mut self, snapshot: Snapshot);
     fn navigation(&mut self, navigation: Navigation);
     fn open_command_palette(&mut self, commands: Vec<crate::commands::ExpandedCommand>);
+    fn open_launcher(
+        &mut self,
+        args: config::keyassignment::LauncherActionArgs,
+        entries: crate::overlay::launcher::LauncherEntries,
+    );
     fn input(&mut self, input: Input<'_>) -> bool;
     fn terminal_input(&mut self, input: Input<'_>) -> bool;
     fn message(&mut self, message: serde_json::Value);
@@ -1201,6 +1207,39 @@ impl TermWindow {
         }
         self.vtabs_relayout(before);
     }
+    pub fn vtabs_open_launcher(
+        &mut self,
+        mut args: config::keyassignment::LauncherActionArgs,
+        initial_choice_idx: usize,
+    ) {
+        self.hide_terminal_overlay();
+        self.vtabs_sync();
+        let Some(window) = self.window.clone() else { return };
+        let Some(ui) = self.ui_host.as_ref() else { return };
+        let visible_tabs = ui.projection.tabs.clone();
+        let mux_window_id = self.mux_window_id;
+        let domain = self.get_active_pane_or_overlay()
+            .map(|pane| pane.domain_id())
+            .unwrap_or_else(|| Mux::get().default_domain().domain_id());
+        let config = self.config.clone();
+        args.alphabet.get_or_insert_with(|| config.launcher_alphabet.clone());
+        promise::spawn::spawn(async move {
+            let entries = crate::overlay::launcher::LauncherArgs::new(args.flags, visible_tabs, domain)
+                .await
+                .build_entries(&config, initial_choice_idx);
+            window.notify(TermWindowNotif::Apply(Box::new(move |tw| {
+                // Domain labels may run Lua; the window can switch workspaces while awaiting them.
+                if tw.mux_window_id != mux_window_id { return; }
+                let before = tw.vtabs_reservation();
+                tw.cancel_modal();
+                if let Some(ui) = tw.ui_host.as_mut() {
+                    ui.provider.open_launcher(args, entries);
+                    ui.needs_commit = true;
+                }
+                tw.vtabs_relayout(before);
+            })));
+        }).detach();
+    }
     pub fn vtabs_message_for(&mut self, window_id: usize, message: serde_json::Value) {
         if window_id == self.mux_window_id {
             self.vtabs_message(message);
@@ -1386,6 +1425,15 @@ impl TermWindow {
                     }
                 }
                 Command::OpenCommandPalette => self.vtabs_open_command_palette(),
+                Command::RunLauncherEntry(entry) => {
+                    if let Some(id) = entry.tab_id {
+                        self.vtabs_activate_visible(id);
+                    } else if let Some(pane) = self.get_active_pane_or_overlay() {
+                        if let Err(err) = self.perform_key_assignment(&pane, &entry.action) {
+                            log::error!("Error while performing launcher action: {err:#}");
+                        }
+                    }
+                }
                 Command::RunPaletteCommand(command) => {
                     if let Err(err) = super::palette::save_recent(&command) {
                         log::error!("Error while saving recents: {err:#}");

@@ -19,7 +19,7 @@ fn vtabs_attaching_to_an_idle_pane_replays_existing_user_vars_once() {
         Box::new(std::io::sink()),
     );
     // This value was emitted before the client attached.
-    terminal.advance_bytes(b"\x1b]1337;SetUserVar=vtabs_jobs=YmVmb3Jl\x07");
+    terminal.advance_bytes(b"\x1b]1337;SetUserVar=vtabs_test=YmVmb3Jl\x07");
     let pane: Arc<dyn Pane> = Arc::new(mux::localpane::LocalPane::new(
         1,
         terminal,
@@ -45,7 +45,7 @@ fn vtabs_attaching_to_an_idle_pane_replays_existing_user_vars_once() {
     maybe_push_pane_changes(&pane, sender.clone(), Arc::clone(&connection)).unwrap();
     assert_eq!(
         *messages.lock().unwrap(),
-        vec![(1, "vtabs_jobs".into(), "before".into())]
+        vec![(1, "vtabs_test".into(), "before".into())]
     );
     messages.lock().unwrap().clear();
     maybe_push_pane_changes(&pane, sender.clone(), connection).unwrap();
@@ -54,6 +54,6 @@ fn vtabs_attaching_to_an_idle_pane_replays_existing_user_vars_once() {
     maybe_push_pane_changes(&pane, sender, Arc::new(Mutex::new(PerPane::default()))).unwrap();
     assert_eq!(
         *messages.lock().unwrap(),
-        vec![(1, "vtabs_jobs".into(), "before".into())]
+        vec![(1, "vtabs_test".into(), "before".into())]
     );
 }

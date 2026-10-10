@@ -221,3 +221,214 @@ fn recording_cmd_digit_filters_commands_without_activating_the_tab() {
     )));
     assert_eq!(adapter.app.model().selected_tab, Some(1));
 }
+
+fn launcher_args(
+    flags: config::keyassignment::LauncherFlags,
+) -> crate::overlay::launcher::LauncherArgs {
+    crate::overlay::launcher::LauncherArgs {
+        flags,
+        domains: Vec::new(),
+        tabs: Vec::new(),
+        domain_id_of_current_tab: 0,
+        active_workspace: "current".into(),
+        workspaces: vec!["current".into(), "other".into()],
+    }
+}
+
+fn launcher_action(
+    flags: config::keyassignment::LauncherFlags,
+) -> config::keyassignment::LauncherActionArgs {
+    config::keyassignment::LauncherActionArgs {
+        flags,
+        title: Some("My tools".into()),
+        help_text: Some("Choose a tool".into()),
+        fuzzy_help_text: Some("Find a tool".into()),
+        alphabet: Some("xy".into()),
+    }
+}
+
+#[test]
+fn launcher_flags_scope_entries() {
+    use config::keyassignment::LauncherFlags as F;
+    let config = config::ConfigHandle::default_config();
+    assert!(
+        launcher_args(F::FUZZY)
+            .build_entries(&config, 0)
+            .entries
+            .is_empty()
+    );
+    let entries = launcher_args(F::WORKSPACES)
+        .build_entries(&config, 0)
+        .entries;
+    assert_eq!(entries.len(), 2);
+    assert_eq!(
+        entries[0].action,
+        KeyAssignment::SwitchToWorkspace {
+            name: Some("other".into()),
+            spawn: None
+        }
+    );
+    assert_eq!(
+        entries[1].action,
+        KeyAssignment::SwitchToWorkspace {
+            name: None,
+            spawn: None
+        }
+    );
+    for flag in [F::KEY_ASSIGNMENTS, F::COMMANDS] {
+        let entries = launcher_args(flag).build_entries(&config, 0).entries;
+        assert!(!entries.is_empty());
+        assert!(!entries.iter().any(|entry| matches!(
+            entry.action,
+            KeyAssignment::ActivateTab(_) | KeyAssignment::ActivateTabRelative(_)
+        )));
+    }
+}
+
+fn launch_menu(
+    commands: &[config::keyassignment::SpawnCommand],
+) -> crate::overlay::launcher::LauncherEntries {
+    crate::overlay::launcher::LauncherEntries {
+        entries: commands
+            .iter()
+            .map(|command| crate::overlay::launcher::Entry {
+                label: command.label.clone().unwrap(),
+                action: KeyAssignment::SpawnCommandInNewTab(command.clone()),
+                tab_id: None,
+            })
+            .collect(),
+        selected: 0,
+    }
+}
+
+#[test]
+fn launcher_keeps_domain_preselection_and_stable_tab_identity() {
+    use crate::overlay::launcher::{LauncherDomainEntry, LauncherTabEntry};
+    use config::keyassignment::{LauncherFlags as F, SpawnCommand, SpawnTabDomain};
+    let mut args = launcher_args(F::DOMAINS | F::TABS);
+    args.domains = vec![
+        LauncherDomainEntry {
+            domain_id: 1,
+            name: "remote".into(),
+            label: "Remote".into(),
+            state: mux::domain::DomainState::Detached,
+        },
+        LauncherDomainEntry {
+            domain_id: 2,
+            name: "local".into(),
+            label: "Local".into(),
+            state: mux::domain::DomainState::Attached,
+        },
+    ];
+    args.domain_id_of_current_tab = 2;
+    args.tabs = vec![LauncherTabEntry {
+        title: "Shell".into(),
+        tab_id: 42,
+        pane_count: Some(1),
+    }];
+    let entries = args.build_entries(&config::ConfigHandle::default_config(), 0);
+    assert_eq!(entries.selected, 1);
+    assert_eq!(
+        entries.entries[0].action,
+        KeyAssignment::AttachDomain("remote".into())
+    );
+    assert_eq!(
+        entries.entries[1].action,
+        KeyAssignment::SpawnCommandInNewTab(SpawnCommand {
+            domain: SpawnTabDomain::DomainName("local".into()),
+            ..SpawnCommand::default()
+        })
+    );
+    config::designate_this_as_the_main_thread();
+    let mut adapter = Adapter::new(9897);
+    adapter.open_launcher(launcher_action(args.flags), entries);
+    adapter.ui_input(ui::UiInput::key(ui::Key::Down));
+    adapter.ui_input(ui::UiInput::key(ui::Key::Enter));
+    assert!(
+        matches!(adapter.commands().as_slice(), [Command::RunLauncherEntry(entry)] if entry.tab_id == Some(42))
+    );
+}
+
+#[test]
+fn launcher_uses_native_fuzzy_matching_and_executes_the_filtered_entry() {
+    use config::keyassignment::{LauncherFlags as F, SpawnCommand};
+    config::designate_this_as_the_main_thread();
+    let commands = vec![
+        SpawnCommand {
+            label: Some("Zulu shell".into()),
+            ..SpawnCommand::default()
+        },
+        SpawnCommand {
+            label: Some("Alpha build server".into()),
+            args: Some(vec!["build".into()]),
+            ..SpawnCommand::default()
+        },
+    ];
+    let flags = F::LAUNCH_MENU_ITEMS | F::FUZZY;
+    let mut adapter = Adapter::new(9898);
+    adapter.open_launcher(launcher_action(flags), launch_menu(&commands));
+    assert_eq!(
+        results(&mut adapter),
+        ["command/0", "command/1"],
+        "Lua entry order is preserved"
+    );
+    adapter.ui_input(ui::UiInput::Text("absv".into()));
+    assert_eq!(results(&mut adapter), ["command/1"]);
+    adapter.ui_input(ui::UiInput::key(ui::Key::Enter));
+    assert!(!adapter.app.is_modal());
+    assert!(
+        matches!(adapter.commands().as_slice(), [Command::RunLauncherEntry(entry)] if entry.action == KeyAssignment::SpawnCommandInNewTab(commands[1].clone()))
+    );
+    adapter.command(app::Command::RunCommand(1));
+    assert!(adapter.commands().is_empty());
+}
+
+#[test]
+fn launcher_honors_custom_alphabet_and_can_enter_and_leave_filtering() {
+    use config::keyassignment::{LauncherFlags as F, SpawnCommand};
+    config::designate_this_as_the_main_thread();
+    let commands = vec![
+        SpawnCommand {
+            label: Some("First".into()),
+            ..SpawnCommand::default()
+        },
+        SpawnCommand {
+            label: Some("Second".into()),
+            ..SpawnCommand::default()
+        },
+        SpawnCommand {
+            label: Some("Third".into()),
+            ..SpawnCommand::default()
+        },
+    ];
+    let flags = F::LAUNCH_MENU_ITEMS;
+    let mut adapter = Adapter::new(9899);
+    adapter.open_launcher(launcher_action(flags), launch_menu(&commands));
+    results(&mut adapter);
+    assert!(!adapter.text_input_active());
+    adapter.input(Input::Key(&logical_key(
+        KeyCode::Char('/'),
+        Modifiers::NONE,
+    )));
+    assert!(adapter.text_input_active());
+    adapter.input(Input::Key(&logical_key(
+        KeyCode::Char('\u{8}'),
+        Modifiers::NONE,
+    )));
+    assert!(!adapter.text_input_active());
+    adapter.input(Input::Key(&logical_key(
+        KeyCode::Char('y'),
+        Modifiers::NONE,
+    )));
+    assert!(
+        adapter.commands().is_empty(),
+        "wait for the second label character"
+    );
+    adapter.input(Input::Key(&logical_key(
+        KeyCode::Char('x'),
+        Modifiers::NONE,
+    )));
+    assert!(
+        matches!(adapter.commands().as_slice(), [Command::RunLauncherEntry(entry)] if entry.label == "Second")
+    );
+}

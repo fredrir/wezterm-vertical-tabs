@@ -50,9 +50,7 @@ pub struct HostSnapshot {
 pub enum Command {
     OpenCommands,
     RunCommand(usize),
-    OpenJobs,
     QuickTerminal,
-    Job(core::jobs::JobTarget, core::jobs::JobOperation),
     Refresh,
     Host(HostCommand),
     SetClipboard(String),
@@ -461,12 +459,8 @@ impl WindowApp {
                 UiIntent::Host(HostAction::RunCommand(id)) => {
                     update.commands.push(Command::RunCommand(id))
                 }
-                UiIntent::Host(HostAction::OpenJobs) => update.commands.push(Command::OpenJobs),
                 UiIntent::Host(HostAction::QuickTerminal) => {
                     update.commands.push(Command::QuickTerminal)
-                }
-                UiIntent::Host(HostAction::Job(target, operation)) => {
-                    update.commands.push(Command::Job(target, operation))
                 }
                 UiIntent::Refresh => {
                     self.refresh_storage();

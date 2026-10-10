@@ -4,9 +4,7 @@ use vtabs_core::{Intent, PaneId, TabId};
 pub enum HostAction {
     OpenCommands,
     RunCommand(usize),
-    OpenJobs,
     QuickTerminal,
-    Job(vtabs_core::jobs::JobTarget, vtabs_core::jobs::JobOperation),
     Custom(String),
     MoveTabToNewWindow(TabId),
     CloseTab(TabId),

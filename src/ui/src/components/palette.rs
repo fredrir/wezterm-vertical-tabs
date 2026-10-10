@@ -25,7 +25,9 @@ pub(crate) fn palette(cx: &mut Canvas, area: Rect, menu: &mut Menu) -> Rect {
     let pad = u16::from(tall);
     let gap = u16::from(tall);
     let wanted = search.all_items.len().clamp(1, MAX_VISIBLE_ITEMS) as u16;
-    let height = (pad * 2 + line + gap + wanted * line).min(area.height.saturating_sub(2).max(1));
+    let heading = if search.launch_menu.is_some() { 2 } else { 0 };
+    let height =
+        (pad * 2 + heading + line + gap + wanted * line).min(area.height.saturating_sub(2).max(1));
     let rect = centered(area, 64, height);
     cx.clear(rect);
     cx.rounded(rect, theme.background);
@@ -35,7 +37,32 @@ pub(crate) fn palette(cx: &mut Canvas, area: Rect, menu: &mut Menu) -> Rect {
         rect.width.saturating_sub(pad * 2),
         rect.height.saturating_sub(pad * 2),
     );
-    let field = Rect::new(inner.x, inner.y, inner.width, line.min(inner.height));
+    if let Some(launcher) = &search.launch_menu {
+        cx.write(
+            Rect::new(inner.x, inner.y, inner.width, inner.height.min(1)),
+            display_text(&menu.title),
+            theme.accent(),
+        );
+        if inner.height > 1 {
+            let help = if launcher.filtering {
+                &launcher.config.fuzzy_help_text
+            } else {
+                &launcher.config.help_text
+            };
+            cx.write(
+                Rect::new(inner.x, inner.y + 1, inner.width, 1),
+                display_text(help),
+                theme.muted(),
+            );
+        }
+    }
+    let heading = heading.min(inner.height);
+    let field = Rect::new(
+        inner.x,
+        inner.y + heading,
+        inner.width,
+        line.min(inner.height.saturating_sub(heading)),
+    );
     cx.surface(field, theme.card, SURFACE_RADIUS, ROW_INSET);
     let lead = ICON_CELLS.min(field.width.saturating_sub(1));
     cx.write(
@@ -56,14 +83,20 @@ pub(crate) fn palette(cx: &mut Canvas, area: Rect, menu: &mut Menu) -> Rect {
     );
     let shift = if field.height == 2 { 0.5 } else { 0.0 };
     let mut recorded;
+    let edits_query = search.edits_query();
     let editor = if search.kind == LauncherKind::Keybind {
         recorded = TextEditor::new(crate::keybinds::display_chord(search.editor.text()));
+        &mut recorded
+    } else if let Some(launcher) = &search.launch_menu
+        && !launcher.filtering
+    {
+        recorded = TextEditor::new(&launcher.selection);
         &mut recorded
     } else {
         &mut search.editor
     };
     TextInput::new(ElementId::Editor, editor, theme.card)
-        .active(!search.recording && search.kind != LauncherKind::Keybind)
+        .active(edits_query)
         .shift(shift)
         .placeholder(if search.recording {
             "Recording keys. Press Escape to exit"
@@ -99,6 +132,12 @@ pub(crate) fn palette(cx: &mut Canvas, area: Rect, menu: &mut Menu) -> Rect {
     );
     let rows = usize::from(list.height / line).max(1);
     menu.scroll = list::scroll_to(menu.scroll, menu.selected, menu.items.len(), rows);
+    if let Some(launcher) = &mut search.launch_menu {
+        launcher.labels = (launcher.config.labels)(
+            &launcher.config.alphabet,
+            rows.min(menu.items.len().saturating_sub(menu.scroll)),
+        );
+    }
     search.scrollbar = Scrollbar::new(
         Rect::new(
             list.right().saturating_sub(1),
@@ -151,7 +190,14 @@ pub(crate) fn palette(cx: &mut Canvas, area: Rect, menu: &mut Menu) -> Rect {
             )
         }
         .render(cx);
-        let hint = display_text(&item.hint);
+        let hint = display_text(
+            search
+                .launch_menu
+                .as_ref()
+                .filter(|launcher| !launcher.filtering)
+                .and_then(|launcher| launcher.labels.get(offset))
+                .unwrap_or(&item.hint),
+        );
         let width = (hint.width() as u16).min(layout.content.width / 2);
         cx.write(
             Rect::new(layout.content.right() - width, rect.y, width, 1),

@@ -22,7 +22,6 @@ pub(crate) struct MenuItem {
     pub keywords: String,
     pub action: Action,
     pub enabled: bool,
-    pub actions: Vec<MenuItem>,
 }
 
 impl MenuItem {
@@ -38,7 +37,6 @@ impl MenuItem {
             keywords: String::new(),
             action,
             enabled: true,
-            actions: Vec::new(),
         }
     }
 }
