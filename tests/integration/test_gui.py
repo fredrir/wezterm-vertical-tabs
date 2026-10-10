@@ -3,6 +3,7 @@
 import json
 import subprocess
 from contextlib import ExitStack, suppress
+from pathlib import Path
 
 import pytest
 
@@ -396,5 +397,159 @@ def test_quick_terminal_preserves_its_shell_without_creating_a_tab(
             )
         )
         assert len(gui.state()["tabs"]) == len(initial["tabs"])
+    finally:
+        probe.close()
+
+
+PROGRAMS = r"""
+local vtabs = assert(loadfile(os.getenv('WEZ_VTABS_PLUGIN')))()
+local record = 'pwd > "$WEZ_VTABS_SCENARIO/program-cwd"; echo $$ > "$WEZ_VTABS_SCENARIO/program-pid";'
+  .. ' echo "$PROGRAM_MARK" >> "$WEZ_VTABS_SCENARIO/program-starts"; exec cat -v > "$WEZ_VTABS_SCENARIO/program-input"'
+table.insert(cfg.keys,{key='F5',action=vtabs.action{QuickTerminal={
+  args={'/bin/sh','-c',record},set_environment_variables={PROGRAM_MARK='started'},width=0.5,height=0.6,
+}}})
+table.insert(cfg.keys,{key='F6',action=vtabs.action{QuickTerminal={args={'/bin/sh','-c','exec cat'}}}})
+return cfg
+"""
+
+
+def quick_programs_probe(wezterm_binaries, headless_display, tmp_path, domain, local_pane_layout):
+    probe = Probe(
+        tmp_path / domain,
+        wezterm_binaries["wezterm-gui"],
+        wezterm_binaries["wez-vtabs-store"],
+        domain,
+        server=wezterm_binaries["wezterm-mux-server"],
+        initial_size={"cols": 110, "rows": 40},
+        display=headless_display,
+    )
+    config = probe.config.read_text().replace("return cfg", PROGRAMS)
+    if local_pane_layout:
+        config = config.replace(
+            "no_serve_automatically=true}", "no_serve_automatically=true,local_pane_layout=true}"
+        )
+    probe.config.write_text(config)
+    return probe, GuiInput(probe, headless_display, tmp_path)
+
+
+def alive(pid):
+    try:
+        return Path(f"/proc/{pid}/stat").read_text().rsplit(") ", 1)[1][0] != "Z"
+    except FileNotFoundError:
+        return False
+
+
+@pytest.mark.gui
+@pytest.mark.parametrize("domain", ["local", "unix"])
+def test_quick_programs_start_fresh_in_the_active_pane_directory(
+    wezterm_binaries, headless_display, tmp_path, domain
+):
+    probe, gui = quick_programs_probe(wezterm_binaries, headless_display, tmp_path, domain, True)
+    project = probe.root / "project dir"
+    project.mkdir()
+
+    def quick(state):
+        return state["quick_terminal"]
+
+    def program_started(count):
+        starts = probe.root / "program-starts"
+        return starts.exists() and starts.read_text().count("started") == count
+
+    try:
+        initial = probe.start()
+        gui.attach()
+        # OSC 7 reports the directory percent-encoded, as remote shells do.
+        gui.text(
+            f'cd "{project}" && '
+            + r"""printf '\033]7;file://localhost%s\033\\' "$PWD" && """
+            + 'touch "$WEZ_VTABS_SCENARIO/moved"'
+        )
+        gui.key("Return")
+        probe.wait(lambda state: (probe.root / "moved").exists())
+
+        gui.key("F5")
+        opened = probe.wait(
+            lambda state: quick(state)["visible"] and quick(state)["program"] is not None
+        )
+        program = quick(opened)["program"]
+        assert quick(opened)["pane"] is None
+        assert opened["tabs"] == initial["tabs"]
+        width = opened["sidebar"]["width"] + opened["content"]["width"]
+        assert quick(opened)["bounds"]["width"] == pytest.approx(width * 0.5)
+        probe.wait(lambda state: program_started(1))
+        assert (probe.root / "program-cwd").read_text().strip() == str(project)
+        pid = int((probe.root / "program-pid").read_text())
+
+        # Escape reaches the program instead of dismissing it.
+        probe.wait(lambda state: (probe.root / "program-input").exists())
+        gui.key("Escape")
+        gui.key("Return")
+        probe.wait(lambda state: "^[" in (probe.root / "program-input").read_text())
+        assert quick(gui.state())["program"] == program
+
+        # Losing focus keeps the program, unlike the shell.
+        gui.command("windowminimize", gui.window)
+        minimized = probe.sample_for(0.5)
+        gui.command("windowactivate", "--sync", gui.window)
+        assert all(
+            quick(state)["program"] == program
+            for state in minimized + probe.sample_for(0.3)
+            if state["window"] == probe.window
+        )
+
+        # The same binding ends it; the next opening starts a new process.
+        gui.key("F5")
+        hidden = probe.wait(lambda state: not quick(state)["visible"])
+        assert quick(hidden)["program"] is None
+        probe.wait(lambda state: not alive(pid))
+        gui.key("F5")
+        probe.wait(lambda state: quick(state)["program"] not in (None, program))
+        probe.wait(lambda state: program_started(2))
+        pid = int((probe.root / "program-pid").read_text())
+
+        # The quick terminal shortcut replaces the program with the persistent shell.
+        gui.key("ctrl+grave")
+        shell = probe.wait(
+            lambda state: (
+                quick(state)["visible"]
+                and quick(state)["program"] is None
+                and quick(state)["pane"] is not None
+            )
+        )
+        assert quick(shell)["bounds"]["width"] == pytest.approx(width * 0.75)
+        probe.wait(lambda state: not alive(pid))
+
+        # Programs replace the shell and each other; the shell keeps running.
+        gui.key("F6")
+        other = quick(probe.wait(lambda state: quick(state)["program"] is not None))["program"]
+        gui.key("F5")
+        replaced = probe.wait(lambda state: quick(state)["program"] not in (None, other))
+        assert quick(replaced)["pane"] == quick(shell)["pane"]
+        probe.wait(lambda state: program_started(3))
+
+        # Exiting the program hides the surface without touching tabs.
+        probe.wait(lambda state: (probe.root / "program-input").exists())
+        gui.key("ctrl+d")
+        probe.wait(lambda state: not quick(state)["visible"] and quick(state)["program"] is None)
+        assert gui.state()["tabs"] == initial["tabs"]
+    finally:
+        probe.close()
+
+
+@pytest.mark.gui
+def test_quick_programs_do_nothing_where_the_domain_keeps_remote_layouts(
+    wezterm_binaries, headless_display, tmp_path
+):
+    probe, gui = quick_programs_probe(wezterm_binaries, headless_display, tmp_path, "unix", False)
+    try:
+        probe.start()
+        gui.attach()
+        gui.key("F5")
+        assert not any(
+            state["quick_terminal"]["visible"]
+            for state in probe.sample_for(1)
+            if state["window"] == probe.window
+        )
+        assert not (probe.root / "program-starts").exists()
     finally:
         probe.close()

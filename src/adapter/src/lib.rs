@@ -15,7 +15,7 @@ mod update;
 
 use crate::termwindow::ui_host::{
     Bounds, Command, Geometry, Input, Navigation, Projection, Provider, Reservation,
-    RoundedSurface, Snapshot, Surface, spawn_completed,
+    RoundedSurface, Snapshot, Surface, TerminalProgram, spawn_completed,
 };
 use mux::{BACKING_WORKSPACE_PREFIX, DETACHED_WORKSPACE};
 use std::{
@@ -312,11 +312,7 @@ impl Adapter {
                 self.palette_commands.clear();
                 self.launcher_entries.clear();
             }
-            app::Command::QuickTerminal => {
-                self.cancel_paste();
-                self.app.ui_mut().close_settings();
-                self.commands.push(Command::ToggleTerminalOverlay);
-            }
+            app::Command::QuickTerminal => self.show_terminal(Command::ToggleTerminalOverlay),
             app::Command::Refresh => {
                 std::thread::spawn(config::reload);
                 self.app.ui_mut().invalidate();
@@ -481,6 +477,12 @@ impl Adapter {
     fn cancel_paste(&mut self) {
         self.pending_paste = None;
         self.input_epoch = self.input_epoch.wrapping_add(1);
+    }
+
+    fn show_terminal(&mut self, command: Command) {
+        self.cancel_paste();
+        self.app.ui_mut().close_settings();
+        self.commands.push(command);
     }
 
     fn expire_paste(&mut self, now: Instant) {
@@ -1362,7 +1364,7 @@ impl Provider for Adapter {
             launcher.selected,
         );
     }
-    fn terminal_input(&mut self, input: Input<'_>) -> bool {
+    fn terminal_input(&mut self, input: Input<'_>, program: bool) -> bool {
         let (code, mods, down) = match input {
             Input::RawKey(key) => {
                 let mods = modifiers(key.modifiers);
@@ -1379,19 +1381,20 @@ impl Provider for Adapter {
             _ => return false,
         };
         let Some(code) = code else { return false };
-        if code == ui::Key::Escape && mods == ui::Modifiers::default() {
-            if down {
-                self.commands.push(Command::ToggleTerminalOverlay);
+        let command = if code == ui::Key::Escape && mods == ui::Modifiers::default() && !program {
+            Command::HideTerminalOverlay
+        } else {
+            match core::keybinds::action(
+                &self.app.model().settings,
+                &ui::shortcut_chord(&code, mods),
+            ) {
+                Some("quick_terminal") => Command::ToggleTerminalOverlay,
+                Some("close") => Command::HideTerminalOverlay,
+                _ => return false,
             }
-            return true;
-        }
-        let action =
-            core::keybinds::action(&self.app.model().settings, &ui::shortcut_chord(&code, mods));
-        if !matches!(action, Some("quick_terminal" | "close")) {
-            return false;
-        }
+        };
         if down {
-            self.commands.push(Command::ToggleTerminalOverlay);
+            self.commands.push(command);
         }
         true
     }
@@ -1746,6 +1749,9 @@ impl Provider for Adapter {
                 Ok(core::Action::Ui(core::UiAction::QuickTerminal)) => {
                     self.command(app::Command::QuickTerminal)
                 }
+                Ok(core::Action::Ui(core::UiAction::QuickProgram(program))) => {
+                    self.show_terminal(Command::ToggleTerminalProgram(terminal_program(program)))
+                }
                 Ok(core::Action::Ui(core::UiAction::RetryStorage)) => self.app.retry_storage(),
                 Ok(core::Action::Intent(intent)) => self.dispatch(intent),
                 Err(err) => log::warn!("tabs action: {err}"),
@@ -2012,6 +2018,18 @@ fn spawn(launch: core::LaunchSpec) -> config::keyassignment::SpawnCommand {
             .map(config::keyassignment::SpawnTabDomain::DomainName)
             .unwrap_or(config::keyassignment::SpawnTabDomain::CurrentPaneDomain),
         ..Default::default()
+    }
+}
+fn terminal_program(program: core::QuickProgram) -> TerminalProgram {
+    TerminalProgram {
+        spawn: config::keyassignment::SpawnCommand {
+            args: (!program.args.is_empty()).then_some(program.args),
+            cwd: program.cwd.map(Into::into),
+            set_environment_variables: program.set_environment_variables.into_iter().collect(),
+            ..Default::default()
+        },
+        width: program.width,
+        height: program.height,
     }
 }
 fn modifiers(m: window::Modifiers) -> ui::Modifiers {

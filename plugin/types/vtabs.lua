@@ -61,6 +61,14 @@
 ---@field id string
 ---@field label string
 
+--- A fresh program in the quick terminal surface, in the active pane's domain; ends when hidden.
+---@class TabsQuickProgram
+---@field args? string[] The domain's default program when empty.
+---@field cwd? string The active pane's directory when omitted.
+---@field height? number Fraction of the window height, above 0 and at most 1; 0.75 when omitted.
+---@field set_environment_variables? table<string, string>
+---@field width? number Fraction of the window width, above 0 and at most 1; 0.75 when omitted.
+
 ---@alias TabsRailMode 'expanded'|'hidden'
 
 ---@class TabsRoutingRule
@@ -125,7 +133,7 @@
 ---@field width? integer
 
 --- Sidebar surfaces opened by `vtabs.action`, besides domain intents.
----@alias TabsUiAction 'settings'|'create_space'|'navigator'|'quick_terminal'|'retry_storage'
+---@alias TabsUiAction 'settings'|'create_space'|'navigator'|'quick_terminal'|'retry_storage'|{ QuickTerminal: TabsQuickProgram }
 
 --- Input to the window-level `theme` and `footer` hooks.
 ---@class TabsWindowContext

@@ -7,7 +7,7 @@ mod model;
 mod routing;
 pub mod settings;
 
-pub use contract::{Action, UiAction, WindowContext};
+pub use contract::{Action, QuickProgram, UiAction, WindowContext};
 pub use managed::Managed;
 pub use model::*;
 pub use routing::{MatchField, RoutingRule, SpaceTemplate};

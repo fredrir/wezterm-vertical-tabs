@@ -65,6 +65,31 @@ fn lua_actions_are_typed_before_they_reach_a_window() {
         core::Action::Intent(core::Intent::SelectSpace("work".into()))
     );
     assert!(action("return 'navigate'").is_err());
+    assert_eq!(
+        action("return 'quick_terminal'").unwrap(),
+        core::Action::Ui(core::UiAction::QuickTerminal)
+    );
+    assert_eq!(
+        action("return { QuickTerminal = { args = { 'yazi' }, cwd = '/tmp', height = 1 } }")
+            .unwrap(),
+        core::Action::Ui(core::UiAction::QuickProgram(core::QuickProgram {
+            args: vec!["yazi".into()],
+            cwd: Some("/tmp".into()),
+            height: Some(1.),
+            ..Default::default()
+        }))
+    );
+    assert_eq!(
+        action("return { QuickTerminal = {} }").unwrap(),
+        core::Action::Ui(core::UiAction::QuickProgram(Default::default()))
+    );
+    for invalid in [
+        "{ width = 0 }",
+        "{ height = 1.5 }",
+        "{ args = { 'lazygit' }, size = 0.5 }",
+    ] {
+        assert!(action(&format!("return {{ QuickTerminal = {invalid} }}")).is_err());
+    }
 }
 #[test]
 fn managed_file_tables_round_trip_through_the_registry() {

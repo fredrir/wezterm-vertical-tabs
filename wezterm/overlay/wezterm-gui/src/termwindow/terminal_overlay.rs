@@ -1,13 +1,18 @@
-//! A persistent PTY surface owned by the existing GUI window, outside its tab projection.
-use super::ui_host::Bounds;
+//! A PTY surface owned by the existing GUI window, outside its tab projection: a persistent
+//! shell, or a program that ends when hidden.
+use super::ui_host::{Bounds, TerminalProgram};
 use super::{TermWindow, TermWindowNotif};
 use crate::quad::{HeapQuadAllocator, TripleLayerQuadAllocator};
-use mux::pane::{Pane, PaneId};
+use mux::domain::{Domain, DomainState};
+use mux::pane::{CachePolicy, Pane, PaneId};
 use mux::tab::PositionedPane;
 use mux::Mux;
+use portable_pty::CommandBuilder;
 use std::{cell::RefCell, rc::Rc, sync::Arc};
 use wezterm_term::TerminalSize;
 use window::{color::LinearRgba, WindowOps};
+
+const SHELL_SIZE: (f32, f32) = (0.75, 0.75);
 
 #[derive(Default)]
 pub(super) struct TerminalOverlay(Rc<RefCell<State>>);
@@ -17,17 +22,121 @@ struct State {
     visible: bool,
     pending: bool,
     pane: Option<Arc<dyn Pane>>,
+    /// Shown instead of the shell; exists only while visible.
+    program: Option<Program>,
+    programs: u64,
+}
+
+struct Program {
+    id: u64,
+    spec: TerminalProgram,
+    pane: Option<Arc<dyn Pane>>,
+}
+
+struct Launch {
+    domain: Arc<dyn Domain>,
+    command: Option<CommandBuilder>,
+    cwd: Option<String>,
+}
+
+#[derive(Clone, Copy)]
+enum Slot {
+    Shell,
+    Program(u64),
+}
+
+impl State {
+    fn shown(&self) -> Option<Arc<dyn Pane>> {
+        if !self.visible {
+            return None;
+        }
+        match &self.program {
+            Some(program) => program.pane.clone(),
+            None => self.pane.clone(),
+        }
+    }
+
+    fn size(&self) -> (f32, f32) {
+        self.program.as_ref().map_or(SHELL_SIZE, |program| {
+            (
+                program.spec.width.unwrap_or(SHELL_SIZE.0),
+                program.spec.height.unwrap_or(SHELL_SIZE.1),
+            )
+        })
+    }
+
+    fn wants(&self, slot: Slot) -> bool {
+        match slot {
+            Slot::Shell => self.pending,
+            Slot::Program(id) => self.program.as_ref().is_some_and(|program| program.id == id),
+        }
+    }
+
+    fn settle(&mut self, slot: Slot, pane: Option<Arc<dyn Pane>>) {
+        match (slot, pane) {
+            (Slot::Shell, pane) => {
+                self.pending = false;
+                self.visible &= pane.is_some() || self.program.is_some();
+                self.pane = pane;
+            }
+            (Slot::Program(_), Some(pane)) => {
+                if let Some(program) = &mut self.program {
+                    program.pane = Some(pane);
+                }
+            }
+            (Slot::Program(_), None) => {
+                self.program = None;
+                self.visible = false;
+            }
+        }
+    }
+}
+
+fn remove(pane: &Arc<dyn Pane>) {
+    match Mux::try_get() {
+        Some(mux) => mux.remove_pane(pane.pane_id()),
+        None => pane.kill(),
+    }
 }
 
 impl Drop for State {
     fn drop(&mut self) {
-        if let Some(pane) = self.pane.take() {
-            pane.kill();
-            if let Some(mux) = Mux::try_get() {
-                mux.remove_pane(pane.pane_id());
-            }
+        let program = self.program.take().and_then(|program| program.pane);
+        for pane in self.pane.take().into_iter().chain(program) {
+            remove(&pane);
         }
     }
+}
+
+/// Client domains spawn panes outside tabs only with `local_pane_layout`.
+fn spawns_untabbed(domain: &Arc<dyn Domain>) -> bool {
+    if domain
+        .downcast_ref::<wezterm_client::domain::ClientDomain>()
+        .is_none()
+    {
+        return true;
+    }
+    let config = config::configuration();
+    let name = domain.domain_name();
+    config
+        .unix_domains
+        .iter()
+        .any(|unix| unix.name == name && unix.local_pane_layout)
+        || config
+            .tls_clients
+            .iter()
+            .any(|tls| tls.name == name && tls.local_pane_layout)
+        || config
+            .ssh_domains()
+            .iter()
+            .any(|ssh| ssh.name == name && ssh.local_pane_layout)
+}
+
+/// Remote panes report their host, which a decoded path doesn't need.
+fn directory(url: &url::Url) -> Option<String> {
+    let mut url = url.clone();
+    url.set_host(None).ok()?;
+    url.to_file_path().ok()?.into_os_string().into_string().ok()
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -38,12 +147,18 @@ struct Layout {
 }
 
 impl Layout {
-    fn new(bounds: Bounds, cell_width: f32, cell_height: f32, dpi: u32) -> Self {
+    fn new(
+        bounds: Bounds,
+        (width, height): (f32, f32),
+        cell_width: f32,
+        cell_height: f32,
+        dpi: u32,
+    ) -> Self {
         let frame = Bounds {
-            x: bounds.x + bounds.width / 8.,
-            y: bounds.y + bounds.height / 8.,
-            width: bounds.width * 0.75,
-            height: bounds.height * 0.75,
+            x: bounds.x + bounds.width * (1. - width) / 2.,
+            y: bounds.y + bounds.height * (1. - height) / 2.,
+            width: bounds.width * width,
+            height: bounds.height * height,
         };
         let padding = (12. * dpi as f32 / 96.)
             .min(frame.width / 4.)
@@ -79,7 +194,9 @@ impl TermWindow {
             .iter()
             .chain(self.vtabs_suspended.values())
             .all(|ui| {
-                ui.terminal.0.borrow().pane.as_ref().map_or(true, |pane| {
+                let state = ui.terminal.0.borrow();
+                let program = state.program.as_ref().and_then(|program| program.pane.as_ref());
+                state.pane.iter().chain(program).all(|pane| {
                     pane.can_close_without_prompting(mux::pane::CloseReason::Window)
                 })
             })
@@ -88,6 +205,9 @@ impl TermWindow {
     fn terminal_overlay_layout(&self) -> Layout {
         Layout::new(
             self.vtabs_geometry().ui_bounds(true),
+            self.ui_host
+                .as_ref()
+                .map_or(SHELL_SIZE, |ui| ui.terminal.0.borrow().size()),
             self.render_metrics.cell_size.width as f32,
             self.render_metrics.cell_size.height as f32,
             self.dimensions.dpi as u32,
@@ -104,10 +224,15 @@ impl TermWindow {
             .is_some_and(|ui| ui.terminal.0.borrow().visible)
     }
 
+    pub(super) fn terminal_overlay_program(&self) -> bool {
+        self.ui_host.as_ref().is_some_and(|ui| {
+            let state = ui.terminal.0.borrow();
+            state.visible && state.program.is_some()
+        })
+    }
+
     pub(super) fn terminal_overlay_pane(&self) -> Option<Arc<dyn Pane>> {
-        let ui = self.ui_host.as_ref()?;
-        let state = ui.terminal.0.borrow();
-        state.visible.then(|| state.pane.clone()).flatten()
+        self.ui_host.as_ref()?.terminal.0.borrow().shown()
     }
 
     pub(super) fn terminal_overlay_content(&self, pane_id: PaneId) -> Option<Bounds> {
@@ -156,10 +281,16 @@ impl TermWindow {
             return;
         }
         if let Some(ui) = &self.ui_host {
-            let mut state = ui.terminal.0.borrow_mut();
-            state.visible = false;
-            if let Some(pane) = &state.pane {
-                pane.focus_changed(false);
+            let program = {
+                let mut state = ui.terminal.0.borrow_mut();
+                state.visible = false;
+                if let Some(pane) = &state.pane {
+                    pane.focus_changed(false);
+                }
+                state.program.take().and_then(|program| program.pane)
+            };
+            if let Some(pane) = program {
+                remove(&pane);
             }
         }
         self.current_mouse_capture = None;
@@ -174,10 +305,72 @@ impl TermWindow {
     }
 
     pub(super) fn toggle_terminal_overlay(&mut self) {
-        if self.terminal_overlay_visible() {
+        if self.terminal_overlay_visible() && !self.terminal_overlay_program() {
             self.hide_terminal_overlay();
             return;
         }
+        self.show_terminal_overlay(None);
+    }
+
+    pub(super) fn toggle_terminal_program(&mut self, program: TerminalProgram) {
+        let shown = self.ui_host.as_ref().is_some_and(|ui| {
+            let state = ui.terminal.0.borrow();
+            state.visible
+                && state
+                    .program
+                    .as_ref()
+                    .is_some_and(|current| current.spec == program)
+        });
+        if shown {
+            self.hide_terminal_overlay();
+            return;
+        }
+        let Some(launch) = self.terminal_program_launch(&program) else {
+            return;
+        };
+        self.show_terminal_overlay(Some((program, launch)));
+    }
+
+    /// Resolved like a split of the active tab's pane; `None` where its domain can't host one.
+    fn terminal_program_launch(&self, program: &TerminalProgram) -> Option<Launch> {
+        let mux = Mux::get();
+        let current = mux
+            .get_active_tab_for_window(self.mux_window_id)
+            .and_then(|tab| tab.get_active_pane());
+        let mut spawn = program.spawn.clone();
+        if let Some(ui) = &self.ui_host {
+            ui.provider.prepare_command(false, &mut spawn);
+        }
+        let domain = mux
+            .resolve_spawn_tab_domain(current.as_ref().map(|pane| pane.pane_id()), &spawn.domain)
+            .map_err(|error| log::warn!("Quick terminal: {error:#}"))
+            .ok()
+            .filter(spawns_untabbed)?;
+        let cwd = match spawn.cwd {
+            Some(cwd) => Some(cwd.to_string_lossy().into_owned()),
+            None => current
+                .filter(|pane| pane.domain_id() == domain.domain_id())
+                .and_then(|pane| pane.get_current_working_dir(CachePolicy::FetchImmediate))
+                .and_then(|url| directory(&url)),
+        };
+        let (args, env) = (spawn.args, spawn.set_environment_variables);
+        let command = (args.is_some() || !env.is_empty()).then(|| {
+            let mut command = args
+                .map(|args| CommandBuilder::from_argv(args.into_iter().map(Into::into).collect()))
+                .unwrap_or_else(CommandBuilder::new_default_prog);
+            for (key, value) in env {
+                command.env(key, value);
+            }
+            command
+        });
+        Some(Launch {
+            domain,
+            command,
+            cwd,
+        })
+    }
+
+    fn show_terminal_overlay(&mut self, program: Option<(TerminalProgram, Launch)>) {
         let Some(window) = self.window.clone() else {
             return;
         };
@@ -191,18 +384,44 @@ impl TermWindow {
         self.current_mouse_capture = None;
         self.current_mouse_buttons.clear();
         self.dragging = None;
+        let previous = state_ref
+            .borrow_mut()
+            .program
+            .take()
+            .and_then(|program| program.pane);
+        if let Some(pane) = previous {
+            remove(&pane);
+        }
         let mut state = state_ref.borrow_mut();
-        if state
+        state.visible = true;
+        window.invalidate();
+        if let Some((spec, launch)) = program {
+            state.programs += 1;
+            let id = state.programs;
+            state.program = Some(Program {
+                id,
+                spec,
+                pane: None,
+            });
+            drop(state);
+            self.spawn_terminal_pane(
+                &state_ref,
+                Slot::Program(id),
+                Ok(launch.domain),
+                launch.command,
+                launch.cwd,
+            );
+            return;
+        }
+        let dead = state
             .pane
             .as_ref()
-            .is_some_and(|pane| pane.is_dead() || Mux::get().get_pane(pane.pane_id()).is_none())
-        {
+            .is_some_and(|pane| pane.is_dead() || Mux::get().get_pane(pane.pane_id()).is_none());
+        if dead {
             if let Some(pane) = state.pane.take() {
                 Mux::get().remove_pane(pane.pane_id());
             }
         }
-        state.visible = true;
-        window.invalidate();
         if let Some(pane) = &state.pane {
             pane.focus_changed(true);
             return;
@@ -212,42 +431,64 @@ impl TermWindow {
         }
         state.pending = true;
         drop(state);
-        let state = Rc::downgrade(&state_ref);
-        let size = self.terminal_overlay_layout().size;
-        let config = self.config.clone();
         let mut spawn = config::keyassignment::SpawnCommand::default();
         if let Some(ui) = &self.ui_host {
             ui.provider.prepare_command(false, &mut spawn);
         }
-        let mut command = portable_pty::CommandBuilder::new_default_prog();
+        let mut command = CommandBuilder::new_default_prog();
         for (key, value) in spawn.set_environment_variables {
             command.env(key, value);
         }
+        let domain = Mux::get()
+            .get_domain_by_name("local")
+            .ok_or_else(|| anyhow::anyhow!("Local terminal domain is unavailable"));
+        self.spawn_terminal_pane(&state_ref, Slot::Shell, domain, Some(command), None);
+    }
+
+    /// A pane arriving after its slot stopped wanting it is removed.
+    fn spawn_terminal_pane(
+        &self,
+        state: &Rc<RefCell<State>>,
+        slot: Slot,
+        domain: anyhow::Result<Arc<dyn Domain>>,
+        command: Option<CommandBuilder>,
+        cwd: Option<String>,
+    ) {
+        let Some(window) = self.window.clone() else {
+            return;
+        };
+        let state = Rc::downgrade(state);
+        let size = self.terminal_overlay_layout().size;
+        let config = self.config.clone();
         let window_id = self.mux_window_id;
         promise::spawn::spawn(async move {
             let result = async {
-                let domain = Mux::get()
-                    .get_domain_by_name("local")
-                    .ok_or_else(|| anyhow::anyhow!("Local terminal domain is unavailable"))?;
-                domain.spawn_pane(size, Some(command), None).await
+                let domain = domain?;
+                if domain.state() == DomainState::Detached {
+                    domain.attach(Some(window_id)).await?;
+                }
+                domain.spawn_pane(size, command, cwd).await
             }
             .await;
-            let Some(state) = state.upgrade() else {
+            let Some(state) = state.upgrade().filter(|state| state.borrow().wants(slot)) else {
                 if let Ok(pane) = result {
-                    Mux::get().remove_pane(pane.pane_id());
+                    remove(&pane);
                 }
                 return;
             };
             let mut state = state.borrow_mut();
-            state.pending = false;
             match result {
                 Ok(pane) => {
                     pane.set_config(Arc::new(config::TermConfig::with_config(config)));
-                    pane.focus_changed(state.visible);
-                    state.pane = Some(pane);
+                    state.settle(slot, Some(pane.clone()));
+                    pane.focus_changed(
+                        state
+                            .shown()
+                            .is_some_and(|shown| shown.pane_id() == pane.pane_id()),
+                    );
                 }
                 Err(error) => {
-                    state.visible = false;
+                    state.settle(slot, None);
                     window.notify(TermWindowNotif::Apply(Box::new(move |tw| {
                         tw.vtabs_message_for(
                             window_id,
@@ -283,13 +524,21 @@ impl TermWindow {
 
     pub(crate) fn inspect_terminal_overlay(&self) -> serde_json::Value {
         let layout = self.terminal_overlay_layout();
-        let pane = self
-            .ui_host
-            .as_ref()
-            .and_then(|ui| ui.terminal.0.borrow().pane.clone());
+        let (pane, program) = self.ui_host.as_ref().map_or((None, None), |ui| {
+            let state = ui.terminal.0.borrow();
+            (
+                state.pane.as_ref().map(|pane| pane.pane_id()),
+                state
+                    .program
+                    .as_ref()
+                    .and_then(|program| program.pane.as_ref())
+                    .map(|pane| pane.pane_id()),
+            )
+        });
         serde_json::json!({
             "visible": self.terminal_overlay_visible(),
-            "pane": pane.as_ref().map(|pane| pane.pane_id()),
+            "pane": pane,
+            "program": program,
             "bounds": {"x": layout.frame.x, "y": layout.frame.y, "width": layout.frame.width, "height": layout.frame.height},
             "content": {"x": layout.content.x, "y": layout.content.y, "width": layout.content.width, "height": layout.content.height},
             "cols": layout.size.cols, "rows": layout.size.rows,

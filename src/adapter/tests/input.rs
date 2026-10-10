@@ -855,41 +855,46 @@ fn quick_terminal_shortcut_opens_from_settings_and_leaves_terminal_keys_alone() 
     ));
     assert!(!adapter.content_page());
     assert!(!adapter.keyboard_focus());
-    assert!(adapter.terminal_input(Input::RawKey(&raw(
-        KeyCode::Char('`'),
-        window::Modifiers::CTRL,
+    assert!(adapter.terminal_input(
+        Input::RawKey(&raw(KeyCode::Char('`'), window::Modifiers::CTRL, false)),
         false
-    ))));
+    ));
     assert!(adapter.commands().is_empty());
     for (key, mods) in [
         (KeyCode::Char('a'), window::Modifiers::NONE),
         (KeyCode::Char('c'), window::Modifiers::CTRL),
         (KeyCode::Char('t'), window::Modifiers::SUPER),
     ] {
-        assert!(!adapter.terminal_input(Input::RawKey(&raw(key, mods, true))));
+        assert!(!adapter.terminal_input(Input::RawKey(&raw(key, mods, true)), false));
     }
     assert!(adapter.commands().is_empty());
     // Escape dismisses the overlay instead of reaching the pane inside it.
     let escape = raw(KeyCode::Char('\u{1b}'), window::Modifiers::NONE, true);
-    assert!(adapter.terminal_input(Input::RawKey(&escape)));
+    assert!(adapter.terminal_input(Input::RawKey(&escape), false));
     assert!(matches!(
         adapter.commands().as_slice(),
-        [Command::ToggleTerminalOverlay]
+        [Command::HideTerminalOverlay]
     ));
-    assert!(adapter.terminal_input(Input::RawKey(&raw(
-        KeyCode::Char('\u{1b}'),
-        window::Modifiers::NONE,
+    assert!(adapter.terminal_input(
+        Input::RawKey(&raw(
+            KeyCode::Char('\u{1b}'),
+            window::Modifiers::NONE,
+            false
+        )),
         false
-    ))));
+    ));
     assert!(adapter.commands().is_empty());
     // Escape keeps its terminal meaning when modified.
-    assert!(!adapter.terminal_input(Input::RawKey(&raw(
-        KeyCode::Char('\u{1b}'),
-        window::Modifiers::SHIFT,
-        true
-    ))));
+    assert!(!adapter.terminal_input(
+        Input::RawKey(&raw(
+            KeyCode::Char('\u{1b}'),
+            window::Modifiers::SHIFT,
+            true
+        )),
+        false
+    ));
     assert!(adapter.commands().is_empty());
-    assert!(adapter.terminal_input(Input::RawKey(&toggle)));
+    assert!(adapter.terminal_input(Input::RawKey(&toggle), false));
     assert!(matches!(
         adapter.commands().as_slice(),
         [Command::ToggleTerminalOverlay]
@@ -910,13 +915,13 @@ fn quick_terminal_respects_remapping_and_disabled_shortcuts() {
     let original = raw(KeyCode::Char('`'), window::Modifiers::CTRL, true);
     let replacement = raw(KeyCode::Function(12), window::Modifiers::NONE, true);
     assert!(!adapter.input(Input::RawKey(&original)));
-    assert!(!adapter.terminal_input(Input::RawKey(&original)));
+    assert!(!adapter.terminal_input(Input::RawKey(&original), false));
     assert!(adapter.input(Input::RawKey(&replacement)));
     assert!(matches!(
         adapter.commands().as_slice(),
         [Command::ToggleTerminalOverlay]
     ));
-    assert!(adapter.terminal_input(Input::RawKey(&replacement)));
+    assert!(adapter.terminal_input(Input::RawKey(&replacement), false));
     assert!(matches!(
         adapter.commands().as_slice(),
         [Command::ToggleTerminalOverlay]
@@ -929,10 +934,57 @@ fn quick_terminal_respects_remapping_and_disabled_shortcuts() {
         })
         .unwrap();
     assert!(!adapter.input(Input::RawKey(&replacement)));
-    assert!(!adapter.terminal_input(Input::RawKey(&replacement)));
+    assert!(!adapter.terminal_input(Input::RawKey(&replacement), false));
     adapter.message(serde_json::json!({"action": "quick_terminal"}));
     assert!(matches!(
         adapter.commands().as_slice(),
         [Command::ToggleTerminalOverlay]
     ));
+}
+
+#[test]
+fn quick_programs_receive_escape_and_toggle_by_their_command() {
+    config::designate_this_as_the_main_thread();
+    let mut adapter = Adapter::new(9917);
+    adapter.app.ui_mut().open_settings();
+    let program = serde_json::json!({"QuickTerminal": {
+        "args": ["lazygit"],
+        "set_environment_variables": {"THEME": "dark"},
+        "width": 0.9,
+    }});
+    adapter.message(serde_json::json!({"action": program}));
+    let commands = adapter.commands();
+    let [Command::ToggleTerminalProgram(program)] = commands.as_slice() else {
+        panic!("expected a quick program");
+    };
+    assert_eq!(program.spawn.args, Some(vec!["lazygit".to_string()]));
+    assert_eq!(program.spawn.cwd, None);
+    assert_eq!(
+        program.spawn.set_environment_variables,
+        HashMap::from([("THEME".to_string(), "dark".to_string())])
+    );
+    assert_eq!(
+        program.spawn.domain,
+        config::keyassignment::SpawnTabDomain::CurrentPaneDomain
+    );
+    assert_eq!((program.width, program.height), (Some(0.9), None));
+    assert!(!adapter.content_page());
+
+    let escape = raw(KeyCode::Char('\u{1b}'), window::Modifiers::NONE, true);
+    assert!(!adapter.terminal_input(Input::RawKey(&escape), true));
+    assert!(adapter.commands().is_empty());
+    let toggle = raw(KeyCode::Char('`'), window::Modifiers::CTRL, true);
+    assert!(adapter.terminal_input(Input::RawKey(&toggle), true));
+    assert!(matches!(
+        adapter.commands().as_slice(),
+        [Command::ToggleTerminalOverlay]
+    ));
+    let close = raw(KeyCode::Char('w'), window::Modifiers::SUPER, true);
+    for program in [false, true] {
+        assert!(adapter.terminal_input(Input::RawKey(&close), program));
+        assert!(matches!(
+            adapter.commands().as_slice(),
+            [Command::HideTerminalOverlay]
+        ));
+    }
 }

@@ -97,6 +97,26 @@ return config
 | Session | One local shell per window; continues running while hidden; ends when its window closes |
 | Lua action | `vtabs.action("quick_terminal")`; available with plugin shortcuts disabled |
 
+**Quick programs**
+
+```lua
+config.keys = {
+  { key = 'g', mods = 'CMD', action = vtabs.action { QuickTerminal = { args = { 'lazygit' }, width = 0.9, height = 0.9 } } },
+  { key = 'y', mods = 'CMD', action = vtabs.action { QuickTerminal = { args = { 'yazi' } } } },
+}
+```
+
+| Name | Value |
+| --- | --- |
+| `args` | Program and arguments; default the domain's default program |
+| `cwd` | Default the active pane's directory |
+| `set_environment_variables` | Added to the program's environment |
+| `width`, `height` | Window fraction above 0, at most 1; default `0.75` |
+| Domain | Active pane's; unix, TLS and SSH mux domains need `local_pane_layout`, otherwise nothing opens |
+| Session | Starts fresh on each opening; ends when hidden or when the program exits |
+| Toggle | Same binding hides; another binding or the quick terminal shortcut replaces it |
+| Hide | Repeat binding, click outside, close-tab shortcut; Escape goes to the program; stays open on focus loss |
+
 **Launcher**
 
 ```lua
@@ -220,6 +240,7 @@ vtabs.apply_to_config(config, {
 | `'create_space'`                                                | Open the create-space form             |
 | `'navigator'`                                                   | Open the visible-tab navigator         |
 | `'retry_storage'`                                               | Retry a failed durable operation       |
+| `{ QuickTerminal = { args = { 'lazygit' } } }`                  | Toggle a quick program                 |
 | `{ CreateSpace = { name = 'Work' } }`                           | Create and select a space              |
 | `{ SelectSpace = 'work' }`                                      | Select a space by stable ID            |
 | `{ RenameSpace = { id = 'work', name = 'Projects' } }`          | Rename a space                         |

@@ -176,8 +176,18 @@ pub enum Input<'a> {
     Composition(&'a DeadKeyStatus),
     Focus(bool),
 }
+/// Runs in place of the overlay's shell; an omitted fraction keeps the shell's size.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TerminalProgram {
+    pub spawn: SpawnCommand,
+    pub width: Option<f32>,
+    pub height: Option<f32>,
+}
 pub enum Command {
     ToggleTerminalOverlay,
+    HideTerminalOverlay,
+    /// The same program hides; anything else visible is replaced.
+    ToggleTerminalProgram(TerminalProgram),
     OpenCommandPalette,
     RunPaletteCommand(crate::commands::ExpandedCommand),
     RunLauncherEntry(crate::overlay::launcher::Entry),
@@ -217,7 +227,8 @@ pub trait Provider {
         entries: crate::overlay::launcher::LauncherEntries,
     );
     fn input(&mut self, input: Input<'_>) -> bool;
-    fn terminal_input(&mut self, input: Input<'_>) -> bool;
+    /// A visible program, unlike the shell, receives Escape.
+    fn terminal_input(&mut self, input: Input<'_>, program: bool) -> bool;
     fn message(&mut self, message: serde_json::Value);
     fn projection(&self) -> Projection;
     fn commands(&mut self) -> Vec<Command>;
@@ -1250,7 +1261,9 @@ impl TermWindow {
         }
     }
     pub fn vtabs_message(&mut self, message: serde_json::Value) {
-        if message.get("action").is_some_and(|action| action != "quick_terminal") {
+        if message.get("action").is_some_and(|action| {
+            action != "quick_terminal" && action.get("QuickTerminal").is_none()
+        }) {
             self.hide_terminal_overlay();
         }
         let before = self.vtabs_reservation();
@@ -1264,7 +1277,10 @@ impl TermWindow {
         self.vtabs_sync();
         if self.terminal_overlay_visible() {
             match &input {
-                Input::Focus(false) => self.hide_terminal_overlay(),
+                // A program ends when hidden, so it outlives focus changes.
+                Input::Focus(false) if !self.terminal_overlay_program() => {
+                    self.hide_terminal_overlay()
+                }
                 Input::Mouse(event, _) => {
                     if !self.terminal_overlay_bounds().contains(event.coords.x as f32, event.coords.y as f32) {
                         if matches!(self.current_mouse_capture, Some(super::MouseCapture::TerminalPane(_)))
@@ -1280,7 +1296,8 @@ impl TermWindow {
                     return false;
                 }
                 Input::Key(_) | Input::RawKey(_) => {
-                    let consumed = self.ui_host.as_mut().is_some_and(|ui| ui.provider.terminal_input(input));
+                    let program = self.terminal_overlay_program();
+                    let consumed = self.ui_host.as_mut().is_some_and(|ui| ui.provider.terminal_input(input, program));
                     if consumed {
                         let commands = self.ui_host.as_mut().unwrap().provider.commands();
                         self.vtabs_commands(commands);
@@ -1368,6 +1385,8 @@ impl TermWindow {
             let mux = Mux::get();
             match command {
                 Command::ToggleTerminalOverlay => self.toggle_terminal_overlay(),
+                Command::HideTerminalOverlay => self.hide_terminal_overlay(),
+                Command::ToggleTerminalProgram(program) => self.toggle_terminal_program(program),
                 Command::Activate(id) => {
                     if let Some(mut window) = mux.get_window_mut(self.mux_window_id) {
                         let idx = window.iter_tabs().position(|tab| tab.tab_id() == id);
