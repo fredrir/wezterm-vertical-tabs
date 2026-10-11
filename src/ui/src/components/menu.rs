@@ -1,4 +1,4 @@
-use crate::components::{ROW_INSET, SURFACE_RADIUS, anchored, centered, panel};
+use crate::components::{EDGE_INSET, SURFACE_RADIUS, anchored, centered, panel};
 use crate::element::ElementId;
 use crate::icons;
 use crate::input::display_text;
@@ -126,8 +126,8 @@ pub(crate) fn dropdown(cx: &mut Canvas, area: Rect, menu: &mut Menu) -> Rect {
     );
     cx.clear(rect);
     let fill = theme.card;
-    cx.surface(rect, theme.lift(fill, 14), SURFACE_RADIUS, 0.0);
-    cx.surface(rect, fill, SURFACE_RADIUS - 1.0, 1.0);
+    cx.surface(rect, theme.lift(fill, 14), SURFACE_RADIUS, EDGE_INSET);
+    cx.surface(rect, fill, SURFACE_RADIUS - 1.0, EDGE_INSET + 1.0);
     let rows = usize::from(height.saturating_sub(2) / line).max(1);
     menu.follow_selection(rows);
     for (offset, item) in menu.items.iter().enumerate().skip(menu.scroll).take(rows) {
@@ -145,7 +145,7 @@ pub(crate) fn dropdown(cx: &mut Canvas, area: Rect, menu: &mut Menu) -> Rect {
         } else {
             fill
         };
-        cx.surface(row, row_fill, SURFACE_RADIUS, ROW_INSET);
+        cx.surface(row, row_fill, SURFACE_RADIUS, EDGE_INSET);
         let checked = menu.checked == Some(offset);
         let style = theme.base().bg(row_fill);
         cx.write(

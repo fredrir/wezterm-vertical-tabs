@@ -2,7 +2,7 @@ use crate::SidebarUi;
 use crate::components::button::{Button, Tone};
 use crate::components::scrollbar::Scrollbar;
 use crate::components::text_input::TextInput;
-use crate::components::{ICON_CELLS, ROW_INSET, SURFACE_RADIUS, list};
+use crate::components::{EDGE_INSET, ICON_CELLS, SURFACE_RADIUS, list};
 use crate::element::{ElementId, ScrollArea};
 use crate::events::EditorSlot;
 use crate::icons;
@@ -362,7 +362,7 @@ impl SettingsPage {
 
     fn search(&mut self, rect: Rect, overlay_open: bool, cx: &mut Canvas) {
         let theme = cx.theme;
-        cx.surface(rect, theme.card, SURFACE_RADIUS, ROW_INSET);
+        cx.surface(rect, theme.card, SURFACE_RADIUS, EDGE_INSET);
         let lead = ICON_CELLS.min(rect.width.saturating_sub(1));
         cx.write(
             Rect::new(rect.x + 1, rect.y, lead, 1),
@@ -483,7 +483,7 @@ impl SettingsPage {
         } else {
             theme.card
         };
-        cx.surface(rect, fill, SURFACE_RADIUS, ROW_INSET);
+        cx.surface(rect, fill, SURFACE_RADIUS, EDGE_INSET);
         let mut style = theme.base().bg(fill).fg(if selected || active {
             theme.accent
         } else {
@@ -604,7 +604,7 @@ impl SettingsPage {
         } else {
             (Color::Reset, theme.background)
         };
-        cx.surface(rect, fill, SURFACE_RADIUS, ROW_INSET);
+        cx.surface(rect, fill, SURFACE_RADIUS, EDGE_INSET);
         cx.hit(id, rect, "");
         let pad = padding(rect.width);
         let content = Rect::new(
@@ -614,7 +614,7 @@ impl SettingsPage {
             rect.height,
         );
         let muted = owned || dimmed(model, field.key);
-        let mut used = self.control(model, field, content, base, muted, cx);
+        let mut used = self.control(model, field, content, rect.right(), base, muted, cx);
         if owned && content.width > used + 4 {
             used += ICON_CELLS;
             cx.write(
@@ -642,12 +642,15 @@ impl SettingsPage {
         );
     }
 
-    /// Draws the value against the right edge and returns the cells it takes.
+    /// Text ends on the content edge and boxed controls on the card `edge`, so text
+    /// inside a box lines up with plain values. Returns the content cells it takes.
+    #[allow(clippy::too_many_arguments)]
     fn control(
         &mut self,
         model: &Model,
         field: &SettingDescriptor,
         area: Rect,
+        edge: u16,
         base: Color,
         muted: bool,
         cx: &mut Canvas,
@@ -674,6 +677,7 @@ impl SettingsPage {
                 range,
                 number(model, field.key),
                 area,
+                edge,
                 base,
                 muted,
                 cx,
@@ -682,7 +686,14 @@ impl SettingsPage {
         let value = model.settings.get(field.key).unwrap_or_default();
         let text = match field.kind {
             SettingKind::Bool => {
-                return switch(cx, area, base, value.as_bool().unwrap_or(false), muted);
+                return switch(
+                    cx,
+                    area,
+                    edge,
+                    base,
+                    value.as_bool().unwrap_or(false),
+                    muted,
+                );
             }
             SettingKind::Choice(_) => format!(
                 "{}  {}",
@@ -703,14 +714,9 @@ impl SettingsPage {
         if area.width < width + (area.width / 3).min(16) {
             return 0;
         }
-        let pill = Rect::new(area.right() - width, area.y, width, area.height);
+        let pill = Rect::new(edge - width, area.y, width, area.height);
         let fill = theme.lift(base, 8);
-        cx.fill(RoundedSurface::new(
-            pill,
-            fill,
-            7.0,
-            if area.height > 1 { 4.0 } else { 1.0 },
-        ));
+        cx.fill(flush(pill, fill, 7.0));
         cx.write(
             Rect::new(pill.x + 2, pill.y, width - 2, 1),
             text,
@@ -733,7 +739,7 @@ impl SettingsPage {
         if matches!(field.kind, SettingKind::Choice(_)) {
             self.anchors.push((field.key.into(), pill));
         }
-        width
+        area.right().saturating_sub(pill.x)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -743,6 +749,7 @@ impl SettingsPage {
         range: Range,
         value: f64,
         area: Rect,
+        edge: u16,
         base: Color,
         muted: bool,
         cx: &mut Canvas,
@@ -762,19 +769,10 @@ impl SettingsPage {
         );
         let fg = if muted { theme.muted } else { theme.foreground };
         if let Some(entry) = entry {
-            let field = Rect::new(
-                text.x.saturating_sub(1),
-                area.y,
-                text.width + 2,
-                area.height,
-            );
+            let x = text.x.saturating_sub(2);
+            let field = Rect::new(x, area.y, edge.saturating_sub(x), area.height);
             let surface = theme.lift(base, 10);
-            cx.fill(RoundedSurface::new(
-                field,
-                surface,
-                6.0,
-                if area.height > 1 { 4.0 } else { 0.0 },
-            ));
+            cx.fill(flush(field, surface, 6.0));
             let typed = (entry.editor.text().width() as u16 + 1).clamp(2, text.width);
             TextInput::new(ElementId::SettingsEntry, &mut entry.editor, surface)
                 .active(true)
@@ -823,6 +821,14 @@ impl SettingsPage {
     }
 }
 
+/// Insets sideways like the row card, so a box ending on the card's cell meets its edge.
+fn flush(rect: Rect, fill: Color, radius: f32) -> RoundedSurface {
+    RoundedSurface {
+        scale_y: if rect.height > 1 { 0.82 } else { 0.95 },
+        ..RoundedSurface::new(rect, fill, radius, EDGE_INSET)
+    }
+}
+
 fn padding(width: u16) -> u16 {
     if width >= 24 {
         2
@@ -831,12 +837,12 @@ fn padding(width: u16) -> u16 {
     }
 }
 
-fn switch(cx: &mut Canvas, area: Rect, base: Color, on: bool, muted: bool) -> u16 {
+fn switch(cx: &mut Canvas, area: Rect, edge: u16, base: Color, on: bool, muted: bool) -> u16 {
     if area.width < 6 {
         return 0;
     }
     let theme = cx.theme;
-    let track = Rect::new(area.right() - 4, area.y, 4, area.height);
+    let track = Rect::new(edge - 4, area.y, 4, area.height);
     let (rail, knob) = match (on, muted) {
         (true, false) => (theme.accent, theme.background),
         (true, true) => (theme.lift(base, 30), base),
@@ -844,14 +850,19 @@ fn switch(cx: &mut Canvas, area: Rect, base: Color, on: bool, muted: bool) -> u1
     };
     cx.mark(RoundedSurface {
         scale_y: 1. / f32::from(area.height),
-        ..RoundedSurface::new(track, rail, 9.0, 0.0)
+        ..RoundedSurface::new(track, rail, 6.0, EDGE_INSET)
     });
     let x = if on { track.x + 2 } else { track.x };
     cx.mark(RoundedSurface {
         square: true,
-        ..RoundedSurface::new(Rect::new(x, track.y, 2, track.height), knob, 6.0, 2.0)
+        ..RoundedSurface::new(
+            Rect::new(x, track.y, 2, track.height),
+            knob,
+            4.0,
+            EDGE_INSET + 2.0,
+        )
     });
-    4
+    area.right().saturating_sub(track.x)
 }
 
 impl SidebarUi {

@@ -13,6 +13,8 @@ use ratatui::layout::{Position, Rect};
 
 pub(crate) const SURFACE_RADIUS: f32 = 9.0;
 pub(crate) const ROW_INSET: f32 = 1.5;
+/// Settings surfaces; whole pixels keep rounded corners free of seams at 1x.
+pub(crate) const EDGE_INSET: f32 = 2.0;
 pub(crate) const PRESS_INSET: f32 = 3.0;
 pub(crate) const NESTED_INSET: f32 = 4.0;
 pub(crate) const DROP_TINT: u16 = 24;
