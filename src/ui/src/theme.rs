@@ -64,6 +64,14 @@ impl Theme {
         self.sync_surfaces();
     }
 
+    /// The same palette over another background, such as the terminal's behind a page.
+    pub(crate) fn on(&self, background: Color) -> Self {
+        let mut theme = self.clone();
+        theme.background = background;
+        theme.sync_surfaces();
+        theme
+    }
+
     fn sync_surfaces(&mut self) {
         if !matches!(
             (self.background, self.foreground),

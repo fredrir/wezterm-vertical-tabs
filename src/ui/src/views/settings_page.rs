@@ -15,7 +15,7 @@ use ratatui::text::Line;
 use serde_json::{Value, json};
 use std::collections::BTreeSet;
 use unicode_width::UnicodeWidthStr;
-use vtabs_core::{Intent, Model, SettingDescriptor, SettingKind, keybinds, settings};
+use vtabs_core::{Intent, Model, SettingDescriptor, SettingKind, Settings, keybinds, settings};
 
 const CATEGORIES: &[(&str, &str, &str)] = &[
     ("all", "All", icons::ALL),
@@ -29,15 +29,6 @@ const CATEGORIES: &[(&str, &str, &str)] = &[
 ];
 
 const VALUE_CELLS: u16 = 5;
-
-pub(crate) enum Capture {
-    Search,
-    Chord {
-        key: String,
-        index: Option<usize>,
-        conflict: Option<String>,
-    },
-}
 
 pub(crate) struct Entry {
     pub key: String,
@@ -58,10 +49,11 @@ pub(crate) struct SettingsPage {
     pub rect: Rect,
     pub scrollbar: Option<Scrollbar>,
     pub config_owned: BTreeSet<String>,
-    pub capture: Option<Capture>,
+    pub recording: bool,
     pub entry: Option<Entry>,
     pub drag: Option<(String, f64)>,
-    pub chip: Option<usize>,
+    /// Where each dropdown value sits, so its menu can open beneath it.
+    pub anchors: Vec<(String, Rect)>,
     pub chord_label: fn(&str) -> String,
 }
 
@@ -81,10 +73,10 @@ impl Default for SettingsPage {
             rect: Rect::default(),
             scrollbar: None,
             config_owned: BTreeSet::new(),
-            capture: None,
+            recording: false,
             entry: None,
             drag: None,
-            chip: None,
+            anchors: Vec::new(),
             chord_label: crate::keybinds::display_chord,
         }
     }
@@ -176,15 +168,11 @@ impl Range {
     }
 }
 
-fn capitalized(text: &str) -> String {
-    let mut chars = text.chars();
+pub(crate) fn choice_label(choice: &str) -> String {
+    let mut chars = choice.chars();
     chars.next().map_or_else(String::new, |first| {
         first.to_uppercase().chain(chars).collect()
     })
-}
-
-pub(crate) fn choice_label(choice: &str) -> String {
-    capitalized(choice)
 }
 
 fn action(field: &SettingDescriptor) -> Option<&'static str> {
@@ -232,12 +220,28 @@ fn visible_end(
     end
 }
 
-struct Pill {
-    id: Option<ElementId>,
-    remove: Option<ElementId>,
-    text: String,
-    fill: Color,
-    fg: Color,
+struct Changed {
+    current: Value,
+    defaults: Value,
+}
+
+impl Changed {
+    fn new(settings: &Settings) -> Self {
+        Self {
+            current: serde_json::to_value(settings).unwrap_or_default(),
+            defaults: serde_json::to_value(Settings::default()).unwrap_or_default(),
+        }
+    }
+    fn contains(&self, model: &Model, field: &SettingDescriptor) -> bool {
+        match action(field) {
+            Some(action) => model
+                .settings
+                .keybinds
+                .get(action)
+                .is_some_and(|keys| *keys != keybinds::defaults(action)),
+            None => self.current.get(field.key) != self.defaults.get(field.key),
+        }
+    }
 }
 
 impl SettingsPage {
@@ -276,24 +280,29 @@ impl SettingsPage {
             .collect()
     }
 
-    pub(crate) fn recording(&self) -> bool {
-        self.capture.is_some()
-    }
-
-    pub fn render(&mut self, model: &Model, area: Rect, overlay_open: bool, cx: &mut Canvas) {
+    /// `opaque` covers whatever lies beneath, when the page shares the sidebar's cells.
+    pub fn render(
+        &mut self,
+        model: &Model,
+        area: Rect,
+        overlay_open: bool,
+        opaque: bool,
+        cx: &mut Canvas,
+    ) {
         self.scrollbar = None;
+        self.anchors.clear();
         if area.is_empty() {
             return;
         }
-        let theme = cx.theme;
         self.rect = area;
+        if opaque {
+            cx.rounded(area, cx.theme.background);
+        }
         let area = if area.height >= 24 && area.width >= 48 {
-            cx.rounded(area, theme.background);
             Rect::new(area.x + 1, area.y + 1, area.width - 2, area.height - 2)
         } else {
             area
         };
-        cx.rounded(area, theme.background);
         let margin = if area.width >= 72 {
             4
         } else if area.width >= 40 {
@@ -367,16 +376,15 @@ impl SettingsPage {
             rect.width.saturating_sub(lead + 2 + button),
             1,
         );
-        let recording = matches!(self.capture, Some(Capture::Search));
         cx.hit(
             ElementId::SettingsSearch,
             Rect::new(rect.x, rect.y, rect.width - button, rect.height),
             "",
         );
         TextInput::new(ElementId::SettingsSearch, &mut self.query, theme.card)
-            .active(self.search_focused && !overlay_open && !recording)
+            .active(self.search_focused && !overlay_open && !self.recording)
             .shift(if rect.height == 2 { 0.5 } else { 0.0 })
-            .placeholder(if recording {
+            .placeholder(if self.recording {
                 "Recording keys"
             } else {
                 "Search settings"
@@ -384,7 +392,7 @@ impl SettingsPage {
             .render(edit, cx);
         if button > 0 {
             Button::action(ElementId::SettingsRecord, icons::KEYBOARD, Tone::Neutral)
-                .selected(recording)
+                .selected(self.recording)
                 .label_right_padding(1)
                 .render(
                     Rect::new(rect.right() - button - 1, rect.y, button + 1, rect.height),
@@ -501,7 +509,7 @@ impl SettingsPage {
             self.max_scroll = 0;
             if area.height > 0 {
                 cx.write(
-                    Rect::new(area.x + 1, area.y, area.width.saturating_sub(1), 1),
+                    Rect::new(area.x + 2, area.y, area.width.saturating_sub(2), 1),
                     "No results",
                     theme.muted(),
                 );
@@ -534,6 +542,8 @@ impl SettingsPage {
             list.width -= 2;
             scrollbar.render(ScrollArea::Settings, cx);
         }
+        let changed = Changed::new(&model.settings);
+        let pad = padding(list.width);
         let mut y = list.y;
         for index in self.scroll..end(self.scroll) {
             let field = fields[index];
@@ -544,17 +554,24 @@ impl SettingsPage {
                     .find(|(id, ..)| *id == field.group)
                     .map_or(field.group, |(_, name, _)| name);
                 cx.write(
-                    Rect::new(list.x + 1, y + above - 1, list.width.saturating_sub(1), 1),
+                    Rect::new(
+                        list.x + pad,
+                        y + above - 1,
+                        list.width.saturating_sub(pad),
+                        1,
+                    ),
                     name,
                     theme.muted().add_modifier(Modifier::BOLD),
                 );
                 y += above;
             }
+            let modified = changed.contains(model, field);
             self.setting(
                 model,
                 field,
                 index,
                 Rect::new(list.x, y, list.width, line),
+                modified,
                 cx,
             );
             y += line;
@@ -567,6 +584,7 @@ impl SettingsPage {
         field: &SettingDescriptor,
         index: usize,
         rect: Rect,
+        modified: bool,
         cx: &mut Canvas,
     ) {
         let theme = cx.theme;
@@ -578,20 +596,17 @@ impl SettingsPage {
                 .is_none_or(|focused| focused.setting() == Some(field.key));
         let hovered = cx.pointer.hovered.as_ref().and_then(ElementId::setting) == Some(field.key);
         let owned = self.managed_in_lua(model, field.key);
-        let fill = if focused {
-            theme.selected
+        // Idle rows sit on the page like launcher results; the clear surface centers their text.
+        let (fill, base) = if focused {
+            (theme.selected, theme.selected)
         } else if hovered {
-            theme.lift(theme.card, 5)
+            (theme.card, theme.card)
         } else {
-            theme.card
+            (Color::Reset, theme.background)
         };
         cx.surface(rect, fill, SURFACE_RADIUS, ROW_INSET);
         cx.hit(id, rect, "");
-        let pad = if rect.width >= 24 {
-            2
-        } else {
-            u16::from(rect.width >= 4)
-        };
+        let pad = padding(rect.width);
         let content = Rect::new(
             rect.x + pad,
             rect.y,
@@ -599,9 +614,7 @@ impl SettingsPage {
             rect.height,
         );
         let muted = owned || dimmed(model, field.key);
-        let mut used = self.control(
-            model, field, content, fill, focused, hovered, owned, muted, cx,
-        );
+        let mut used = self.control(model, field, content, base, muted, cx);
         if owned && content.width > used + 4 {
             used += ICON_CELLS;
             cx.write(
@@ -610,6 +623,13 @@ impl SettingsPage {
                 theme.base().bg(fill).fg(theme.muted),
             );
         }
+        let fg = if muted {
+            theme.muted
+        } else if modified {
+            theme.accent
+        } else {
+            theme.foreground
+        };
         cx.write(
             Rect::new(
                 content.x,
@@ -618,32 +638,35 @@ impl SettingsPage {
                 1,
             ),
             field.label,
-            theme
-                .base()
-                .bg(fill)
-                .fg(if muted { theme.muted } else { theme.foreground }),
+            theme.base().bg(fill).fg(fg),
         );
     }
 
-    /// Draws the value control against the right edge and returns the cells it takes.
-    #[allow(clippy::too_many_arguments)]
+    /// Draws the value against the right edge and returns the cells it takes.
     fn control(
         &mut self,
         model: &Model,
         field: &SettingDescriptor,
         area: Rect,
-        fill: Color,
-        focused: bool,
-        hovered: bool,
-        owned: bool,
+        base: Color,
         muted: bool,
         cx: &mut Canvas,
     ) -> u16 {
         let theme = cx.theme;
+        let fg = if muted { theme.muted } else { theme.foreground };
         if let Some(action) = action(field) {
-            return self.chords(
-                model, field.key, action, area, fill, focused, hovered, owned, cx,
+            let chords = keybinds::bindings(&model.settings, action)
+                .iter()
+                .map(|chord| (self.chord_label)(chord))
+                .collect::<Vec<_>>()
+                .join("   ");
+            let width = (chords.width() as u16).min(area.width * 2 / 3);
+            cx.write(
+                Rect::new(area.right() - width, area.y, width, 1),
+                Line::from(chords).alignment(Alignment::Right),
+                theme.base().bg(base).fg(fg),
             );
+            return width;
         }
         if let Some(range) = Range::of(&field.kind) {
             return self.slider(
@@ -651,70 +674,66 @@ impl SettingsPage {
                 range,
                 number(model, field.key),
                 area,
-                fill,
+                base,
                 muted,
                 cx,
             );
         }
         let value = model.settings.get(field.key).unwrap_or_default();
-        let fg = if muted { theme.muted } else { theme.foreground };
-        let pill = |text: String| Pill {
-            id: None,
-            remove: None,
-            text,
-            fill: theme.lift(fill, 8),
-            fg,
+        let text = match field.kind {
+            SettingKind::Bool => {
+                return switch(cx, area, base, value.as_bool().unwrap_or(false), muted);
+            }
+            SettingKind::Choice(_) => format!(
+                "{}  {}",
+                choice_label(value.as_str().unwrap_or_default()),
+                icons::EXPANDED
+            ),
+            SettingKind::Color | SettingKind::OptionalColor => value
+                .as_str()
+                .map_or_else(|| "Auto".into(), |hex| format!("   {hex}")),
+            SettingKind::Text => value.as_str().map_or_else(|| "Auto".into(), display_text),
+            SettingKind::Object | SettingKind::Colors => {
+                format!("{} entries", value.as_object().map_or(0, |v| v.len()))
+            }
+            SettingKind::List => format!("{} items", value.as_array().map_or(0, |v| v.len())),
+            _ => return 0,
         };
-        match field.kind {
-            SettingKind::Bool => switch(cx, area, fill, value.as_bool().unwrap_or(false), muted),
-            SettingKind::Choice(_) => pills(
-                cx,
-                area,
-                vec![pill(format!(
-                    "{}  {}",
-                    choice_label(value.as_str().unwrap_or_default()),
-                    icons::SELECT
-                ))],
-            ),
-            SettingKind::Color | SettingKind::OptionalColor => match value.as_str() {
-                Some(hex) => {
-                    let used = pills(cx, area, vec![pill(format!("   {hex}"))]);
-                    if let Some(color) = crate::Theme::parse_color(hex).filter(|_| used > 0) {
-                        let swatch = Rect::new(area.right() + 3 - used, area.y, 2, area.height);
-                        cx.mark(RoundedSurface {
-                            square: true,
-                            ..RoundedSurface::new(swatch, color, 3.0, 3.0)
-                        });
-                    }
-                    used
-                }
-                None => pills(cx, area, vec![pill("Auto".into())]),
-            },
-            SettingKind::Text => pills(
-                cx,
-                area,
-                vec![pill(
-                    value.as_str().map_or_else(|| "Auto".into(), display_text),
-                )],
-            ),
-            SettingKind::Object | SettingKind::Colors => pills(
-                cx,
-                area,
-                vec![pill(format!(
-                    "{} entries",
-                    value.as_object().map_or(0, |v| v.len())
-                ))],
-            ),
-            SettingKind::List => pills(
-                cx,
-                area,
-                vec![pill(format!(
-                    "{} items",
-                    value.as_array().map_or(0, |v| v.len())
-                ))],
-            ),
-            _ => 0,
+        let width = text.width() as u16 + 4;
+        if area.width < width + (area.width / 3).min(16) {
+            return 0;
         }
+        let pill = Rect::new(area.right() - width, area.y, width, area.height);
+        let fill = theme.lift(base, 8);
+        cx.fill(RoundedSurface::new(
+            pill,
+            fill,
+            7.0,
+            if area.height > 1 { 4.0 } else { 1.0 },
+        ));
+        cx.write(
+            Rect::new(pill.x + 2, pill.y, width - 2, 1),
+            text,
+            theme.base().bg(fill).fg(fg),
+        );
+        if let (SettingKind::Color | SettingKind::OptionalColor, Some(color)) = (
+            &field.kind,
+            value.as_str().and_then(crate::Theme::parse_color),
+        ) {
+            cx.mark(RoundedSurface {
+                square: true,
+                ..RoundedSurface::new(
+                    Rect::new(pill.x + 2, pill.y, 2, pill.height),
+                    color,
+                    3.0,
+                    3.0,
+                )
+            });
+        }
+        if matches!(field.kind, SettingKind::Choice(_)) {
+            self.anchors.push((field.key.into(), pill));
+        }
+        width
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -724,7 +743,7 @@ impl SettingsPage {
         range: Range,
         value: f64,
         area: Rect,
-        fill: Color,
+        base: Color,
         muted: bool,
         cx: &mut Canvas,
     ) -> u16 {
@@ -749,7 +768,7 @@ impl SettingsPage {
                 text.width + 2,
                 area.height,
             );
-            let surface = theme.lift(fill, 10);
+            let surface = theme.lift(base, 10);
             cx.fill(RoundedSurface::new(
                 field,
                 surface,
@@ -765,7 +784,7 @@ impl SettingsPage {
             cx.write(
                 text,
                 Line::from(range.label(value)).alignment(Alignment::Right),
-                theme.base().bg(fill).fg(fg),
+                theme.base().bg(base).fg(fg),
             );
         }
         let width = (area.width * 2 / 5)
@@ -778,9 +797,9 @@ impl SettingsPage {
         let knob = track.x + (range.fraction(value) * f64::from(width - 2)).round() as u16;
         let thin = 0.24 / f32::from(area.height);
         let (rail, filled, handle) = if muted {
-            (theme.lift(fill, 10), theme.lift(fill, 24), theme.muted)
+            (theme.lift(base, 10), theme.lift(base, 24), theme.muted)
         } else {
-            (theme.lift(fill, 14), theme.accent, theme.foreground)
+            (theme.lift(base, 14), theme.accent, theme.foreground)
         };
         cx.mark(RoundedSurface {
             scale_y: thin,
@@ -802,140 +821,17 @@ impl SettingsPage {
         cx.hit(ElementId::Slider(key.into()), track, "");
         width + 2 + VALUE_CELLS
     }
+}
 
-    #[allow(clippy::too_many_arguments)]
-    fn chords(
-        &self,
-        model: &Model,
-        key: &str,
-        action: &str,
-        area: Rect,
-        fill: Color,
-        focused: bool,
-        hovered: bool,
-        owned: bool,
-        cx: &mut Canvas,
-    ) -> u16 {
-        let theme = cx.theme;
-        let chords = keybinds::bindings(&model.settings, action);
-        let (recording, conflict) = match &self.capture {
-            Some(Capture::Chord {
-                key: target,
-                index,
-                conflict,
-            }) if target == key => (Some(*index), conflict.as_deref()),
-            _ => (None, None),
-        };
-        let clash = match &self.capture {
-            Some(Capture::Chord {
-                conflict: Some(chord),
-                ..
-            }) => Some(chord.as_str()),
-            _ => None,
-        };
-        let recorder = |text: Option<&str>| Pill {
-            id: None,
-            remove: None,
-            text: text.map_or_else(|| "●".into(), self.chord_label),
-            fill: if text.is_some() {
-                theme.warn(fill, 45)
-            } else {
-                theme.tint(fill, 30)
-            },
-            fg: if text.is_some() {
-                theme.foreground
-            } else {
-                theme.accent
-            },
-        };
-        let mut row = Vec::new();
-        for (index, chord) in chords.iter().enumerate() {
-            if recording == Some(Some(index)) {
-                row.push(recorder(conflict));
-                continue;
-            }
-            let id = ElementId::Chord(key.into(), index);
-            let remove = ElementId::RemoveChord(key.into(), chord.clone());
-            let chip = focused && self.chip == Some(index) && recording.is_none();
-            let pointed = cx.hovered(&id) || cx.hovered(&remove);
-            row.push(Pill {
-                fill: if clash == Some(chord.as_str()) {
-                    theme.warn(fill, 30)
-                } else if chip {
-                    theme.tint(fill, 30)
-                } else if pointed {
-                    theme.lift(fill, 16)
-                } else {
-                    theme.lift(fill, 8)
-                },
-                fg: if owned { theme.muted } else { theme.foreground },
-                remove: (!owned && (chip || pointed)).then_some(remove),
-                id: (!owned).then_some(id),
-                text: (self.chord_label)(chord),
-            });
-        }
-        if recording == Some(None) {
-            row.push(recorder(conflict));
-        } else if !owned && recording.is_none() && (focused || hovered || chords.is_empty()) {
-            let id = ElementId::AddChord(key.into());
-            let active = (focused && self.chip == Some(chords.len())) || cx.hovered(&id);
-            row.push(Pill {
-                fill: if active {
-                    theme.tint(fill, 30)
-                } else {
-                    theme.lift(fill, 8)
-                },
-                fg: if active { theme.accent } else { theme.muted },
-                id: Some(id),
-                remove: None,
-                text: "+".into(),
-            });
-        }
-        pills(cx, area, row)
+fn padding(width: u16) -> u16 {
+    if width >= 24 {
+        2
+    } else {
+        u16::from(width >= 4)
     }
 }
 
-/// Right-aligned rounded chips; the leftmost drop when the row runs out of room.
-fn pills(cx: &mut Canvas, area: Rect, pills: Vec<Pill>) -> u16 {
-    let inset = if area.height > 1 { 4.0 } else { 1.0 };
-    let mut right = area.right();
-    let floor = area.x + (area.width / 3).min(16);
-    for pill in pills.into_iter().rev() {
-        let width = pill.text.width() as u16 + 4;
-        if right < floor + width {
-            break;
-        }
-        let rect = Rect::new(right - width, area.y, width, area.height);
-        cx.fill(RoundedSurface::new(rect, pill.fill, 7.0, inset));
-        let style = cx.theme.base().bg(pill.fill).fg(pill.fg);
-        let shifted = u16::from(pill.remove.is_some());
-        cx.write(
-            Rect::new(rect.x + 2 - shifted, rect.y, width - 2, 1),
-            pill.text,
-            style,
-        );
-        if let Some(id) = pill.id {
-            cx.hit(id, rect, "");
-        }
-        if let Some(remove) = pill.remove {
-            let close = Rect::new(rect.right() - 2, rect.y, 2, rect.height);
-            cx.write(
-                Rect::new(close.x, close.y, 1, 1),
-                "×",
-                style.fg(if cx.hovered(&remove) {
-                    cx.theme.danger
-                } else {
-                    cx.theme.muted
-                }),
-            );
-            cx.hit(remove, close, "");
-        }
-        right = rect.x.saturating_sub(1);
-    }
-    area.right() - right.min(area.right())
-}
-
-fn switch(cx: &mut Canvas, area: Rect, fill: Color, on: bool, muted: bool) -> u16 {
+fn switch(cx: &mut Canvas, area: Rect, base: Color, on: bool, muted: bool) -> u16 {
     if area.width < 6 {
         return 0;
     }
@@ -943,8 +839,8 @@ fn switch(cx: &mut Canvas, area: Rect, fill: Color, on: bool, muted: bool) -> u1
     let track = Rect::new(area.right() - 4, area.y, 4, area.height);
     let (rail, knob) = match (on, muted) {
         (true, false) => (theme.accent, theme.background),
-        (true, true) => (theme.lift(fill, 30), fill),
-        (false, _) => (theme.lift(fill, 14), theme.muted),
+        (true, true) => (theme.lift(base, 30), base),
+        (false, _) => (theme.lift(base, 14), theme.muted),
     };
     cx.mark(RoundedSurface {
         scale_y: 1. / f32::from(area.height),
@@ -978,7 +874,6 @@ impl SidebarUi {
         self.settings.category = category.clone();
         self.settings.selected = 0;
         self.settings.scroll = 0;
-        self.settings.chip = None;
         self.settings.search_focused = false;
         self.focused = Some(ElementId::SettingsCategory(category));
         self.caret.stop();
@@ -999,9 +894,6 @@ impl SidebarUi {
             .iter()
             .position(|field| field.key == key)
         {
-            if index != self.settings.selected {
-                self.settings.chip = None;
-            }
             self.settings.selected = index;
             self.settings.search_focused = false;
             self.focused = Some(ElementId::Setting(key.into()));
@@ -1012,6 +904,13 @@ impl SidebarUi {
         }
     }
 
+    fn settings_focus_categories(&mut self) {
+        self.settings.search_focused = false;
+        self.focused = Some(ElementId::SettingsCategory(self.settings.category.clone()));
+        self.caret.stop();
+        self.frame.dirty = true;
+    }
+
     pub(crate) fn settings_scroll_by(&mut self, rows: i32) {
         self.settings.scroll =
             list::scroll_by(self.settings.scroll, rows, self.settings.max_scroll);
@@ -1020,72 +919,24 @@ impl SidebarUi {
 
     pub(crate) fn toggle_settings_recording(&mut self, intents: &mut Vec<UiIntent>) {
         self.commit_entry(intents);
-        self.settings.capture = match self.settings.capture {
-            Some(Capture::Search) => None,
-            _ => Some(Capture::Search),
-        };
+        self.settings.recording = !self.settings.recording;
         self.settings.search_focused = false;
         self.focused = Some(ElementId::SettingsRecord);
         self.caret.stop();
         self.frame.dirty = true;
     }
 
-    pub(crate) fn record_chord(&mut self, model: &Model, key: &str, index: Option<usize>) {
-        if self.settings.managed_in_lua(model, key) {
-            return;
-        }
-        self.settings_focus_setting(model, key);
-        self.settings.capture = Some(Capture::Chord {
-            key: key.into(),
-            index,
-            conflict: None,
-        });
-        self.frame.dirty = true;
-    }
-
-    /// Returns whether the settings page owned the recording.
-    pub(crate) fn settings_recorded(
-        &mut self,
-        model: &Model,
-        chord: &str,
-        intents: &mut Vec<UiIntent>,
-    ) -> bool {
-        let Some(capture) = self.settings.capture.take() else {
-            return false;
-        };
+    /// A chord recorded from the search field lists the actions bound to it.
+    pub(crate) fn settings_recorded(&mut self, chord: &str) {
         self.frame.dirty = true;
         if chord.is_empty() {
-            return true;
+            self.settings.recording = false;
+            return;
         }
-        match capture {
-            Capture::Search => {
-                self.settings.chord = Some(chord.into());
-                self.settings.query = TextEditor::new((self.settings.chord_label)(chord));
-                self.settings.selected = 0;
-                self.settings.scroll = 0;
-                self.settings.capture = Some(Capture::Search);
-            }
-            Capture::Chord { key, index, .. } => {
-                let Some(action) = key.strip_prefix("shortcut.") else {
-                    return true;
-                };
-                let bindings =
-                    super::keybinds::changed_keybinds(model, action, index, Some(chord.into()));
-                if keybinds::validate(&bindings).is_ok() {
-                    intents.push(UiIntent::Domain(super::keybinds::set_keybinds(bindings)));
-                    if let Some(index) = index {
-                        self.settings.chip = Some(index);
-                    }
-                } else {
-                    self.settings.capture = Some(Capture::Chord {
-                        key,
-                        index,
-                        conflict: Some(chord.into()),
-                    });
-                }
-            }
-        }
-        true
+        self.settings.chord = Some(chord.into());
+        self.settings.query = TextEditor::new((self.settings.chord_label)(chord));
+        self.settings.selected = 0;
+        self.settings.scroll = 0;
     }
 
     pub(crate) fn start_entry(&mut self, model: &Model, key: &str, typed: Option<char>) {
@@ -1261,49 +1112,64 @@ impl SidebarUi {
             }
             return;
         }
-        if matches!(key, Key::Left | Key::Right)
-            && let Some(ElementId::SettingsCategory(category)) = &self.focused
-        {
+        let fields = self.settings.fields(model);
+        let last = fields.len().saturating_sub(1);
+        if let Some(ElementId::SettingsCategory(category)) = &self.focused {
             let at = CATEGORIES
                 .iter()
                 .position(|(id, ..)| id == category)
                 .unwrap_or(0);
-            let next = if key == Key::Left {
-                (at + CATEGORIES.len() - 1) % CATEGORIES.len()
-            } else {
-                (at + 1) % CATEGORIES.len()
-            };
-            self.settings_select_category(CATEGORIES[next].0.into());
+            match key {
+                Key::Left | Key::Right => {
+                    let next = if key == Key::Left {
+                        (at + CATEGORIES.len() - 1) % CATEGORIES.len()
+                    } else {
+                        (at + 1) % CATEGORIES.len()
+                    };
+                    self.settings_select_category(CATEGORIES[next].0.into());
+                }
+                Key::Down | Key::Up if !fields.is_empty() => {
+                    let at = if key == Key::Down { 0 } else { last };
+                    self.settings_focus_setting(model, fields[at].key);
+                }
+                Key::Enter | Key::Character(' ') => self.activate_element(
+                    model,
+                    ElementId::SettingsCategory(category.clone()),
+                    intents,
+                ),
+                Key::Character(character) if !mods.command() && !mods.alt => {
+                    self.settings_input_text(&character.to_string())
+                }
+                _ => {}
+            }
             return;
         }
-        let fields = self.settings.fields(model);
-        let field = fields.get(self.settings.selected).copied();
-        let on_row = field.is_some_and(|field| {
+        let field = fields.get(self.settings.selected).copied().filter(|field| {
             self.focused
                 .as_ref()
                 .is_none_or(|focused| focused.setting() == Some(field.key))
         });
-        let field = field.filter(|_| on_row);
-        let chords = field
-            .and_then(action)
-            .map(|action| keybinds::bindings(&model.settings, action).len());
         let ranged = field.is_some_and(|field| Range::of(&field.kind).is_some());
         match key {
             Key::Escape => {
-                self.settings.chip = None;
                 self.focused = None;
                 self.frame.dirty = true;
+            }
+            Key::Up if self.settings.search_focused => {}
+            Key::Up if field.is_some() && self.settings.selected == 0 => {
+                self.settings_focus_categories()
+            }
+            Key::Down if field.is_some() && self.settings.selected == last => {
+                self.settings_focus_categories()
             }
             Key::Down | Key::Up | Key::PageDown | Key::PageUp | Key::Home | Key::End => {
                 self.settings.selected = match key {
                     Key::Home => 0,
-                    Key::End => fields.len().saturating_sub(1),
+                    Key::End => last,
                     Key::Down if self.settings.search_focused => 0,
-                    Key::Down => (self.settings.selected + 1).min(fields.len().saturating_sub(1)),
+                    Key::Down => (self.settings.selected + 1).min(last),
                     Key::Up => self.settings.selected.saturating_sub(1),
-                    Key::PageDown => {
-                        (self.settings.selected + 5).min(fields.len().saturating_sub(1))
-                    }
+                    Key::PageDown => (self.settings.selected + 5).min(last),
                     Key::PageUp => self.settings.selected.saturating_sub(5),
                     _ => self.settings.selected,
                 };
@@ -1317,54 +1183,21 @@ impl SidebarUi {
                 let steps = if key == Key::Left { -steps } else { steps };
                 self.step_setting(model, field.unwrap().key, steps, intents);
             }
-            Key::Left | Key::Right
-                if chords.is_some() && !self.settings.managed_in_lua(model, "keybinds") =>
-            {
-                let last = chords.unwrap();
-                self.settings.chip = Some(match (self.settings.chip, key) {
-                    (None, Key::Left) => last,
-                    (None, _) => 0,
-                    (Some(at), Key::Left) => at.saturating_sub(1),
-                    (Some(at), _) => (at + 1).min(last),
-                });
-                self.frame.dirty = true;
-            }
             Key::Delete | Key::Backspace => {
                 if let Some(field) = field {
-                    let chord = action(field)
-                        .zip(self.settings.chip)
-                        .and_then(|(action, at)| {
-                            Some((
-                                action,
-                                keybinds::bindings(&model.settings, action).get(at)?.clone(),
-                            ))
-                        });
-                    match chord {
-                        Some((action, chord)) => {
-                            self.remove_keybind(model, action, &chord, intents)
-                        }
-                        None => self.reset_setting(model, field.key, intents),
-                    }
-                    self.frame.dirty = true;
+                    self.reset_setting(model, field.key, intents);
                 }
             }
             Key::Enter | Key::Character(' ') => {
                 if let Some(
-                    id @ (ElementId::SettingsCategory(_)
-                    | ElementId::ResetSettings
+                    id @ (ElementId::ResetSettings
                     | ElementId::SettingsRecord
                     | ElementId::SettingsSearch),
                 ) = self.focused.clone()
                 {
                     self.activate_element(model, id, intents);
                 } else if let Some(field) = field {
-                    match chords {
-                        Some(count) => {
-                            let index = self.settings.chip.filter(|at| *at < count);
-                            self.record_chord(model, field.key, index);
-                        }
-                        None => self.edit_setting(model, field.key, intents),
-                    }
+                    self.edit_setting(model, field.key, intents);
                 }
             }
             Key::Character(digit) if ranged && digit.is_ascii_digit() && !mods.command() => {

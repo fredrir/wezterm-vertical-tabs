@@ -57,6 +57,7 @@ struct Host {
     focused: bool,
     sidebar_columns: Option<u16>,
     header_inset: u16,
+    page_background: Option<ratatui::style::Color>,
 }
 
 impl Default for Host {
@@ -66,6 +67,7 @@ impl Default for Host {
             focused: true,
             sidebar_columns: None,
             header_inset: 0,
+            page_background: None,
         }
     }
 }
@@ -275,7 +277,7 @@ impl SidebarUi {
         self.caret.stop();
     }
     fn cancel_settings_input(&mut self) {
-        self.settings.capture = None;
+        self.settings.recording = false;
         self.settings.entry = None;
         self.settings.drag = None;
     }
@@ -290,6 +292,12 @@ impl SidebarUi {
     }
     pub fn rounded_surfaces(&self) -> &[RoundedSurface] {
         &self.paint.surfaces
+    }
+    pub fn set_page_background(&mut self, color: Option<ratatui::style::Color>) {
+        if self.host.page_background != color {
+            self.host.page_background = color;
+            self.invalidate();
+        }
     }
     pub fn set_layout(&mut self, sidebar_columns: u16, header_inset: u16) {
         if self.host.sidebar_columns != Some(sidebar_columns)

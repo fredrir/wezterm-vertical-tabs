@@ -21,6 +21,8 @@ pub(crate) struct MenuItem {
     pub shortcuts: Vec<String>,
     pub keywords: String,
     pub action: Action,
+    /// Shown as a trailing remove control on hover, and run by Delete.
+    pub remove: Option<Action>,
     pub enabled: bool,
 }
 
@@ -36,6 +38,7 @@ impl MenuItem {
             shortcuts: Vec::new(),
             keywords: String::new(),
             action,
+            remove: None,
             enabled: true,
         }
     }
@@ -52,6 +55,9 @@ pub(crate) struct Menu {
     pub revealed: Option<usize>,
     pub visible: usize,
     pub search: Option<Launcher>,
+    /// The control a dropdown opens beneath, and the option it currently holds.
+    pub dropdown: Option<Rect>,
+    pub checked: Option<usize>,
 }
 
 impl Menu {
@@ -65,6 +71,8 @@ impl Menu {
             revealed: None,
             visible: 0,
             search: None,
+            dropdown: None,
+            checked: None,
         }
     }
 
@@ -141,7 +149,7 @@ impl Overlays {
 
 impl SidebarUi {
     pub(crate) fn open_overlay(&mut self, overlay: Overlay) {
-        self.settings.capture = None;
+        self.settings.recording = false;
         self.settings.entry = None;
         self.cancel_effects();
         self.caret.stop();

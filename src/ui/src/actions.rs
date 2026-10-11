@@ -30,6 +30,8 @@ pub(crate) enum Action {
     CloseSettings,
     EditSetting(String),
     ResetSetting(String),
+    ReplaceKeybind(usize),
+    RemoveKeybind(String, String),
     EditorCommand { key: Key, target: ElementId },
     Submenu { title: String, items: Vec<MenuItem> },
     Confirm { label: String, action: Box<Action> },
@@ -109,16 +111,19 @@ impl SidebarUi {
             }
             ElementId::Setting(key) => {
                 self.settings_focus_setting(model, &key);
-                if !key.starts_with("shortcut.") {
-                    self.edit_setting(model, &key, intents);
-                }
+                self.edit_setting(model, &key, intents);
             }
-            ElementId::Chord(key, index) => self.record_chord(model, &key, Some(index)),
-            ElementId::AddChord(key) => self.record_chord(model, &key, None),
-            ElementId::RemoveChord(key, chord) => {
-                self.settings_focus_setting(model, &key);
-                if let Some(action) = key.strip_prefix("shortcut.") {
-                    self.remove_keybind(model, action, &chord, intents);
+            ElementId::MenuRemove(id) => {
+                let remove = match &self.overlays.current {
+                    Some(Overlay::Menu(menu)) => menu
+                        .items
+                        .iter()
+                        .find(|item| item.id == id)
+                        .and_then(|item| item.remove.clone()),
+                    _ => None,
+                };
+                if let Some(remove) = remove {
+                    self.run_action(model, remove, intents);
                 }
             }
             ElementId::Submit => self.submit_form(model, intents),
@@ -272,6 +277,10 @@ impl SidebarUi {
             Action::Settings => self.open_settings(),
             Action::CloseSettings => self.close_settings(),
             Action::EditSetting(key) => self.edit_setting(model, &key, intents),
+            Action::ReplaceKeybind(index) => self.replace_keybind(model, index),
+            Action::RemoveKeybind(action, chord) => {
+                self.remove_keybind(model, &action, &chord, intents)
+            }
             Action::ResetSetting(key) => self.reset_setting(model, &key, intents),
             Action::EditorCommand { key, target } => {
                 self.restore_editor(target);
@@ -315,8 +324,8 @@ impl SidebarUi {
         if self.overlays.current.is_some() {
             self.dismiss();
         }
-        if key.starts_with("shortcut.") {
-            self.record_chord(model, key, None);
+        if let Some(action) = key.strip_prefix("shortcut.") {
+            self.open_keybinds(model, action);
             return;
         }
         if self.settings.managed_in_lua(model, key) {
@@ -348,12 +357,19 @@ impl SidebarUi {
                         )
                     })
                     .collect();
+                let anchor = self
+                    .settings
+                    .anchors
+                    .iter()
+                    .find(|(anchored, _)| anchored == key)
+                    .map(|(_, rect)| *rect);
                 self.push_menu(descriptor.label, items);
                 if let Some(Overlay::Menu(menu)) = &mut self.overlays.current {
-                    menu.selected = choices
+                    menu.checked = choices
                         .iter()
-                        .position(|choice| value.as_str() == Some(*choice))
-                        .unwrap_or(0);
+                        .position(|choice| value.as_str() == Some(*choice));
+                    menu.selected = menu.checked.unwrap_or(0);
+                    menu.dropdown = anchor;
                 }
             }
             SettingKind::Number { .. } | SettingKind::Fraction | SettingKind::Opacity => {

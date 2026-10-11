@@ -133,6 +133,7 @@ impl SidebarUi {
                 self.cancel_effects();
             }
             self.prune_targets(model);
+            self.refresh_keybinds(model);
         }
         if !self.host.visible {
             return None;
@@ -339,6 +340,7 @@ impl SidebarUi {
         self.sidebar.rect = sidebar;
         let anchor = self.anchor_position();
         let editing = self.focused == Some(ElementId::Editor);
+        let page_theme = self.host.page_background.map(|color| self.theme.on(color));
         let mut cx = Canvas {
             buf: &mut self.frame.staging,
             paint: &mut self.paint,
@@ -360,11 +362,16 @@ impl SidebarUi {
             } else {
                 area
             };
-            if page == area {
+            let covers = page == area;
+            if covers {
                 cx.paint.clear_targets();
             }
             let overlay_open = self.overlays.current.is_some();
-            self.settings.render(model, page, overlay_open, &mut cx);
+            let sidebar_theme = cx.theme;
+            cx.theme = page_theme.as_ref().unwrap_or(sidebar_theme);
+            self.settings
+                .render(model, page, overlay_open, covers, &mut cx);
+            cx.theme = sidebar_theme;
         }
         crate::keybinds::update_shortcut_tooltips(
             model,
@@ -377,6 +384,10 @@ impl SidebarUi {
                 Overlay::Menu(menu) if menu.search.is_some() => palette(&mut cx, area, menu),
                 Overlay::Menu(menu) if menu.message.is_some() && dialog::fits(area) => {
                     dialog::confirm(&mut cx, area, menu)
+                }
+                Overlay::Menu(menu) if menu.dropdown.is_some() => {
+                    cx.theme = page_theme.as_ref().unwrap_or(cx.theme);
+                    menu::dropdown(&mut cx, area, menu)
                 }
                 Overlay::Menu(menu) => menu::menu(&mut cx, area, anchor, menu),
                 Overlay::Form(form) => dialog::form(&mut cx, area, form, editing),

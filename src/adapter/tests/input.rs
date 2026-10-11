@@ -662,10 +662,6 @@ fn settings_recorder_saves_a_physical_key_without_executing_it() {
         &mut adapter,
         ui::ElementId::Setting("shortcut.commands".into()),
     );
-    click(
-        &mut adapter,
-        ui::ElementId::AddChord("shortcut.commands".into()),
-    );
     assert!(adapter.app.ui().recording_keybind());
     assert!(adapter.input(Input::RawKey(&raw(
         KeyCode::Physical(window::PhysKeyCode::F12),
@@ -676,7 +672,11 @@ fn settings_recorder_saves_a_physical_key_without_executing_it() {
     assert!(
         core::keybinds::bindings(&adapter.app.model().settings, "commands").contains(&"F12".into())
     );
+    // Escape leaves the launcher, which records until then, without reaching the shell.
+    let escape = raw(KeyCode::Char('\u{1b}'), window::Modifiers::NONE, true);
+    assert!(adapter.input(Input::RawKey(&escape)));
     assert!(!adapter.app.ui().recording_shortcut());
+    assert!(adapter.content_page());
 }
 
 fn click(adapter: &mut Adapter, id: ui::ElementId) {
@@ -798,10 +798,6 @@ fn settings_recorder_keeps_control_backspace_and_h_distinct() {
             click(
                 &mut adapter,
                 ui::ElementId::Setting("shortcut.commands".into()),
-            );
-            click(
-                &mut adapter,
-                ui::ElementId::AddChord("shortcut.commands".into()),
             );
             assert!(adapter.app.ui().recording_keybind());
             let input = if raw_path {

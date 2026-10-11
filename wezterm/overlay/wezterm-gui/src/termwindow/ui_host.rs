@@ -104,6 +104,8 @@ pub struct Geometry {
     /// Width and height reserved for AppKit's integrated title controls, in pixels.
     pub header_inset: f32,
     pub header_height: f32,
+    /// The terminal palette background, which content pages share with shells.
+    pub page_background: Option<(u8, u8, u8)>,
 }
 impl Geometry {
     pub fn ui_bounds(self, whole_window: bool) -> Bounds {
@@ -895,6 +897,10 @@ impl TermWindow {
             dpi: self.dimensions.dpi as f32,
             header_inset: header_inset.unwrap_or(0.),
             header_height: if inline_header { top } else { 0. },
+            page_background: self.palette.as_ref().map(|palette| {
+                let (r, g, b, _) = palette.background.to_srgb_u8();
+                (r, g, b)
+            }),
         }
     }
     pub fn vtabs_empty(&self) -> bool {
@@ -1656,7 +1662,7 @@ impl TermWindow {
             let bounds =
                 geometry.ui_bounds(ui.provider.content_page() || ui.provider.overlay_surface());
             // Transient surfaces leave the terminal visible beneath their own rounded shapes.
-            let background_bounds = geometry.ui_bounds(ui.provider.content_page());
+            let background_bounds = geometry.ui_bounds(false);
             let rounded = !ui.provider.primitives().is_empty();
             let clip = (
                 bounds.x - self.dimensions.pixel_width as f32 / 2.,
@@ -1706,6 +1712,20 @@ impl TermWindow {
                         self.vtabs_titlebar_height(),
                     ),
                     background,
+                )?;
+            }
+            if ui.provider.content_page() {
+                // Pages fill the content frame the way a shell's background does.
+                let page = palette
+                    .background
+                    .to_linear()
+                    .mul_alpha(self.config.window_background_opacity);
+                let content = geometry.content;
+                self.filled_rectangle(
+                    layers,
+                    0,
+                    euclid::rect(content.x, content.y, content.width, content.height),
+                    page,
                 )?;
             }
             self.paint_vtabs_frame(layers, geometry.content, background)?;

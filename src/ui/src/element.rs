@@ -30,12 +30,10 @@ pub enum ElementId {
     ClosePane(TabId, PaneId),
     CloseTab(TabId),
     Menu(String),
+    MenuRemove(String),
     Setting(String),
     Slider(String),
     SettingsEntry,
-    Chord(String, usize),
-    RemoveChord(String, String),
-    AddChord(String),
     Editor,
     RecordShortcut,
     Scrollbar(ScrollArea),
@@ -48,6 +46,7 @@ impl ElementId {
         match self {
             Self::CloseTab(id) | Self::Pane(id, _) | Self::ClosePane(id, _) => Self::Tab(*id),
             Self::CloseSettingsTab => Self::SettingsTab,
+            Self::MenuRemove(id) => Self::Menu(id.clone()),
             Self::CreateFolder => Self::SpaceTitle,
             other => other.clone(),
         }
@@ -65,11 +64,7 @@ impl ElementId {
     /// The setting a row, or a control inside it, belongs to.
     pub(crate) fn setting(&self) -> Option<&str> {
         match self {
-            Self::Setting(key)
-            | Self::Slider(key)
-            | Self::Chord(key, _)
-            | Self::RemoveChord(key, _)
-            | Self::AddChord(key) => Some(key),
+            Self::Setting(key) | Self::Slider(key) => Some(key),
             _ => None,
         }
     }

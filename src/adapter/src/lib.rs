@@ -1830,6 +1830,11 @@ impl Provider for Adapter {
             self.app.ui_mut().invalidate();
         }
         self.geometry = geometry;
+        self.app.ui_mut().set_page_background(
+            geometry
+                .page_background
+                .map(|(r, g, b)| ratatui::style::Color::Rgb(r, g, b)),
+        );
         self.app.ui_mut().set_layout(
             (geometry.sidebar.width / geometry.cell_width.max(1.))
                 .floor()

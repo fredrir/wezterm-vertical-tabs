@@ -4,6 +4,7 @@ use crate::element::ElementId;
 use crate::input::{Key, Modifiers, TextEditor};
 use crate::intent::{HostAction, UiIntent};
 use crate::overlays::{Menu, MenuItem, Overlay};
+use crate::views::keybinds::Binding;
 use crate::views::{tab_machine, tab_name};
 use crate::{SidebarUi, icons};
 use vtabs_core::{Intent, Model, Tab, TabId};
@@ -12,6 +13,7 @@ use vtabs_core::{Intent, Model, Tab, TabId};
 pub(crate) enum LauncherKind {
     Tabs,
     Commands,
+    Keybinds,
     LaunchMenu,
 }
 
@@ -44,6 +46,7 @@ pub(crate) struct Launcher {
     pub scrollbar: Option<Scrollbar>,
     pub recording: bool,
     pub launch_menu: Option<Box<LaunchMenu>>,
+    pub binding: Option<Box<Binding>>,
 }
 
 impl Launcher {
@@ -253,7 +256,8 @@ impl SidebarUi {
 
     /// Settings record plugin chords; the command search records host key labels.
     pub fn recording_keybind(&self) -> bool {
-        self.settings.open && self.settings.recording() && self.overlays.current.is_none()
+        self.binding().is_some()
+            || (self.settings.open && self.settings.recording && self.overlays.current.is_none())
     }
 
     pub fn recording_shortcut(&self) -> bool {
@@ -283,8 +287,12 @@ impl SidebarUi {
         shortcut: String,
         intents: &mut Vec<UiIntent>,
     ) {
+        if self.binding().is_some() {
+            self.keybind_recorded(model, &shortcut, intents);
+            return;
+        }
         if self.recording_keybind() {
-            self.settings_recorded(model, &shortcut, intents);
+            self.settings_recorded(&shortcut);
             return;
         }
         if let Some(Overlay::Menu(menu)) = &mut self.overlays.current
@@ -319,6 +327,7 @@ impl SidebarUi {
             scrollbar: None,
             recording: false,
             launch_menu: None,
+            binding: None,
         });
         self.open_overlay(Overlay::Menu(Menu {
             selected,
@@ -473,6 +482,10 @@ pub(crate) fn filter_menu(menu: &mut Menu) {
         return;
     };
     search.scrollbar = None;
+    if search.kind == LauncherKind::Keybinds {
+        menu.items = search.all_items.clone();
+        return;
+    }
     if let Some(launcher) = &search.launch_menu {
         let query = search.editor.text();
         let mut matches: Vec<_> = search

@@ -148,8 +148,11 @@ impl SidebarUi {
         {
             self.commit_entry(intents);
         }
-        if self.recording_keybind() && !matches!(hit, Some(ElementId::SettingsRecord)) {
-            self.settings.capture = None;
+        if self.settings.recording
+            && self.overlays.current.is_none()
+            && !matches!(hit, Some(ElementId::SettingsRecord))
+        {
+            self.settings.recording = false;
             self.frame.dirty = true;
         }
         if self.overlays.current.is_some() && !self.overlays.rect.contains(Position::new(x, y)) {

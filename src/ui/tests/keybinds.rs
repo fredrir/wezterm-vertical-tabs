@@ -65,99 +65,101 @@ fn setup() -> (SidebarUi, Model) {
         &mut model,
         ElementId::SettingsCategory("keybinds".into()),
     );
-    click(&mut ui, &mut model, ElementId::Setting(COMMANDS.into()));
     (ui, model)
+}
+fn open(ui: &mut SidebarUi, model: &mut Model) {
+    click(ui, model, ElementId::Setting(COMMANDS.into()));
+    assert!(ui.recording_keybind(), "the launcher opens recording");
 }
 fn record(ui: &mut SidebarUi, model: &mut Model, chord: &str) {
     assert!(ui.recording_keybind());
     let intents = ui.event(model, UiInput::RecordShortcut(chord.into()));
     apply(model, intents);
+    draw(ui, model);
 }
-fn remove(chord: &str) -> ElementId {
-    ElementId::RemoveChord(COMMANDS.into(), chord.into())
+fn rows(ui: &SidebarUi) -> Vec<String> {
+    ui.hit_regions()
+        .iter()
+        .filter_map(|hit| match &hit.id {
+            ElementId::Menu(id) => Some(id.clone()),
+            _ => None,
+        })
+        .collect()
+}
+fn chord(chord: &str) -> ElementId {
+    ElementId::Menu(format!("chord/{chord}"))
+}
+fn commands(model: &Model) -> Vec<String> {
+    keybinds::bindings(&model.settings, "commands")
 }
 
 #[test]
-fn chord_pills_add_replace_remove_and_reset_a_plugin_shortcut() {
+fn launcher_adds_replaces_removes_and_resets_a_plugin_shortcut() {
     let (mut ui, mut model) = setup();
-    click(&mut ui, &mut model, ElementId::AddChord(COMMANDS.into()));
+    let first = keybinds::defaults("commands")[0].clone();
+    open(&mut ui, &mut model);
     record(&mut ui, &mut model, "F12");
-    assert!(!ui.recording_shortcut());
-    assert!(keybinds::bindings(&model.settings, "commands").contains(&"F12".into()));
+    assert!(commands(&model).contains(&"F12".into()));
+    assert!(ui.has_overlay(), "the launcher stays open for more changes");
+    assert!(rows(&ui).contains(&"chord/F12".into()));
+    record(&mut ui, &mut model, "");
+    assert!(!ui.has_overlay());
     assert!(matches!(
         ui.event(&model, UiInput::key(Key::Function(12))).as_slice(),
         [UiIntent::Host(HostAction::OpenCommands)]
     ));
 
-    click(&mut ui, &mut model, ElementId::Chord(COMMANDS.into(), 0));
+    open(&mut ui, &mut model);
+    click(&mut ui, &mut model, chord(&first));
     record(&mut ui, &mut model, "Ctrl+Alt+p");
-    assert_eq!(
-        keybinds::bindings(&model.settings, "commands")[0],
-        "Ctrl+Alt+p"
-    );
-    assert_eq!(
-        keybinds::action(&model.settings, &keybinds::defaults("commands")[0]),
-        None
-    );
+    assert_eq!(commands(&model)[0], "Ctrl+Alt+p");
+    assert_eq!(keybinds::action(&model.settings, &first), None);
 
-    hover(&mut ui, &model, ElementId::Chord(COMMANDS.into(), 0));
-    click(&mut ui, &mut model, remove("Ctrl+Alt+p"));
-    assert!(!keybinds::bindings(&model.settings, "commands").contains(&"Ctrl+Alt+p".into()));
-
-    ui.event(&model, UiInput::key(Key::Escape));
-    let intents = ui.event(&model, UiInput::key(Key::Delete));
-    apply(&mut model, intents);
-    assert_eq!(
-        keybinds::bindings(&model.settings, "commands"),
-        keybinds::defaults("commands")
+    hover(&mut ui, &model, chord("Ctrl+Alt+p"));
+    click(
+        &mut ui,
+        &mut model,
+        ElementId::MenuRemove("chord/Ctrl+Alt+p".into()),
     );
+    assert!(!commands(&model).contains(&"Ctrl+Alt+p".into()));
+
+    click(&mut ui, &mut model, ElementId::Menu("reset".into()));
+    assert_eq!(commands(&model), keybinds::defaults("commands"));
     assert!(!model.settings.keybinds.contains_key("commands"));
 }
 
 #[test]
-fn keyboard_reaches_each_chord_and_the_add_pill() {
+fn plain_navigation_keys_steer_the_list_while_recording() {
     let (mut ui, mut model) = setup();
-    let count = keybinds::bindings(&model.settings, "commands").len();
-    ui.event(&model, UiInput::key(Key::Left));
-    ui.event(&model, UiInput::key(Key::Enter));
-    record(&mut ui, &mut model, "F12");
-    assert_eq!(
-        keybinds::bindings(&model.settings, "commands").last(),
-        Some(&"F12".to_owned())
-    );
-
-    for _ in 0..=count {
-        ui.event(&model, UiInput::key(Key::Left));
+    let defaults = keybinds::defaults("commands");
+    open(&mut ui, &mut model);
+    for key in ["Down", "Up", "Down", "Up"] {
+        record(&mut ui, &mut model, key);
     }
-    let intents = ui.event(&model, UiInput::key(Key::Delete));
-    apply(&mut model, intents);
-    assert_eq!(
-        keybinds::bindings(&model.settings, "commands").len(),
-        count,
-        "Delete on a focused chord removes only that chord"
-    );
-    assert!(
-        !keybinds::bindings(&model.settings, "commands")
-            .contains(&keybinds::defaults("commands")[0])
-    );
+    assert!(model.settings.keybinds.is_empty(), "navigation never binds");
+    record(&mut ui, &mut model, "Enter");
+    record(&mut ui, &mut model, "F11");
+    assert_eq!(commands(&model)[0], "F11", "Enter on a chord re-records it");
+
+    record(&mut ui, &mut model, "Down");
+    record(&mut ui, &mut model, "Delete");
+    let mut expected = vec!["F11".to_owned()];
+    expected.extend_from_slice(&defaults[2..]);
+    assert_eq!(commands(&model), expected);
 }
 
 #[test]
-fn conflicting_shortcuts_and_cancel_leave_saved_bindings_unchanged() {
+fn a_clash_shows_its_owner_and_leaves_bindings_unchanged() {
     let (mut ui, mut model) = setup();
-    click(&mut ui, &mut model, ElementId::AddChord(COMMANDS.into()));
+    open(&mut ui, &mut model);
     record(&mut ui, &mut model, &keybinds::defaults("settings")[0]);
     assert!(model.settings.keybinds.is_empty());
-    assert!(
-        ui.recording_keybind(),
-        "a conflict keeps recording for another try"
-    );
+    assert_eq!(rows(&ui).first().map(String::as_str), Some("rejected"));
     record(&mut ui, &mut model, "");
-    assert!(!ui.recording_shortcut());
-
-    click(&mut ui, &mut model, ElementId::AddChord(COMMANDS.into()));
-    ui.event(&model, UiInput::key(Key::Escape));
-    assert!(!ui.recording_shortcut());
+    assert!(ui.has_overlay(), "Escape first clears the clash");
+    assert!(!rows(&ui).contains(&"rejected".into()));
+    record(&mut ui, &mut model, "");
+    assert!(!ui.has_overlay());
     assert!(model.settings.keybinds.is_empty());
 }
 
@@ -170,12 +172,8 @@ fn lua_owned_bindings_cannot_be_edited_from_settings() {
         } else {
             model.config_owned.insert("keybinds".into());
         }
-        draw(&mut ui, &model);
-        assert!(ui.hit_regions().iter().all(|hit| !matches!(
-            hit.id,
-            ElementId::AddChord(_) | ElementId::Chord(..) | ElementId::RemoveChord(..)
-        )));
-        ui.event(&model, UiInput::key(Key::Enter));
+        click(&mut ui, &mut model, ElementId::Setting(COMMANDS.into()));
+        assert!(!ui.has_overlay());
         assert!(!ui.recording_shortcut());
         assert!(ui.event(&model, UiInput::key(Key::Delete)).is_empty());
     }
@@ -184,14 +182,13 @@ fn lua_owned_bindings_cannot_be_edited_from_settings() {
 #[test]
 fn recording_ignores_pasted_text() {
     let (mut ui, mut model) = setup();
-    click(&mut ui, &mut model, ElementId::AddChord(COMMANDS.into()));
+    open(&mut ui, &mut model);
     assert!(
         ui.event(&model, UiInput::Paste("unrelated clipboard text".into()))
             .is_empty()
     );
     record(&mut ui, &mut model, "Super+Alt+p");
-    assert!(keybinds::bindings(&model.settings, "commands").contains(&"Super+Alt+p".into()));
-    assert!(!ui.has_overlay());
+    assert!(commands(&model).contains(&"Super+Alt+p".into()));
 }
 
 #[test]
@@ -205,15 +202,21 @@ fn restoring_a_default_does_not_overwrite_another_actions_shortcut() {
             serde_json::json!({"commands": [], "settings": [reassigned]}),
         )
         .unwrap();
-    draw(&mut ui, &model);
+    open(&mut ui, &mut model);
+    record(&mut ui, &mut model, "");
     let intents = ui.event(&model, UiInput::key(Key::Delete));
     apply(&mut model, intents);
-    assert!(keybinds::bindings(&model.settings, "commands").is_empty());
+    draw(&mut ui, &model);
+    assert!(commands(&model).is_empty());
     assert_eq!(
         keybinds::action(&model.settings, &reassigned),
         Some("settings")
     );
-    assert!(ui.has_overlay());
+    assert!(
+        ui.recording_keybind(),
+        "the clash opens where it can be resolved"
+    );
+    assert!(rows(&ui).contains(&"rejected".into()));
 }
 
 #[test]
@@ -224,8 +227,9 @@ fn removing_a_shortcut_uses_current_bindings_after_a_reload() {
             .settings
             .set("keybinds", serde_json::json!({"commands": ["F12", "F11"]}))
             .unwrap();
-        hover(&mut ui, &model, ElementId::Chord(COMMANDS.into(), 0));
-        let at = rect(&ui, &remove("F12"));
+        open(&mut ui, &mut model);
+        hover(&mut ui, &model, chord("F12"));
+        let at = rect(&ui, &ElementId::MenuRemove("chord/F12".into()));
 
         // Another window reorders or removes the pointed binding and edits another action.
         model
@@ -238,7 +242,7 @@ fn removing_a_shortcut_uses_current_bindings_after_a_reload() {
         model.revision += 1;
         press(&mut ui, &mut model, at);
 
-        assert_eq!(keybinds::bindings(&model.settings, "commands"), ["F11"]);
+        assert_eq!(commands(&model), ["F11"]);
         assert_eq!(keybinds::bindings(&model.settings, "settings"), ["F10"]);
     }
 }
@@ -247,8 +251,10 @@ fn removing_a_shortcut_uses_current_bindings_after_a_reload() {
 fn removing_a_shortcut_rechecks_lua_ownership_after_it_was_drawn() {
     for host_owned in [false, true] {
         let (mut ui, mut model) = setup();
-        hover(&mut ui, &model, ElementId::Chord(COMMANDS.into(), 0));
-        let at = rect(&ui, &remove(&keybinds::defaults("commands")[0]));
+        let first = keybinds::defaults("commands")[0].clone();
+        open(&mut ui, &mut model);
+        hover(&mut ui, &model, chord(&first));
+        let at = rect(&ui, &ElementId::MenuRemove(format!("chord/{first}")));
         if host_owned {
             ui.set_config_owned(["keybinds".into()]);
         } else {
@@ -264,7 +270,6 @@ fn recording_in_search_lists_the_actions_bound_to_a_chord() {
     let (mut ui, mut model) = setup();
     click(&mut ui, &mut model, ElementId::SettingsRecord);
     record(&mut ui, &mut model, &keybinds::defaults("tabs")[0]);
-    draw(&mut ui, &model);
     let rows: Vec<_> = ui
         .hit_regions()
         .iter()

@@ -1,5 +1,6 @@
-use crate::components::{anchored, centered, panel};
+use crate::components::{ROW_INSET, SURFACE_RADIUS, anchored, centered, panel};
 use crate::element::ElementId;
+use crate::icons;
 use crate::input::display_text;
 use crate::overlays::Menu;
 use crate::runtime::canvas::Canvas;
@@ -95,4 +96,73 @@ fn width(menu: &Menu) -> u16 {
         .max()
         .unwrap_or(0)
         .clamp(20, 56) as u16
+}
+
+/// Opens beneath its control, right-aligned to it, or above when the page ends first.
+pub(crate) fn dropdown(cx: &mut Canvas, area: Rect, menu: &mut Menu) -> Rect {
+    let theme = cx.theme;
+    let anchor = menu.dropdown.unwrap_or_default();
+    let line = if anchor.height >= 2 { 2 } else { 1 };
+    let widest = menu
+        .items
+        .iter()
+        .map(|item| display_text(&item.label).width() as u16)
+        .max()
+        .unwrap_or(0);
+    let width = (widest + 8).max(anchor.width).min(area.width);
+    let height = (menu.items.len() as u16 * line + 2).min(area.height);
+    let y = if anchor.bottom() + height <= area.bottom() {
+        anchor.bottom()
+    } else if anchor.y >= area.y + height {
+        anchor.y - height
+    } else {
+        area.bottom().saturating_sub(height)
+    };
+    let rect = Rect::new(
+        anchor.right().saturating_sub(width).max(area.x),
+        y,
+        width,
+        height,
+    );
+    cx.clear(rect);
+    let fill = theme.card;
+    cx.surface(rect, theme.lift(fill, 14), SURFACE_RADIUS, 0.0);
+    cx.surface(rect, fill, SURFACE_RADIUS - 1.0, 1.0);
+    let rows = usize::from(height.saturating_sub(2) / line).max(1);
+    menu.follow_selection(rows);
+    for (offset, item) in menu.items.iter().enumerate().skip(menu.scroll).take(rows) {
+        let row = Rect::new(
+            rect.x + 1,
+            rect.y + 1 + (offset - menu.scroll) as u16 * line,
+            rect.width.saturating_sub(2),
+            line,
+        );
+        let id = ElementId::Menu(item.id.clone());
+        let row_fill = if offset == menu.selected {
+            theme.selected
+        } else if cx.hovered(&id) {
+            theme.lift(fill, 6)
+        } else {
+            fill
+        };
+        cx.surface(row, row_fill, SURFACE_RADIUS, ROW_INSET);
+        let checked = menu.checked == Some(offset);
+        let style = theme.base().bg(row_fill);
+        cx.write(
+            Rect::new(row.x + 1, row.y, 2, 1),
+            if checked { icons::CHECK } else { "" },
+            style.fg(theme.accent),
+        );
+        cx.write(
+            Rect::new(row.x + 4, row.y, row.width.saturating_sub(5), 1),
+            display_text(&item.label),
+            style.fg(if checked {
+                theme.accent
+            } else {
+                theme.foreground
+            }),
+        );
+        cx.hit(id, row, "");
+    }
+    rect
 }

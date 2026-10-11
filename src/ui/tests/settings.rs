@@ -258,3 +258,71 @@ fn settings_controls_carry_no_tooltips() {
             .all(|hit| hit.tooltip.is_empty())
     );
 }
+
+fn focused_row(ui: &SidebarUi) -> Option<String> {
+    match ui.focused() {
+        Some(ElementId::Setting(key)) => Some(key.clone()),
+        _ => None,
+    }
+}
+
+#[test]
+fn arrows_ring_between_the_category_tabs_and_the_list() {
+    let (mut ui, model) = settings("keybinds");
+    draw(&mut ui, &model);
+    let tab = ElementId::SettingsCategory("keybinds".into());
+    assert_eq!(ui.focused(), Some(&tab));
+    ui.event(&model, UiInput::key(Key::Down));
+    assert_eq!(focused_row(&ui).as_deref(), Some("shortcut.settings"));
+    ui.event(&model, UiInput::key(Key::Up));
+    assert_eq!(ui.focused(), Some(&tab));
+    ui.event(&model, UiInput::key(Key::Up));
+    assert_eq!(focused_row(&ui).as_deref(), Some("shortcut.next_space"));
+    ui.event(&model, UiInput::key(Key::Down));
+    assert_eq!(ui.focused(), Some(&tab));
+    ui.event(&model, UiInput::key(Key::Right));
+    assert_eq!(
+        ui.focused(),
+        Some(&ElementId::SettingsCategory("all".into()))
+    );
+}
+
+#[test]
+fn choices_open_a_dropdown_beneath_their_value() {
+    let (mut ui, model) = settings("layout");
+    draw(&mut ui, &model);
+    let row = rect(&ui, &ElementId::Setting("side".into()));
+    click(&mut ui, &model, ElementId::Setting("side".into()));
+    draw(&mut ui, &model);
+    let left = rect(&ui, &ElementId::Menu("left".into()));
+    let right = rect(&ui, &ElementId::Menu("right".into()));
+    assert!(
+        left.y >= row.bottom() && right.y > left.y,
+        "{row:?} {left:?}"
+    );
+    assert!(left.right() <= row.right() && left.x > row.x + row.width / 2);
+    assert!(
+        ui.hit_regions()
+            .iter()
+            .filter(|hit| matches!(hit.id, ElementId::Menu(_)))
+            .all(|hit| hit.tooltip.is_empty())
+    );
+    ui.event(&model, UiInput::key(Key::Down));
+    let intents = ui.event(&model, UiInput::key(Key::Enter));
+    assert_eq!(set(&intents, "side"), Some(json!("right")));
+}
+
+#[test]
+fn changed_settings_draw_their_label_in_the_accent() {
+    let (mut ui, mut model) = settings("layout");
+    model.settings.width = 300;
+    ui.event(&model, UiInput::key(Key::Escape));
+    draw(&mut ui, &model);
+    let label = |ui: &SidebarUi, key: &str| {
+        let row = rect(ui, &ElementId::Setting(key.into()));
+        ui.buffer()[(row.x + 2, row.y)].fg
+    };
+    let accent = ui.theme().accent;
+    assert_eq!(label(&ui, "width"), accent);
+    assert_ne!(label(&ui, "side"), accent);
+}

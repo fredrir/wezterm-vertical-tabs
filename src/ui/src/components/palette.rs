@@ -1,5 +1,5 @@
 use crate::components::button::{Button, Tone};
-use crate::components::row::{Content, Row};
+use crate::components::row::{Content, Row, Trailing};
 use crate::components::scrollbar::Scrollbar;
 use crate::components::text_input::TextInput;
 use crate::components::{ICON_CELLS, ROW_INSET, SURFACE_RADIUS, centered, list};
@@ -9,7 +9,8 @@ use crate::input::{TextEditor, display_text};
 use crate::overlays::Menu;
 use crate::runtime::canvas::Canvas;
 use crate::views::launcher::LauncherKind;
-use ratatui::layout::Rect;
+use ratatui::layout::{Alignment, Rect};
+use ratatui::text::Line;
 use unicode_width::UnicodeWidthStr;
 
 const MAX_VISIBLE_ITEMS: usize = 10;
@@ -65,12 +66,17 @@ pub(crate) fn palette(cx: &mut Canvas, area: Rect, menu: &mut Menu) -> Rect {
     );
     cx.surface(field, theme.card, SURFACE_RADIUS, ROW_INSET);
     let lead = ICON_CELLS.min(field.width.saturating_sub(1));
+    let binding = search.binding.is_some();
     cx.write(
         Rect::new(field.x + 1, field.y, lead, 1),
-        icons::SEARCH,
+        if binding {
+            icons::KEYBOARD
+        } else {
+            icons::SEARCH
+        },
         theme.muted().bg(theme.card),
     );
-    let button_width = if search.kind == LauncherKind::Commands {
+    let button_width = if matches!(search.kind, LauncherKind::Commands | LauncherKind::Keybinds) {
         3.min(field.width.saturating_sub(lead + 2))
     } else {
         0
@@ -95,14 +101,20 @@ pub(crate) fn palette(cx: &mut Canvas, area: Rect, menu: &mut Menu) -> Rect {
     TextInput::new(ElementId::Editor, editor, theme.card)
         .active(edits_query)
         .shift(shift)
-        .placeholder(if search.recording {
+        .placeholder(if search.recording && !binding {
             "Recording keys"
         } else {
             &menu.title
         })
         .render(edit, cx);
     cx.hit(ElementId::Editor, field, &menu.title);
-    if button_width > 0 {
+    if binding && button_width > 0 {
+        cx.write(
+            Rect::new(field.right() - button_width, field.y, button_width, 1),
+            Line::from("●").alignment(Alignment::Center),
+            theme.accent().bg(theme.card),
+        );
+    } else if button_width > 0 {
         Button::action(ElementId::RecordShortcut, icons::KEYBOARD, Tone::Neutral)
             .selected(search.recording)
             .label_right_padding(1)
@@ -181,6 +193,11 @@ pub(crate) fn palette(cx: &mut Canvas, area: Rect, menu: &mut Menu) -> Rect {
             leading,
             selected: menu.scroll + offset == menu.selected,
             muted: !item.enabled,
+            trailing: item.remove.as_ref().map(|_| Trailing {
+                id: ElementId::MenuRemove(item.id.clone()),
+                icon: icons::CLOSE,
+                tooltip: "",
+            }),
             ..Row::new(
                 ElementId::Menu(item.id.clone()),
                 rect,
