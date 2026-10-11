@@ -1770,6 +1770,7 @@ impl Provider for Adapter {
                 Ok(core::Action::Ui(core::UiAction::Settings)) => self.app.open_settings(),
                 Ok(core::Action::Ui(core::UiAction::CreateSpace)) => self.app.open_create_space(),
                 Ok(core::Action::Ui(core::UiAction::Navigator)) => self.open_tab_navigator(),
+                Ok(core::Action::Ui(core::UiAction::TabActions)) => self.app.open_tab_actions(),
                 Ok(core::Action::Ui(core::UiAction::QuickTerminal)) => {
                     self.command(app::Command::QuickTerminal)
                 }

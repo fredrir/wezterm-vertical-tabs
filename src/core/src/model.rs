@@ -288,6 +288,7 @@ pub enum Intent {
     NewTabInFolder(String),
     CloseTab(TabId),
     CloseOthers(TabId),
+    CloseBelow(TabId),
     RenameTab {
         id: TabId,
         title: String,
@@ -1099,6 +1100,21 @@ impl Model {
                     self.visible
                         .iter()
                         .filter(|other| **other != id && !self.tabs[other].pinned)
+                        .map(|id| HostCommand::Close(*id)),
+                );
+                return Ok(out);
+            }
+            Intent::CloseBelow(id) => {
+                self.require_tab(id)?;
+                let below = self
+                    .visible
+                    .iter()
+                    .position(|other| *other == id)
+                    .map_or(&[][..], |at| &self.visible[at + 1..]);
+                out.commands.extend(
+                    below
+                        .iter()
+                        .filter(|other| !self.tabs[other].pinned)
                         .map(|id| HostCommand::Close(*id)),
                 );
                 return Ok(out);

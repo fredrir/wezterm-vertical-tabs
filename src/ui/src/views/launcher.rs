@@ -3,6 +3,7 @@ use crate::components::scrollbar::Scrollbar;
 use crate::element::ElementId;
 use crate::input::{Key, Modifiers, TextEditor};
 use crate::intent::{HostAction, UiIntent};
+use crate::overlays::menus::tab_actions;
 use crate::overlays::{Menu, MenuItem, Overlay};
 use crate::views::keybinds::Binding;
 use crate::views::{tab_machine, tab_name};
@@ -15,6 +16,7 @@ pub(crate) enum LauncherKind {
     Commands,
     Keybinds,
     LaunchMenu,
+    TabActions,
 }
 
 /// The host supplies its matching and label rules to preserve native launcher behavior.
@@ -424,6 +426,22 @@ impl SidebarUi {
             "No matching tabs",
             items,
             selected,
+        );
+    }
+
+    pub fn open_tab_actions(&mut self, model: &Model) {
+        if self.settings.open {
+            return;
+        }
+        let Some(id) = model.selected_tab else {
+            return;
+        };
+        self.open_launcher(
+            LauncherKind::TabActions,
+            "Tab actions",
+            "No tab actions",
+            tab_actions(model, id),
+            0,
         );
     }
 

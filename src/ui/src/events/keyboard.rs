@@ -6,6 +6,7 @@ use crate::events::EditorSlot;
 use crate::input::{EditResult, Key, Modifiers};
 use crate::intent::UiIntent;
 use crate::overlays::{Menu, Overlay, next_enabled};
+use crate::views::launcher::LauncherKind;
 use vtabs_core::Model;
 
 impl SidebarUi {
@@ -106,6 +107,9 @@ impl SidebarUi {
                 EditResult::Cancel => self.back(),
                 _ => {}
             }
+            return;
+        }
+        if self.menu_shortcut(model, &key, modifiers, intents) {
             return;
         }
         let edits_query = matches!(
@@ -234,5 +238,34 @@ impl SidebarUi {
             Key::Character('+') => self.open_create_space(),
             _ => {}
         }
+    }
+
+    /// Plain menus and tab actions run the item bound to an unmodified key; disabled items swallow it.
+    fn menu_shortcut(
+        &mut self,
+        model: &Model,
+        key: &Key,
+        modifiers: Modifiers,
+        intents: &mut Vec<UiIntent>,
+    ) -> bool {
+        let (Key::Character(c), Some(Overlay::Menu(menu))) = (key, &self.overlays.current) else {
+            return false;
+        };
+        if modifiers.command() || modifiers.alt {
+            return false;
+        }
+        let items = match &menu.search {
+            None => &menu.items,
+            Some(search) if search.kind == LauncherKind::TabActions => &search.all_items,
+            Some(_) => return false,
+        };
+        let pressed = c.to_string();
+        let Some(item) = items.iter().find(|item| item.shortcuts.contains(&pressed)) else {
+            return false;
+        };
+        if let Some(action) = item.enabled.then(|| item.action.clone()) {
+            self.run_action(model, action, intents);
+        }
+        true
     }
 }

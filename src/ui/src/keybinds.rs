@@ -80,6 +80,7 @@ impl SidebarUi {
             }
             "tabs" => intents.push(UiIntent::Host(HostAction::SearchTabs)),
             "commands" => intents.push(UiIntent::Host(HostAction::OpenCommands)),
+            "tab_actions" => self.open_tab_actions(model),
             "quick_terminal" => intents.push(UiIntent::Host(HostAction::QuickTerminal)),
             "rail" => intents.push(UiIntent::Domain(toggle_rail(model))),
             "new_tab" => {

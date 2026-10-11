@@ -29,6 +29,8 @@ shortcuts! {
         &["Super+k", "Super+Shift+k"], &["Ctrl+Shift+k", "Super+k", "Super+Shift+k"]),
     ("commands", "Command palette", "Open the command palette",
         &["Super+p", "Super+Shift+p"], &["Ctrl+Shift+p", "Super+p", "Super+Shift+p"]),
+    ("tab_actions", "Tab actions", "Open actions for the current tab",
+        &["Super+Shift+e"], &["Ctrl+Shift+e", "Super+Shift+e"]),
     ("quick_terminal", "Quick terminal", "Show or hide the floating terminal",
         &["Ctrl+`"], &["Ctrl+`"]),
     ("rail", "Toggle sidebar", "Show or hide the sidebar",

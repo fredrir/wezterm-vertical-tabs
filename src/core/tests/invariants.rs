@@ -107,6 +107,22 @@ fn reorder_preserves_hidden_slots_and_pin_partition() {
     assert_eq!(m.visible_ids(), &[1, 2]);
 }
 #[test]
+fn close_below_spares_pinned_and_earlier_tabs() {
+    let mut m = model();
+    m.reconcile((1..=5).map(tab).collect(), Some(1), false)
+        .unwrap();
+    for id in [2, 5] {
+        m.dispatch(Intent::PinTab { id, pinned: true }).unwrap();
+    }
+    assert_eq!(m.visible_ids(), &[2, 5, 1, 4]);
+    let mut close_below = |id| m.dispatch(Intent::CloseBelow(id)).unwrap().commands;
+    assert_eq!(
+        close_below(2),
+        [HostCommand::Close(1), HostCommand::Close(4)]
+    );
+    assert!(close_below(4).is_empty());
+}
+#[test]
 fn deletion_requires_explicit_valid_destination_without_partial_mutation() {
     let mut m = model();
     assert!(

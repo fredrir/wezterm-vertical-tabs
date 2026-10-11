@@ -5,7 +5,7 @@ use crate::events::EditorSlot;
 use crate::input::Key;
 use crate::overlays::MenuItem;
 use crate::views::settings_page;
-use vtabs_core::{Intent, Model, RailMode, settings};
+use vtabs_core::{Intent, Model, RailMode, TabId, settings};
 
 impl SidebarUi {
     pub(crate) fn root_menu(&mut self, model: &Model) {
@@ -72,69 +72,7 @@ impl SidebarUi {
                 let Some(tab) = model.tabs.get(&id) else {
                     return;
                 };
-                let others = Action::Domain(Intent::CloseOthers(id));
-                let mut items = vec![
-                    MenuItem::new(
-                        "activate",
-                        "Activate",
-                        Action::Domain(Intent::ActivateTab(id)),
-                    ),
-                    MenuItem::new("rename", "Rename", Action::RenameTab(id)),
-                    MenuItem::new(
-                        "pin",
-                        if tab.pinned { "Unpin" } else { "Pin" },
-                        Action::Domain(Intent::PinTab {
-                            id,
-                            pinned: !tab.pinned,
-                        }),
-                    ),
-                    MenuItem::new("move-space", "Move to space ›", Action::MoveTab(id)),
-                    MenuItem::new(
-                        "auto",
-                        "Return to automatic routing",
-                        Action::Domain(Intent::ReturnToAuto(id)),
-                    ),
-                    MenuItem::new(
-                        "move-window",
-                        "Move to new window",
-                        Action::Domain(Intent::MoveTabToNewWindow(id)),
-                    ),
-                    MenuItem::new(
-                        "close-others",
-                        "Close other unpinned tabs",
-                        Action::Confirm {
-                            label: "Close other unpinned tabs?".into(),
-                            action: Box::new(others),
-                        },
-                    ),
-                    MenuItem::new("close", "Close", Action::CloseTab(id)),
-                ];
-                items[4].enabled = tab.manual_assignment;
-                items.insert(
-                    4,
-                    MenuItem::new("move-folder", "Move to folder ›", Action::MoveToFolder(id)),
-                );
-                let at = model
-                    .visible_ids()
-                    .iter()
-                    .position(|t| *t == id)
-                    .unwrap_or(0);
-                items.push(MenuItem::new(
-                    "move-up",
-                    "Move up",
-                    Action::Domain(Intent::MoveTab {
-                        id,
-                        index: at.saturating_sub(1),
-                    }),
-                ));
-                items.push(MenuItem::new(
-                    "move-down",
-                    "Move down",
-                    Action::Domain(Intent::MoveTab {
-                        id,
-                        index: at.saturating_add(1),
-                    }),
-                ));
+                let mut items = tab_actions(model, id);
                 items.extend(custom_menu(&model.settings.menus, "custom"));
                 self.menu(tab.display_title(), items);
             }
@@ -260,6 +198,77 @@ impl SidebarUi {
             _ => {}
         }
     }
+}
+
+/// Shared by the tab context menu and the tab actions launcher; digits run the first nine.
+pub(crate) fn tab_actions(model: &Model, id: TabId) -> Vec<MenuItem> {
+    let Some(tab) = model.tabs.get(&id) else {
+        return Vec::new();
+    };
+    let visible = model.visible_ids();
+    let below = visible
+        .iter()
+        .position(|other| *other == id)
+        .map_or(&[][..], |at| &visible[at + 1..]);
+    let closable = |tabs: &[TabId]| {
+        tabs.iter()
+            .any(|other| *other != id && model.tabs.get(other).is_some_and(|tab| !tab.pinned))
+    };
+    let mut items = vec![
+        MenuItem::new("rename", "Rename", Action::RenameTab(id)),
+        MenuItem::new(
+            "pin",
+            if tab.pinned { "Unpin" } else { "Pin" },
+            Action::Domain(Intent::PinTab {
+                id,
+                pinned: !tab.pinned,
+            }),
+        ),
+        MenuItem::new(
+            "move-top",
+            "Move to top",
+            Action::Domain(Intent::MoveTab { id, index: 0 }),
+        ),
+        MenuItem::new(
+            "move-bottom",
+            "Move to bottom",
+            Action::Domain(Intent::MoveTab {
+                id,
+                index: visible.len(),
+            }),
+        ),
+        MenuItem::new("move-space", "Move to space ›", Action::MoveTab(id)),
+        MenuItem::new("move-folder", "Move to folder ›", Action::MoveToFolder(id)),
+        MenuItem::new(
+            "move-window",
+            "Move to new window",
+            Action::Domain(Intent::MoveTabToNewWindow(id)),
+        ),
+        MenuItem::new("close", "Close tab", Action::CloseTab(id)),
+        MenuItem::new(
+            "close-below",
+            "Close tabs below",
+            Action::Confirm {
+                label: "Close unpinned tabs below?".into(),
+                action: Box::new(Action::Domain(Intent::CloseBelow(id))),
+            },
+        ),
+        MenuItem::new(
+            "close-others",
+            "Close other tabs",
+            Action::Confirm {
+                label: "Close other unpinned tabs?".into(),
+                action: Box::new(Action::Domain(Intent::CloseOthers(id))),
+            },
+        ),
+    ];
+    items[8].enabled = closable(below);
+    items[9].enabled = closable(visible);
+    for (digit, item) in ('1'..='9').zip(&mut items) {
+        item.hint = digit.to_string();
+        item.shortcuts = vec![item.hint.clone()];
+    }
+    items
 }
 
 fn custom_menu(entries: &[settings::MenuEntry], prefix: &str) -> Vec<MenuItem> {

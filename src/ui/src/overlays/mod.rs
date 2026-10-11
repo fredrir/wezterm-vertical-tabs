@@ -1,6 +1,6 @@
 pub(crate) mod colors;
 mod forms;
-mod menus;
+pub(crate) mod menus;
 
 use crate::SidebarUi;
 use crate::actions::Action;
@@ -234,6 +234,7 @@ pub(crate) fn action_exists(model: &Model, action: &Action) -> bool {
             Intent::ActivateTab(id)
             | Intent::CloseTab(id)
             | Intent::CloseOthers(id)
+            | Intent::CloseBelow(id)
             | Intent::ReturnToAuto(id)
             | Intent::MoveTabToNewWindow(id)
             | Intent::RenameTab { id, .. }

@@ -42,6 +42,7 @@ return config
 | New tab | `Cmd+T` | `Ctrl+Shift+T` |
 | Search tabs | `Cmd+K` | `Ctrl+Shift+K` |
 | Command palette | `Cmd+P` | `Ctrl+Shift+P` |
+| Tab actions | `Cmd+Shift+E` | `Ctrl+Shift+E` |
 | Quick terminal | Ctrl + backtick | Ctrl + backtick |
 | Toggle sidebar | `Cmd+B` | `Ctrl+Shift+B` |
 | Close tab | `Cmd+W` | `Ctrl+Shift+W` |
@@ -64,6 +65,7 @@ return config
 | Settings | Own tab with a gear icon and the index after the last tab (`Cmd+index`, `Cmd+9`, `Ctrl+Tab`); close with × or `Cmd+W` |
 | Search | Centered palette of sidebar rows; Up/Down select, Left/Right edit the query, Enter opens; matches name, title or index |
 | Search scope | Current space (indexed), other spaces, filter-hidden, other windows (`window N`), other workspaces, disconnected domains |
+| Tab actions | Launcher for the current tab; same items as the tab context menu; `1`-`9` run the first nine |
 | Search `__detached` | Moves the tab into this window; other workspaces switch; disconnected domains reattach |
 | Search unadopted | Remote panes no mux shows, from connected remotes and `hooks.adoptable`; Enter adopts into this window |
 | `__detached` windows | Never shown on their own; when only they remain the GUI quits (`quit_when_all_windows_are_closed`); reconnecting spawns a fresh tab |
@@ -229,7 +231,7 @@ vtabs.apply_to_config(config, {
 | Catalog | All spaces, including empty spaces; scrollable at the bottom of the sidebar |
 | Bottom `+` | Create a space; distinct from New tab |
 | Empty space | Keeps other tabs running; no automatic shell creation |
-| Manual assignment | Tab context menu; Return to auto resumes routing |
+| Manual assignment | Tab context menu or Tab actions; `ReturnToAuto` resumes routing |
 | Rules | A space matches any rule; fields within one rule must all match |
 | Field patterns | Any pattern within a field; `*` wildcard, otherwise literal |
 | Fields | `domain`, `host`, `user`, `process`, `cwd`, `title` |
@@ -248,6 +250,7 @@ vtabs.apply_to_config(config, {
 | `'settings'` | Open settings |
 | `'create_space'` | Open the create-space form |
 | `'navigator'` | Open the visible-tab navigator |
+| `'tab_actions'` | Open actions for the current tab |
 | `'retry_storage'` | Retry a failed durable operation |
 | `{ QuickTerminal = { args = { 'lazygit' } } }` | Toggle a quick program |
 | `{ CreateSpace = { name = 'Work' } }` | Create and select a space |

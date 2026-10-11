@@ -1,5 +1,5 @@
 use std::time::Duration;
-use vtabs_core::{Model, Tab};
+use vtabs_core::{Intent, Model, Tab};
 use vtabs_ui::{
     AdoptablePane, CommandEntry, ElementId, HostAction, Key, Modifiers, MouseButton, Rect,
     SidebarUi, UiInput, UiIntent,
@@ -39,6 +39,47 @@ fn click(ui: &mut SidebarUi, model: &Model, id: &ElementId) {
             button: MouseButton::Left,
         },
     );
+}
+
+fn with_tabs(count: u64, selected: u64) -> Model {
+    let mut model = model();
+    let tabs = (1..=count)
+        .map(|id| Tab {
+            id,
+            title: format!("Tab {id}"),
+            ..Tab::default()
+        })
+        .collect();
+    model.reconcile(tabs, Some(selected), true).unwrap();
+    model
+}
+
+const TAB_ACTIONS: [&str; 10] = [
+    "rename",
+    "pin",
+    "move-top",
+    "move-bottom",
+    "move-space",
+    "move-folder",
+    "move-window",
+    "close",
+    "close-below",
+    "close-others",
+];
+
+fn open_tab_actions(ui: &mut SidebarUi, model: &Model) {
+    ui.event(
+        model,
+        UiInput::Key {
+            key: Key::Character('e'),
+            modifiers: Modifiers {
+                super_key: true,
+                shift: true,
+                ..Modifiers::default()
+            },
+        },
+    );
+    ui.render(model, Rect::new(0, 0, 110, 42), Duration::ZERO);
 }
 
 fn command(label: &str, shortcut: &str) -> CommandEntry {
@@ -160,5 +201,65 @@ fn wheel_scrolls_results_without_changing_the_selection() {
     assert!(matches!(
         ui.event(&model, UiInput::key(Key::Enter)).as_slice(),
         [UiIntent::Host(HostAction::RunCommand(0))]
+    ));
+}
+
+#[test]
+fn tab_actions_shortcut_lists_actions_and_digits_run_them() {
+    let model = with_tabs(3, 2);
+    let mut ui = SidebarUi::new();
+    open_tab_actions(&mut ui, &model);
+    assert_eq!(results(&ui), TAB_ACTIONS);
+    assert!(matches!(
+        ui.event(&model, UiInput::key(Key::Character('4')))
+            .as_slice(),
+        [UiIntent::Domain(Intent::MoveTab { id: 2, index: 3 })]
+    ));
+    assert!(!ui.has_overlay());
+}
+
+#[test]
+fn disabled_tab_action_digits_leave_the_query_untouched() {
+    let model = with_tabs(3, 3);
+    let mut ui = SidebarUi::new();
+    open_tab_actions(&mut ui, &model);
+    assert!(
+        ui.event(&model, UiInput::key(Key::Character('9')))
+            .is_empty()
+    );
+    ui.render(&model, Rect::new(0, 0, 110, 42), Duration::ZERO);
+    assert_eq!(results(&ui), TAB_ACTIONS);
+}
+
+#[test]
+fn tab_context_menu_matches_tab_actions_and_takes_digits() {
+    let model = with_tabs(3, 1);
+    let mut ui = SidebarUi::new();
+    ui.set_layout(32, 0);
+    draw(&mut ui, &model);
+    let tab = ui
+        .hit_regions()
+        .iter()
+        .find(|hit| hit.id == ElementId::Tab(2))
+        .expect("tab row")
+        .rect;
+    ui.event(
+        &model,
+        UiInput::PointerDown {
+            x: tab.x,
+            y: tab.y,
+            button: MouseButton::Right,
+            modifiers: Modifiers::default(),
+        },
+    );
+    draw(&mut ui, &model);
+    assert_eq!(results(&ui), TAB_ACTIONS);
+    assert!(matches!(
+        ui.event(&model, UiInput::key(Key::Character('2')))
+            .as_slice(),
+        [UiIntent::Domain(Intent::PinTab {
+            id: 2,
+            pinned: true
+        })]
     ));
 }
