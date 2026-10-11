@@ -904,7 +904,7 @@ index d66908074090d5a2b541a5a5065c3311a78906f5..9ed208743675e95eb3e2a1dabe8da323
          // any key table rules. Therefore, we should pop all `until_unknown`
          // entries from the stack.
 diff --git a/wezterm-gui/src/termwindow/mod.rs b/wezterm-gui/src/termwindow/mod.rs
-index 27567d9dd36028a6de7b943a35a791532340cfe3..1c66ce26575480996a4db97661ee1cbc03979b1d 100644
+index 27567d9dd36028a6de7b943a35a791532340cfe3..a1f72e080a966f2d4aeaee885d26767850aaca50 100644
 --- a/wezterm-gui/src/termwindow/mod.rs
 +++ b/wezterm-gui/src/termwindow/mod.rs
 @@ -1,13 +1,15 @@
@@ -1078,7 +1078,15 @@ index 27567d9dd36028a6de7b943a35a791532340cfe3..1c66ce26575480996a4db97661ee1cbc
          }
          *self.cursor_blink_state.borrow_mut() = ColorEase::new(
              config.cursor_blink_rate,
-@@ -1970,6 +1993,7 @@ impl TermWindow {
+@@ -1900,6 +1923,7 @@ impl TermWindow {
+     }
+ 
+     fn window_contains_pane(&mut self, pane_id: PaneId) -> bool {
++        if self.terminal_overlay_owns(pane_id) { return true; }
+         let mux = Mux::get();
+ 
+         let (_domain, window_id, _tab_id) = match mux.resolve_pane_id(pane_id) {
+@@ -1970,6 +1994,7 @@ impl TermWindow {
          let active_tab = tabs.iter().find(|t| t.is_active).cloned();
          let active_pane = panes.iter().find(|p| p.is_active).cloned();
  
@@ -1086,7 +1094,7 @@ index 27567d9dd36028a6de7b943a35a791532340cfe3..1c66ce26575480996a4db97661ee1cbc
          let border = self.get_os_border();
          let tab_bar_height = self.tab_bar_pixel_height().unwrap_or(0.);
          let tab_bar_y = if self.config.tab_bar_at_bottom {
-@@ -2011,6 +2035,7 @@ impl TermWindow {
+@@ -2011,6 +2036,7 @@ impl TermWindow {
                  window.invalidate();
              }
          }
@@ -1094,7 +1102,7 @@ index 27567d9dd36028a6de7b943a35a791532340cfe3..1c66ce26575480996a4db97661ee1cbc
  
          let tabs_count = window.count_tabs();
          if tabs_count == 0 {
-@@ -2075,11 +2100,7 @@ impl TermWindow {
+@@ -2075,11 +2101,7 @@ impl TermWindow {
          if let Some(window) = self.window.as_ref() {
              window.set_title(&title);
  
@@ -1107,7 +1115,7 @@ index 27567d9dd36028a6de7b943a35a791532340cfe3..1c66ce26575480996a4db97661ee1cbc
  
              // If the number of tabs changed and caused the tab bar to
              // hide/show, then we'll need to resize things.  It is simplest
-@@ -2119,7 +2140,7 @@ impl TermWindow {
+@@ -2119,7 +2141,7 @@ impl TermWindow {
              } else {
                  0.0
              };
@@ -1116,7 +1124,7 @@ index 27567d9dd36028a6de7b943a35a791532340cfe3..1c66ce26575480996a4db97661ee1cbc
  
              let r = Rect::new(
                  Point::new(
-@@ -2402,69 +2423,7 @@ impl TermWindow {
+@@ -2402,69 +2424,7 @@ impl TermWindow {
      }
  
      fn show_launcher_impl(&mut self, args: LauncherActionArgs, initial_choice_idx: usize) {
@@ -1187,7 +1195,7 @@ index 27567d9dd36028a6de7b943a35a791532340cfe3..1c66ce26575480996a4db97661ee1cbc
      }
  
      /// Returns the Prompt semantic zones
-@@ -2587,6 +2546,7 @@ impl TermWindow {
+@@ -2587,6 +2547,7 @@ impl TermWindow {
          assignment: &KeyAssignment,
      ) -> anyhow::Result<PerformAssignmentResult> {
          use KeyAssignment::*;
@@ -1195,7 +1203,7 @@ index 27567d9dd36028a6de7b943a35a791532340cfe3..1c66ce26575480996a4db97661ee1cbc
  
          if let Some(modal) = self.get_modal() {
              if modal.perform_assignment(assignment, self) {
-@@ -2601,6 +2561,9 @@ impl TermWindow {
+@@ -2601,6 +2562,9 @@ impl TermWindow {
  
          let window = self.window.as_ref().map(|w| w.clone());
  
@@ -1205,7 +1213,7 @@ index 27567d9dd36028a6de7b943a35a791532340cfe3..1c66ce26575480996a4db97661ee1cbc
          match assignment {
              ActivateKeyTable {
                  name,
-@@ -3042,6 +3005,7 @@ impl TermWindow {
+@@ -3042,6 +3006,7 @@ impl TermWindow {
                              size,
                              Some(src_window_id),
                              term_config,
@@ -1213,7 +1221,7 @@ index 27567d9dd36028a6de7b943a35a791532340cfe3..1c66ce26575480996a4db97661ee1cbc
                          )
                          .await
                          {
-@@ -3211,6 +3175,7 @@ impl TermWindow {
+@@ -3211,6 +3176,7 @@ impl TermWindow {
          }
      }
      fn close_current_pane(&mut self, confirm: bool) {
@@ -1221,7 +1229,7 @@ index 27567d9dd36028a6de7b943a35a791532340cfe3..1c66ce26575480996a4db97661ee1cbc
          let mux_window_id = self.mux_window_id;
          let mux = Mux::get();
          let tab = match mux.get_active_tab_for_window(mux_window_id) {
-@@ -3251,9 +3216,11 @@ impl TermWindow {
+@@ -3251,9 +3217,11 @@ impl TermWindow {
  
          let tab_id = tab.tab_id();
          if confirm && !tab.can_close_without_prompting(CloseReason::Tab) {
@@ -1235,7 +1243,7 @@ index 27567d9dd36028a6de7b943a35a791532340cfe3..1c66ce26575480996a4db97661ee1cbc
  
              let window = self.window.clone().unwrap();
              let (overlay, future) = start_overlay(self, &tab, move |tab_id, term| {
-@@ -3267,6 +3234,7 @@ impl TermWindow {
+@@ -3267,6 +3235,7 @@ impl TermWindow {
      }
  
      fn close_current_tab(&mut self, confirm: bool) {
@@ -1243,7 +1251,7 @@ index 27567d9dd36028a6de7b943a35a791532340cfe3..1c66ce26575480996a4db97661ee1cbc
          let mux = Mux::get();
          let tab = match mux.get_active_tab_for_window(self.mux_window_id) {
              Some(tab) => tab,
-@@ -3394,6 +3362,9 @@ impl TermWindow {
+@@ -3394,6 +3363,9 @@ impl TermWindow {
      /// an active overlay (such as search or copy mode) then that will
      /// be returned.
      pub fn get_active_pane_or_overlay(&self) -> Option<Arc<dyn Pane>> {
@@ -1253,7 +1261,7 @@ index 27567d9dd36028a6de7b943a35a791532340cfe3..1c66ce26575480996a4db97661ee1cbc
          let mux = Mux::get();
          let tab = match mux.get_active_tab_for_window(self.mux_window_id) {
              Some(tab) => tab,
-@@ -3421,6 +3392,7 @@ impl TermWindow {
+@@ -3421,6 +3393,7 @@ impl TermWindow {
      }
  
      fn get_splits(&mut self) -> Vec<PositionedSplit> {
@@ -1261,7 +1269,7 @@ index 27567d9dd36028a6de7b943a35a791532340cfe3..1c66ce26575480996a4db97661ee1cbc
          let mux = Mux::get();
          let tab = match mux.get_active_tab_for_window(self.mux_window_id) {
              Some(tab) => tab,
-@@ -3456,6 +3428,7 @@ impl TermWindow {
+@@ -3456,6 +3429,7 @@ impl TermWindow {
      }
  
      fn get_tab_information(&mut self) -> Vec<TabInformation> {
@@ -1269,7 +1277,7 @@ index 27567d9dd36028a6de7b943a35a791532340cfe3..1c66ce26575480996a4db97661ee1cbc
          let mux = Mux::get();
          let window = match mux.get_window(self.mux_window_id) {
              Some(window) => window,
-@@ -3529,6 +3502,12 @@ impl TermWindow {
+@@ -3529,6 +3503,12 @@ impl TermWindow {
      }
  
      fn get_panes_to_render(&self) -> Vec<PositionedPane> {
@@ -1282,7 +1290,7 @@ index 27567d9dd36028a6de7b943a35a791532340cfe3..1c66ce26575480996a4db97661ee1cbc
          let mux = Mux::get();
          let tab = match mux.get_active_tab_for_window(self.mux_window_id) {
              Some(tab) => tab,
-@@ -3592,6 +3571,7 @@ impl TermWindow {
+@@ -3592,6 +3572,7 @@ impl TermWindow {
      }
  
      pub fn assign_overlay(&mut self, tab_id: TabId, overlay: Arc<dyn Pane>) {
@@ -1290,7 +1298,7 @@ index 27567d9dd36028a6de7b943a35a791532340cfe3..1c66ce26575480996a4db97661ee1cbc
          self.cancel_overlay_for_tab(tab_id, None);
          self.tab_state(tab_id).overlay.replace(OverlayState {
              pane: overlay,
-@@ -3621,6 +3601,7 @@ impl TermWindow {
+@@ -3621,6 +3602,7 @@ impl TermWindow {
  
  impl Drop for TermWindow {
      fn drop(&mut self) {

@@ -22,6 +22,7 @@ pub struct SpawnBesidePane {
     pub command: Option<CommandBuilder>,
     pub command_dir: Option<String>,
     pub size: TerminalSize,
+    pub workspace: String,
 }
 
 /// A client cannot see what runs in a remote pane, so its owner judges the close.

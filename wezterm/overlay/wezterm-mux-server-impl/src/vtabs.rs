@@ -156,7 +156,7 @@ async fn spawn_beside_pane(
             request.command_dir,
             request.size,
             Some(request.pane_id),
-            mux::backing_workspace(),
+            request.workspace,
             None,
         )
         .await?;

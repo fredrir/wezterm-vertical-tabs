@@ -94,7 +94,9 @@ return config
 | Surface | Centered inside the current window, 75% width and height, without a sidebar |
 | Shortcut | Ctrl + backtick; configurable as `quick_terminal` in Settings → Keybinds |
 | Hide | Escape, repeat shortcut, click outside, close-tab shortcut, or window loses focus |
-| Session | One local shell per window; continues running while hidden; ends when its window closes |
+| Session | One shell per window; continues running while hidden; ends when its window closes |
+| Start | Beside the active pane on first opening: same host, domain and directory |
+| Mux without `local_pane_layout` | Shell lives in a hidden workspace on the mux server; reattached after a GUI restart; follows `replace-pane` |
 | Lua action | `vtabs.action("quick_terminal")`; available with plugin shortcuts disabled |
 
 **Quick programs**

@@ -4,9 +4,11 @@ use super::ui_host::{Bounds, TerminalProgram};
 use super::{TermWindow, TermWindowNotif};
 use crate::quad::{HeapQuadAllocator, TripleLayerQuadAllocator};
 use codec::SpawnBesidePane;
+use config::keyassignment::{SpawnCommand, SpawnTabDomain};
 use mux::domain::{Domain, DomainState};
 use mux::pane::{CachePolicy, Pane, PaneId};
-use mux::tab::PositionedPane;
+use mux::tab::{PositionedPane, TabId};
+use mux::window::WindowId as MuxWindowId;
 use mux::Mux;
 use portable_pty::CommandBuilder;
 use std::{cell::RefCell, rc::Rc, sync::Arc};
@@ -25,6 +27,8 @@ struct State {
     visible: bool,
     pending: bool,
     pane: Option<Arc<dyn Pane>>,
+    /// The shell's mirrored tab, where `attach_mux` swaps in its replacement.
+    tab: Option<TabId>,
     /// Shown instead of the shell; exists only while visible.
     program: Option<Program>,
     programs: u64,
@@ -56,6 +60,16 @@ enum Slot {
 }
 
 impl State {
+    /// The shell's tab shows a different pane once `attach_mux` replaced it.
+    fn follow(&mut self) -> Option<Arc<dyn Pane>> {
+        let current = self.pane.as_ref()?;
+        let replacement = Mux::get().get_tab(self.tab?)?.get_active_pane()?;
+        (replacement.pane_id() != current.pane_id()).then(|| {
+            self.pane = Some(replacement.clone());
+            replacement
+        })
+    }
+
     fn shown(&self) -> Option<Arc<dyn Pane>> {
         if !self.visible {
             return None;
@@ -87,6 +101,7 @@ impl State {
             (Slot::Shell, pane) => {
                 self.pending = false;
                 self.visible &= pane.is_some() || self.program.is_some();
+                self.tab = pane.as_ref().and_then(mirrored_tab);
                 self.pane = pane;
             }
             (Slot::Program(_), Some(pane)) => {
@@ -100,6 +115,39 @@ impl State {
             }
         }
     }
+}
+
+fn mirrored_tab(pane: &Arc<dyn Pane>) -> Option<TabId> {
+    Mux::get()
+        .resolve_pane_id(pane.pane_id())
+        .map(|(_, _, tab)| tab)
+}
+
+/// Keyed by the server window, which outlives this GUI, so a restart finds what it left.
+fn quick_workspace(domain: &Arc<dyn Domain>, window: MuxWindowId, slot: Slot) -> String {
+    let window = domain
+        .downcast_ref::<ClientDomain>()
+        .and_then(|client| client.local_to_remote_window_id(window))
+        .map_or_else(|| format!("local{window}"), |id| id.to_string());
+    let kind = match slot {
+        Slot::Shell => "shell",
+        Slot::Program(_) => "program",
+    };
+    format!("{}{window}:{kind}", mux::QUICK_WORKSPACE_PREFIX)
+}
+
+fn quick_panes(workspace: &str) -> Vec<Arc<dyn Pane>> {
+    let mux = Mux::get();
+    mux.iter_windows_in_workspace(workspace)
+        .into_iter()
+        .filter_map(|id| mux.get_window(id))
+        .flat_map(|window| {
+            window
+                .iter_tabs()
+                .filter_map(|tab| tab.get_active_pane())
+                .collect::<Vec<_>>()
+        })
+        .collect()
 }
 
 fn remove(pane: &Arc<dyn Pane>) {
@@ -233,6 +281,18 @@ impl TermWindow {
         })
     }
 
+    pub(super) fn terminal_overlay_owns(&self, pane_id: PaneId) -> bool {
+        self.ui_host.as_ref().is_some_and(|ui| {
+            let state = ui.terminal.0.borrow();
+            let program = state.program.as_ref().and_then(|program| program.pane.as_ref());
+            state
+                .pane
+                .iter()
+                .chain(program)
+                .any(|pane| pane.pane_id() == pane_id)
+        })
+    }
+
     pub(super) fn terminal_overlay_pane(&self) -> Option<Arc<dyn Pane>> {
         self.ui_host.as_ref()?.terminal.0.borrow().shown()
     }
@@ -327,19 +387,19 @@ impl TermWindow {
             self.hide_terminal_overlay();
             return;
         }
-        let Some(launch) = self.terminal_program_launch(&program) else {
+        let Some(launch) = self.terminal_launch(&program.spawn) else {
             return;
         };
         self.show_terminal_overlay(Some((program, launch)));
     }
 
     /// Resolved like a split of the active tab's pane; `None` without a pane to spawn beside.
-    fn terminal_program_launch(&self, program: &TerminalProgram) -> Option<Launch> {
+    fn terminal_launch(&self, spawn: &SpawnCommand) -> Option<Launch> {
         let mux = Mux::get();
         let current = mux
             .get_active_tab_for_window(self.mux_window_id)
             .and_then(|tab| tab.get_active_pane());
-        let mut spawn = program.spawn.clone();
+        let mut spawn = spawn.clone();
         if let Some(ui) = &self.ui_host {
             ui.provider.prepare_command(false, &mut spawn);
         }
@@ -438,21 +498,38 @@ impl TermWindow {
         if state.pending {
             return;
         }
-        state.pending = true;
         drop(state);
-        let mut spawn = config::keyassignment::SpawnCommand::default();
-        if let Some(ui) = &self.ui_host {
-            ui.provider.prepare_command(false, &mut spawn);
+        let local = SpawnCommand {
+            domain: SpawnTabDomain::DomainName("local".into()),
+            ..Default::default()
+        };
+        let Some(launch) = self
+            .terminal_launch(&SpawnCommand::default())
+            .or_else(|| self.terminal_launch(&local))
+        else {
+            return;
+        };
+        if let Target::Beside(domain, _) = &launch.target {
+            let workspace = quick_workspace(domain, self.mux_window_id, Slot::Shell);
+            if let Some(pane) = quick_panes(&workspace).into_iter().next() {
+                pane.set_config(Arc::new(config::TermConfig::with_config(
+                    self.config.clone(),
+                )));
+                pane.focus_changed(true);
+                let mut state = state_ref.borrow_mut();
+                state.tab = mirrored_tab(&pane);
+                state.pane = Some(pane);
+                return;
+            }
         }
-        let mut command = CommandBuilder::new_default_prog();
-        for (key, value) in spawn.set_environment_variables {
-            command.env(key, value);
-        }
-        let target = Mux::get()
-            .get_domain_by_name("local")
-            .map(Target::Domain)
-            .ok_or_else(|| anyhow::anyhow!("Local terminal domain is unavailable"));
-        self.spawn_terminal_pane(&state_ref, Slot::Shell, target, Some(command), None);
+        state_ref.borrow_mut().pending = true;
+        self.spawn_terminal_pane(
+            &state_ref,
+            Slot::Shell,
+            Ok(launch.target),
+            launch.command,
+            launch.cwd,
+        );
     }
 
     /// A pane arriving after its slot stopped wanting it is removed.
@@ -484,6 +561,11 @@ impl TermWindow {
                         let client = domain
                             .downcast_ref::<ClientDomain>()
                             .ok_or_else(|| anyhow::anyhow!("not a client domain"))?;
+                        let workspace = quick_workspace(&domain, window_id, slot);
+                        // Programs a quit GUI couldn't end would otherwise outlive it.
+                        if let Slot::Program(_) = slot {
+                            quick_panes(&workspace).iter().for_each(remove);
+                        }
                         let spawned = ClientDomain::get_client_inner_for_domain(domain.domain_id())?
                             .client
                             .spawn_beside_pane(SpawnBesidePane {
@@ -491,6 +573,7 @@ impl TermWindow {
                                 command,
                                 command_dir: cwd,
                                 size,
+                                workspace,
                             })
                             .await?;
                         // The pane arrives with this client's mirror of the server's hidden tab.
@@ -536,6 +619,17 @@ impl TermWindow {
     }
 
     pub(super) fn resize_terminal_overlay(&mut self) {
+        let replacement = self
+            .ui_host
+            .as_ref()
+            .and_then(|ui| ui.terminal.0.borrow_mut().follow());
+        if let Some(pane) = replacement {
+            pane.set_config(Arc::new(config::TermConfig::with_config(
+                self.config.clone(),
+            )));
+            let shown = self.terminal_overlay_pane();
+            pane.focus_changed(shown.is_some_and(|shown| shown.pane_id() == pane.pane_id()));
+        }
         let Some(pane) = self.terminal_overlay_pane() else {
             return;
         };

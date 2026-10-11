@@ -17,7 +17,7 @@ use crate::termwindow::ui_host::{
     Bounds, Command, Geometry, Input, Navigation, Projection, Provider, Reservation,
     RoundedSurface, Snapshot, Surface, TerminalProgram, spawn_completed,
 };
-use mux::{BACKING_WORKSPACE_PREFIX, DETACHED_WORKSPACE};
+use mux::{BACKING_WORKSPACE_PREFIX, DETACHED_WORKSPACE, QUICK_WORKSPACE_PREFIX};
 use std::{
     collections::{HashMap, VecDeque},
     time::{Duration, Instant},
@@ -622,7 +622,12 @@ impl Adapter {
                 continue;
             };
             let place = match window.get_workspace() {
-                workspace if workspace.starts_with(BACKING_WORKSPACE_PREFIX) => continue,
+                workspace
+                    if workspace.starts_with(BACKING_WORKSPACE_PREFIX)
+                        || workspace.starts_with(QUICK_WORKSPACE_PREFIX) =>
+                {
+                    continue;
+                }
                 DETACHED_WORKSPACE => "detached".to_owned(),
                 workspace => workspace.to_owned(),
             };

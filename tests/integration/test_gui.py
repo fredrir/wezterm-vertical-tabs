@@ -539,3 +539,104 @@ def test_quick_programs_start_fresh_in_the_active_pane_directory(
         assert gui.state()["tabs"] == initial["tabs"]
     finally:
         probe.close()
+
+
+@pytest.mark.gui
+def test_localmux_quick_terminal_shell_runs_on_the_server_and_follows_replacement(
+    wezterm_binaries, headless_display, tmp_path
+):
+    probe = Probe(
+        tmp_path / "unix",
+        wezterm_binaries["wezterm-gui"],
+        wezterm_binaries["wez-vtabs-store"],
+        "unix",
+        server=wezterm_binaries["wezterm-mux-server"],
+        initial_size={"cols": 110, "rows": 40},
+        display=headless_display,
+    )
+    gui = GuiInput(probe, headless_display, tmp_path)
+    probe.config.write_text(
+        probe.config.read_text().replace(
+            "return cfg",
+            r"""
+wezterm.on('user-var-changed', function(window, pane, name, value)
+  if name == 'QUICK_PROBE' then
+    local f = assert(io.open(root..'/quick-user-var', 'w')); f:write(value); f:close()
+  end
+end)
+return cfg
+""",
+        )
+    )
+    mux_env = dict(probe.env, WEZTERM_UNIX_SOCKET=str(probe.root / "mux.sock"))
+    project = probe.root / "project dir"
+    project.mkdir()
+
+    def cli(*arguments):
+        return subprocess.check_output(
+            [wezterm_binaries["wezterm"], "--config-file", probe.config, "cli", *arguments],
+            env=mux_env,
+            text=True,
+            timeout=5,
+        )
+
+    def quick_shells():
+        return [
+            pane["pane_id"]
+            for pane in json.loads(cli("list", "--format", "json"))
+            if pane["workspace"].startswith("__quick:") and pane["workspace"].endswith(":shell")
+        ]
+
+    def quick(state):
+        return state["quick_terminal"]
+
+    def run(command, marker):
+        gui.text(command)
+        gui.key("Return")
+        probe.wait(lambda state: (probe.root / marker).exists())
+        return (probe.root / marker).read_text()
+
+    try:
+        initial = probe.start()
+        gui.attach()
+        gui.text(
+            f'cd "{project}" && '
+            + r"""printf '\033]7;file://%s%s\033\\' "$(uname -n)" "$PWD" && """
+            + 'touch "$WEZ_VTABS_SCENARIO/moved"'
+        )
+        gui.key("Return")
+        probe.wait(lambda state: (probe.root / "moved").exists())
+
+        gui.key("ctrl+grave")
+        opened = probe.wait(
+            lambda state: quick(state)["visible"] and quick(state)["pane"] is not None
+        )
+        pane = quick(opened)["pane"]
+        assert run('pwd > "$WEZ_VTABS_SCENARIO/quick-pwd"', "quick-pwd").strip() == str(project)
+        # The shell lives on the server, in a workspace the GUI never shows.
+        [server_pane] = quick_shells()
+        assert gui.state()["tabs"] == initial["tabs"]
+
+        gui.text("""printf '\\033]1337;SetUserVar=QUICK_PROBE=%s\\007' "$(printf hi | base64)\"""")
+        gui.key("Return")
+        probe.wait(lambda state: (probe.root / "quick-user-var").exists())
+        assert (probe.root / "quick-user-var").read_text() == "hi"
+
+        # ATTACH_MUX replaces the server pane; the overlay follows it.
+        cli(
+            "replace-pane",
+            "--pane-id",
+            str(server_pane),
+            "--",
+            "/bin/sh",
+            "-c",
+            'touch "$WEZ_VTABS_SCENARIO/replaced"; exec /bin/sh',
+        )
+        probe.wait(lambda state: (probe.root / "replaced").exists())
+        followed = probe.wait(lambda state: quick(state)["pane"] not in (None, pane))
+        assert quick(followed)["visible"]
+        assert quick_shells() not in ([], [server_pane])
+        run('touch "$WEZ_VTABS_SCENARIO/typed"', "typed")
+        assert gui.state()["tabs"] == initial["tabs"]
+    finally:
+        probe.close()

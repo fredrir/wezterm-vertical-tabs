@@ -4,6 +4,8 @@
 pub const DETACHED_WORKSPACE: &str = "__detached";
 /// Prefixes the workspace in which a mux keeps the tabs backing another host's panes.
 pub const BACKING_WORKSPACE_PREFIX: &str = "__backing:";
+/// Prefixes hidden workspaces holding a GUI window's quick terminal panes.
+pub const QUICK_WORKSPACE_PREFIX: &str = "__quick:";
 
 /// The workspace a remote mux puts this host's backing tabs in, so it can hand them back.
 pub fn backing_workspace() -> String {
@@ -16,5 +18,7 @@ pub fn backing_workspace() -> String {
 
 /// Workspaces a GUI never switches to on its own.
 pub fn is_hidden_workspace(workspace: &str) -> bool {
-    workspace == DETACHED_WORKSPACE || workspace.starts_with(BACKING_WORKSPACE_PREFIX)
+    workspace == DETACHED_WORKSPACE
+        || workspace.starts_with(BACKING_WORKSPACE_PREFIX)
+        || workspace.starts_with(QUICK_WORKSPACE_PREFIX)
 }
