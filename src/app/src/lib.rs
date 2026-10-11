@@ -358,6 +358,13 @@ impl WindowApp {
             .model
             .reconcile(snapshot.tabs, snapshot.active_tab, follow)?;
         model_changed |= self.storage.restore_discovered(&mut self.model)?;
+        // The host activated another tab; a closed tab beneath the page is not a switch away.
+        if follow
+            && old_active != self.model.selected_tab
+            && old_active.is_some_and(|id| self.model.tabs.contains_key(&id))
+        {
+            self.ui.hide_settings();
+        }
         self.host_active = snapshot.active_tab;
         self.host_revision = Some(snapshot.revision);
         self.configuration_epoch = snapshot.configuration_epoch;
@@ -405,7 +412,18 @@ impl WindowApp {
         let old_projection = self.model.projection_revision();
         let old_active = self.model.selected_tab;
         let old_space = self.model.selected_space.clone();
+        let activates = matches!(
+            intent,
+            Intent::ActivateTab(_)
+                | Intent::ActivateIndex(_)
+                | Intent::ActivateRelative { .. }
+                | Intent::ActivateLast
+        );
         let transition = self.model.dispatch(intent)?;
+        // Every activation leaves the settings page, whichever surface asked for it.
+        if activates {
+            self.ui.hide_settings();
+        }
         if old_active != self.model.selected_tab || old_space != self.model.selected_space {
             self.selection_epoch = self.selection_epoch.wrapping_add(1);
         }
@@ -440,6 +458,12 @@ impl WindowApp {
         self.ui
             .activate_relative(&self.model, delta, wrap, &mut intents);
         self.run(intents)
+    }
+    pub fn move_settings(&mut self, index: usize) {
+        self.ui.move_settings(&self.model, index);
+    }
+    pub fn move_settings_relative(&mut self, delta: isize) {
+        self.ui.move_settings_relative(&self.model, delta);
     }
     fn owns_pane(&self, tab: TabId, pane: core::PaneId) -> bool {
         self.model

@@ -210,10 +210,8 @@ impl SidebarUi {
                 .map(|_| EditorSlot::Palette),
             None if self.sidebar.rename.is_some() => Some(EditorSlot::Rename),
             None if self.settings.open && self.settings.entry.is_some() => Some(EditorSlot::Entry),
-            None => (self.settings.open
-                && self.settings.search_focused
-                && self.focused == Some(ElementId::SettingsSearch))
-            .then_some(EditorSlot::SettingsSearch),
+            None => (self.settings.open && self.focused == Some(ElementId::SettingsSearch))
+                .then_some(EditorSlot::SettingsSearch),
         }
     }
 

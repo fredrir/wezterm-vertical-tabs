@@ -3,8 +3,9 @@ use crate::element::ElementId;
 use crate::input::TextEditor;
 use crate::intent::UiIntent;
 use crate::overlays::{Form, FormKind, Overlay};
+use crate::views::settings_page::set_distro_color;
 use serde_json::Value;
-use vtabs_core::{Intent, Model, SettingKind, settings};
+use vtabs_core::{Intent, Model, SettingKind, distros, settings};
 
 impl SidebarUi {
     pub(crate) fn open_form(&mut self, title: impl Into<String>, kind: FormKind, value: &str) {
@@ -109,6 +110,9 @@ impl SidebarUi {
                         accent,
                         rules,
                     }
+                }
+                FormKind::Setting(key) if let Some(id) = distros::id(key) => {
+                    set_distro_color(model, id, value.clone())
                 }
                 FormKind::Setting(key) => {
                     let descriptor =

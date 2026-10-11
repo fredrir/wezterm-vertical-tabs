@@ -28,7 +28,7 @@
 ---@field foreground? string Text foreground
 ---@field muted? string Secondary text foreground
 ---@field selected_background? string Selected card background
----@field distro_colors? table<string, string> Remote glyph colors by os-release ID, `remote` when unknown
+---@field distro_colors? table<'arch'|'ubuntu'|'debian'|'fedora'|'nixos'|'alpine'|'centos'|'rhel'|'opensuse'|'manjaro'|'raspbian'|'gentoo'|'freebsd'|'linux'|'macos'|'windows'|'remote', string> Remote glyph colors by os-release ID, `remote` when unknown
 ---@field keyboard_shortcuts? boolean Enable tab, search, settings and sidebar shortcuts
 ---@field default_domain? string Spawn domain used in an empty space; null retains the host default
 ---@field menus? TabsMenuEntry[] Nested semantic action menus
@@ -39,7 +39,7 @@
 ---@field foreground? string Text foreground
 ---@field muted? string Secondary text foreground
 ---@field selected_background? string Selected card background
----@field distro_colors? table<string, string> Remote glyph colors by os-release ID, `remote` when unknown
+---@field distro_colors? table<'arch'|'ubuntu'|'debian'|'fedora'|'nixos'|'alpine'|'centos'|'rhel'|'opensuse'|'manjaro'|'raspbian'|'gentoo'|'freebsd'|'linux'|'macos'|'windows'|'remote', string> Remote glyph colors by os-release ID, `remote` when unknown
 
 --- Argument to `vtabs.action` and `wezterm.vtabs.dispatch`.
 ---@alias TabsAction TabsUiAction|TabsIntent

@@ -44,7 +44,7 @@ return config
 | Command palette | `Cmd+P` | `Ctrl+Shift+P` |
 | Quick terminal | Ctrl + backtick | Ctrl + backtick |
 | Toggle sidebar | `Cmd+B` | `Ctrl+Shift+B` |
-| Close tab or settings | `Cmd+W` | `Ctrl+Shift+W` |
+| Close tab | `Cmd+W` | `Ctrl+Shift+W` |
 | Refresh configuration | `Cmd+Shift+R` | `Ctrl+Shift+R` |
 | Tab 1 through 8 / last | `Cmd+1..9` | `Ctrl+Shift+1..9` |
 | Next / previous tab | `Ctrl+Tab` / `Ctrl+Shift+Tab` | Same |

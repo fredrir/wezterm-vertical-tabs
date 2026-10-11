@@ -1,5 +1,6 @@
 //! Deterministic vertical-tab policies. No host, rendering, storage, or I/O dependencies.
 mod contract;
+pub mod distros;
 pub mod keybinds;
 pub mod lua;
 mod managed;

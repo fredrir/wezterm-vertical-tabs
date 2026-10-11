@@ -255,7 +255,11 @@ impl SidebarUi {
     pub fn hide_settings(&mut self) {
         if self.settings.open {
             self.settings.open = false;
-            if self.focused.as_ref().is_some_and(ElementId::on_settings_page) {
+            if self
+                .focused
+                .as_ref()
+                .is_some_and(ElementId::on_settings_page)
+            {
                 self.focused = None;
                 self.caret.stop();
             }

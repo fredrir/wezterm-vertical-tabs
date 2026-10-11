@@ -11,11 +11,13 @@ use crate::intent::UiIntent;
 use crate::runtime::canvas::{Canvas, RoundedSurface};
 use ratatui::layout::{Alignment, Rect};
 use ratatui::style::{Color, Modifier};
-use ratatui::text::Line;
+use ratatui::text::{Line, Span};
 use serde_json::{Value, json};
 use std::collections::BTreeSet;
 use unicode_width::UnicodeWidthStr;
-use vtabs_core::{Intent, Model, SettingDescriptor, SettingKind, Settings, keybinds, settings};
+use vtabs_core::{
+    Intent, Model, SettingDescriptor, SettingKind, Settings, distros, keybinds, settings,
+};
 
 const CATEGORIES: &[(&str, &str, &str)] = &[
     ("all", "All", icons::ALL),
@@ -54,7 +56,6 @@ pub(crate) struct SettingsPage {
     pub revealed: Option<usize>,
     pub scroll: usize,
     pub max_scroll: usize,
-    pub search_focused: bool,
     pub rect: Rect,
     pub scrollbar: Option<Scrollbar>,
     pub config_owned: BTreeSet<String>,
@@ -78,7 +79,6 @@ impl Default for SettingsPage {
             revealed: None,
             scroll: 0,
             max_scroll: 0,
-            search_focused: false,
             rect: Rect::default(),
             scrollbar: None,
             config_owned: BTreeSet::new(),
@@ -200,26 +200,68 @@ fn dimmed(model: &Model, key: &str) -> bool {
     key == "quick_terminal_blur" && model.settings.quick_terminal_opacity >= 1.
 }
 
-fn heading(fields: &[&SettingDescriptor], index: usize, headings: bool) -> u16 {
-    match index {
-        _ if !headings => 0,
-        0 => 1,
-        _ if fields[index - 1].group != fields[index].group => 2,
-        _ => 0,
+/// Settings, keybind and remote glyph rows by key.
+pub(crate) fn descriptor(key: &str) -> Option<&'static SettingDescriptor> {
+    settings::descriptor(key).or_else(|| {
+        keybinds::DESCRIPTORS
+            .iter()
+            .chain(distros::DESCRIPTORS)
+            .find(|field| field.key == key)
+    })
+}
+
+/// A remote glyph row reads its entry in `distro_colors`.
+pub(crate) fn setting_value(settings: &Settings, key: &str) -> Value {
+    match distros::id(key) {
+        Some(id) => json!(settings.distro_colors.get(id)),
+        None => settings.get(key).unwrap_or_default(),
     }
 }
 
-fn visible_end(
-    fields: &[&SettingDescriptor],
-    start: usize,
-    height: u16,
-    line: u16,
-    headings: bool,
-) -> usize {
+pub(crate) fn set_distro_color(model: &Model, id: &str, color: String) -> Intent {
+    let mut colors = model.settings.distro_colors.clone();
+    colors.insert(id.into(), color);
+    Intent::SetSetting {
+        key: "distro_colors".into(),
+        value: json!(colors),
+    }
+}
+
+/// The heading above each row that starts a section: groups in All, remote glyphs anywhere.
+fn sections(fields: &[&SettingDescriptor], all: bool) -> Vec<Option<&'static str>> {
+    let section = |field: &SettingDescriptor| match field.key {
+        key if distros::id(key).is_some() => Some("Remote glyphs"),
+        _ if all => Some(
+            CATEGORIES
+                .iter()
+                .find(|(id, ..)| *id == field.group)
+                .map_or(field.group, |(_, name, _)| name),
+        ),
+        _ => None,
+    };
+    fields
+        .iter()
+        .enumerate()
+        .map(|(index, field)| {
+            let name = section(field)?;
+            (index == 0 || section(fields[index - 1]) != Some(name)).then_some(name)
+        })
+        .collect()
+}
+
+fn heading(sections: &[Option<&str>], index: usize) -> u16 {
+    match sections[index] {
+        None => 0,
+        Some(_) if index == 0 => 1,
+        Some(_) => 2,
+    }
+}
+
+fn visible_end(sections: &[Option<&str>], start: usize, height: u16, line: u16) -> usize {
     let mut remaining = height;
     let mut end = start;
-    for index in start..fields.len() {
-        let needed = heading(fields, index, headings) + line;
+    for index in start..sections.len() {
+        let needed = heading(sections, index) + line;
         if needed > remaining {
             break;
         }
@@ -248,17 +290,20 @@ impl Changed {
                 .keybinds
                 .get(action)
                 .is_some_and(|keys| *keys != keybinds::defaults(action)),
-            None => self.current.get(field.key) != self.defaults.get(field.key),
+            None => match distros::id(field.key) {
+                Some(id) => self.current["distro_colors"][id] != self.defaults["distro_colors"][id],
+                None => self.current.get(field.key) != self.defaults.get(field.key),
+            },
         }
     }
 }
 
 impl SettingsPage {
     pub(crate) fn managed_in_lua(&self, model: &Model, key: &str) -> bool {
-        let key = if key.starts_with("shortcut.") {
-            "keybinds"
-        } else {
-            key
+        let key = match key {
+            _ if key.starts_with("shortcut.") => "keybinds",
+            _ if distros::id(key).is_some() => "distro_colors",
+            _ => key,
         };
         model.config_owned.contains(key) || self.config_owned.contains(key)
     }
@@ -279,9 +324,13 @@ impl SettingsPage {
             .iter()
             .filter(|_| self.category == "theme")
             .filter_map(|(key, _)| settings::descriptor(key));
-        settings::descriptors()
+        let mut fields: Vec<_> = settings::descriptors()
             .iter()
             .filter(|field| field.key != "keybinds")
+            .flat_map(|field| match field.key {
+                "distro_colors" => distros::DESCRIPTORS,
+                _ => std::slice::from_ref(field),
+            })
             .chain(keybinds::DESCRIPTORS.iter())
             .filter(|field| self.category == "all" || field.group == self.category)
             .chain(borrowed)
@@ -291,7 +340,12 @@ impl SettingsPage {
                         .iter()
                         .any(|text| text.to_lowercase().contains(&query))
             })
-            .collect()
+            .collect();
+        // Remote glyphs close the Colors tab, after the quick terminal colors.
+        if self.category == "theme" {
+            fields.sort_by_key(|field| distros::id(field.key).is_some());
+        }
+        fields
     }
 
     pub(crate) fn label(&self, field: &SettingDescriptor) -> &'static str {
@@ -403,7 +457,9 @@ impl SettingsPage {
             "",
         );
         TextInput::new(ElementId::SettingsSearch, &mut self.query, theme.card)
-            .active(self.search_focused && !overlay_open && !self.recording)
+            .active(
+                cx.focused == Some(&ElementId::SettingsSearch) && !overlay_open && !self.recording,
+            )
             .shift(if rect.height == 2 { 0.5 } else { 0.0 })
             .placeholder(if self.recording {
                 "Recording keys"
@@ -537,8 +593,12 @@ impl SettingsPage {
             }
             return;
         }
-        let headings = self.category == "all" && self.chord.is_none() && line > 1;
-        let end = |start| visible_end(&fields, start, area.height, line, headings);
+        let sections = if self.chord.is_none() && line > 1 {
+            sections(&fields, self.category == "all")
+        } else {
+            vec![None; fields.len()]
+        };
+        let end = |start| visible_end(&sections, start, area.height, line);
         self.max_scroll = (0..fields.len())
             .find(|start| end(*start) >= fields.len())
             .unwrap_or(fields.len() - 1);
@@ -568,12 +628,8 @@ impl SettingsPage {
         let mut y = list.y;
         for index in self.scroll..end(self.scroll) {
             let field = fields[index];
-            let above = heading(&fields, index, headings);
-            if above > 0 {
-                let name = CATEGORIES
-                    .iter()
-                    .find(|(id, ..)| *id == field.group)
-                    .map_or(field.group, |(_, name, _)| name);
+            let above = heading(&sections, index);
+            if let Some(name) = sections[index] {
                 cx.write(
                     Rect::new(
                         list.x + pad,
@@ -611,7 +667,6 @@ impl SettingsPage {
         let theme = cx.theme;
         let id = ElementId::Setting(field.key.into());
         let focused = index == self.selected
-            && !self.search_focused
             && cx
                 .focused
                 .is_none_or(|focused| focused.setting() == Some(field.key));
@@ -651,6 +706,11 @@ impl SettingsPage {
         } else {
             theme.foreground
         };
+        let style = theme.base().bg(fill).fg(fg);
+        let glyph = distros::id(field.key).map(|id| {
+            let color = theme.host(true, id).unwrap_or(fg);
+            Span::styled(format!("{}  ", icons::host(true, id)), style.fg(color))
+        });
         cx.write(
             Rect::new(
                 content.x,
@@ -658,8 +718,11 @@ impl SettingsPage {
                 content.width.saturating_sub(used + 1),
                 1,
             ),
-            self.label(field),
-            theme.base().bg(fill).fg(fg),
+            glyph
+                .into_iter()
+                .chain([Span::raw(self.label(field))])
+                .collect::<Line>(),
+            style,
         );
     }
 
@@ -704,7 +767,7 @@ impl SettingsPage {
                 cx,
             );
         }
-        let value = model.settings.get(field.key).unwrap_or_default();
+        let value = setting_value(&model.settings, field.key);
         let text = match field.kind {
             SettingKind::Bool => {
                 return switch(
@@ -725,9 +788,6 @@ impl SettingsPage {
                 .as_str()
                 .map_or_else(|| "Auto".into(), |hex| format!("   {hex}")),
             SettingKind::Text => value.as_str().map_or_else(|| "Auto".into(), display_text),
-            SettingKind::Colors => {
-                format!("{} entries", value.as_object().map_or(0, |v| v.len()))
-            }
             SettingKind::List => format!("{} items", value.as_array().map_or(0, |v| v.len())),
             _ => return 0,
         };
@@ -906,14 +966,12 @@ impl SidebarUi {
         self.settings.category = category.clone();
         self.settings.selected = 0;
         self.settings.scroll = 0;
-        self.settings.search_focused = false;
         self.focused = Some(ElementId::SettingsCategory(category));
         self.caret.stop();
         self.frame.dirty = true;
     }
 
     fn settings_input_text(&mut self, text: &str) {
-        self.settings.search_focused = true;
         self.focused = Some(ElementId::SettingsSearch);
         self.settings.query.insert(text);
         self.edited(EditorSlot::SettingsSearch);
@@ -927,7 +985,6 @@ impl SidebarUi {
             .position(|field| field.key == key)
         {
             self.settings.selected = index;
-            self.settings.search_focused = false;
             self.focused = Some(ElementId::Setting(key.into()));
             if self.settings.entry.is_none() {
                 self.caret.stop();
@@ -945,7 +1002,6 @@ impl SidebarUi {
     pub(crate) fn toggle_settings_recording(&mut self, intents: &mut Vec<UiIntent>) {
         self.commit_entry(intents);
         self.settings.recording = !self.settings.recording;
-        self.settings.search_focused = false;
         self.focused = Some(ElementId::SettingsRecord);
         self.caret.stop();
         self.frame.dirty = true;
@@ -1089,7 +1145,6 @@ impl SidebarUi {
             }
         }
         if mods.command() && matches!(key, Key::Character('f' | 'F')) {
-            self.settings.search_focused = true;
             self.focused = Some(ElementId::SettingsSearch);
             self.settings.query.select_all();
             self.reset_caret();
@@ -1115,12 +1170,12 @@ impl SidebarUi {
                 .map(|hit| hit.id.clone())
                 .collect();
             if let Some(id) = list::cycle(&ids, self.focused.as_ref(), mods.shift) {
-                self.settings.search_focused = id == ElementId::SettingsSearch;
+                let search = id == ElementId::SettingsSearch;
                 if let ElementId::Setting(key) = &id {
                     self.settings_focus_setting(model, key);
                 }
                 self.focused = Some(id);
-                if self.settings.search_focused {
+                if search {
                     self.reset_caret();
                 } else {
                     self.caret.stop();
@@ -1129,9 +1184,8 @@ impl SidebarUi {
             }
             return;
         }
-        if self.settings.search_focused
-            && !matches!(key, Key::Up | Key::Down | Key::PageUp | Key::PageDown)
-        {
+        let search = self.focused == Some(ElementId::SettingsSearch);
+        if search && !matches!(key, Key::Up | Key::Down | Key::PageUp | Key::PageDown) {
             match self.editor_key(EditorSlot::SettingsSearch, &key, mods, intents) {
                 EditResult::Submit => {
                     if let Some(field) = self.settings.fields(model).first() {
@@ -1139,7 +1193,6 @@ impl SidebarUi {
                     }
                 }
                 EditResult::Cancel => {
-                    self.settings.search_focused = false;
                     self.focused = None;
                     self.caret.stop();
                     self.frame.dirty = true;
@@ -1183,7 +1236,7 @@ impl SidebarUi {
                 self.focused = None;
                 self.frame.dirty = true;
             }
-            Key::Up if self.settings.search_focused => {}
+            Key::Up if search => {}
             Key::Up if field.is_some() && self.settings.selected == 0 => {
                 self.settings_focus_setting(model, fields[last].key)
             }
@@ -1194,7 +1247,7 @@ impl SidebarUi {
                 self.settings.selected = match key {
                     Key::Home => 0,
                     Key::End => last,
-                    Key::Down if self.settings.search_focused => 0,
+                    Key::Down if search => 0,
                     Key::Down => (self.settings.selected + 1).min(last),
                     Key::Up => self.settings.selected.saturating_sub(1),
                     Key::PageDown => (self.settings.selected + 5).min(last),

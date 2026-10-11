@@ -28,7 +28,7 @@
 | `foreground`                      | `"#e1e7f0"`  | Hex color `#RRGGBB`. Text foreground                                                 |
 | `muted`                           | `"#98a8be"`  | Hex color `#RRGGBB`. Secondary text foreground                                       |
 | `selected_background`             | `"#34485f"`  | Hex color `#RRGGBB`. Selected card background                                        |
-| `distro_colors`                   | `{}`         | Object of hex colors. Remote glyph colors by os-release ID, `remote` when unknown    |
+| `distro_colors`                   | Per OS ID    | Object of hex colors. Remote glyph colors by os-release ID, `remote` when unknown    |
 | `keyboard_shortcuts`              | `true`       | Boolean. Enable tab, search, settings and sidebar shortcuts                          |
 | `default_domain`                  | `null`       | String or null. Spawn domain used in an empty space; null retains the host default   |
 | `menus`                           | `[]`         | List. Nested semantic action menus                                                   |

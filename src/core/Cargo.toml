@@ -17,3 +17,7 @@ schemars.workspace   = true
 [[test]]
 name = "keybinds"
 path = "tests/keybinds.rs"
+
+[[test]]
+name = "distros"
+path = "tests/distros.rs"

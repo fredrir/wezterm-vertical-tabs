@@ -315,3 +315,26 @@ fn close_requests_ask_the_host_only_while_confirmation_is_enabled() {
         vec![Command::Host(HostCommand::Close(1))]
     );
 }
+#[test]
+fn any_tab_activation_leaves_the_settings_page_and_releases_its_search() {
+    let mut app = app();
+    app.open_settings();
+    app.input(UiInput::key(ui::Key::Character('w'))).unwrap();
+    assert!(app.ui().text_input_active());
+
+    app.update(snapshot(2, Some(3), vec![tab(1), tab(2), tab(3)]))
+        .unwrap();
+    assert!(!app.ui().content_page());
+    assert_eq!(app.ui().focused(), None);
+    assert!(!app.is_modal());
+
+    app.open_settings();
+    app.update(snapshot(3, Some(2), vec![tab(1), tab(2)]))
+        .unwrap();
+    assert!(
+        app.ui().content_page(),
+        "closing the tab beneath the page is not a switch away"
+    );
+    app.dispatch(Intent::ActivateTab(1)).unwrap();
+    assert!(!app.ui().content_page());
+}

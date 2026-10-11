@@ -216,9 +216,6 @@ impl SidebarUi {
     pub(crate) fn restore_editor(&mut self, target: ElementId) {
         self.back();
         self.focused = Some(target.clone());
-        if target == ElementId::SettingsSearch {
-            self.settings.search_focused = true;
-        }
         self.pointer.drag = None;
         self.pointer.origin = None;
         self.reset_caret();

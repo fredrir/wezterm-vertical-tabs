@@ -1,7 +1,7 @@
 //! Generate optional Lua types and a machine-readable schema from the Rust authority.
 use serde_json::{Map, Value};
 use std::fmt::Write;
-use vtabs_core::{SettingKind, Settings, lua, settings};
+use vtabs_core::{SettingKind, Settings, distros, lua, settings};
 
 const PREFIX: &str = "Tabs";
 
@@ -184,7 +184,13 @@ fn setting_type(kind: &SettingKind) -> String {
         SettingKind::Fraction | SettingKind::Opacity => "number".into(),
         SettingKind::Text => "string".into(),
         SettingKind::Color | SettingKind::OptionalColor => "string".into(),
-        SettingKind::Colors => "table<string, string>".into(),
+        SettingKind::Colors => format!(
+            "table<{}, string>",
+            distros::ids()
+                .map(|id| format!("'{id}'"))
+                .collect::<Vec<_>>()
+                .join("|")
+        ),
         SettingKind::Choice(choices) => choices
             .iter()
             .map(|c| format!("'{c}'"))
@@ -287,11 +293,17 @@ fn generate(format: &str) -> Result<String, String> {
                     SettingKind::List => "List".into(),
                     SettingKind::Keybinds => "Plugin action shortcuts".into(),
                 };
-                let default = serde_json::to_string(&defaults.get(option.key).unwrap()).unwrap();
                 let cell = |value: &str| value.replace('|', "\\|").replace('\n', "<br>");
+                let default = match option.kind {
+                    SettingKind::Colors => "Per OS ID".into(),
+                    _ => format!(
+                        "`{}`",
+                        cell(&serde_json::to_string(&defaults.get(option.key).unwrap()).unwrap())
+                    ),
+                };
                 rows.push([
                     format!("`{}`", option.key),
-                    format!("`{}`", cell(&default)),
+                    default,
                     format!("{}. {}", cell(&kind), cell(option.description)),
                 ]);
             }

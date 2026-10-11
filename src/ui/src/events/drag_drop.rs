@@ -3,13 +3,18 @@ use crate::element::ElementId;
 use crate::events::Press;
 use crate::intent::{HostAction, UiIntent};
 use crate::runtime::motion;
+use crate::views::sidebar::Slot;
 use ratatui::layout::Position;
 use std::time::Duration;
 use vtabs_core::{Intent, Model, SpaceId, TabId};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum DropTarget {
-    Beside { tab: TabId, after: bool },
+    /// Beside a tab row or the settings tab row.
+    Beside {
+        row: ElementId,
+        after: bool,
+    },
     Into(TabId),
     Folder(String),
     NewTab,
@@ -42,20 +47,29 @@ impl SidebarUi {
             let list = self.sidebar.list.contains(Position::new(x, y));
             return (pane && list).then_some(DropTarget::NewTab);
         };
+        let within = (f32::from(y - hit.rect.y) + self.pointer.fraction.1)
+            / f32::from(hit.rect.height.max(1));
+        let beside = |row| DropTarget::Beside {
+            row,
+            after: within > 0.5,
+        };
         match (&from, hit.id.row()) {
-            (ElementId::Tab(tab), ElementId::Tab(target)) if *tab != target => {
-                let within = (f32::from(y - hit.rect.y) + self.pointer.fraction.1)
-                    / f32::from(hit.rect.height.max(1));
+            (ElementId::Tab(tab), row @ ElementId::Tab(target)) if *tab != target => {
                 Some(if !(0.3..=0.7).contains(&within) {
-                    DropTarget::Beside {
-                        tab: target,
-                        after: within > 0.5,
-                    }
+                    beside(row)
                 } else {
                     DropTarget::Into(target)
                 })
             }
-            (ElementId::Tab(_), ElementId::NewTab) => Some(DropTarget::NewTab),
+            (ElementId::Tab(_), row @ ElementId::SettingsTab) if !pane => Some(beside(row)),
+            (ElementId::SettingsTab, row @ ElementId::Tab(target))
+                if model.tabs.get(&target).is_some_and(|tab| !tab.pinned) =>
+            {
+                Some(beside(row))
+            }
+            (ElementId::Tab(_) | ElementId::SettingsTab, ElementId::NewTab) => {
+                Some(DropTarget::NewTab)
+            }
             (ElementId::Tab(_), ElementId::Folder(id)) if !pane => Some(DropTarget::Folder(id)),
             (ElementId::Tab(_), ElementId::Space(id)) if !pane => Some(DropTarget::Space(id)),
             (ElementId::Folder(id), ElementId::Folder(target)) if *id != target => {
@@ -67,7 +81,11 @@ impl SidebarUi {
             _ => None,
         }
         .filter(|target| match target {
-            DropTarget::Beside { tab, .. } | DropTarget::Into(tab) => model.tabs.contains_key(tab),
+            DropTarget::Beside {
+                row: ElementId::Tab(tab),
+                ..
+            }
+            | DropTarget::Into(tab) => model.tabs.contains_key(tab),
             _ => true,
         })
     }
@@ -78,7 +96,7 @@ impl SidebarUi {
             return;
         }
         let edge = |target: &DropTarget, ui: &Self| match target {
-            DropTarget::Beside { tab, after } => ui.paint.hit(&ElementId::Tab(*tab)).map(|hit| {
+            DropTarget::Beside { row, after } => ui.paint.hit(row).map(|hit| {
                 f32::from(if *after {
                     hit.rect.bottom()
                 } else {
@@ -110,25 +128,24 @@ impl SidebarUi {
         target: DropTarget,
         intents: &mut Vec<UiIntent>,
     ) {
-        let place = |tab: TabId, after: bool, from: Option<TabId>| {
-            let visible = model.visible_ids();
-            let at = visible.iter().position(|id| *id == tab)? + usize::from(after);
-            let above = from
-                .and_then(|from| visible.iter().position(|id| *id == from))
-                .is_some_and(|from| from < at);
-            Some(at - usize::from(above))
-        };
         match (source, target) {
             (ElementId::Pane(tab, pane), DropTarget::Into(target)) => {
                 intents.push(UiIntent::Host(HostAction::JoinPane { pane, tab: target }));
                 self.settle(ElementId::Tab(if tab == target { tab } else { target }));
             }
-            (ElementId::Pane(tab, pane), DropTarget::Beside { tab: beside, after }) => {
-                intents.push(UiIntent::Host(HostAction::DetachPane {
-                    tab,
-                    pane,
-                    index: place(beside, after, None),
-                }));
+            (
+                ElementId::Pane(tab, pane),
+                DropTarget::Beside {
+                    row: ElementId::Tab(beside),
+                    after,
+                },
+            ) => {
+                let index = model
+                    .visible_ids()
+                    .iter()
+                    .position(|id| *id == beside)
+                    .map(|at| at + usize::from(after));
+                intents.push(UiIntent::Host(HostAction::DetachPane { tab, pane, index }));
             }
             (ElementId::Pane(tab, pane), DropTarget::NewTab) => {
                 intents.push(UiIntent::Host(HostAction::DetachPane {
@@ -142,27 +159,46 @@ impl SidebarUi {
                     intents.push(UiIntent::Host(HostAction::JoinTab { source: id, tab }));
                     self.settle(ElementId::Tab(tab));
                 }
-                (ElementId::Tab(id), DropTarget::Beside { tab, after }) => {
-                    let (Some(from), Some(beside)) = (model.tabs.get(&id), model.tabs.get(&tab))
-                    else {
+                (ElementId::Tab(id), DropTarget::Beside { row, after }) => {
+                    let Some(from) = model.tabs.get(&id) else {
                         return;
                     };
-                    if from.folder_id != beside.folder_id {
+                    // The settings tab only sits among unpinned tabs outside folders.
+                    let (folder_id, pinned) = match &row {
+                        ElementId::Tab(beside) => match model.tabs.get(beside) {
+                            Some(beside) => (beside.folder_id.clone(), beside.pinned),
+                            None => return,
+                        },
+                        _ => (None, false),
+                    };
+                    if from.folder_id != folder_id {
                         intents.push(UiIntent::Domain(Intent::AssignFolder {
                             tab_id: id,
-                            folder_id: beside.folder_id.clone(),
+                            folder_id,
                         }));
                     }
-                    if from.pinned != beside.pinned {
-                        intents.push(UiIntent::Domain(Intent::PinTab {
-                            id,
-                            pinned: beside.pinned,
-                        }));
+                    if from.pinned != pinned {
+                        intents.push(UiIntent::Domain(Intent::PinTab { id, pinned }));
                     }
-                    if let Some(index) = place(tab, after, Some(id)) {
+                    let slots = self.rearrange(model, Slot::Tab(id), &row, after);
+                    if let Some(index) = slots
+                        .iter()
+                        .filter(|slot| matches!(slot, Slot::Tab(_)))
+                        .position(|slot| *slot == Slot::Tab(id))
+                    {
                         intents.push(UiIntent::Domain(Intent::MoveTab { id, index }));
                     }
+                    self.sidebar.settle_settings(&slots);
                     self.settle(ElementId::Tab(id));
+                }
+                (ElementId::SettingsTab, DropTarget::Beside { row, after }) => {
+                    let slots = self.rearrange(model, Slot::Settings, &row, after);
+                    self.sidebar.settle_settings(&slots);
+                    self.settle(ElementId::SettingsTab);
+                }
+                (ElementId::SettingsTab, DropTarget::NewTab) => {
+                    self.move_settings(model, 0);
+                    self.settle(ElementId::SettingsTab);
                 }
                 (ElementId::Tab(tab_id), DropTarget::Folder(folder_id)) => {
                     intents.push(UiIntent::Domain(Intent::AssignFolder {
@@ -195,6 +231,26 @@ impl SidebarUi {
                 _ => {}
             },
         }
+    }
+
+    /// Sidebar order once `source` sits beside `row`.
+    fn rearrange(
+        &mut self,
+        model: &Model,
+        source: Slot,
+        row: &ElementId,
+        after: bool,
+    ) -> Vec<Slot> {
+        let target = match row {
+            ElementId::Tab(id) => Slot::Tab(*id),
+            _ => Slot::Settings,
+        };
+        let mut slots = self.sidebar.slots(model, self.settings.listed);
+        slots.retain(|slot| *slot != source);
+        if let Some(at) = slots.iter().position(|slot| *slot == target) {
+            slots.insert(at + usize::from(after), source);
+        }
+        slots
     }
 
     fn settle(&mut self, id: ElementId) {

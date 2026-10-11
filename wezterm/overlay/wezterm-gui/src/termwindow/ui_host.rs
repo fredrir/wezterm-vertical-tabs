@@ -1133,7 +1133,7 @@ impl TermWindow {
         }
         false
     }
-    /// Runs before modals: sidebar clipboard edits, and only window actions without a tab.
+    /// Runs before modals: sidebar clipboard edits, and only window actions without a pane.
     pub fn vtabs_preempt_assignment(
         &mut self,
         assignment: &config::keyassignment::KeyAssignment,
@@ -1156,8 +1156,20 @@ impl TermWindow {
             ) { return true; }
             return false;
         }
+        let page = self
+            .ui_host
+            .as_ref()
+            .is_some_and(|ui| ui.provider.content_page());
         self.vtabs_clipboard_assignment(assignment)
-            || (self.vtabs_empty()
+            || ((self.vtabs_empty() || page)
+                && !(page
+                    && matches!(
+                        assignment,
+                        CloseCurrentTab { .. }
+                            | CloseCurrentPane { .. }
+                            | MoveTab(_)
+                            | MoveTabRelative(_)
+                    ))
                 && !matches!(
                     assignment,
                     ActivateTab(_)
@@ -1206,7 +1218,7 @@ impl TermWindow {
             MoveTab(index) => Navigation::Move(*index),
             MoveTabRelative(delta) => Navigation::MoveRelative(*delta),
             ShowTabNavigator => Navigation::Navigator,
-            CloseCurrentTab { .. }
+            CloseCurrentTab { .. } | CloseCurrentPane { .. }
                 if self
                     .ui_host
                     .as_ref()

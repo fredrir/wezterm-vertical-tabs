@@ -1291,6 +1291,15 @@ impl Provider for Adapter {
         self.metadata.cancel();
     }
     fn navigation(&mut self, navigation: Navigation) {
+        if self.content_page() {
+            match navigation {
+                // The tab beneath the page is the one it was opened from.
+                Navigation::Last => return self.app.ui_mut().hide_settings(),
+                Navigation::Move(index) => return self.app.move_settings(index),
+                Navigation::MoveRelative(delta) => return self.app.move_settings_relative(delta),
+                _ => {}
+            }
+        }
         let intent = match navigation {
             Navigation::Index(index) => return self.transact(|app| app.activate_index(index)),
             Navigation::Relative(delta, wrap) => {

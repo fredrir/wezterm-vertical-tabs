@@ -2,7 +2,7 @@ mod rows;
 mod spaces;
 mod tab;
 
-pub(crate) use rows::{SettingsPlace, SidebarRow};
+pub(crate) use rows::{SettingsPlace, SidebarRow, Slot};
 pub(crate) use tab::InlineRename;
 
 use crate::components::button::Button;

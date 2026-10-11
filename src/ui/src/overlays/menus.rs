@@ -4,6 +4,7 @@ use crate::element::ElementId;
 use crate::events::EditorSlot;
 use crate::input::Key;
 use crate::overlays::MenuItem;
+use crate::views::settings_page;
 use vtabs_core::{Intent, Model, RailMode, settings};
 
 impl SidebarUi {
@@ -57,9 +58,6 @@ impl SidebarUi {
                 })
                 .collect();
                 self.focused = Some(id.clone());
-                if id == ElementId::SettingsSearch {
-                    self.settings.search_focused = true;
-                }
                 self.pointer.drag = None;
                 self.pointer.origin = None;
                 self.push_menu("Edit text", items);
@@ -237,12 +235,7 @@ impl SidebarUi {
                 self.menu(&space.name, items);
             }
             ElementId::Setting(key) => {
-                let title = settings::descriptor(&key)
-                    .or_else(|| {
-                        vtabs_core::keybinds::DESCRIPTORS
-                            .iter()
-                            .find(|field| field.key == key)
-                    })
+                let title = settings_page::descriptor(&key)
                     .map_or(key.as_str(), |field| field.label)
                     .to_owned();
                 let mut items = vec![

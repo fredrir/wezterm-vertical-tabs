@@ -1,6 +1,6 @@
 use serde_json::{Value, json};
 use std::time::Duration;
-use vtabs_core::{Intent, Model};
+use vtabs_core::{Intent, Model, Tab};
 use vtabs_ui::{ElementId, Key, Modifiers, MouseButton, Rect, SidebarUi, UiInput, UiIntent};
 
 fn draw(ui: &mut SidebarUi, model: &Model) {
@@ -602,6 +602,63 @@ fn changed_settings_draw_their_label_in_the_accent() {
 }
 
 #[test]
+fn remote_glyphs_close_the_colors_tab_with_a_colored_row_per_os() {
+    let (mut ui, model) = settings("theme");
+    draw(&mut ui, &model);
+    let rows = selected_rows(&ui);
+    let distros: Vec<String> = vtabs_core::distros::DESCRIPTORS
+        .iter()
+        .map(|field| field.key.into())
+        .collect();
+    assert!(rows.ends_with(&distros), "{rows:?}");
+    assert_eq!(
+        rows[rows.len() - distros.len() - 1],
+        "quick_terminal_background_color"
+    );
+
+    let arch = rect(&ui, &ElementId::Setting("distro.arch".into()));
+    let heading: String = (arch.x..arch.right())
+        .map(|x| ui.buffer()[(x, arch.y - 1)].symbol().to_owned())
+        .collect();
+    assert_eq!(heading.trim(), "Remote glyphs");
+    assert_eq!(
+        Some(ui.buffer()[(arch.x + 2, arch.y)].fg),
+        vtabs_ui::Theme::parse_color(&model.settings.distro_colors["arch"])
+    );
+}
+
+#[test]
+fn remote_glyph_rows_edit_and_reset_one_entry_of_distro_colors() {
+    let (mut ui, mut model) = settings("theme");
+    model
+        .settings
+        .distro_colors
+        .insert("arch".into(), "#000000".into());
+    click(&mut ui, &model, ElementId::Setting("distro.ubuntu".into()));
+    ui.event(&model, UiInput::key(Key::Backspace));
+    ui.event(&model, UiInput::Text("#123456".into()));
+    let intents = ui.event(&model, UiInput::key(Key::Enter));
+    let mut expected = model.settings.distro_colors.clone();
+    expected.insert("ubuntu".into(), "#123456".into());
+    assert_eq!(set(&intents, "distro_colors"), Some(json!(expected)));
+
+    let (mut ui, mut model) = settings("theme");
+    model
+        .settings
+        .distro_colors
+        .insert("arch".into(), "#000000".into());
+    model
+        .settings
+        .distro_colors
+        .insert("remote".into(), "#ffffff".into());
+    ui.event(&model, UiInput::key(Key::Up));
+    let intents = ui.event(&model, UiInput::key(Key::Backspace));
+    let mut expected = vtabs_core::distros::defaults();
+    expected.insert("arch".into(), "#000000".into());
+    assert_eq!(set(&intents, "distro_colors"), Some(json!(expected)));
+}
+
+#[test]
 fn quick_terminal_colors_also_list_under_colors_with_their_own_labels() {
     let text = |ui: &SidebarUi, key: &str| {
         let row = rect(ui, &ElementId::Setting(key.into()));
@@ -616,7 +673,11 @@ fn quick_terminal_colors_also_list_under_colors_with_their_own_labels() {
 
     let (mut ui, model) = settings("theme");
     draw(&mut ui, &model);
-    assert!(selected_rows(&ui).ends_with(&keys.map(String::from)));
+    assert!(
+        selected_rows(&ui)
+            .windows(2)
+            .any(|pair| pair == keys.map(String::from))
+    );
     assert!(text(&ui, keys[0]).starts_with("Quick terminal border "));
     assert!(text(&ui, keys[1]).starts_with("Quick terminal background "));
 
@@ -630,4 +691,110 @@ fn quick_terminal_colors_also_list_under_colors_with_their_own_labels() {
     for key in keys {
         assert_eq!(rows.iter().filter(|row| *row == key).count(), 1);
     }
+}
+
+fn with_tabs(count: u64) -> (SidebarUi, Model) {
+    let mut model = Model::default();
+    model.settings.animations = false;
+    let tabs = (1..=count)
+        .map(|id| Tab {
+            id,
+            title: format!("Tab {id}"),
+            ..Tab::default()
+        })
+        .collect();
+    model.reconcile(tabs, Some(1), true).unwrap();
+    let mut ui = SidebarUi::new();
+    ui.set_layout(32, 0);
+    ui.open_settings();
+    (ui, model)
+}
+
+fn drag(ui: &mut SidebarUi, model: &mut Model, from: ElementId, to: ElementId, after: bool) {
+    draw(ui, model);
+    let (start, end) = (rect(ui, &from), rect(ui, &to));
+    let y = if after { end.bottom() - 1 } else { end.y };
+    ui.event(
+        model,
+        UiInput::PointerDown {
+            x: start.x + 1,
+            y: start.y,
+            button: MouseButton::Left,
+            modifiers: Modifiers::default(),
+        },
+    );
+    ui.event(model, UiInput::PointerMove { x: end.x + 1, y });
+    let intents = ui.event(
+        model,
+        UiInput::PointerUp {
+            x: end.x + 1,
+            y,
+            button: MouseButton::Left,
+        },
+    );
+    for intent in intents {
+        if let UiIntent::Domain(intent) = intent {
+            model.dispatch(intent).unwrap();
+        }
+    }
+    draw(ui, model);
+}
+
+fn order(ui: &SidebarUi) -> Vec<ElementId> {
+    let mut rows: Vec<_> = ui
+        .hit_regions()
+        .iter()
+        .filter(|hit| matches!(hit.id, ElementId::Tab(_) | ElementId::SettingsTab))
+        .map(|hit| (hit.rect.y, hit.id.clone()))
+        .collect();
+    rows.sort_by_key(|(y, _)| *y);
+    rows.dedup();
+    rows.into_iter().map(|(_, id)| id).collect()
+}
+
+#[test]
+fn settings_tab_drags_among_open_tabs_like_any_tab() {
+    let (mut ui, mut model) = with_tabs(3);
+    use ElementId::{SettingsTab as S, Tab as T};
+    drag(&mut ui, &mut model, S, T(1), false);
+    assert_eq!(order(&ui), [S, T(1), T(2), T(3)]);
+    drag(&mut ui, &mut model, S, T(2), true);
+    assert_eq!(order(&ui), [T(1), T(2), S, T(3)]);
+    assert!(ui.content_page(), "dragging does not leave the page");
+}
+
+#[test]
+fn tabs_drop_beside_the_settings_tab_without_moving_it() {
+    let (mut ui, mut model) = with_tabs(3);
+    use ElementId::{SettingsTab as S, Tab as T};
+    drag(&mut ui, &mut model, S, T(2), false);
+    assert_eq!(order(&ui), [T(1), S, T(2), T(3)]);
+    drag(&mut ui, &mut model, T(3), S, false);
+    assert_eq!(order(&ui), [T(1), T(3), S, T(2)]);
+    drag(&mut ui, &mut model, T(3), T(2), true);
+    assert_eq!(order(&ui), [T(1), S, T(2), T(3)]);
+    drag(&mut ui, &mut model, T(1), S, true);
+    assert_eq!(order(&ui), [S, T(1), T(2), T(3)]);
+}
+
+#[test]
+fn settings_tab_stays_out_of_pinned_tabs() {
+    let (mut ui, mut model) = with_tabs(3);
+    use ElementId::{SettingsTab as S, Tab as T};
+    model
+        .dispatch(Intent::PinTab {
+            id: 1,
+            pinned: true,
+        })
+        .unwrap();
+    drag(&mut ui, &mut model, S, T(1), false);
+    assert_eq!(order(&ui), [T(1), T(2), T(3), S]);
+    drag(&mut ui, &mut model, S, ElementId::NewTab, false);
+    assert_eq!(order(&ui), [T(1), S, T(2), T(3)]);
+    ui.move_settings_relative(&model, -1);
+    draw(&mut ui, &model);
+    assert_eq!(order(&ui), [T(1), S, T(2), T(3)]);
+    ui.move_settings(&model, 9);
+    draw(&mut ui, &model);
+    assert_eq!(order(&ui), [T(1), T(2), T(3), S]);
 }

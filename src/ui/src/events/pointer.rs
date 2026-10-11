@@ -2,7 +2,7 @@ use crate::SidebarUi;
 use crate::components::list;
 use crate::components::scrollbar::Scrollbar;
 use crate::element::{ElementId, ScrollArea};
-use crate::events::{DropMotion, DropTarget, EditorSlot};
+use crate::events::{DropMotion, DropTarget};
 use crate::input::{Modifiers, MouseButton};
 use crate::intent::UiIntent;
 use crate::overlays::Overlay;
@@ -213,9 +213,6 @@ impl SidebarUi {
             (MouseButton::Middle, Some(ElementId::Tab(id))) => self.close_tab(model, id, intents),
             (MouseButton::Left, Some(id @ (ElementId::Editor | ElementId::SettingsSearch))) => {
                 if let Some(slot) = self.editor_slot(&id) {
-                    if slot == EditorSlot::SettingsSearch {
-                        self.settings.search_focused = true;
-                    }
                     self.click_editor(slot, x, modifiers.shift);
                 }
                 self.focused = Some(id.clone());

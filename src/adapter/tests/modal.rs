@@ -247,3 +247,33 @@ fn hidden_sidebar_modals_use_window_bounds_without_resizing_it() {
         );
     }
 }
+
+#[test]
+fn tab_moves_and_last_tab_act_on_the_settings_page_not_the_tab_beneath() {
+    config::designate_this_as_the_main_thread();
+    let mut adapter = Adapter::new(9932);
+    let tab = |id| core::Tab {
+        id,
+        title: format!("Tab {id}"),
+        ..Default::default()
+    };
+    adapter
+        .app
+        .update(app::HostSnapshot {
+            revision: 1,
+            tabs: vec![tab(1), tab(2), tab(3)],
+            active_tab: Some(1),
+            metrics: app::Metrics::default(),
+            focused: true,
+            configuration_epoch: 0,
+        })
+        .unwrap();
+    adapter.app.open_settings();
+    adapter.navigation(Navigation::Move(0));
+    adapter.navigation(Navigation::MoveRelative(1));
+    assert_eq!(adapter.app.model().visible_ids(), &[1, 2, 3]);
+    assert!(adapter.content_page());
+    adapter.navigation(Navigation::Last);
+    assert!(!adapter.content_page());
+    assert_eq!(adapter.app.model().selected_tab, Some(1));
+}

@@ -3,11 +3,11 @@ use crate::element::ElementId;
 use crate::input::{Key, Modifiers, TextEditor};
 use crate::intent::{HostAction, UiIntent};
 use crate::overlays::{FormKind, MenuItem, Overlay};
-use crate::views::settings_page::choice_label;
-use crate::views::sidebar::InlineRename;
+use crate::views::settings_page::{self, choice_label};
+use crate::views::sidebar::{InlineRename, Slot};
 use crate::views::tab_name;
 use serde_json::Value;
-use vtabs_core::{Intent, Model, PaneId, RailMode, SettingKind, SpaceId, TabId, settings};
+use vtabs_core::{Intent, Model, PaneId, RailMode, SettingKind, SpaceId, TabId};
 
 #[derive(Clone, Debug)]
 pub(crate) enum Action {
@@ -53,7 +53,6 @@ impl SidebarUi {
             ElementId::Folder(id) => intents.push(UiIntent::Domain(Intent::ToggleFolder(id))),
             ElementId::SettingsCategory(category) => self.settings_select_category(category),
             ElementId::SettingsSearch => {
-                self.settings.search_focused = true;
                 self.focused = Some(ElementId::SettingsSearch);
                 self.reset_caret();
                 self.frame.dirty = true;
@@ -339,10 +338,10 @@ impl SidebarUi {
         if self.settings.managed_in_lua(model, key) {
             return;
         }
-        let Some(descriptor) = settings::descriptor(key) else {
+        let Some(descriptor) = settings_page::descriptor(key) else {
             return;
         };
-        let value = model.settings.get(key).unwrap_or_default();
+        let value = settings_page::setting_value(&model.settings, key);
         match descriptor.kind {
             SettingKind::Bool => {
                 intents.push(UiIntent::Domain(Intent::SetSetting {
@@ -384,7 +383,7 @@ impl SidebarUi {
                 self.start_entry(model, key, None);
             }
             SettingKind::Color | SettingKind::OptionalColor => {
-                let default = vtabs_core::Settings::default().get(key).unwrap_or_default();
+                let default = settings_page::setting_value(&vtabs_core::Settings::default(), key);
                 let fallback = if key == "quick_terminal_background_color" {
                     self.host.page_background.unwrap_or(self.theme.background)
                 } else if key == "quick_terminal_border_color" {
@@ -461,6 +460,25 @@ impl SidebarUi {
             (current + delta).clamp(0, count)
         };
         self.activate_index(model, next, intents);
+    }
+
+    /// Host tab moves reach the settings tab through the same order as the sidebar.
+    pub fn move_settings(&mut self, model: &Model, index: usize) {
+        let mut slots = self.sidebar.slots(model, self.settings.listed);
+        if !slots.contains(&Slot::Settings) {
+            return;
+        }
+        slots.retain(|slot| *slot != Slot::Settings);
+        slots.insert(index.min(slots.len()), Slot::Settings);
+        self.sidebar.settle_settings(&slots);
+        self.sidebar.reveal_settings = true;
+        self.frame.dirty = true;
+    }
+
+    pub fn move_settings_relative(&mut self, model: &Model, delta: isize) {
+        if let Some(slot) = self.settings_slot(model) {
+            self.move_settings(model, slot.saturating_add(delta).max(0) as usize);
+        }
     }
 
     fn settings_slot(&mut self, model: &Model) -> Option<isize> {

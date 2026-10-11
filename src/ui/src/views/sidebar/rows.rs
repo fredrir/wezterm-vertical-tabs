@@ -20,7 +20,40 @@ pub(crate) struct SettingsPlace {
     pub slot: usize,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Slot {
+    Tab(TabId),
+    Settings,
+}
+
 impl Sidebar {
+    /// Visible tabs in order, with the settings tab where it is listed.
+    pub(crate) fn slots(&mut self, model: &Model, settings_listed: bool) -> Vec<Slot> {
+        self.ensure_rows(model, settings_listed);
+        let mut slots: Vec<_> = model
+            .visible_ids()
+            .iter()
+            .map(|id| Slot::Tab(*id))
+            .collect();
+        if let Some(place) = self.settings_place.filter(|_| settings_listed) {
+            slots.insert(place.slot.min(slots.len()), Slot::Settings);
+        }
+        slots
+    }
+
+    /// Keeps the settings tab where `slots` puts it; the next rebuild clamps it past pinned tabs.
+    pub(crate) fn settle_settings(&mut self, slots: &[Slot]) {
+        let Some(slot) = slots.iter().position(|entry| *entry == Slot::Settings) else {
+            return;
+        };
+        let anchor = slot.checked_sub(1).and_then(|at| match slots[at] {
+            Slot::Tab(id) => Some(id),
+            Slot::Settings => None,
+        });
+        self.settings_place = Some(SettingsPlace { anchor, slot });
+        self.rows_revision = None;
+    }
+
     fn place_settings(&mut self, model: &Model) -> usize {
         let visible = model.visible_ids();
         let first_open = visible

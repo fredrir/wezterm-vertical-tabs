@@ -60,6 +60,7 @@ pub struct Settings {
     pub foreground: String,
     pub muted: String,
     pub selected_background: String,
+    #[serde(deserialize_with = "crate::distros::deserialize")]
     pub distro_colors: BTreeMap<String, String>,
     pub default_domain: Option<String>,
     pub menus: Vec<MenuEntry>,
@@ -107,7 +108,7 @@ impl Default for Settings {
             foreground: "#e1e7f0".into(),
             muted: "#98a8be".into(),
             selected_background: "#34485f".into(),
-            distro_colors: BTreeMap::new(),
+            distro_colors: crate::distros::defaults(),
             default_domain: None,
             menus: Vec::new(),
         }
@@ -130,7 +131,7 @@ pub enum SettingKind {
     Color,
     /// Null follows the terminal palette.
     OptionalColor,
-    /// Keyed hex colors.
+    /// Hex colors keyed by OS ID.
     Colors,
     Choice(&'static [&'static str]),
     List,
@@ -377,6 +378,7 @@ pub fn validate_value(key: &str, value: &Value) -> Result<(), String> {
     let d = descriptor(key).ok_or_else(|| format!("Unknown setting: {key}"))?;
     let valid = match d.kind {
         SettingKind::Keybinds => return crate::keybinds::validate(&crate::keybinds::parse(value)?),
+        SettingKind::Colors => return crate::distros::validate(value),
         SettingKind::Bool => value.is_boolean(),
         SettingKind::Number { min, max } => value
             .as_u64()
@@ -386,11 +388,6 @@ pub fn validate_value(key: &str, value: &Value) -> Result<(), String> {
         SettingKind::Text => value.is_null() || value.as_str().is_some_and(|s| s.len() <= 4096),
         SettingKind::Color => value.as_str().is_some_and(valid_color),
         SettingKind::OptionalColor => value.is_null() || value.as_str().is_some_and(valid_color),
-        SettingKind::Colors => value.as_object().is_some_and(|o| {
-            o.len() <= 128
-                && o.iter()
-                    .all(|(k, v)| k.len() <= 64 && v.as_str().is_some_and(valid_color))
-        }),
         SettingKind::Choice(choices) => value.as_str().is_some_and(|s| choices.contains(&s)),
         SettingKind::List => serde_json::from_value::<Vec<MenuEntry>>(value.clone())
             .is_ok_and(|v| validate_menus(&v, 0)),
