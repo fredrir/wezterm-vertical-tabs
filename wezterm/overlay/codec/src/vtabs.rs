@@ -38,6 +38,19 @@ pub struct GetPaneCloseInfoResponse {
     pub process: String,
 }
 
+/// The owner sends the key only while something runs in the pane, judged as a close is;
+/// handled in arrival order, so it stays ahead of the `SendKeyDown`s that follow.
+#[derive(Deserialize, Serialize, PartialEq, Debug)]
+pub struct SendKeyDownIfBusy {
+    pub pane_id: PaneId,
+    pub event: termwiz::input::KeyEvent,
+}
+
+#[derive(Deserialize, Serialize, PartialEq, Eq, Debug, Clone, Default)]
+pub struct SendKeyDownIfBusyResponse {
+    pub sent: bool,
+}
+
 /// Only the machine that owns a pane can see its host, home and Git work tree.
 /// Relayed hop by hop; stock servers reject it and keep upstream labels.
 #[derive(Deserialize, Serialize, PartialEq, Debug)]

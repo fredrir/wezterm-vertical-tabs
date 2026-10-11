@@ -15,6 +15,7 @@
 | `quick_terminal_background_color` | `null`                                                        | Hex color `#RRGGBB` or null. Null follows the quick terminal palette background    |
 | `quick_terminal_auto_hide`        | `false`                                                       | Boolean. Hide the quick terminal when the window loses focus                       |
 | `quick_terminal_preserve_shell`   | `true`                                                        | Boolean. Keep the shell when hidden; disable to start a fresh shell each time      |
+| `quick_terminal_hide_on_escape`   | `"auto"`                                                      | `never`, `always`, `auto`. Auto hides only while nothing runs in the shell         |
 | `animations`                      | `true`                                                        | Boolean. Enable finite visual transitions                                          |
 | `reduced_motion`                  | `false`                                                       | Boolean. Suppress transitions                                                      |
 | `animation_ms`                    | `140`                                                         | Integer 0–1000. Transition duration in milliseconds                                |

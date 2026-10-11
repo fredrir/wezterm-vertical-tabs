@@ -96,6 +96,7 @@ return config
 | Size | `quick_terminal_width`, `quick_terminal_height` settings; window fraction above 0, at most 1; default `0.75` |
 | Shortcut | Ctrl + backtick; configurable as `quick_terminal` in Settings → Keybinds |
 | Hide | Escape, repeat shortcut, click outside, close-tab shortcut; `quick_terminal_auto_hide = true` also hides on focus loss (default `false`) |
+| Escape | `quick_terminal_hide_on_escape`: `"auto"` (default) hides only while nothing runs in the shell, judged by the pane's owning mux like closing a tab; `"always"`; `"never"` |
 | Session | `quick_terminal_preserve_shell = true` (default) keeps one shell per window running while hidden; `false` ends it when hidden and starts fresh on opening |
 | Start | Beside the active pane when a shell is created: same host, domain and directory |
 | Mux without `local_pane_layout` | Shell lives in a hidden workspace on the mux server; reattached after a GUI restart when preserved; follows `replace-pane` |
@@ -124,7 +125,7 @@ config.keys = {
 | Domain | Wherever the active pane runs; a mux without `local_pane_layout` spawns it in a hidden workspace and needs this build's mux server |
 | Session | Starts fresh on each opening; ends when hidden or when the program exits |
 | Toggle | Same binding hides; another binding or the quick terminal shortcut replaces it |
-| Hide | Repeat binding, click outside, close-tab shortcut; Escape goes to the program |
+| Hide | Repeat binding, click outside, close-tab shortcut; Escape goes to the program unless `quick_terminal_hide_on_escape = "always"` |
 
 **Launcher**
 

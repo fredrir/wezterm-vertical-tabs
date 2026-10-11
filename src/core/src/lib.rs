@@ -11,7 +11,7 @@ pub use contract::{Action, QuickProgram, UiAction, WindowContext};
 pub use managed::Managed;
 pub use model::*;
 pub use routing::{MatchField, RoutingRule, SpaceTemplate};
-pub use settings::{RailMode, SettingDescriptor, SettingKind, Settings, Side};
+pub use settings::{HideOnEscape, RailMode, SettingDescriptor, SettingKind, Settings, Side};
 
 #[cfg(test)]
 #[path = "../tests/folders.rs"]

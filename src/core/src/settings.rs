@@ -19,6 +19,16 @@ pub enum RailMode {
     Hidden,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum HideOnEscape {
+    Never,
+    Always,
+    /// Only while nothing runs in the shell, judged like closing a tab.
+    #[default]
+    Auto,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Settings {
@@ -34,6 +44,7 @@ pub struct Settings {
     pub quick_terminal_background_color: Option<String>,
     pub quick_terminal_auto_hide: bool,
     pub quick_terminal_preserve_shell: bool,
+    pub quick_terminal_hide_on_escape: HideOnEscape,
     pub animations: bool,
     pub reduced_motion: bool,
     pub animation_ms: u16,
@@ -84,6 +95,7 @@ impl Default for Settings {
             quick_terminal_background_color: None,
             quick_terminal_auto_hide: false,
             quick_terminal_preserve_shell: true,
+            quick_terminal_hide_on_escape: HideOnEscape::Auto,
             animations: true,
             reduced_motion: false,
             animation_ms: 140,
@@ -236,6 +248,13 @@ pub const DESCRIPTORS: &[SettingDescriptor] = &[
         group: "quick_terminal",
         kind: SettingKind::Bool,
         description: "Keep the shell when hidden; disable to start a fresh shell each time",
+    },
+    SettingDescriptor {
+        key: "quick_terminal_hide_on_escape",
+        label: "Hide on Escape",
+        group: "quick_terminal",
+        kind: SettingKind::Choice(&["never", "always", "auto"]),
+        description: "Auto hides only while nothing runs in the shell",
     },
     SettingDescriptor {
         key: "animations",

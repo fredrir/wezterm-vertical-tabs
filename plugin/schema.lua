@@ -21,6 +21,7 @@ return {
     quick_terminal_blur = 0,
     quick_terminal_border_color = nil,
     quick_terminal_height = 0.75,
+    quick_terminal_hide_on_escape = "auto",
     quick_terminal_opacity = 1.0,
     quick_terminal_preserve_shell = true,
     quick_terminal_transparency = false,
@@ -125,6 +126,13 @@ return {
       key = "quick_terminal_preserve_shell",
       kind = "bool",
       label = "Preserve shell",
+    },
+    {
+      description = "Auto hides only while nothing runs in the shell",
+      group = "quick_terminal",
+      key = "quick_terminal_hide_on_escape",
+      kind = { choice = { "never", "always", "auto" } },
+      label = "Hide on Escape",
     },
     {
       description = "Enable finite visual transitions",

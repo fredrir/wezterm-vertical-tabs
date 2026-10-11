@@ -232,6 +232,10 @@ fn quick_terminal_defaults_preserve_existing_sessions_and_appearance() {
     assert_eq!(settings.quick_terminal_background_color, None);
     assert!(!settings.quick_terminal_auto_hide);
     assert!(settings.quick_terminal_preserve_shell);
+    assert_eq!(
+        settings.quick_terminal_hide_on_escape,
+        settings::HideOnEscape::Auto
+    );
 }
 
 #[test]
@@ -249,6 +253,16 @@ fn quick_terminal_options_validate_atomically_and_colors_can_follow_the_palette(
         assert_eq!(settings.get(key), Some(json!(null)));
     }
     settings.set("quick_terminal_blur", json!(64)).unwrap();
+    for (value, mode) in [
+        ("never", settings::HideOnEscape::Never),
+        ("always", settings::HideOnEscape::Always),
+        ("auto", settings::HideOnEscape::Auto),
+    ] {
+        settings
+            .set("quick_terminal_hide_on_escape", json!(value))
+            .unwrap();
+        assert_eq!(settings.quick_terminal_hide_on_escape, mode);
+    }
     for key in [
         "quick_terminal_transparency",
         "quick_terminal_auto_hide",
@@ -274,6 +288,10 @@ fn quick_terminal_options_validate_atomically_and_colors_can_follow_the_palette(
         (
             "quick_terminal_background_color",
             vec![json!(""), json!(42)],
+        ),
+        (
+            "quick_terminal_hide_on_escape",
+            vec![json!(false), json!("sometimes"), json!(null)],
         ),
     ] {
         let before = settings.clone();

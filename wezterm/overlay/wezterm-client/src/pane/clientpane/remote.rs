@@ -3,12 +3,13 @@ use crate::pane::clientpane::ClientPane;
 use crate::pane::renderable::hydrate_lines;
 use codec::{
     GetLines, GetPaneCloseInfo, GetPaneCloseInfoResponse, GetPaneLocation, GetPaneLocationResponse,
-    GetPaneRenderableDimensions,
+    GetPaneRenderableDimensions, SendKeyDownIfBusy,
 };
 use mux::pane::{CachePolicy, Pane};
+use std::future::Future;
 use std::sync::Arc;
 use url::Url;
-use wezterm_term::StableRowIndex;
+use wezterm_term::{KeyCode, KeyModifiers, StableRowIndex};
 
 impl ClientPane {
     /// Load the visible screen, directory and owner before this proxy enters the local split tree.
@@ -85,5 +86,20 @@ impl ClientPane {
                 pane_id: self.remote_pane_id,
             })
             .await
+    }
+
+    /// Whether the owner sent the key; spawn it before later keys so it reaches the server first.
+    pub fn key_down_if_busy(
+        &self,
+        key: KeyCode,
+        modifiers: KeyModifiers,
+    ) -> impl Future<Output = anyhow::Result<bool>> + 'static {
+        let client = Arc::clone(&self.client);
+        let pane_id = self.remote_pane_id;
+        async move {
+            let event = termwiz::input::KeyEvent { key, modifiers };
+            let request = SendKeyDownIfBusy { pane_id, event };
+            Ok(client.client.send_key_down_if_busy(request).await?.sent)
+        }
     }
 }

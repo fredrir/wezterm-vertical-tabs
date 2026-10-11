@@ -9,7 +9,7 @@
 | Storage transport | One JSON request on stdin; one JSON response on stdout    |
 | Storage helper    | `wez-vtabs-store --db PATH`                               |
 | Protocol version  | `1`                                                       |
-| Mux wire          | Upstream protocol plus optional PDUs 65–66, 69–75         |
+| Mux wire          | Upstream protocol plus optional PDUs 65–66, 69–80         |
 
 | Mux PDU               | ID     | Value                                                                            |
 | --------------------- | ------ | -------------------------------------------------------------------------------- |
@@ -18,6 +18,7 @@
 | `AdoptPane`           | 71, 72 | `{domain, remote_pane_id, window_id?}` → `{pane_id, tab_id, window_id}`          |
 | `ReplacePane`         | 73     | `{pane_id, command?, command_dir?, domain, wait_for_ready}` → `SpawnResponse`    |
 | `GetPaneLocation`     | 74, 75 | `{pane_id?}` → `{cwd, home, repo_root?, os, hostname}`; no `pane_id`: the server |
+| `SendKeyDownIfBusy`   | 79, 80 | `{pane_id, event}` → `{sent}`; sends the key unless closing would not prompt     |
 | Retired               | 63, 64 | `GetHostInfo`; never reused                                                      |
 | Retired               | 67, 68 | `GetPaneLocation` without host fields; never reused                              |
 | Relay                 |        | Intermediate mux answers for the pane's owner                                    |

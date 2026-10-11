@@ -39,9 +39,38 @@ where
     SND: Fn(anyhow::Result<Pdu>) + Send + 'static,
 {
     spawn_into_main_thread(async move {
+        // Within this turn, as `SendKeyDown` does, so a later key cannot overtake it.
+        if let Pdu::SendKeyDownIfBusy(request) = pdu {
+            return key_down_if_busy(request, send_response);
+        }
         promise::spawn::spawn(async move { send_response(respond(pdu, client_id).await) }).detach();
     })
     .detach();
+}
+
+/// The pane's owner sends the key unless closing the pane would not prompt; a relay asks
+/// further along.
+fn key_down_if_busy<SND>(request: SendKeyDownIfBusy, send_response: SND)
+where
+    SND: Fn(anyhow::Result<Pdu>) + Send + 'static,
+{
+    let SendKeyDownIfBusy { pane_id, event } = request;
+    let answer = |sent| Pdu::SendKeyDownIfBusyResponse(SendKeyDownIfBusyResponse { sent });
+    let Some(pane) = Mux::get().get_pane(pane_id) else {
+        return send_response(Err(anyhow!("no such pane {pane_id}")));
+    };
+    if let Some(relayed) = pane.downcast_ref::<wezterm_client::pane::ClientPane>() {
+        let sent = relayed.key_down_if_busy(event.key, event.modifiers);
+        promise::spawn::spawn(async move { send_response(sent.await.map(answer)) }).detach();
+        return;
+    }
+    let busy = !pane.can_close_without_prompting(mux::pane::CloseReason::Pane);
+    let sent = if busy {
+        pane.key_down(event.key, event.modifiers)
+    } else {
+        Ok(())
+    };
+    send_response(sent.map(|()| answer(busy)));
 }
 
 async fn respond(pdu: Pdu, client_id: Option<Arc<ClientId>>) -> anyhow::Result<Pdu> {

@@ -5,7 +5,7 @@ use crate::quad::{HeapQuadAllocator, TripleLayerQuadAllocator};
 use codec::SpawnBesidePane;
 use config::keyassignment::{SpawnCommand, SpawnTabDomain};
 use mux::domain::{Domain, DomainState};
-use mux::pane::{CachePolicy, Pane, PaneId};
+use mux::pane::{CachePolicy, CloseReason, Pane, PaneId};
 use mux::tab::{PositionedPane, TabId};
 use mux::window::WindowId as MuxWindowId;
 use mux::Mux;
@@ -13,7 +13,7 @@ use portable_pty::CommandBuilder;
 use std::{cell::RefCell, rc::Rc, sync::Arc};
 use wezterm_client::domain::ClientDomain;
 use wezterm_client::pane::ClientPane;
-use wezterm_term::TerminalSize;
+use wezterm_term::{KeyCode, KeyModifiers, TerminalSize};
 use window::{color::LinearRgba, WindowOps};
 
 mod blur;
@@ -306,7 +306,7 @@ impl TermWindow {
             .is_some_and(|ui| ui.terminal.0.borrow().visible)
     }
 
-    pub(super) fn terminal_overlay_program(&self) -> bool {
+    fn terminal_overlay_program(&self) -> bool {
         self.ui_host.as_ref().is_some_and(|ui| {
             let state = ui.terminal.0.borrow();
             state.visible && state.program.is_some()
@@ -406,6 +406,48 @@ impl TermWindow {
         if let Some(window) = &self.window {
             window.invalidate();
         }
+    }
+
+    /// Hides while nothing runs in the pane, judged as a close is; otherwise Escape reaches it.
+    pub(super) fn terminal_overlay_escape(&mut self) -> bool {
+        if self.terminal_overlay_pane().is_none() {
+            self.hide_terminal_overlay();
+            return true;
+        }
+        let Some(pane) = self.get_active_pane_or_overlay() else {
+            return false;
+        };
+        let Some(sent) = pane
+            .downcast_ref::<ClientPane>()
+            .map(|client| client.key_down_if_busy(KeyCode::Escape, KeyModifiers::NONE))
+        else {
+            let idle = pane.can_close_without_prompting(CloseReason::Pane);
+            if idle {
+                self.hide_terminal_overlay();
+            }
+            return idle;
+        };
+        let Some(window) = self.window.clone() else {
+            return false;
+        };
+        promise::spawn::spawn(async move {
+            let sent = sent.await;
+            window.notify(TermWindowNotif::Apply(Box::new(move |tw| match sent {
+                Ok(true) => {}
+                Ok(false) => {
+                    let shown = tw.terminal_overlay_pane();
+                    if shown.is_some_and(|shown| shown.pane_id() == pane.pane_id()) {
+                        tw.hide_terminal_overlay();
+                    }
+                }
+                // A stock server cannot judge; the key still reaches the pane.
+                Err(_) => {
+                    pane.key_down(KeyCode::Escape, KeyModifiers::NONE).ok();
+                }
+            })));
+        })
+        .detach();
+        true
     }
 
     pub(super) fn toggle_terminal_overlay(&mut self) {

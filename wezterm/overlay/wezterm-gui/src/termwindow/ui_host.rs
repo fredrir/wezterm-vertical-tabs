@@ -183,6 +183,16 @@ pub struct TerminalProgram {
     pub width: Option<f32>,
     pub height: Option<f32>,
 }
+/// What the quick terminal makes of a key.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TerminalKey {
+    /// Reaches the pane.
+    Pass,
+    /// Any effect is queued in `commands`.
+    Handled,
+    /// An unmodified Escape that hides only while nothing runs in the pane.
+    Escape,
+}
 pub enum Command {
     ToggleTerminalOverlay,
     HideTerminalOverlay,
@@ -238,8 +248,7 @@ pub trait Provider {
         entries: crate::overlay::launcher::LauncherEntries,
     );
     fn input(&mut self, input: Input<'_>) -> bool;
-    /// A visible program, unlike the shell, receives Escape.
-    fn terminal_input(&mut self, input: Input<'_>, program: bool) -> bool;
+    fn terminal_input(&mut self, input: Input<'_>) -> TerminalKey;
     fn quick_terminal_config(&self) -> QuickTerminalConfig;
     fn message(&mut self, message: serde_json::Value);
     fn projection(&self) -> Projection;
@@ -1304,12 +1313,16 @@ impl TermWindow {
                     return false;
                 }
                 Input::Key(_) | Input::RawKey(_) => {
-                    let program = self.terminal_overlay_program();
-                    let consumed = self.ui_host.as_mut().is_some_and(|ui| ui.provider.terminal_input(input, program));
-                    if consumed {
-                        let commands = self.ui_host.as_mut().unwrap().provider.commands();
-                        self.vtabs_commands(commands);
-                    }
+                    let key = self.ui_host.as_mut().map(|ui| ui.provider.terminal_input(input));
+                    let consumed = match key {
+                        Some(TerminalKey::Handled) => {
+                            let commands = self.ui_host.as_mut().unwrap().provider.commands();
+                            self.vtabs_commands(commands);
+                            true
+                        }
+                        Some(TerminalKey::Escape) => self.terminal_overlay_escape(),
+                        _ => false,
+                    };
                     return consumed || self.terminal_overlay_pane().is_none();
                 }
                 Input::Composition(_) => return false,

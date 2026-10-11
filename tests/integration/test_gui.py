@@ -371,7 +371,21 @@ def test_quick_terminal_preserves_its_shell_without_creating_a_tab(
             resized["quick_terminal"]["cols"],
         ]
 
-        # Escape dismisses the overlay and keeps its shell running.
+        # Escape reaches what runs in the shell, ahead of the keys typed after it.
+        gui.text('cat -v > "$WEZ_VTABS_SCENARIO/quick-escape"')
+        gui.key("Return")
+        probe.wait(lambda state: (probe.root / "quick-escape").exists())
+        gui.key("Escape")
+        gui.text("x")
+        gui.key("Return")
+        probe.wait(lambda state: "^[x" in (probe.root / "quick-escape").read_text())
+        assert gui.state()["quick_terminal"]["visible"]
+        gui.key("ctrl+d")
+        gui.text(': > "$WEZ_VTABS_SCENARIO/quick-idle"')
+        gui.key("Return")
+        probe.wait(lambda state: (probe.root / "quick-idle").exists())
+
+        # At the idle shell, Escape dismisses the overlay and keeps its shell running.
         gui.key("Escape")
         probe.wait(lambda state: not state["quick_terminal"]["visible"])
         assert gui.state()["quick_terminal"]["pane"] == pane

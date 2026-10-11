@@ -16,7 +16,7 @@ mod update;
 
 use crate::termwindow::ui_host::{
     Bounds, Command, Geometry, Input, Navigation, Projection, Provider, QuickTerminalConfig,
-    Reservation, RoundedSurface, Snapshot, Surface, TerminalProgram, spawn_completed,
+    Reservation, RoundedSurface, Snapshot, Surface, TerminalKey, TerminalProgram, spawn_completed,
 };
 use mux::{BACKING_WORKSPACE_PREFIX, DETACHED_WORKSPACE, QUICK_WORKSPACE_PREFIX};
 use std::{
@@ -1385,7 +1385,7 @@ impl Provider for Adapter {
             launcher.selected,
         );
     }
-    fn terminal_input(&mut self, input: Input<'_>, program: bool) -> bool {
+    fn terminal_input(&mut self, input: Input<'_>) -> TerminalKey {
         let (code, mods, down) = match input {
             Input::RawKey(key) => {
                 let mods = modifiers(key.modifiers);
@@ -1399,25 +1399,27 @@ impl Provider for Adapter {
                 );
                 (code, mods, key.key_is_down)
             }
-            _ => return false,
+            _ => return TerminalKey::Pass,
         };
-        let Some(code) = code else { return false };
-        let command = if code == ui::Key::Escape && mods == ui::Modifiers::default() && !program {
-            Command::HideTerminalOverlay
-        } else {
-            match core::keybinds::action(
-                &self.app.model().settings,
-                &ui::shortcut_chord(&code, mods),
-            ) {
+        let Some(code) = code else {
+            return TerminalKey::Pass;
+        };
+        let settings = &self.app.model().settings;
+        let escape = code == ui::Key::Escape && mods == ui::Modifiers::default();
+        let command = match (escape, settings.quick_terminal_hide_on_escape) {
+            (true, core::HideOnEscape::Always) => Command::HideTerminalOverlay,
+            (true, core::HideOnEscape::Auto) if down => return TerminalKey::Escape,
+            (true, core::HideOnEscape::Auto) => return TerminalKey::Pass,
+            _ => match core::keybinds::action(settings, &ui::shortcut_chord(&code, mods)) {
                 Some("quick_terminal") => Command::ToggleTerminalOverlay,
                 Some("close") => Command::HideTerminalOverlay,
-                _ => return false,
-            }
+                _ => return TerminalKey::Pass,
+            },
         };
         if down {
             self.commands.push(command);
         }
-        true
+        TerminalKey::Handled
     }
     fn input(&mut self, input: Input<'_>) -> bool {
         match input {

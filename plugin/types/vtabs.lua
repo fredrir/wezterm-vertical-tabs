@@ -15,6 +15,7 @@
 ---@field quick_terminal_background_color? string Null follows the quick terminal palette background
 ---@field quick_terminal_auto_hide? boolean Hide the quick terminal when the window loses focus
 ---@field quick_terminal_preserve_shell? boolean Keep the shell when hidden; disable to start a fresh shell each time
+---@field quick_terminal_hide_on_escape? 'never'|'always'|'auto' Auto hides only while nothing runs in the shell
 ---@field animations? boolean Enable finite visual transitions
 ---@field reduced_motion? boolean Suppress transitions
 ---@field animation_ms? integer Transition duration in milliseconds
@@ -84,7 +85,7 @@
 ---@field fields? { [1]: TabsMatchField, [2]: string[] }[]
 ---@field remote? boolean
 
----@alias TabsSettingKey 'keybinds'|'width'|'side'|'rail'|'quick_terminal_width'|'quick_terminal_height'|'quick_terminal_transparency'|'quick_terminal_blur'|'quick_terminal_opacity'|'quick_terminal_border_color'|'quick_terminal_background_color'|'quick_terminal_auto_hide'|'quick_terminal_preserve_shell'|'animations'|'reduced_motion'|'animation_ms'|'cards'|'show_indexes'|'show_metadata'|'show_close'|'confirm_close'|'accent'|'background'|'foreground'|'muted'|'selected_background'|'private_accent'|'distro_colors'|'keyboard_shortcuts'|'default_domain'|'private_env'|'menus'
+---@alias TabsSettingKey 'keybinds'|'width'|'side'|'rail'|'quick_terminal_width'|'quick_terminal_height'|'quick_terminal_transparency'|'quick_terminal_blur'|'quick_terminal_opacity'|'quick_terminal_border_color'|'quick_terminal_background_color'|'quick_terminal_auto_hide'|'quick_terminal_preserve_shell'|'quick_terminal_hide_on_escape'|'animations'|'reduced_motion'|'animation_ms'|'cards'|'show_indexes'|'show_metadata'|'show_close'|'confirm_close'|'accent'|'background'|'foreground'|'muted'|'selected_background'|'private_accent'|'distro_colors'|'keyboard_shortcuts'|'default_domain'|'private_env'|'menus'
 
 ---@class TabsSpace
 ---@field accent? string
