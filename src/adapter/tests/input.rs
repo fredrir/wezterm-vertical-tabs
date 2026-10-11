@@ -988,3 +988,52 @@ fn quick_programs_receive_escape_and_toggle_by_their_command() {
         ));
     }
 }
+
+#[test]
+fn quick_terminal_configuration_gates_effects_and_preserves_defaults() {
+    config::designate_this_as_the_main_thread();
+    let mut adapter = Adapter::new(9931);
+    let defaults = adapter.quick_terminal_config();
+    assert_eq!(defaults.size, (0.75, 0.75));
+    assert_eq!(defaults.opacity, 1.);
+    assert_eq!(defaults.blur, 0.);
+    assert!(defaults.preserve_shell);
+    assert!(!defaults.auto_hide);
+    assert!(defaults.background_color.is_none() && defaults.border_color.is_none());
+    for (key, value) in [
+        ("quick_terminal_opacity", serde_json::json!(0.4)),
+        ("quick_terminal_blur", serde_json::json!(12)),
+        ("quick_terminal_border_color", serde_json::json!("#ff0000")),
+        (
+            "quick_terminal_background_color",
+            serde_json::json!("#001122"),
+        ),
+        ("quick_terminal_auto_hide", serde_json::json!(true)),
+        ("quick_terminal_preserve_shell", serde_json::json!(false)),
+    ] {
+        adapter
+            .app
+            .dispatch(core::Intent::SetSetting {
+                key: key.into(),
+                value,
+            })
+            .unwrap();
+    }
+    let opaque = adapter.quick_terminal_config();
+    assert_eq!((opaque.opacity, opaque.blur), (1., 0.));
+    assert!(opaque.auto_hide && !opaque.preserve_shell);
+    assert_eq!(
+        opaque.border_color,
+        Some(window::color::LinearRgba(1., 0., 0., 1.))
+    );
+    assert!(opaque.background_color.is_some());
+    adapter
+        .app
+        .dispatch(core::Intent::SetSetting {
+            key: "quick_terminal_transparency".into(),
+            value: serde_json::json!(true),
+        })
+        .unwrap();
+    let transparent = adapter.quick_terminal_config();
+    assert_eq!((transparent.opacity, transparent.blur), (0.4, 12.));
+}

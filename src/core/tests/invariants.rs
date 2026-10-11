@@ -221,3 +221,65 @@ fn schema_defaults_validate_every_field() {
         settings::validate_value(d.key, &defaults.get(d.key).unwrap()).unwrap();
     }
 }
+
+#[test]
+fn quick_terminal_defaults_preserve_existing_sessions_and_appearance() {
+    let settings: Settings = serde_json::from_value(json!({})).unwrap();
+    assert!(!settings.quick_terminal_transparency);
+    assert_eq!(settings.quick_terminal_opacity, 1.);
+    assert_eq!(settings.quick_terminal_blur, 0);
+    assert_eq!(settings.quick_terminal_border_color, None);
+    assert_eq!(settings.quick_terminal_background_color, None);
+    assert!(!settings.quick_terminal_auto_hide);
+    assert!(settings.quick_terminal_preserve_shell);
+}
+
+#[test]
+fn quick_terminal_options_validate_atomically_and_colors_can_follow_the_palette() {
+    let mut settings = Settings::default();
+    for value in [json!(0), json!(0.4), json!(1)] {
+        settings.set("quick_terminal_opacity", value).unwrap();
+    }
+    for key in [
+        "quick_terminal_border_color",
+        "quick_terminal_background_color",
+    ] {
+        settings.set(key, json!("#012aFE")).unwrap();
+        settings.set(key, json!(null)).unwrap();
+        assert_eq!(settings.get(key), Some(json!(null)));
+    }
+    settings.set("quick_terminal_blur", json!(64)).unwrap();
+    for key in [
+        "quick_terminal_transparency",
+        "quick_terminal_auto_hide",
+        "quick_terminal_preserve_shell",
+    ] {
+        settings.set(key, json!(true)).unwrap();
+        settings.set(key, json!(false)).unwrap();
+        assert!(settings.set(key, json!(1)).is_err());
+    }
+    for (key, values) in [
+        (
+            "quick_terminal_opacity",
+            vec![json!(-0.1), json!(1.1), json!("0.5"), json!(null)],
+        ),
+        (
+            "quick_terminal_blur",
+            vec![json!(-1), json!(65), json!(1.5), json!(true)],
+        ),
+        (
+            "quick_terminal_border_color",
+            vec![json!("red"), json!("#12345g"), json!("#12345678")],
+        ),
+        (
+            "quick_terminal_background_color",
+            vec![json!(""), json!(42)],
+        ),
+    ] {
+        let before = settings.clone();
+        for value in values {
+            assert!(settings.set(key, value).is_err());
+            assert_eq!(settings, before);
+        }
+    }
+}

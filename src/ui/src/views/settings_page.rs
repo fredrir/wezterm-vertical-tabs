@@ -16,6 +16,7 @@ use vtabs_core::{Model, SettingDescriptor, SettingKind, settings};
 const CATEGORIES: &[(&str, &str)] = &[
     ("all", "All"),
     ("layout", "Layout"),
+    ("quick_terminal", "Quick terminal"),
     ("appearance", "Tabs"),
     ("theme", "Colors"),
     ("motion", "Motion"),
@@ -70,6 +71,7 @@ fn fields(category: &str, query: &str) -> Vec<&'static SettingDescriptor> {
 fn group_label(group: &str) -> &'static str {
     match group {
         "layout" => "Your workspace",
+        "quick_terminal" => "Quick terminal",
         "appearance" => "Tabs and details",
         "theme" => "Color and atmosphere",
         "motion" => "Motion and accessibility",

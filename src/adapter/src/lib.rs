@@ -15,8 +15,8 @@ mod storage;
 mod update;
 
 use crate::termwindow::ui_host::{
-    Bounds, Command, Geometry, Input, Navigation, Projection, Provider, Reservation,
-    RoundedSurface, Snapshot, Surface, TerminalProgram, spawn_completed,
+    Bounds, Command, Geometry, Input, Navigation, Projection, Provider, QuickTerminalConfig,
+    Reservation, RoundedSurface, Snapshot, Surface, TerminalProgram, spawn_completed,
 };
 use mux::{BACKING_WORKSPACE_PREFIX, DETACHED_WORKSPACE, QUICK_WORKSPACE_PREFIX};
 use std::{
@@ -1934,12 +1934,34 @@ impl Provider for Adapter {
         directory::withdraw(self.window_id);
         Box::pin(shutdown::drain(self.app, self.outstanding))
     }
-    fn quick_terminal_size(&self) -> (f32, f32) {
+    fn quick_terminal_config(&self) -> QuickTerminalConfig {
         let settings = &self.app.model().settings;
-        (
-            settings.quick_terminal_width as f32,
-            settings.quick_terminal_height as f32,
-        )
+        let color = |value: &Option<String>| {
+            value
+                .as_deref()
+                .and_then(ui::Theme::parse_color)
+                .map(linear_color)
+        };
+        QuickTerminalConfig {
+            size: (
+                settings.quick_terminal_width as f32,
+                settings.quick_terminal_height as f32,
+            ),
+            opacity: if settings.quick_terminal_transparency {
+                settings.quick_terminal_opacity as f32
+            } else {
+                1.
+            },
+            blur: if settings.quick_terminal_transparency {
+                settings.quick_terminal_blur as f32
+            } else {
+                0.
+            },
+            border_color: color(&settings.quick_terminal_border_color),
+            background_color: color(&settings.quick_terminal_background_color),
+            auto_hide: settings.quick_terminal_auto_hide,
+            preserve_shell: settings.quick_terminal_preserve_shell,
+        }
     }
     fn prepare_command(&self, new_window: bool, command: &mut config::keyassignment::SpawnCommand) {
         if (self.app.model().private && !new_window) || self.next_private {

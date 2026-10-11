@@ -1,6 +1,7 @@
 """Production startup, rendering, and shutdown on owned displays."""
 
 import json
+import shutil
 import subprocess
 from contextlib import ExitStack, suppress
 from pathlib import Path
@@ -440,6 +441,144 @@ def alive(pid):
         return Path(f"/proc/{pid}/stat").read_text().rsplit(") ", 1)[1][0] != "Z"
     except FileNotFoundError:
         return False
+
+
+@pytest.mark.gui
+@pytest.mark.parametrize("domain", ["local", "unix"])
+def test_quick_terminal_can_hide_on_focus_loss_and_start_fresh(
+    wezterm_binaries, headless_display, tmp_path, domain
+):
+    probe = Probe(
+        tmp_path / domain,
+        wezterm_binaries["wezterm-gui"],
+        wezterm_binaries["wez-vtabs-store"],
+        domain,
+        server=wezterm_binaries["wezterm-mux-server"],
+        display=headless_display,
+    )
+    gui = GuiInput(probe, headless_display, tmp_path)
+
+    def setting(key, value):
+        probe.intent({"SetSetting": {"key": key, "value": value}})
+        probe.wait(lambda state: state["model"]["settings"][key] == value)
+
+    def opened():
+        probe.intent("quick_terminal")
+        return probe.wait(
+            lambda state: (
+                state["quick_terminal"]["visible"] and state["quick_terminal"]["pane"] is not None
+            )
+        )["quick_terminal"]["pane"]
+
+    try:
+        initial = probe.start()
+        gui.attach()
+        setting("quick_terminal_auto_hide", True)
+        pane = opened()
+        gui.command("windowminimize", gui.window)
+        hidden = probe.wait(lambda state: not state["quick_terminal"]["visible"])
+        assert hidden["quick_terminal"]["pane"] == pane
+        gui.command("windowactivate", "--sync", gui.window)
+        assert opened() == pane
+
+        setting("quick_terminal_preserve_shell", False)
+        discarded = opened()
+        assert discarded != pane
+        gui.text("QT_SESSION=discarded")
+        gui.key("Return")
+        gui.command("windowminimize", gui.window)
+        hidden = probe.wait(lambda state: not state["quick_terminal"]["visible"])
+        assert hidden["quick_terminal"]["pane"] is None
+        gui.command("windowactivate", "--sync", gui.window)
+        fresh = opened()
+        assert fresh != discarded
+        gui.text('printf "%s" "${QT_SESSION-fresh}" > "$WEZ_VTABS_SCENARIO/quick-fresh"')
+        gui.key("Return")
+        probe.wait(lambda state: (probe.root / "quick-fresh").exists())
+        assert (probe.root / "quick-fresh").read_text() == "fresh"
+        gui.key("Escape")
+        hidden = probe.wait(lambda state: not state["quick_terminal"]["visible"])
+        assert hidden["quick_terminal"]["pane"] is None
+        assert opened() != fresh
+        assert gui.state()["tabs"] == initial["tabs"]
+    finally:
+        probe.close()
+
+
+@pytest.mark.gui
+@pytest.mark.parametrize("frontend", ["OpenGL", "WebGpu"])
+def test_quick_terminal_background_opacity_and_blur_render_in_both_backends(
+    wezterm_binaries, headless_display, tmp_path, frontend
+):
+    probe = Probe(
+        tmp_path / frontend,
+        wezterm_binaries["wezterm-gui"],
+        wezterm_binaries["wez-vtabs-store"],
+        "local",
+        display=headless_display,
+    )
+    probe.config.write_text(
+        probe.config.read_text().replace(
+            "return cfg",
+            f"cfg.front_end = '{frontend}'; cfg.colors = {{background='#ffffff'}}; return cfg",
+        )
+    )
+    gui = GuiInput(probe, headless_display, tmp_path)
+
+    def setting(key, value):
+        probe.intent({"SetSetting": {"key": key, "value": value}})
+        probe.wait(lambda state: state["model"]["settings"][key] == value)
+
+    def center(name):
+        if not gui.state()["quick_terminal"]["visible"]:
+            probe.intent("quick_terminal")
+            probe.wait(lambda state: state["quick_terminal"]["visible"])
+        capture = gui.capture(f"{frontend}-{name}")
+        frame = gui.state()["quick_terminal"]["bounds"]
+        x, y = round(frame["x"] + frame["width"] / 2), round(frame["y"] + frame["height"] / 2)
+        return subprocess.run(
+            [
+                shutil.which("magick") or "convert",
+                str(capture),
+                "-crop",
+                f"1x1+{x}+{y}",
+                "-depth",
+                "8",
+                "rgb:-",
+            ],
+            env=headless_display.env,
+            check=True,
+            capture_output=True,
+            timeout=10,
+        ).stdout
+
+    try:
+        probe.start()
+        gui.attach()
+        setting("quick_terminal_background_color", "#123456")
+        setting("quick_terminal_border_color", "#ff0000")
+        probe.intent("quick_terminal")
+        probe.wait(lambda state: state["quick_terminal"]["pane"] is not None)
+        opaque = center("opaque")
+        assert len(opaque) == 3
+        assert all(
+            abs(actual - expected) <= 2
+            for actual, expected in zip(opaque, [18, 52, 86], strict=True)
+        )
+        setting("quick_terminal_opacity", 0.5)
+        setting("quick_terminal_transparency", True)
+        translucent = center("translucent")
+        assert all(after > before + 20 for before, after in zip(opaque, translucent, strict=True))
+        setting("quick_terminal_blur", 12)
+        blurred = center("blurred")
+        assert all(abs(a - b) <= 3 for a, b in zip(translucent, blurred, strict=True))
+        probe.send("resize", {"width": 900, "height": 600})
+        probe.wait(lambda state: state["dimensions"]["pixel_width"] == 900)
+        assert all(value > 100 for value in center("resized"))
+        setting("quick_terminal_transparency", False)
+        assert all(abs(a - b) <= 2 for a, b in zip(opaque, center("opaque-again"), strict=True))
+    finally:
+        probe.close()
 
 
 @pytest.mark.gui

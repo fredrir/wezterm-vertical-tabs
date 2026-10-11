@@ -808,6 +808,19 @@ index d51f897810923b53d385e72a38ed62eeb5a6179b..0b648ec7b7ac3c72e374412ec687a895
  /// Each cell is composed of two triangles built from 4 vertices.
  /// The buffer is organized row by row.
  pub const VERTICES_PER_CELL: usize = 4;
+diff --git a/wezterm-gui/src/renderstate.rs b/wezterm-gui/src/renderstate.rs
+index 219d707f81b6616960f084baef44e7aab77e611b..bd96b285172e39ed46aafde00677a8789c7a12f3 100644
+--- a/wezterm-gui/src/renderstate.rs
++++ b/wezterm-gui/src/renderstate.rs
+@@ -454,7 +454,7 @@ impl TripleVertexBuffer {
+ pub struct RenderLayer {
+     pub vb: RefCell<[TripleVertexBuffer; 3]>,
+     context: RenderContext,
+-    zindex: i8,
++    pub(crate) zindex: i8,
+ }
+ 
+ impl RenderLayer {
 diff --git a/wezterm-gui/src/scripting/mod.rs b/wezterm-gui/src/scripting/mod.rs
 index 7188ca213f3259ae7affef37a5fc1dfabbc6f023..008a0ee0769f0fbedf0b6a716750ee25c770f387 100644
 --- a/wezterm-gui/src/scripting/mod.rs
@@ -904,7 +917,7 @@ index d66908074090d5a2b541a5a5065c3311a78906f5..9ed208743675e95eb3e2a1dabe8da323
          // any key table rules. Therefore, we should pop all `until_unknown`
          // entries from the stack.
 diff --git a/wezterm-gui/src/termwindow/mod.rs b/wezterm-gui/src/termwindow/mod.rs
-index 27567d9dd36028a6de7b943a35a791532340cfe3..a1f72e080a966f2d4aeaee885d26767850aaca50 100644
+index 27567d9dd36028a6de7b943a35a791532340cfe3..16924287cb2dfe1c3d05e2450e6407a0a7ee3f70 100644
 --- a/wezterm-gui/src/termwindow/mod.rs
 +++ b/wezterm-gui/src/termwindow/mod.rs
 @@ -1,13 +1,15 @@
@@ -944,7 +957,17 @@ index 27567d9dd36028a6de7b943a35a791532340cfe3..a1f72e080a966f2d4aeaee885d267678
                  if can_close {
                      mux.kill_window(self.mux_window_id);
                      window.close();
-@@ -591,6 +596,8 @@ impl TermWindow {
+@@ -529,6 +534,9 @@ impl TermWindow {
+     fn focus_changed(&mut self, focused: bool, window: &Window) {
+         log::trace!("Setting focus to {:?}", focused);
+         self.focused = if focused { Some(Instant::now()) } else { None };
++        if !focused && self.ui_host.as_ref().is_some_and(|ui| ui.provider.quick_terminal_config().auto_hide) {
++            self.hide_terminal_overlay();
++        }
+         self.quad_generation += 1;
+         self.load_os_parameters();
+ 
+@@ -591,6 +599,8 @@ impl TermWindow {
          let dpi = config.dpi.unwrap_or_else(|| ::window::default_dpi()) as usize;
          let fontconfig = Rc::new(FontConfiguration::new(Some(config.clone()), dpi)?);
  
@@ -953,7 +976,7 @@ index 27567d9dd36028a6de7b943a35a791532340cfe3..a1f72e080a966f2d4aeaee885d267678
          let mux = Mux::get();
          let size = match mux.get_active_tab_for_window(mux_window_id) {
              Some(tab) => tab.get_size(),
-@@ -607,7 +614,9 @@ impl TermWindow {
+@@ -607,7 +617,9 @@ impl TermWindow {
  
          // Initially we have only a single tab, so take that into account
          // for the tab bar state.
@@ -964,7 +987,7 @@ index 27567d9dd36028a6de7b943a35a791532340cfe3..a1f72e080a966f2d4aeaee885d267678
          let tab_bar_height = if show_tab_bar {
              Self::tab_bar_pixel_height_impl(&config, &fontconfig, &render_metrics)? as usize
          } else {
-@@ -644,15 +653,19 @@ impl TermWindow {
+@@ -644,15 +656,19 @@ impl TermWindow {
              pixel_max: terminal_size.pixel_width as f32,
              pixel_cell: render_metrics.cell_size.width as f32,
          };
@@ -988,7 +1011,7 @@ index 27567d9dd36028a6de7b943a35a791532340cfe3..a1f72e080a966f2d4aeaee885d267678
  
          let mut dimensions = Dimensions {
              pixel_width: (terminal_size.pixel_width + padding_left + padding_right) as usize,
-@@ -713,6 +726,8 @@ impl TermWindow {
+@@ -713,6 +729,8 @@ impl TermWindow {
              input_map: InputMap::new(&config),
              leader_is_down: None,
              dead_key_status: DeadKeyStatus::None,
@@ -997,7 +1020,7 @@ index 27567d9dd36028a6de7b943a35a791532340cfe3..a1f72e080a966f2d4aeaee885d267678
              show_tab_bar,
              show_scroll_bar: config.enable_scroll_bar,
              tab_bar: TabBarState::default(),
-@@ -890,6 +905,7 @@ impl TermWindow {
+@@ -890,6 +908,7 @@ impl TermWindow {
              myself.load_os_parameters();
              window.show();
              myself.subscribe_to_pane_updates();
@@ -1005,7 +1028,7 @@ index 27567d9dd36028a6de7b943a35a791532340cfe3..a1f72e080a966f2d4aeaee885d267678
              myself.emit_window_event("window-config-reloaded", None);
              myself.emit_status_event();
          }
-@@ -945,6 +961,7 @@ impl TermWindow {
+@@ -945,6 +964,7 @@ impl TermWindow {
              }
              WindowEvent::FocusChanged(focused) => {
                  self.focus_changed(focused, window);
@@ -1013,7 +1036,7 @@ index 27567d9dd36028a6de7b943a35a791532340cfe3..a1f72e080a966f2d4aeaee885d267678
                  Ok(true)
              }
              WindowEvent::MouseEvent(event) => {
-@@ -996,6 +1013,7 @@ impl TermWindow {
+@@ -996,6 +1016,7 @@ impl TermWindow {
                  } else {
                      log::trace!("DeadKeyStatus now: {:?}", status);
                  }
@@ -1021,7 +1044,7 @@ index 27567d9dd36028a6de7b943a35a791532340cfe3..a1f72e080a966f2d4aeaee885d267678
                  self.dead_key_status = status;
                  self.update_title();
                  // Ensure that we repaint so that any composing
-@@ -1115,6 +1133,9 @@ impl TermWindow {
+@@ -1115,6 +1136,9 @@ impl TermWindow {
              anyhow::anyhow!("{}", e)
          }
  
@@ -1031,7 +1054,7 @@ index 27567d9dd36028a6de7b943a35a791532340cfe3..a1f72e080a966f2d4aeaee885d267678
          match notif {
              TermWindowNotif::InvalidateShapeCache => {
                  self.shape_generation += 1;
-@@ -1346,12 +1367,11 @@ impl TermWindow {
+@@ -1346,12 +1370,11 @@ impl TermWindow {
                  self.invalidate_fancy_tab_bar();
                  self.invalidate_modal();
  
@@ -1049,7 +1072,7 @@ index 27567d9dd36028a6de7b943a35a791532340cfe3..a1f72e080a966f2d4aeaee885d267678
                  self.update_title();
                  window.invalidate();
              }
-@@ -1417,6 +1437,7 @@ impl TermWindow {
+@@ -1417,6 +1440,7 @@ impl TermWindow {
      }
  
      fn is_pane_visible(&mut self, pane_id: PaneId) -> bool {
@@ -1057,7 +1080,7 @@ index 27567d9dd36028a6de7b943a35a791532340cfe3..a1f72e080a966f2d4aeaee885d267678
          let mux = Mux::get();
          let tab = match mux.get_active_tab_for_window(self.mux_window_id) {
              Some(tab) => tab,
-@@ -1743,6 +1764,8 @@ impl TermWindow {
+@@ -1743,6 +1767,8 @@ impl TermWindow {
              }
          };
          self.config = config.clone();
@@ -1066,7 +1089,7 @@ index 27567d9dd36028a6de7b943a35a791532340cfe3..a1f72e080a966f2d4aeaee885d267678
          self.palette.take();
  
          let mux = Mux::get();
-@@ -1751,9 +1774,9 @@ impl TermWindow {
+@@ -1751,9 +1777,9 @@ impl TermWindow {
              _ => return,
          };
          if window.count_tabs() == 1 {
@@ -1078,7 +1101,7 @@ index 27567d9dd36028a6de7b943a35a791532340cfe3..a1f72e080a966f2d4aeaee885d267678
          }
          *self.cursor_blink_state.borrow_mut() = ColorEase::new(
              config.cursor_blink_rate,
-@@ -1900,6 +1923,7 @@ impl TermWindow {
+@@ -1900,6 +1926,7 @@ impl TermWindow {
      }
  
      fn window_contains_pane(&mut self, pane_id: PaneId) -> bool {
@@ -1086,7 +1109,7 @@ index 27567d9dd36028a6de7b943a35a791532340cfe3..a1f72e080a966f2d4aeaee885d267678
          let mux = Mux::get();
  
          let (_domain, window_id, _tab_id) = match mux.resolve_pane_id(pane_id) {
-@@ -1970,6 +1994,7 @@ impl TermWindow {
+@@ -1970,6 +1997,7 @@ impl TermWindow {
          let active_tab = tabs.iter().find(|t| t.is_active).cloned();
          let active_pane = panes.iter().find(|p| p.is_active).cloned();
  
@@ -1094,7 +1117,7 @@ index 27567d9dd36028a6de7b943a35a791532340cfe3..a1f72e080a966f2d4aeaee885d267678
          let border = self.get_os_border();
          let tab_bar_height = self.tab_bar_pixel_height().unwrap_or(0.);
          let tab_bar_y = if self.config.tab_bar_at_bottom {
-@@ -2011,6 +2036,7 @@ impl TermWindow {
+@@ -2011,6 +2039,7 @@ impl TermWindow {
                  window.invalidate();
              }
          }
@@ -1102,7 +1125,7 @@ index 27567d9dd36028a6de7b943a35a791532340cfe3..a1f72e080a966f2d4aeaee885d267678
  
          let tabs_count = window.count_tabs();
          if tabs_count == 0 {
-@@ -2075,11 +2101,7 @@ impl TermWindow {
+@@ -2075,11 +2104,7 @@ impl TermWindow {
          if let Some(window) = self.window.as_ref() {
              window.set_title(&title);
  
@@ -1115,7 +1138,7 @@ index 27567d9dd36028a6de7b943a35a791532340cfe3..a1f72e080a966f2d4aeaee885d267678
  
              // If the number of tabs changed and caused the tab bar to
              // hide/show, then we'll need to resize things.  It is simplest
-@@ -2119,7 +2141,7 @@ impl TermWindow {
+@@ -2119,7 +2144,7 @@ impl TermWindow {
              } else {
                  0.0
              };
@@ -1124,7 +1147,7 @@ index 27567d9dd36028a6de7b943a35a791532340cfe3..a1f72e080a966f2d4aeaee885d267678
  
              let r = Rect::new(
                  Point::new(
-@@ -2402,69 +2424,7 @@ impl TermWindow {
+@@ -2402,69 +2427,7 @@ impl TermWindow {
      }
  
      fn show_launcher_impl(&mut self, args: LauncherActionArgs, initial_choice_idx: usize) {
@@ -1195,7 +1218,7 @@ index 27567d9dd36028a6de7b943a35a791532340cfe3..a1f72e080a966f2d4aeaee885d267678
      }
  
      /// Returns the Prompt semantic zones
-@@ -2587,6 +2547,7 @@ impl TermWindow {
+@@ -2587,6 +2550,7 @@ impl TermWindow {
          assignment: &KeyAssignment,
      ) -> anyhow::Result<PerformAssignmentResult> {
          use KeyAssignment::*;
@@ -1203,7 +1226,7 @@ index 27567d9dd36028a6de7b943a35a791532340cfe3..a1f72e080a966f2d4aeaee885d267678
  
          if let Some(modal) = self.get_modal() {
              if modal.perform_assignment(assignment, self) {
-@@ -2601,6 +2562,9 @@ impl TermWindow {
+@@ -2601,6 +2565,9 @@ impl TermWindow {
  
          let window = self.window.as_ref().map(|w| w.clone());
  
@@ -1213,7 +1236,7 @@ index 27567d9dd36028a6de7b943a35a791532340cfe3..a1f72e080a966f2d4aeaee885d267678
          match assignment {
              ActivateKeyTable {
                  name,
-@@ -3042,6 +3006,7 @@ impl TermWindow {
+@@ -3042,6 +3009,7 @@ impl TermWindow {
                              size,
                              Some(src_window_id),
                              term_config,
@@ -1221,7 +1244,7 @@ index 27567d9dd36028a6de7b943a35a791532340cfe3..a1f72e080a966f2d4aeaee885d267678
                          )
                          .await
                          {
-@@ -3211,6 +3176,7 @@ impl TermWindow {
+@@ -3211,6 +3179,7 @@ impl TermWindow {
          }
      }
      fn close_current_pane(&mut self, confirm: bool) {
@@ -1229,7 +1252,7 @@ index 27567d9dd36028a6de7b943a35a791532340cfe3..a1f72e080a966f2d4aeaee885d267678
          let mux_window_id = self.mux_window_id;
          let mux = Mux::get();
          let tab = match mux.get_active_tab_for_window(mux_window_id) {
-@@ -3251,9 +3217,11 @@ impl TermWindow {
+@@ -3251,9 +3220,11 @@ impl TermWindow {
  
          let tab_id = tab.tab_id();
          if confirm && !tab.can_close_without_prompting(CloseReason::Tab) {
@@ -1243,7 +1266,7 @@ index 27567d9dd36028a6de7b943a35a791532340cfe3..a1f72e080a966f2d4aeaee885d267678
  
              let window = self.window.clone().unwrap();
              let (overlay, future) = start_overlay(self, &tab, move |tab_id, term| {
-@@ -3267,6 +3235,7 @@ impl TermWindow {
+@@ -3267,6 +3238,7 @@ impl TermWindow {
      }
  
      fn close_current_tab(&mut self, confirm: bool) {
@@ -1251,7 +1274,7 @@ index 27567d9dd36028a6de7b943a35a791532340cfe3..a1f72e080a966f2d4aeaee885d267678
          let mux = Mux::get();
          let tab = match mux.get_active_tab_for_window(self.mux_window_id) {
              Some(tab) => tab,
-@@ -3394,6 +3363,9 @@ impl TermWindow {
+@@ -3394,6 +3366,9 @@ impl TermWindow {
      /// an active overlay (such as search or copy mode) then that will
      /// be returned.
      pub fn get_active_pane_or_overlay(&self) -> Option<Arc<dyn Pane>> {
@@ -1261,7 +1284,7 @@ index 27567d9dd36028a6de7b943a35a791532340cfe3..a1f72e080a966f2d4aeaee885d267678
          let mux = Mux::get();
          let tab = match mux.get_active_tab_for_window(self.mux_window_id) {
              Some(tab) => tab,
-@@ -3421,6 +3393,7 @@ impl TermWindow {
+@@ -3421,6 +3396,7 @@ impl TermWindow {
      }
  
      fn get_splits(&mut self) -> Vec<PositionedSplit> {
@@ -1269,7 +1292,7 @@ index 27567d9dd36028a6de7b943a35a791532340cfe3..a1f72e080a966f2d4aeaee885d267678
          let mux = Mux::get();
          let tab = match mux.get_active_tab_for_window(self.mux_window_id) {
              Some(tab) => tab,
-@@ -3456,6 +3429,7 @@ impl TermWindow {
+@@ -3456,6 +3432,7 @@ impl TermWindow {
      }
  
      fn get_tab_information(&mut self) -> Vec<TabInformation> {
@@ -1277,7 +1300,7 @@ index 27567d9dd36028a6de7b943a35a791532340cfe3..a1f72e080a966f2d4aeaee885d267678
          let mux = Mux::get();
          let window = match mux.get_window(self.mux_window_id) {
              Some(window) => window,
-@@ -3529,6 +3503,12 @@ impl TermWindow {
+@@ -3529,6 +3506,12 @@ impl TermWindow {
      }
  
      fn get_panes_to_render(&self) -> Vec<PositionedPane> {
@@ -1290,7 +1313,7 @@ index 27567d9dd36028a6de7b943a35a791532340cfe3..a1f72e080a966f2d4aeaee885d267678
          let mux = Mux::get();
          let tab = match mux.get_active_tab_for_window(self.mux_window_id) {
              Some(tab) => tab,
-@@ -3592,6 +3572,7 @@ impl TermWindow {
+@@ -3592,6 +3575,7 @@ impl TermWindow {
      }
  
      pub fn assign_overlay(&mut self, tab_id: TabId, overlay: Arc<dyn Pane>) {
@@ -1298,7 +1321,7 @@ index 27567d9dd36028a6de7b943a35a791532340cfe3..a1f72e080a966f2d4aeaee885d267678
          self.cancel_overlay_for_tab(tab_id, None);
          self.tab_state(tab_id).overlay.replace(OverlayState {
              pane: overlay,
-@@ -3621,6 +3602,7 @@ impl TermWindow {
+@@ -3621,6 +3605,7 @@ impl TermWindow {
  
  impl Drop for TermWindow {
      fn drop(&mut self) {
@@ -1371,6 +1394,125 @@ index 7b0a5ffec1ef48ca7707c6e5663be6b3af86daa3..91f4b12ab00b0611b75422121d6bd320
      pub fn new(term_window: &mut TermWindow) -> Self {
          // Showing the CopyMode actions in the palette is useless
          // if the CopyOverlay isn't active, so figure out if that
+diff --git a/wezterm-gui/src/termwindow/render/draw.rs b/wezterm-gui/src/termwindow/render/draw.rs
+index e190b6508f94f57d2474199b0dd83e8a75cc540a..2a6453ea2179355f2bcfa4dadc53b6c940ad94c6 100644
+--- a/wezterm-gui/src/termwindow/render/draw.rs
++++ b/wezterm-gui/src/termwindow/render/draw.rs
+@@ -20,7 +20,8 @@ impl crate::TermWindow {
+     fn call_draw_webgpu(&mut self) -> anyhow::Result<()> {
+         use crate::termwindow::webgpu::WebGpuTexture;
+ 
+-        let webgpu = self.webgpu.as_mut().unwrap();
++        let blur = self.prepare_terminal_blur()?;
++        let webgpu = self.webgpu.as_ref().unwrap();
+         let render_state = self.render_state.as_ref().unwrap();
+ 
+         let output = webgpu.surface.get_current_texture()?;
+@@ -87,7 +88,20 @@ impl crate::TermWindow {
+         )
+         .to_arrays_transposed();
+ 
++        let mut composited = false;
+         for layer in render_state.layers.borrow().iter() {
++            if !composited && layer.zindex >= 6 {
++                if let Some((params, blur)) = &blur {
++                    blur.draw_webgpu(webgpu, &mut encoder, &view, *params);
++                    cleared = true;
++                }
++                composited = true;
++            }
++            let target = if !composited {
++                blur.as_ref().map_or(&view, |(_, blur)| blur.webgpu_scene())
++            } else {
++                &view
++            };
+             for idx in 0..3 {
+                 let vb = &layer.vb.borrow()[idx];
+                 let (vertex_count, index_count) = vb.vertex_index_count();
+@@ -98,7 +112,7 @@ impl crate::TermWindow {
+                     let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                         label: Some("Render Pass"),
+                         color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+-                            view: &view,
++                            view: target,
+                             resolve_target: None,
+                             ops: wgpu::Operations {
+                                 load: if cleared {
+@@ -152,11 +166,16 @@ impl crate::TermWindow {
+     fn call_draw_glium(&mut self, frame: &mut glium::Frame) -> anyhow::Result<()> {
+         use window::glium::texture::SrgbTexture2d;
+ 
++        let blur = self.prepare_terminal_blur()?;
++        let mut scene = blur.as_ref().map(|(_, blur)| blur.gl_scene()).transpose()?;
+         let gl_state = self.render_state.as_ref().unwrap();
+         let tex = gl_state.glyph_cache.borrow().atlas.texture();
+         let tex = tex.downcast_ref::<SrgbTexture2d>().unwrap();
+ 
+         frame.clear_color(0., 0., 0., 0.);
++        if let Some(scene) = &mut scene {
++            scene.clear_color(0., 0., 0., 0.);
++        }
+ 
+         let projection = euclid::Transform3D::<f32, f32, f32>::ortho(
+             -(self.dimensions.pixel_width as f32) / 2.0,
+@@ -234,7 +253,14 @@ impl crate::TermWindow {
+         let blink: ColorEaseUniform = (*self.blink_state.borrow()).into();
+         let rapid_blink: ColorEaseUniform = (*self.rapid_blink_state.borrow()).into();
+ 
++        let mut composited = false;
+         for layer in gl_state.layers.borrow().iter() {
++            if !composited && layer.zindex >= 6 {
++                if let Some((params, blur)) = &blur {
++                    blur.draw_gl(frame, *params)?;
++                }
++                composited = true;
++            }
+             for idx in 0..3 {
+                 let vb = &layer.vb.borrow()[idx];
+                 let (vertex_count, index_count) = vb.vertex_index_count();
+@@ -254,17 +280,31 @@ impl crate::TermWindow {
+                     uniforms.add_struct("blink", &blink);
+                     uniforms.add_struct("rapid_blink", &rapid_blink);
+ 
+-                    frame.draw(
+-                        vertices.glium().slice(0..vertex_count).unwrap(),
+-                        vb.indices.glium().slice(0..index_count).unwrap(),
+-                        gl_state.glyph_prog.as_ref().unwrap(),
+-                        &uniforms,
+-                        if subpixel_aa {
+-                            &dual_source_blending
+-                        } else {
+-                            &alpha_blending
+-                        },
+-                    )?;
++                    if let Some(scene) = scene.as_mut().filter(|_| !composited) {
++                        scene.draw(
++                            vertices.glium().slice(0..vertex_count).unwrap(),
++                            vb.indices.glium().slice(0..index_count).unwrap(),
++                            gl_state.glyph_prog.as_ref().unwrap(),
++                            &uniforms,
++                            if subpixel_aa {
++                                &dual_source_blending
++                            } else {
++                                &alpha_blending
++                            },
++                        )?;
++                    } else {
++                        frame.draw(
++                            vertices.glium().slice(0..vertex_count).unwrap(),
++                            vb.indices.glium().slice(0..index_count).unwrap(),
++                            gl_state.glyph_prog.as_ref().unwrap(),
++                            &uniforms,
++                            if subpixel_aa {
++                                &dual_source_blending
++                            } else {
++                                &alpha_blending
++                            },
++                        )?;
++                    }
+                 }
+ 
+                 vb.next_index();
 diff --git a/wezterm-gui/src/termwindow/render/mod.rs b/wezterm-gui/src/termwindow/render/mod.rs
 index 1cb777d76d0b2cbdbfda617f8f40725713d3c30b..70e287a36ad15d5f9957e4f4c31f5c6e6900a229 100644
 --- a/wezterm-gui/src/termwindow/render/mod.rs
@@ -1448,7 +1590,7 @@ index 3136f28e23d85c70d903a4a8b87d24f09b002c18..562cdf8cf85887543c9cd65a50ad521a
              .context("paint_window_borders")?;
          drop(layers);
 diff --git a/wezterm-gui/src/termwindow/render/pane.rs b/wezterm-gui/src/termwindow/render/pane.rs
-index 4af46389d8cf8479f1de450902f95bfb9ff6f4d7..674b3a55d22c08c38f81c4d2d20fa75fa1f16ac8 100644
+index 4af46389d8cf8479f1de450902f95bfb9ff6f4d7..7ce02c7f1eab6239db4ba1f46949d40a2ea4c211 100644
 --- a/wezterm-gui/src/termwindow/render/pane.rs
 +++ b/wezterm-gui/src/termwindow/render/pane.rs
 @@ -34,7 +34,7 @@ impl crate::TermWindow {
@@ -1460,16 +1602,34 @@ index 4af46389d8cf8479f1de450902f95bfb9ff6f4d7..674b3a55d22c08c38f81c4d2d20fa75f
              return self.paint_pane_box_model(pos);
          }
  
-@@ -60,7 +60,7 @@ impl crate::TermWindow {
+@@ -58,9 +58,15 @@ impl crate::TermWindow {
+         let global_cursor_fg = self.palette().cursor_fg;
+         let global_cursor_bg = self.palette().cursor_bg;
          let config = self.config.clone();
-         let palette = pos.pane.palette();
+-        let palette = pos.pane.palette();
++        let quick_terminal = self.terminal_overlay_content(pos.pane.pane_id()).is_some();
++        let mut palette = pos.pane.palette();
++        if quick_terminal {
++            if let Some(color) = self.ui_host.as_ref().and_then(|ui| ui.provider.quick_terminal_config().background_color) {
++                palette.background = color.to_srgb();
++            }
++        }
  
 -        let (padding_left, padding_top) = self.padding_left_top();
 +        let (padding_left, padding_top) = self.pane_padding_left_top(pos.pane.pane_id());
  
          let tab_bar_height = if self.show_tab_bar {
              self.tab_bar_pixel_height()
-@@ -107,12 +107,14 @@ impl crate::TermWindow {
+@@ -94,7 +100,7 @@ impl crate::TermWindow {
+         let filled_box = gl_state.util_sprites.filled_box.texture_coords();
+ 
+         let window_is_transparent =
+-            !self.window_background.is_empty() || config.window_background_opacity != 1.0;
++            quick_terminal || !self.window_background.is_empty() || config.window_background_opacity != 1.0;
+ 
+         let default_bg = palette
+             .resolve_bg(ColorAttribute::Default)
+@@ -107,12 +113,14 @@ impl crate::TermWindow {
  
          let cell_width = self.render_metrics.cell_size.width as f32;
          let cell_height = self.render_metrics.cell_size.height as f32;
@@ -1487,7 +1647,7 @@ index 4af46389d8cf8479f1de450902f95bfb9ff6f4d7..674b3a55d22c08c38f81c4d2d20fa75f
                  )
              } else {
                  (
-@@ -124,8 +126,8 @@ impl crate::TermWindow {
+@@ -124,8 +132,8 @@ impl crate::TermWindow {
  
              let (y, height_delta) = if pos.top == 0 {
                  (
@@ -1498,7 +1658,7 @@ index 4af46389d8cf8479f1de450902f95bfb9ff6f4d7..674b3a55d22c08c38f81c4d2d20fa75f
                  )
              } else {
                  (
-@@ -138,7 +140,7 @@ impl crate::TermWindow {
+@@ -138,7 +146,7 @@ impl crate::TermWindow {
                  y,
                  // Go all the way to the right edge if we're right-most
                  if pos.left + pos.width >= self.terminal_size.cols as usize {
@@ -1507,7 +1667,16 @@ index 4af46389d8cf8479f1de450902f95bfb9ff6f4d7..674b3a55d22c08c38f81c4d2d20fa75f
                  } else {
                      (pos.width as f32 * cell_width) + width_delta
                  },
-@@ -226,8 +228,10 @@ impl crate::TermWindow {
+@@ -151,7 +159,7 @@ impl crate::TermWindow {
+             )
+         };
+ 
+-        if self.window_background.is_empty() {
++        if !quick_terminal && self.window_background.is_empty() {
+             // Per-pane, palette-specified background
+ 
+             let mut quad = self
+@@ -226,8 +234,10 @@ impl crate::TermWindow {
          // do a per-pane scrollbar.  That will require more extensive
          // changes to ScrollHit, mouse positioning, PositionedPane
          // and tab size calculation.
@@ -1520,7 +1689,7 @@ index 4af46389d8cf8479f1de450902f95bfb9ff6f4d7..674b3a55d22c08c38f81c4d2d20fa75f
  
              let min_height = self.min_scroll_bar_height();
  
-@@ -235,7 +239,7 @@ impl crate::TermWindow {
+@@ -235,7 +245,7 @@ impl crate::TermWindow {
                  &*pos.pane,
                  current_viewport,
                  self.dimensions.pixel_height.saturating_sub(
@@ -1529,7 +1698,7 @@ index 4af46389d8cf8479f1de450902f95bfb9ff6f4d7..674b3a55d22c08c38f81c4d2d20fa75f
                  ),
                  min_height as usize,
              );
-@@ -247,7 +251,7 @@ impl crate::TermWindow {
+@@ -247,7 +257,7 @@ impl crate::TermWindow {
              let config = &self.config;
              let padding = self.effective_right_padding(&config) as f32;
  
@@ -1538,7 +1707,7 @@ index 4af46389d8cf8479f1de450902f95bfb9ff6f4d7..674b3a55d22c08c38f81c4d2d20fa75f
  
              // Register the scroll bar location
              self.ui_items.push(UIItem {
-@@ -271,7 +275,7 @@ impl crate::TermWindow {
+@@ -271,7 +281,7 @@ impl crate::TermWindow {
                  height: self
                      .dimensions
                      .pixel_height
@@ -1547,7 +1716,7 @@ index 4af46389d8cf8479f1de450902f95bfb9ff6f4d7..674b3a55d22c08c38f81c4d2d20fa75f
                  item_type: UIItemType::BelowScrollThumb,
              });
  
-@@ -605,8 +609,8 @@ impl crate::TermWindow {
+@@ -605,8 +615,8 @@ impl crate::TermWindow {
          // We want to fill out to the edges of the splits
          let (x, width_delta) = if pos.left == 0 {
              (
@@ -1558,7 +1727,7 @@ index 4af46389d8cf8479f1de450902f95bfb9ff6f4d7..674b3a55d22c08c38f81c4d2d20fa75f
              )
          } else {
              (
-@@ -618,8 +622,8 @@ impl crate::TermWindow {
+@@ -618,8 +628,8 @@ impl crate::TermWindow {
  
          let (y, height_delta) = if pos.top == 0 {
              (
@@ -1569,7 +1738,7 @@ index 4af46389d8cf8479f1de450902f95bfb9ff6f4d7..674b3a55d22c08c38f81c4d2d20fa75f
              )
          } else {
              (
-@@ -633,7 +637,7 @@ impl crate::TermWindow {
+@@ -633,7 +643,7 @@ impl crate::TermWindow {
              y,
              // Go all the way to the right edge if we're right-most
              if pos.left + pos.width >= self.terminal_size.cols as usize {

@@ -1,6 +1,5 @@
-//! A PTY surface owned by the existing GUI window, outside its tab projection: a persistent
-//! shell, or a program that ends when hidden.
-use super::ui_host::{Bounds, TerminalProgram};
+//! A PTY surface owned by the existing GUI window, outside its tab projection.
+use super::ui_host::{Bounds, QuickTerminalConfig, TerminalProgram};
 use super::{TermWindow, TermWindowNotif};
 use crate::quad::{HeapQuadAllocator, TripleLayerQuadAllocator};
 use codec::SpawnBesidePane;
@@ -17,15 +16,20 @@ use wezterm_client::pane::ClientPane;
 use wezterm_term::TerminalSize;
 use window::{color::LinearRgba, WindowOps};
 
+mod blur;
+mod frame;
+
 const SHELL_SIZE: (f32, f32) = (0.75, 0.75);
 
 #[derive(Default)]
-pub(super) struct TerminalOverlay(Rc<RefCell<State>>);
+pub(super) struct TerminalOverlay(Rc<RefCell<State>>, RefCell<Option<blur::BackdropBlur>>);
 
 #[derive(Default)]
 struct State {
     visible: bool,
-    pending: bool,
+    pending: Option<u64>,
+    launches: u64,
+    config: Option<QuickTerminalConfig>,
     pane: Option<Arc<dyn Pane>>,
     /// The shell's mirrored tab, where `attach_mux` swaps in its replacement.
     tab: Option<TabId>,
@@ -55,7 +59,7 @@ struct Launch {
 
 #[derive(Clone, Copy)]
 enum Slot {
-    Shell,
+    Shell(u64),
     Program(u64),
 }
 
@@ -91,15 +95,30 @@ impl State {
 
     fn wants(&self, slot: Slot) -> bool {
         match slot {
-            Slot::Shell => self.pending,
-            Slot::Program(id) => self.program.as_ref().is_some_and(|program| program.id == id),
+            Slot::Shell(id) => self.pending == Some(id),
+            Slot::Program(id) => self
+                .program
+                .as_ref()
+                .is_some_and(|program| program.id == id),
         }
+    }
+
+    fn discard_shell(&mut self) -> Option<Arc<dyn Pane>> {
+        self.pending = None;
+        self.tab = None;
+        self.pane.take()
+    }
+
+    fn launch_shell(&mut self) -> Slot {
+        self.launches += 1;
+        self.pending = Some(self.launches);
+        Slot::Shell(self.launches)
     }
 
     fn settle(&mut self, slot: Slot, pane: Option<Arc<dyn Pane>>) {
         match (slot, pane) {
-            (Slot::Shell, pane) => {
-                self.pending = false;
+            (Slot::Shell(_), pane) => {
+                self.pending = None;
                 self.visible &= pane.is_some() || self.program.is_some();
                 self.tab = pane.as_ref().and_then(mirrored_tab);
                 self.pane = pane;
@@ -130,7 +149,7 @@ fn quick_workspace(domain: &Arc<dyn Domain>, window: MuxWindowId, slot: Slot) ->
         .and_then(|client| client.local_to_remote_window_id(window))
         .map_or_else(|| format!("local{window}"), |id| id.to_string());
     let kind = match slot {
-        Slot::Shell => "shell",
+        Slot::Shell(_) => "shell",
         Slot::Program(_) => "program",
     };
     format!("{}{window}:{kind}", mux::QUICK_WORKSPACE_PREFIX)
@@ -186,7 +205,12 @@ fn local_pane_layout(config: &config::Config, name: &str) -> bool {
 fn directory(url: &url::Url) -> Option<String> {
     let mut local = url::Url::parse("file:///").ok()?;
     local.set_path(url.path());
-    local.to_file_path().ok()?.into_os_string().into_string().ok()
+    local
+        .to_file_path()
+        .ok()?
+        .into_os_string()
+        .into_string()
+        .ok()
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -245,21 +269,27 @@ impl TermWindow {
             .chain(self.vtabs_suspended.values())
             .all(|ui| {
                 let state = ui.terminal.0.borrow();
-                let program = state.program.as_ref().and_then(|program| program.pane.as_ref());
-                state.pane.iter().chain(program).all(|pane| {
-                    pane.can_close_without_prompting(mux::pane::CloseReason::Window)
-                })
+                let program = state
+                    .program
+                    .as_ref()
+                    .and_then(|program| program.pane.as_ref());
+                state
+                    .pane
+                    .iter()
+                    .chain(program)
+                    .all(|pane| pane.can_close_without_prompting(mux::pane::CloseReason::Window))
             })
     }
 
     fn terminal_overlay_layout(&self) -> Layout {
         Layout::new(
             self.vtabs_geometry().ui_bounds(true),
-            self.ui_host
-                .as_ref()
-                .map_or(SHELL_SIZE, |ui| {
-                    ui.terminal.0.borrow().size(ui.provider.quick_terminal_size())
-                }),
+            self.ui_host.as_ref().map_or(SHELL_SIZE, |ui| {
+                ui.terminal
+                    .0
+                    .borrow()
+                    .size(ui.provider.quick_terminal_config().size)
+            }),
             self.render_metrics.cell_size.width as f32,
             self.render_metrics.cell_size.height as f32,
             self.dimensions.dpi as u32,
@@ -286,7 +316,10 @@ impl TermWindow {
     pub(super) fn terminal_overlay_owns(&self, pane_id: PaneId) -> bool {
         self.ui_host.as_ref().is_some_and(|ui| {
             let state = ui.terminal.0.borrow();
-            let program = state.program.as_ref().and_then(|program| program.pane.as_ref());
+            let program = state
+                .program
+                .as_ref()
+                .and_then(|program| program.pane.as_ref());
             state
                 .pane
                 .iter()
@@ -345,17 +378,24 @@ impl TermWindow {
             return;
         }
         if let Some(ui) = &self.ui_host {
-            let program = {
+            let panes = {
                 let mut state = ui.terminal.0.borrow_mut();
                 state.visible = false;
                 if let Some(pane) = &state.pane {
                     pane.focus_changed(false);
                 }
-                state.program.take().and_then(|program| program.pane)
+                let program = state.program.take().and_then(|program| program.pane);
+                let shell = if ui.provider.quick_terminal_config().preserve_shell {
+                    None
+                } else {
+                    state.discard_shell()
+                };
+                [program, shell]
             };
-            if let Some(pane) = program {
-                remove(&pane);
+            for pane in panes.iter().flatten() {
+                remove(pane);
             }
+            ui.terminal.1.borrow_mut().take();
         }
         self.current_mouse_capture = None;
         self.current_mouse_buttons.clear();
@@ -448,7 +488,14 @@ impl TermWindow {
         let Some(ui) = self.ui_host.as_ref() else {
             return;
         };
+        let preserve_shell = ui.provider.quick_terminal_config().preserve_shell;
         let state_ref = ui.terminal.0.clone();
+        if !preserve_shell {
+            let discarded = state_ref.borrow_mut().discard_shell();
+            if let Some(pane) = discarded {
+                remove(&pane);
+            }
+        }
         if let Some(pane) = self.get_active_pane_or_overlay() {
             pane.focus_changed(false);
         }
@@ -497,7 +544,7 @@ impl TermWindow {
             pane.focus_changed(true);
             return;
         }
-        if state.pending {
+        if state.pending.is_some() {
             return;
         }
         drop(state);
@@ -512,8 +559,11 @@ impl TermWindow {
             return;
         };
         if let Target::Beside(domain, _) = &launch.target {
-            let workspace = quick_workspace(domain, self.mux_window_id, Slot::Shell);
-            if let Some(pane) = quick_panes(&workspace).into_iter().next() {
+            let workspace = quick_workspace(domain, self.mux_window_id, Slot::Shell(0));
+            let panes = quick_panes(&workspace);
+            if !preserve_shell {
+                panes.iter().for_each(remove);
+            } else if let Some(pane) = panes.into_iter().next() {
                 pane.set_config(Arc::new(config::TermConfig::with_config(
                     self.config.clone(),
                 )));
@@ -524,10 +574,10 @@ impl TermWindow {
                 return;
             }
         }
-        state_ref.borrow_mut().pending = true;
+        let slot = state_ref.borrow_mut().launch_shell();
         self.spawn_terminal_pane(
             &state_ref,
-            Slot::Shell,
+            slot,
             Ok(launch.target),
             launch.command,
             launch.cwd,
@@ -568,16 +618,17 @@ impl TermWindow {
                         if let Slot::Program(_) = slot {
                             quick_panes(&workspace).iter().for_each(remove);
                         }
-                        let spawned = ClientDomain::get_client_inner_for_domain(domain.domain_id())?
-                            .client
-                            .spawn_beside_pane(SpawnBesidePane {
-                                pane_id,
-                                command,
-                                command_dir: cwd,
-                                size,
-                                workspace,
-                            })
-                            .await?;
+                        let spawned =
+                            ClientDomain::get_client_inner_for_domain(domain.domain_id())?
+                                .client
+                                .spawn_beside_pane(SpawnBesidePane {
+                                    pane_id,
+                                    command,
+                                    command_dir: cwd,
+                                    size,
+                                    workspace,
+                                })
+                                .await?;
                         // The pane arrives with this client's mirror of the server's hidden tab.
                         client.resync().await?;
                         client
@@ -621,6 +672,24 @@ impl TermWindow {
     }
 
     pub(super) fn resize_terminal_overlay(&mut self) {
+        if let Some(ui) = &self.ui_host {
+            let config = ui.provider.quick_terminal_config();
+            let discarded = {
+                let mut state = ui.terminal.0.borrow_mut();
+                if state.config != Some(config) {
+                    state.config = Some(config);
+                    self.quad_generation += 1;
+                }
+                if !config.preserve_shell && (!state.visible || state.program.is_some()) {
+                    state.discard_shell()
+                } else {
+                    None
+                }
+            };
+            if let Some(pane) = discarded {
+                remove(&pane);
+            }
+        }
         let replacement = self
             .ui_host
             .as_ref()
@@ -679,6 +748,12 @@ impl TermWindow {
             return Ok(());
         }
         let layout = self.terminal_overlay_layout();
+        let config = self
+            .ui_host
+            .as_ref()
+            .unwrap()
+            .provider
+            .quick_terminal_config();
         let layer = self.render_state.as_ref().unwrap().layer_for_zindex(6)?;
         let mut layers = layer.quad_allocator();
         self.filled_rectangle(
@@ -692,14 +767,20 @@ impl TermWindow {
             ),
             LinearRgba::with_components(0., 0., 0., 0.2),
         )?;
-        let background = self
-            .terminal_overlay_pane()
-            .map(|pane| pane.palette().background)
-            .unwrap_or(self.palette().background)
-            .to_linear();
+        let background = config
+            .background_color
+            .unwrap_or_else(|| {
+                self.terminal_overlay_pane()
+                    .map(|pane| pane.palette().background)
+                    .unwrap_or(self.palette().background)
+                    .to_linear()
+            })
+            .mul_alpha(config.opacity);
         let border = (self.dimensions.dpi as f32 / 96.).max(1.);
-        let border_color = self.palette().foreground.to_linear().mul_alpha(0.22);
-        self.paint_vtabs_rounded_fill(&mut layers, layout.frame, 12. * border, border_color)?;
+        let border_color = config
+            .border_color
+            .unwrap_or_else(|| self.palette().foreground.to_linear().mul_alpha(0.22));
+        self.paint_terminal_border(&mut layers, layout.frame, border, border_color)?;
         self.paint_vtabs_rounded_fill(
             &mut layers,
             Bounds {

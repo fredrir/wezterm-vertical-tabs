@@ -104,11 +104,14 @@ impl SidebarUi {
                     let value = match descriptor.kind {
                         SettingKind::Number { .. }
                         | SettingKind::Fraction
+                        | SettingKind::Opacity
                         | SettingKind::Object
                         | SettingKind::Colors
                         | SettingKind::List => serde_json::from_str(&value)
                             .map_err(|error| format!("Invalid value: {error}"))?,
-                        SettingKind::Text if value.is_empty() => Value::Null,
+                        SettingKind::Text | SettingKind::OptionalColor if value.is_empty() => {
+                            Value::Null
+                        }
                         _ => Value::String(value.clone()),
                     };
                     settings::validate_value(key, &value)?;

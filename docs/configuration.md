@@ -95,11 +95,16 @@ return config
 | Surface | Centered inside the current window, without a sidebar |
 | Size | `quick_terminal_width`, `quick_terminal_height` settings; window fraction above 0, at most 1; default `0.75` |
 | Shortcut | Ctrl + backtick; configurable as `quick_terminal` in Settings → Keybinds |
-| Hide | Escape, repeat shortcut, click outside, close-tab shortcut; stays open on focus loss |
-| Session | One shell per window; continues running while hidden; ends when its window closes |
-| Start | Beside the active pane on first opening: same host, domain and directory |
-| Mux without `local_pane_layout` | Shell lives in a hidden workspace on the mux server; reattached after a GUI restart; follows `replace-pane` |
+| Hide | Escape, repeat shortcut, click outside, close-tab shortcut; `quick_terminal_auto_hide = true` also hides on focus loss (default `false`) |
+| Session | `quick_terminal_preserve_shell = true` (default) keeps one shell per window running while hidden; `false` ends it when hidden and starts fresh on opening |
+| Start | Beside the active pane when a shell is created: same host, domain and directory |
+| Mux without `local_pane_layout` | Shell lives in a hidden workspace on the mux server; reattached after a GUI restart when preserved; follows `replace-pane` |
 | Lua action | `vtabs.action("quick_terminal")`; available with plugin shortcuts disabled |
+| Appearance | Settings → Quick terminal, or the same keys in Lua `settings`; applies to quick programs too |
+| Transparency | `quick_terminal_transparency = false` by default; `true` reveals underlying WezTerm content |
+| Opacity | `quick_terminal_opacity = 1.0`; background strength from `0` to `1` when transparency is enabled; text stays opaque |
+| Blur | `quick_terminal_blur = 0`; radius `0`–`64` logical pixels behind the rounded frame, visible with transparency and opacity below `1` |
+| Colors | `quick_terminal_background_color`, `quick_terminal_border_color`: `#RRGGBB`; unset follows the terminal palette (border uses foreground at 22% opacity); clear the Settings field to restore |
 
 **Quick programs**
 

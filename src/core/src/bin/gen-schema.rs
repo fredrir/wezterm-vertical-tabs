@@ -181,9 +181,9 @@ fn setting_type(kind: &SettingKind) -> String {
     match kind {
         SettingKind::Bool => "boolean".into(),
         SettingKind::Number { .. } => "integer".into(),
-        SettingKind::Fraction => "number".into(),
+        SettingKind::Fraction | SettingKind::Opacity => "number".into(),
         SettingKind::Text => "string".into(),
-        SettingKind::Color => "string".into(),
+        SettingKind::Color | SettingKind::OptionalColor => "string".into(),
         SettingKind::Colors => "table<string, string>".into(),
         SettingKind::Choice(choices) => choices
             .iter()
@@ -275,8 +275,10 @@ fn generate(format: &str) -> Result<String, String> {
                     SettingKind::Bool => "Boolean".into(),
                     SettingKind::Number { min, max } => format!("Integer {min}–{max}"),
                     SettingKind::Fraction => "Number above 0, at most 1".into(),
+                    SettingKind::Opacity => "Number 0–1".into(),
                     SettingKind::Text => "String or null".into(),
                     SettingKind::Color => "Hex color `#RRGGBB`".into(),
+                    SettingKind::OptionalColor => "Hex color `#RRGGBB` or null".into(),
                     SettingKind::Colors => "Object of hex colors".into(),
                     SettingKind::Choice(choices) => choices
                         .iter()

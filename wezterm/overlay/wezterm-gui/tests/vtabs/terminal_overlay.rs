@@ -64,8 +64,7 @@ fn programs_choose_their_share_of_the_window() {
                 < 0.01
         );
         assert!(
-            (center(layout.frame.y, layout.frame.height) - center(bounds.y, bounds.height))
-                .abs()
+            (center(layout.frame.y, layout.frame.height) - center(bounds.y, bounds.height)).abs()
                 < 0.01
         );
         assert!(layout.content.x + layout.content.width <= layout.frame.x + layout.frame.width);
@@ -136,4 +135,30 @@ fn directories_decode_whichever_host_reported_them() {
             Some(path)
         );
     }
+}
+
+#[test]
+fn discarded_shell_launch_cannot_replace_a_reopened_shell() {
+    let mut state = State::default();
+    state.visible = true;
+    let previous = state.launch_shell();
+    assert!(state.wants(previous));
+    state.discard_shell();
+    assert!(!state.wants(previous));
+    let current = state.launch_shell();
+    assert!(!state.wants(previous));
+    assert!(state.wants(current));
+    state.settle(current, None);
+    assert!(!state.visible);
+    assert!(state.pending.is_none());
+}
+
+#[test]
+fn preserved_shell_launch_can_finish_while_hidden() {
+    let mut state = State::default();
+    let pending = state.launch_shell();
+    state.visible = false;
+    assert!(state.wants(pending));
+    state.visible = true;
+    assert!(state.wants(pending));
 }

@@ -209,6 +209,17 @@ pub struct Surface {
     /// Per row, pixel spans from the grid's left whose text sits half a cell lower.
     pub centered: Vec<Vec<(f32, f32)>>,
 }
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct QuickTerminalConfig {
+    pub size: (f32, f32),
+    pub opacity: f32,
+    pub blur: f32,
+    pub border_color: Option<LinearRgba>,
+    pub background_color: Option<LinearRgba>,
+    pub auto_hide: bool,
+    pub preserve_shell: bool,
+}
+
 pub trait Provider {
     fn initialize(&mut self) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + '_>>;
     fn reservation(&self) -> Reservation;
@@ -229,8 +240,7 @@ pub trait Provider {
     fn input(&mut self, input: Input<'_>) -> bool;
     /// A visible program, unlike the shell, receives Escape.
     fn terminal_input(&mut self, input: Input<'_>, program: bool) -> bool;
-    /// The quick terminal shell's share of the window width and height.
-    fn quick_terminal_size(&self) -> (f32, f32);
+    fn quick_terminal_config(&self) -> QuickTerminalConfig;
     fn message(&mut self, message: serde_json::Value);
     fn projection(&self) -> Projection;
     fn commands(&mut self) -> Vec<Command>;
