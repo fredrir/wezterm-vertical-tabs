@@ -1,3 +1,26 @@
+diff --git a/mux/src/connui.rs b/mux/src/connui.rs
+index b1b721efbff2f7a638faf5bd90d030191671dc44..2bc10d6e23ab4ebb65f2e966f51b3aa995bc82cb 100644
+--- a/mux/src/connui.rs
++++ b/mux/src/connui.rs
+@@ -12,6 +12,8 @@ use termwiz::surface::{Change, Position};
+ use termwiz::terminal::*;
+ use wezterm_term::TerminalSize;
+ 
++mod headless;
++
+ #[derive(Default)]
+ struct PasswordPromptHost {
+     history: BasicHistory,
+@@ -253,6 +255,9 @@ impl ConnectionUI {
+     }
+ 
+     pub fn with_params(params: ConnectionUIParams) -> Self {
++        if Self::is_headless() {
++            return Self::new_headless();
++        }
+         let (tx, rx) = unbounded();
+         promise::spawn::spawn_into_main_thread(termwiztermtab::run(
+             params.size,
 diff --git a/mux/src/domain.rs b/mux/src/domain.rs
 index 12109666e23dbc36ced1f2cf4d39c60ac9dfa18e..9fc94f2f94b33135ab367d6f67c47c35dc077628 100644
 --- a/mux/src/domain.rs

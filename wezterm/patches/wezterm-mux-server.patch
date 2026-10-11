@@ -1,8 +1,16 @@
 diff --git a/wezterm-mux-server/src/main.rs b/wezterm-mux-server/src/main.rs
-index 5c9c22009d7b7713e0ad993acdd33e6772ac2344..37b004e43001667169acd68a0ef29183f999da6f 100644
+index 5c9c22009d7b7713e0ad993acdd33e6772ac2344..f209168a2ff9cf8e93ae2fab1594a9b4e2d9d55e 100644
 --- a/wezterm-mux-server/src/main.rs
 +++ b/wezterm-mux-server/src/main.rs
-@@ -309,7 +309,8 @@ mod ossl;
+@@ -77,6 +77,7 @@ fn run() -> anyhow::Result<()> {
+ 
+     //stats::Stats::init()?;
+     config::designate_this_as_the_main_thread();
++    mux::connui::ConnectionUI::set_headless();
+     let _saver = umask::UmaskSaver::new();
+ 
+     let opts = Opt::parse();
+@@ -309,7 +310,8 @@ mod ossl;
  
  pub fn spawn_listener() -> anyhow::Result<()> {
      let config = configuration();

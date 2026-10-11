@@ -41,3 +41,4 @@ Private windows exclude live-tab persistence. Catalog/settings changes are expli
 | Activation                         | Updated GUI/CLI and owning mux server; restart required for existing domains                                                                        |
 | Reattachment                       | Live TLS reconnects retain panes; unix/SSH disconnects close their panes; the next attach adopts orphaned `__backing:<host>` tabs into `__detached` |
 | Server identity                    | Host name, executable and config path; routes to one server share adopted panes                                                                     |
+| Connection progress                | Mux servers log it; no tab or window opens, so WezTerm-multiplexed SSH prompts fail; use keys or an agent                                           |

@@ -16,14 +16,16 @@ pub(crate) fn spans_machines(tab: &Tab) -> bool {
         .is_some_and(|first| glyphs.any(|glyph| glyph != first))
 }
 
-pub(crate) fn tab_machine(tab: &Tab) -> (bool, &str) {
+pub(crate) fn tab_machine(tab: &Tab) -> Option<(bool, &str)> {
     if spans_machines(tab) {
-        return (true, "");
+        return None;
     }
-    tab.panes
-        .iter()
-        .find(|pane| pane.active)
-        .map_or((tab.remote, &tab.os), |pane| (pane.remote, &pane.os))
+    Some(
+        tab.panes
+            .iter()
+            .find(|pane| pane.active)
+            .map_or((tab.remote, &tab.os), |pane| (pane.remote, &pane.os)),
+    )
 }
 
 pub(crate) fn tab_name(tab: &Tab, home: Option<&str>) -> Option<String> {

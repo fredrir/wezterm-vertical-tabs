@@ -308,6 +308,29 @@ def test_failed_remote_connection_preserves_the_source(mux_pair):
     assert json.loads(remote("list", "--format", "json")) == []
 
 
+@pytest.mark.parametrize("domain", ["peer", "proxied"])
+def test_first_attach_adds_no_tab_to_the_callers_window(mux_pair, domain):
+    local, _ = mux_pair
+    source = int(local.cli("spawn", "--new-window"))
+    (tab,) = {p["tab_id"] for p in local.panes()}
+    seen = set()
+    with concurrent.futures.ThreadPoolExecutor() as pool:
+        # The default shell never reports readiness, so the replacement stays in flight a second.
+        result = pool.submit(
+            local.cli,
+            "replace-pane",
+            "--pane-id",
+            source,
+            "--domain-name",
+            domain,
+            "--wait-for-ready",
+        )
+        while not result.done():
+            seen |= {p["tab_id"] for p in local.panes()}
+        result.result()
+    assert seen == {tab}
+
+
 @pytest.mark.parametrize("domain", ["local", "peer", "proxied"])
 def test_replacement_keeps_old_screen_until_prompt_ready(mux_pair, tmp_path, domain):
     local, _ = mux_pair

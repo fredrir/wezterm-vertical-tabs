@@ -116,7 +116,7 @@ impl Sidebar {
         let segmented = tab.panes.len() > 1
             && rect.width.saturating_sub(ICON_CELLS + 2)
                 >= tab.panes.len() as u16 * MIN_SEGMENT_CELLS;
-        let (remote, os) = tab_machine(tab);
+        let machine = tab_machine(tab);
         let mut rename = rename;
         let mut rename_field = |cx: &mut Canvas, layout: &RowLayout| {
             if let Some(rename) = rename.as_mut() {
@@ -127,7 +127,7 @@ impl Sidebar {
         let id = ElementId::Tab(tab.id);
         let layout = Row {
             indent: if tab.folder_id.is_some() { 2 } else { 0 },
-            icon_color: theme.host(remote, os),
+            icon_color: machine.and_then(|(remote, os)| theme.host(remote, os)),
             index: model.settings.show_indexes.then_some(number),
             selected: model.selected_tab == Some(tab.id) && !view.props.settings_open,
             trailing: model.settings.show_close.then_some(Trailing {
@@ -138,7 +138,7 @@ impl Sidebar {
             ..Row::new(
                 id.clone(),
                 rect,
-                icons::host(remote, os),
+                machine.map_or("", |(remote, os)| icons::host(remote, os)),
                 if renaming {
                     Content::Custom(&mut rename_field)
                 } else if segmented {

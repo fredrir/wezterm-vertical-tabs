@@ -297,9 +297,10 @@ impl SidebarUi {
                 name.as_deref().unwrap_or(&tab.title),
                 Action::Domain(Intent::ActivateTab(tab.id)),
             );
-            let (remote, os) = tab_machine(tab);
-            item.icon = icons::host(remote, os);
-            item.icon_color = self.theme.host(remote, os);
+            if let Some((remote, os)) = tab_machine(tab) {
+                item.icon = icons::host(remote, os);
+                item.icon_color = self.theme.host(remote, os);
+            }
             if name.is_some_and(|name| name != tab.title) {
                 item.keywords = tab.title.clone();
             }
