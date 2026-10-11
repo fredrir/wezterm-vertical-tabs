@@ -62,6 +62,7 @@ impl ElementId {
             self,
             Self::SettingsCategory(_)
                 | Self::SettingsSearch
+                | Self::SettingsEntry
                 | Self::SettingsRecord
                 | Self::ResetSettings
                 | Self::Scrollbar(ScrollArea::Settings)

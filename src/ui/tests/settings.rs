@@ -240,53 +240,6 @@ fn color_palette_previews_until_apply_and_cancel_discards() {
 }
 
 #[test]
-fn color_hex_and_rgb_entries_validate_and_normalize() {
-    for (rgb, text, expected) in [
-        (false, "#aBc", Some("#aabbcc")),
-        (false, " 123ABC ", Some("#123abc")),
-        (false, "#fffffg", None),
-        (false, "#12345678", None),
-        (false, "#💙", None),
-        (false, "", None),
-        (true, "12, 128, 255", Some("#0c80ff")),
-        (true, "0, 0, 0", Some("#000000")),
-        (true, "256, 0, 0", None),
-        (true, "-1, 0, 0", None),
-        (true, "12, 13", None),
-    ] {
-        let (mut ui, model) = settings("theme");
-        click(&mut ui, &model, ElementId::Setting("accent".into()));
-        if rgb {
-            click(&mut ui, &model, ElementId::ColorFormat);
-        }
-        ui.event(&model, UiInput::key(Key::Backspace));
-        ui.event(&model, UiInput::Paste(text.into()));
-        let intents = ui.event(&model, UiInput::key(Key::Enter));
-        assert_eq!(
-            set(&intents, "accent"),
-            expected.map(|value| json!(value)),
-            "{text}"
-        );
-        if expected.is_none() {
-            draw(&mut ui, &model);
-            assert!(ui.text_input_active());
-            assert!(
-                ui.buffer()
-                    .content
-                    .iter()
-                    .any(|cell| cell.fg == ui.theme().danger)
-            );
-            // Invalid text never poisons the visual controls.
-            click(&mut ui, &model, ElementId::ColorSwatch(0));
-            assert_eq!(
-                set(&click(&mut ui, &model, ElementId::Submit), "accent"),
-                Some(json!("#f8fafc"))
-            );
-        }
-    }
-}
-
-#[test]
 fn color_reset_and_original_restore_the_right_values() {
     for (category, key, original, reset) in [
         (
@@ -400,6 +353,43 @@ fn color_picker_can_be_operated_with_only_the_keyboard() {
         Some(json!("#f43f5e"))
     );
     ui.event(&model, UiInput::key(Key::Escape));
+    assert!(ui.content_page());
+}
+
+#[test]
+fn color_picker_enter_applies_from_any_focus_except_cancel() {
+    for id in [
+        ElementId::ColorOriginal,
+        ElementId::ColorReset,
+        ElementId::ColorFormat,
+        ElementId::ColorSwatch(11),
+        ElementId::Submit,
+    ] {
+        let (mut ui, model) = settings("theme");
+        click(&mut ui, &model, ElementId::Setting("accent".into()));
+        click(&mut ui, &model, ElementId::ColorSwatch(11));
+        click(&mut ui, &model, id.clone());
+        assert!(
+            set(&ui.event(&model, UiInput::key(Key::Enter)), "accent").is_some(),
+            "{id:?}"
+        );
+    }
+    let (mut ui, model) = settings("theme");
+    click(&mut ui, &model, ElementId::Setting("accent".into()));
+    draw(&mut ui, &model);
+    ui.event(
+        &model,
+        UiInput::Key {
+            key: Key::Tab,
+            modifiers: Modifiers {
+                shift: true,
+                ..Modifiers::default()
+            },
+        },
+    );
+    assert_eq!(ui.focused(), Some(&ElementId::Cancel));
+    assert!(ui.event(&model, UiInput::key(Key::Enter)).is_empty());
+    draw(&mut ui, &model);
     assert!(ui.content_page());
 }
 

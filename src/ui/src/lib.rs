@@ -246,13 +246,19 @@ impl SidebarUi {
         self.settings.open = true;
         self.sidebar.reveal_settings = !self.settings.listed;
         self.settings.listed = true;
-        self.settings.search_focused = false;
+        if self.focused == Some(ElementId::SettingsSearch) {
+            self.focused = None;
+        }
         self.frame.dirty = true;
     }
-    pub(crate) fn hide_settings(&mut self) {
+    /// Leaves the page for the tab beneath; it stays listed like any background tab.
+    pub fn hide_settings(&mut self) {
         if self.settings.open {
             self.settings.open = false;
-            self.settings.search_focused = false;
+            if self.focused.as_ref().is_some_and(ElementId::on_settings_page) {
+                self.focused = None;
+                self.caret.stop();
+            }
             self.cancel_settings_input();
             self.frame.dirty = true;
         }
@@ -261,7 +267,6 @@ impl SidebarUi {
         self.settings.open = false;
         self.settings.listed = false;
         self.sidebar.settings_place = None;
-        self.settings.search_focused = false;
         self.cancel_settings_input();
         self.dismiss();
         self.focused = None;
@@ -270,8 +275,7 @@ impl SidebarUi {
     pub fn interrupt(&mut self) {
         self.dismiss();
         self.cancel_settings_input();
-        if self.settings.search_focused {
-            self.settings.search_focused = false;
+        if self.focused == Some(ElementId::SettingsSearch) {
             self.focused = None;
         }
         self.caret.stop();

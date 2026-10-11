@@ -249,24 +249,25 @@ impl SidebarUi {
         if self.focused == Some(ElementId::Editor) {
             return false;
         }
-        if *key == Key::Escape {
-            self.back();
-            return true;
+        match key {
+            Key::Escape => {
+                self.back();
+                return true;
+            }
+            Key::Enter => {
+                if self.focused == Some(ElementId::Cancel) {
+                    self.back();
+                } else {
+                    self.submit_form(model, intents);
+                }
+                return true;
+            }
+            _ => {}
         }
         let Some(id) = self.focused.clone() else {
             return true;
         };
         match key {
-            Key::Enter => {
-                if matches!(
-                    id,
-                    ElementId::ColorPlane | ElementId::ColorHue | ElementId::ColorSwatch(_)
-                ) {
-                    self.submit_form(model, intents);
-                } else {
-                    self.activate_element(model, id, intents);
-                }
-            }
             Key::Character(' ') => self.activate_element(model, id, intents),
             Key::Left | Key::Right | Key::Up | Key::Down => {
                 let direction = if matches!(key, Key::Left | Key::Down) {
