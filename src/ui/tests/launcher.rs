@@ -219,6 +219,41 @@ fn tab_actions_shortcut_lists_actions_and_digits_run_them() {
 }
 
 #[test]
+fn finishing_an_inline_rename_returns_the_keyboard_to_the_terminal() {
+    let model = with_tabs(3, 2);
+    for (key, renamed) in [(Key::Enter, true), (Key::Escape, false)] {
+        let mut ui = SidebarUi::new();
+        ui.set_layout(32, 0);
+        draw(&mut ui, &model);
+        open_tab_actions(&mut ui, &model);
+        ui.event(&model, UiInput::key(Key::Character('1')));
+        assert_eq!(ui.focused(), Some(&ElementId::Editor));
+        ui.event(&model, UiInput::Text("Renamed".into()));
+        let intents = ui.event(&model, UiInput::key(key));
+        assert_eq!(
+            matches!(
+                intents.as_slice(),
+                [UiIntent::Domain(Intent::RenameTab { id: 2, title })] if title == "Renamed"
+            ),
+            renamed
+        );
+        assert_eq!(ui.focused(), None);
+    }
+}
+
+#[test]
+fn clicking_a_tab_leaves_the_keyboard_with_the_terminal() {
+    let model = with_tabs(3, 1);
+    let mut ui = SidebarUi::new();
+    ui.set_layout(32, 0);
+    draw(&mut ui, &model);
+    ui.event(&model, UiInput::key(Key::Tab));
+    assert!(ui.focused().is_some());
+    click(&mut ui, &model, &ElementId::Tab(2));
+    assert_eq!(ui.focused(), None);
+}
+
+#[test]
 fn disabled_tab_action_digits_leave_the_query_untouched() {
     let model = with_tabs(3, 3);
     let mut ui = SidebarUi::new();

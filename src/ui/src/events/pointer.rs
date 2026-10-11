@@ -238,7 +238,8 @@ impl SidebarUi {
                     level: 0.0,
                     animating: true,
                 });
-                self.focused = Some(id.clone());
+                // Tab and split rows leave the keyboard with the terminal.
+                self.focused = (!matches!(id.row(), ElementId::Tab(_))).then(|| id.clone());
                 self.pointer.drag = Some(id);
                 self.frame.dirty = true;
             }

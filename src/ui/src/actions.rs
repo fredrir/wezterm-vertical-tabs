@@ -527,7 +527,7 @@ impl SidebarUi {
                 title,
             }));
         }
-        self.focused = Some(ElementId::Tab(rename.id));
+        self.focused = None;
         self.caret.stop();
         self.frame.dirty = true;
     }
