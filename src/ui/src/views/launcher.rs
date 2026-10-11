@@ -58,6 +58,37 @@ impl Launcher {
 #[derive(Default)]
 pub(crate) struct Launchers {
     pub foreign_tabs: Vec<ForeignTab>,
+    pub adoptable: Vec<AdoptablePane>,
+}
+
+/// A remote pane no mux shows; choosing it adopts it into this window.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AdoptablePane {
+    pub domain: String,
+    pub pane: u64,
+    pub label: String,
+    pub title: String,
+    pub place: String,
+    pub os: String,
+}
+
+impl AdoptablePane {
+    pub fn new(
+        domain: impl Into<String>,
+        pane: u64,
+        tab: &Tab,
+        home: Option<&str>,
+        place: impl Into<String>,
+    ) -> Self {
+        Self {
+            domain: domain.into(),
+            pane,
+            label: tab_name(tab, home).unwrap_or_else(|| tab.title.clone()),
+            title: tab.title.clone(),
+            place: place.into(),
+            os: tab.os.clone(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -351,6 +382,12 @@ impl SidebarUi {
             }
             item
         }));
+        items.extend(
+            self.launchers
+                .adoptable
+                .iter()
+                .map(|pane| self.adoptable_item(pane)),
+        );
         if model.settings.rail == vtabs_core::RailMode::Hidden {
             let mut item = MenuItem::new(
                 "sidebar/expand",
@@ -372,7 +409,56 @@ impl SidebarUi {
             selected,
         );
     }
+
+    /// Found after the search opens, so an open search takes them in place.
+    pub fn set_adoptable_panes(&mut self, panes: Vec<AdoptablePane>) {
+        let items: Vec<_> = panes.iter().map(|pane| self.adoptable_item(pane)).collect();
+        self.launchers.adoptable = panes;
+        let Some(Overlay::Menu(menu)) = self.overlays.current.as_mut() else {
+            return;
+        };
+        let Some(search) = menu
+            .search
+            .as_mut()
+            .filter(|search| search.kind == LauncherKind::Tabs)
+        else {
+            return;
+        };
+        search
+            .all_items
+            .retain(|item| !item.id.starts_with(ADOPT_PREFIX));
+        let at = search
+            .all_items
+            .iter()
+            .position(|item| item.id == "sidebar/expand")
+            .unwrap_or(search.all_items.len());
+        search.all_items.splice(at..at, items);
+        let scroll = menu.scroll;
+        filter_menu(menu);
+        menu.scroll = scroll;
+        self.frame.dirty = true;
+    }
+
+    fn adoptable_item(&self, pane: &AdoptablePane) -> MenuItem {
+        let mut item = MenuItem::new(
+            format!("{ADOPT_PREFIX}{}/{}", pane.domain, pane.pane),
+            &pane.label,
+            Action::Host(HostAction::AdoptPane {
+                domain: pane.domain.clone(),
+                pane: pane.pane,
+            }),
+        );
+        item.icon = icons::host(true, &pane.os);
+        item.icon_color = self.theme.host(true, &pane.os);
+        item.hint = pane.place.clone();
+        if pane.label != pane.title {
+            item.keywords = pane.title.clone();
+        }
+        item
+    }
 }
+
+const ADOPT_PREFIX: &str = "adopt/";
 
 pub(crate) fn filter_menu(menu: &mut Menu) {
     let Some(search) = &mut menu.search else {

@@ -65,6 +65,7 @@ return config
 | Search                | Centered palette of sidebar rows; Up/Down select, Left/Right edit the query, Enter opens; matches name, title or index  |
 | Search scope          | Current space (indexed), other spaces, filter-hidden, other windows (`window N`), other workspaces, disconnected domains |
 | Search `__detached`   | Moves the tab into this window; other workspaces switch; disconnected domains reattach                                  |
+| Search unadopted      | Remote panes no mux shows, from connected remotes and `hooks.adoptable`; Enter adopts into this window                  |
 | `__detached` windows  | Never shown on their own; when only they remain the GUI quits (`quit_when_all_windows_are_closed`); reconnecting spawns a fresh tab |
 | Space row             | Click collapses pinned tabs and folders; hover shows the chevron and the new-folder plus; right click edits the space   |
 | Folders               | Create with the space row plus; rename, collapse, reorder, add a tab or ungroup from the context menu                   |
@@ -281,6 +282,9 @@ vtabs.apply_to_config(config, {
     footer = function(context)
       return context.profile
     end,
+    adoptable = function()
+      return 'remote-tls'
+    end,
   },
 })
 ```
@@ -294,6 +298,7 @@ vtabs.apply_to_config(config, {
 | `filter`              | Boolean visibility                                                                               |
 | `theme`               | Window callback; validated theme-color overrides                                                 |
 | `footer`              | Window callback; string; first line shown above spaces, or `nil`                                 |
+| `adoptable`           | Per tab search; domain name(s) to list unadopted panes from, besides connected ones              |
 | Scheduling            | Semantic metadata changes; cached results, no frame-time callbacks                               |
 | Stale results         | Discarded after superseding host/model/configuration changes                                     |
 | Failure               | Valid state retained; two-second batch deadline; warnings deduplicated per configuration epoch   |

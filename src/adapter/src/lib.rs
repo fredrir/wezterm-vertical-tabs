@@ -1,4 +1,5 @@
 //! The only product code coupled to WezTerm's internal APIs.
+mod adoption;
 mod cells;
 mod centering;
 mod commands;
@@ -78,6 +79,7 @@ struct Adapter {
     published: Option<u64>,
     pending_show: Option<core::TabId>,
     metadata: metadata::Refresh,
+    adoptable_search: u64,
 }
 
 impl Adapter {
@@ -152,6 +154,7 @@ impl Adapter {
             published: None,
             pending_show: None,
             metadata: metadata::Refresh::default(),
+            adoptable_search: 0,
         }
     }
     fn apply(&mut self, result: Result<app::Update, core::Error>) {
@@ -321,6 +324,12 @@ impl Adapter {
             app::Command::ConfirmClose(id) => self.check_close(id, None),
             app::Command::ConfirmClosePane(tab, pane) => self.check_close(tab, Some(pane)),
             app::Command::ShowTab { window, tab } => self.show_tab(window as usize, tab),
+            app::Command::SearchTabs => self.open_tab_navigator(),
+            app::Command::AdoptPane { domain, pane } => {
+                if let Some(id) = self.mux_window {
+                    self.rearrange(adoption::adopt(self.window.clone(), id, domain, pane));
+                }
+            }
             app::Command::RequestClipboard => {
                 self.pending_paste = Some(PendingPaste {
                     token: self.input_epoch,
@@ -648,6 +657,8 @@ impl Adapter {
                         .unwrap_or_else(|| pane.get_title()),
                     repo_root: location.repo_root,
                     home: location.home,
+                    remote: location.remote,
+                    os: location.os,
                     cwd,
                     ..Default::default()
                 };
@@ -663,7 +674,12 @@ impl Adapter {
     }
     fn open_tab_navigator(&mut self) {
         self.sync_foreign();
+        self.app.set_adoptable_panes(Vec::new());
         self.app.open_tab_navigator();
+        self.adoptable_search += 1;
+        if let (Some(window), Some(id)) = (self.window.clone(), self.mux_window) {
+            adoption::find(window, id, self.adoptable_search);
+        }
     }
     /// Detached tabs come into this window; others are shown where they live.
     fn show_tab(&mut self, window: usize, tab: core::TabId) {
@@ -1760,6 +1776,13 @@ impl Provider for Adapter {
                 Ok(core::Action::Ui(core::UiAction::RetryStorage)) => self.app.retry_storage(),
                 Ok(core::Action::Intent(intent)) => self.dispatch(intent),
                 Err(err) => log::warn!("tabs action: {err}"),
+            }
+        } else if let Some(found) = message.get("adoptable") {
+            if found["search"].as_u64() == Some(self.adoptable_search) {
+                match adoption::entries(found["panes"].clone(), self.app.model().home.as_deref()) {
+                    Ok(panes) => self.app.set_adoptable_panes(panes),
+                    Err(error) => log::warn!("tabs adoptable: {error:#}"),
+                }
             }
         } else if message.get("hooks").is_some() {
             self.hook_pending = false;

@@ -366,6 +366,50 @@ pub fn hooks(
     .detach();
 }
 
+/// Domains the `adoptable` hook names besides the connected ones.
+pub async fn adoptable_domains() -> Vec<String> {
+    let operation = config::with_lua_config_on_main_thread(|lua| async move {
+        let Some(lua) = lua else {
+            return Ok(Vec::new());
+        };
+        let module = get_or_create_sub_module(&lua, "vtabs")?;
+        let mlua::Value::Table(callbacks) = module.raw_get::<_, mlua::Value>("hooks")? else {
+            return Ok(Vec::new());
+        };
+        let function = match callbacks.raw_get::<_, mlua::Value>("adoptable")? {
+            mlua::Value::Function(function) => function,
+            mlua::Value::Nil => return Ok(Vec::new()),
+            _ => anyhow::bail!("hook must be a function"),
+        };
+        let value = function.call_async::<_, mlua::Value>(()).await?;
+        match lua.from_value::<Value>(value)? {
+            Value::Null => Ok(Vec::new()),
+            Value::Object(empty) if empty.is_empty() => Ok(Vec::new()),
+            Value::String(domain) => Ok(vec![domain]),
+            Value::Array(domains) => domains
+                .into_iter()
+                .map(|domain| match domain {
+                    Value::String(domain) => Ok(domain),
+                    _ => anyhow::bail!("domain names must be strings"),
+                })
+                .collect(),
+            _ => anyhow::bail!("adoptable must return a domain name, a list of them, or nil"),
+        }
+    });
+    match smol::future::race(operation, async {
+        smol::Timer::after(HOOK_TIMEOUT).await;
+        anyhow::bail!("adoptable exceeded two seconds")
+    })
+    .await
+    {
+        Ok(domains) => domains,
+        Err(error) => {
+            warn_once("adoptable", error);
+            Vec::new()
+        }
+    }
+}
+
 pub fn complete(app: &mut WindowApp, message: Value) -> bool {
     let Some(hooks) = message.get("hooks").and_then(Value::as_array) else {
         return true;

@@ -31,6 +31,13 @@ async fn respond(pdu: Pdu, client_id: Option<Arc<ClientId>>) -> anyhow::Result<P
         }
         Pdu::ReplacePane(request) => return replace_pane(request, client_id).await,
         Pdu::SpawnBesidePane(request) => return spawn_beside_pane(request, client_id).await,
+        Pdu::FindAdoptablePanes(FindAdoptablePanes { domains }) => {
+            return Ok(Pdu::FindAdoptablePanesResponse(
+                FindAdoptablePanesResponse {
+                    panes: wezterm_client::domain::adoption::find(&domains).await,
+                },
+            ))
+        }
         Pdu::ListAdoptablePanes(ListAdoptablePanes { domain }) => (domain, None),
         Pdu::AdoptPane(AdoptPane {
             domain,

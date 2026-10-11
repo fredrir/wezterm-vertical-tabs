@@ -640,3 +640,93 @@ return cfg
         assert gui.state()["tabs"] == initial["tabs"]
     finally:
         probe.close()
+
+
+@pytest.mark.gui
+def test_tab_search_lists_and_adopts_unadopted_remote_panes(
+    wezterm_binaries, headless_display, tmp_path
+):
+    remote = LocalTlsMux(tmp_path / "remote", wezterm_binaries["wezterm-mux-server"])
+    probe = Probe(
+        tmp_path / "gui",
+        wezterm_binaries["wezterm-gui"],
+        wezterm_binaries["wez-vtabs-store"],
+        "unix",
+        server=wezterm_binaries["wezterm-mux-server"],
+        display=headless_display,
+    )
+    gui = GuiInput(probe, headless_display, tmp_path)
+
+    def remote_cli(*arguments):
+        return subprocess.check_output(
+            [
+                wezterm_binaries["wezterm"],
+                "--config-file",
+                remote.config,
+                "cli",
+                "--no-auto-start",
+                *map(str, arguments),
+            ],
+            env=remote_env,
+            text=True,
+            timeout=10,
+        )
+
+    def remote_panes():
+        return json.loads(remote_cli("list", "--format", "json"))
+
+    def adoptable(state):
+        return {
+            hit["id"]
+            for hit in state.get("model", {}).get("hits", [])
+            if hit["id"].startswith('Menu("adopt/')
+        }
+
+    try:
+        remote.start()
+        remote_env = dict(probe.env, WEZTERM_UNIX_SOCKET=str(remote.root / "mux.sock"))
+        # Stands in for `ssh -T HOST wezterm cli proxy`.
+        peer = {
+            "name": "peer",
+            "local_pane_layout": True,
+            "proxy_command": [
+                "/usr/bin/env",
+                f"WEZTERM_UNIX_SOCKET={remote.root / 'mux.sock'}",
+                str(wezterm_binaries["wezterm"]),
+                "--config-file",
+                str(remote.config),
+                "cli",
+                "--no-auto-start",
+                "proxy",
+            ],
+        }
+        probe.config.write_text(
+            probe.config.read_text()
+            .replace(
+                "  plugin.apply_to_config(cfg,options)",
+                "  options.hooks={adoptable=function() return 'peer' end}\n"
+                "  plugin.apply_to_config(cfg,options)",
+            )
+            .replace(
+                "return cfg",
+                f"table.insert(cfg.unix_domains, wezterm.json_parse([=[{json.dumps(peer)}]=]))\n"
+                "return cfg",
+            )
+        )
+        (pane,) = [p["pane_id"] for p in remote_panes()]
+        initial = probe.start()
+        gui.attach()
+        probe.action("navigator")
+        entry = f'Menu("adopt/peer/{pane}")'
+        probe.wait(lambda state: adoptable(state) == {entry})
+        gui.click(entry)
+        probe.wait(lambda state: len(state["tabs"]) == len(initial["tabs"]) + 1)
+        assert remote_panes()[0]["workspace"].startswith("__backing:")
+
+        # A second remote pane proves the next search finished without the adopted one.
+        second = int(remote_cli("spawn", "--new-window"))
+        probe.action("navigator")
+        probe.wait(lambda state: adoptable(state) == {f'Menu("adopt/peer/{second}")'})
+    finally:
+        probe.close()
+        remote.close()

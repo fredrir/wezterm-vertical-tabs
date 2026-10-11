@@ -3,6 +3,7 @@ use vtabs_core::{Intent, PaneId, TabId};
 #[derive(Clone, Debug)]
 pub enum HostAction {
     OpenCommands,
+    SearchTabs,
     RunCommand(usize),
     QuickTerminal,
     Custom(String),
@@ -27,6 +28,10 @@ pub enum HostAction {
     ShowTab {
         window: u64,
         tab: TabId,
+    },
+    AdoptPane {
+        domain: String,
+        pane: u64,
     },
 }
 

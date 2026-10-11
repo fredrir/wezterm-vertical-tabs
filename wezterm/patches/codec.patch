@@ -1,5 +1,5 @@
 diff --git a/codec/src/lib.rs b/codec/src/lib.rs
-index 8aed584c2d4aa46b949ab53605774fe762fa0d34..8b372d6cc78331b139c794e6ed6d5f7143092944 100644
+index 8aed584c2d4aa46b949ab53605774fe762fa0d34..cb1b65a78bc5e9643aa2aa37554b2fe3d495c6ba 100644
 --- a/codec/src/lib.rs
 +++ b/codec/src/lib.rs
 @@ -37,6 +37,9 @@ use thiserror::Error;
@@ -12,7 +12,7 @@ index 8aed584c2d4aa46b949ab53605774fe762fa0d34..8b372d6cc78331b139c794e6ed6d5f71
  #[derive(Error, Debug)]
  #[error("Corrupt Response: {0}")]
  pub struct CorruptResponse(String);
-@@ -503,6 +506,17 @@ pdu! {
+@@ -503,6 +506,19 @@ pdu! {
      GetPaneDirection: 60,
      GetPaneDirectionResponse: 61,
      AdjustPaneSize: 62,
@@ -27,6 +27,8 @@ index 8aed584c2d4aa46b949ab53605774fe762fa0d34..8b372d6cc78331b139c794e6ed6d5f71
 +    GetPaneLocation: 74,
 +    GetPaneLocationResponse: 75,
 +    SpawnBesidePane: 76,
++    FindAdoptablePanes: 77,
++    FindAdoptablePanesResponse: 78,
  }
  
  impl Pdu {

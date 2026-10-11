@@ -1,5 +1,5 @@
 diff --git a/wezterm-client/src/client.rs b/wezterm-client/src/client.rs
-index df3351365d125f21db6bc987fcbf4d3a61fefe5f..54e74160599bebbb74e99c998b1cba43c7cbbd4c 100644
+index df3351365d125f21db6bc987fcbf4d3a61fefe5f..eabbd68fb35d6f3d055ebfcdff2d33afef4534f5 100644
 --- a/wezterm-client/src/client.rs
 +++ b/wezterm-client/src/client.rs
 @@ -141,11 +141,30 @@ async fn process_unilateral_inner_async(
@@ -33,7 +33,7 @@ index df3351365d125f21db6bc987fcbf4d3a61fefe5f..54e74160599bebbb74e99c998b1cba43
          None => {
              log::debug!("got {decoded:?}, pane not found locally, resync");
              client_domain.resync().await?;
-@@ -1340,8 +1359,22 @@ impl Client {
+@@ -1340,8 +1359,27 @@ impl Client {
  
      rpc!(ping, Ping = (), Pong);
      rpc!(list_panes, ListPanes = (), ListPanesResponse);
@@ -49,6 +49,11 @@ index df3351365d125f21db6bc987fcbf4d3a61fefe5f..54e74160599bebbb74e99c998b1cba43
 +        ListAdoptablePanesResponse
 +    );
 +    rpc!(adopt_pane, AdoptPane, AdoptPaneResponse);
++    rpc!(
++        find_adoptable_panes,
++        FindAdoptablePanes,
++        FindAdoptablePanesResponse
++    );
      rpc!(spawn_v2, SpawnV2, SpawnResponse);
      rpc!(split_pane, SplitPane, SpawnResponse);
 +    rpc!(replace_pane, ReplacePane, SpawnResponse);
@@ -57,20 +62,21 @@ index df3351365d125f21db6bc987fcbf4d3a61fefe5f..54e74160599bebbb74e99c998b1cba43
          move_pane_to_new_tab,
          MovePaneToNewTab,
 diff --git a/wezterm-client/src/domain.rs b/wezterm-client/src/domain.rs
-index 02fac8cbc6a448d6cbcec7d45778796bdfa12db7..d45c5b1034bc9deb64b515082f3788de05e408bd 100644
+index 02fac8cbc6a448d6cbcec7d45778796bdfa12db7..88bd734358b868f89092d1b5d273a2c959213811 100644
 --- a/wezterm-client/src/domain.rs
 +++ b/wezterm-client/src/domain.rs
-@@ -17,6 +17,9 @@ use std::collections::{HashMap, HashSet};
+@@ -17,6 +17,10 @@ use std::collections::{HashMap, HashSet};
  use std::sync::{Arc, Mutex};
  use wezterm_term::TerminalSize;
  
++pub mod adoption;
 +mod backing;
 +mod snapshot;
 +
  pub struct ClientInner {
      pub client: Client,
      pub local_domain_id: DomainId,
-@@ -26,6 +29,10 @@ pub struct ClientInner {
+@@ -26,6 +30,10 @@ pub struct ClientInner {
      remote_to_local_tab: Mutex<HashMap<TabId, TabId>>,
      remote_to_local_pane: Mutex<HashMap<PaneId, PaneId>>,
      pub focused_remote_pane_id: Mutex<Option<PaneId>>,
@@ -81,7 +87,7 @@ index 02fac8cbc6a448d6cbcec7d45778796bdfa12db7..d45c5b1034bc9deb64b515082f3788de
  }
  
  impl ClientInner {
-@@ -183,6 +190,14 @@ pub enum ClientDomainConfig {
+@@ -183,6 +191,14 @@ pub enum ClientDomainConfig {
  }
  
  impl ClientDomainConfig {
@@ -96,7 +102,7 @@ index 02fac8cbc6a448d6cbcec7d45778796bdfa12db7..d45c5b1034bc9deb64b515082f3788de
      pub fn name(&self) -> &str {
          match self {
              ClientDomainConfig::Unix(unix) => &unix.name,
-@@ -236,6 +251,8 @@ impl ClientInner {
+@@ -236,6 +252,8 @@ impl ClientInner {
          client: Client,
          local_echo_threshold_ms: Option<u64>,
          overlay_lag_indicator: bool,
@@ -105,7 +111,7 @@ index 02fac8cbc6a448d6cbcec7d45778796bdfa12db7..d45c5b1034bc9deb64b515082f3788de
      ) -> Self {
          Self {
              client,
-@@ -246,6 +263,9 @@ impl ClientInner {
+@@ -246,6 +264,9 @@ impl ClientInner {
              remote_to_local_tab: Mutex::new(HashMap::new()),
              remote_to_local_pane: Mutex::new(HashMap::new()),
              focused_remote_pane_id: Mutex::new(None),
@@ -115,7 +121,7 @@ index 02fac8cbc6a448d6cbcec7d45778796bdfa12db7..d45c5b1034bc9deb64b515082f3788de
          }
      }
  }
-@@ -254,6 +274,7 @@ pub struct ClientDomain {
+@@ -254,6 +275,7 @@ pub struct ClientDomain {
      config: ClientDomainConfig,
      label: String,
      inner: Mutex<Option<Arc<ClientInner>>>,
@@ -123,7 +129,7 @@ index 02fac8cbc6a448d6cbcec7d45778796bdfa12db7..d45c5b1034bc9deb64b515082f3788de
      local_domain_id: DomainId,
  }
  
-@@ -277,6 +298,10 @@ fn mux_notify_client_domain(local_domain_id: DomainId, notif: MuxNotification) -
+@@ -277,6 +299,10 @@ fn mux_notify_client_domain(local_domain_id: DomainId, notif: MuxNotification) -
          None => return false,
      };
  
@@ -134,7 +140,7 @@ index 02fac8cbc6a448d6cbcec7d45778796bdfa12db7..d45c5b1034bc9deb64b515082f3788de
      match notif {
          MuxNotification::ActiveWorkspaceChanged(_client_id) => {
              // TODO: advice remote host of interesting workspaces
-@@ -396,6 +421,10 @@ fn mux_notify_client_domain(local_domain_id: DomainId, notif: MuxNotification) -
+@@ -396,6 +422,10 @@ fn mux_notify_client_domain(local_domain_id: DomainId, notif: MuxNotification) -
  }
  
  impl ClientDomain {
@@ -145,7 +151,7 @@ index 02fac8cbc6a448d6cbcec7d45778796bdfa12db7..d45c5b1034bc9deb64b515082f3788de
      pub fn new(config: ClientDomainConfig) -> Self {
          let local_domain_id = alloc_domain_id();
          let label = config.label();
-@@ -404,6 +433,7 @@ impl ClientDomain {
+@@ -404,6 +434,7 @@ impl ClientDomain {
              config,
              label,
              inner: Mutex::new(None),
@@ -153,7 +159,7 @@ index 02fac8cbc6a448d6cbcec7d45778796bdfa12db7..d45c5b1034bc9deb64b515082f3788de
              local_domain_id,
          }
      }
-@@ -466,8 +496,7 @@ impl ClientDomain {
+@@ -466,8 +497,7 @@ impl ClientDomain {
      pub async fn reattach(domain_id: DomainId, ui: ConnectionUI) -> anyhow::Result<()> {
          let inner = Self::get_client_inner_for_domain(domain_id)?;
  
@@ -163,7 +169,7 @@ index 02fac8cbc6a448d6cbcec7d45778796bdfa12db7..d45c5b1034bc9deb64b515082f3788de
  
          ui.close();
          Ok(())
-@@ -475,12 +504,34 @@ impl ClientDomain {
+@@ -475,12 +505,34 @@ impl ClientDomain {
  
      pub async fn resync(&self) -> anyhow::Result<()> {
          if let Some(inner) = self.inner() {
@@ -200,7 +206,7 @@ index 02fac8cbc6a448d6cbcec7d45778796bdfa12db7..d45c5b1034bc9deb64b515082f3788de
      pub fn process_remote_window_title_change(&self, remote_window_id: WindowId, title: String) {
          if let Some(inner) = self.inner() {
              if let Some(local_window_id) = inner.remote_to_local_window(remote_window_id) {
-@@ -505,7 +556,13 @@ impl ClientDomain {
+@@ -505,7 +557,13 @@ impl ClientDomain {
          inner: Arc<ClientInner>,
          panes: ListPanesResponse,
          mut primary_window_id: Option<WindowId>,
@@ -214,7 +220,7 @@ index 02fac8cbc6a448d6cbcec7d45778796bdfa12db7..d45c5b1034bc9deb64b515082f3788de
          let mux = Mux::get();
          log::debug!(
              "domain {}: ListPanes result {:#?}",
-@@ -536,6 +593,7 @@ impl ClientDomain {
+@@ -536,6 +594,7 @@ impl ClientDomain {
              .keys()
              .copied()
              .collect();
@@ -222,7 +228,7 @@ index 02fac8cbc6a448d6cbcec7d45778796bdfa12db7..d45c5b1034bc9deb64b515082f3788de
  
          for (tabroot, tab_title) in panes.tabs.into_iter().zip(panes.tab_titles.iter()) {
              let root_size = match tabroot.root_size() {
-@@ -580,9 +638,39 @@ impl ClientDomain {
+@@ -580,9 +639,39 @@ impl ClientDomain {
                  tab.sync_with_pane_tree(root_size, tabroot, |entry| {
                      workspace.replace(entry.workspace.clone());
                      remote_panes_to_forget.remove(&entry.pane_id);
@@ -263,7 +269,7 @@ index 02fac8cbc6a448d6cbcec7d45778796bdfa12db7..d45c5b1034bc9deb64b515082f3788de
                              None => {
                                  // We likely decided that we hit EOF on the tab and
                                  // removed it from the mux.  Let's add it back, but
-@@ -704,6 +792,18 @@ impl ClientDomain {
+@@ -704,6 +793,18 @@ impl ClientDomain {
              }
          }
  
@@ -282,7 +288,7 @@ index 02fac8cbc6a448d6cbcec7d45778796bdfa12db7..d45c5b1034bc9deb64b515082f3788de
          Ok(())
      }
  
-@@ -712,6 +812,7 @@ impl ClientDomain {
+@@ -712,6 +813,7 @@ impl ClientDomain {
          client: Client,
          panes: ListPanesResponse,
          primary_window_id: Option<WindowId>,
@@ -290,7 +296,7 @@ index 02fac8cbc6a448d6cbcec7d45778796bdfa12db7..d45c5b1034bc9deb64b515082f3788de
      ) -> anyhow::Result<()> {
          let mux = Mux::get();
          let domain = mux
-@@ -728,10 +829,14 @@ impl ClientDomain {
+@@ -728,10 +830,14 @@ impl ClientDomain {
              client,
              threshold,
              overlay_lag_indicator,
@@ -306,7 +312,7 @@ index 02fac8cbc6a448d6cbcec7d45778796bdfa12db7..d45c5b1034bc9deb64b515082f3788de
  
          Ok(())
      }
-@@ -753,11 +858,11 @@ impl Domain for ClientDomain {
+@@ -753,11 +859,11 @@ impl Domain for ClientDomain {
  
      async fn spawn_pane(
          &self,
@@ -322,7 +328,7 @@ index 02fac8cbc6a448d6cbcec7d45778796bdfa12db7..d45c5b1034bc9deb64b515082f3788de
      }
  
      /// Forward the request to the remote; we need to translate the local ids
-@@ -769,6 +874,9 @@ impl Domain for ClientDomain {
+@@ -769,6 +875,9 @@ impl Domain for ClientDomain {
          window_id: Option<WindowId>,
          workspace_for_new_window: Option<String>,
      ) -> anyhow::Result<Option<(Arc<Tab>, WindowId)>> {
@@ -332,7 +338,7 @@ index 02fac8cbc6a448d6cbcec7d45778796bdfa12db7..d45c5b1034bc9deb64b515082f3788de
          let inner = self
              .inner()
              .ok_or_else(|| anyhow!("domain is not attached"))?;
-@@ -821,10 +929,21 @@ impl Domain for ClientDomain {
+@@ -821,10 +930,21 @@ impl Domain for ClientDomain {
          command_dir: Option<String>,
          window: WindowId,
      ) -> anyhow::Result<Arc<Tab>> {
@@ -354,7 +360,7 @@ index 02fac8cbc6a448d6cbcec7d45778796bdfa12db7..d45c5b1034bc9deb64b515082f3788de
          let workspace = Mux::get().active_workspace();
  
          let result = inner
-@@ -867,15 +986,17 @@ impl Domain for ClientDomain {
+@@ -867,15 +987,17 @@ impl Domain for ClientDomain {
          pane_id: PaneId,
          split_request: SplitRequest,
      ) -> anyhow::Result<Arc<dyn Pane>> {
@@ -375,7 +381,7 @@ index 02fac8cbc6a448d6cbcec7d45778796bdfa12db7..d45c5b1034bc9deb64b515082f3788de
          let local_pane = mux
              .get_pane(pane_id)
              .ok_or_else(|| anyhow!("pane_id {} is invalid", pane_id))?;
-@@ -888,9 +1009,22 @@ impl Domain for ClientDomain {
+@@ -888,9 +1010,22 @@ impl Domain for ClientDomain {
                  command,
                  command_dir,
              } => (command, command_dir, None),
@@ -399,7 +405,7 @@ index 02fac8cbc6a448d6cbcec7d45778796bdfa12db7..d45c5b1034bc9deb64b515082f3788de
          let result = inner
              .client
              .split_pane(SplitPane {
-@@ -903,32 +1037,16 @@ impl Domain for ClientDomain {
+@@ -903,32 +1038,16 @@ impl Domain for ClientDomain {
              })
              .await?;
  
@@ -439,7 +445,7 @@ index 02fac8cbc6a448d6cbcec7d45778796bdfa12db7..d45c5b1034bc9deb64b515082f3788de
          if self.state() == DomainState::Attached {
              // Already attached
              return Ok(());
-@@ -936,6 +1054,7 @@ impl Domain for ClientDomain {
+@@ -936,6 +1055,7 @@ impl Domain for ClientDomain {
  
          let domain_id = self.local_domain_id;
          let config = self.config.clone();
@@ -447,7 +453,7 @@ index 02fac8cbc6a448d6cbcec7d45778796bdfa12db7..d45c5b1034bc9deb64b515082f3788de
  
          let activity = mux::activity::Activity::new();
          let ui = ConnectionUI::with_params(ConnectionUIParams {
-@@ -966,7 +1085,12 @@ impl Domain for ClientDomain {
+@@ -966,7 +1086,12 @@ impl Domain for ClientDomain {
                  .await?;
  
                  ui.output_str("Checking server version\n");
@@ -461,7 +467,7 @@ index 02fac8cbc6a448d6cbcec7d45778796bdfa12db7..d45c5b1034bc9deb64b515082f3788de
  
                  ui.output_str("Version check OK!  Requesting pane list...\n");
                  let panes = client.list_panes().await?;
-@@ -974,7 +1098,7 @@ impl Domain for ClientDomain {
+@@ -974,7 +1099,7 @@ impl Domain for ClientDomain {
                      "Server has {} tabs.  Attaching to local UI...\n",
                      panes.tabs.len()
                  ));

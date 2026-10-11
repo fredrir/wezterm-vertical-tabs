@@ -68,6 +68,27 @@ pub struct ListAdoptablePanesResponse {
     pub panes: Vec<PaneEntry>,
 }
 
+/// Remote panes a mux could show, once per server: through `domains` first, attached when
+/// needed, then through every connected `local_pane_layout` domain.
+#[derive(Deserialize, Serialize, PartialEq, Debug)]
+pub struct FindAdoptablePanes {
+    pub domains: Vec<String>,
+}
+
+#[derive(Deserialize, Serialize, PartialEq, Debug)]
+pub struct FindAdoptablePanesResponse {
+    pub panes: Vec<AdoptablePane>,
+}
+
+#[derive(Deserialize, Serialize, PartialEq, Debug, Clone)]
+pub struct AdoptablePane {
+    /// Adopts through this domain.
+    pub domain: String,
+    pub entry: PaneEntry,
+    /// `None` from a stock server.
+    pub location: Option<GetPaneLocationResponse>,
+}
+
 /// Shows an existing remote pane in a new tab and takes over its backing tab.
 #[derive(Deserialize, Serialize, PartialEq, Debug)]
 pub struct AdoptPane {

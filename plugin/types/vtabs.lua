@@ -150,6 +150,7 @@
 ---@field filter? fun(tab: TabsTab): boolean? Visibility
 ---@field theme? fun(context: TabsWindowContext): TabsTheme? Theme-color overrides
 ---@field footer? fun(context: TabsWindowContext): string|string[]|nil Rows shown above spaces
+---@field adoptable? fun(): string|string[]|nil Domains whose unadopted panes the tab search lists, besides connected ones
 
 ---@class TabsOptions
 ---@field profile? string Shared catalog scope; default `default`

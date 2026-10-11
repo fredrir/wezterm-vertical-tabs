@@ -1,6 +1,9 @@
 use std::time::Duration;
-use vtabs_core::Model;
-use vtabs_ui::{CommandEntry, ElementId, Key, Modifiers, MouseButton, Rect, SidebarUi, UiInput};
+use vtabs_core::{Model, Tab};
+use vtabs_ui::{
+    AdoptablePane, CommandEntry, ElementId, HostAction, Key, Modifiers, MouseButton, Rect,
+    SidebarUi, UiInput, UiIntent,
+};
 
 fn model() -> Model {
     let mut model = Model::default();
@@ -100,4 +103,34 @@ fn escape_leaves_recording_and_keeps_the_captured_shortcut_as_the_query() {
     ui.event(&model, UiInput::Text("X".into()));
     draw(&mut ui, &model);
     assert!(results(&ui).is_empty());
+}
+
+#[test]
+fn unadopted_panes_join_an_open_tab_search_and_enter_adopts() {
+    let model = model();
+    let mut ui = SidebarUi::new();
+    ui.open_tab_navigator(&model);
+    draw(&mut ui, &model);
+    assert!(results(&ui).is_empty());
+
+    let tab = Tab {
+        title: "zsh".into(),
+        cwd: "/home/me/notes".into(),
+        home: Some("/home/me".into()),
+        remote: true,
+        os: "arch".into(),
+        ..Default::default()
+    };
+    ui.set_adoptable_panes(vec![AdoptablePane::new("remote", 7, &tab, None, "archie")]);
+    draw(&mut ui, &model);
+    assert_eq!(results(&ui), ["adopt/remote/7"]);
+
+    ui.event(&model, UiInput::Text("archie".into()));
+    draw(&mut ui, &model);
+    assert_eq!(results(&ui), ["adopt/remote/7"]);
+    let intents = ui.event(&model, UiInput::key(Key::Enter));
+    assert!(intents.iter().any(|intent| matches!(
+        intent,
+        UiIntent::Host(HostAction::AdoptPane { domain, pane: 7 }) if domain == "remote"
+    )));
 }

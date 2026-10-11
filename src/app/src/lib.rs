@@ -64,6 +64,13 @@ pub enum Command {
         window: u64,
         tab: TabId,
     },
+    /// Lists foreign tabs and unadopted panes, then opens the tab search.
+    SearchTabs,
+    /// A remote pane no mux shows, adopted into this window.
+    AdoptPane {
+        domain: String,
+        pane: u64,
+    },
 }
 #[derive(Clone, Debug, Default)]
 pub struct Update {
@@ -462,6 +469,7 @@ impl WindowApp {
                 UiIntent::Host(HostAction::QuickTerminal) => {
                     update.commands.push(Command::QuickTerminal)
                 }
+                UiIntent::Host(HostAction::SearchTabs) => update.commands.push(Command::SearchTabs),
                 UiIntent::Refresh => {
                     self.refresh_storage();
                     update.commands.push(Command::Refresh);
@@ -532,6 +540,9 @@ impl WindowApp {
                 UiIntent::Host(HostAction::ShowTab { window, tab }) => {
                     update.commands.push(Command::ShowTab { window, tab });
                 }
+                UiIntent::Host(HostAction::AdoptPane { domain, pane }) => {
+                    update.commands.push(Command::AdoptPane { domain, pane });
+                }
                 UiIntent::Host(HostAction::FocusPane(tab, pane)) => {
                     if self.owns_pane(tab, pane) {
                         update
@@ -575,6 +586,9 @@ impl WindowApp {
     }
     pub fn set_foreign_tabs(&mut self, tabs: Vec<ui::ForeignTab>) {
         self.ui.set_foreign_tabs(tabs);
+    }
+    pub fn set_adoptable_panes(&mut self, panes: Vec<ui::AdoptablePane>) {
+        self.ui.set_adoptable_panes(panes);
     }
     /// A tab that returns under a new ID takes back the place and name it left with.
     pub fn restore_tab(&mut self, id: TabId, previous: &Tab) -> Result<Update, Error> {
