@@ -3,7 +3,7 @@ use crate::components::text_input::TextInput;
 use crate::components::{centered, panel};
 use crate::element::ElementId;
 use crate::overlays::Form;
-use crate::overlays::colors::{ColorPicker, PALETTE, hex, hsv, rgb};
+use crate::overlays::colors::{ColorPicker, PALETTE, hsv, rgb};
 use crate::runtime::canvas::{Canvas, RoundedSurface};
 use ratatui::layout::{Alignment, Rect};
 use ratatui::style::{Color, Modifier};
@@ -73,7 +73,7 @@ fn palette(cx: &mut Canvas, area: Rect, picker: &ColorPicker) {
         if selected || focused {
             cx.write(
                 Rect::new(rect.x, rect.y, rect.width, 1),
-                Line::from(if selected { "✓" } else { "·" }).alignment(Alignment::Center),
+                Line::from(if selected { "✓" } else { "" }).alignment(Alignment::Center),
                 cx.theme.base().bg(color).fg(ink(color)),
             );
         }
@@ -276,22 +276,7 @@ pub(crate) fn render(cx: &mut Canvas, area: Rect, form: &mut Form, editing: bool
             .render(Rect::new(edit.right() + 1, entry_y, 7, 1), cx);
         }
     }
-    if entry_y + 1 < inner.bottom().saturating_sub(1) {
-        let hint = if picker.selected.is_none() {
-            "Automatic · follows the theme".into()
-        } else {
-            hex(picker.preview())
-        };
-        cx.write(
-            Rect::new(inner.x, entry_y + 1, inner.width, 1),
-            form.error.as_ref().unwrap_or(&hint).clone(),
-            if form.error.is_some() {
-                theme.base().fg(theme.danger)
-            } else {
-                theme.muted()
-            },
-        );
-    }
+
     if inner.height >= 5 {
         let height = if roomy { 2 } else { 1 };
         let y = inner.bottom() - height;

@@ -9,24 +9,24 @@
 | Host regressions                     | `just build`                                                                                       |
 | Extended geometry and physical input | [Development](development.md)                                                                      |
 
-| Boundary            | Verified behavior                                                                                                                   |
-| ------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
-| Rust processes      | Generated schema, bounded storage errors, atomic conflict rollback, concurrent writers, private state and mux incarnation isolation |
-| Lua plugin          | Headless configuration, capability failures, options, semantic hooks and action dispatch through the production entrypoint          |
-| Lua Language Server | Valid public options accepted; invalid option types and choices diagnosed                                                           |
-| PTY                 | Real management CLI and installed `wez-vtabs` launcher output and exit status                                                       |
-| Startup             | Local and Unix mux render content; attached remote tabs use the current viewport without a physical resize                          |
-| Shutdown            | Owned application quits through its public action and exits successfully before fixture cleanup                                     |
-| SSH mux             | Containerized loopback transport, temporary keys, rejected unknown key, new/close lifecycle                                        |
-| TLS mux             | Certificate and hostname verification, mutual authentication, tab lifecycle and key cleanup                                         |
-| Geometry            | Resizing, left/right sidebar, expanded/hidden sidebar, integrated chrome, tiny windows, fonts, zoom and fullscreen                  |
-| Splits              | Pane identities and topology retained; active and background tabs remain sized consistently                                         |
-| Mouse               | Tab activation, folder expand/collapse, tab reorder and folder assignment                                                           |
-| Keyboard            | Settings, search, tab creation, folders, sidebar toggle, Escape, field editing and terminal Control keys                            |
-| Clipboard           | Real OS copy/paste in tab search, settings search and color editor; scoped context menus preserve drafts                            |
-| Transient surfaces  | Anchored launcher, menus and tooltips, centered editors, stable sidebar geometry, retained terminal pixels outside popovers         |
-| Rendering           | Rounded frame on all four content edges, compact search, centered icon hover, atlas invalidation and row-cache reuse                |
-| Scheduling          | Idle composition and semantic hook counts stabilize; animations have finite deadlines                                               |
+| Boundary            | Verified behavior                                                                                                           |
+| ------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| Rust processes      | Generated schema, bounded storage errors, atomic conflict rollback, concurrent writers and mux incarnation isolation        |
+| Lua plugin          | Headless configuration, capability failures, options, semantic hooks and action dispatch through the production entrypoint  |
+| Lua Language Server | Valid public options accepted; invalid option types and choices diagnosed                                                   |
+| PTY                 | Real management CLI and installed `wez-vtabs` launcher output and exit status                                               |
+| Startup             | Local and Unix mux render content; attached remote tabs use the current viewport without a physical resize                  |
+| Shutdown            | Owned application quits through its public action and exits successfully before fixture cleanup                             |
+| SSH mux             | Containerized loopback transport, temporary keys, rejected unknown key, new/close lifecycle                                 |
+| TLS mux             | Certificate and hostname verification, mutual authentication, tab lifecycle and key cleanup                                 |
+| Geometry            | Resizing, left/right sidebar, expanded/hidden sidebar, integrated chrome, tiny windows, fonts, zoom and fullscreen          |
+| Splits              | Pane identities and topology retained; active and background tabs remain sized consistently                                 |
+| Mouse               | Tab activation, folder expand/collapse, tab reorder and folder assignment                                                   |
+| Keyboard            | Settings, search, tab creation, folders, sidebar toggle, Escape, field editing and terminal Control keys                    |
+| Clipboard           | Real OS copy/paste in tab search, settings search and color editor; scoped context menus preserve drafts                    |
+| Transient surfaces  | Anchored launcher, menus and tooltips, centered editors, stable sidebar geometry, retained terminal pixels outside popovers |
+| Rendering           | Rounded frame on all four content edges, compact search, centered icon hover, atlas invalidation and row-cache reuse        |
+| Scheduling          | Idle composition and semantic hook counts stabilize; animations have finite deadlines                                       |
 
 | Isolation         | Value                                                                                     |
 | ----------------- | ----------------------------------------------------------------------------------------- |

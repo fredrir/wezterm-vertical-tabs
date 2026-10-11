@@ -18,8 +18,8 @@ fn snapshot(id: u64) -> HostSnapshot {
 }
 
 #[test]
-fn window_transfer_preserves_private_profile_catalog_flags_and_launch() {
-    let mut source = WindowApp::new("work-profile", true);
+fn window_transfer_preserves_profile_catalog_flags_and_launch() {
+    let mut source = WindowApp::new("work-profile");
     source.update(snapshot(1)).unwrap();
     source
         .dispatch(Intent::CreateSpace {
@@ -76,7 +76,6 @@ fn window_transfer_preserves_private_profile_catalog_flags_and_launch() {
         .unwrap();
     destination.update(snapshot(77)).unwrap();
     assert_eq!(destination.model().profile, "work-profile");
-    assert!(destination.model().private);
     assert_eq!(destination.model().selected_space, space);
     assert_eq!(destination.model().selected_tab, Some(77));
     assert_eq!(destination.model().settings.width, 310);
@@ -134,13 +133,12 @@ fn malformed_transferred_folder_catalog_does_not_replace_destination() {
         .unwrap();
     let mut transfer = source.export_transfer(1).unwrap();
     transfer.folders[0].space_id = "missing".into();
-    let mut destination = WindowApp::new("other", true);
+    let mut destination = WindowApp::new("other");
     assert!(
         destination
             .import_transfer_before_snapshot(transfer)
             .is_err()
     );
     assert_eq!(destination.model().profile, "other");
-    assert!(destination.model().private);
     assert!(destination.model().tabs.is_empty());
 }

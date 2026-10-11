@@ -8,7 +8,6 @@ import json
 import os
 import shutil
 import signal
-import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -80,7 +79,7 @@ end
 -- Settings writes reload the config; executed commands and the sample count outlive it.
 wezterm.GLOBAL.scenario = wezterm.GLOBAL.scenario or {seen={},sequence=0}
 local shared = wezterm.GLOBAL.scenario
-local started, current_step, requested, env_probe = false, 0, nil, false
+local started, current_step, requested = false, 0, nil
 local closing = {}
 local function execute(window,pane,command)
   if command.kind=='action' then
@@ -102,9 +101,6 @@ local function execute(window,pane,command)
     else error('unknown vtabs action') end
     window:perform_action(action,pane)
   elseif command.kind=='intent' then wezterm.vtabs.dispatch(window,command.value)
-  elseif command.kind=='probe_private_env' then
-    env_probe=true
-    pane:send_text(wezterm.target_triple:find('windows') and 'echo VTABS_PRIVATE_CHECK:%VTABS_PRIVATE%\r\n' or 'printf "\\nVTABS_PRIVATE_CHECK:%s\\n" "$VTABS_PRIVATE"\n')
   elseif command.kind=='resize' then
     current_step=command.step or 0; requested=command.value
     window:set_inner_size(command.value.width,command.value.height)
@@ -148,7 +144,6 @@ sample=function(window)
     state.hook_calls=hook_calls
     state.mux_window=window:mux_window():window_id()
     state.workspace=window:mux_window():get_workspace()
-    if env_probe and pane then state.private_env_ok=pane:get_lines_as_text(40):find('VTABS_PRIVATE_CHECK:1',1,true)~=nil end
     state.dimensions=window:get_dimensions()
     state.tabs={}
     for _,info in ipairs(window:mux_window():tabs_with_info()) do
@@ -618,74 +613,8 @@ def feature_scenarios(probe):
     probe.wait(lambda state: state.get("model", {}).get("settings", {}).get("width") == 300)
     managed = probe.root / "vtabs_settings.lua"
     wait_for_managed(probe, managed, "width = 300", "settings write did not reach the Lua file")
-    probe.intent("PrivateWindow")
-    private = probe.wait(
-        lambda state: state.get("model", {}).get("private") is True, any_window=True
-    )
-    private_window = private["window"]
-    private_tab = private["tabs"][0]["id"]
-    private_count = len(private["tabs"])
-    probe.send("action", {"name": "new_tab"}, window=private_window)
-    private = probe.wait(
-        lambda state: (
-            state["window"] == private_window and len(state.get("tabs", [])) == private_count + 1
-        ),
-        any_window=True,
-    )
-    probe.send("probe_private_env", window=private_window)
-    probe.wait(
-        lambda state: state["window"] == private_window and state.get("private_env_ok") is True,
-        any_window=True,
-    )
-    probe.intent(
-        {"RenameTab": {"id": private_tab, "title": "PRIVATE MUST NOT PERSIST"}},
-        window=private_window,
-    )
-    probe.wait(
-        lambda state: (
-            state["window"] == private_window and state.get("command", 0) >= probe.command_id
-        ),
-        any_window=True,
-    )
-    probe.intent({"PinTab": {"id": private_tab, "pinned": True}}, window=private_window)
-    probe.wait(
-        lambda state: (
-            state["window"] == private_window and state.get("command", 0) >= probe.command_id
-        ),
-        any_window=True,
-    )
-    probe.intent({"CreateSpace": {"name": "Shared catalog edit"}}, window=private_window)
-    probe.wait(
-        lambda state: (
-            state["window"] == private_window
-            and any(
-                space["name"] == "Shared catalog edit"
-                for space in state.get("model", {}).get("spaces", [])
-            )
-        ),
-        any_window=True,
-    )
-    wait_for_managed(
-        probe,
-        managed,
-        "Shared catalog edit",
-        "explicit shared catalog edit was not written to the Lua file",
-    )
-    with sqlite3.connect(f"file:{probe.root / 'state.sqlite'}?mode=ro", uri=True) as connection:
-        persisted = connection.execute(
-            "SELECT scope,entity,value FROM fields WHERE value IS NOT NULL"
-        ).fetchall()
-    assert all("PRIVATE MUST NOT PERSIST" not in value for _, _, value in persisted), (
-        "private tab metadata reached SQLite"
-    )
-    assert not any(
-        json.loads(scope)["kind"] == "session" and entity == f"tab:{private_tab}"
-        for scope, entity, _ in persisted
-    ), "private tab state reached SQLite"
     return {
         "empty_space": space,
-        "private_window": private_window,
-        "persisted_fields": len(persisted),
         "idle_samples": len(idle),
     }
 

@@ -1,14 +1,14 @@
 # Development
 
-| Name        | Value                                                                            |
-| ----------- | -------------------------------------------------------------------------------- |
-| Toolchain   | Stable Rust, Git and platform C/C++ tools; uv/Python 3.12+ for tests             |
-| Upstream    | `main` resolved once; `--upstream SHA` pins; `dev`/`deploy` reuse the last build |
-| Tooling     | `cargo xtask` uses the `xtask` profile: optimized hashing, incremental rebuilds  |
-| GUI         | WezTerm renderer with per-crate patches, overlay and the project application     |
-| UI          | Retained Ratatui text, rounded geometry and finite TachyonFX effects             |
-| Persistence | `wez-vtabs-store`; bundled SQLite for runtime state; settings in a Lua file      |
-| Lua         | Source of truth for settings/spaces, schemars-generated types, semantic hooks    |
+| Name | Value |
+| --- | --- |
+| Toolchain | Stable Rust, Git and platform C/C++ tools; uv/Python 3.12+ for tests |
+| Upstream | `main` resolved once; `--upstream SHA` pins; `dev`/`deploy` reuse the last build |
+| Tooling | `cargo xtask` uses the `xtask` profile: optimized hashing, incremental rebuilds |
+| GUI | WezTerm renderer with per-crate patches, overlay and the project application |
+| UI | Retained Ratatui text, rounded geometry and finite TachyonFX effects |
+| Persistence | `wez-vtabs-store`; bundled SQLite for runtime state; settings in a Lua file |
+| Lua | Source of truth for settings/spaces, schemars-generated types, semantic hooks |
 
 ```sh
 just deploy
@@ -22,39 +22,39 @@ just setup
 
 Recipes invoke `cargo xtask`. Installed launch entries invoke the bundled Rust binary directly.
 
-| Command                                        | Value                                                                                        |
-| ---------------------------------------------- | -------------------------------------------------------------------------------------------- |
-| `just deploy`                                  | Build, install and replace the desktop app; `--app PATH`, `--bin DIR`, `--no-app`            |
-| `just deploy --on MACHINE`                     | Compile on `MACHINE`, install and place here                                                 |
-| `just deploy --to MACHINE`                     | Compile on the default `--on` machine, install and place on `MACHINE`                        |
-| `just deploy --on archie --to archie`          | Compile and install on archie                                                                |
-| `just deploy --rollback [ID]`                  | Reactivate and place the previous or given installed version                                 |
-| `just deploy --upstream main`                  | Move every machine to the newest upstream; plain `deploy` reuses the pinned revision         |
-| `just deploy --bundle PATH --offline`          | Deploy an existing verified bundle without fetching upstream                                 |
-| `just build [--on M] [--to M]`                 | Exact upstream, Cargo freshness, validation; `--to` bundles for another machine              |
-| `just dev`                                     | Cached upstream, incremental `iterate` profile, hot reload; `--no-watch` launches once       |
-| `just test [SUITE] [-- ARGS]`                  | `all`, `tools`, `rust`, `lua`, `gui`, `ssh`, `tls`, `bench`; pytest arguments after `--`     |
-| `just test --on MACHINE`                       | Same suite on `MACHINE` against the synced working tree                                      |
-| `just lint`                                    | Rust format, Clippy, Ruff, `uv.lock`, generated schema/types/options                         |
-| `just lint --fix`                              | Rewrite formatting and generated artifacts, then lint; `--on MACHINE`                        |
-| `just status [--to MACHINE]`                   | Active, pending, previous and installed versions                                             |
-| `just setup [--on MACHINE]`                    | Upstream `get-deps --testing` and `uv sync`; `--check` only diagnoses                        |
-| `--offline`                                    | No Git/network fetching; Cargo and uv offline                                                |
-| `--profile NAME` / `--debug`                   | Explicit Cargo profile / development profile                                                 |
-| `--jobs N`                                     | Cargo job limit and pytest worker count                                                      |
-| `--json` / `--explain` / `--timings`           | Machine output / decisions / command durations                                               |
+| Command | Value |
+| --- | --- |
+| `just deploy` | Build, install and replace the desktop app; `--app PATH`, `--bin DIR`, `--no-app` |
+| `just deploy --on MACHINE` | Compile on `MACHINE`, install and place here |
+| `just deploy --to MACHINE` | Compile on the default `--on` machine, install and place on `MACHINE` |
+| `just deploy --on archie --to archie` | Compile and install on archie |
+| `just deploy --rollback [ID]` | Reactivate and place the previous or given installed version |
+| `just deploy --upstream main` | Move every machine to the newest upstream; plain `deploy` reuses the pinned revision |
+| `just deploy --bundle PATH --offline` | Deploy an existing verified bundle without fetching upstream |
+| `just build [--on M] [--to M]` | Exact upstream, Cargo freshness, validation; `--to` bundles for another machine |
+| `just dev` | Cached upstream, incremental `iterate` profile, hot reload; `--no-watch` launches once |
+| `just test [SUITE] [-- ARGS]` | `all`, `tools`, `rust`, `lua`, `gui`, `ssh`, `tls`, `bench`; pytest arguments after `--` |
+| `just test --on MACHINE` | Same suite on `MACHINE` against the synced working tree |
+| `just lint` | Rust format, Clippy, Ruff, `uv.lock`, generated schema/types/options |
+| `just lint --fix` | Rewrite formatting and generated artifacts, then lint; `--on MACHINE` |
+| `just status [--to MACHINE]` | Active, pending, previous and installed versions |
+| `just setup [--on MACHINE]` | Upstream `get-deps --testing` and `uv sync`; `--check` only diagnoses |
+| `--offline` | No Git/network fetching; Cargo and uv offline |
+| `--profile NAME` / `--debug` | Explicit Cargo profile / development profile |
+| `--jobs N` | Cargo job limit and pytest worker count |
+| `--json` / `--explain` / `--timings` | Machine output / decisions / command durations |
 
-| `cargo xtask`                                  | Value                                                                                        |
-| ---------------------------------------------- | -------------------------------------------------------------------------------------------- |
-| `check`                                        | CI: `lint`, Cargo tests and pytest                                                           |
-| `package [--bundle PATH]`                      | Verified bundle, ZIP/tar.gz archive and release manifest in `dist/`                          |
-| `update --check` / `--manifest PATH_OR_URL`    | Installed updater: availability / verified prebuilt release                                  |
-| `launch -- ARGS`                               | Promote completed pending version and forward GUI arguments                                  |
-| `plan dev --json`                              | Inputs and execution decisions without fetch/build                                           |
-| `patch check --upstream SHA`                   | Apply patches and overlay in an isolated worktree; 3-way merge on drift                      |
-| `patch export`                                 | Write the prepared worktree back to `wezterm/`; see **Patches**                              |
-| `cache inspect` / `cache gc --dry-run --keep N`| Owned run/bundle sizes; pruning preview                                                      |
-| `repro RUN_JSON [--execute]`                   | Inspect or replay a failure report                                                           |
+| `cargo xtask` | Value |
+| --- | --- |
+| `check` | CI: `lint`, Cargo tests and pytest |
+| `package [--bundle PATH]` | Verified bundle, ZIP/tar.gz archive and release manifest in `dist/` |
+| `update --check` / `--manifest PATH_OR_URL` | Installed updater: availability / verified prebuilt release |
+| `launch -- ARGS` | Promote completed pending version and forward GUI arguments |
+| `plan dev --json` | Inputs and execution decisions without fetch/build |
+| `patch check --upstream SHA` | Apply patches and overlay in an isolated worktree; 3-way merge on drift |
+| `patch export` | Write the prepared worktree back to `wezterm/`; see **Patches** |
+| `cache inspect` / `cache gc --dry-run --keep N` | Owned run/bundle sizes; pruning preview |
+| `repro RUN_JSON [--execute]` | Inspect or replay a failure report |
 
 **Targets**
 
@@ -78,56 +78,56 @@ platform = "ubuntu-26.04"
 role = "mux"
 ```
 
-| Key                  | Value                                                                                           |
-| -------------------- | ----------------------------------------------------------------------------------------------- |
-| `--on MACHINE`       | Runs the command: `local`, or a name below; `build`, `deploy`, `test`, `lint`, `setup`          |
-| `--to MACHINE`       | Receives the result: `local` (default), or a name below; `build`, `deploy`, `status`            |
-| `on`                 | Default `--on`; a machine's own `on` overrides it; `on = "archie"` is `local` on archie itself  |
-| `host`               | SSH host; the entry matching this machine's short hostname is `local`                           |
-| `platform`           | `macos` or `distro[-version]`: `arch`, `ubuntu-26.04`, `debian-13`, `fedora`                    |
-| `role`               | `desktop` (default) or `mux`: `wezterm`, `wezterm-mux-server`, `wez-vtabs`; no app or GUI build |
-| Unreachable host     | `Error: Unreachable (HOST)` before any work                                                     |
-| Upstream             | `cache/upstream.json` pins every machine to the last deployed revision                          |
+| Key | Value |
+| --- | --- |
+| `--on MACHINE` | Runs the command: `local`, or a name below; `build`, `deploy`, `test`, `lint`, `setup` |
+| `--to MACHINE` | Receives the result: `local` (default), or a name below; `build`, `deploy`, `status` |
+| `on` | Default `--on`; a machine's own `on` overrides it; `on = "archie"` is `local` on archie itself |
+| `host` | SSH host; the entry matching this machine's short hostname is `local` |
+| `platform` | `macos` or `distro[-version]`: `arch`, `ubuntu-26.04`, `debian-13`, `fedora` |
+| `role` | `desktop` (default) or `mux`: `wezterm`, `wezterm-mux-server`, `wez-vtabs`; no app or GUI build |
+| Unreachable host | `Error: Unreachable (HOST)` before any work |
+| Upstream | `cache/upstream.json` pins every machine to the last deployed revision |
 
-| Flow                           | Value                                                                                     |
-| ------------------------------ | ----------------------------------------------------------------------------------------- |
-| `--on` is `--to`               | Sync working tree, run `deploy --on local` there                                          |
-| `--on` differs from `--to`     | Sync, build the bundle on `--on`, relay it through this machine, `deploy --bundle`        |
-| Linux platform on another host | `cargo xtask package` inside an x86_64 container; Podman or Docker                        |
-| Linux platform on a Mac        | Docker Desktop with Rosetta, started in the background when needed                        |
-| macOS platform on a Linux host | Cross-compiled in a clang/lld container; packaged and signed on the Mac (`--prebuilt`)    |
-| `test`/`lint`/`setup`          | Sync working tree to `--on`, run there                                                    |
-| `status`/`--rollback`          | `--to` machine's deployed `~/.local/bin/wez-vtabs`                                        |
+| Flow | Value |
+| --- | --- |
+| `--on` is `--to` | Sync working tree, run `deploy --on local` there |
+| `--on` differs from `--to` | Sync, build the bundle on `--on`, relay it through this machine, `deploy --bundle` |
+| Linux platform on another host | `cargo xtask package` inside an x86_64 container; Podman or Docker |
+| Linux platform on a Mac | Docker Desktop with Rosetta, started in the background when needed |
+| macOS platform on a Linux host | Cross-compiled in a clang/lld container; packaged and signed on the Mac (`--prebuilt`) |
+| `test`/`lint`/`setup` | Sync working tree to `--on`, run there |
+| `status`/`--rollback` | `--to` machine's deployed `~/.local/bin/wez-vtabs` |
 
-| Path                                        | Value                                                                   |
-| ------------------------------------------- | ----------------------------------------------------------------------- |
-| `~/.cache/wez-vtabs/remote/ORIGIN/source`   | Synced working tree; `target/` and `.venv/` survive syncs               |
-| `~/.cache/wez-vtabs/remote/ORIGIN/cache`    | Builder cache for that origin, separate from local checkouts            |
-| `~/.cache/wez-vtabs/remote/ORIGIN/out/NAME` | Bundle built for machine `NAME`                                         |
-| `~/.cache/wez-vtabs/incoming/bundle`        | Bundle received by a target before `deploy --bundle`                    |
-| `cache/platforms/PLATFORM`                  | Container cache: upstream clone, worktree, targets and tool build       |
-| `~/.cache/wez-vtabs/sdk`                    | macOS SDK from the Mac's Xcode; `arm64e.x1` stub slices removed for lld |
-| `cache/staging/NAME`                        | Bundle relayed from the `--on` machine                                  |
+| Path | Value |
+| --- | --- |
+| `~/.cache/wez-vtabs/remote/ORIGIN/source` | Synced working tree; `target/` and `.venv/` survive syncs |
+| `~/.cache/wez-vtabs/remote/ORIGIN/cache` | Builder cache for that origin, separate from local checkouts |
+| `~/.cache/wez-vtabs/remote/ORIGIN/out/NAME` | Bundle built for machine `NAME` |
+| `~/.cache/wez-vtabs/incoming/bundle` | Bundle received by a target before `deploy --bundle` |
+| `cache/platforms/PLATFORM` | Container cache: upstream clone, worktree, targets and tool build |
+| `~/.cache/wez-vtabs/sdk` | macOS SDK from the Mac's Xcode; `arm64e.x1` stub slices removed for lld |
+| `cache/staging/NAME` | Bundle relayed from the `--on` machine |
 
 **Source boundaries**
 
-| Path                     | Value                                                                     |
-| ------------------------ | ------------------------------------------------------------------------- |
-| `src/core`               | Domain state, spaces, routing, action policy, settings schema             |
-| `src/ui`                 | Ratatui composition, TachyonFX, input, menus and forms                    |
-| `src/app`                | Per-window coordination, dirty scheduling, asynchronous ports             |
-| `src/store`              | Storage protocol and SQLite helper                                        |
-| `src/bench`              | Core, UI and storage benchmarks                                           |
-| `src/*/tests`            | Bodies outside src; `autotests = false` and `#[cfg(test)] #[path]` wiring |
-| `src/adapter/src`        | Private WezTerm API integration; entry point `lib.rs`                     |
-| `src/adapter/tests`      | Unit modules compiled inside `wezterm-gui`; run with `just build`         |
+| Path | Value |
+| --- | --- |
+| `src/core` | Domain state, spaces, routing, action policy, settings schema |
+| `src/ui` | Ratatui composition, TachyonFX, input, menus and forms |
+| `src/app` | Per-window coordination, dirty scheduling, asynchronous ports |
+| `src/store` | Storage protocol and SQLite helper |
+| `src/bench` | Core, UI and storage benchmarks |
+| `src/*/tests` | Bodies outside src; `autotests = false` and `#[cfg(test)] #[path]` wiring |
+| `src/adapter/src` | Internal WezTerm API integration; entry point `lib.rs` |
+| `src/adapter/tests` | Unit modules compiled inside `wezterm-gui`; run with `just build` |
 | `src/adapter/Cargo.toml` | `vtabs-adapter` source package; dependencies merged into the GUI manifest |
-| `wezterm/patches`        | `<crate>.patch` hooks into upstream WezTerm files                         |
-| `wezterm/overlay`        | Project files copied into WezTerm at the same upstream paths              |
-| `plugin`                 | Optional Lua configuration and generated contracts                        |
-| `tools/src`              | Rust CLI, process runner, source/build state, packaging and updates       |
-| `tests/tools`            | pytest/tui-test tooling behavior through the compiled CLI                 |
-| `tests`                  | uv-managed pytest, production process boundaries and isolated scenarios   |
+| `wezterm/patches` | `<crate>.patch` hooks into upstream WezTerm files |
+| `wezterm/overlay` | Project files copied into WezTerm at the same upstream paths |
+| `plugin` | Optional Lua configuration and generated contracts |
+| `tools/src` | Rust CLI, process runner, source/build state, packaging and updates |
+| `tests/tools` | pytest/tui-test tooling behavior through the compiled CLI |
+| `tests` | uv-managed pytest, production process boundaries and isolated scenarios |
 
 `vtabs-store` has no default features. The GUI links protocol types only; the `sqlite` feature builds the helper.
 
@@ -139,48 +139,48 @@ cargo run --quiet --locked -p vtabs-core --bin gen-schema -- json
 
 **Patches**
 
-| Name         | Value                                                                                                  |
-| ------------ | ------------------------------------------------------------------------------------------------------ |
-| Patch        | `wezterm/patches/<entry>.patch`: one per top-level upstream directory or root file; any order          |
-| Overlay      | `wezterm/overlay/<path>`, copied to the same upstream path; must not exist upstream                    |
-| Tool-managed | `Cargo.toml`, `Cargo.lock`, `wezterm-gui/Cargo.toml`, `wezterm-gui/src/vtabs/`; never in `wezterm/`    |
-| Hook edit    | Edit `cache/worktree`, then `cargo xtask patch export`                                                 |
-| Overlay edit | Edit `wezterm/overlay/<path>`; prepare copies changed files without reapplying patches                 |
-| Export       | Refused if `wezterm/` changed since prepare; the next prepare reuses the worktree                      |
-| Drift        | `git apply --3way` from the patch's blob IDs; a conflict fails naming the patch                        |
-| Format       | `git diff --full-index --diff-algorithm=myers -U3` against the prepared revision; Git config ignored   |
+| Name | Value |
+| --- | --- |
+| Patch | `wezterm/patches/<entry>.patch`: one per top-level upstream directory or root file; any order |
+| Overlay | `wezterm/overlay/<path>`, copied to the same upstream path; must not exist upstream |
+| Tool-managed | `Cargo.toml`, `Cargo.lock`, `wezterm-gui/Cargo.toml`, `wezterm-gui/src/vtabs/`; never in `wezterm/` |
+| Hook edit | Edit `cache/worktree`, then `cargo xtask patch export` |
+| Overlay edit | Edit `wezterm/overlay/<path>`; prepare copies changed files without reapplying patches |
+| Export | Refused if `wezterm/` changed since prepare; the next prepare reuses the worktree |
+| Drift | `git apply --3way` from the patch's blob IDs; a conflict fails naming the patch |
+| Format | `git diff --full-index --diff-algorithm=myers -U3` against the prepared revision; Git config ignored |
 
 **Build state and installation**
 
-| Name                         | Value                                                                                                |
-| ---------------------------- | ---------------------------------------------------------------------------------------------------- |
-| `WEZ_VTABS_CACHE`            | `$XDG_CACHE_HOME/wez-vtabs`, `~/.cache/wez-vtabs`, or `%LOCALAPPDATA%/wez-vtabs`                     |
-| `WEZ_VTABS_INSTALL`          | `$XDG_DATA_HOME/wez-vtabs`, `~/.local/share/wez-vtabs`, or `%LOCALAPPDATA%/wez-vtabs`                |
-| `WEZ_VTABS_APP`              | `deploy --app`: `/Applications/WezTerm.app`, or the XDG `org.wezfurlong.wezterm.desktop` entry       |
-| `WEZ_VTABS_BIN`              | `deploy --bin`: `~/.local/bin`                                                                       |
-| `cache/upstream`             | Tool-owned upstream clone and Cargo target cache                                                     |
-| `cache/worktree`             | Owned patched checkout; overlay and adapter files synchronize in place                               |
-| `cache/project`              | Installed updater's separate dev-branch checkout; an ownership marker is required before replacement |
-| `cache/build.json`           | Separate source/compile/validation/mux identities, toolchain/configuration and Cargo artifact paths  |
-| `mux_digest`                 | Upstream revision, patches and overlay in `wezterm-mux-server`'s path closure; also bundle marker    |
-| `install/versions`           | Immutable bundles; install/deploy/update keep active, pending, previous and running versions only    |
-| `install/active.json`        | Selected installed bundle                                                                            |
-| `install/pending.json`       | Completed update selected by the next managed launch                                                 |
-| `install/update.json`        | Last update attempt and result                                                                       |
-| `install/update.log`         | Background build output                                                                              |
-| `cache/runs/ID/run.json`     | Invocation, resolved revisions/locks, configuration, command logs and timings                        |
-| `cache/runs/ID/source`       | Project source snapshot for reproduction                                                             |
-| `install/previous.json`      | Previous active version for rollback                                                                 |
-| `install/wez-vtabs-launcher` | Stable dispatcher; versioned Rust tools own launch/update behavior                                   |
-| MacOS launch entry           | `install/WezTerm VTabs.app`                                                                          |
-| MacOS application            | `just deploy` copies the active `WezTerm.app`; a replaced foreign app moves to `install/replaced`    |
-| MacOS deploy links           | `~/.local/bin` links to `wezterm{,-gui,-mux-server}`, `wez-vtabs{,-store}` and `strip-ansi-escapes`  |
-| MacOS deploy link target     | Deployed `WezTerm.app/Contents/MacOS/NAME`                                                           |
-| MacOS signing                | Keychain `Developer ID Application`, else ad-hoc; helpers as `com.github.wez.wezterm.NAME`           |
-| MacOS local network          | Consent keyed by real executable path and signing identifier; run binaries from the deployed app     |
-| Linux deploy                 | `~/.local/share/applications/org.wezfurlong.wezterm.desktop` and the same `~/.local/bin` links       |
-| Linux launch entry           | `install/wez-vtabs` and `install/wez-vtabs.desktop`                                                  |
-| Windows launch entry         | `install/wez-vtabs.cmd`                                                                              |
+| Name | Value |
+| --- | --- |
+| `WEZ_VTABS_CACHE` | `$XDG_CACHE_HOME/wez-vtabs`, `~/.cache/wez-vtabs`, or `%LOCALAPPDATA%/wez-vtabs` |
+| `WEZ_VTABS_INSTALL` | `$XDG_DATA_HOME/wez-vtabs`, `~/.local/share/wez-vtabs`, or `%LOCALAPPDATA%/wez-vtabs` |
+| `WEZ_VTABS_APP` | `deploy --app`: `/Applications/WezTerm.app`, or the XDG `org.wezfurlong.wezterm.desktop` entry |
+| `WEZ_VTABS_BIN` | `deploy --bin`: `~/.local/bin` |
+| `cache/upstream` | Tool-owned upstream clone and Cargo target cache |
+| `cache/worktree` | Owned patched checkout; overlay and adapter files synchronize in place |
+| `cache/project` | Installed updater's separate dev-branch checkout; an ownership marker is required before replacement |
+| `cache/build.json` | Separate source/compile/validation/mux identities, toolchain/configuration and Cargo artifact paths |
+| `mux_digest` | Upstream revision, patches and overlay in `wezterm-mux-server`'s path closure; also bundle marker |
+| `install/versions` | Immutable bundles; install/deploy/update keep active, pending, previous and running versions only |
+| `install/active.json` | Selected installed bundle |
+| `install/pending.json` | Completed update selected by the next managed launch |
+| `install/update.json` | Last update attempt and result |
+| `install/update.log` | Background build output |
+| `cache/runs/ID/run.json` | Invocation, resolved revisions/locks, configuration, command logs and timings |
+| `cache/runs/ID/source` | Project source snapshot for reproduction |
+| `install/previous.json` | Previous active version for rollback |
+| `install/wez-vtabs-launcher` | Stable dispatcher; versioned Rust tools own launch/update behavior |
+| MacOS launch entry | `install/WezTerm VTabs.app` |
+| MacOS application | `just deploy` copies the active `WezTerm.app`; a replaced foreign app moves to `install/replaced` |
+| MacOS deploy links | `~/.local/bin` links to `wezterm{,-gui,-mux-server}`, `wez-vtabs{,-store}` and `strip-ansi-escapes` |
+| MacOS deploy link target | Deployed `WezTerm.app/Contents/MacOS/NAME` |
+| MacOS signing | Keychain `Developer ID Application`, else ad-hoc; helpers as `com.github.wez.wezterm.NAME` |
+| MacOS local network | Consent keyed by real executable path and signing identifier; run binaries from the deployed app |
+| Linux deploy | `~/.local/share/applications/org.wezfurlong.wezterm.desktop` and the same `~/.local/bin` links |
+| Linux launch entry | `install/wez-vtabs` and `install/wez-vtabs.desktop` |
+| Windows launch entry | `install/wez-vtabs.cmd` |
 
 Use the managed launch entry for updates between launches. Versioned application paths identify a particular build. Installed bundles contain their project source; rebuilds require the toolchain. Rust changes require rebuilding; Lua configuration reloads normally.
 
@@ -197,27 +197,27 @@ cargo xtask repro /path/to/run/run.json --execute
 cargo xtask repro /path/to/run/run.json --execute --project-root /path/to/checkout
 ```
 
-| Name          | Value                                                                                           |
-| ------------- | ----------------------------------------------------------------------------------------------- |
-| Inspection    | Prints invocation, commands, selected source and configuration                                  |
-| Execution     | Separate `cache/reproductions/ID` source/cache/install; pinned recorded upstream                |
-| Build inputs  | Source snapshot, project revision, resolved Cargo locks, compiler/configuration identity        |
-| Compatibility | Replay rejects incompatible compiler/target/profile/configuration inputs                        |
-| Logs          | Per-command stdout/stderr paths, exit status, elapsed milliseconds                              |
-| CI            | Failed/cancelled jobs upload reports and snapshots on all three platforms                       |
-| Scope         | Prepare/deps/build/check/test/package/generate/patch operations; install/launch inspection only |
+| Name | Value |
+| --- | --- |
+| Inspection | Prints invocation, commands, selected source and configuration |
+| Execution | Separate `cache/reproductions/ID` source/cache/install; pinned recorded upstream |
+| Build inputs | Source snapshot, project revision, resolved Cargo locks, compiler/configuration identity |
+| Compatibility | Replay rejects incompatible compiler/target/profile/configuration inputs |
+| Logs | Per-command stdout/stderr paths, exit status, elapsed milliseconds |
+| CI | Failed/cancelled jobs upload reports and snapshots on all three platforms |
+| Scope | Prepare/deps/build/check/test/package/generate/patch operations; install/launch inspection only |
 
 **Prebuilt releases**
 
 `cargo xtask package` writes an adjacent `*.manifest.json`. Publish it beside its archive, then use `cargo xtask update --manifest URL`. CI uploads both as artifacts; no release is published by local commands.
 
-| Manifest field                              | Value                                                |
-| ------------------------------------------- | ---------------------------------------------------- |
-| `schema_version`                            | `1`                                                  |
-| `id`, `target`, `source_digest`, `upstream` | Exact bundle identity and source/upstream hashes     |
-| `project_source`                            | Recorded remote, branch and exact project revision   |
-| `archive`                                   | Sibling archive filename or HTTPS URL                |
-| `sha256`, `size`                            | Archive integrity; extracted contents verified again |
+| Manifest field | Value |
+| --- | --- |
+| `schema_version` | `1` |
+| `id`, `target`, `source_digest`, `upstream` | Exact bundle identity and source/upstream hashes |
+| `project_source` | Recorded remote, branch and exact project revision |
+| `archive` | Sibling archive filename or HTTPS URL |
+| `sha256`, `size` | Archive integrity; extracted contents verified again |
 
 **Test suite**
 
@@ -231,28 +231,28 @@ uv run --locked pytest -n 2 tests/integration --run-gui --run-container \
   --wezterm-bin-dir=/path/to/bin
 ```
 
-| Check                   | Value                                                                                                                                                               |
-| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Default suite           | Tooling, production Rust schema/storage processes, headless Lua plugin boundary and CLI PTYs                                                                        |
-| Python tools            | pytest, pytest-asyncio, pytest-xdist, Ruff, tui-test; exact versions in `uv.lock`                                                                                   |
-| Worker count            | `-n 2`; each test receives separate state and temporary files                                                                                                       |
-| Tools binary            | `--tools-bin=PATH`; built once under `target/pytest`, coordinated across workers                                                                                    |
-| Rust binaries           | Cached project-only build coordinated across workers; `--rust-bin-dir=PATH` uses supplied `gen-schema` and `wez-vtabs-store`                                        |
-| Lua                     | `lua` or `luajit`; executes `plugin/init.lua` through its public configuration boundary                                                                             |
-| LuaCATS                 | `--run-luals`; requires `lua-language-server`; valid and invalid public option examples                                                                             |
-| Binaries                | `--run-gui --wezterm-bin-dir=PATH`; prebuilt GUI, CLI, mux server and storage helper; focused CLI suites use recorded Cargo artifacts when no directory is supplied |
-| Display                 | Linux Xvfb and Openbox owned by the fixture; inherited desktop/session endpoints removed                                                                            |
-| Mouse and screenshots   | xdotool and ImageMagick; only the owned headless display                                                                                                            |
-| SSH mux                 | `--run-container`; loopback-only container, temporary keys, owned mux, Podman or Docker                                                                             |
-| PTY                     | tui-test drives real CLI processes; the group also exercises an isolated installed `wez-vtabs` launcher                                                             |
-| Startup/render/shutdown | Local and Unix mux sessions with visible content, sidebar rendering and clean shutdown; TLS tab lifecycle                                                           |
-| Desktop                 | No suite or scenario opens a GUI on the user's desktop                                                                                                              |
+| Check | Value |
+| --- | --- |
+| Default suite | Tooling, production Rust schema/storage processes, headless Lua plugin boundary and CLI PTYs |
+| Python tools | pytest, pytest-asyncio, pytest-xdist, Ruff, tui-test; exact versions in `uv.lock` |
+| Worker count | `-n 2`; each test receives separate state and temporary files |
+| Tools binary | `--tools-bin=PATH`; built once under `target/pytest`, coordinated across workers |
+| Rust binaries | Cached project-only build coordinated across workers; `--rust-bin-dir=PATH` uses supplied `gen-schema` and `wez-vtabs-store` |
+| Lua | `lua` or `luajit`; executes `plugin/init.lua` through its public configuration boundary |
+| LuaCATS | `--run-luals`; requires `lua-language-server`; valid and invalid public option examples |
+| Binaries | `--run-gui --wezterm-bin-dir=PATH`; prebuilt GUI, CLI, mux server and storage helper; focused CLI suites use recorded Cargo artifacts when no directory is supplied |
+| Display | Linux Xvfb and Openbox owned by the fixture; inherited desktop/session endpoints removed |
+| Mouse and screenshots | xdotool and ImageMagick; only the owned headless display |
+| SSH mux | `--run-container`; loopback-only container, temporary keys, owned mux, Podman or Docker |
+| PTY | tui-test drives real CLI processes; the group also exercises an isolated installed `wez-vtabs` launcher |
+| Startup/render/shutdown | Local and Unix mux sessions with visible content, sidebar rendering and clean shutdown; TLS tab lifecycle |
+| Desktop | No suite or scenario opens a GUI on the user's desktop |
 
-| Rust layer       | Value                                                                     |
-| ---------------- | ------------------------------------------------------------------------- |
-| Unit modules     | `cargo test --workspace --all-features`; bodies in `src/<crate>/tests`    |
-| Process boundary | `schema.rs` and `helper.rs` `[[test]]` targets; need `CARGO_BIN_EXE_*`    |
-| Patched WezTerm  | `wezterm/overlay/<crate>/tests/vtabs/*.rs`; run with `just build`         |
+| Rust layer | Value |
+| --- | --- |
+| Unit modules | `cargo test --workspace --all-features`; bodies in `src/<crate>/tests` |
+| Process boundary | `schema.rs` and `helper.rs` `[[test]]` targets; need `CARGO_BIN_EXE_*` |
+| Patched WezTerm | `wezterm/overlay/<crate>/tests/vtabs/*.rs`; run with `just build` |
 
 **Extended GUI scenarios**
 
@@ -272,24 +272,22 @@ uv run --locked python tests/scenarios/tls_fixture.py --wezterm /path/to/wezterm
   --gui /path/to/wezterm-gui --helper /path/to/wez-vtabs-store --workspace --effects
 ```
 
-| Scenario              | Value                                                                                        |
-| --------------------- | -------------------------------------------------------------------------------------------- |
-| Geometry              | Resize/reversal, stable reservation, background tab dimensions and split identities          |
-| Navigation            | indexed/negative activation, folders, spaces, drag/reorder and sidebar modes                 |
-| Settings              | Dedicated page, filtering, centered editors and preserved terminal geometry                  |
-| Clipboard             | Real OS copy/paste in tab search, settings search and color editor; passive pointer movement |
-| TLS                   | Temporary CA and certificates, mutual authentication and hostname verification               |
-| Artifacts             | JSON report, sampled geometry, GUI/mux logs and owned-window screenshots                     |
-| `--capture`           | Capture only the fixture's private X11 window                                                |
-| `--baseline-gui PATH` | Compare split sizing with stock at the same viewport                                         |
-| `--trace-mux`         | Additional transport/layout traces; changes timing                                           |
-| Performance boundary  | CPU/render samples exclude GPU completion and physical display latency                       |
+| Scenario | Value |
+| --- | --- |
+| Geometry | Resize/reversal, stable reservation, background tab dimensions and split identities |
+| Navigation | indexed/negative activation, folders, spaces, drag/reorder and sidebar modes |
+| Settings | Dedicated page, filtering, centered editors and preserved terminal geometry |
+| Clipboard | Real OS copy/paste in tab search, settings search and color editor; passive pointer movement |
+| TLS | Temporary CA and certificates, mutual authentication and hostname verification |
+| Artifacts | JSON report, sampled geometry, GUI/mux logs and owned-window screenshots |
+| `--capture` | Capture only the fixture's private X11 window |
+| `--baseline-gui PATH` | Compare split sizing with stock at the same viewport |
+| `--trace-mux` | Additional transport/layout traces; changes timing |
+| Performance boundary | CPU/render samples exclude GPU completion and physical display latency |
 
 **Storage diagnostics**
 
-| Env               | Value                                                                                              |
-| ----------------- | -------------------------------------------------------------------------------------------------- |
-| `WEZ_VTABS_STORE` | Explicit helper path; defaults to the GUI executable's sibling                                     |
-| `WEZ_VTABS_DB`    | Explicit SQLite path; defaults to the platform local-data directory under `wez-vtabs/state.sqlite` |
-
-Requests and responses are versioned and bounded. Field revisions reject stale writes atomically; tombstones retain revisions. Session-scoped live state requires a verified incarnation. Private live-tab state is excluded; explicit catalog/settings edits remain shared and durable. Database work never runs in the resize or activation path.
+| Env | Value |
+| --- | --- |
+| `WEZ_VTABS_STORE` | Explicit helper path; defaults to the GUI executable's sibling |
+| `WEZ_VTABS_DB` | Explicit SQLite path; defaults to the platform local-data directory under `wez-vtabs/state.sqlite` |

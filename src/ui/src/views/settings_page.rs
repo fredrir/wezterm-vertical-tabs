@@ -28,6 +28,15 @@ const CATEGORIES: &[(&str, &str, &str)] = &[
     ("keybinds", "Keybinds", icons::KEYBOARD_OUTLINE),
 ];
 
+/// Settings from other groups also listed under Colors, with the label they take there.
+const ALSO_IN_COLORS: &[(&str, &str)] = &[
+    ("quick_terminal_border_color", "Quick terminal border"),
+    (
+        "quick_terminal_background_color",
+        "Quick terminal background",
+    ),
+];
+
 const VALUE_CELLS: u16 = 5;
 
 pub(crate) struct Entry {
@@ -266,18 +275,30 @@ impl SettingsPage {
                 .collect();
         }
         let query = self.query.text().trim().to_lowercase();
+        let borrowed = ALSO_IN_COLORS
+            .iter()
+            .filter(|_| self.category == "theme")
+            .filter_map(|(key, _)| settings::descriptor(key));
         settings::descriptors()
             .iter()
             .filter(|field| field.key != "keybinds")
             .chain(keybinds::DESCRIPTORS.iter())
             .filter(|field| self.category == "all" || field.group == self.category)
+            .chain(borrowed)
             .filter(|field| {
                 query.is_empty()
-                    || [field.key, field.label, field.description, field.group]
+                    || [field.key, self.label(field), field.description, field.group]
                         .iter()
                         .any(|text| text.to_lowercase().contains(&query))
             })
             .collect()
+    }
+
+    pub(crate) fn label(&self, field: &SettingDescriptor) -> &'static str {
+        ALSO_IN_COLORS
+            .iter()
+            .find(|(key, _)| self.category == "theme" && *key == field.key)
+            .map_or(field.label, |(_, label)| label)
     }
 
     /// `opaque` covers whatever lies beneath, when the page shares the sidebar's cells.
@@ -637,7 +658,7 @@ impl SettingsPage {
                 content.width.saturating_sub(used + 1),
                 1,
             ),
-            field.label,
+            self.label(field),
             theme.base().bg(fill).fg(fg),
         );
     }
@@ -704,7 +725,7 @@ impl SettingsPage {
                 .as_str()
                 .map_or_else(|| "Auto".into(), |hex| format!("   {hex}")),
             SettingKind::Text => value.as_str().map_or_else(|| "Auto".into(), display_text),
-            SettingKind::Object | SettingKind::Colors => {
+            SettingKind::Colors => {
                 format!("{} entries", value.as_object().map_or(0, |v| v.len()))
             }
             SettingKind::List => format!("{} items", value.as_array().map_or(0, |v| v.len())),

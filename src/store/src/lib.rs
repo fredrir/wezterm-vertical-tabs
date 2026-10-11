@@ -82,8 +82,6 @@ pub enum Operation {
 pub struct Request {
     pub version: u32,
     pub request_id: u64,
-    #[serde(default)]
-    pub private: bool,
     pub operations: Vec<Operation>,
 }
 
@@ -92,7 +90,6 @@ impl Request {
         Self {
             version: PROTOCOL_VERSION,
             request_id,
-            private: false,
             operations,
         }
     }
@@ -103,7 +100,6 @@ impl Request {
 pub enum ErrorCode {
     InvalidRequest,
     Conflict,
-    PrivateWrite,
     Database,
     NewerSchema,
     Limit,

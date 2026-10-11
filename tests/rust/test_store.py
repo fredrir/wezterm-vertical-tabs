@@ -29,7 +29,7 @@ def put(item: dict, value, revision: int = 0) -> dict:
 def request_store(rust_binaries: dict[str, Path], tmp_path: Path, isolated_env: dict[str, str]):
     ids = itertools.count(1)
 
-    async def request(operations: list[dict], *, private: bool = False):
+    async def request(operations: list[dict]):
         request_id = next(ids)
         result = await run_process(
             [rust_binaries["wez-vtabs-store"], "--db", tmp_path / "state.sqlite"],
@@ -38,7 +38,6 @@ def request_store(rust_binaries: dict[str, Path], tmp_path: Path, isolated_env: 
                 {
                     "version": 1,
                     "request_id": request_id,
-                    "private": private,
                     "operations": operations,
                 }
             ),
@@ -92,13 +91,6 @@ async def test_session_membership_never_crosses_mux_incarnations(request_store):
     assert restored["records"] == []
     restored = await request_store([{"op": "read", "scope": session}])
     assert restored["records"][0]["value"] == membership
-
-
-async def test_private_writes_leave_the_public_catalog_unchanged(request_store):
-    rejected = await request_store([put(key("folder:private"), "Private")], private=True)
-    assert rejected["error"]["code"] == "private_write"
-    restored = await request_store([{"op": "read", "scope": PROFILE}])
-    assert restored["records"] == []
 
 
 async def test_null_preference_and_deleted_preference_remain_distinct(request_store):

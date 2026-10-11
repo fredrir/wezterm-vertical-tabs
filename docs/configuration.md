@@ -18,75 +18,75 @@ vtabs.apply_to_config(config, {
 return config
 ```
 
-| Name                  | Value                                                                        |
-| --------------------- | ---------------------------------------------------------------------------- |
-| `profile`             | Shared folder/session scope; default `default`                               |
-| `settings`            | Explicit overrides; [generated option reference](options.md)                 |
-| `spaces`              | Optional declared catalog of `{id, name, icon?, accent?, rules?, template?}` |
-| `templates`           | Dynamic spaces derived from metadata                                         |
-| `hooks`               | Optional semantic callbacks                                                  |
-| `settings_file`       | Managed Lua file; default `wezterm.config_dir .. "/vtabs_settings.lua"`      |
-| Precedence            | Rust defaults → `settings_file` → explicit `apply_to_config` values          |
-| Config-owned settings | Read-only in the settings UI                                                 |
-| Types                 | `plugin/types/`; generated from Rust with `just lint --fix`                  |
-| Actions               | Indexed, relative, negative-index and MRU navigation follow visible tabs     |
-| Raw mux identities    | CLI/mux tab IDs retain upstream meaning                                      |
-| Sidebar width         | Logical pixels; clamped against available content area                       |
-| Side/rail             | `left`/`right`; `expanded`/`hidden`; hidden also hides macOS window buttons  |
+| Name | Value |
+| --- | --- |
+| `profile` | Shared folder/session scope; default `default` |
+| `settings` | Explicit overrides; [generated option reference](options.md) |
+| `spaces` | Optional declared catalog of `{id, name, icon?, accent?, rules?, template?}` |
+| `templates` | Dynamic spaces derived from metadata |
+| `hooks` | Optional semantic callbacks |
+| `settings_file` | Managed Lua file; default `wezterm.config_dir .. "/vtabs_settings.lua"` |
+| Precedence | Rust defaults → `settings_file` → explicit `apply_to_config` values |
+| Config-owned settings | Read-only in the settings UI |
+| Types | `plugin/types/`; generated from Rust with `just lint --fix` |
+| Actions | Indexed, relative, negative-index and MRU navigation follow visible tabs |
+| Raw mux identities | CLI/mux tab IDs retain upstream meaning |
+| Sidebar width | Logical pixels; clamped against available content area |
+| Side/rail | `left`/`right`; `expanded`/`hidden`; hidden also hides macOS window buttons |
 
 **Keyboard and mouse**
 
-| Action                              | macOS                              | Linux / Windows      |
-| ----------------------------------- | ---------------------------------- | -------------------- |
-| Settings              | Gear tab opens last and keeps its index; later tabs follow it (`Cmd+index`, `Ctrl+Tab`); closes with × or `Cmd+W` |
-| New tab                             | `Cmd+T`                            | `Ctrl+Shift+T`       |
-| Search tabs                         | `Cmd+K`                            | `Ctrl+Shift+K`       |
-| Command palette                     | `Cmd+P`                            | `Ctrl+Shift+P`       |
-| Quick terminal                      | Ctrl + backtick                    | Ctrl + backtick      |
-| Toggle sidebar                      | `Cmd+B`                            | `Ctrl+Shift+B`       |
-| Close tab or settings               | `Cmd+W`                            | `Ctrl+Shift+W`       |
-| Refresh configuration               | `Cmd+Shift+R`                      | `Ctrl+Shift+R`       |
-| Tab 1 through 8 / last              | `Cmd+1..9`                         | `Ctrl+Shift+1..9`    |
-| Next / previous tab                 | `Ctrl+Tab` / `Ctrl+Shift+Tab`      | Same                 |
-| Previous / next space               | `Ctrl+Alt+Left` / `Ctrl+Alt+Right` | Same                 |
-| Search settings                     | `Cmd+F` in settings                | `Ctrl+F` in settings |
-| Traverse controls                   | `Tab` / `Shift+Tab`                | Same                 |
-| Rename focused tab, folder or space | `F2`                               | Same                 |
-| Context menu                        | Right click / `F10`                | Same                 |
-| Dismiss menu or page                | `Escape`                           | Same                 |
+| Action | macOS | Linux / Windows |
+| --- | --- | --- |
+| Settings | Gear tab opens last and keeps its index; later tabs follow it (`Cmd+index`, `Ctrl+Tab`); closes with × or `Cmd+W` |  |
+| New tab | `Cmd+T` | `Ctrl+Shift+T` |
+| Search tabs | `Cmd+K` | `Ctrl+Shift+K` |
+| Command palette | `Cmd+P` | `Ctrl+Shift+P` |
+| Quick terminal | Ctrl + backtick | Ctrl + backtick |
+| Toggle sidebar | `Cmd+B` | `Ctrl+Shift+B` |
+| Close tab or settings | `Cmd+W` | `Ctrl+Shift+W` |
+| Refresh configuration | `Cmd+Shift+R` | `Ctrl+Shift+R` |
+| Tab 1 through 8 / last | `Cmd+1..9` | `Ctrl+Shift+1..9` |
+| Next / previous tab | `Ctrl+Tab` / `Ctrl+Shift+Tab` | Same |
+| Previous / next space | `Ctrl+Alt+Left` / `Ctrl+Alt+Right` | Same |
+| Search settings | `Cmd+F` in settings | `Ctrl+F` in settings |
+| Traverse controls | `Tab` / `Shift+Tab` | Same |
+| Rename focused tab, folder or space | `F2` | Same |
+| Context menu | Right click / `F10` | Same |
+| Dismiss menu or page | `Escape` | Same |
 
-| Name                  | Value                                                                                                                   |
-| --------------------- | ----------------------------------------------------------------------------------------------------------------------- |
-| Keyboard preference   | Disable `keyboard_shortcuts` to use custom Lua bindings                                                                 |
-| Command palette       | Shared searchable launcher; includes WezTerm commands and `augment-command-palette` entries; custom bindings use `wezterm.action.ActivateCommandPalette` |
-| Launcher              | `ShowLauncher` and `ShowLauncherArgs` open the sidebar launcher; configure entries with standard `config.launch_menu` |
-| Terminal Control keys | Ordinary Control shortcuts remain available to the shell                                                                |
-| Settings              | Own tab with a gear icon and the index after the last tab (`Cmd+index`, `Cmd+9`, `Ctrl+Tab`); close with × or `Cmd+W` |
-| Search                | Centered palette of sidebar rows; Up/Down select, Left/Right edit the query, Enter opens; matches name, title or index  |
-| Search scope          | Current space (indexed), other spaces, filter-hidden, other windows (`window N`), other workspaces, disconnected domains |
-| Search `__detached`   | Moves the tab into this window; other workspaces switch; disconnected domains reattach                                  |
-| Search unadopted      | Remote panes no mux shows, from connected remotes and `hooks.adoptable`; Enter adopts into this window                  |
-| `__detached` windows  | Never shown on their own; when only they remain the GUI quits (`quit_when_all_windows_are_closed`); reconnecting spawns a fresh tab |
-| Space row             | Click collapses pinned tabs and folders; hover shows the chevron and the new-folder plus; right click edits the space   |
-| Folders               | Create with the space row plus; rename, collapse, reorder, add a tab or ungroup from the context menu                   |
-| Tab grouping          | Drag onto a folder, or use the tab context menu                                                                         |
-| Reordering            | Drag to a row's edge, where an accent bar marks the landing; folders and spaces drag too; Escape abandons a drag        |
-| Split by dragging     | Drop a tab or pane on a row's middle to join it as a split; drag a pane out to an edge or New Tab for its own tab       |
-| Ungrouping            | Drop onto New Tab to ungroup and unpin; Remove from folder keeps the pin; processes remain running                      |
-| Pinned order          | Pinned tabs and folders precede New Tab; ordinary tabs follow                                                           |
-| Space assignment      | Drop a tab on a bottom space control or use Move to space                                                               |
-| Folder persistence    | Catalog, names and collapse state persist; live membership follows the session boundary in [Boundaries](limitations.md) |
-| Tab title             | Double-click edits in place with the text selected; Enter saves, Escape cancels, an empty title restores the directory  |
-| Tab icon              | Active pane's machine, `󰒋` when splits span machines; each split then reads `GLYPH/name`                                |
-| Tab index             | Replaces the row's icon while hovered, for `Cmd+1`-`Cmd+9` (`show_indexes`)                                             |
-| Icons                 | Drawn from WezTerm's bundled symbols font, so their size does not depend on the terminal font's Nerd Font variant       |
-| Splits                | Mirrors the layout in one row: side-by-side panes as columns, top/bottom panes as its two lines; click focuses a pane   |
-| Close control         | Floats over the hovered tab row without moving its content (`show_close`)                                               |
-| Hints                 | Compact, beside the sidebar and level with the control; tabs show none                                                  |
-| Motion                | Finite hover/selection transitions and press shrink; `reduced_motion` disables animation                                |
-| Closing tabs          | Idle tabs close at once; only a running process prompts, judged by the pane's owning mux (`confirm_close`, skip list)   |
-| Closing splits        | Hovering a split reveals its own ×; the tab's × shows over the icon side of the row                                     |
-| Menus and prompts     | Context menus open under the pointer or focused control; confirmations are a dialog with the accepting button selected  |
+| Name | Value |
+| --- | --- |
+| Keyboard preference | Disable `keyboard_shortcuts` to use custom Lua bindings |
+| Command palette | Shared searchable launcher; includes WezTerm commands and `augment-command-palette` entries; custom bindings use `wezterm.action.ActivateCommandPalette` |
+| Launcher | `ShowLauncher` and `ShowLauncherArgs` open the sidebar launcher; configure entries with standard `config.launch_menu` |
+| Terminal Control keys | Ordinary Control shortcuts remain available to the shell |
+| Settings | Own tab with a gear icon and the index after the last tab (`Cmd+index`, `Cmd+9`, `Ctrl+Tab`); close with × or `Cmd+W` |
+| Search | Centered palette of sidebar rows; Up/Down select, Left/Right edit the query, Enter opens; matches name, title or index |
+| Search scope | Current space (indexed), other spaces, filter-hidden, other windows (`window N`), other workspaces, disconnected domains |
+| Search `__detached` | Moves the tab into this window; other workspaces switch; disconnected domains reattach |
+| Search unadopted | Remote panes no mux shows, from connected remotes and `hooks.adoptable`; Enter adopts into this window |
+| `__detached` windows | Never shown on their own; when only they remain the GUI quits (`quit_when_all_windows_are_closed`); reconnecting spawns a fresh tab |
+| Space row | Click collapses pinned tabs and folders; hover shows the chevron and the new-folder plus; right click edits the space |
+| Folders | Create with the space row plus; rename, collapse, reorder, add a tab or ungroup from the context menu |
+| Tab grouping | Drag onto a folder, or use the tab context menu |
+| Reordering | Drag to a row's edge, where an accent bar marks the landing; folders and spaces drag too; Escape abandons a drag |
+| Split by dragging | Drop a tab or pane on a row's middle to join it as a split; drag a pane out to an edge or New Tab for its own tab |
+| Ungrouping | Drop onto New Tab to ungroup and unpin; Remove from folder keeps the pin; processes remain running |
+| Pinned order | Pinned tabs and folders precede New Tab; ordinary tabs follow |
+| Space assignment | Drop a tab on a bottom space control or use Move to space |
+| Folder persistence | Catalog, names and collapse state persist; live membership follows the session boundary in [Boundaries](limitations.md) |
+| Tab title | Double-click edits in place with the text selected; Enter saves, Escape cancels, an empty title restores the directory |
+| Tab icon | Active pane's machine, `󰒋` when splits span machines; each split then reads `GLYPH/name` |
+| Tab index | Replaces the row's icon while hovered, for `Cmd+1`-`Cmd+9` (`show_indexes`) |
+| Icons | Drawn from WezTerm's bundled symbols font, so their size does not depend on the terminal font's Nerd Font variant |
+| Splits | Mirrors the layout in one row: side-by-side panes as columns, top/bottom panes as its two lines; click focuses a pane |
+| Close control | Floats over the hovered tab row without moving its content (`show_close`) |
+| Hints | Compact, beside the sidebar and level with the control; tabs show none |
+| Motion | Finite hover/selection transitions and press shrink; `reduced_motion` disables animation |
+| Closing tabs | Idle tabs close at once; only a running process prompts, judged by the pane's owning mux (`confirm_close`, skip list) |
+| Closing splits | Hovering a split reveals its own ×; the tab's × shows over the icon side of the row |
+| Menus and prompts | Context menus open under the pointer or focused control; confirmations are a dialog with the accepting button selected |
 
 **Quick terminal**
 
@@ -175,15 +175,15 @@ return {
 }
 ```
 
-| Name              | Value                                                                        |
-| ----------------- | ---------------------------------------------------------------------------- |
-| Writer            | Settings UI, space create/rename/edit/move/delete; atomic replace            |
-| Reload            | Written file reloads the config; hand edits reload through the watch list    |
-| Missing file      | Empty; created on the first UI edit                                          |
-| Symlink           | Target rewritten, link kept                                                  |
-| Declared `spaces` | Listed first; a file entry with the same `id` is ignored                     |
-| Session only      | Rail toggle (`Cmd+B`, `SetRail`); Lua keeps the startup value                |
-| SQLite            | Folders, space collapse, template-derived spaces, verified session state     |
+| Name | Value |
+| --- | --- |
+| Writer | Settings UI, space create/rename/edit/move/delete; atomic replace |
+| Reload | Written file reloads the config; hand edits reload through the watch list |
+| Missing file | Empty; created on the first UI edit |
+| Symlink | Target rewritten, link kept |
+| Declared `spaces` | Listed first; a file entry with the same `id` is ignored |
+| Session only | Rail toggle (`Cmd+B`, `SetRail`); Lua keeps the startup value |
+| SQLite | Folders, space collapse, template-derived spaces, verified session state |
 
 **Editor types**
 
@@ -191,15 +191,15 @@ return {
 { "workspace.library": ["/absolute/path/to/wezterm-vertical-tabs/plugin/types"] }
 ```
 
-| Type                | Value                                             |
-| ------------------- | ------------------------------------------------- |
-| `TabsOptions`       | `apply_to_config` options                         |
-| `TabsSettings`      | `settings` table                                  |
-| `TabsManaged`       | `settings_file` content                           |
-| `TabsSpace`         | `spaces` entry                                    |
-| `TabsSpaceTemplate` | `templates` entry                                 |
-| `TabsHooks`         | `hooks` callbacks; `TabsTab`, `TabsWindowContext` |
-| `TabsAction`        | `vtabs.action` / `wezterm.vtabs.dispatch` value   |
+| Type | Value |
+| --- | --- |
+| `TabsOptions` | `apply_to_config` options |
+| `TabsSettings` | `settings` table |
+| `TabsManaged` | `settings_file` content |
+| `TabsSpace` | `spaces` entry |
+| `TabsSpaceTemplate` | `templates` entry |
+| `TabsHooks` | `hooks` callbacks; `TabsTab`, `TabsWindowContext` |
+| `TabsAction` | `vtabs.action` / `wezterm.vtabs.dispatch` value |
 
 **Spaces and routing**
 
@@ -224,46 +224,46 @@ vtabs.apply_to_config(config, {
 })
 ```
 
-| Name                      | Value                                                                       |
-| ------------------------- | --------------------------------------------------------------------------- |
-| Catalog                   | All spaces, including empty spaces; scrollable at the bottom of the sidebar |
-| Bottom `+`                | Create a space; distinct from New tab                                       |
-| Empty space               | Keeps other tabs running; no automatic shell creation                       |
-| Manual assignment         | Tab context menu; Return to auto resumes routing                            |
-| Rules                     | A space matches any rule; fields within one rule must all match             |
-| Field patterns            | Any pattern within a field; `*` wildcard, otherwise literal                 |
-| Fields                    | `domain`, `host`, `user`, `process`, `cwd`, `title`                         |
-| Cwd literal               | Also matches descendants separated by `/`                                   |
-| `remote`                  | Optional boolean constraint                                                 |
-| Templates                 | `$domain`, `$host`, `$user`, `$proc`/`$process`, `$cwd`, `$title`           |
-| Deleting a nonempty space | Select a destination for its tabs                                           |
-| Private window            | Live tab state stays private; settings file edits remain shared             |
+| Name | Value |
+| --- | --- |
+| Catalog | All spaces, including empty spaces; scrollable at the bottom of the sidebar |
+| Bottom `+` | Create a space; distinct from New tab |
+| Empty space | Keeps other tabs running; no automatic shell creation |
+| Manual assignment | Tab context menu; Return to auto resumes routing |
+| Rules | A space matches any rule; fields within one rule must all match |
+| Field patterns | Any pattern within a field; `*` wildcard, otherwise literal |
+| Fields | `domain`, `host`, `user`, `process`, `cwd`, `title` |
+| Cwd literal | Also matches descendants separated by `/` |
+| `remote` | Optional boolean constraint |
+| Templates | `$domain`, `$host`, `$user`, `$proc`/`$process`, `$cwd`, `$title` |
+| Deleting a nonempty space | Select a destination for its tabs |
+
 
 **Optional actions**
 
 `vtabs.action(value)` returns a WezTerm callback action. It installs no bindings by itself.
 
-| Value                                                           | Result                                 |
-| --------------------------------------------------------------- | -------------------------------------- |
-| `'settings'`                                                    | Open settings                          |
-| `'create_space'`                                                | Open the create-space form             |
-| `'navigator'`                                                   | Open the visible-tab navigator         |
-| `'retry_storage'`                                               | Retry a failed durable operation       |
-| `{ QuickTerminal = { args = { 'lazygit' } } }`                  | Toggle a quick program                 |
-| `{ CreateSpace = { name = 'Work' } }`                           | Create and select a space              |
-| `{ SelectSpace = 'work' }`                                      | Select a space by stable ID            |
-| `{ RenameSpace = { id = 'work', name = 'Projects' } }`          | Rename a space                         |
-| `{ DeleteSpace = { id = 'work', destination = 'home' } }`       | Delete and reassign its tabs           |
-| `{ AssignTab = { id = tab_id, space_id = 'work' } }`            | Manually assign a tab                  |
-| `{ ReturnToAuto = tab_id }`                                     | Resume automatic routing               |
-| `{ PinTab = { id = tab_id, pinned = true } }`                   | Pin a tab                              |
-| `{ CreateFolder = { name = 'Project' } }`                       | Create a folder in the selected space  |
-| `{ AssignFolder = { tab_id = tab_id, folder_id = folder_id } }` | Group and pin a tab                    |
-| `{ NewTabInFolder = folder_id }`                                | Spawn a tab inside a folder            |
-| `{ DeleteFolder = folder_id }`                                  | Ungroup tabs without closing them      |
-| `{ SetSetting = { key = 'width', value = 300 } }`               | Write a setting to `settings_file`     |
-| `{ SetRail = 'hidden' }`                                        | Change rail mode for this session      |
-| `'PrivateWindow'`                                               | Create a private window                |
+| Value | Result |
+| --- | --- |
+| `'settings'` | Open settings |
+| `'create_space'` | Open the create-space form |
+| `'navigator'` | Open the visible-tab navigator |
+| `'retry_storage'` | Retry a failed durable operation |
+| `{ QuickTerminal = { args = { 'lazygit' } } }` | Toggle a quick program |
+| `{ CreateSpace = { name = 'Work' } }` | Create and select a space |
+| `{ SelectSpace = 'work' }` | Select a space by stable ID |
+| `{ RenameSpace = { id = 'work', name = 'Projects' } }` | Rename a space |
+| `{ DeleteSpace = { id = 'work', destination = 'home' } }` | Delete and reassign its tabs |
+| `{ AssignTab = { id = tab_id, space_id = 'work' } }` | Manually assign a tab |
+| `{ ReturnToAuto = tab_id }` | Resume automatic routing |
+| `{ PinTab = { id = tab_id, pinned = true } }` | Pin a tab |
+| `{ CreateFolder = { name = 'Project' } }` | Create a folder in the selected space |
+| `{ AssignFolder = { tab_id = tab_id, folder_id = folder_id } }` | Group and pin a tab |
+| `{ NewTabInFolder = folder_id }` | Spawn a tab inside a folder |
+| `{ DeleteFolder = folder_id }` | Ungroup tabs without closing them |
+| `{ SetSetting = { key = 'width', value = 300 } }` | Write a setting to `settings_file` |
+| `{ SetRail = 'hidden' }` | Change rail mode for this session |
+
 
 The full typed action set is `TabsAction` in `plugin/types/vtabs.lua`, generated from `Action` in `src/core/src/contract.rs`; `dispatch` rejects unknown actions. Pane/split actions remain ordinary WezTerm actions.
 
@@ -295,65 +295,65 @@ vtabs.apply_to_config(config, {
 })
 ```
 
-| Name                  | Value                                                                                            |
-| --------------------- | ------------------------------------------------------------------------------------------------ |
-| Tab callback input    | Rust tab facts: stable ID, title, cwd, domain, host, user, process, remote and activity metadata |
-| Window callback input | `profile`, `private`, `selected_space`, `space`, `active_tab`, `settings`                        |
-| `title`               | Display title string                                                                             |
-| `routing`             | Existing space ID or `nil`                                                                       |
-| `filter`              | Boolean visibility                                                                               |
-| `theme`               | Window callback; validated theme-color overrides                                                 |
-| `footer`              | Window callback; string; first line shown above spaces, or `nil`                                 |
-| `adoptable`           | Per tab search; domain name(s) to list unadopted panes from, besides connected ones              |
-| Scheduling            | Semantic metadata changes; cached results, no frame-time callbacks                               |
-| Stale results         | Discarded after superseding host/model/configuration changes                                     |
-| Failure               | Valid state retained; two-second batch deadline; warnings deduplicated per configuration epoch   |
+| Name | Value |
+| --- | --- |
+| Tab callback input | Rust tab facts: stable ID, title, cwd, domain, host, user, process, remote and activity metadata |
+| Window callback input | `profile`,  `selected_space`, `space`, `active_tab`, `settings` |
+| `title` | Display title string |
+| `routing` | Existing space ID or `nil` |
+| `filter` | Boolean visibility |
+| `theme` | Window callback; validated theme-color overrides |
+| `footer` | Window callback; string; first line shown above spaces, or `nil` |
+| `adoptable` | Per tab search; domain name(s) to list unadopted panes from, besides connected ones |
+| Scheduling | Semantic metadata changes; cached results, no frame-time callbacks |
+| Stale results | Discarded after superseding host/model/configuration changes |
+| Failure | Valid state retained; two-second batch deadline; warnings deduplicated per configuration epoch |
 
 **API**
 
-| Name                                     | Value                                                                        |
-| ---------------------------------------- | ---------------------------------------------------------------------------- |
-| `wezterm.vtabs.capability`               | Current integration contract marker                                          |
-| `wezterm.vtabs.schema`                   | Rust settings schema                                                         |
-| `wezterm.vtabs.configure(options)`       | Validated configuration update                                               |
-| `wezterm.vtabs.dispatch(window, action)` | Validated semantic action on one GUI window                                  |
-| `wezterm.vtabs.inspect(window)`          | Async diagnostic projection, geometry, model summary and CPU timing counters |
+| Name | Value |
+| --- | --- |
+| `wezterm.vtabs.capability` | Current integration contract marker |
+| `wezterm.vtabs.schema` | Rust settings schema |
+| `wezterm.vtabs.configure(options)` | Validated configuration update |
+| `wezterm.vtabs.dispatch(window, action)` | Validated semantic action on one GUI window |
+| `wezterm.vtabs.inspect(window)` | Async diagnostic projection, geometry, model summary and CPU timing counters |
 
 Use [development.md](development.md) for installation, build/update commands and GUI verification. Storage boundaries are documented in [protocol.md](protocol.md).
 
-| Appearance | Default behavior                                                                            |
-| ---------- | ------------------------------------------------------------------------------------------- |
-| Palette    | Dark blue background `#192231`, accent `#a9c7f5`; file and explicit colors retain priority  |
-| Frame      | Sidebar background surrounds rounded terminal content on every edge                         |
-| Search     | Compact sidebar trigger; launcher drops down from it, tooltips open below their control     |
-| Tab rows   | Index, directory marker and the deepest directory name                                      |
-| Directory  | Repository root name, `~/` for the owning machine's home and below it, `/` otherwise        |
-| Renames    | Custom title from the context menu or a Lua hook replaces the directory                     |
-| Metadata   | Session domain on a second line; `show_metadata`                                            |
-| Icons      | Active foreground color; subtle centered hover surface                                      |
-| Remote     | OS glyph in its own color; the local terminal glyph keeps the row color (`distro_colors`)   |
-| Clipboard  | Cmd/Ctrl+A, C, X and V in editors, including macOS Edit menu equivalents; Ctrl+Shift too    |
+| Appearance | Default behavior |
+| --- | --- |
+| Palette | Dark blue background `#192231`, accent `#a9c7f5`; file and explicit colors retain priority |
+| Frame | Sidebar background surrounds rounded terminal content on every edge |
+| Search | Compact sidebar trigger; launcher drops down from it, tooltips open below their control |
+| Tab rows | Index, directory marker and the deepest directory name |
+| Directory | Repository root name, `~/` for the owning machine's home and below it, `/` otherwise |
+| Renames | Custom title from the context menu or a Lua hook replaces the directory |
+| Metadata | Session domain on a second line; `show_metadata` |
+| Icons | Active foreground color; subtle centered hover surface |
+| Remote | OS glyph in its own color; the local terminal glyph keeps the row color (`distro_colors`) |
+| Clipboard | Cmd/Ctrl+A, C, X and V in editors, including macOS Edit menu equivalents; Ctrl+Shift too |
 
 ```lua
 settings = { distro_colors = { arch = '#a6e3a1', remote = '#ffffff' } }
 ```
 
-| OS ID      | Default   |
-| ---------- | --------- |
-| `arch`     | `#e86464` |
-| `ubuntu`   | `#ffa05e` |
-| `debian`   | `#ff7ea6` |
-| `fedora`   | `#c9a4ff` |
-| `nixos`    | `#c3ee7a` |
-| `alpine`   | `#eee57a` |
-| `centos`   | `#e9a0ff` |
-| `rhel`     | `#ff7676` |
+| OS ID | Default |
+| --- | --- |
+| `arch` | `#e86464` |
+| `ubuntu` | `#ffa05e` |
+| `debian` | `#ff7ea6` |
+| `fedora` | `#c9a4ff` |
+| `nixos` | `#c3ee7a` |
+| `alpine` | `#eee57a` |
+| `centos` | `#e9a0ff` |
+| `rhel` | `#ff7676` |
 | `opensuse` | `#8bf08a` |
-| `manjaro`  | `#5ee8a4` |
+| `manjaro` | `#5ee8a4` |
 | `raspbian` | `#ff9ad5` |
-| `gentoo`   | `#e0c8ff` |
-| `freebsd`  | `#ffb3a6` |
-| `linux`    | `#ffcb6b` |
-| `macos`    | `#e4e4ea` |
-| `windows`  | `#c6f7e2` |
-| `remote`   | `#ffe9a8` |
+| `gentoo` | `#e0c8ff` |
+| `freebsd` | `#ffb3a6` |
+| `linux` | `#ffcb6b` |
+| `macos` | `#e4e4ea` |
+| `windows` | `#c6f7e2` |
+| `remote` | `#ffe9a8` |

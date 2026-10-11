@@ -610,3 +610,34 @@ fn changed_settings_draw_their_label_in_the_accent() {
     assert_eq!(label(&ui, "width"), accent);
     assert_ne!(label(&ui, "side"), accent);
 }
+
+#[test]
+fn quick_terminal_colors_also_list_under_colors_with_their_own_labels() {
+    let text = |ui: &SidebarUi, key: &str| {
+        let row = rect(ui, &ElementId::Setting(key.into()));
+        (row.x + 2..row.right())
+            .map(|x| ui.buffer()[(x, row.y)].symbol().to_owned())
+            .collect::<String>()
+    };
+    let keys = [
+        "quick_terminal_border_color",
+        "quick_terminal_background_color",
+    ];
+
+    let (mut ui, model) = settings("theme");
+    draw(&mut ui, &model);
+    assert!(selected_rows(&ui).ends_with(&keys.map(String::from)));
+    assert!(text(&ui, keys[0]).starts_with("Quick terminal border "));
+    assert!(text(&ui, keys[1]).starts_with("Quick terminal background "));
+
+    let (mut ui, model) = settings("quick_terminal");
+    draw(&mut ui, &model);
+    assert!(text(&ui, keys[0]).starts_with("Border color "));
+
+    let (mut ui, model) = settings("all");
+    draw(&mut ui, &model);
+    let rows = selected_rows(&ui);
+    for key in keys {
+        assert_eq!(rows.iter().filter(|row| *row == key).count(), 1);
+    }
+}

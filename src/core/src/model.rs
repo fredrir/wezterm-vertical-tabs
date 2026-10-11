@@ -313,7 +313,6 @@ pub enum Intent {
     ResetSetting(#[schemars(with = "settings::Key")] String),
     ResetSettings,
     SetRail(RailMode),
-    PrivateWindow,
     MoveTabToNewWindow(TabId),
     CustomAction(String),
 }
@@ -333,10 +332,6 @@ pub enum HostCommand {
     },
     Reorder {
         visible_order: Vec<TabId>,
-    },
-    NewWindow {
-        private: bool,
-        launch: LaunchSpec,
     },
     MoveTabToNewWindow(TabId),
     FocusPane {
@@ -394,7 +389,6 @@ pub struct Model {
     pub selected_tab: Option<TabId>,
     pub settings: Settings,
     pub revision: u64,
-    pub private: bool,
     /// Host home directory; labels shorten only, paths are never rewritten.
     pub home: Option<String>,
     pub config_owned: BTreeSet<String>,
@@ -416,11 +410,11 @@ pub struct Model {
 
 impl Default for Model {
     fn default() -> Self {
-        Self::new("default", false)
+        Self::new("default")
     }
 }
 impl Model {
-    pub fn new(profile: impl Into<String>, private: bool) -> Self {
+    pub fn new(profile: impl Into<String>) -> Self {
         Self {
             profile: profile.into(),
             spaces: vec![Space::new(DEFAULT_SPACE, "Home")],
@@ -431,7 +425,6 @@ impl Model {
             selected_tab: None,
             settings: Settings::default(),
             revision: 0,
-            private,
             home: None,
             config_owned: BTreeSet::new(),
             footer: String::new(),
@@ -1228,15 +1221,6 @@ impl Model {
                 self.settings.rail = rail;
                 out.layout_changed = true;
             }
-            Intent::PrivateWindow => {
-                let mut launch = self.default_launch();
-                launch.env.extend(self.settings.private_env.clone());
-                out.commands.push(HostCommand::NewWindow {
-                    private: true,
-                    launch,
-                });
-                return Ok(out);
-            }
             Intent::MoveTabToNewWindow(id) => {
                 self.require_tab(id)?;
                 out.commands.push(HostCommand::MoveTabToNewWindow(id));
@@ -1271,12 +1255,6 @@ impl Model {
             domain,
             cwd,
             ..LaunchSpec::default()
-        }
-    }
-    pub fn set_private(&mut self, private: bool) {
-        if self.private != private {
-            self.private = private;
-            self.touch();
         }
     }
     pub fn set_home(&mut self, home: Option<String>) {

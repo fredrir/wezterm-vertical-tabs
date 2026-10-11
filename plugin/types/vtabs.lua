@@ -28,11 +28,9 @@
 ---@field foreground? string Text foreground
 ---@field muted? string Secondary text foreground
 ---@field selected_background? string Selected card background
----@field private_accent? string Private window accent
 ---@field distro_colors? table<string, string> Remote glyph colors by os-release ID, `remote` when unknown
 ---@field keyboard_shortcuts? boolean Enable tab, search, settings and sidebar shortcuts
 ---@field default_domain? string Spawn domain used in an empty space; null retains the host default
----@field private_env? table<string, string> Environment additions for explicitly created private windows
 ---@field menus? TabsMenuEntry[] Nested semantic action menus
 
 ---@class TabsTheme
@@ -41,13 +39,12 @@
 ---@field foreground? string Text foreground
 ---@field muted? string Secondary text foreground
 ---@field selected_background? string Selected card background
----@field private_accent? string Private window accent
 ---@field distro_colors? table<string, string> Remote glyph colors by os-release ID, `remote` when unknown
 
 --- Argument to `vtabs.action` and `wezterm.vtabs.dispatch`.
 ---@alias TabsAction TabsUiAction|TabsIntent
 
----@alias TabsIntent 'ActivateLast'|'NewTab'|'ResetSettings'|'PrivateWindow'|{ SelectSpace: string }|{ CreateSpace: { name: string } }|{ RenameSpace: { id: string, name: string } }|{ EditSpace: { accent?: string, icon: string, id: string, rules: TabsRoutingRule[] } }|{ DeleteSpace: { destination?: string, id: string } }|{ MoveSpace: { id: string, index: integer } }|{ ToggleSpace: string }|{ CreateFolder: { name: string } }|{ RenameFolder: { id: string, name: string } }|{ ToggleFolder: string }|{ DeleteFolder: string }|{ AssignFolder: { folder_id?: string, tab_id: integer } }|{ MoveFolder: { id: string, index: integer } }|{ ActivateTab: integer }|{ ActivateIndex: integer }|{ ActivateRelative: { delta: integer, wrap: boolean } }|{ NewTabInFolder: string }|{ CloseTab: integer }|{ CloseOthers: integer }|{ RenameTab: { id: integer, title: string } }|{ PinTab: { id: integer, pinned: boolean } }|{ MoveTab: { id: integer, index: integer } }|{ AssignTab: { id: integer, space_id: string } }|{ ReturnToAuto: integer }|{ SetSetting: { key: TabsSettingKey, value: any } }|{ ResetSetting: TabsSettingKey }|{ SetRail: TabsRailMode }|{ MoveTabToNewWindow: integer }|{ CustomAction: string }
+---@alias TabsIntent 'ActivateLast'|'NewTab'|'ResetSettings'|{ SelectSpace: string }|{ CreateSpace: { name: string } }|{ RenameSpace: { id: string, name: string } }|{ EditSpace: { accent?: string, icon: string, id: string, rules: TabsRoutingRule[] } }|{ DeleteSpace: { destination?: string, id: string } }|{ MoveSpace: { id: string, index: integer } }|{ ToggleSpace: string }|{ CreateFolder: { name: string } }|{ RenameFolder: { id: string, name: string } }|{ ToggleFolder: string }|{ DeleteFolder: string }|{ AssignFolder: { folder_id?: string, tab_id: integer } }|{ MoveFolder: { id: string, index: integer } }|{ ActivateTab: integer }|{ ActivateIndex: integer }|{ ActivateRelative: { delta: integer, wrap: boolean } }|{ NewTabInFolder: string }|{ CloseTab: integer }|{ CloseOthers: integer }|{ RenameTab: { id: integer, title: string } }|{ PinTab: { id: integer, pinned: boolean } }|{ MoveTab: { id: integer, index: integer } }|{ AssignTab: { id: integer, space_id: string } }|{ ReturnToAuto: integer }|{ SetSetting: { key: TabsSettingKey, value: any } }|{ ResetSetting: TabsSettingKey }|{ SetRail: TabsRailMode }|{ MoveTabToNewWindow: integer }|{ CustomAction: string }
 
 ---@class TabsLaunchSpec
 ---@field args? string[]
@@ -84,7 +81,7 @@
 ---@field fields? { [1]: TabsMatchField, [2]: string[] }[]
 ---@field remote? boolean
 
----@alias TabsSettingKey 'keybinds'|'width'|'side'|'rail'|'quick_terminal_width'|'quick_terminal_height'|'quick_terminal_blur'|'quick_terminal_opacity'|'quick_terminal_border_color'|'quick_terminal_background_color'|'quick_terminal_auto_hide'|'quick_terminal_preserve_shell'|'quick_terminal_hide_on_escape'|'animations'|'reduced_motion'|'animation_ms'|'cards'|'show_indexes'|'show_metadata'|'show_close'|'confirm_close'|'accent'|'background'|'foreground'|'muted'|'selected_background'|'private_accent'|'distro_colors'|'keyboard_shortcuts'|'default_domain'|'private_env'|'menus'
+---@alias TabsSettingKey 'keybinds'|'width'|'side'|'rail'|'quick_terminal_width'|'quick_terminal_height'|'quick_terminal_blur'|'quick_terminal_opacity'|'quick_terminal_border_color'|'quick_terminal_background_color'|'quick_terminal_auto_hide'|'quick_terminal_preserve_shell'|'quick_terminal_hide_on_escape'|'animations'|'reduced_motion'|'animation_ms'|'cards'|'show_indexes'|'show_metadata'|'show_close'|'confirm_close'|'accent'|'background'|'foreground'|'muted'|'selected_background'|'distro_colors'|'keyboard_shortcuts'|'default_domain'|'menus'
 
 ---@class TabsSpace
 ---@field accent? string
@@ -147,7 +144,6 @@
 --- Input to the window-level `theme` and `footer` hooks.
 ---@class TabsWindowContext
 ---@field active_tab? integer
----@field private boolean
 ---@field profile string
 ---@field selected_space string
 ---@field settings TabsSettings

@@ -14,8 +14,6 @@ return {
     keyboard_shortcuts = true,
     menus = {},
     muted = "#98a8be",
-    private_accent = "#cba6f7",
-    private_env = { HISTFILE = "", VTABS_PRIVATE = "1", fish_private_mode = "1" },
     quick_terminal_auto_hide = false,
     quick_terminal_background_color = nil,
     quick_terminal_blur = 0,
@@ -194,13 +192,6 @@ return {
       label = "Selection",
     },
     {
-      description = "Private window accent",
-      group = "theme",
-      key = "private_accent",
-      kind = "color",
-      label = "Private accent",
-    },
-    {
       description = "Remote glyph colors by os-release ID, `remote` when unknown",
       group = "theme",
       key = "distro_colors",
@@ -220,13 +211,6 @@ return {
       key = "default_domain",
       kind = "text",
       label = "Default domain",
-    },
-    {
-      description = "Environment additions for explicitly created private windows",
-      group = "behavior",
-      key = "private_env",
-      kind = "object",
-      label = "Private environment",
     },
     {
       description = "Nested semantic action menus",

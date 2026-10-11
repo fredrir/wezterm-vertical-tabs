@@ -335,20 +335,11 @@ fn space_title(model: &Model, rect: Rect, cx: &mut Canvas) {
         icons::SPACE
     };
     let name = space.map_or("Space", |space| space.name.as_str());
-    let (label, tooltip) = if model.private {
-        (
-            "Private tabs".to_owned(),
-            "Private tabs and history stay in memory. Spaces and settings are shared.".into(),
-        )
-    } else {
-        (
-            display_text(name),
-            format!(
-                "{name}\n{} pinned tabs and folders",
-                if collapsed { "Show" } else { "Hide" }
-            ),
-        )
-    };
+    let label = display_text(name);
+    let tooltip = format!(
+        "{name}\n{} pinned tabs and folders",
+        if collapsed { "Show" } else { "Hide" }
+    );
     Row {
         tooltip: Some(tooltip),
         muted: true,

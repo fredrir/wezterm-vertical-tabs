@@ -11,11 +11,6 @@ impl SidebarUi {
         let mut items = vec![
             MenuItem::new("new-tab", "New tab", Action::Domain(Intent::NewTab)),
             MenuItem::new("new-space", "Create space", Action::NewSpace),
-            MenuItem::new(
-                "private",
-                "New private window",
-                Action::Domain(Intent::PrivateWindow),
-            ),
             MenuItem::new("settings", "Settings", Action::Settings),
             MenuItem::new("reset-settings", "Reset settings", reset_settings()),
             MenuItem::new(

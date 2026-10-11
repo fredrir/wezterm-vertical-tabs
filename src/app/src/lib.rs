@@ -129,7 +129,6 @@ pub struct SpawnToken {
 pub struct WindowTransfer {
     pub version: u32,
     pub profile: String,
-    pub private: bool,
     pub spaces: Vec<core::Space>,
     #[serde(default)]
     pub folders: Vec<core::Folder>,
@@ -165,12 +164,12 @@ pub struct WindowApp {
 
 impl Default for WindowApp {
     fn default() -> Self {
-        Self::new("default", false)
+        Self::new("default")
     }
 }
 impl WindowApp {
-    pub fn new(profile: impl Into<String>, private: bool) -> Self {
-        let mut model = Model::new(profile, private);
+    pub fn new(profile: impl Into<String>) -> Self {
+        let mut model = Model::new(profile);
         static INSTANCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let epoch = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -203,14 +202,6 @@ impl WindowApp {
     pub fn model(&self) -> &Model {
         &self.model
     }
-    /// Called by generic provider initialization before accepting a new window snapshot.
-    pub fn set_private(&mut self, private: bool) {
-        if self.model.private != private {
-            self.model.set_private(private);
-            self.storage = persistence::Persistence::new(&self.model);
-            self.ui.invalidate();
-        }
-    }
     pub fn set_launch(&mut self, tab_id: TabId, launch: core::LaunchSpec) -> Result<(), Error> {
         self.model.set_launch(tab_id, launch)
     }
@@ -226,7 +217,6 @@ impl WindowApp {
         Ok(WindowTransfer {
             version: 1,
             profile: self.model.profile.clone(),
-            private: self.model.private,
             spaces: self.model.spaces.clone(),
             folders: self.model.folders.clone(),
             templates: self.model.templates.clone(),
@@ -256,7 +246,7 @@ impl WindowApp {
         {
             return Err(Error("Invalid transferred profile".into()));
         }
-        let mut candidate = WindowApp::new(transfer.profile, transfer.private);
+        let mut candidate = WindowApp::new(transfer.profile);
         candidate
             .model
             .load_catalog(transfer.spaces, transfer.templates)?;
@@ -930,7 +920,7 @@ impl WindowApp {
     }
     pub fn take_storage_request(&mut self, now: Duration) -> Option<store::Request> {
         self.now = now;
-        self.storage.take_request(&self.model, now)
+        self.storage.take_request(now)
     }
     pub fn complete_storage(&mut self, response: store::Response) -> Result<Update, Error> {
         let changed = self.storage.complete(&mut self.model, response, self.now)?;

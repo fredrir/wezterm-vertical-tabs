@@ -266,7 +266,7 @@ pub trait Provider {
     fn keyboard_focus(&self) -> bool;
     fn inspect(&self) -> serde_json::Value;
     fn shutdown(self: Box<Self>) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()>>>;
-    fn prepare_command(&self, new_window: bool, command: &mut SpawnCommand);
+    fn prepare_command(&self, command: &mut SpawnCommand);
     fn reserve_spawn(&mut self, new_window: bool, command: &SpawnCommand) -> serde_json::Value;
 }
 
@@ -1396,7 +1396,7 @@ impl TermWindow {
         let new_window = spawn_where == SpawnWhere::NewWindow;
         let mut spawn = spawn.clone();
         if let Some(ui) = self.ui_host.as_ref() {
-            ui.provider.prepare_command(new_window, &mut spawn);
+            ui.provider.prepare_command(&mut spawn);
         }
         let context = if matches!(spawn_where, SpawnWhere::NewTab | SpawnWhere::NewWindow) {
             self.ui_host

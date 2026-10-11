@@ -13,7 +13,6 @@ pub struct Theme {
     pub selected: Color,
     pub accent: Color,
     pub danger: Color,
-    pub private: Color,
     pub machines: BTreeMap<String, Color>,
 }
 
@@ -28,7 +27,6 @@ impl Default for Theme {
             selected: Color::Rgb(52, 72, 95),
             accent: Color::Rgb(169, 199, 245),
             danger: Color::Rgb(250, 122, 134),
-            private: Color::Rgb(207, 166, 255),
             machines: BTreeMap::new(),
         };
         theme.sync_surfaces();
@@ -43,24 +41,19 @@ impl Theme {
         self.foreground = Self::parse_color(&settings.foreground).unwrap_or(self.foreground);
         self.muted = Self::parse_color(&settings.muted).unwrap_or(self.muted);
         self.selected = Self::parse_color(&settings.selected_background).unwrap_or(self.selected);
-        self.private = Self::parse_color(&settings.private_accent).unwrap_or(self.private);
         self.machines = settings
             .distro_colors
             .iter()
             .filter_map(|(os, color)| Some((os.clone(), Self::parse_color(color)?)))
             .collect();
-        self.accent = if model.private {
-            self.private
-        } else {
-            model
-                .spaces
-                .iter()
-                .find(|space| space.id == model.selected_space)
-                .and_then(|space| space.accent.as_deref())
-                .and_then(Self::parse_color)
-                .or_else(|| Self::parse_color(&settings.accent))
-                .unwrap_or(self.accent)
-        };
+        self.accent = model
+            .spaces
+            .iter()
+            .find(|space| space.id == model.selected_space)
+            .and_then(|space| space.accent.as_deref())
+            .and_then(Self::parse_color)
+            .or_else(|| Self::parse_color(&settings.accent))
+            .unwrap_or(self.accent);
         self.sync_surfaces();
     }
 

@@ -58,7 +58,6 @@ pub enum Action {
 #[derive(Clone, Debug, Serialize, JsonSchema)]
 pub struct WindowContext {
     pub profile: String,
-    pub private: bool,
     pub selected_space: SpaceId,
     pub space: Space,
     pub active_tab: Option<TabId>,
@@ -70,7 +69,6 @@ impl WindowContext {
     pub fn of(model: &Model) -> Self {
         Self {
             profile: model.profile.clone(),
-            private: model.private,
             selected_space: model.selected_space.clone(),
             space: model.selected_space().clone(),
             active_tab: model.selected_tab,

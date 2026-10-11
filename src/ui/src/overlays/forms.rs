@@ -117,7 +117,6 @@ impl SidebarUi {
                         SettingKind::Number { .. }
                         | SettingKind::Fraction
                         | SettingKind::Opacity
-                        | SettingKind::Object
                         | SettingKind::Colors
                         | SettingKind::List => serde_json::from_str(&value)
                             .map_err(|error| format!("Invalid value: {error}"))?,

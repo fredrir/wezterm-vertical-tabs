@@ -486,7 +486,7 @@ impl TermWindow {
             .and_then(|tab| tab.get_active_pane());
         let mut spawn = spawn.clone();
         if let Some(ui) = &self.ui_host {
-            ui.provider.prepare_command(false, &mut spawn);
+            ui.provider.prepare_command(&mut spawn);
         }
         let domain = mux
             .resolve_spawn_tab_domain(current.as_ref().map(|pane| pane.pane_id()), &spawn.domain)

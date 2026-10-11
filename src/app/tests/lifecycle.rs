@@ -166,28 +166,6 @@ fn reserved_spawn_activates_captured_space_when_interaction_unchanged() {
     }));
 }
 #[test]
-fn private_state_excludes_session_writes_but_persists_public_catalog_state() {
-    let mut app = WindowApp::new("default", true);
-    drain_initial(&mut app);
-    app.dispatch(Intent::CreateSpace {
-        name: "Secret".into(),
-    })
-    .unwrap();
-    app.dispatch(Intent::SetSetting {
-        key: "width".into(),
-        value: json!(300),
-    })
-    .unwrap();
-    app.set_verified_session(Some("verified-session".into()));
-    let request = app.take_storage_request(Duration::from_secs(1)).unwrap();
-    assert!(!request.private);
-    assert!(request.operations.iter().all(|op| match op {
-        Operation::Put { key, .. } | Operation::Delete { key, .. } =>
-            matches!(key.scope, store::Scope::Profile { .. }),
-        Operation::Read { scope } => matches!(scope, store::Scope::Profile { .. }),
-    }));
-}
-#[test]
 fn unverified_session_ids_cannot_restore_assignment() {
     let mut app = app();
     let request = app.take_storage_request(Duration::ZERO).unwrap();

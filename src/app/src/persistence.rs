@@ -97,34 +97,24 @@ impl Persistence {
         self.reads
             .retain(|scope| !matches!(scope, Scope::Session { .. }));
         self.session = session;
-        if let Some(scope) = &self.session
-            && !model.private
-        {
+        if let Some(scope) = &self.session {
             self.reads.push(scope.clone());
             self.deadline = Some(Duration::ZERO);
         }
     }
     pub fn observe(&mut self, model: &Model, now: Duration) {
         let mut values = profile_values(model, &self.profile);
-        if !model.private
-            && let Some(scope) = &self.session
-        {
+        if let Some(scope) = &self.session {
             values.extend(session_values(model, scope, self.window_id));
         }
         self.observe_values(values, now, false);
     }
     pub fn observe_session(&mut self, model: &Model, now: Duration) {
-        if model.private {
-            return;
-        }
         if let Some(scope) = &self.session {
             self.observe_values(session_values(model, scope, self.window_id), now, true);
         }
     }
     pub fn restore_discovered(&mut self, model: &mut Model) -> Result<bool, Error> {
-        if model.private {
-            return Ok(false);
-        }
         let Some(scope) = &self.session else {
             return Ok(false);
         };
@@ -197,7 +187,7 @@ impl Persistence {
             self.deadline = Some(now + WRITE_DELAY);
         }
     }
-    pub fn take_request(&mut self, model: &Model, now: Duration) -> Option<Request> {
+    pub fn take_request(&mut self, now: Duration) -> Option<Request> {
         if self.flight.is_some()
             || self.failures >= MAX_RETRIES
             || self.deadline.is_some_and(|d| d > now)
@@ -210,10 +200,6 @@ impl Persistence {
                 .map(|scope| Operation::Read { scope })
                 .collect()
         } else {
-            if model.private {
-                self.dirty
-                    .retain(|key, _| matches!(key.scope, Scope::Profile { .. }));
-            }
             self.dirty
                 .iter()
                 .take(MAX_OPERATIONS)
@@ -243,13 +229,7 @@ impl Persistence {
         }
         static REQUEST_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
         self.request_id = REQUEST_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let mut request = Request::new(self.request_id, operations.clone());
-        // Public catalog edits contain no live private data and remain profile-scoped.
-        request.private = model.private
-            && request
-                .operations
-                .iter()
-                .all(|op| matches!(op, Operation::Read { .. }));
+        let request = Request::new(self.request_id, operations.clone());
         self.flight = Some(Flight {
             id: request.request_id,
             operations,
@@ -473,9 +453,7 @@ impl Persistence {
                 changed = true;
             }
         }
-        if !model.private
-            && let Some(scope) = &self.session
-        {
+        if let Some(scope) = &self.session {
             for (key, value) in &values {
                 if &key.scope != scope || key.field != "membership" {
                     continue;
@@ -510,8 +488,7 @@ impl Persistence {
                 )?;
             }
         }
-        if !model.private
-            && let (Some(scope), Some(id)) = (&self.session, self.window_id)
+        if let (Some(scope), Some(id)) = (&self.session, self.window_id)
             && let Some(space) = values
                 .get(&Key {
                     scope: scope.clone(),

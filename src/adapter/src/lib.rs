@@ -63,7 +63,6 @@ struct Adapter {
     pointer_captured: bool,
     next_spawn_space: Option<String>,
     next_spawn_folder: Option<String>,
-    next_private: bool,
     hook_metadata: HashMap<u64, core::Tab>,
     outstanding: Option<u64>,
     hook_pending: bool,
@@ -106,7 +105,7 @@ impl Adapter {
 
     fn new(window_id: usize) -> Self {
         let config = lua::configuration();
-        let mut app = WindowApp::new(&config.profile, false);
+        let mut app = WindowApp::new(&config.profile);
         app.set_window_identity(window_id as u64);
         app.ui_mut().set_chord_label(commands::chord_label);
         app.set_home(home_dir());
@@ -139,7 +138,6 @@ impl Adapter {
             pointer_captured: false,
             next_spawn_space: None,
             next_spawn_folder: None,
-            next_private: false,
             hook_metadata: HashMap::new(),
             outstanding: None,
             hook_pending: false,
@@ -356,10 +354,6 @@ impl Adapter {
                     self.next_spawn_folder = folder_id;
                     self.next_spawn_space = Some(space_id);
                     self.commands.push(Command::Spawn(spawn(launch), false));
-                }
-                C::NewWindow { private, launch } => {
-                    self.next_private = private;
-                    self.commands.push(Command::Spawn(spawn(launch), true));
                 }
                 C::Reorder { visible_order } => self.reorder(visible_order),
                 C::MoveTabToNewWindow(id) => self.move_to_new_window(id as usize),
@@ -1689,9 +1683,6 @@ impl Provider for Adapter {
                     }
                     Err(error) => self.app.ui_mut().set_error(error.to_string()),
                 }
-            } else {
-                self.app
-                    .set_private(context["private"].as_bool().unwrap_or(false));
             }
         } else if let Some(spawned) = message.get("spawned") {
             if let Some(id) = spawned["tab_id"].as_u64() {
@@ -1967,12 +1958,7 @@ impl Provider for Adapter {
             preserve_shell: settings.quick_terminal_preserve_shell,
         }
     }
-    fn prepare_command(&self, new_window: bool, command: &mut config::keyassignment::SpawnCommand) {
-        if (self.app.model().private && !new_window) || self.next_private {
-            command
-                .set_environment_variables
-                .extend(self.app.model().settings.private_env.clone());
-        }
+    fn prepare_command(&self, command: &mut config::keyassignment::SpawnCommand) {
         if self.app.model().selected_tab.is_none()
             && matches!(
                 command.domain,
@@ -2038,14 +2024,13 @@ impl Provider for Adapter {
                 .into_iter()
                 .collect(),
         };
-        let private = std::mem::take(&mut self.next_private);
-        serde_json::json!({"token":token,"new_window":new_window,"private":private,"launch":launch})
+        serde_json::json!({"token":token,"new_window":new_window,"launch":launch})
     }
     fn inspect(&self) -> serde_json::Value {
         let bounds = self
             .geometry
             .ui_bounds(self.content_page() || self.overlay_surface());
-        serde_json::json!({"folders":self.app.model().folders,"settings_page":self.content_page(),"overlay_surface":self.overlay_surface(),"grid":{"x":bounds.x+self.surface.offset.0,"y":bounds.y+self.surface.offset.1,"columns":self.surface.columns,"rows":self.surface.rows.len(),"cell_width":self.geometry.cell_width,"cell_height":self.geometry.cell_height},"hits":self.app.ui().hit_regions().iter().map(|h|serde_json::json!({"id":format!("{:?}",h.id),"x":h.rect.x,"y":h.rect.y,"width":h.rect.width,"height":h.rect.height})).collect::<Vec<_>>(),"spaces":self.app.model().spaces,"selected_space":self.app.model().selected_space,"settings":self.app.model().settings,"surface_revision":self.surface.revision,"private":self.app.model().private, "tabs":self.app.model().tabs.values().map(|tab|serde_json::json!({"id":tab.id,"pinned":tab.pinned,"space_id":tab.space_id,"folder_id":tab.folder_id})).collect::<Vec<_>>()})
+        serde_json::json!({"folders":self.app.model().folders,"settings_page":self.content_page(),"overlay_surface":self.overlay_surface(),"grid":{"x":bounds.x+self.surface.offset.0,"y":bounds.y+self.surface.offset.1,"columns":self.surface.columns,"rows":self.surface.rows.len(),"cell_width":self.geometry.cell_width,"cell_height":self.geometry.cell_height},"hits":self.app.ui().hit_regions().iter().map(|h|serde_json::json!({"id":format!("{:?}",h.id),"x":h.rect.x,"y":h.rect.y,"width":h.rect.width,"height":h.rect.height})).collect::<Vec<_>>(),"spaces":self.app.model().spaces,"selected_space":self.app.model().selected_space,"settings":self.app.model().settings,"surface_revision":self.surface.revision,"tabs":self.app.model().tabs.values().map(|tab|serde_json::json!({"id":tab.id,"pinned":tab.pinned,"space_id":tab.space_id,"folder_id":tab.folder_id})).collect::<Vec<_>>()})
     }
     fn keyboard_focus(&self) -> bool {
         self.app.is_modal() || (self.reservation().width > 0. && self.app.ui().focused().is_some())

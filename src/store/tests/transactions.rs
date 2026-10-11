@@ -211,15 +211,9 @@ fn concurrent_openers_migrate_a_fresh_database_once() {
 }
 
 #[test]
-fn private_writes_and_unverified_session_keys_are_rejected() {
+fn unverified_session_keys_are_rejected() {
     let db = Database::new();
     let mut connection = sqlite::open(&db.0).unwrap();
-    let mut private = Request::new(1, vec![put("name", "private", None)]);
-    private.private = true;
-    assert_eq!(
-        sqlite::execute(&mut connection, &private).unwrap_err().code,
-        ErrorCode::PrivateWrite
-    );
     let invalid = Request::new(
         2,
         vec![Operation::Read {

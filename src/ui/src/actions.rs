@@ -393,7 +393,7 @@ impl SidebarUi {
                     self.theme.accent
                 };
                 self.open_color_form(
-                    descriptor.label,
+                    self.settings.label(descriptor),
                     FormKind::Setting(key.into()),
                     value.as_str().unwrap_or(""),
                     default.as_str(),

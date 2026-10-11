@@ -263,31 +263,6 @@ fn delayed_discovery_restores_only_matching_session_folder_membership() {
 }
 
 #[test]
-fn private_folder_edits_persist_catalog_without_live_membership() {
-    let mut app = WindowApp::new("default", true);
-    app.set_verified_session(Some("verified".into()));
-    initial(&mut app);
-    discover(&mut app, 1, &[1]);
-    app.dispatch(Intent::CreateFolder {
-        name: "Tools".into(),
-    })
-    .unwrap();
-    let folder = app.model().folders[0].id.clone();
-    app.dispatch(Intent::AssignFolder {
-        tab_id: 1,
-        folder_id: Some(folder.clone()),
-    })
-    .unwrap();
-    let request = app.take_storage_request(Duration::from_secs(1)).unwrap();
-    assert!(request.operations.iter().any(|operation| matches!(operation, Operation::Put { key, .. } if key.entity == format!("folder:{folder}"))));
-    assert!(request.operations.iter().all(|operation| match operation {
-        Operation::Put { key, .. } | Operation::Delete { key, .. } =>
-            matches!(key.scope, Scope::Profile { .. }),
-        Operation::Read { scope } => matches!(scope, Scope::Profile { .. }),
-    }));
-}
-
-#[test]
 fn concurrent_folder_creation_merges_catalog_and_keeps_local_fields() {
     let mut app = WindowApp::default();
     initial(&mut app);

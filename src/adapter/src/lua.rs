@@ -156,7 +156,7 @@ pub fn register(lua: &Lua) -> anyhow::Result<()> {
         "configure",
         lua.create_function(|lua, value: mlua::Value| {
             let config: Configuration = lua.from_value(value)?;
-            let mut app = WindowApp::new(&config.profile, false);
+            let mut app = WindowApp::new(&config.profile);
             app.config(config.value()).map_err(mlua::Error::external)?;
             // This state is published only after WezTerm accepts the entire Lua config.
             lua.set_named_registry_value(CONFIG_REGISTRY, lua.to_value(&config)?)?;

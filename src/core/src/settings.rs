@@ -60,10 +60,8 @@ pub struct Settings {
     pub foreground: String,
     pub muted: String,
     pub selected_background: String,
-    pub private_accent: String,
     pub distro_colors: BTreeMap<String, String>,
     pub default_domain: Option<String>,
-    pub private_env: BTreeMap<String, String>,
     pub menus: Vec<MenuEntry>,
 }
 
@@ -109,14 +107,8 @@ impl Default for Settings {
             foreground: "#e1e7f0".into(),
             muted: "#98a8be".into(),
             selected_background: "#34485f".into(),
-            private_accent: "#cba6f7".into(),
             distro_colors: BTreeMap::new(),
             default_domain: None,
-            private_env: BTreeMap::from([
-                ("HISTFILE".into(), "".into()),
-                ("VTABS_PRIVATE".into(), "1".into()),
-                ("fish_private_mode".into(), "1".into()),
-            ]),
             menus: Vec::new(),
         }
     }
@@ -141,7 +133,6 @@ pub enum SettingKind {
     /// Keyed hex colors.
     Colors,
     Choice(&'static [&'static str]),
-    Object,
     List,
     Keybinds,
 }
@@ -339,13 +330,6 @@ pub const DESCRIPTORS: &[SettingDescriptor] = &[
         description: "Selected card background",
     },
     SettingDescriptor {
-        key: "private_accent",
-        label: "Private accent",
-        group: "theme",
-        kind: SettingKind::Color,
-        description: "Private window accent",
-    },
-    SettingDescriptor {
         key: "distro_colors",
         label: "Remote glyphs",
         group: "theme",
@@ -365,13 +349,6 @@ pub const DESCRIPTORS: &[SettingDescriptor] = &[
         group: "behavior",
         kind: SettingKind::Text,
         description: "Spawn domain used in an empty space; null retains the host default",
-    },
-    SettingDescriptor {
-        key: "private_env",
-        label: "Private environment",
-        group: "behavior",
-        kind: SettingKind::Object,
-        description: "Environment additions for explicitly created private windows",
     },
     SettingDescriptor {
         key: "menus",
@@ -415,11 +392,6 @@ pub fn validate_value(key: &str, value: &Value) -> Result<(), String> {
                     .all(|(k, v)| k.len() <= 64 && v.as_str().is_some_and(valid_color))
         }),
         SettingKind::Choice(choices) => value.as_str().is_some_and(|s| choices.contains(&s)),
-        SettingKind::Object => value.as_object().is_some_and(|o| {
-            o.len() <= 128
-                && o.iter()
-                    .all(|(k, v)| k.len() <= 256 && v.as_str().is_some_and(|s| s.len() <= 4096))
-        }),
         SettingKind::List => serde_json::from_value::<Vec<MenuEntry>>(value.clone())
             .is_ok_and(|v| validate_menus(&v, 0)),
     };

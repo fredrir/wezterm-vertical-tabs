@@ -94,12 +94,6 @@ fn validate(request: &Request) -> Result<(), StoreError> {
             }
             Operation::Delete { key, .. } => key,
         };
-        if request.private {
-            return Err(StoreError::new(
-                ErrorCode::PrivateWrite,
-                "private writes are disabled",
-            ));
-        }
         validate_scope(&key.scope)?;
         valid_component(&key.entity)?;
         valid_component(&key.field)?;

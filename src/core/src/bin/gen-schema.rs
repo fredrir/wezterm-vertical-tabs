@@ -190,7 +190,6 @@ fn setting_type(kind: &SettingKind) -> String {
             .map(|c| format!("'{c}'"))
             .collect::<Vec<_>>()
             .join("|"),
-        SettingKind::Object => "table<string, string>".into(),
         SettingKind::List => "TabsMenuEntry[]".into(),
         SettingKind::Keybinds => "table<string, string[]>".into(),
     }
@@ -285,7 +284,6 @@ fn generate(format: &str) -> Result<String, String> {
                         .map(|value| format!("`{value}`"))
                         .collect::<Vec<_>>()
                         .join(", "),
-                    SettingKind::Object => "Object".into(),
                     SettingKind::List => "List".into(),
                     SettingKind::Keybinds => "Plugin action shortcuts".into(),
                 };
