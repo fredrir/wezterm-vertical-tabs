@@ -1,5 +1,12 @@
 use vtabs_core::{PaneId, SpaceId, TabId};
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum ScrollArea {
+    Launcher,
+    Settings,
+    Sidebar,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum ElementId {
     SpaceTitle,
@@ -9,7 +16,7 @@ pub enum ElementId {
     Folder(String),
     SettingsCategory(String),
     SettingsSearch,
-    CloseSettings,
+    SettingsRecord,
     ResetSettings,
     CreateSpace,
     NewTab,
@@ -24,9 +31,14 @@ pub enum ElementId {
     CloseTab(TabId),
     Menu(String),
     Setting(String),
+    Slider(String),
+    SettingsEntry,
+    Chord(String, usize),
+    RemoveChord(String, String),
+    AddChord(String),
     Editor,
     RecordShortcut,
-    Scrollbar,
+    Scrollbar(ScrollArea),
     Submit,
     Cancel,
 }
@@ -45,9 +57,20 @@ impl ElementId {
             self,
             Self::SettingsCategory(_)
                 | Self::SettingsSearch
-                | Self::CloseSettings
+                | Self::SettingsRecord
                 | Self::ResetSettings
-                | Self::Setting(_)
-        )
+                | Self::Scrollbar(ScrollArea::Settings)
+        ) || self.setting().is_some()
+    }
+    /// The setting a row, or a control inside it, belongs to.
+    pub(crate) fn setting(&self) -> Option<&str> {
+        match self {
+            Self::Setting(key)
+            | Self::Slider(key)
+            | Self::Chord(key, _)
+            | Self::RemoveChord(key, _)
+            | Self::AddChord(key) => Some(key),
+            _ => None,
+        }
     }
 }

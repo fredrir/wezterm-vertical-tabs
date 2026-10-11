@@ -134,3 +134,31 @@ fn unadopted_panes_join_an_open_tab_search_and_enter_adopts() {
         UiIntent::Host(HostAction::AdoptPane { domain, pane: 7 }) if domain == "remote"
     )));
 }
+
+#[test]
+fn wheel_scrolls_results_without_changing_the_selection() {
+    let model = model();
+    let mut ui = SidebarUi::new();
+    ui.open_commands(
+        (0..30)
+            .map(|index| command(&format!("Command {index:02}"), ""))
+            .collect(),
+    );
+    draw(&mut ui, &model);
+    let first = results(&ui);
+    ui.event(
+        &model,
+        UiInput::Scroll {
+            x: 40,
+            y: 12,
+            rows: 5,
+        },
+    );
+    draw(&mut ui, &model);
+    let scrolled = results(&ui);
+    assert_eq!(scrolled.first(), first.get(5));
+    assert!(matches!(
+        ui.event(&model, UiInput::key(Key::Enter)).as_slice(),
+        [UiIntent::Host(HostAction::RunCommand(0))]
+    ));
+}

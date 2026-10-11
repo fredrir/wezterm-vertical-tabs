@@ -281,6 +281,7 @@ impl WindowApp {
         candidate
             .ui
             .set_config_owned(candidate.model.config_owned.iter().cloned());
+        candidate.ui.set_chord_label(self.ui.chord_label());
         *self = candidate;
         Ok(())
     }

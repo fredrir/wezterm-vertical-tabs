@@ -662,7 +662,10 @@ fn settings_recorder_saves_a_physical_key_without_executing_it() {
         &mut adapter,
         ui::ElementId::Setting("shortcut.commands".into()),
     );
-    click(&mut adapter, ui::ElementId::Menu("add".into()));
+    click(
+        &mut adapter,
+        ui::ElementId::AddChord("shortcut.commands".into()),
+    );
     assert!(adapter.app.ui().recording_keybind());
     assert!(adapter.input(Input::RawKey(&raw(
         KeyCode::Physical(window::PhysKeyCode::F12),
@@ -670,8 +673,6 @@ fn settings_recorder_saves_a_physical_key_without_executing_it() {
         true
     ))));
     assert!(adapter.commands().is_empty());
-    assert!(adapter.app.model().settings.keybinds.is_empty());
-    click(&mut adapter, ui::ElementId::Menu("save-keybind".into()));
     assert!(
         core::keybinds::bindings(&adapter.app.model().settings, "commands").contains(&"F12".into())
     );
@@ -798,7 +799,10 @@ fn settings_recorder_keeps_control_backspace_and_h_distinct() {
                 &mut adapter,
                 ui::ElementId::Setting("shortcut.commands".into()),
             );
-            click(&mut adapter, ui::ElementId::Menu("add".into()));
+            click(
+                &mut adapter,
+                ui::ElementId::AddChord("shortcut.commands".into()),
+            );
             assert!(adapter.app.ui().recording_keybind());
             let input = if raw_path {
                 Input::RawKey(event.raw.as_ref().unwrap())
@@ -807,7 +811,6 @@ fn settings_recorder_keeps_control_backspace_and_h_distinct() {
             };
             assert!(adapter.input(input));
             assert!(adapter.commands().is_empty());
-            click(&mut adapter, ui::ElementId::Menu("save-keybind".into()));
             assert!(
                 core::keybinds::bindings(&adapter.app.model().settings, "commands")
                     .contains(&expected.into()),
@@ -843,7 +846,7 @@ fn unbound_processed_control_h_does_not_dispatch_control_backspace() {
 }
 
 #[test]
-fn quick_terminal_shortcut_opens_from_settings_and_leaves_terminal_keys_alone() {
+fn quick_terminal_shortcut_opens_over_settings_and_leaves_terminal_keys_alone() {
     config::designate_this_as_the_main_thread();
     let mut adapter = Adapter::new(9915);
     adapter.app.ui_mut().open_settings();
@@ -853,8 +856,8 @@ fn quick_terminal_shortcut_opens_from_settings_and_leaves_terminal_keys_alone() 
         adapter.commands().as_slice(),
         [Command::ToggleTerminalOverlay]
     ));
-    assert!(!adapter.content_page());
-    assert!(!adapter.keyboard_focus());
+    assert!(adapter.content_page());
+    assert!(!adapter.text_input_active());
     assert_eq!(
         adapter.terminal_input(Input::RawKey(&raw(
             KeyCode::Char('`'),
@@ -1010,7 +1013,10 @@ fn quick_programs_toggle_by_their_command() {
         config::keyassignment::SpawnTabDomain::CurrentPaneDomain
     );
     assert_eq!((program.width, program.height), (Some(0.9), None));
-    assert!(!adapter.content_page());
+    assert!(
+        adapter.content_page(),
+        "settings stay open beneath the program"
+    );
 
     let toggle = raw(KeyCode::Char('`'), window::Modifiers::CTRL, true);
     assert_eq!(
@@ -1062,21 +1068,21 @@ fn quick_terminal_configuration_gates_effects_and_preserves_defaults() {
             })
             .unwrap();
     }
-    let opaque = adapter.quick_terminal_config();
-    assert_eq!((opaque.opacity, opaque.blur), (1., 0.));
-    assert!(opaque.auto_hide && !opaque.preserve_shell);
+    let translucent = adapter.quick_terminal_config();
+    assert_eq!((translucent.opacity, translucent.blur), (0.4, 12.));
+    assert!(translucent.auto_hide && !translucent.preserve_shell);
     assert_eq!(
-        opaque.border_color,
+        translucent.border_color,
         Some(window::color::LinearRgba(1., 0., 0., 1.))
     );
-    assert!(opaque.background_color.is_some());
+    assert!(translucent.background_color.is_some());
     adapter
         .app
         .dispatch(core::Intent::SetSetting {
-            key: "quick_terminal_transparency".into(),
-            value: serde_json::json!(true),
+            key: "quick_terminal_opacity".into(),
+            value: serde_json::json!(1),
         })
         .unwrap();
-    let transparent = adapter.quick_terminal_config();
-    assert_eq!((transparent.opacity, transparent.blur), (0.4, 12.));
+    let opaque = adapter.quick_terminal_config();
+    assert_eq!((opaque.opacity, opaque.blur), (1., 0.));
 }

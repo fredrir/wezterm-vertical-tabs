@@ -8,9 +8,8 @@
 ---@field rail? 'expanded'|'hidden' Sidebar visibility
 ---@field quick_terminal_width? number Fraction of the window width
 ---@field quick_terminal_height? number Fraction of the window height
----@field quick_terminal_transparency? boolean Show underlying window content through the quick terminal background
----@field quick_terminal_blur? integer Backdrop blur radius in logical pixels; 0 disables blur
----@field quick_terminal_opacity? number Background opacity when transparency is enabled; text stays opaque
+---@field quick_terminal_blur? integer Backdrop blur radius in logical pixels behind a translucent background
+---@field quick_terminal_opacity? number Background opacity; 1 is opaque and text stays opaque
 ---@field quick_terminal_border_color? string Null follows the terminal foreground at 22% opacity
 ---@field quick_terminal_background_color? string Null follows the quick terminal palette background
 ---@field quick_terminal_auto_hide? boolean Hide the quick terminal when the window loses focus
@@ -85,7 +84,7 @@
 ---@field fields? { [1]: TabsMatchField, [2]: string[] }[]
 ---@field remote? boolean
 
----@alias TabsSettingKey 'keybinds'|'width'|'side'|'rail'|'quick_terminal_width'|'quick_terminal_height'|'quick_terminal_transparency'|'quick_terminal_blur'|'quick_terminal_opacity'|'quick_terminal_border_color'|'quick_terminal_background_color'|'quick_terminal_auto_hide'|'quick_terminal_preserve_shell'|'quick_terminal_hide_on_escape'|'animations'|'reduced_motion'|'animation_ms'|'cards'|'show_indexes'|'show_metadata'|'show_close'|'confirm_close'|'accent'|'background'|'foreground'|'muted'|'selected_background'|'private_accent'|'distro_colors'|'keyboard_shortcuts'|'default_domain'|'private_env'|'menus'
+---@alias TabsSettingKey 'keybinds'|'width'|'side'|'rail'|'quick_terminal_width'|'quick_terminal_height'|'quick_terminal_blur'|'quick_terminal_opacity'|'quick_terminal_border_color'|'quick_terminal_background_color'|'quick_terminal_auto_hide'|'quick_terminal_preserve_shell'|'quick_terminal_hide_on_escape'|'animations'|'reduced_motion'|'animation_ms'|'cards'|'show_indexes'|'show_metadata'|'show_close'|'confirm_close'|'accent'|'background'|'foreground'|'muted'|'selected_background'|'private_accent'|'distro_colors'|'keyboard_shortcuts'|'default_domain'|'private_env'|'menus'
 
 ---@class TabsSpace
 ---@field accent? string

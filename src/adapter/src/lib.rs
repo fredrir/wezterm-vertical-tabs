@@ -108,6 +108,7 @@ impl Adapter {
         let config = lua::configuration();
         let mut app = WindowApp::new(&config.profile, false);
         app.set_window_identity(window_id as u64);
+        app.ui_mut().set_chord_label(commands::chord_label);
         app.set_home(home_dir());
         if let Err(err) = app.config(config.value()) {
             log::error!("tabs config: {err}");
@@ -490,7 +491,7 @@ impl Adapter {
 
     fn show_terminal(&mut self, command: Command) {
         self.cancel_paste();
-        self.app.ui_mut().close_settings();
+        self.app.ui_mut().interrupt();
         self.commands.push(command);
     }
 
@@ -1949,12 +1950,8 @@ impl Provider for Adapter {
                 settings.quick_terminal_width as f32,
                 settings.quick_terminal_height as f32,
             ),
-            opacity: if settings.quick_terminal_transparency {
-                settings.quick_terminal_opacity as f32
-            } else {
-                1.
-            },
-            blur: if settings.quick_terminal_transparency {
+            opacity: settings.quick_terminal_opacity as f32,
+            blur: if settings.quick_terminal_opacity < 1. {
                 settings.quick_terminal_blur as f32
             } else {
                 0.

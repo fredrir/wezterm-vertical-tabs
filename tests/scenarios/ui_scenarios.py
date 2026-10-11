@@ -314,14 +314,19 @@ def scenarios(probe: Probe, gui: GuiInput):
     gui.key("Return")
     probe.wait(lambda state: state["model"]["settings"]["accent"] == "#8eb4ed")
     gui.capture("color-edited")
+    # Like any tab, the page stays open on Escape and closes with the close shortcut.
     gui.key("Escape")
+    probe.sample_for(0.2)
+    if not gui.state()["model"].get("settings_page"):
+        errors.append("Escape closed the settings page")
+    gui.key("ctrl+shift+w")
     probe.wait(lambda state: not state["model"].get("settings_page"))
     shortcut(
         "ctrl+shift+comma",
         lambda state: state["model"].get("settings_page") is True,
         "Settings",
     )
-    gui.key("Escape")
+    gui.key("ctrl+shift+w")
     probe.wait(lambda state: not state["model"].get("settings_page"))
     shortcut("ctrl+shift+k", lambda state: gui.hit(state, "Editor") is not None, "Search")
     gui.text("Logs")
@@ -370,7 +375,7 @@ def scenarios(probe: Probe, gui: GuiInput):
         lambda state: state["model"].get("settings_page") is True,
         "Settings",
     )
-    gui.key("Escape")
+    gui.key("ctrl+shift+w")
     probe.wait(lambda state: not state["model"].get("settings_page"))
     probe.sample_for(0.2)
     leaked = capture.read_bytes()

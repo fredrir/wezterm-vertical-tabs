@@ -228,11 +228,12 @@ impl Layout {
         cell_height: f32,
         dpi: u32,
     ) -> Self {
+        // Whole device pixels keep glyphs and frame edges crisp.
         let frame = Bounds {
-            x: bounds.x + bounds.width * (1. - width) / 2.,
-            y: bounds.y + bounds.height * (1. - height) / 2.,
-            width: bounds.width * width,
-            height: bounds.height * height,
+            x: (bounds.x + bounds.width * (1. - width) / 2.).round(),
+            y: (bounds.y + bounds.height * (1. - height) / 2.).round(),
+            width: (bounds.width * width).round(),
+            height: (bounds.height * height).round(),
         };
         let padding = (12. * dpi as f32 / 96.)
             .min(frame.width / 4.)
@@ -246,8 +247,8 @@ impl Layout {
         Self {
             frame,
             content: Bounds {
-                x: frame.x + (frame.width - width) / 2.,
-                y: frame.y + (frame.height - height) / 2.,
+                x: (frame.x + (frame.width - width) / 2.).floor(),
+                y: (frame.y + (frame.height - height) / 2.).floor(),
                 width,
                 height,
             },

@@ -19,6 +19,7 @@ pub(crate) enum EditorSlot {
     Palette,
     Rename,
     SettingsSearch,
+    Entry,
 }
 
 impl EditorSlot {
@@ -28,6 +29,7 @@ impl EditorSlot {
     pub(crate) fn element(self) -> ElementId {
         match self {
             Self::SettingsSearch => ElementId::SettingsSearch,
+            Self::Entry => ElementId::SettingsEntry,
             Self::Form | Self::Palette | Self::Rename => ElementId::Editor,
         }
     }
@@ -78,7 +80,9 @@ impl SidebarUi {
             } => self.pointer_up(model, x, y, &mut intents),
             UiInput::PointerUp { .. } => {}
             UiInput::Scroll { x, y, rows } => self.scroll(model, x, y, rows),
-            UiInput::RecordShortcut(shortcut) => self.record_shortcut(shortcut),
+            UiInput::RecordShortcut(shortcut) => {
+                self.record_shortcut(model, shortcut, &mut intents)
+            }
             UiInput::Text(text) | UiInput::Paste(text) | UiInput::ImeCommit(text) => {
                 if let Some(slot) = self.active_editor() {
                     if let Some(editor) = self.editor_mut(slot) {
@@ -157,9 +161,11 @@ impl SidebarUi {
             (EditorSlot::Form, Some(Overlay::Form(form))) => form.error = None,
             (EditorSlot::Palette, Some(Overlay::Menu(menu))) => filter_menu(menu),
             (EditorSlot::SettingsSearch, _) => {
+                self.settings.chord = None;
                 self.settings.selected = 0;
                 self.settings.scroll = 0;
             }
+            (EditorSlot::Entry, _) => self.sanitize_entry(),
             _ => {}
         }
         self.caret_moved(slot);
@@ -198,6 +204,7 @@ impl SidebarUi {
                 .filter(|search| search.edits_query())
                 .map(|_| EditorSlot::Palette),
             None if self.sidebar.rename.is_some() => Some(EditorSlot::Rename),
+            None if self.settings.open && self.settings.entry.is_some() => Some(EditorSlot::Entry),
             None => (self.settings.open
                 && self.settings.search_focused
                 && self.focused == Some(ElementId::SettingsSearch))
@@ -217,6 +224,9 @@ impl SidebarUi {
             (ElementId::SettingsSearch, None) => {
                 self.settings.open.then_some(EditorSlot::SettingsSearch)
             }
+            (ElementId::SettingsEntry, None) => {
+                self.settings.entry.as_ref().map(|_| EditorSlot::Entry)
+            }
             _ => None,
         }
     }
@@ -229,6 +239,7 @@ impl SidebarUi {
             }
             (EditorSlot::Rename, _) => self.sidebar.rename.as_ref().map(|rename| &rename.editor),
             (EditorSlot::SettingsSearch, _) => Some(&self.settings.query),
+            (EditorSlot::Entry, _) => self.settings.entry.as_ref().map(|entry| &entry.editor),
             _ => None,
         }
     }
@@ -245,6 +256,7 @@ impl SidebarUi {
                 .as_mut()
                 .map(|rename| &mut rename.editor),
             (EditorSlot::SettingsSearch, _) => Some(&mut self.settings.query),
+            (EditorSlot::Entry, _) => self.settings.entry.as_mut().map(|entry| &mut entry.editor),
             _ => None,
         }
     }

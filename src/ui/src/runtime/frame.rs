@@ -366,7 +366,11 @@ impl SidebarUi {
             let overlay_open = self.overlays.current.is_some();
             self.settings.render(model, page, overlay_open, &mut cx);
         }
-        crate::keybinds::update_shortcut_tooltips(model, &mut cx.paint.hits);
+        crate::keybinds::update_shortcut_tooltips(
+            model,
+            self.settings.chord_label,
+            &mut cx.paint.hits,
+        );
         if let Some(overlay) = &mut self.overlays.current {
             cx.paint.clear_targets();
             self.overlays.rect = match overlay {

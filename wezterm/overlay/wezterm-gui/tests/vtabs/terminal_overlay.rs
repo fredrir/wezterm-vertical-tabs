@@ -31,6 +31,29 @@ fn terminal_is_centered_in_three_quarters_of_the_window() {
 }
 
 #[test]
+fn frame_and_content_sit_on_whole_pixels() {
+    let bounds = Bounds {
+        x: 3.5,
+        y: 28.25,
+        width: 1001.5,
+        height: 777.3,
+    };
+    for size in [SHELL_SIZE, (0.77, 0.63), (0.333, 0.9)] {
+        let layout = Layout::new(bounds, size, 8.4, 17.3, 144);
+        for value in [
+            layout.frame.x,
+            layout.frame.y,
+            layout.frame.width,
+            layout.frame.height,
+            layout.content.x,
+            layout.content.y,
+        ] {
+            assert_eq!(value.fract(), 0., "{size:?}: {layout:?}");
+        }
+    }
+}
+
+#[test]
 fn tiny_windows_still_have_a_valid_pty_size() {
     let layout = Layout::new(
         Bounds {

@@ -83,17 +83,13 @@ pub(crate) fn form(cx: &mut Canvas, area: Rect, form: &mut Form, editing: bool) 
         .active(editing)
         .render(edit, cx);
     cx.hit(ElementId::Editor, edit, "Text entry");
-    if inner.height > 2 {
+    if inner.height > 2
+        && let Some(error) = &form.error
+    {
         cx.write(
             Rect::new(inner.x, input_y + 1, inner.width, 1),
-            form.error
-                .clone()
-                .unwrap_or_else(|| "Enter saves   Esc cancels".into()),
-            if form.error.is_some() {
-                theme.base().fg(theme.danger)
-            } else {
-                theme.muted()
-            },
+            error.clone(),
+            theme.base().fg(theme.danger),
         );
     }
     if inner.height > 3 {
@@ -111,7 +107,7 @@ pub(crate) fn form(cx: &mut Canvas, area: Rect, form: &mut Form, editing: bool) 
             (ElementId::Submit, save, "Save"),
             (ElementId::Cancel, cancel, "Cancel"),
         ] {
-            Button::text(id, label).tooltip(label).render(button, cx);
+            Button::text(id, label).render(button, cx);
         }
     }
     panel.rect

@@ -18,7 +18,7 @@ impl SidebarUi {
     ) {
         if self.recording_shortcut() {
             if key == Key::Escape {
-                self.record_shortcut(String::new());
+                self.record_shortcut(model, String::new(), intents);
             }
             return;
         }
@@ -50,7 +50,7 @@ impl SidebarUi {
             {
                 self.restore_editor(target);
             }
-        } else if key == Key::F10 && self.text_input_active() {
+        } else if key == Key::F10 && self.text_input_active() && self.settings.entry.is_none() {
             let target = if self.overlays.current.is_some() {
                 ElementId::Editor
             } else {

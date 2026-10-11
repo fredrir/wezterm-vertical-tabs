@@ -7,7 +7,8 @@ pub(crate) use tab::InlineRename;
 
 use crate::components::button::Button;
 use crate::components::row::{Content, Row, Trailing};
-use crate::element::ElementId;
+use crate::components::scrollbar::Scrollbar;
+use crate::element::{ElementId, ScrollArea};
 use crate::events::DropTarget;
 use crate::icons;
 use crate::input::display_text;
@@ -23,6 +24,7 @@ pub(crate) struct Sidebar {
     pub rows: Vec<SidebarRow>,
     pub rows_revision: Option<(u64, bool)>,
     pub scroll: usize,
+    pub scrollbar: Option<Scrollbar>,
     pub space_scroll: usize,
     pub rect: Rect,
     pub list: Rect,
@@ -43,6 +45,7 @@ impl Default for Sidebar {
             rows: Vec::new(),
             rows_revision: None,
             scroll: 0,
+            scrollbar: None,
             space_scroll: 0,
             rect: Rect::default(),
             list: Rect::default(),
@@ -241,11 +244,20 @@ impl Sidebar {
                 }
             }
         }
-        if self.rows.len() > capacity && self.list.width > 2 {
-            let y = self.list.y
-                + (self.list.height.saturating_sub(1) as usize * self.scroll
-                    / self.max_scroll(model).max(1)) as u16;
-            cx.write(Rect::new(area.right() - 1, y, 1, 1), "▏", theme.muted());
+        let max_scroll = self.max_scroll(model);
+        self.scrollbar = Scrollbar::new(
+            Rect::new(
+                area.right().saturating_sub(1),
+                self.list.y,
+                u16::from(self.list.width > 2 && self.rows.len() > capacity),
+                self.list.height,
+            ),
+            self.rows.len() - max_scroll,
+            self.rows.len(),
+            self.scroll,
+        );
+        if let Some(scrollbar) = self.scrollbar {
+            scrollbar.render(ScrollArea::Sidebar, cx);
         }
         let pointer = cx.pointer;
         if let (Some(DropTarget::Beside { .. }), Some(motion)) =

@@ -242,6 +242,14 @@ impl SidebarUi {
                 self.menu(&space.name, items);
             }
             ElementId::Setting(key) => {
+                let title = settings::descriptor(&key)
+                    .or_else(|| {
+                        vtabs_core::keybinds::DESCRIPTORS
+                            .iter()
+                            .find(|field| field.key == key)
+                    })
+                    .map_or(key.as_str(), |field| field.label)
+                    .to_owned();
                 let mut items = vec![
                     MenuItem::new("edit", "Edit", Action::EditSetting(key.clone())),
                     MenuItem::new(
@@ -254,7 +262,7 @@ impl SidebarUi {
                     item.enabled = !self.settings.managed_in_lua(model, &key);
                 }
                 self.overlays.stash();
-                self.menu(key, items);
+                self.menu(title, items);
             }
             ElementId::SettingsTab | ElementId::CloseSettingsTab => self.menu(
                 "Settings",

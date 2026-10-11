@@ -38,7 +38,7 @@ return config
 
 | Action                              | macOS                              | Linux / Windows      |
 | ----------------------------------- | ---------------------------------- | -------------------- |
-| Settings              | Gear tab opens last and keeps its index; later tabs follow it (`Cmd+index`, `Ctrl+Tab`); closes with ×, `Cmd+W`, Escape |
+| Settings              | Gear tab opens last and keeps its index; later tabs follow it (`Cmd+index`, `Ctrl+Tab`); closes with × or `Cmd+W` |
 | New tab                             | `Cmd+T`                            | `Ctrl+Shift+T`       |
 | Search tabs                         | `Cmd+K`                            | `Ctrl+Shift+K`       |
 | Command palette                     | `Cmd+P`                            | `Ctrl+Shift+P`       |
@@ -61,7 +61,7 @@ return config
 | Command palette       | Shared searchable launcher; includes WezTerm commands and `augment-command-palette` entries; custom bindings use `wezterm.action.ActivateCommandPalette` |
 | Launcher              | `ShowLauncher` and `ShowLauncherArgs` open the sidebar launcher; configure entries with standard `config.launch_menu` |
 | Terminal Control keys | Ordinary Control shortcuts remain available to the shell                                                                |
-| Settings              | Own tab with a gear icon and the index after the last tab (`Cmd+index`, `Cmd+9`, `Ctrl+Tab`); close with ×, `Cmd+W`, Escape |
+| Settings              | Own tab with a gear icon and the index after the last tab (`Cmd+index`, `Cmd+9`, `Ctrl+Tab`); close with × or `Cmd+W` |
 | Search                | Centered palette of sidebar rows; Up/Down select, Left/Right edit the query, Enter opens; matches name, title or index  |
 | Search scope          | Current space (indexed), other spaces, filter-hidden, other windows (`window N`), other workspaces, disconnected domains |
 | Search `__detached`   | Moves the tab into this window; other workspaces switch; disconnected domains reattach                                  |
@@ -102,9 +102,8 @@ return config
 | Mux without `local_pane_layout` | Shell lives in a hidden workspace on the mux server; reattached after a GUI restart when preserved; follows `replace-pane` |
 | Lua action | `vtabs.action("quick_terminal")`; available with plugin shortcuts disabled |
 | Appearance | Settings → Quick terminal, or the same keys in Lua `settings`; applies to quick programs too |
-| Transparency | `quick_terminal_transparency = false` by default; `true` reveals underlying WezTerm content |
-| Opacity | `quick_terminal_opacity = 1.0`; background strength from `0` to `1` when transparency is enabled; text stays opaque |
-| Blur | `quick_terminal_blur = 0`; radius `0`–`64` logical pixels behind the rounded frame, visible with transparency and opacity below `1` |
+| Opacity | `quick_terminal_opacity = 1.0` (opaque); below `1` reveals underlying WezTerm content; text stays opaque |
+| Blur | `quick_terminal_blur = 0`; radius `0`–`64` logical pixels behind the rounded frame, applies with opacity below `1` |
 | Colors | `quick_terminal_background_color`, `quick_terminal_border_color`: `#RRGGBB`; unset follows the terminal palette (border uses foreground at 22% opacity); clear the Settings field to restore |
 
 **Quick programs**

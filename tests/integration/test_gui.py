@@ -580,7 +580,6 @@ def test_quick_terminal_background_opacity_and_blur_render_in_both_backends(
             for actual, expected in zip(opaque, [18, 52, 86], strict=True)
         )
         setting("quick_terminal_opacity", 0.5)
-        setting("quick_terminal_transparency", True)
         translucent = center("translucent")
         assert all(after > before + 20 for before, after in zip(opaque, translucent, strict=True))
         setting("quick_terminal_blur", 12)
@@ -589,7 +588,7 @@ def test_quick_terminal_background_opacity_and_blur_render_in_both_backends(
         probe.send("resize", {"width": 900, "height": 600})
         probe.wait(lambda state: state["dimensions"]["pixel_width"] == 900)
         assert all(value > 100 for value in center("resized"))
-        setting("quick_terminal_transparency", False)
+        setting("quick_terminal_opacity", 1)
         assert all(abs(a - b) <= 2 for a, b in zip(opaque, center("opaque-again"), strict=True))
     finally:
         probe.close()

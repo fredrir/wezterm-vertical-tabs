@@ -1,4 +1,4 @@
-use crate::components::{anchored, centered, list, panel};
+use crate::components::{anchored, centered, panel};
 use crate::element::ElementId;
 use crate::input::display_text;
 use crate::overlays::Menu;
@@ -34,7 +34,7 @@ pub(crate) fn menu(cx: &mut Canvas, area: Rect, anchor: Option<Position>, menu: 
         );
     }
     let rows = usize::from(inner.height);
-    menu.scroll = list::scroll_to(menu.scroll, menu.selected, menu.items.len(), rows);
+    menu.follow_selection(rows);
     for (offset, item) in menu.items.iter().skip(menu.scroll).take(rows).enumerate() {
         let row = Rect::new(inner.x, inner.y + offset as u16, inner.width, 1);
         let selected = menu.scroll + offset == menu.selected;

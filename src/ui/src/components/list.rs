@@ -16,9 +16,24 @@ pub(crate) fn reveal_rows(scroll: usize, at: usize, rows: usize) -> usize {
     }
 }
 
-pub(crate) fn scroll_to(scroll: usize, at: usize, len: usize, rows: usize) -> usize {
-    let rows = rows.max(1);
-    reveal_rows(scroll, at, rows).min(len.saturating_sub(rows))
+/// Scrolls to the selection only when it changed since it was last revealed.
+pub(crate) fn follow(
+    scroll: usize,
+    revealed: &mut Option<usize>,
+    selected: usize,
+    len: usize,
+    rows: usize,
+) -> usize {
+    let mut scroll = scroll;
+    if *revealed != Some(selected) {
+        scroll = reveal_rows(scroll, selected, rows);
+        *revealed = Some(selected);
+    }
+    scroll.min(len.saturating_sub(rows))
+}
+
+pub(crate) fn scroll_by(current: usize, delta: i32, max: usize) -> usize {
+    current.saturating_add_signed(delta as isize).min(max)
 }
 
 pub(crate) fn offset(current: usize, delta: i32, len: usize) -> usize {

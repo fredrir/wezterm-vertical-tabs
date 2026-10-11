@@ -12,7 +12,11 @@ pub(crate) fn display_chord(chord: &str) -> String {
     }
 }
 
-pub(crate) fn update_shortcut_tooltips(model: &Model, hits: &mut [crate::HitRegion]) {
+pub(crate) fn update_shortcut_tooltips(
+    model: &Model,
+    label: fn(&str) -> String,
+    hits: &mut [crate::HitRegion],
+) {
     use crate::ElementId;
     for hit in hits {
         let action = match hit.id {
@@ -27,7 +31,7 @@ pub(crate) fn update_shortcut_tooltips(model: &Model, hits: &mut [crate::HitRegi
         if model.settings.keyboard_shortcuts {
             let keys = vtabs_core::keybinds::bindings(&model.settings, action);
             if let Some(key) = keys.first() {
-                hit.tooltip.push_str(&format!("  {}", display_chord(key)));
+                hit.tooltip.push_str(&format!("  {}", label(key)));
             }
         }
     }

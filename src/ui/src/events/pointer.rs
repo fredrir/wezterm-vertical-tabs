@@ -1,12 +1,13 @@
 use crate::SidebarUi;
 use crate::components::list;
 use crate::components::scrollbar::Scrollbar;
-use crate::element::ElementId;
+use crate::element::{ElementId, ScrollArea};
 use crate::events::{DropMotion, DropTarget, EditorSlot};
 use crate::input::{Modifiers, MouseButton};
 use crate::intent::UiIntent;
 use crate::overlays::Overlay;
 use crate::runtime::motion;
+use crate::views::settings_page::Range;
 use crate::views::tab_name;
 use ratatui::layout::Position;
 use std::time::Duration;
@@ -66,8 +67,12 @@ impl Pointer {
 
 impl SidebarUi {
     pub(crate) fn pointer_move(&mut self, model: &Model, x: u16, y: u16) {
-        if self.pointer.drag == Some(ElementId::Scrollbar) {
-            self.drag_scrollbar(y);
+        if let Some(ElementId::Scrollbar(area)) = self.pointer.drag {
+            self.drag_scrollbar(area, y);
+            return;
+        }
+        if let Some(ElementId::Slider(key)) = self.pointer.drag.clone() {
+            self.drag_slider(&key, x);
             return;
         }
         if let Some(slot) = self
@@ -137,6 +142,16 @@ impl SidebarUi {
     ) {
         self.tooltip.hide();
         let hit = self.hit_test(x, y).map(|hit| hit.id.clone());
+        if self.settings.entry.is_some()
+            && hit.as_ref().and_then(ElementId::setting)
+                != self.settings.entry.as_ref().map(|entry| entry.key.as_str())
+        {
+            self.commit_entry(intents);
+        }
+        if self.recording_keybind() && !matches!(hit, Some(ElementId::SettingsRecord)) {
+            self.settings.capture = None;
+            self.frame.dirty = true;
+        }
         if self.overlays.current.is_some() && !self.overlays.rect.contains(Position::new(x, y)) {
             if let Some(target) = self.editor_menu_target() {
                 self.restore_editor(target);
@@ -154,18 +169,33 @@ impl SidebarUi {
             self.set_anchor(x, y);
         }
         match (button, hit) {
-            (MouseButton::Left, Some(ElementId::Scrollbar)) => {
-                if let Some(scrollbar) = self.launcher_scrollbar() {
-                    self.pointer.drag = Some(ElementId::Scrollbar);
+            (MouseButton::Left, Some(ElementId::Scrollbar(area))) => {
+                if let Some(scrollbar) = self.scrollbar(area) {
+                    self.pointer.drag = Some(ElementId::Scrollbar(area));
                     if scrollbar.thumb.contains(Position::new(x, y)) {
                         self.pointer.scrollbar_grab = y - scrollbar.thumb.y;
                     } else {
                         self.pointer.scrollbar_grab = scrollbar.thumb.height / 2;
-                        self.drag_scrollbar(y);
+                        self.drag_scrollbar(area, y);
                     }
                 }
             }
-            (MouseButton::Right, Some(id)) => self.context_menu(model, id),
+            (MouseButton::Left, Some(ElementId::Slider(key))) => {
+                if !self.settings.managed_in_lua(model, &key) {
+                    self.settings.entry = None;
+                    self.caret.stop();
+                    self.settings_focus_setting(model, &key);
+                    self.pointer.drag = Some(ElementId::Slider(key.clone()));
+                    self.drag_slider(&key, x);
+                }
+            }
+            (MouseButton::Right, Some(id)) => {
+                let id = match id.setting() {
+                    Some(key) => ElementId::Setting(key.into()),
+                    None => id,
+                };
+                self.context_menu(model, id)
+            }
             (MouseButton::Middle, Some(ElementId::Tab(id))) => self.close_tab(model, id, intents),
             (MouseButton::Left, Some(id @ (ElementId::Editor | ElementId::SettingsSearch))) => {
                 if let Some(slot) = self.editor_slot(&id) {
@@ -223,7 +253,20 @@ impl SidebarUi {
             press.up.get_or_insert(None);
             press.animating = true;
         }
-        if down == Some(ElementId::Scrollbar) {
+        if matches!(down, Some(ElementId::Scrollbar(_))) {
+            return;
+        }
+        if let Some(ElementId::Slider(key)) = &down {
+            if let Some((dragged, value)) = self.settings.drag.take()
+                && &dragged == key
+                && let Some(range) =
+                    vtabs_core::settings::descriptor(key).and_then(|field| Range::of(&field.kind))
+            {
+                intents.push(UiIntent::Domain(vtabs_core::Intent::SetSetting {
+                    key: dragged,
+                    value: range.json(value),
+                }));
+            }
             return;
         }
         let up = self.hit_test(x, y).map(|hit| hit.id.clone());
@@ -248,13 +291,11 @@ impl SidebarUi {
     pub(crate) fn scroll(&mut self, model: &Model, x: u16, y: u16, rows: i32) {
         if let Some(overlay) = &mut self.overlays.current {
             match overlay {
-                Overlay::Menu(menu) => {
-                    menu.selected = list::offset(menu.selected, rows, menu.items.len());
-                }
+                Overlay::Menu(menu) => menu.scroll_by(rows),
                 Overlay::Form(_) => {}
             }
         } else if self.settings.open && self.settings.rect.contains(Position::new(x, y)) {
-            self.settings_scroll_by(model, rows);
+            self.settings_scroll_by(rows);
         } else if self.sidebar.spaces.contains(Position::new(x, y)) {
             self.sidebar.space_scroll =
                 list::offset(self.sidebar.space_scroll, rows, model.spaces.len());
@@ -264,24 +305,51 @@ impl SidebarUi {
         self.frame.dirty = true;
     }
 
-    fn launcher_scrollbar(&self) -> Option<Scrollbar> {
-        match &self.overlays.current {
-            Some(Overlay::Menu(menu)) => menu.search.as_ref()?.scrollbar,
-            _ => None,
+    fn scrollbar(&self, area: ScrollArea) -> Option<Scrollbar> {
+        match area {
+            ScrollArea::Launcher => match &self.overlays.current {
+                Some(Overlay::Menu(menu)) => menu.search.as_ref()?.scrollbar,
+                _ => None,
+            },
+            ScrollArea::Settings => self.settings.scrollbar,
+            ScrollArea::Sidebar => self.sidebar.scrollbar,
         }
     }
 
-    fn drag_scrollbar(&mut self, y: u16) {
-        let Some(scrollbar) = self.launcher_scrollbar() else {
+    fn drag_scrollbar(&mut self, area: ScrollArea, y: u16) {
+        let Some(scrollbar) = self.scrollbar(area) else {
             return;
         };
-        if let Some(Overlay::Menu(menu)) = &mut self.overlays.current {
-            menu.scroll = scrollbar.offset(y, self.pointer.scrollbar_grab);
-            menu.selected = menu
-                .selected
-                .clamp(menu.scroll, menu.scroll + scrollbar.visible - 1);
-            self.frame.dirty = true;
+        let offset = scrollbar.offset(y, self.pointer.scrollbar_grab);
+        match area {
+            ScrollArea::Launcher => {
+                if let Some(Overlay::Menu(menu)) = &mut self.overlays.current {
+                    menu.scroll = offset;
+                }
+            }
+            ScrollArea::Settings => self.settings.scroll = offset,
+            ScrollArea::Sidebar => self.sidebar.scroll = offset,
         }
+        self.frame.dirty = true;
+    }
+
+    fn drag_slider(&mut self, key: &str, x: u16) {
+        let Some(track) = self
+            .paint
+            .hit(&ElementId::Slider(key.into()))
+            .map(|hit| hit.rect)
+        else {
+            return;
+        };
+        let Some(range) =
+            vtabs_core::settings::descriptor(key).and_then(|field| Range::of(&field.kind))
+        else {
+            return;
+        };
+        let at = (f32::from(x) - f32::from(track.x) + self.pointer.fraction.0 - 1.)
+            / f32::from(track.width.saturating_sub(2).max(1));
+        self.settings.drag = Some((key.into(), range.at(at)));
+        self.frame.dirty = true;
     }
 
     fn double_clicked_title(&self, id: TabId, x: u16, y: u16) -> bool {

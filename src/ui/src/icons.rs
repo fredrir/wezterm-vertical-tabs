@@ -16,6 +16,17 @@ pub(crate) const FOLDER_OPEN: &str = "\u{f0dcf}";
 pub(crate) const LOCAL: &str = "\u{f120}";
 pub(crate) const REMOTE: &str = "\u{f048b}";
 pub(crate) const ALERT: &str = "\u{f05d6}";
+pub(crate) const LOCK: &str = "\u{f0341}";
+pub(crate) const RESTORE: &str = "\u{f099b}";
+pub(crate) const SELECT: &str = "\u{f054f}";
+pub(crate) const ALL: &str = "\u{f11d9}";
+pub(crate) const LAYOUT: &str = "\u{f06fd}";
+pub(crate) const TERMINAL: &str = "\u{f018d}";
+pub(crate) const TAB: &str = "\u{f04e9}";
+pub(crate) const PALETTE: &str = "\u{f0e0c}";
+pub(crate) const MOTION: &str = "\u{f0a8f}";
+pub(crate) const TUNE: &str = "\u{f1542}";
+pub(crate) const KEYBOARD_OUTLINE: &str = "\u{f097b}";
 const SPACE_DOT: &str = "\u{f0ec3}";
 
 pub(crate) fn index(index: Option<usize>) -> Option<&'static str> {

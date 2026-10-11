@@ -84,6 +84,11 @@ pub(super) fn shortcut_label(key: &KeyCode, mods: Modifiers) -> String {
     }
 }
 
+/// Plugin chords drawn like host key assignments, honoring `ui_key_cap_rendering`.
+pub(super) fn chord_label(chord: &str) -> String {
+    binding_label(chord).unwrap_or_else(|| chord.to_owned())
+}
+
 fn binding_label(chord: &str) -> Option<String> {
     let mut key = chord;
     let mut mods = Modifiers::NONE;

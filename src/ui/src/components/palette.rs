@@ -3,7 +3,7 @@ use crate::components::row::{Content, Row};
 use crate::components::scrollbar::Scrollbar;
 use crate::components::text_input::TextInput;
 use crate::components::{ICON_CELLS, ROW_INSET, SURFACE_RADIUS, centered, list};
-use crate::element::ElementId;
+use crate::element::{ElementId, ScrollArea};
 use crate::icons;
 use crate::input::{TextEditor, display_text};
 use crate::overlays::Menu;
@@ -70,7 +70,7 @@ pub(crate) fn palette(cx: &mut Canvas, area: Rect, menu: &mut Menu) -> Rect {
         icons::SEARCH,
         theme.muted().bg(theme.card),
     );
-    let button_width = if matches!(search.kind, LauncherKind::Commands | LauncherKind::Keybind) {
+    let button_width = if search.kind == LauncherKind::Commands {
         3.min(field.width.saturating_sub(lead + 2))
     } else {
         0
@@ -84,10 +84,7 @@ pub(crate) fn palette(cx: &mut Canvas, area: Rect, menu: &mut Menu) -> Rect {
     let shift = if field.height == 2 { 0.5 } else { 0.0 };
     let mut recorded;
     let edits_query = search.edits_query();
-    let editor = if search.kind == LauncherKind::Keybind {
-        recorded = TextEditor::new(crate::keybinds::display_chord(search.editor.text()));
-        &mut recorded
-    } else if let Some(launcher) = &search.launch_menu
+    let editor = if let Some(launcher) = &search.launch_menu
         && !launcher.filtering
     {
         recorded = TextEditor::new(&launcher.selection);
@@ -99,7 +96,7 @@ pub(crate) fn palette(cx: &mut Canvas, area: Rect, menu: &mut Menu) -> Rect {
         .active(edits_query)
         .shift(shift)
         .placeholder(if search.recording {
-            "Recording keys. Press Escape to exit"
+            "Recording keys"
         } else {
             &menu.title
         })
@@ -109,11 +106,6 @@ pub(crate) fn palette(cx: &mut Canvas, area: Rect, menu: &mut Menu) -> Rect {
         Button::action(ElementId::RecordShortcut, icons::KEYBOARD, Tone::Neutral)
             .selected(search.recording)
             .label_right_padding(1)
-            .tooltip(if search.recording {
-                "Stop recording keys"
-            } else {
-                "Record keys"
-            })
             .render(
                 Rect::new(
                     field.right() - button_width - 1,
@@ -131,7 +123,14 @@ pub(crate) fn palette(cx: &mut Canvas, area: Rect, menu: &mut Menu) -> Rect {
         inner.bottom().saturating_sub(field.bottom() + gap),
     );
     let rows = usize::from(list.height / line).max(1);
-    menu.scroll = list::scroll_to(menu.scroll, menu.selected, menu.items.len(), rows);
+    menu.scroll = list::follow(
+        menu.scroll,
+        &mut menu.revealed,
+        menu.selected,
+        menu.items.len(),
+        rows,
+    );
+    menu.visible = rows;
     if let Some(launcher) = &mut search.launch_menu {
         launcher.labels = (launcher.config.labels)(
             &launcher.config.alphabet,
@@ -151,7 +150,7 @@ pub(crate) fn palette(cx: &mut Canvas, area: Rect, menu: &mut Menu) -> Rect {
     );
     if let Some(scrollbar) = search.scrollbar {
         list.width = list.width.saturating_sub(2);
-        scrollbar.render(cx);
+        scrollbar.render(ScrollArea::Launcher, cx);
     }
     if menu.items.is_empty() && list.height > 0 {
         cx.write(

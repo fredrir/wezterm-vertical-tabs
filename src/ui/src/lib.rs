@@ -11,7 +11,7 @@ mod runtime;
 mod theme;
 mod views;
 
-pub use element::ElementId;
+pub use element::{ElementId, ScrollArea};
 pub use input::{EditResult, Key, Modifiers, MouseButton, TextEditor, UiInput};
 pub use intent::{HostAction, UiIntent};
 pub use keybinds::{matches_shortcut, shortcut_chord};
@@ -251,6 +251,7 @@ impl SidebarUi {
         if self.settings.open {
             self.settings.open = false;
             self.settings.search_focused = false;
+            self.cancel_settings_input();
             self.frame.dirty = true;
         }
     }
@@ -259,8 +260,24 @@ impl SidebarUi {
         self.settings.listed = false;
         self.sidebar.settings_place = None;
         self.settings.search_focused = false;
+        self.cancel_settings_input();
         self.dismiss();
         self.focused = None;
+    }
+    /// Another surface takes the keyboard, such as the quick terminal over this window.
+    pub fn interrupt(&mut self) {
+        self.dismiss();
+        self.cancel_settings_input();
+        if self.settings.search_focused {
+            self.settings.search_focused = false;
+            self.focused = None;
+        }
+        self.caret.stop();
+    }
+    fn cancel_settings_input(&mut self) {
+        self.settings.capture = None;
+        self.settings.entry = None;
+        self.settings.drag = None;
     }
     pub fn has_overlay(&self) -> bool {
         self.overlays.current.is_some()

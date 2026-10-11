@@ -209,7 +209,7 @@ fn hidden_sidebar_modals_use_window_bounds_without_resizing_it() {
             .map(|cell| cell.symbol())
             .collect::<String>();
         let title = match action {
-            "settings" => "Settings",
+            "settings" => "Search settings",
             "create_space" => "Create space",
             _ => "\u{f0349}",
         };
@@ -225,6 +225,17 @@ fn hidden_sidebar_modals_use_window_bounds_without_resizing_it() {
             win32_uni_char: None,
         };
         assert!(adapter.input(Input::Key(&escape)));
+        if action == "settings" {
+            // Like any tab, the page outlives Escape and closes with the close shortcut.
+            assert!(adapter.content_page());
+            let mods = if cfg!(target_os = "macos") {
+                window::Modifiers::SUPER
+            } else {
+                window::Modifiers::CTRL | window::Modifiers::SHIFT
+            };
+            let close = super::input_tests::raw(KeyCode::Char('w'), mods, true);
+            assert!(adapter.input(Input::RawKey(&close)));
+        }
         assert!(!adapter.app.is_modal());
         assert!(!adapter.keyboard_focus());
         assert_eq!(adapter.reservation().width, original);

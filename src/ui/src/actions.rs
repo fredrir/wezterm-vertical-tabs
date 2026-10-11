@@ -3,6 +3,7 @@ use crate::element::ElementId;
 use crate::input::{Key, Modifiers, TextEditor};
 use crate::intent::{HostAction, UiIntent};
 use crate::overlays::{FormKind, MenuItem, Overlay};
+use crate::views::settings_page::choice_label;
 use crate::views::sidebar::InlineRename;
 use crate::views::tab_name;
 use serde_json::Value;
@@ -29,9 +30,6 @@ pub(crate) enum Action {
     CloseSettings,
     EditSetting(String),
     ResetSetting(String),
-    RecordKeybind(String, Option<usize>),
-    SaveKeybind(String, Option<usize>),
-    RemoveKeybind(String, String),
     EditorCommand { key: Key, target: ElementId },
     Submenu { title: String, items: Vec<MenuItem> },
     Confirm { label: String, action: Box<Action> },
@@ -58,7 +56,7 @@ impl SidebarUi {
                 self.reset_caret();
                 self.frame.dirty = true;
             }
-            ElementId::CloseSettings => self.close_settings(),
+            ElementId::SettingsRecord => self.toggle_settings_recording(intents),
             ElementId::ResetSettings => self.run_action(model, reset_settings(), intents),
             ElementId::CreateSpace => self.open_create_space(),
             ElementId::NewTab => {
@@ -111,11 +109,24 @@ impl SidebarUi {
             }
             ElementId::Setting(key) => {
                 self.settings_focus_setting(model, &key);
-                self.edit_setting(model, &key, intents);
+                if !key.starts_with("shortcut.") {
+                    self.edit_setting(model, &key, intents);
+                }
+            }
+            ElementId::Chord(key, index) => self.record_chord(model, &key, Some(index)),
+            ElementId::AddChord(key) => self.record_chord(model, &key, None),
+            ElementId::RemoveChord(key, chord) => {
+                self.settings_focus_setting(model, &key);
+                if let Some(action) = key.strip_prefix("shortcut.") {
+                    self.remove_keybind(model, action, &chord, intents);
+                }
             }
             ElementId::Submit => self.submit_form(model, intents),
             ElementId::Cancel => self.back(),
-            ElementId::Editor | ElementId::Scrollbar => {}
+            ElementId::Editor
+            | ElementId::Scrollbar(_)
+            | ElementId::Slider(_)
+            | ElementId::SettingsEntry => {}
         }
     }
 
@@ -260,11 +271,6 @@ impl SidebarUi {
             Action::CloseTab(id) => self.close_tab(model, id, intents),
             Action::Settings => self.open_settings(),
             Action::CloseSettings => self.close_settings(),
-            Action::RecordKeybind(action, index) => self.open_keybind_recorder(&action, index),
-            Action::SaveKeybind(action, index) => self.save_keybind(model, &action, index, intents),
-            Action::RemoveKeybind(action, chord) => {
-                self.remove_keybind(model, &action, &chord, intents)
-            }
             Action::EditSetting(key) => self.edit_setting(model, &key, intents),
             Action::ResetSetting(key) => self.reset_setting(model, &key, intents),
             Action::EditorCommand { key, target } => {
@@ -306,8 +312,11 @@ impl SidebarUi {
     }
 
     pub(crate) fn edit_setting(&mut self, model: &Model, key: &str, intents: &mut Vec<UiIntent>) {
-        if let Some(action) = key.strip_prefix("shortcut.") {
-            self.edit_keybind(model, action);
+        if self.overlays.current.is_some() {
+            self.dismiss();
+        }
+        if key.starts_with("shortcut.") {
+            self.record_chord(model, key, None);
             return;
         }
         if self.settings.managed_in_lua(model, key) {
@@ -331,7 +340,7 @@ impl SidebarUi {
                     .map(|choice| {
                         MenuItem::new(
                             *choice,
-                            *choice,
+                            choice_label(choice),
                             Action::Domain(Intent::SetSetting {
                                 key: key.into(),
                                 value: Value::String((*choice).into()),
@@ -340,6 +349,15 @@ impl SidebarUi {
                     })
                     .collect();
                 self.push_menu(descriptor.label, items);
+                if let Some(Overlay::Menu(menu)) = &mut self.overlays.current {
+                    menu.selected = choices
+                        .iter()
+                        .position(|choice| value.as_str() == Some(*choice))
+                        .unwrap_or(0);
+                }
+            }
+            SettingKind::Number { .. } | SettingKind::Fraction | SettingKind::Opacity => {
+                self.start_entry(model, key, None);
             }
             _ => {
                 let value = value.as_str().map_or_else(

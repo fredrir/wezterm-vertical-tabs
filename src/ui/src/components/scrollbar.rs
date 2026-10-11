@@ -1,4 +1,4 @@
-use crate::element::ElementId;
+use crate::element::{ElementId, ScrollArea};
 use crate::runtime::canvas::Canvas;
 use ratatui::layout::Rect;
 
@@ -6,7 +6,7 @@ use ratatui::layout::Rect;
 pub(crate) struct Scrollbar {
     pub track: Rect,
     pub thumb: Rect,
-    pub visible: usize,
+    visible: usize,
     total: usize,
 }
 
@@ -34,9 +34,9 @@ impl Scrollbar {
         (top * (self.total - self.visible) + travel / 2) / travel.max(1)
     }
 
-    pub fn render(self, cx: &mut Canvas) {
+    pub fn render(self, area: ScrollArea, cx: &mut Canvas) {
         cx.surface(self.track, cx.theme.card, 3.0, 1.5);
         cx.surface(self.thumb, cx.theme.muted, 3.0, 1.5);
-        cx.hit(ElementId::Scrollbar, self.track, "");
+        cx.hit(ElementId::Scrollbar(area), self.track, "");
     }
 }

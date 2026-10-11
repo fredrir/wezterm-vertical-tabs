@@ -48,6 +48,9 @@ pub(crate) struct Menu {
     pub items: Vec<MenuItem>,
     pub selected: usize,
     pub scroll: usize,
+    /// Wheel and scrollbar move only the viewport, never the selection.
+    pub revealed: Option<usize>,
+    pub visible: usize,
     pub search: Option<Launcher>,
 }
 
@@ -59,8 +62,29 @@ impl Menu {
             selected: items.iter().position(|item| item.enabled).unwrap_or(0),
             items,
             scroll: 0,
+            revealed: None,
+            visible: 0,
             search: None,
         }
+    }
+
+    pub(crate) fn follow_selection(&mut self, rows: usize) {
+        self.scroll = list::follow(
+            self.scroll,
+            &mut self.revealed,
+            self.selected,
+            self.items.len(),
+            rows,
+        );
+        self.visible = rows;
+    }
+
+    pub(crate) fn scroll_by(&mut self, rows: i32) {
+        self.scroll = list::scroll_by(
+            self.scroll,
+            rows,
+            self.items.len().saturating_sub(self.visible),
+        );
     }
 
     pub(crate) fn has_leading_column(&self) -> bool {
@@ -117,6 +141,8 @@ impl Overlays {
 
 impl SidebarUi {
     pub(crate) fn open_overlay(&mut self, overlay: Overlay) {
+        self.settings.capture = None;
+        self.settings.entry = None;
         self.cancel_effects();
         self.caret.stop();
         self.caret.visible = true;

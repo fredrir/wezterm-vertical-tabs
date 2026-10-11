@@ -12,7 +12,6 @@ use vtabs_core::{Intent, Model, Tab, TabId};
 pub(crate) enum LauncherKind {
     Tabs,
     Commands,
-    Keybind,
     LaunchMenu,
 }
 
@@ -49,9 +48,7 @@ pub(crate) struct Launcher {
 
 impl Launcher {
     pub fn edits_query(&self) -> bool {
-        !self.recording
-            && self.kind != LauncherKind::Keybind
-            && self.launch_menu.as_ref().is_none_or(|menu| menu.filtering)
+        !self.recording && self.launch_menu.as_ref().is_none_or(|menu| menu.filtering)
     }
 }
 
@@ -254,19 +251,21 @@ impl SidebarUi {
         );
     }
 
+    /// Settings record plugin chords; the command search records host key labels.
     pub fn recording_keybind(&self) -> bool {
-        matches!(&self.overlays.current, Some(Overlay::Menu(menu)) if menu.search.as_ref().is_some_and(|s| s.kind == LauncherKind::Keybind && s.recording))
+        self.settings.open && self.settings.recording() && self.overlays.current.is_none()
     }
 
     pub fn recording_shortcut(&self) -> bool {
-        matches!(&self.overlays.current, Some(Overlay::Menu(menu))
+        self.recording_keybind()
+            || matches!(&self.overlays.current, Some(Overlay::Menu(menu))
             if menu.search.as_ref().is_some_and(|search| search.recording))
     }
 
     pub(crate) fn toggle_shortcut_recording(&mut self) {
         if let Some(Overlay::Menu(menu)) = &mut self.overlays.current
             && let Some(search) = &mut menu.search
-            && matches!(search.kind, LauncherKind::Commands | LauncherKind::Keybind)
+            && search.kind == LauncherKind::Commands
         {
             search.recording = !search.recording;
             if search.recording {
@@ -278,7 +277,16 @@ impl SidebarUi {
         }
     }
 
-    pub(crate) fn record_shortcut(&mut self, shortcut: String) {
+    pub(crate) fn record_shortcut(
+        &mut self,
+        model: &Model,
+        shortcut: String,
+        intents: &mut Vec<UiIntent>,
+    ) {
+        if self.recording_keybind() {
+            self.settings_recorded(model, &shortcut, intents);
+            return;
+        }
         if let Some(Overlay::Menu(menu)) = &mut self.overlays.current
             && let Some(search) = &mut menu.search
             && search.recording
@@ -464,13 +472,6 @@ pub(crate) fn filter_menu(menu: &mut Menu) {
     let Some(search) = &mut menu.search else {
         return;
     };
-    if search.kind == LauncherKind::Keybind {
-        menu.items = search.all_items.clone();
-        if let Some(save) = menu.items.first_mut() {
-            save.enabled = !search.editor.text().is_empty();
-        }
-        return;
-    }
     search.scrollbar = None;
     if let Some(launcher) = &search.launch_menu {
         let query = search.editor.text();
