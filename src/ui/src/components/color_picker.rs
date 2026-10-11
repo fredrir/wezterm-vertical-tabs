@@ -20,8 +20,10 @@ fn ink(color: Color) -> Color {
     }
 }
 
-fn label(cx: &mut Canvas, rect: Rect, text: &str) {
-    cx.write(rect, text.to_owned(), cx.theme.muted());
+fn label(cx: &mut Canvas, rect: Rect, text: Option<&str>) {
+    if let Some(text) = text {
+        cx.write(rect, text.to_owned(), cx.theme.muted());
+    }
 }
 
 fn preview(cx: &mut Canvas, rect: Rect, color: Color, text: &str, id: Option<ElementId>) {
@@ -186,17 +188,13 @@ pub(crate) fn render(cx: &mut Canvas, area: Rect, form: &mut Form, editing: bool
             inner.width - preview_width - 3,
             plane_height,
         );
-        label(
-            cx,
-            Rect::new(inner.x, inner.y + 2, shades.width, 1),
-            "Saturation & brightness",
-        );
+
         plane(cx, shades, picker);
         let preview_x = shades.right() + 3;
         label(
             cx,
             Rect::new(preview_x, inner.y + 2, preview_width, 1),
-            "Current  /  New",
+            Some("Current    New"),
         );
         let width = preview_width / 2;
         preview(
@@ -227,32 +225,24 @@ pub(crate) fn render(cx: &mut Canvas, area: Rect, form: &mut Form, editing: bool
             None,
         );
         let hue_y = shades.bottom() + 1;
-        label(cx, Rect::new(inner.x, hue_y, 5, 1), "Hue");
+        label(cx, Rect::new(inner.x, hue_y, 5, 1), None);
         hue(
             cx,
             Rect::new(inner.x + 5, hue_y, inner.width - 5, 1),
             picker,
         );
-        label(cx, Rect::new(inner.x, hue_y + 2, inner.width, 1), "Palette");
+        label(cx, Rect::new(inner.x, hue_y + 2, inner.width, 1), None);
         let swatches = Rect::new(inner.x, hue_y + 3, inner.width, swatch_height * 3);
         palette(cx, swatches, picker);
         entry_y = swatches.bottom() + 2;
-        label(
-            cx,
-            Rect::new(inner.x, entry_y - 1, inner.width, 1),
-            if picker.rgb_entry {
-                "Red, green, blue"
-            } else {
-                "Hex color"
-            },
-        );
+        label(cx, Rect::new(inner.x, entry_y - 1, inner.width, 1), None);
     } else {
         entry_y = inner.y + u16::from(inner.height > 1);
         if inner.height >= 10 && inner.width >= 10 {
             label(
                 cx,
                 Rect::new(inner.x, inner.y + 4, inner.width, 1),
-                "Palette",
+                Some("Palette"),
             );
             palette(cx, Rect::new(inner.x, inner.y + 5, inner.width, 3), picker);
         }
@@ -289,11 +279,6 @@ pub(crate) fn render(cx: &mut Canvas, area: Rect, form: &mut Form, editing: bool
     if entry_y + 1 < inner.bottom().saturating_sub(1) {
         let hint = if picker.selected.is_none() {
             "Automatic · follows the theme".into()
-        } else if roomy {
-            format!(
-                "{}   ·   Tab to move, arrows to adjust",
-                hex(picker.preview())
-            )
         } else {
             hex(picker.preview())
         };
