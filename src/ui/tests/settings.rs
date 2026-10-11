@@ -111,34 +111,41 @@ fn values_below_the_minimum_apply_the_minimum_and_escape_discards() {
 }
 
 #[test]
-fn arrows_step_a_slider_and_shift_steps_further() {
+fn up_and_down_step_a_value_being_edited_and_enter_applies_it() {
     let (mut ui, model) = settings("quick_terminal");
     click(
         &mut ui,
         &model,
         ElementId::Setting("quick_terminal_blur".into()),
     );
-    ui.event(&model, UiInput::key(Key::Escape));
+    let shift = Modifiers {
+        shift: true,
+        ..Modifiers::default()
+    };
+    for (key, modifiers) in [
+        (Key::Up, Modifiers::default()),
+        (Key::Up, shift),
+        (Key::Down, Modifiers::default()),
+    ] {
+        assert!(
+            ui.event(&model, UiInput::Key { key, modifiers }).is_empty(),
+            "stepping previews until Enter"
+        );
+    }
+    assert!(ui.text_input_active());
+    let intents = ui.event(&model, UiInput::key(Key::Enter));
+    assert_eq!(set(&intents, "quick_terminal_blur"), Some(json!(10)));
+
     click(
         &mut ui,
         &model,
-        ElementId::Slider("quick_terminal_blur".into()),
+        ElementId::Setting("quick_terminal_blur".into()),
     );
-    let right = ui.event(&model, UiInput::key(Key::Right));
-    assert_eq!(set(&right, "quick_terminal_blur"), Some(json!(1)));
-    let shifted = ui.event(
-        &model,
-        UiInput::Key {
-            key: Key::Right,
-            modifiers: Modifiers {
-                shift: true,
-                ..Modifiers::default()
-            },
-        },
-    );
-    assert_eq!(set(&shifted, "quick_terminal_blur"), Some(json!(10)));
-    assert!(
-        ui.event(&model, UiInput::key(Key::Left)).is_empty(),
+    ui.event(&model, UiInput::key(Key::Down));
+    let intents = ui.event(&model, UiInput::key(Key::Enter));
+    assert_eq!(
+        set(&intents, "quick_terminal_blur"),
+        Some(json!(0)),
         "already at the minimum"
     );
 }
@@ -267,7 +274,7 @@ fn focused_row(ui: &SidebarUi) -> Option<String> {
 }
 
 #[test]
-fn arrows_ring_between_the_category_tabs_and_the_list() {
+fn arrows_wrap_within_the_list() {
     let (mut ui, model) = settings("keybinds");
     draw(&mut ui, &model);
     let tab = ElementId::SettingsCategory("keybinds".into());
@@ -275,16 +282,43 @@ fn arrows_ring_between_the_category_tabs_and_the_list() {
     ui.event(&model, UiInput::key(Key::Down));
     assert_eq!(focused_row(&ui).as_deref(), Some("shortcut.settings"));
     ui.event(&model, UiInput::key(Key::Up));
-    assert_eq!(ui.focused(), Some(&tab));
-    ui.event(&model, UiInput::key(Key::Up));
     assert_eq!(focused_row(&ui).as_deref(), Some("shortcut.next_space"));
     ui.event(&model, UiInput::key(Key::Down));
-    assert_eq!(ui.focused(), Some(&tab));
+    assert_eq!(focused_row(&ui).as_deref(), Some("shortcut.settings"));
     ui.event(&model, UiInput::key(Key::Right));
-    assert_eq!(
-        ui.focused(),
-        Some(&ElementId::SettingsCategory("all".into()))
+    assert_eq!(focused_row(&ui).as_deref(), Some("width"));
+}
+
+#[test]
+fn left_and_right_switch_tabs_from_the_list_unless_text_is_being_edited() {
+    let (mut ui, model) = settings("layout");
+    ui.event(&model, UiInput::key(Key::Down));
+    assert_eq!(focused_row(&ui).as_deref(), Some("width"));
+    assert!(
+        ui.event(&model, UiInput::key(Key::Right)).is_empty(),
+        "sliders do not step"
     );
+    assert_eq!(
+        focused_row(&ui).as_deref(),
+        Some("quick_terminal_width"),
+        "the list keeps focus on the next tab"
+    );
+    ui.event(&model, UiInput::key(Key::Left));
+    ui.event(&model, UiInput::key(Key::Left));
+    assert_eq!(
+        focused_row(&ui).as_deref(),
+        Some("width"),
+        "All lists Layout first"
+    );
+
+    click(&mut ui, &model, ElementId::Setting("width".into()));
+    ui.event(&model, UiInput::key(Key::Left));
+    ui.event(&model, UiInput::key(Key::Right));
+    assert!(
+        ui.text_input_active(),
+        "arrows move the caret while a value is edited"
+    );
+    assert_eq!(focused_row(&ui).as_deref(), Some("width"));
 }
 
 #[test]

@@ -3,9 +3,10 @@ use crate::element::ElementId;
 use crate::icons;
 use crate::input::display_text;
 use crate::overlays::Menu;
-use crate::runtime::canvas::Canvas;
+use crate::runtime::canvas::{Canvas, RoundedSurface};
 use crate::views::launcher::LauncherKind;
 use ratatui::layout::{Position, Rect};
+use ratatui::style::Color;
 use unicode_width::UnicodeWidthStr;
 
 pub(crate) fn menu(cx: &mut Canvas, area: Rect, anchor: Option<Position>, menu: &mut Menu) -> Rect {
@@ -102,15 +103,14 @@ fn width(menu: &Menu) -> u16 {
 pub(crate) fn dropdown(cx: &mut Canvas, area: Rect, menu: &mut Menu) -> Rect {
     let theme = cx.theme;
     let anchor = menu.dropdown.unwrap_or_default();
-    let line = if anchor.height >= 2 { 2 } else { 1 };
     let widest = menu
         .items
         .iter()
         .map(|item| display_text(&item.label).width() as u16)
         .max()
         .unwrap_or(0);
-    let width = (widest + 8).max(anchor.width).min(area.width);
-    let height = (menu.items.len() as u16 * line + 2).min(area.height);
+    let width = (widest + 7).max(anchor.width).min(area.width);
+    let height = (menu.items.len() as u16).clamp(1, area.height.max(1));
     let y = if anchor.bottom() + height <= area.bottom() {
         anchor.bottom()
     } else if anchor.y >= area.y + height {
@@ -125,17 +125,35 @@ pub(crate) fn dropdown(cx: &mut Canvas, area: Rect, menu: &mut Menu) -> Rect {
         height,
     );
     cx.clear(rect);
+    cx.mark(RoundedSurface {
+        stacked: true,
+        ..RoundedSurface::new(rect, Color::Reset, 0.0, 0.0)
+    });
+    // The panel reaches a third of a row past its options instead of a whole padding row.
+    let grow = (f32::from(height) + 0.6) / f32::from(height);
     let fill = theme.card;
-    cx.surface(rect, theme.lift(fill, 14), SURFACE_RADIUS, EDGE_INSET);
-    cx.surface(rect, fill, SURFACE_RADIUS - 1.0, EDGE_INSET + 1.0);
-    let rows = usize::from(height.saturating_sub(2) / line).max(1);
-    menu.follow_selection(rows);
-    for (offset, item) in menu.items.iter().enumerate().skip(menu.scroll).take(rows) {
+    for (color, radius, inset) in [
+        (theme.lift(fill, 14), SURFACE_RADIUS, EDGE_INSET),
+        (fill, SURFACE_RADIUS - 1.0, EDGE_INSET + 1.0),
+    ] {
+        cx.mark(RoundedSurface {
+            scale_y: grow,
+            ..RoundedSurface::new(rect, color, radius, inset)
+        });
+    }
+    menu.follow_selection(usize::from(height));
+    for (offset, item) in menu
+        .items
+        .iter()
+        .enumerate()
+        .skip(menu.scroll)
+        .take(usize::from(height))
+    {
         let row = Rect::new(
             rect.x + 1,
-            rect.y + 1 + (offset - menu.scroll) as u16 * line,
+            rect.y + (offset - menu.scroll) as u16,
             rect.width.saturating_sub(2),
-            line,
+            1,
         );
         let id = ElementId::Menu(item.id.clone());
         let row_fill = if offset == menu.selected {
@@ -145,7 +163,7 @@ pub(crate) fn dropdown(cx: &mut Canvas, area: Rect, menu: &mut Menu) -> Rect {
         } else {
             fill
         };
-        cx.surface(row, row_fill, SURFACE_RADIUS, EDGE_INSET);
+        cx.fill(RoundedSurface::new(row, row_fill, 6.0, EDGE_INSET));
         let checked = menu.checked == Some(offset);
         let style = theme.base().bg(row_fill);
         cx.write(

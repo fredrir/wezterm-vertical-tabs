@@ -915,13 +915,6 @@ impl SidebarUi {
         }
     }
 
-    fn settings_focus_categories(&mut self) {
-        self.settings.search_focused = false;
-        self.focused = Some(ElementId::SettingsCategory(self.settings.category.clone()));
-        self.caret.stop();
-        self.frame.dirty = true;
-    }
-
     pub(crate) fn settings_scroll_by(&mut self, rows: i32) {
         self.settings.scroll =
             list::scroll_by(self.settings.scroll, rows, self.settings.max_scroll);
@@ -1012,26 +1005,34 @@ impl SidebarUi {
         }
     }
 
-    pub(crate) fn step_setting(
-        &mut self,
-        model: &Model,
-        key: &str,
-        steps: i32,
-        intents: &mut Vec<UiIntent>,
-    ) {
-        let Some(range) = settings::descriptor(key).and_then(|field| Range::of(&field.kind)) else {
+    /// Steps the value being typed, like a number field; Enter still applies it.
+    fn step_entry(&mut self, model: &Model, steps: i32) {
+        let Some(entry) = &mut self.settings.entry else {
             return;
         };
-        if self.settings.managed_in_lua(model, key) {
+        let Some(range) = settings::descriptor(&entry.key).and_then(|field| Range::of(&field.kind))
+        else {
             return;
-        }
-        let current = number(model, key);
-        let value = range.step(current, steps);
-        if value != current {
-            intents.push(UiIntent::Domain(Intent::SetSetting {
-                key: key.into(),
-                value: range.json(value),
-            }));
+        };
+        let current = range
+            .parse(entry.editor.text())
+            .unwrap_or_else(|| number(model, &entry.key));
+        entry.editor = TextEditor::new(range.entry_text(range.step(current, steps)));
+        self.reset_caret();
+        self.frame.dirty = true;
+    }
+
+    /// Switches like the tab row; focus stays in the list when it was there.
+    fn settings_switch_category(&mut self, model: &Model, delta: isize) {
+        let in_list = !matches!(self.focused, Some(ElementId::SettingsCategory(_)));
+        let at = CATEGORIES
+            .iter()
+            .position(|(id, ..)| *id == self.settings.category)
+            .unwrap_or(0) as isize;
+        let next = (at + delta).rem_euclid(CATEGORIES.len() as isize) as usize;
+        self.settings_select_category(CATEGORIES[next].0.into());
+        if in_list && let Some(field) = self.settings.fields(model).first() {
+            self.settings_focus_setting(model, field.key);
         }
     }
 
@@ -1054,9 +1055,12 @@ impl SidebarUi {
                     self.commit_entry(intents);
                     return;
                 }
-                Key::Up | Key::Down | Key::Tab | Key::PageUp | Key::PageDown => {
-                    self.commit_entry(intents)
+                Key::Up | Key::Down => {
+                    let steps = if mods.shift { 10 } else { 1 };
+                    self.step_entry(model, if key == Key::Up { steps } else { -steps });
+                    return;
                 }
+                Key::Tab | Key::PageUp | Key::PageDown => self.commit_entry(intents),
                 _ => {
                     self.editor_key(EditorSlot::Entry, &key, mods, intents);
                     return;
@@ -1123,22 +1127,14 @@ impl SidebarUi {
             }
             return;
         }
+        if matches!(key, Key::Left | Key::Right) && !mods.command() && !mods.alt {
+            self.settings_switch_category(model, if key == Key::Left { -1 } else { 1 });
+            return;
+        }
         let fields = self.settings.fields(model);
         let last = fields.len().saturating_sub(1);
         if let Some(ElementId::SettingsCategory(category)) = &self.focused {
-            let at = CATEGORIES
-                .iter()
-                .position(|(id, ..)| id == category)
-                .unwrap_or(0);
             match key {
-                Key::Left | Key::Right => {
-                    let next = if key == Key::Left {
-                        (at + CATEGORIES.len() - 1) % CATEGORIES.len()
-                    } else {
-                        (at + 1) % CATEGORIES.len()
-                    };
-                    self.settings_select_category(CATEGORIES[next].0.into());
-                }
                 Key::Down | Key::Up if !fields.is_empty() => {
                     let at = if key == Key::Down { 0 } else { last };
                     self.settings_focus_setting(model, fields[at].key);
@@ -1168,10 +1164,10 @@ impl SidebarUi {
             }
             Key::Up if self.settings.search_focused => {}
             Key::Up if field.is_some() && self.settings.selected == 0 => {
-                self.settings_focus_categories()
+                self.settings_focus_setting(model, fields[last].key)
             }
             Key::Down if field.is_some() && self.settings.selected == last => {
-                self.settings_focus_categories()
+                self.settings_focus_setting(model, fields[0].key)
             }
             Key::Down | Key::Up | Key::PageDown | Key::PageUp | Key::Home | Key::End => {
                 self.settings.selected = match key {
@@ -1188,11 +1184,6 @@ impl SidebarUi {
                     self.settings_focus_setting(model, field.key);
                 }
                 self.frame.dirty = true;
-            }
-            Key::Left | Key::Right if ranged => {
-                let steps = if mods.shift { 10 } else { 1 };
-                let steps = if key == Key::Left { -steps } else { steps };
-                self.step_setting(model, field.unwrap().key, steps, intents);
             }
             Key::Delete | Key::Backspace => {
                 if let Some(field) = field {
