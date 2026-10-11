@@ -463,10 +463,10 @@ def test_quick_programs_start_fresh_in_the_active_pane_directory(
     try:
         initial = probe.start()
         gui.attach()
-        # OSC 7 reports the directory percent-encoded, as remote shells do.
+        # OSC 7 reports the directory percent-encoded with the shell's host name.
         gui.text(
             f'cd "{project}" && '
-            + r"""printf '\033]7;file://localhost%s\033\\' "$PWD" && """
+            + r"""printf '\033]7;file://%s%s\033\\' "$(uname -n)" "$PWD" && """
             + 'touch "$WEZ_VTABS_SCENARIO/moved"'
         )
         gui.key("Return")

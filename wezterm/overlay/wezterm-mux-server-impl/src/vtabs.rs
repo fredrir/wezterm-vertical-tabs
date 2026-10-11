@@ -1,4 +1,5 @@
-//! Requests served for this project's clients: close policy, location, adoption and replacement.
+//! Requests served for this project's clients: close policy, location, adoption, replacement
+//! and spawning beside a pane.
 use anyhow::anyhow;
 use codec::*;
 use mux::client::ClientId;
@@ -29,6 +30,7 @@ async fn respond(pdu: Pdu, client_id: Option<Arc<ClientId>>) -> anyhow::Result<P
                 .map(Pdu::GetPaneLocationResponse)
         }
         Pdu::ReplacePane(request) => return replace_pane(request, client_id).await,
+        Pdu::SpawnBesidePane(request) => return spawn_beside_pane(request, client_id).await,
         Pdu::ListAdoptablePanes(ListAdoptablePanes { domain }) => (domain, None),
         Pdu::AdoptPane(AdoptPane {
             domain,
@@ -136,5 +138,32 @@ async fn replace_pane(
         tab_id,
         window_id,
         size,
+    }))
+}
+
+/// The pane's own domain spawns, so a relayed pane's program runs on its real host.
+async fn spawn_beside_pane(
+    request: SpawnBesidePane,
+    client_id: Option<Arc<ClientId>>,
+) -> anyhow::Result<Pdu> {
+    let mux = Mux::get();
+    let _identity = mux.with_identity(client_id);
+    let (tab, pane, window_id) = mux
+        .spawn_tab_or_window(
+            None,
+            config::keyassignment::SpawnTabDomain::CurrentPaneDomain,
+            request.command,
+            request.command_dir,
+            request.size,
+            Some(request.pane_id),
+            mux::backing_workspace(),
+            None,
+        )
+        .await?;
+    Ok(Pdu::SpawnResponse(SpawnResponse {
+        pane_id: pane.pane_id(),
+        tab_id: tab.tab_id(),
+        window_id,
+        size: tab.get_size(),
     }))
 }

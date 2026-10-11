@@ -3,12 +3,15 @@
 use super::ui_host::{Bounds, TerminalProgram};
 use super::{TermWindow, TermWindowNotif};
 use crate::quad::{HeapQuadAllocator, TripleLayerQuadAllocator};
+use codec::SpawnBesidePane;
 use mux::domain::{Domain, DomainState};
 use mux::pane::{CachePolicy, Pane, PaneId};
 use mux::tab::PositionedPane;
 use mux::Mux;
 use portable_pty::CommandBuilder;
 use std::{cell::RefCell, rc::Rc, sync::Arc};
+use wezterm_client::domain::ClientDomain;
+use wezterm_client::pane::ClientPane;
 use wezterm_term::TerminalSize;
 use window::{color::LinearRgba, WindowOps};
 
@@ -33,8 +36,15 @@ struct Program {
     pane: Option<Arc<dyn Pane>>,
 }
 
+enum Target {
+    Domain(Arc<dyn Domain>),
+    /// A client without `local_pane_layout` mirrors its server's tabs, so the server spawns
+    /// beside its pane in a hidden workspace.
+    Beside(Arc<dyn Domain>, PaneId),
+}
+
 struct Launch {
-    domain: Arc<dyn Domain>,
+    target: Target,
     command: Option<CommandBuilder>,
     cwd: Option<String>,
 }
@@ -108,17 +118,12 @@ impl Drop for State {
     }
 }
 
-#[derive(Debug, PartialEq)]
-enum Host {
-    Domain,
-    Local,
-}
-
-/// Client domains spawn panes outside tabs only with `local_pane_layout`; a unix socket
-/// without a proxy shares this machine, so its programs run locally.
-fn client_host(config: &config::Config, name: &str) -> Option<Host> {
-    let unix = config.unix_domains.iter().find(|unix| unix.name == name);
-    if unix.is_some_and(|unix| unix.local_pane_layout)
+/// Client domains spawn panes outside tabs only with `local_pane_layout`.
+fn local_pane_layout(config: &config::Config, name: &str) -> bool {
+    config
+        .unix_domains
+        .iter()
+        .any(|unix| unix.name == name && unix.local_pane_layout)
         || config
             .tls_clients
             .iter()
@@ -127,31 +132,13 @@ fn client_host(config: &config::Config, name: &str) -> Option<Host> {
             .ssh_domains()
             .iter()
             .any(|ssh| ssh.name == name && ssh.local_pane_layout)
-    {
-        return Some(Host::Domain);
-    }
-    unix.filter(|unix| unix.proxy_command.is_none())
-        .map(|_| Host::Local)
 }
 
-fn program_domain(domain: Arc<dyn Domain>) -> Option<Arc<dyn Domain>> {
-    if domain
-        .downcast_ref::<wezterm_client::domain::ClientDomain>()
-        .is_none()
-    {
-        return Some(domain);
-    }
-    match client_host(&config::configuration(), domain.domain_name())? {
-        Host::Domain => Some(domain),
-        Host::Local => Mux::get().get_domain_by_name("local"),
-    }
-}
-
-/// Remote panes report their host, which a decoded path doesn't need.
+/// `to_file_path` refuses the host a shell's OSC 7 includes, so only the path is decoded.
 fn directory(url: &url::Url) -> Option<String> {
-    let mut url = url.clone();
-    url.set_host(None).ok()?;
-    url.to_file_path().ok()?.into_os_string().into_string().ok()
+    let mut local = url::Url::parse("file:///").ok()?;
+    local.set_path(url.path());
+    local.to_file_path().ok()?.into_os_string().into_string().ok()
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -346,7 +333,7 @@ impl TermWindow {
         self.show_terminal_overlay(Some((program, launch)));
     }
 
-    /// Resolved like a split of the active tab's pane; `None` where its domain can't host one.
+    /// Resolved like a split of the active tab's pane; `None` without a pane to spawn beside.
     fn terminal_program_launch(&self, program: &TerminalProgram) -> Option<Launch> {
         let mux = Mux::get();
         let current = mux
@@ -360,14 +347,21 @@ impl TermWindow {
             .resolve_spawn_tab_domain(current.as_ref().map(|pane| pane.pane_id()), &spawn.domain)
             .map_err(|error| log::warn!("Quick terminal: {error:#}"))
             .ok()?;
-        let cwd = match spawn.cwd {
-            Some(cwd) => Some(cwd.to_string_lossy().into_owned()),
-            None => current
-                .filter(|pane| pane.domain_id() == domain.domain_id())
-                .and_then(|pane| pane.get_current_working_dir(CachePolicy::FetchImmediate))
-                .and_then(|url| directory(&url)),
+        let current = current.filter(|pane| pane.domain_id() == domain.domain_id());
+        let explicit = spawn.cwd.map(|cwd| cwd.to_string_lossy().into_owned());
+        let (target, cwd) = if domain.downcast_ref::<ClientDomain>().is_some()
+            && !local_pane_layout(&config::configuration(), domain.domain_name())
+        {
+            let pane = current?.downcast_ref::<ClientPane>()?.remote_pane_id();
+            (Target::Beside(domain, pane), explicit)
+        } else {
+            let cwd = explicit.or_else(|| {
+                current
+                    .and_then(|pane| pane.get_current_working_dir(CachePolicy::FetchImmediate))
+                    .and_then(|url| directory(&url))
+            });
+            (Target::Domain(domain), cwd)
         };
-        let domain = program_domain(domain)?;
         let (args, env) = (spawn.args, spawn.set_environment_variables);
         let command = (args.is_some() || !env.is_empty()).then(|| {
             let mut command = args
@@ -379,7 +373,7 @@ impl TermWindow {
             command
         });
         Some(Launch {
-            domain,
+            target,
             command,
             cwd,
         })
@@ -422,7 +416,7 @@ impl TermWindow {
             self.spawn_terminal_pane(
                 &state_ref,
                 Slot::Program(id),
-                Ok(launch.domain),
+                Ok(launch.target),
                 launch.command,
                 launch.cwd,
             );
@@ -454,10 +448,11 @@ impl TermWindow {
         for (key, value) in spawn.set_environment_variables {
             command.env(key, value);
         }
-        let domain = Mux::get()
+        let target = Mux::get()
             .get_domain_by_name("local")
+            .map(Target::Domain)
             .ok_or_else(|| anyhow::anyhow!("Local terminal domain is unavailable"));
-        self.spawn_terminal_pane(&state_ref, Slot::Shell, domain, Some(command), None);
+        self.spawn_terminal_pane(&state_ref, Slot::Shell, target, Some(command), None);
     }
 
     /// A pane arriving after its slot stopped wanting it is removed.
@@ -465,7 +460,7 @@ impl TermWindow {
         &self,
         state: &Rc<RefCell<State>>,
         slot: Slot,
-        domain: anyhow::Result<Arc<dyn Domain>>,
+        target: anyhow::Result<Target>,
         command: Option<CommandBuilder>,
         cwd: Option<String>,
     ) {
@@ -478,11 +473,34 @@ impl TermWindow {
         let window_id = self.mux_window_id;
         promise::spawn::spawn(async move {
             let result = async {
-                let domain = domain?;
-                if domain.state() == DomainState::Detached {
-                    domain.attach(Some(window_id)).await?;
+                match target? {
+                    Target::Domain(domain) => {
+                        if domain.state() == DomainState::Detached {
+                            domain.attach(Some(window_id)).await?;
+                        }
+                        domain.spawn_pane(size, command, cwd).await
+                    }
+                    Target::Beside(domain, pane_id) => {
+                        let client = domain
+                            .downcast_ref::<ClientDomain>()
+                            .ok_or_else(|| anyhow::anyhow!("not a client domain"))?;
+                        let spawned = ClientDomain::get_client_inner_for_domain(domain.domain_id())?
+                            .client
+                            .spawn_beside_pane(SpawnBesidePane {
+                                pane_id,
+                                command,
+                                command_dir: cwd,
+                                size,
+                            })
+                            .await?;
+                        // The pane arrives with this client's mirror of the server's hidden tab.
+                        client.resync().await?;
+                        client
+                            .remote_to_local_pane_id(spawned.pane_id)
+                            .and_then(|id| Mux::get().get_pane(id))
+                            .ok_or_else(|| anyhow::anyhow!("pane {} not mirrored", spawned.pane_id))
+                    }
                 }
-                domain.spawn_pane(size, command, cwd).await
             }
             .await;
             let Some(state) = state.upgrade().filter(|state| state.borrow().wants(slot)) else {

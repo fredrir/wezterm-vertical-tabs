@@ -4,6 +4,7 @@ use mux::tab::{PaneEntry, TabId};
 use mux::window::WindowId;
 use portable_pty::CommandBuilder;
 use serde::{Deserialize, Serialize};
+use wezterm_term::TerminalSize;
 
 #[derive(Deserialize, Serialize, PartialEq, Debug)]
 pub struct ReplacePane {
@@ -12,6 +13,15 @@ pub struct ReplacePane {
     pub command_dir: Option<String>,
     pub domain: config::keyassignment::SpawnTabDomain,
     pub wait_for_ready: bool,
+}
+
+/// Spawns in the pane's domain and directory, in a hidden tab; answered by `SpawnResponse`.
+#[derive(Deserialize, Serialize, PartialEq, Debug)]
+pub struct SpawnBesidePane {
+    pub pane_id: PaneId,
+    pub command: Option<CommandBuilder>,
+    pub command_dir: Option<String>,
+    pub size: TerminalSize,
 }
 
 /// A client cannot see what runs in a remote pane, so its owner judges the close.

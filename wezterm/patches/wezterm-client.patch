@@ -1,5 +1,5 @@
 diff --git a/wezterm-client/src/client.rs b/wezterm-client/src/client.rs
-index df3351365d125f21db6bc987fcbf4d3a61fefe5f..7db565377024b64476d34a57dfd62478a777f95c 100644
+index df3351365d125f21db6bc987fcbf4d3a61fefe5f..54e74160599bebbb74e99c998b1cba43c7cbbd4c 100644
 --- a/wezterm-client/src/client.rs
 +++ b/wezterm-client/src/client.rs
 @@ -141,11 +141,30 @@ async fn process_unilateral_inner_async(
@@ -33,7 +33,7 @@ index df3351365d125f21db6bc987fcbf4d3a61fefe5f..7db565377024b64476d34a57dfd62478
          None => {
              log::debug!("got {decoded:?}, pane not found locally, resync");
              client_domain.resync().await?;
-@@ -1340,8 +1359,21 @@ impl Client {
+@@ -1340,8 +1359,22 @@ impl Client {
  
      rpc!(ping, Ping = (), Pong);
      rpc!(list_panes, ListPanes = (), ListPanesResponse);
@@ -52,6 +52,7 @@ index df3351365d125f21db6bc987fcbf4d3a61fefe5f..7db565377024b64476d34a57dfd62478
      rpc!(spawn_v2, SpawnV2, SpawnResponse);
      rpc!(split_pane, SplitPane, SpawnResponse);
 +    rpc!(replace_pane, ReplacePane, SpawnResponse);
++    rpc!(spawn_beside_pane, SpawnBesidePane, SpawnResponse);
      rpc!(
          move_pane_to_new_tab,
          MovePaneToNewTab,
@@ -479,7 +480,7 @@ index 073521152252924465dc4914ea4c7313d3b7357c..edbd954b9342e1e040ef5fa96fa48a6b
  pub mod pane;
 +mod topology;
 diff --git a/wezterm-client/src/pane/clientpane.rs b/wezterm-client/src/pane/clientpane.rs
-index aad21a54cc47781e39a62c4c99220c0733211e1c..ecff5db013af24ae67f1a4b778e6cf933f4a78f7 100644
+index 063787c25be0b115d192ca593cb4814cfec7c2c0..d2b4770b5cfc5a74c5039e9018ba501181882e4f 100644
 --- a/wezterm-client/src/pane/clientpane.rs
 +++ b/wezterm-client/src/pane/clientpane.rs
 @@ -20,6 +20,7 @@ use ratelim::RateLimiter;
@@ -505,7 +506,7 @@ index aad21a54cc47781e39a62c4c99220c0733211e1c..ecff5db013af24ae67f1a4b778e6cf93
      pub renderable: Mutex<RenderableState>,
      configured_palette: Mutex<ColorPalette>,
      palette: Mutex<ColorPalette>,
-@@ -118,7 +121,7 @@ impl ClientPane {
+@@ -119,7 +122,7 @@ impl ClientPane {
              mouse,
              remote_pane_id,
              local_pane_id,
@@ -514,7 +515,7 @@ index aad21a54cc47781e39a62c4c99220c0733211e1c..ecff5db013af24ae67f1a4b778e6cf93
              application_palette: Mutex::new(false),
              renderable: Mutex::new(render),
              writer: Mutex::new(writer),
-@@ -134,6 +137,14 @@ impl ClientPane {
+@@ -136,6 +139,14 @@ impl ClientPane {
          }
      }
  
@@ -529,7 +530,7 @@ index aad21a54cc47781e39a62c4c99220c0733211e1c..ecff5db013af24ae67f1a4b778e6cf93
      pub async fn process_unilateral(&self, pdu: Pdu) -> anyhow::Result<()> {
          match pdu {
              Pdu::GetPaneRenderChangesResponse(mut delta) => {
-@@ -225,6 +236,8 @@ impl ClientPane {
+@@ -228,6 +239,8 @@ impl ClientPane {
                  // has been changed on the server, so we work to apply
                  // it here.
                  log::trace!("advised of remote pane focus: {pane_id}");
@@ -538,7 +539,7 @@ index aad21a54cc47781e39a62c4c99220c0733211e1c..ecff5db013af24ae67f1a4b778e6cf93
  
                  let mux = Mux::get();
                  if let Err(err) = mux.focus_pane_and_containing_tab(self.local_pane_id) {
-@@ -240,6 +253,13 @@ impl ClientPane {
+@@ -243,6 +256,13 @@ impl ClientPane {
          self.remote_pane_id
      }
  
@@ -552,7 +553,7 @@ index aad21a54cc47781e39a62c4c99220c0733211e1c..ecff5db013af24ae67f1a4b778e6cf93
      /// Arrange to suppress the next Pane::kill call.
      /// This is a bit of a hack that we use when closing a window;
      /// our Domain::local_window_is_closing impl calls this for each
-@@ -263,6 +283,10 @@ impl Pane for ClientPane {
+@@ -266,6 +286,10 @@ impl Pane for ClientPane {
          let inner = renderable.inner.borrow();
  
          let mut map: BTreeMap<Value, Value> = BTreeMap::new();
@@ -563,7 +564,7 @@ index aad21a54cc47781e39a62c4c99220c0733211e1c..ecff5db013af24ae67f1a4b778e6cf93
          map.insert(
              Value::String("is_tardy".to_string()),
              Value::Bool(inner.is_tardy()),
-@@ -369,7 +393,7 @@ impl Pane for ClientPane {
+@@ -372,7 +396,7 @@ impl Pane for ClientPane {
          let mut inner = render.inner.borrow_mut();
          let client = Arc::clone(&self.client);
          let remote_pane_id = self.remote_pane_id;
@@ -572,7 +573,7 @@ index aad21a54cc47781e39a62c4c99220c0733211e1c..ecff5db013af24ae67f1a4b778e6cf93
          // Invalidate any cached rows on a resize
          inner.make_all_stale();
          promise::spawn::spawn(async move {
-@@ -408,16 +432,23 @@ impl Pane for ClientPane {
+@@ -411,16 +435,23 @@ impl Pane for ClientPane {
  
              let client = Arc::clone(&self.client);
              let remote_pane_id = self.remote_pane_id;
@@ -599,7 +600,7 @@ index aad21a54cc47781e39a62c4c99220c0733211e1c..ecff5db013af24ae67f1a4b778e6cf93
              })
              .detach();
              inner.update_last_send();
-@@ -509,13 +540,16 @@ impl Pane for ClientPane {
+@@ -512,13 +543,16 @@ impl Pane for ClientPane {
          }
  
          if send_kill {

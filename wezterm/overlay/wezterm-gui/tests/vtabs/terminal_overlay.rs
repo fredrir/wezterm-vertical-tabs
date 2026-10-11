@@ -74,19 +74,14 @@ fn programs_choose_their_share_of_the_window() {
 }
 
 #[test]
-fn client_domains_host_programs_where_their_files_are() {
+fn client_domains_spawn_untabbed_panes_only_with_local_layouts() {
     let mut config = config::Config::default_config();
-    let unix = |name: &str, proxy: bool, local_pane_layout: bool| config::UnixDomain {
+    let unix = |name: &str, local_pane_layout: bool| config::UnixDomain {
         name: name.into(),
-        proxy_command: proxy.then(|| vec!["ssh".into(), "-T".into(), "host".into()]),
         local_pane_layout,
         ..Default::default()
     };
-    config.unix_domains = vec![
-        unix("localmux", false, false),
-        unix("proxied", true, false),
-        unix("laid-out", true, true),
-    ];
+    config.unix_domains = vec![unix("localmux", false), unix("laid-out", true)];
     config.tls_clients = vec![config::TlsDomainClient {
         name: "tls".into(),
         local_pane_layout: true,
@@ -96,9 +91,27 @@ fn client_domains_host_programs_where_their_files_are() {
         name: "ssh".into(),
         ..Default::default()
     }]);
-    assert_eq!(client_host(&config, "localmux"), Some(Host::Local));
-    assert_eq!(client_host(&config, "laid-out"), Some(Host::Domain));
-    assert_eq!(client_host(&config, "tls"), Some(Host::Domain));
-    assert_eq!(client_host(&config, "proxied"), None);
-    assert_eq!(client_host(&config, "ssh"), None);
+    for (name, laid_out) in [
+        ("localmux", false),
+        ("laid-out", true),
+        ("tls", true),
+        ("ssh", false),
+        ("unknown", false),
+    ] {
+        assert_eq!(local_pane_layout(&config, name), laid_out, "{name}");
+    }
+}
+
+#[test]
+fn directories_decode_whichever_host_reported_them() {
+    for (url, path) in [
+        ("file://macie/Users/me/projects", "/Users/me/projects"),
+        ("file://archie/home/me/a%20b", "/home/me/a b"),
+        ("file:///Users/me/", "/Users/me/"),
+    ] {
+        assert_eq!(
+            directory(&url::Url::parse(url).unwrap()).as_deref(),
+            Some(path)
+        );
+    }
 }
