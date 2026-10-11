@@ -61,6 +61,9 @@ impl SidebarUi {
             return;
         }
         if matches!(self.overlays.current, Some(Overlay::Form(_))) {
+            if self.color_key(model, &key, modifiers, intents) {
+                return;
+            }
             if key == Key::Tab {
                 let mut order: Vec<_> = [ElementId::Editor, ElementId::Submit, ElementId::Cancel]
                     .into_iter()

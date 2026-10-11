@@ -65,6 +65,9 @@ pub(crate) fn confirm(cx: &mut Canvas, area: Rect, menu: &Menu) -> Rect {
 }
 
 pub(crate) fn form(cx: &mut Canvas, area: Rect, form: &mut Form, editing: bool) -> Rect {
+    if form.color.is_some() {
+        return super::color_picker::render(cx, area, form, editing);
+    }
     let theme = cx.theme;
     let panel = panel(cx, centered(area, 64, 7), area);
     let inner = panel.inner;

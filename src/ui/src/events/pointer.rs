@@ -67,6 +67,11 @@ impl Pointer {
 
 impl SidebarUi {
     pub(crate) fn pointer_move(&mut self, model: &Model, x: u16, y: u16) {
+        if let Some(id @ (ElementId::ColorPlane | ElementId::ColorHue)) = self.pointer.drag.clone()
+        {
+            self.drag_color(&id, x, y);
+            return;
+        }
         if let Some(ElementId::Scrollbar(area)) = self.pointer.drag {
             self.drag_scrollbar(area, y);
             return;
@@ -172,6 +177,12 @@ impl SidebarUi {
             self.set_anchor(x, y);
         }
         match (button, hit) {
+            (MouseButton::Left, Some(id @ (ElementId::ColorPlane | ElementId::ColorHue))) => {
+                self.focused = Some(id.clone());
+                self.pointer.drag = Some(id.clone());
+                self.caret.stop();
+                self.drag_color(&id, x, y);
+            }
             (MouseButton::Left, Some(ElementId::Scrollbar(area))) => {
                 if let Some(scrollbar) = self.scrollbar(area) {
                     self.pointer.drag = Some(ElementId::Scrollbar(area));
@@ -257,6 +268,10 @@ impl SidebarUi {
             press.animating = true;
         }
         if matches!(down, Some(ElementId::Scrollbar(_))) {
+            return;
+        }
+        if let Some(id @ (ElementId::ColorPlane | ElementId::ColorHue)) = &down {
+            self.drag_color(id, x, y);
             return;
         }
         if let Some(ElementId::Slider(key)) = &down {

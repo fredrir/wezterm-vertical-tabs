@@ -14,6 +14,63 @@ from tests.scenarios.ui_scenarios import GuiInput, scenarios
 
 
 @pytest.mark.gui
+def test_color_picker_previews_applies_and_cancels(wezterm_binaries, headless_display, tmp_path):
+    probe = Probe(
+        tmp_path / "color-picker",
+        wezterm_binaries["wezterm-gui"],
+        wezterm_binaries["wez-vtabs-store"],
+        "local",
+        initial_size={"cols": 110, "rows": 42},
+        display=headless_display,
+    )
+    gui = GuiInput(probe, headless_display, tmp_path)
+
+    def open_accent():
+        gui.click('Setting("accent")')
+        probe.wait(lambda state: gui.hit(state, "ColorPlane") is not None)
+
+    try:
+        original = probe.start()["model"]["settings"]["accent"]
+        gui.attach()
+        gui.click("Settings")
+        gui.click('SettingsCategory("theme")')
+        open_accent()
+        gui.capture("color-picker")
+        gui.click("ColorSwatch(17)")
+        assert gui.state()["model"]["settings"]["accent"] == original
+        gui.capture("color-picker-preview")
+        gui.click("Submit")
+        probe.wait(lambda state: state["model"]["settings"]["accent"] == "#3b82f6")
+        probe.wait(lambda state: gui.hit(state, "ColorPlane") is None)
+
+        open_accent()
+        gui.click("ColorFormat")
+        gui.text("255, 128, 64")
+        gui.capture("color-picker-rgb")
+        gui.key("Return")
+        probe.wait(lambda state: state["model"]["settings"]["accent"] == "#ff8040")
+        probe.wait(lambda state: gui.hit(state, "ColorPlane") is None)
+
+        open_accent()
+        gui.drag("ColorPlane", "ColorHue")
+        gui.capture("color-picker-drag")
+        gui.click("Cancel")
+        probe.wait(lambda state: gui.hit(state, "ColorPlane") is None)
+        assert gui.state()["model"]["settings"]["accent"] == "#ff8040"
+
+        open_accent()
+        gui.text("#oops")
+        gui.key("Return")
+        gui.capture("color-picker-invalid")
+        assert gui.hit(gui.state(), "ColorPlane") is not None
+        assert gui.state()["model"]["settings"]["accent"] == "#ff8040"
+        gui.key("Escape")
+        assert gui.state()["model"]["settings_page"]
+    finally:
+        probe.close()
+
+
+@pytest.mark.gui
 def test_native_launcher_configuration_uses_sidebar_and_preserves_spawn_options(
     wezterm_binaries, headless_display, tmp_path
 ):

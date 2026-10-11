@@ -16,6 +16,7 @@ impl SidebarUi {
             kind,
             editor,
             error: None,
+            color: None,
         }));
         self.focused = Some(ElementId::Editor);
         self.reset_caret();
@@ -25,7 +26,18 @@ impl SidebarUi {
         let Some(Overlay::Form(form)) = &mut self.overlays.current else {
             return;
         };
-        let value = form.editor.text().trim().to_owned();
+        let value = if let Some(color) = &form.color {
+            match color.parse(form.editor.text()) {
+                Ok(value) => value.map_or_else(String::new, super::colors::hex),
+                Err(error) => {
+                    form.error = Some(error.into());
+                    self.frame.dirty = true;
+                    return;
+                }
+            }
+        } else {
+            form.editor.text().trim().to_owned()
+        };
         let intent: Result<Intent, String> = (|| {
             Ok(match &form.kind {
                 FormKind::CreateFolder => {

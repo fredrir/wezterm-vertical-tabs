@@ -181,7 +181,7 @@ fn dragging_a_slider_previews_and_applies_once_on_release() {
 }
 
 #[test]
-fn colors_still_use_a_form_and_empty_restores_automatic() {
+fn color_entry_accepts_hex_and_empty_restores_automatic() {
     for (key, text, expected) in [
         (
             "quick_terminal_background_color",
@@ -197,6 +197,256 @@ fn colors_still_use_a_form_and_empty_restores_automatic() {
         ui.event(&model, UiInput::Text(text.into()));
         let intents = ui.event(&model, UiInput::key(Key::Enter));
         assert_eq!(set(&intents, key), Some(expected), "{key}");
+    }
+}
+
+#[test]
+fn color_palette_previews_until_apply_and_cancel_discards() {
+    let (mut ui, model) = settings("theme");
+    click(&mut ui, &model, ElementId::Setting("accent".into()));
+    draw(&mut ui, &model);
+    assert_eq!(
+        ui.hit_regions()
+            .iter()
+            .filter(|hit| matches!(hit.id, ElementId::ColorSwatch(_)))
+            .count(),
+        30
+    );
+    assert!(click(&mut ui, &model, ElementId::ColorSwatch(17)).is_empty());
+    draw(&mut ui, &model);
+    let field = rect(&ui, &ElementId::Editor);
+    let text: String = (field.x..field.right())
+        .map(|x| ui.buffer()[(x, field.y)].symbol())
+        .collect();
+    assert!(text.contains("#3b82f6"), "{text}");
+    assert_eq!(
+        ui.theme().accent,
+        vtabs_ui::Theme::parse_color(&model.settings.accent).unwrap()
+    );
+    let intents = click(&mut ui, &model, ElementId::Submit);
+    assert_eq!(set(&intents, "accent"), Some(json!("#3b82f6")));
+
+    ui.dismiss();
+    click(&mut ui, &model, ElementId::Setting("accent".into()));
+    click(&mut ui, &model, ElementId::ColorSwatch(11));
+    assert!(click(&mut ui, &model, ElementId::Cancel).is_empty());
+    draw(&mut ui, &model);
+    assert!(
+        !ui.hit_regions()
+            .iter()
+            .any(|hit| hit.id == ElementId::ColorPlane)
+    );
+    assert!(ui.content_page());
+}
+
+#[test]
+fn color_hex_and_rgb_entries_validate_and_normalize() {
+    for (rgb, text, expected) in [
+        (false, "#aBc", Some("#aabbcc")),
+        (false, " 123ABC ", Some("#123abc")),
+        (false, "#fffffg", None),
+        (false, "#12345678", None),
+        (false, "#💙", None),
+        (false, "", None),
+        (true, "12, 128, 255", Some("#0c80ff")),
+        (true, "0, 0, 0", Some("#000000")),
+        (true, "256, 0, 0", None),
+        (true, "-1, 0, 0", None),
+        (true, "12, 13", None),
+    ] {
+        let (mut ui, model) = settings("theme");
+        click(&mut ui, &model, ElementId::Setting("accent".into()));
+        if rgb {
+            click(&mut ui, &model, ElementId::ColorFormat);
+        }
+        ui.event(&model, UiInput::key(Key::Backspace));
+        ui.event(&model, UiInput::Paste(text.into()));
+        let intents = ui.event(&model, UiInput::key(Key::Enter));
+        assert_eq!(
+            set(&intents, "accent"),
+            expected.map(|value| json!(value)),
+            "{text}"
+        );
+        if expected.is_none() {
+            draw(&mut ui, &model);
+            assert!(ui.text_input_active());
+            assert!(
+                ui.buffer()
+                    .content
+                    .iter()
+                    .any(|cell| cell.fg == ui.theme().danger)
+            );
+            // Invalid text never poisons the visual controls.
+            click(&mut ui, &model, ElementId::ColorSwatch(0));
+            assert_eq!(
+                set(&click(&mut ui, &model, ElementId::Submit), "accent"),
+                Some(json!("#f8fafc"))
+            );
+        }
+    }
+}
+
+#[test]
+fn color_reset_and_original_restore_the_right_values() {
+    for (category, key, original, reset) in [
+        (
+            "theme",
+            "accent",
+            "#112233",
+            json!(vtabs_core::Settings::default().accent),
+        ),
+        (
+            "quick_terminal",
+            "quick_terminal_border_color",
+            "#abcdef",
+            json!(null),
+        ),
+    ] {
+        let (mut ui, mut model) = settings(category);
+        model.settings.set(key, json!(original)).unwrap();
+        click(&mut ui, &model, ElementId::Setting(key.into()));
+        click(&mut ui, &model, ElementId::ColorSwatch(11));
+        click(&mut ui, &model, ElementId::ColorOriginal);
+        assert_eq!(
+            set(&click(&mut ui, &model, ElementId::Submit), key),
+            Some(json!(original))
+        );
+        ui.dismiss();
+        click(&mut ui, &model, ElementId::Setting(key.into()));
+        click(&mut ui, &model, ElementId::ColorReset);
+        assert_eq!(
+            set(&click(&mut ui, &model, ElementId::Submit), key),
+            Some(reset)
+        );
+    }
+}
+
+#[test]
+fn color_drag_clamps_outside_the_control_and_only_apply_saves() {
+    let (mut ui, model) = settings("theme");
+    click(&mut ui, &model, ElementId::Setting("accent".into()));
+    draw(&mut ui, &model);
+    for (id, end, expected) in [
+        (ElementId::ColorPlane, (0, 0), "#ffffff"),
+        (ElementId::ColorPlane, (109, 69), "#000000"),
+    ] {
+        let area = rect(&ui, &id);
+        for event in [
+            UiInput::PointerDown {
+                x: area.x,
+                y: area.y,
+                button: MouseButton::Left,
+                modifiers: Modifiers::default(),
+            },
+            UiInput::PointerMove { x: end.0, y: end.1 },
+            UiInput::PointerUp {
+                x: end.0,
+                y: end.1,
+                button: MouseButton::Left,
+            },
+        ] {
+            assert!(ui.event(&model, event).is_empty());
+        }
+        assert_eq!(
+            set(&click(&mut ui, &model, ElementId::Submit), "accent"),
+            Some(json!(expected))
+        );
+    }
+    // Saturation and value at full, hue at zero produce pure red.
+    let plane = rect(&ui, &ElementId::ColorPlane);
+    ui.event(
+        &model,
+        UiInput::PointerDown {
+            x: plane.right() - 1,
+            y: plane.y,
+            button: MouseButton::Left,
+            modifiers: Modifiers::default(),
+        },
+    );
+    ui.event(
+        &model,
+        UiInput::PointerUp {
+            x: plane.right() - 1,
+            y: plane.y,
+            button: MouseButton::Left,
+        },
+    );
+    assert!(click(&mut ui, &model, ElementId::ColorHue).is_empty());
+    assert_eq!(
+        set(&click(&mut ui, &model, ElementId::Submit), "accent"),
+        Some(json!("#ff0000"))
+    );
+}
+
+#[test]
+fn color_picker_can_be_operated_with_only_the_keyboard() {
+    let (mut ui, model) = settings("theme");
+    click(&mut ui, &model, ElementId::Setting("accent".into()));
+    draw(&mut ui, &model);
+    for expected in [
+        ElementId::ColorFormat,
+        ElementId::ColorPlane,
+        ElementId::ColorHue,
+        ElementId::ColorSwatch(0),
+    ] {
+        ui.event(&model, UiInput::key(Key::Tab));
+        assert_eq!(ui.focused(), Some(&expected));
+    }
+    assert!(ui.event(&model, UiInput::key(Key::Right)).is_empty());
+    assert!(ui.event(&model, UiInput::key(Key::Down)).is_empty());
+    assert_eq!(ui.focused(), Some(&ElementId::ColorSwatch(11)));
+    assert_eq!(
+        set(&ui.event(&model, UiInput::key(Key::Enter)), "accent"),
+        Some(json!("#f43f5e"))
+    );
+    ui.event(&model, UiInput::key(Key::Escape));
+    assert!(ui.content_page());
+}
+
+#[test]
+fn color_picker_keeps_keyboard_focus_before_its_first_frame() {
+    let (mut ui, model) = settings("theme");
+    click(&mut ui, &model, ElementId::Setting("accent".into()));
+    // An input event can arrive before the newly opened overlay is painted.
+    ui.event(&model, UiInput::key(Key::Tab));
+    assert!(ui.text_input_active());
+    assert!(ui.event(&model, UiInput::key(Key::Escape)).is_empty());
+    draw(&mut ui, &model);
+    assert!(
+        !ui.hit_regions()
+            .iter()
+            .any(|hit| hit.id == ElementId::ColorPlane)
+    );
+}
+
+#[test]
+fn color_picker_resizes_without_overlapping_or_escaping_its_controls() {
+    let (mut ui, model) = settings("theme");
+    click(&mut ui, &model, ElementId::Setting("accent".into()));
+    for (width, height) in [
+        (1, 1),
+        (3, 3),
+        (10, 8),
+        (24, 12),
+        (40, 20),
+        (80, 24),
+        (110, 70),
+    ] {
+        let area = Rect::new(2, 3, width, height);
+        ui.render(&model, area, Duration::ZERO);
+        for (index, hit) in ui.hit_regions().iter().enumerate() {
+            assert_eq!(
+                hit.rect.intersection(area),
+                hit.rect,
+                "{width}x{height}: {hit:?}"
+            );
+            for other in &ui.hit_regions()[index + 1..] {
+                assert!(
+                    hit.rect.intersection(other.rect).is_empty(),
+                    "{width}x{height}: {hit:?} overlaps {other:?}"
+                );
+            }
+        }
     }
 }
 

@@ -158,7 +158,12 @@ impl SidebarUi {
 
     pub(crate) fn edited(&mut self, slot: EditorSlot) {
         match (slot, &mut self.overlays.current) {
-            (EditorSlot::Form, Some(Overlay::Form(form))) => form.error = None,
+            (EditorSlot::Form, Some(Overlay::Form(form))) => {
+                form.error = form
+                    .color
+                    .as_mut()
+                    .and_then(|color| color.edited(form.editor.text()).err().map(str::to_owned));
+            }
             (EditorSlot::Palette, Some(Overlay::Menu(menu))) => filter_menu(menu),
             (EditorSlot::SettingsSearch, _) => {
                 self.settings.chord = None;

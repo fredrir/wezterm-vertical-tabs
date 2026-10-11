@@ -1,3 +1,4 @@
+pub(crate) mod colors;
 mod forms;
 mod menus;
 
@@ -121,6 +122,7 @@ pub(crate) struct Form {
     pub kind: FormKind,
     pub editor: TextEditor,
     pub error: Option<String>,
+    pub color: Option<Box<colors::ColorPicker>>,
 }
 
 #[derive(Clone, Debug)]

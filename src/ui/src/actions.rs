@@ -128,6 +128,11 @@ impl SidebarUi {
             }
             ElementId::Submit => self.submit_form(model, intents),
             ElementId::Cancel => self.back(),
+            id @ (ElementId::ColorSwatch(_)
+            | ElementId::ColorFormat
+            | ElementId::ColorReset
+            | ElementId::ColorOriginal) => self.color_action(id),
+            ElementId::ColorPlane | ElementId::ColorHue => {}
             ElementId::Editor
             | ElementId::Scrollbar(_)
             | ElementId::Slider(_)
@@ -189,10 +194,13 @@ impl SidebarUi {
             }
             Action::EditSpaceAccent(id) => {
                 if let Some(space) = model.spaces.iter().find(|s| s.id == id) {
-                    self.open_form(
-                        "Accent (#RRGGBB or empty)",
+                    self.open_color_form(
+                        "Space accent",
                         FormKind::SpaceAccent(id),
                         space.accent.as_deref().unwrap_or(""),
+                        None,
+                        crate::theme::Theme::parse_color(&model.settings.accent)
+                            .unwrap_or(self.theme.accent),
                     );
                 }
             }
@@ -374,6 +382,23 @@ impl SidebarUi {
             }
             SettingKind::Number { .. } | SettingKind::Fraction | SettingKind::Opacity => {
                 self.start_entry(model, key, None);
+            }
+            SettingKind::Color | SettingKind::OptionalColor => {
+                let default = vtabs_core::Settings::default().get(key).unwrap_or_default();
+                let fallback = if key == "quick_terminal_background_color" {
+                    self.host.page_background.unwrap_or(self.theme.background)
+                } else if key == "quick_terminal_border_color" {
+                    self.theme.foreground
+                } else {
+                    self.theme.accent
+                };
+                self.open_color_form(
+                    descriptor.label,
+                    FormKind::Setting(key.into()),
+                    value.as_str().unwrap_or(""),
+                    default.as_str(),
+                    fallback,
+                );
             }
             _ => {
                 let value = value.as_str().map_or_else(
