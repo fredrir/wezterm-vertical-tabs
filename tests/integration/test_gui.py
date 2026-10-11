@@ -347,10 +347,13 @@ def test_quick_terminal_preserves_its_shell_without_creating_a_tab(
         probe.intent("quick_terminal")
         probe.wait(lambda state: state["quick_terminal"]["visible"])
         gui.command("windowminimize", gui.window)
-        probe.wait(lambda state: not state["quick_terminal"]["visible"])
+        minimized = probe.sample_for(0.5)
         gui.command("windowactivate", "--sync", gui.window)
-        gui.key("ctrl+grave")
-        probe.wait(lambda state: state["quick_terminal"]["visible"])
+        assert all(
+            state["quick_terminal"]["visible"] and state["quick_terminal"]["pane"] == pane
+            for state in minimized + probe.sample_for(0.3)
+            if state["window"] == probe.window
+        )
         probe.send("resize", {"width": 900, "height": 600})
         resized = probe.wait(
             lambda state: (
@@ -492,7 +495,7 @@ def test_quick_programs_start_fresh_in_the_active_pane_directory(
         probe.wait(lambda state: "^[" in (probe.root / "program-input").read_text())
         assert quick(gui.state())["program"] == program
 
-        # Losing focus keeps the program, unlike the shell.
+        # Losing focus keeps the program.
         gui.command("windowminimize", gui.window)
         minimized = probe.sample_for(0.5)
         gui.command("windowactivate", "--sync", gui.window)

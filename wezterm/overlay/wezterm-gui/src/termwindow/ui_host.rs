@@ -1279,10 +1279,6 @@ impl TermWindow {
         self.vtabs_sync();
         if self.terminal_overlay_visible() {
             match &input {
-                // A program ends when hidden, so it outlives focus changes.
-                Input::Focus(false) if !self.terminal_overlay_program() => {
-                    self.hide_terminal_overlay()
-                }
                 Input::Mouse(event, _) => {
                     if !self.terminal_overlay_bounds().contains(event.coords.x as f32, event.coords.y as f32) {
                         if matches!(self.current_mouse_capture, Some(super::MouseCapture::TerminalPane(_)))
