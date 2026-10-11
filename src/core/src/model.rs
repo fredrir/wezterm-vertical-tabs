@@ -793,12 +793,15 @@ impl Model {
             self.activate(id);
             changed = true;
         }
-        if old_selected.is_some_and(|id| !self.tabs.contains_key(&id))
-            && self.selected_tab.is_none()
-        {
+        if selected_closed {
             self.selected_tab = self
-                .visible
-                .get(old_position.min(self.visible.len().saturating_sub(1)))
+                .mru
+                .iter()
+                .find(|id| self.visible.contains(id))
+                .or_else(|| {
+                    self.visible
+                        .get(old_position.min(self.visible.len().saturating_sub(1)))
+                })
                 .copied();
             if let Some(id) = self.selected_tab {
                 self.activate(id);

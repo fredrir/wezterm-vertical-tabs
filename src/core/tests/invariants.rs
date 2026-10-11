@@ -69,6 +69,19 @@ fn closing_active_uses_visible_neighbor() {
     assert_eq!(m.selected_space, "home");
 }
 #[test]
+fn closing_active_returns_to_last_used_visible_tab() {
+    let mut m = model();
+    m.reconcile(vec![tab(1), tab(2), tab(3), tab(4), tab(5)], Some(1), false)
+        .unwrap();
+    for id in [5, 3, 2] {
+        m.dispatch(Intent::ActivateTab(id)).unwrap();
+    }
+    m.reconcile(vec![tab(1), tab(3), tab(4), tab(5)], Some(1), true)
+        .unwrap();
+    assert_eq!(m.selected_space, "home");
+    assert_eq!(m.selected_tab, Some(5));
+}
+#[test]
 fn index_negative_relative_and_mru_share_projection() {
     let mut m = model();
     m.dispatch(Intent::ActivateIndex(-1)).unwrap();
