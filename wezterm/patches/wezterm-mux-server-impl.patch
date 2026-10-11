@@ -23,7 +23,7 @@ index bc0b6968a101ab827af15c23ba076d694fe864c6..0d154a0cf300511ed38a34fc854035c2
  fn client_domains(config: &config::ConfigHandle) -> Vec<ClientDomainConfig> {
      let mut domains = vec![];
 diff --git a/wezterm-mux-server-impl/src/sessionhandler.rs b/wezterm-mux-server-impl/src/sessionhandler.rs
-index 5dc535f86152d991641661ca9a5dc568755885e4..d365f90e8e09585d7b8d6736aad5360063e6df32 100644
+index 5dc535f86152d991641661ca9a5dc568755885e4..f09984fb7a238d71789731d93c51b390e9755b36 100644
 --- a/wezterm-mux-server-impl/src/sessionhandler.rs
 +++ b/wezterm-mux-server-impl/src/sessionhandler.rs
 @@ -44,6 +44,8 @@ pub(crate) struct PerPane {
@@ -85,7 +85,17 @@ index 5dc535f86152d991641661ca9a5dc568755885e4..d365f90e8e09585d7b8d6736aad53600
              Pdu::SetWindowWorkspace(SetWindowWorkspace {
                  window_id,
                  workspace,
-@@ -1006,6 +1037,11 @@ impl SessionHandler {
+@@ -718,7 +749,8 @@ impl SessionHandler {
+                 .detach();
+             }
+ 
+-            Pdu::SpawnV2(spawn) => {
++            Pdu::SpawnV2(mut spawn) => {
++                crate::vtabs::rebase_relayed(&mut spawn);
+                 let client_id = self.client_id.clone();
+                 spawn_into_main_thread(async move {
+                     schedule_domain_spawn_v2(spawn, send_response, client_id);
+@@ -1006,6 +1038,11 @@ impl SessionHandler {
              | Pdu::UnitResponse { .. }
              | Pdu::LivenessResponse { .. }
              | Pdu::GetPaneDirectionResponse { .. }
@@ -97,7 +107,7 @@ index 5dc535f86152d991641661ca9a5dc568755885e4..d365f90e8e09585d7b8d6736aad53600
              | Pdu::SearchScrollbackResponse { .. }
              | Pdu::GetLinesResponse { .. }
              | Pdu::GetCodecVersionResponse { .. }
-@@ -1134,3 +1170,7 @@ async fn move_pane(
+@@ -1134,3 +1171,7 @@ async fn move_pane(
          window_id,
      }))
  }

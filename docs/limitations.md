@@ -33,6 +33,7 @@ Private windows exclude live-tab persistence. Catalog/settings changes are expli
 | Ownership                          | Local tabs and splits; each remote shell has an independent backing tab in the remote's `__backing:<host>` workspace                                |
 | Hidden workspaces                  | `__detached`, `__backing:*`; a GUI never switches to them on its own                                                                                |
 | Replace                            | `wezterm cli replace-pane --pane-id ID --domain-name DOMAIN [--wait-for-ready]`; same slot, fresh shell                                             |
+| Relayed commands                   | Program, directory and explicitly set variables travel; the remote supplies the rest of the environment, as with SSH domains                        |
 | Split                              | `wezterm cli split-pane --pane-id ID`; stays in the pane's domain                                                                                   |
 | Adopt                              | `wezterm cli adopt-pane --domain-name DOMAIN --remote-pane-id ID [--window-id ID]`; moves the backing tab to `__backing:<host>`                     |
 | Adoptable                          | `wezterm cli adopt-pane --domain-name DOMAIN --list`; not shown by any route, not relayed, not another host's backing tab                           |

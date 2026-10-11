@@ -6,8 +6,33 @@ use mux::client::ClientId;
 use mux::domain::{Domain, DomainState};
 use mux::pane::{CachePolicy, PaneId};
 use mux::Mux;
+use portable_pty::CommandBuilder;
 use promise::spawn::spawn_into_main_thread;
 use std::sync::Arc;
+
+/// Another host's mux relays commands built there; like SSH domains, only explicitly set
+/// variables travel and the rest comes from this host.
+pub(crate) fn rebase_relayed(spawn: &mut SpawnV2) {
+    if !spawn.workspace.starts_with(mux::BACKING_WORKSPACE_PREFIX) {
+        return;
+    }
+    let Some(relayed) = spawn.command.take() else {
+        return;
+    };
+    let mut command = if relayed.is_default_prog() {
+        CommandBuilder::new_default_prog()
+    } else {
+        CommandBuilder::from_argv(relayed.get_argv().clone())
+    };
+    for (key, value) in relayed.iter_extra_env_as_str() {
+        command.env(key, value);
+    }
+    if let Some(cwd) = relayed.get_cwd() {
+        command.cwd(cwd);
+    }
+    command.set_controlling_tty(relayed.get_controlling_tty());
+    spawn.command = Some(command);
+}
 
 pub(crate) fn schedule<SND>(pdu: Pdu, send_response: SND, client_id: Option<Arc<ClientId>>)
 where

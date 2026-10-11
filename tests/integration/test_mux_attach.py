@@ -331,6 +331,40 @@ def test_first_attach_adds_no_tab_to_the_callers_window(mux_pair, domain):
     assert seen == {tab}
 
 
+@pytest.mark.parametrize(
+    ("domain", "seen"), [("local", "client"), ("peer", "unset"), ("proxied", "unset")]
+)
+def test_relayed_commands_run_with_the_remote_environment(mux_pair, tmp_path, domain, seen):
+    local, _ = mux_pair
+    source = int(local.cli("spawn", "--new-window"))
+    result = tmp_path / "seen"
+    subprocess.run(
+        [
+            str(local.binaries["wezterm"]),
+            "--config-file",
+            str(local.config),
+            "cli",
+            "--no-auto-start",
+            "replace-pane",
+            "--pane-id",
+            str(source),
+            "--domain-name",
+            domain,
+            "--",
+            "/bin/sh",
+            "-c",
+            'printf %s "${VTABS_CLIENT_ONLY-unset}" > "$1"; exec sleep 30',
+            "sh",
+            str(result),
+        ],
+        env=dict(local.env, VTABS_CLIENT_ONLY="client"),
+        check=True,
+        capture_output=True,
+        timeout=20,
+    )
+    assert wait_for(lambda: result.exists() and result.read_text()) == seen
+
+
 @pytest.mark.parametrize("domain", ["local", "peer", "proxied"])
 def test_replacement_keeps_old_screen_until_prompt_ready(mux_pair, tmp_path, domain):
     local, _ = mux_pair
