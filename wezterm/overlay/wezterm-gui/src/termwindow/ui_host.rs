@@ -229,6 +229,8 @@ pub trait Provider {
     fn input(&mut self, input: Input<'_>) -> bool;
     /// A visible program, unlike the shell, receives Escape.
     fn terminal_input(&mut self, input: Input<'_>, program: bool) -> bool;
+    /// The quick terminal shell's share of the window width and height.
+    fn quick_terminal_size(&self) -> (f32, f32);
     fn message(&mut self, message: serde_json::Value);
     fn projection(&self) -> Projection;
     fn commands(&mut self) -> Vec<Command>;

@@ -1934,6 +1934,13 @@ impl Provider for Adapter {
         directory::withdraw(self.window_id);
         Box::pin(shutdown::drain(self.app, self.outstanding))
     }
+    fn quick_terminal_size(&self) -> (f32, f32) {
+        let settings = &self.app.model().settings;
+        (
+            settings.quick_terminal_width as f32,
+            settings.quick_terminal_height as f32,
+        )
+    }
     fn prepare_command(&self, new_window: bool, command: &mut config::keyassignment::SpawnCommand) {
         if (self.app.model().private && !new_window) || self.next_private {
             command

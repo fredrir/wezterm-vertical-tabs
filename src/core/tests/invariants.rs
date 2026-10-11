@@ -199,6 +199,22 @@ fn settings_precedence_and_atomic_validation() {
     assert_eq!(m.settings.width, 300);
 }
 #[test]
+fn quick_terminal_sizes_are_window_fractions() {
+    let mut settings = Settings::default();
+    settings.set("quick_terminal_width", json!(1)).unwrap();
+    settings.set("quick_terminal_height", json!(0.5)).unwrap();
+    assert_eq!(
+        (
+            settings.quick_terminal_width,
+            settings.quick_terminal_height
+        ),
+        (1., 0.5)
+    );
+    for value in [json!(0), json!(1.5), json!(-0.2), json!("0.5"), json!(null)] {
+        assert!(settings.set("quick_terminal_width", value).is_err());
+    }
+}
+#[test]
 fn schema_defaults_validate_every_field() {
     let defaults = Settings::default();
     for d in settings::descriptors() {

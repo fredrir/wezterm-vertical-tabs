@@ -524,9 +524,23 @@ def test_quick_programs_start_fresh_in_the_active_pane_directory(
         assert quick(shell)["bounds"]["width"] == pytest.approx(width * 0.75)
         probe.wait(lambda state: not alive(pid))
 
+        # The size settings apply to the shell and to programs that set none.
+        probe.intent({"SetSetting": {"key": "quick_terminal_width", "value": 0.6}})
+        probe.wait(
+            lambda state: (
+                not quick(state)["visible"]
+                and state["model"]["settings"]["quick_terminal_width"] == 0.6
+            )
+        )
+        gui.key("ctrl+grave")
+        sized = probe.wait(lambda state: quick(state)["visible"])
+        assert quick(sized)["bounds"]["width"] == pytest.approx(width * 0.6)
+
         # Programs replace the shell and each other; the shell keeps running.
         gui.key("F6")
-        other = quick(probe.wait(lambda state: quick(state)["program"] is not None))["program"]
+        opened = probe.wait(lambda state: quick(state)["program"] is not None)
+        other = quick(opened)["program"]
+        assert quick(opened)["bounds"]["width"] == pytest.approx(width * 0.6)
         gui.key("F5")
         replaced = probe.wait(lambda state: quick(state)["program"] not in (None, other))
         assert quick(replaced)["pane"] == quick(shell)["pane"]

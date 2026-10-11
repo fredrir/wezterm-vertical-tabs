@@ -103,6 +103,7 @@ impl SidebarUi {
                         settings::descriptor(key).ok_or("This setting no longer exists")?;
                     let value = match descriptor.kind {
                         SettingKind::Number { .. }
+                        | SettingKind::Fraction
                         | SettingKind::Object
                         | SettingKind::Colors
                         | SettingKind::List => serde_json::from_str(&value)

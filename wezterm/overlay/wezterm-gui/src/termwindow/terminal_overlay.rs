@@ -80,11 +80,11 @@ impl State {
         }
     }
 
-    fn size(&self) -> (f32, f32) {
-        self.program.as_ref().map_or(SHELL_SIZE, |program| {
+    fn size(&self, shell: (f32, f32)) -> (f32, f32) {
+        self.program.as_ref().map_or(shell, |program| {
             (
-                program.spec.width.unwrap_or(SHELL_SIZE.0),
-                program.spec.height.unwrap_or(SHELL_SIZE.1),
+                program.spec.width.unwrap_or(shell.0),
+                program.spec.height.unwrap_or(shell.1),
             )
         })
     }
@@ -257,7 +257,9 @@ impl TermWindow {
             self.vtabs_geometry().ui_bounds(true),
             self.ui_host
                 .as_ref()
-                .map_or(SHELL_SIZE, |ui| ui.terminal.0.borrow().size()),
+                .map_or(SHELL_SIZE, |ui| {
+                    ui.terminal.0.borrow().size(ui.provider.quick_terminal_size())
+                }),
             self.render_metrics.cell_size.width as f32,
             self.render_metrics.cell_size.height as f32,
             self.dimensions.dpi as u32,

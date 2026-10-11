@@ -74,6 +74,28 @@ fn programs_choose_their_share_of_the_window() {
 }
 
 #[test]
+fn programs_without_a_size_follow_the_shell() {
+    let program = |width, height| {
+        let mut state = State::default();
+        state.program = Some(Program {
+            id: 1,
+            spec: TerminalProgram {
+                spawn: SpawnCommand::default(),
+                width,
+                height,
+            },
+            pane: None,
+        });
+        state
+    };
+    let shell = (0.6, 0.9);
+    assert_eq!(State::default().size(shell), shell);
+    assert_eq!(program(None, None).size(shell), shell);
+    assert_eq!(program(Some(0.5), None).size(shell), (0.5, 0.9));
+    assert_eq!(program(Some(0.5), Some(1.)).size(shell), (0.5, 1.));
+}
+
+#[test]
 fn client_domains_spawn_untabbed_panes_only_with_local_layouts() {
     let mut config = config::Config::default_config();
     let unix = |name: &str, local_pane_layout: bool| config::UnixDomain {

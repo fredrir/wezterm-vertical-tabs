@@ -6,6 +6,8 @@
 ---@field width? integer Width in logical pixels
 ---@field side? 'left'|'right' Sidebar edge
 ---@field rail? 'expanded'|'hidden' Sidebar visibility
+---@field quick_terminal_width? number Fraction of the window width
+---@field quick_terminal_height? number Fraction of the window height
 ---@field animations? boolean Enable finite visual transitions
 ---@field reduced_motion? boolean Suppress transitions
 ---@field animation_ms? integer Transition duration in milliseconds
@@ -65,9 +67,9 @@
 ---@class TabsQuickProgram
 ---@field args? string[] The domain's default program when empty.
 ---@field cwd? string The active pane's directory when omitted.
----@field height? number Fraction of the window height, above 0 and at most 1; 0.75 when omitted.
+---@field height? number Fraction of the window height, above 0 and at most 1; `quick_terminal_height` when omitted.
 ---@field set_environment_variables? table<string, string>
----@field width? number Fraction of the window width, above 0 and at most 1; 0.75 when omitted.
+---@field width? number Fraction of the window width, above 0 and at most 1; `quick_terminal_width` when omitted.
 
 ---@alias TabsRailMode 'expanded'|'hidden'
 
@@ -75,7 +77,7 @@
 ---@field fields? { [1]: TabsMatchField, [2]: string[] }[]
 ---@field remote? boolean
 
----@alias TabsSettingKey 'keybinds'|'width'|'side'|'rail'|'animations'|'reduced_motion'|'animation_ms'|'cards'|'show_indexes'|'show_metadata'|'show_close'|'confirm_close'|'accent'|'background'|'foreground'|'muted'|'selected_background'|'private_accent'|'distro_colors'|'keyboard_shortcuts'|'default_domain'|'private_env'|'menus'
+---@alias TabsSettingKey 'keybinds'|'width'|'side'|'rail'|'quick_terminal_width'|'quick_terminal_height'|'animations'|'reduced_motion'|'animation_ms'|'cards'|'show_indexes'|'show_metadata'|'show_close'|'confirm_close'|'accent'|'background'|'foreground'|'muted'|'selected_background'|'private_accent'|'distro_colors'|'keyboard_shortcuts'|'default_domain'|'private_env'|'menus'
 
 ---@class TabsSpace
 ---@field accent? string

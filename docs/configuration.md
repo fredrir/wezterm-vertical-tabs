@@ -92,7 +92,8 @@ return config
 
 | Name | Value |
 | --- | --- |
-| Surface | Centered inside the current window, 75% width and height, without a sidebar |
+| Surface | Centered inside the current window, without a sidebar |
+| Size | `quick_terminal_width`, `quick_terminal_height` settings; window fraction above 0, at most 1; default `0.75` |
 | Shortcut | Ctrl + backtick; configurable as `quick_terminal` in Settings → Keybinds |
 | Hide | Escape, repeat shortcut, click outside, close-tab shortcut, or window loses focus |
 | Session | One shell per window; continues running while hidden; ends when its window closes |
@@ -114,7 +115,7 @@ config.keys = {
 | `args` | Program and arguments; default the domain's default program |
 | `cwd` | Default the active pane's directory |
 | `set_environment_variables` | Added to the program's environment |
-| `width`, `height` | Window fraction above 0, at most 1; default `0.75` |
+| `width`, `height` | Window fraction above 0, at most 1; default `quick_terminal_width`, `quick_terminal_height` |
 | Domain | Wherever the active pane runs; a mux without `local_pane_layout` spawns it in a hidden workspace and needs this build's mux server |
 | Session | Starts fresh on each opening; ends when hidden or when the program exits |
 | Toggle | Same binding hides; another binding or the quick terminal shortcut replaces it |

@@ -28,17 +28,17 @@ pub struct QuickProgram {
     pub cwd: Option<String>,
     #[serde(default)]
     pub set_environment_variables: BTreeMap<String, String>,
-    /// Fraction of the window width, above 0 and at most 1; 0.75 when omitted.
+    /// Fraction of the window width, above 0 and at most 1; `quick_terminal_width` when omitted.
     #[serde(default, deserialize_with = "fraction")]
     pub width: Option<f32>,
-    /// Fraction of the window height, above 0 and at most 1; 0.75 when omitted.
+    /// Fraction of the window height, above 0 and at most 1; `quick_terminal_height` when omitted.
     #[serde(default, deserialize_with = "fraction")]
     pub height: Option<f32>,
 }
 
 fn fraction<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<f32>, D::Error> {
     let value = Option::<f32>::deserialize(deserializer)?;
-    if value.is_some_and(|value| !(value > 0. && value <= 1.)) {
+    if value.is_some_and(|value| !settings::valid_fraction(value.into())) {
         return Err(serde::de::Error::custom(
             "size must be above 0 and at most 1",
         ));

@@ -181,6 +181,7 @@ fn setting_type(kind: &SettingKind) -> String {
     match kind {
         SettingKind::Bool => "boolean".into(),
         SettingKind::Number { .. } => "integer".into(),
+        SettingKind::Fraction => "number".into(),
         SettingKind::Text => "string".into(),
         SettingKind::Color => "string".into(),
         SettingKind::Colors => "table<string, string>".into(),
@@ -273,6 +274,7 @@ fn generate(format: &str) -> Result<String, String> {
                 let kind = match option.kind {
                     SettingKind::Bool => "Boolean".into(),
                     SettingKind::Number { min, max } => format!("Integer {min}–{max}"),
+                    SettingKind::Fraction => "Number above 0, at most 1".into(),
                     SettingKind::Text => "String or null".into(),
                     SettingKind::Color => "Hex color `#RRGGBB`".into(),
                     SettingKind::Colors => "Object of hex colors".into(),

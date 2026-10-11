@@ -25,6 +25,8 @@ pub struct Settings {
     pub width: u16,
     pub side: Side,
     pub rail: RailMode,
+    pub quick_terminal_width: f64,
+    pub quick_terminal_height: f64,
     pub animations: bool,
     pub reduced_motion: bool,
     pub animation_ms: u16,
@@ -66,6 +68,8 @@ impl Default for Settings {
             width: 256,
             side: Side::Left,
             rail: RailMode::Expanded,
+            quick_terminal_width: 0.75,
+            quick_terminal_height: 0.75,
             animations: true,
             reduced_motion: false,
             animation_ms: 140,
@@ -102,6 +106,8 @@ pub enum SettingKind {
         min: u16,
         max: u16,
     },
+    /// Above 0, at most 1.
+    Fraction,
     Text,
     Color,
     /// Keyed hex colors.
@@ -149,6 +155,20 @@ pub const DESCRIPTORS: &[SettingDescriptor] = &[
         group: "layout",
         kind: SettingKind::Choice(&["expanded", "hidden"]),
         description: "Sidebar visibility",
+    },
+    SettingDescriptor {
+        key: "quick_terminal_width",
+        label: "Quick terminal width",
+        group: "layout",
+        kind: SettingKind::Fraction,
+        description: "Fraction of the window width",
+    },
+    SettingDescriptor {
+        key: "quick_terminal_height",
+        label: "Quick terminal height",
+        group: "layout",
+        kind: SettingKind::Fraction,
+        description: "Fraction of the window height",
     },
     SettingDescriptor {
         key: "animations",
@@ -295,6 +315,10 @@ pub fn valid_color(value: &str) -> bool {
     value.len() == 7 && value.starts_with('#') && value[1..].bytes().all(|b| b.is_ascii_hexdigit())
 }
 
+pub fn valid_fraction(value: f64) -> bool {
+    value > 0. && value <= 1.
+}
+
 pub fn validate_value(key: &str, value: &Value) -> Result<(), String> {
     let d = descriptor(key).ok_or_else(|| format!("Unknown setting: {key}"))?;
     let valid = match d.kind {
@@ -303,6 +327,7 @@ pub fn validate_value(key: &str, value: &Value) -> Result<(), String> {
         SettingKind::Number { min, max } => value
             .as_u64()
             .is_some_and(|n| n >= u64::from(min) && n <= u64::from(max)),
+        SettingKind::Fraction => value.as_f64().is_some_and(valid_fraction),
         SettingKind::Text => value.is_null() || value.as_str().is_some_and(|s| s.len() <= 4096),
         SettingKind::Color => value.as_str().is_some_and(valid_color),
         SettingKind::Colors => value.as_object().is_some_and(|o| {
