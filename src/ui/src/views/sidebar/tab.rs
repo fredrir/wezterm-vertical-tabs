@@ -112,9 +112,12 @@ impl Sidebar {
         let home = model.home.as_deref();
         let rename = self.rename.as_mut().filter(|rename| rename.id == tab.id);
         let renaming = rename.is_some();
-        let name = display_text(&tab_name(tab, home).unwrap_or_default());
+        let glyphs = model.settings.tab_glyphs;
+        let name = display_text(&tab_name(tab, home, model.settings.tab_title).unwrap_or_default());
         let segmented = tab.panes.len() > 1
-            && rect.width.saturating_sub(ICON_CELLS + 2)
+            && rect
+                .width
+                .saturating_sub(ICON_CELLS * u16::from(glyphs) + 2)
                 >= tab.panes.len() as u16 * MIN_SEGMENT_CELLS;
         let machine = tab_machine(tab);
         let mut rename = rename;
@@ -123,11 +126,14 @@ impl Sidebar {
                 rename_field(cx, &mut rename.editor, layout);
             }
         };
-        let mut panes = |cx: &mut Canvas, layout: &RowLayout| pane_segments(cx, tab, home, layout);
+        let mut panes =
+            |cx: &mut Canvas, layout: &RowLayout| pane_segments(cx, tab, home, glyphs, layout);
         let id = ElementId::Tab(tab.id);
         let layout = Row {
             indent: if tab.folder_id.is_some() { 2 } else { 0 },
+            leading: glyphs,
             icon_color: machine.and_then(|(remote, os)| theme.host(remote, os)),
+            foreground: Some(theme.tab_text()),
             index: model.settings.show_indexes.then_some(number),
             selected: model.selected_tab == Some(tab.id) && !view.props.settings_open,
             trailing: model.settings.show_close.then_some(Trailing {
@@ -191,11 +197,11 @@ fn split_preview(cx: &mut Canvas, layout: &RowLayout) {
     );
 }
 
-fn pane_segments(cx: &mut Canvas, tab: &Tab, home: Option<&str>, layout: &RowLayout) {
+fn pane_segments(cx: &mut Canvas, tab: &Tab, home: Option<&str>, glyphs: bool, layout: &RowLayout) {
     let theme = cx.theme;
     let pointer = cx.pointer;
     let area = layout.content;
-    let mixed = spans_machines(tab);
+    let mixed = glyphs && spans_machines(tab);
     let slots = pane_slots(&tab.panes, area.width, area.height >= 2);
     let mut stacked: Vec<(u16, u16)> = Vec::new();
     for slot in slots.iter().filter(|slot| !slot.tall) {

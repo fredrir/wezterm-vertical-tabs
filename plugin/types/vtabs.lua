@@ -22,12 +22,19 @@
 ---@field show_indexes? boolean Visible tab indices
 ---@field show_metadata? boolean Show the session domain
 ---@field show_close? boolean Show close controls
+---@field tab_glyphs? boolean Show machine glyphs on tabs
+---@field glyph_size? number Sidebar glyph size relative to the text
+---@field tab_title? 'directory'|'process'|'pane_title'|'process_and_directory' Title source; renaming a tab overrides it
 ---@field confirm_close? boolean Confirm closing a tab with a running process
 ---@field accent? string Default accent color
 ---@field background? string Surface background
 ---@field foreground? string Text foreground
 ---@field muted? string Secondary text foreground
 ---@field selected_background? string Selected card background
+---@field hover_background? string Hovered card background; null follows Background
+---@field tab_foreground? string Tab title text; null follows Foreground
+---@field selected_foreground? string Selected and hovered card text; null follows Accent
+---@field local_glyph_color? string Local machine glyph; null follows the tab text
 ---@field distro_colors? table<'arch'|'ubuntu'|'debian'|'fedora'|'nixos'|'alpine'|'centos'|'rhel'|'opensuse'|'manjaro'|'raspbian'|'gentoo'|'freebsd'|'linux'|'macos'|'windows'|'remote', string> Remote glyph colors by os-release ID, `remote` when unknown
 ---@field keyboard_shortcuts? boolean Enable tab, search, settings and sidebar shortcuts
 ---@field default_domain? string Spawn domain used in an empty space; null retains the host default
@@ -39,6 +46,10 @@
 ---@field foreground? string Text foreground
 ---@field muted? string Secondary text foreground
 ---@field selected_background? string Selected card background
+---@field hover_background? string Hovered card background; null follows Background
+---@field tab_foreground? string Tab title text; null follows Foreground
+---@field selected_foreground? string Selected and hovered card text; null follows Accent
+---@field local_glyph_color? string Local machine glyph; null follows the tab text
 ---@field distro_colors? table<'arch'|'ubuntu'|'debian'|'fedora'|'nixos'|'alpine'|'centos'|'rhel'|'opensuse'|'manjaro'|'raspbian'|'gentoo'|'freebsd'|'linux'|'macos'|'windows'|'remote', string> Remote glyph colors by os-release ID, `remote` when unknown
 
 --- Argument to `vtabs.action` and `wezterm.vtabs.dispatch`.
@@ -81,7 +92,7 @@
 ---@field fields? { [1]: TabsMatchField, [2]: string[] }[]
 ---@field remote? boolean
 
----@alias TabsSettingKey 'keybinds'|'width'|'side'|'rail'|'quick_terminal_width'|'quick_terminal_height'|'quick_terminal_blur'|'quick_terminal_opacity'|'quick_terminal_border_color'|'quick_terminal_background_color'|'quick_terminal_auto_hide'|'quick_terminal_preserve_shell'|'quick_terminal_hide_on_escape'|'animations'|'reduced_motion'|'animation_ms'|'cards'|'show_indexes'|'show_metadata'|'show_close'|'confirm_close'|'accent'|'background'|'foreground'|'muted'|'selected_background'|'distro_colors'|'keyboard_shortcuts'|'default_domain'|'menus'
+---@alias TabsSettingKey 'keybinds'|'width'|'side'|'rail'|'quick_terminal_width'|'quick_terminal_height'|'quick_terminal_blur'|'quick_terminal_opacity'|'quick_terminal_border_color'|'quick_terminal_background_color'|'quick_terminal_auto_hide'|'quick_terminal_preserve_shell'|'quick_terminal_hide_on_escape'|'animations'|'reduced_motion'|'animation_ms'|'cards'|'show_indexes'|'show_metadata'|'show_close'|'tab_glyphs'|'glyph_size'|'tab_title'|'confirm_close'|'accent'|'background'|'foreground'|'muted'|'selected_background'|'hover_background'|'tab_foreground'|'selected_foreground'|'local_glyph_color'|'distro_colors'|'keyboard_shortcuts'|'default_domain'|'menus'
 
 ---@class TabsSpace
 ---@field accent? string

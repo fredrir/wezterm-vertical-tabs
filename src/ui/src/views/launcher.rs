@@ -8,7 +8,7 @@ use crate::overlays::{Menu, MenuItem, Overlay};
 use crate::views::keybinds::Binding;
 use crate::views::{tab_machine, tab_name};
 use crate::{SidebarUi, icons};
-use vtabs_core::{Intent, Model, Tab, TabId};
+use vtabs_core::{Intent, Model, Tab, TabId, TabTitle};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum LauncherKind {
@@ -85,7 +85,7 @@ impl AdoptablePane {
         Self {
             domain: domain.into(),
             pane,
-            label: tab_name(tab, home).unwrap_or_else(|| tab.title.clone()),
+            label: tab_name(tab, home, TabTitle::Directory).unwrap_or_else(|| tab.title.clone()),
             title: tab.title.clone(),
             place: place.into(),
             os: tab.os.clone(),
@@ -109,7 +109,7 @@ impl ForeignTab {
         Self {
             window,
             id: tab.id,
-            label: tab_name(tab, home).unwrap_or_else(|| tab.title.clone()),
+            label: tab_name(tab, home, TabTitle::Directory).unwrap_or_else(|| tab.title.clone()),
             title: tab.title.clone(),
             place: place.into(),
             remote: tab.remote,
@@ -341,7 +341,7 @@ impl SidebarUi {
     pub fn open_tab_navigator(&mut self, model: &Model) {
         let home = model.home.as_deref();
         let row = |tab: &Tab| {
-            let name = tab_name(tab, home);
+            let name = tab_name(tab, home, model.settings.tab_title);
             let mut item = MenuItem::new(
                 format!("tab/{}", tab.id),
                 name.as_deref().unwrap_or(&tab.title),

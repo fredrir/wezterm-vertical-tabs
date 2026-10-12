@@ -78,10 +78,10 @@ return config
 | Pinned order | Pinned tabs and folders precede New Tab; ordinary tabs follow |
 | Space assignment | Drop a tab on a bottom space control or use Move to space |
 | Folder persistence | Catalog, names and collapse state persist; live membership follows the session boundary in [Boundaries](limitations.md) |
-| Tab title | Double-click edits in place with the text selected; Enter saves, Escape cancels, an empty title restores the directory |
-| Tab icon | Active pane's machine, `󰒋` when splits span machines; each split then reads `GLYPH/name` |
+| Tab title | `tab_title`: directory, process, pane title or process and directory; double-click renames in place, Enter saves, Escape cancels, an empty title restores the source |
+| Tab icon | Active pane's machine, `󰒋` when splits span machines; each split then reads `GLYPH/name`; `tab_glyphs = false` hides them |
 | Tab index | Replaces the row's icon while hovered, for `Cmd+1`-`Cmd+9` (`show_indexes`) |
-| Icons | Drawn from WezTerm's bundled symbols font, so their size does not depend on the terminal font's Nerd Font variant |
+| Icons | Drawn from WezTerm's bundled symbols font, so their size does not depend on the terminal font's Nerd Font variant; `glyph_size` scales them |
 | Splits | Mirrors the layout in one row: side-by-side panes as columns, top/bottom panes as its two lines; click focuses a pane |
 | Close control | Floats over the hovered tab row without moving its content (`show_close`) |
 | Hints | Compact, beside the sidebar and level with the control; tabs show none |
@@ -331,10 +331,10 @@ Use [development.md](development.md) for installation, build/update commands and
 | Search | Compact sidebar trigger; launcher drops down from it, tooltips open below their control |
 | Tab rows | Index, directory marker and the deepest directory name |
 | Directory | Repository root name, `~/` for the owning machine's home and below it, `/` otherwise |
-| Renames | Custom title from the context menu or a Lua hook replaces the directory |
+| Renames | Custom title from the context menu or a Lua hook replaces the `tab_title` source |
 | Metadata | Session domain on a second line; `show_metadata` |
 | Icons | Active foreground color; subtle centered hover surface |
-| Remote | OS glyph in its own color; the local terminal glyph keeps the row color (`distro_colors`) |
+| Remote | OS glyph in its own color (`distro_colors`); the local terminal glyph keeps the row color unless `local_glyph_color` is set |
 | Clipboard | Cmd/Ctrl+A, C, X and V in editors, including macOS Edit menu equivalents; Ctrl+Shift too |
 
 ```lua

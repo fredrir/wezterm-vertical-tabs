@@ -4,7 +4,7 @@ pub(crate) mod settings_page;
 pub(crate) mod sidebar;
 
 use crate::icons;
-use vtabs_core::Tab;
+use vtabs_core::{Tab, TabTitle};
 
 pub(crate) fn spans_machines(tab: &Tab) -> bool {
     let mut glyphs = tab
@@ -28,8 +28,25 @@ pub(crate) fn tab_machine(tab: &Tab) -> Option<(bool, &str)> {
     )
 }
 
-pub(crate) fn tab_name(tab: &Tab, home: Option<&str>) -> Option<String> {
-    tab.custom_title()
-        .map(str::to_owned)
-        .or_else(|| tab.location(home))
+pub(crate) fn tab_name(tab: &Tab, home: Option<&str>, source: TabTitle) -> Option<String> {
+    if let Some(title) = tab.custom_title() {
+        return Some(title.to_owned());
+    }
+    let location = tab.location(home);
+    let process = tab
+        .process
+        .rsplit(['/', '\\'])
+        .next()
+        .filter(|name| !name.is_empty());
+    match source {
+        TabTitle::Directory => location,
+        TabTitle::Process => process.map(str::to_owned).or(location),
+        TabTitle::PaneTitle => Some(tab.title.clone())
+            .filter(|title| !title.is_empty())
+            .or(location),
+        TabTitle::ProcessAndDirectory => match (process, location) {
+            (Some(process), Some(location)) => Some(format!("{process} {location}")),
+            (process, location) => process.map(str::to_owned).or(location),
+        },
+    }
 }

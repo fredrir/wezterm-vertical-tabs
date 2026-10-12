@@ -379,17 +379,23 @@ impl SidebarUi {
                     menu.dropdown = anchor;
                 }
             }
-            SettingKind::Number { .. } | SettingKind::Fraction | SettingKind::Opacity => {
+            SettingKind::Number { .. }
+            | SettingKind::Fraction
+            | SettingKind::Opacity
+            | SettingKind::Scale => {
                 self.start_entry(model, key, None);
             }
             SettingKind::Color | SettingKind::OptionalColor => {
                 let default = settings_page::setting_value(&vtabs_core::Settings::default(), key);
-                let fallback = if key == "quick_terminal_background_color" {
-                    self.host.page_background.unwrap_or(self.theme.background)
-                } else if key == "quick_terminal_border_color" {
-                    self.theme.foreground
-                } else {
-                    self.theme.accent
+                let fallback = match key {
+                    "quick_terminal_background_color" => {
+                        self.host.page_background.unwrap_or(self.theme.background)
+                    }
+                    "quick_terminal_border_color" => self.theme.foreground,
+                    "hover_background" => self.theme.hovered(),
+                    "tab_foreground" | "local_glyph_color" => self.theme.tab_text(),
+                    "selected_foreground" => self.theme.selected_text(),
+                    _ => self.theme.accent,
                 };
                 self.open_color_form(
                     self.settings.label(descriptor),
@@ -493,7 +499,8 @@ impl SidebarUi {
         let Some(tab) = model.tabs.get(&id) else {
             return;
         };
-        let initial = tab_name(tab, model.home.as_deref()).unwrap_or_default();
+        let initial =
+            tab_name(tab, model.home.as_deref(), model.settings.tab_title).unwrap_or_default();
         let mut editor = TextEditor::new(&initial);
         editor.select_all();
         self.sidebar.rename = Some(InlineRename {

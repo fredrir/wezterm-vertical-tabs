@@ -105,10 +105,10 @@ impl SidebarUi {
                     .and_then(|tab| tab.panes.iter().find(|entry| entry.id == *pane))
                     .map(|pane| pane.label(home)),
                 Some(other) => match other.row() {
-                    ElementId::Tab(id) => model
-                        .tabs
-                        .get(&id)
-                        .map(|tab| tab_name(tab, home).unwrap_or_else(|| tab.title.clone())),
+                    ElementId::Tab(id) => model.tabs.get(&id).map(|tab| {
+                        tab_name(tab, home, model.settings.tab_title)
+                            .unwrap_or_else(|| tab.title.clone())
+                    }),
                     _ => None,
                 },
                 None => None,

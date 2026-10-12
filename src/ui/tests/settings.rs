@@ -78,8 +78,11 @@ fn numbers_take_typed_values_in_display_units_and_stay_in_range() {
         ("quick_terminal_width", "60", 0.6),
         ("quick_terminal_blur", "16", 16.),
         ("quick_terminal_blur", "99", 64.),
+        ("glyph_size", "30", 0.5),
+        ("glyph_size", "90", 0.9),
+        ("glyph_size", "250", 1.),
     ] {
-        let (mut ui, model) = settings("quick_terminal");
+        let (mut ui, model) = settings(vtabs_core::settings::descriptor(key).unwrap().group);
         click(&mut ui, &model, ElementId::Setting(key.into()));
         assert!(
             ui.text_input_active(),
@@ -604,7 +607,7 @@ fn changed_settings_draw_their_label_in_the_accent() {
 #[test]
 fn remote_glyphs_close_the_colors_tab_with_a_colored_row_per_os() {
     let (mut ui, model) = settings("theme");
-    draw(&mut ui, &model);
+    ui.render(&model, Rect::new(0, 0, 110, 90), Duration::ZERO);
     let rows = selected_rows(&ui);
     let distros: Vec<String> = vtabs_core::distros::DESCRIPTORS
         .iter()
@@ -691,6 +694,91 @@ fn quick_terminal_colors_also_list_under_colors_with_their_own_labels() {
     for key in keys {
         assert_eq!(rows.iter().filter(|row| *row == key).count(), 1);
     }
+}
+
+#[test]
+fn tab_colors_also_list_under_tabs_with_their_own_labels() {
+    let text = |ui: &SidebarUi, key: &str| {
+        let row = rect(ui, &ElementId::Setting(key.into()));
+        (row.x + 2..row.right())
+            .map(|x| ui.buffer()[(x, row.y)].symbol().to_owned())
+            .collect::<String>()
+    };
+    let labels = [
+        ("selected_background", "Selected background ", "Selection "),
+        ("hover_background", "Hover background ", "Hover "),
+        ("tab_foreground", "Text ", "Tab text "),
+        ("selected_foreground", "Selected text ", "Selected text "),
+        ("local_glyph_color", "Local glyph ", "Local glyph "),
+    ];
+
+    let (mut ui, model) = settings("appearance");
+    draw(&mut ui, &model);
+    let rows = selected_rows(&ui);
+    assert!(
+        rows.ends_with(&labels.map(|(key, ..)| key.to_owned())),
+        "{rows:?}"
+    );
+    for (key, tabs, _) in labels {
+        assert!(text(&ui, key).starts_with(tabs), "{key}");
+    }
+
+    let (mut ui, model) = settings("theme");
+    ui.render(&model, Rect::new(0, 0, 110, 90), Duration::ZERO);
+    for (key, _, colors) in labels {
+        assert!(text(&ui, key).starts_with(colors), "{key}");
+    }
+
+    let (mut ui, model) = settings("all");
+    ui.render(&model, Rect::new(0, 0, 110, 200), Duration::ZERO);
+    let rows = selected_rows(&ui);
+    for (key, ..) in labels {
+        assert_eq!(rows.iter().filter(|row| *row == key).count(), 1, "{key}");
+    }
+}
+
+#[test]
+fn tab_title_follows_its_source_unless_renamed_and_glyphs_can_hide() {
+    let row = |change: &dyn Fn(&mut Model)| {
+        let mut model = Model::default();
+        model.settings.animations = false;
+        model.home = Some("/home/me".into());
+        let tab = Tab {
+            id: 1,
+            title: "notes.md".into(),
+            cwd: "/home/me/notes".into(),
+            process: "/usr/bin/nvim".into(),
+            ..Tab::default()
+        };
+        model.reconcile(vec![tab], Some(1), true).unwrap();
+        change(&mut model);
+        let mut ui = SidebarUi::new();
+        draw(&mut ui, &model);
+        let row = rect(&ui, &ElementId::Tab(1));
+        (row.x..row.right())
+            .map(|x| ui.buffer()[(x, row.y)].symbol().to_owned())
+            .collect::<String>()
+    };
+    let titled = |source: &'static str| {
+        row(&|model: &mut Model| model.settings.set("tab_title", json!(source)).unwrap())
+    };
+
+    assert!(titled("directory").contains("~/notes"));
+    assert!(titled("process").contains("nvim"));
+    assert!(!titled("process").contains("~/notes"));
+    assert!(titled("pane_title").contains("notes.md"));
+    assert!(titled("process_and_directory").contains("nvim ~/notes"));
+    assert!(
+        row(&|model: &mut Model| {
+            model.settings.tab_title = vtabs_core::TabTitle::Process;
+            model.tabs.get_mut(&1).unwrap().title_override = Some("renamed".into());
+        })
+        .contains("renamed")
+    );
+
+    let glyph = "\u{f120}";
+    assert!(row(&|_: &mut Model| {}).contains(glyph));
+    assert!(!row(&|model: &mut Model| model.settings.tab_glyphs = false).contains(glyph));
 }
 
 fn with_tabs(count: u64) -> (SidebarUi, Model) {

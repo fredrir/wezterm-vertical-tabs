@@ -30,13 +30,23 @@ const CATEGORIES: &[(&str, &str, &str)] = &[
     ("keybinds", "Keybinds", icons::KEYBOARD_OUTLINE),
 ];
 
-/// Settings from other groups also listed under Colors, with the label they take there.
-const ALSO_IN_COLORS: &[(&str, &str)] = &[
-    ("quick_terminal_border_color", "Quick terminal border"),
+/// Settings from other groups also listed under a category, with the label they take there.
+const ALSO_IN: &[(&str, &str, &str)] = &[
     (
+        "theme",
+        "quick_terminal_border_color",
+        "Quick terminal border",
+    ),
+    (
+        "theme",
         "quick_terminal_background_color",
         "Quick terminal background",
     ),
+    ("appearance", "selected_background", "Selected background"),
+    ("appearance", "hover_background", "Hover background"),
+    ("appearance", "tab_foreground", "Text"),
+    ("appearance", "selected_foreground", "Selected text"),
+    ("appearance", "local_glyph_color", "Local glyph"),
 ];
 
 const VALUE_CELLS: u16 = 5;
@@ -116,6 +126,7 @@ impl Range {
             }),
             SettingKind::Fraction => Some(percent(0.01)),
             SettingKind::Opacity => Some(percent(0.)),
+            SettingKind::Scale => Some(percent(0.5)),
             _ => None,
         }
     }
@@ -178,7 +189,7 @@ impl Range {
 }
 
 pub(crate) fn choice_label(choice: &str) -> String {
-    let mut chars = choice.chars();
+    let mut chars = choice.chars().map(|c| if c == '_' { ' ' } else { c });
     chars.next().map_or_else(String::new, |first| {
         first.to_uppercase().chain(chars).collect()
     })
@@ -197,7 +208,11 @@ fn number(model: &Model, key: &str) -> f64 {
 }
 
 fn dimmed(model: &Model, key: &str) -> bool {
-    key == "quick_terminal_blur" && model.settings.quick_terminal_opacity >= 1.
+    match key {
+        "quick_terminal_blur" => model.settings.quick_terminal_opacity >= 1.,
+        "show_indexes" => !model.settings.tab_glyphs,
+        _ => false,
+    }
 }
 
 /// Settings, keybind and remote glyph rows by key.
@@ -320,10 +335,10 @@ impl SettingsPage {
                 .collect();
         }
         let query = self.query.text().trim().to_lowercase();
-        let borrowed = ALSO_IN_COLORS
+        let borrowed = ALSO_IN
             .iter()
-            .filter(|_| self.category == "theme")
-            .filter_map(|(key, _)| settings::descriptor(key));
+            .filter(|(category, ..)| *category == self.category)
+            .filter_map(|(_, key, _)| settings::descriptor(key));
         let mut fields: Vec<_> = settings::descriptors()
             .iter()
             .filter(|field| field.key != "keybinds")
@@ -349,10 +364,10 @@ impl SettingsPage {
     }
 
     pub(crate) fn label(&self, field: &SettingDescriptor) -> &'static str {
-        ALSO_IN_COLORS
+        ALSO_IN
             .iter()
-            .find(|(key, _)| self.category == "theme" && *key == field.key)
-            .map_or(field.label, |(_, label)| label)
+            .find(|(category, key, _)| *category == self.category && *key == field.key)
+            .map_or(field.label, |(.., label)| label)
     }
 
     /// `opaque` covers whatever lies beneath, when the page shares the sidebar's cells.

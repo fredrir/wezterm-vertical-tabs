@@ -29,6 +29,16 @@ pub enum HideOnEscape {
     Auto,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum TabTitle {
+    #[default]
+    Directory,
+    Process,
+    PaneTitle,
+    ProcessAndDirectory,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Settings {
@@ -51,6 +61,9 @@ pub struct Settings {
     pub show_indexes: bool,
     pub show_metadata: bool,
     pub show_close: bool,
+    pub tab_glyphs: bool,
+    pub glyph_size: f64,
+    pub tab_title: TabTitle,
     pub confirm_close: bool,
     pub keyboard_shortcuts: bool,
     #[serde(deserialize_with = "crate::keybinds::deserialize")]
@@ -60,6 +73,10 @@ pub struct Settings {
     pub foreground: String,
     pub muted: String,
     pub selected_background: String,
+    pub hover_background: Option<String>,
+    pub tab_foreground: Option<String>,
+    pub selected_foreground: Option<String>,
+    pub local_glyph_color: Option<String>,
     #[serde(deserialize_with = "crate::distros::deserialize")]
     pub distro_colors: BTreeMap<String, String>,
     pub default_domain: Option<String>,
@@ -100,6 +117,9 @@ impl Default for Settings {
             show_indexes: true,
             show_metadata: false,
             show_close: true,
+            tab_glyphs: true,
+            glyph_size: 0.8,
+            tab_title: TabTitle::Directory,
             confirm_close: true,
             keyboard_shortcuts: true,
             keybinds: BTreeMap::new(),
@@ -108,6 +128,10 @@ impl Default for Settings {
             foreground: "#e1e7f0".into(),
             muted: "#98a8be".into(),
             selected_background: "#34485f".into(),
+            hover_background: None,
+            tab_foreground: None,
+            selected_foreground: None,
+            local_glyph_color: None,
             distro_colors: crate::distros::defaults(),
             default_domain: None,
             menus: Vec::new(),
@@ -127,6 +151,8 @@ pub enum SettingKind {
     Fraction,
     /// From 0 (invisible) through 1 (opaque).
     Opacity,
+    /// From 0.5 (half size) through 1.
+    Scale,
     Text,
     Color,
     /// Null follows the terminal palette.
@@ -289,6 +315,32 @@ pub const DESCRIPTORS: &[SettingDescriptor] = &[
         description: "Show close controls",
     },
     SettingDescriptor {
+        key: "tab_glyphs",
+        label: "Glyphs",
+        group: "appearance",
+        kind: SettingKind::Bool,
+        description: "Show machine glyphs on tabs",
+    },
+    SettingDescriptor {
+        key: "glyph_size",
+        label: "Glyph size",
+        group: "appearance",
+        kind: SettingKind::Scale,
+        description: "Sidebar glyph size relative to the text",
+    },
+    SettingDescriptor {
+        key: "tab_title",
+        label: "Title",
+        group: "appearance",
+        kind: SettingKind::Choice(&[
+            "directory",
+            "process",
+            "pane_title",
+            "process_and_directory",
+        ]),
+        description: "Title source; renaming a tab overrides it",
+    },
+    SettingDescriptor {
         key: "confirm_close",
         label: "Confirm close",
         group: "behavior",
@@ -329,6 +381,34 @@ pub const DESCRIPTORS: &[SettingDescriptor] = &[
         group: "theme",
         kind: SettingKind::Color,
         description: "Selected card background",
+    },
+    SettingDescriptor {
+        key: "hover_background",
+        label: "Hover",
+        group: "theme",
+        kind: SettingKind::OptionalColor,
+        description: "Hovered card background; null follows Background",
+    },
+    SettingDescriptor {
+        key: "tab_foreground",
+        label: "Tab text",
+        group: "theme",
+        kind: SettingKind::OptionalColor,
+        description: "Tab title text; null follows Foreground",
+    },
+    SettingDescriptor {
+        key: "selected_foreground",
+        label: "Selected text",
+        group: "theme",
+        kind: SettingKind::OptionalColor,
+        description: "Selected and hovered card text; null follows Accent",
+    },
+    SettingDescriptor {
+        key: "local_glyph_color",
+        label: "Local glyph",
+        group: "theme",
+        kind: SettingKind::OptionalColor,
+        description: "Local machine glyph; null follows the tab text",
     },
     SettingDescriptor {
         key: "distro_colors",
@@ -385,6 +465,7 @@ pub fn validate_value(key: &str, value: &Value) -> Result<(), String> {
             .is_some_and(|n| n >= u64::from(min) && n <= u64::from(max)),
         SettingKind::Fraction => value.as_f64().is_some_and(valid_fraction),
         SettingKind::Opacity => value.as_f64().is_some_and(|v| (0. ..=1.).contains(&v)),
+        SettingKind::Scale => value.as_f64().is_some_and(|v| (0.5..=1.).contains(&v)),
         SettingKind::Text => value.is_null() || value.as_str().is_some_and(|s| s.len() <= 4096),
         SettingKind::Color => value.as_str().is_some_and(valid_color),
         SettingKind::OptionalColor => value.is_null() || value.as_str().is_some_and(valid_color),

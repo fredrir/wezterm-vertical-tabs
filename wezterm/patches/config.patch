@@ -1,3 +1,22 @@
+diff --git a/config/src/lib.rs b/config/src/lib.rs
+index 802059c4f7c17331d29174fbeca7d03f0d9118ef..97cc8863b0bd5ec6f119300c7489110456e7636b 100644
+--- a/config/src/lib.rs
++++ b/config/src/lib.rs
+@@ -798,6 +798,14 @@ impl ConfigHandle {
+         }
+     }
+ 
++    /// The same generation with other values, for a renderer that styles its own text.
++    pub fn derive(&self, config: Config) -> Self {
++        Self {
++            config: Arc::new(config),
++            generation: self.generation,
++        }
++    }
++
+     pub fn unicode_version(&self) -> UnicodeVersion {
+         UnicodeVersion {
+             version: self.config.unicode_version,
 diff --git a/config/src/ssh.rs b/config/src/ssh.rs
 index f1cac1a9effb346c6f8d3fde49499285ce2634ac..0b11936e3bc0e842396c04dc1797da6a22dc4c9f 100644
 --- a/config/src/ssh.rs

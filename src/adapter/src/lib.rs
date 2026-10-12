@@ -1124,7 +1124,11 @@ impl Adapter {
                 })
             })
         });
-        (self.hooks_enabled || process_rules || process_templates)
+        let process_titles = matches!(
+            model.settings.tab_title,
+            core::TabTitle::Process | core::TabTitle::ProcessAndDirectory
+        );
+        (self.hooks_enabled || process_rules || process_templates || process_titles)
             .then_some(std::time::Duration::from_secs(2))
     }
     /// Applies the sidebar's order to every tab of the mux window, keeping its active tab.
@@ -1942,6 +1946,9 @@ impl Provider for Adapter {
         }
         directory::withdraw(self.window_id);
         Box::pin(shutdown::drain(self.app, self.outstanding))
+    }
+    fn glyph_scale(&self) -> f64 {
+        self.app.model().settings.glyph_size
     }
     fn quick_terminal_config(&self) -> QuickTerminalConfig {
         let settings = &self.app.model().settings;

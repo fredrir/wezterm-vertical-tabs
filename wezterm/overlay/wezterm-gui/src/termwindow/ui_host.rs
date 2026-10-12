@@ -251,6 +251,7 @@ pub trait Provider {
     );
     fn input(&mut self, input: Input<'_>) -> bool;
     fn terminal_input(&mut self, input: Input<'_>) -> TerminalKey;
+    fn glyph_scale(&self) -> f64;
     fn quick_terminal_config(&self) -> QuickTerminalConfig;
     fn message(&mut self, message: serde_json::Value);
     fn projection(&self) -> Projection;
@@ -353,7 +354,8 @@ pub struct UiHost {
     cache: Vec<RowCache>,
     primitive_cache: Vec<PrimitiveCache>,
     primitive_cache_key: (usize, usize, usize, u32, u32, u32, u32, u32),
-    cache_key: (usize, usize, usize, usize, usize, bool),
+    cache_key: (usize, usize, usize, usize, usize, bool, u64),
+    glyph_config: Option<((usize, u64), config::ConfigHandle)>,
     chrome: Option<ComputedElement>,
     chrome_items: Vec<UIItem>,
     chrome_key: (usize, usize, usize, usize, usize, bool),
@@ -380,7 +382,8 @@ impl UiHost {
             cache: Vec::new(),
             primitive_cache: Vec::new(),
             primitive_cache_key: Default::default(),
-            cache_key: (0, 0, 0, 0, 0, false),
+            cache_key: (0, 0, 0, 0, 0, false, 0),
+            glyph_config: None,
             chrome: None,
             chrome_items: Vec::new(),
             chrome_key: (0, 0, 0, 0, 0, false),
@@ -396,6 +399,29 @@ impl UiHost {
             }
         });
         host
+    }
+    /// Patched Nerd Fonts size each icon set differently, so the bundled symbols font leads.
+    fn styled_config(&mut self, config: &config::ConfigHandle) -> config::ConfigHandle {
+        let scale = self.provider.glyph_scale();
+        let key = (config.generation(), scale.to_bits());
+        if let Some((cached, handle)) = &self.glyph_config {
+            if *cached == key {
+                return handle.clone();
+            }
+        }
+        let symbols = config::FontAttributes {
+            scale: ordered_float::NotNan::new(scale).ok(),
+            ..config::FontAttributes::new("Symbols Nerd Font Mono")
+        };
+        let mut styled = (**config).clone();
+        for style in std::iter::once(&mut styled.font)
+            .chain(styled.font_rules.iter_mut().map(|rule| &mut rule.font))
+        {
+            style.font.insert(0, symbols.clone());
+        }
+        let handle = config.derive(styled);
+        self.glyph_config = Some((key, handle.clone()));
+        handle
     }
     fn initialize(&mut self, arrivals: &[serde_json::Value]) {
         for arrival in arrivals {
@@ -1670,6 +1696,7 @@ impl TermWindow {
             }
             ui.geometry = geometry;
             ui.provider.render(geometry, start);
+            let styled = ui.styled_config(&self.config);
             let surface = ui.provider.surface();
             let bounds =
                 geometry.ui_bounds(ui.provider.content_page() || ui.provider.overlay_surface());
@@ -1691,6 +1718,7 @@ impl TermWindow {
                 geometry.cell_width as usize,
                 geometry.cell_height as usize,
                 rounded,
+                ui.provider.glyph_scale().to_bits(),
             );
             if ui.cache_key != key {
                 ui.cache.clear();
@@ -1807,15 +1835,6 @@ impl TermWindow {
                     clip,
                 );
             }
-            // Patched "Mono" fonts shrink icons into one cell; the bundled symbols font
-            // leads this chain so an icon can fill the blank cell beside it.
-            let ui_font = {
-                let mut style = self.config.font.clone();
-                style
-                    .font
-                    .insert(0, config::FontAttributes::new("Symbols Nerd Font Mono"));
-                self.fonts.resolve_font(&style).ok()
-            };
             for (y, line) in surface.rows.iter().enumerate() {
                 let centered_ranges = surface.centered.get(y).map_or(&[][..], Vec::as_slice);
                 if ui
@@ -1846,7 +1865,7 @@ impl TermWindow {
                                 pixel_width: grid_width as usize,
                                 reverse_video: false,
                             },
-                            config: &self.config,
+                            config: &styled,
                             cursor_border_color: LinearRgba::default(),
                             foreground: palette.foreground.to_linear(),
                             pane: None,
@@ -1861,7 +1880,7 @@ impl TermWindow {
                             window_is_transparent: false,
                             default_bg: palette.resolve_bg(ColorAttribute::Default).to_linear(),
                             style: None,
-                            font: ui_font.clone(),
+                            font: None,
                             use_pixel_positioning: false,
                             render_metrics: self.render_metrics,
                             shape_key: None,

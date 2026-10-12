@@ -14,6 +14,10 @@ pub struct Theme {
     pub accent: Color,
     pub danger: Color,
     pub machines: BTreeMap<String, Color>,
+    pub hover_background: Option<Color>,
+    pub tab_foreground: Option<Color>,
+    pub selected_foreground: Option<Color>,
+    pub local_glyph: Option<Color>,
 }
 
 impl Default for Theme {
@@ -28,6 +32,10 @@ impl Default for Theme {
             accent: Color::Rgb(169, 199, 245),
             danger: Color::Rgb(250, 122, 134),
             machines: BTreeMap::new(),
+            hover_background: None,
+            tab_foreground: None,
+            selected_foreground: None,
+            local_glyph: None,
         };
         theme.sync_surfaces();
         theme
@@ -46,6 +54,11 @@ impl Theme {
             .iter()
             .filter_map(|(os, color)| Some((os.clone(), Self::parse_color(color)?)))
             .collect();
+        let optional = |value: &Option<String>| value.as_deref().and_then(Self::parse_color);
+        self.hover_background = optional(&settings.hover_background);
+        self.tab_foreground = optional(&settings.tab_foreground);
+        self.selected_foreground = optional(&settings.selected_foreground);
+        self.local_glyph = optional(&settings.local_glyph_color);
         self.accent = model
             .spaces
             .iter()
@@ -99,7 +112,22 @@ impl Theme {
     }
 
     pub(crate) fn host(&self, remote: bool, os: &str) -> Option<Color> {
+        if !remote {
+            return self.local_glyph;
+        }
         icons::host_color(remote, os, &self.machines)
+    }
+
+    pub(crate) fn hovered(&self) -> Color {
+        self.hover_background.unwrap_or(self.card)
+    }
+
+    pub(crate) fn tab_text(&self) -> Color {
+        self.tab_foreground.unwrap_or(self.foreground)
+    }
+
+    pub(crate) fn selected_text(&self) -> Color {
+        self.selected_foreground.unwrap_or(self.accent)
     }
 
     pub fn base(&self) -> Style {

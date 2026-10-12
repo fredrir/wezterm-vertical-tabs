@@ -24,6 +24,7 @@ pub(crate) struct Row<'a> {
     pub leading: bool,
     pub icon: &'a str,
     pub icon_color: Option<Color>,
+    pub foreground: Option<Color>,
     pub index: Option<usize>,
     pub content: Content<'a>,
     pub tooltip: Option<String>,
@@ -42,6 +43,7 @@ impl<'a> Row<'a> {
             leading: true,
             icon,
             icon_color: None,
+            foreground: None,
             index: None,
             content,
             tooltip: None,
@@ -85,14 +87,18 @@ impl Row<'_> {
             _ if aimed => theme.tint(theme.card, DROP_TINT),
             (true, ..) => theme.selected,
             (_, true, true) => theme.lift(theme.card, 5),
-            (_, true, false) | (_, false, true) => theme.card,
+            (_, true, false) => theme.hovered(),
+            (_, false, true) => theme.card,
             _ => theme.background,
         };
         let mut style = theme.base().bg(fill);
+        if let Some(foreground) = self.foreground {
+            style = style.fg(foreground);
+        }
         if ghost {
             style = style.fg(theme.lift(theme.background, 30));
         } else if self.selected || aimed || hovered {
-            style = style.fg(theme.accent);
+            style = style.fg(theme.selected_text());
         } else if self.muted && !focused {
             style = style.fg(theme.muted);
         }

@@ -181,7 +181,7 @@ fn setting_type(kind: &SettingKind) -> String {
     match kind {
         SettingKind::Bool => "boolean".into(),
         SettingKind::Number { .. } => "integer".into(),
-        SettingKind::Fraction | SettingKind::Opacity => "number".into(),
+        SettingKind::Fraction | SettingKind::Opacity | SettingKind::Scale => "number".into(),
         SettingKind::Text => "string".into(),
         SettingKind::Color | SettingKind::OptionalColor => "string".into(),
         SettingKind::Colors => format!(
@@ -281,6 +281,7 @@ fn generate(format: &str) -> Result<String, String> {
                     SettingKind::Number { min, max } => format!("Integer {min}–{max}"),
                     SettingKind::Fraction => "Number above 0, at most 1".into(),
                     SettingKind::Opacity => "Number 0–1".into(),
+                    SettingKind::Scale => "Number 0.5–1".into(),
                     SettingKind::Text => "String or null".into(),
                     SettingKind::Color => "Hex color `#RRGGBB`".into(),
                     SettingKind::OptionalColor => "Hex color `#RRGGBB` or null".into(),
