@@ -385,7 +385,7 @@ impl SidebarUi {
             | SettingKind::Scale => {
                 self.start_entry(model, key, None);
             }
-            SettingKind::Color | SettingKind::OptionalColor => {
+            SettingKind::Color | SettingKind::OptionalColor | SettingKind::Border => {
                 let default = settings_page::setting_value(&vtabs_core::Settings::default(), key);
                 let fallback = match key {
                     "quick_terminal_background_color" => {
@@ -404,6 +404,9 @@ impl SidebarUi {
                     default.as_str(),
                     fallback,
                 );
+                if matches!(descriptor.kind, SettingKind::Border) {
+                    self.allow_no_color();
+                }
             }
             _ => {
                 let value = value.as_str().map_or_else(

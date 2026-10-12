@@ -38,6 +38,13 @@ CONSUMERS = {
     "action": "local tabs = require 'plugin.init'\n"
     "tabs.action('navigator')\ntabs.action({ ResetSetting = 'width' })\n",
     "invalid-action": "local tabs = require 'plugin.init'\ntabs.action('navigate')\n",
+    "program": "local tabs = require 'plugin.init'\n"
+    "tabs.action({ QuickTerminal = { args = { 'lazygit' }, domain = { DomainName = 'local' },\n"
+    "  window_padding = { left = 0, top = '0.5cell' }, window_background_opacity = 0.9,\n"
+    "  border_color = 'none', colors = { background = '#1e1e2e' }, hide_on_escape = 'never',\n"
+    "  preserve = true } })\n",
+    "invalid-program": "local tabs = require 'plugin.init'\n"
+    "tabs.action({ QuickTerminal = { args = { 'lazygit' }, hide_on_escape = 'sometimes' } })\n",
 }
 
 

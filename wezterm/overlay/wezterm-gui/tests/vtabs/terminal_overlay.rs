@@ -1,4 +1,6 @@
 use super::*;
+use crate::termwindow::ui_host::{HideOnEscape, TerminalPadding};
+use config::Dimension;
 
 #[test]
 fn terminal_is_centered_in_three_quarters_of_the_window() {
@@ -10,7 +12,14 @@ fn terminal_is_centered_in_three_quarters_of_the_window() {
             width: 1200. * scale,
             height: 800. * scale,
         };
-        let layout = Layout::new(bounds, SHELL_SIZE, 8. * scale, 16. * scale, dpi);
+        let layout = Layout::new(
+            bounds,
+            SHELL_SIZE,
+            &WindowPadding::default(),
+            8. * scale,
+            16. * scale,
+            dpi,
+        );
         assert_eq!(layout.frame.width, bounds.width * 0.75);
         assert_eq!(layout.frame.height, bounds.height * 0.75);
         assert_eq!(
@@ -39,7 +48,7 @@ fn frame_and_content_sit_on_whole_pixels() {
         height: 777.3,
     };
     for size in [SHELL_SIZE, (0.77, 0.63), (0.333, 0.9)] {
-        let layout = Layout::new(bounds, size, 8.4, 17.3, 144);
+        let layout = Layout::new(bounds, size, &WindowPadding::default(), 8.4, 17.3, 144);
         for value in [
             layout.frame.x,
             layout.frame.y,
@@ -62,6 +71,7 @@ fn tiny_windows_still_have_a_valid_pty_size() {
             ..Default::default()
         },
         SHELL_SIZE,
+        &WindowPadding::default(),
         8.,
         16.,
         96,
@@ -78,7 +88,7 @@ fn programs_choose_their_share_of_the_window() {
         height: 800.,
     };
     for size in [(0.5, 0.9), (1., 1.), (0.2, 0.35)] {
-        let layout = Layout::new(bounds, size, 8., 16., 96);
+        let layout = Layout::new(bounds, size, &WindowPadding::default(), 8., 16., 96);
         assert!((layout.frame.width - bounds.width * size.0).abs() < 0.01);
         assert!((layout.frame.height - bounds.height * size.1).abs() < 0.01);
         let center = |start: f32, extent: f32| start + extent / 2.;
@@ -102,9 +112,9 @@ fn programs_without_a_size_follow_the_shell() {
         state.program = Some(Program::new(
             1,
             TerminalProgram {
-                spawn: SpawnCommand::default(),
                 width,
                 height,
+                ..Default::default()
             },
         ));
         state
@@ -119,11 +129,13 @@ fn programs_without_a_size_follow_the_shell() {
 fn config(size: (f32, f32)) -> QuickTerminalConfig {
     QuickTerminalConfig {
         size,
+        padding: TerminalPadding::default(),
         opacity: 1.,
         blur: 0.,
-        border_color: None,
+        border: TerminalBorder::Palette,
         background_color: None,
         auto_hide: false,
+        hide_on_escape: HideOnEscape::Auto,
         preserve_shell: true,
         transition: Duration::from_millis(140),
     }
@@ -148,11 +160,25 @@ fn a_step_of_one_cell_changes_the_grid_by_one_cell() {
         height: 1600.,
     };
     let (cell_width, cell_height) = (16., 32.);
-    let before = Layout::new(bounds, SHELL_SIZE, cell_width, cell_height, 192);
+    let before = Layout::new(
+        bounds,
+        SHELL_SIZE,
+        &WindowPadding::default(),
+        cell_width,
+        cell_height,
+        192,
+    );
     for amount in [1., 3.] {
         let width = (before.frame.width + amount * cell_width) / bounds.width;
         let height = (before.frame.height - amount * cell_height) / bounds.height;
-        let after = Layout::new(bounds, (width, height), cell_width, cell_height, 192);
+        let after = Layout::new(
+            bounds,
+            (width, height),
+            &WindowPadding::default(),
+            cell_width,
+            cell_height,
+            192,
+        );
         assert_eq!(after.size.cols, before.size.cols + amount as usize);
         assert_eq!(after.size.rows, before.size.rows - amount as usize);
     }
@@ -169,6 +195,7 @@ fn content_stays_inside_the_padding() {
                 height: 777.,
             },
             size,
+            &WindowPadding::default(),
             8.,
             17.,
             dpi,
@@ -197,9 +224,8 @@ fn steps_change_the_window_size_unless_the_program_sets_that_axis() {
     state.program = Some(Program::new(
         1,
         TerminalProgram {
-            spawn: SpawnCommand::default(),
-            width: None,
             height: Some(0.9),
+            ..Default::default()
         },
     ));
     assert_eq!(state.size(configured), (0.8, 0.9));
@@ -312,4 +338,176 @@ fn preserved_shell_launch_can_finish_while_hidden() {
     assert!(state.wants(pending));
     state.visible = true;
     assert!(state.wants(pending));
+}
+
+#[test]
+fn padding_reads_wezterm_units_against_the_frame() {
+    let bounds = Bounds {
+        x: 0.,
+        y: 0.,
+        width: 1600.,
+        height: 1000.,
+    };
+    let padding = WindowPadding {
+        left: Dimension::Pixels(0.),
+        top: Dimension::Percent(0.1),
+        right: Dimension::Cells(2.),
+        bottom: Dimension::Points(18.),
+    };
+    let layout = Layout::new(bounds, (1., 1.), &padding, 10., 20., 144);
+    let (frame, inner) = (layout.frame, layout.inner);
+    assert_eq!(inner.x - frame.x, 0.);
+    assert_eq!(inner.y - frame.y, 100.);
+    assert_eq!(frame.x + frame.width - (inner.x + inner.width), 20.);
+    assert_eq!(frame.y + frame.height - (inner.y + inner.height), 36.);
+    assert_eq!((layout.size.cols, layout.size.rows), (158, 43));
+    assert!(layout.content.x >= inner.x && layout.content.y >= inner.y);
+}
+
+#[test]
+fn padding_takes_at_most_a_quarter_of_each_side() {
+    let bounds = Bounds {
+        x: 0.,
+        y: 0.,
+        width: 800.,
+        height: 600.,
+    };
+    let padding = WindowPadding {
+        left: Dimension::Percent(2.),
+        top: Dimension::Cells(100.),
+        right: Dimension::Pixels(1e6),
+        bottom: Dimension::Points(1e6),
+    };
+    let layout = Layout::new(bounds, (1., 1.), &padding, 8., 16., 96);
+    assert_eq!((layout.inner.width, layout.inner.height), (400., 300.));
+    assert_eq!((layout.size.cols, layout.size.rows), (50, 18));
+}
+
+#[test]
+fn unset_sides_follow_the_window_padding() {
+    let window = WindowPadding::default();
+    let program = TerminalPadding {
+        top: Some(Dimension::Pixels(3.)),
+        ..Default::default()
+    };
+    let settings = TerminalPadding {
+        top: Some(Dimension::Pixels(9.)),
+        left: Some(Dimension::Cells(2.)),
+        ..Default::default()
+    };
+    let resolved = program.or(settings).resolve(&window);
+    assert_eq!(resolved.top, Dimension::Pixels(3.));
+    assert_eq!(resolved.left, Dimension::Cells(2.));
+    assert_eq!(resolved.right, window.right);
+    assert_eq!(resolved.bottom, window.bottom);
+}
+
+#[test]
+fn program_values_override_the_quick_terminal_settings() {
+    let settings = QuickTerminalConfig {
+        padding: TerminalPadding {
+            left: Some(Dimension::Pixels(4.)),
+            top: Some(Dimension::Pixels(4.)),
+            ..Default::default()
+        },
+        opacity: 0.8,
+        blur: 10.,
+        auto_hide: true,
+        background_color: Some(LinearRgba(0., 0., 0., 1.)),
+        ..config((0.75, 0.75))
+    };
+    assert_eq!(settings.with(&TerminalProgram::default()), settings);
+    let program = TerminalProgram {
+        width: Some(0.9),
+        padding: TerminalPadding {
+            left: Some(Dimension::Cells(0.)),
+            bottom: Some(Dimension::Cells(1.)),
+            ..Default::default()
+        },
+        opacity: Some(1.),
+        border: Some(TerminalBorder::None),
+        colors: Some(config::Palette {
+            background: Some((255, 0, 0).into()),
+            ..Default::default()
+        }),
+        auto_hide: Some(false),
+        hide_on_escape: Some(HideOnEscape::Never),
+        ..Default::default()
+    };
+    let merged = settings.with(&program);
+    assert_eq!(
+        merged.padding,
+        TerminalPadding {
+            left: Some(Dimension::Cells(0.)),
+            top: Some(Dimension::Pixels(4.)),
+            right: None,
+            bottom: Some(Dimension::Cells(1.)),
+        }
+    );
+    assert_eq!((merged.opacity, merged.blur), (1., 10.));
+    assert_eq!(merged.border, TerminalBorder::None);
+    assert_eq!(merged.background_color, Some(LinearRgba(1., 0., 0., 1.)));
+    assert!(!merged.auto_hide);
+    assert_eq!(merged.hide_on_escape, HideOnEscape::Never);
+    assert_eq!(merged.size, settings.size);
+}
+
+fn program(id: u64, command: &str, preserve: bool) -> Program {
+    Program::new(
+        id,
+        TerminalProgram {
+            spawn: SpawnCommand {
+                args: Some(vec![command.into()]),
+                ..Default::default()
+            },
+            preserve,
+            ..Default::default()
+        },
+    )
+}
+
+#[test]
+fn preserved_programs_wait_hidden_for_their_next_opening() {
+    let mut state = State::default();
+    state.visible = true;
+    state.program = Some(program(1, "lazygit", true));
+    assert!(state.put_away(|_| true).is_none());
+    assert!(state.program.is_none());
+    // A launch still in flight lands in the kept program.
+    assert!(state.wants(Slot::Program(1)));
+    let lazygit = state.kept[0].spec.clone();
+    assert!(state.reusable(&lazygit, |_| true));
+    assert!(!state.reusable(&program(2, "yazi", true).spec, |_| true));
+    let larger = TerminalProgram {
+        width: Some(0.9),
+        ..lazygit
+    };
+    let reopened = state.take_kept(&larger).unwrap();
+    assert_eq!(reopened.id, 1);
+    assert_eq!(reopened.size, (Some(0.9), None));
+    assert_eq!(reopened.spec, larger);
+    assert!(state.kept.is_empty());
+}
+
+#[test]
+fn programs_without_preserve_end_when_put_away() {
+    let mut state = State::default();
+    state.program = Some(program(1, "lazygit", false));
+    state.put_away(|_| true);
+    assert!(state.program.is_none() && state.kept.is_empty());
+    assert!(!state.wants(Slot::Program(1)));
+    assert!(!state.reusable(&program(2, "lazygit", false).spec, |_| true));
+}
+
+#[test]
+fn a_failed_kept_launch_leaves_the_shown_program_alone() {
+    let mut state = State::default();
+    state.visible = true;
+    state.program = Some(program(1, "lazygit", true));
+    state.put_away(|_| true);
+    state.program = Some(program(2, "yazi", false));
+    state.settle(Slot::Program(1), None);
+    assert!(state.kept.is_empty());
+    assert!(state.visible);
+    assert_eq!(state.program.as_ref().map(|program| program.id), Some(2));
 }

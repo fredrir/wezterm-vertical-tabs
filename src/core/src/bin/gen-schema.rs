@@ -183,7 +183,9 @@ fn setting_type(kind: &SettingKind) -> String {
         SettingKind::Number { .. } => "integer".into(),
         SettingKind::Fraction | SettingKind::Opacity | SettingKind::Scale => "number".into(),
         SettingKind::Text => "string".into(),
-        SettingKind::Color | SettingKind::OptionalColor => "string".into(),
+        SettingKind::Color | SettingKind::OptionalColor | SettingKind::Border => "string".into(),
+        SettingKind::Padding => format!("{PREFIX}WindowPadding"),
+        SettingKind::Dimension => format!("{PREFIX}Dimension"),
         SettingKind::Colors => format!(
             "table<{}, string>",
             distros::ids()
@@ -290,6 +292,11 @@ fn generate(format: &str) -> Result<String, String> {
                     SettingKind::Text => "String or null".into(),
                     SettingKind::Color => "Hex color `#RRGGBB`".into(),
                     SettingKind::OptionalColor => "Hex color `#RRGGBB` or null".into(),
+                    SettingKind::Border => "Hex color `#RRGGBB`, `none` or null".into(),
+                    SettingKind::Padding => "`left`, `top`, `right`, `bottom` sides".into(),
+                    SettingKind::Dimension => {
+                        "Pixels, or a `px`, `%`, `pt` or `cell` string".into()
+                    }
                     SettingKind::Colors => "Object of hex colors".into(),
                     SettingKind::Choice(choices) => choices
                         .iter()

@@ -33,10 +33,9 @@ impl TermWindow {
     pub(crate) fn prepare_terminal_blur(
         &self,
     ) -> anyhow::Result<Option<(BlurParams, RefMut<'_, BackdropBlur>)>> {
-        let Some(ui) = &self.ui_host else {
+        let (Some(ui), Some(config)) = (&self.ui_host, self.terminal_overlay_config()) else {
             return Ok(None);
         };
-        let config = ui.provider.quick_terminal_config();
         if !self.terminal_overlay_visible() || config.opacity >= 1. || config.blur <= 0. {
             // Release the full-window textures when no longer needed.
             ui.terminal.1.borrow_mut().take();

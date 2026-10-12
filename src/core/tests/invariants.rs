@@ -317,6 +317,19 @@ fn quick_terminal_options_validate_atomically_and_colors_can_follow_the_palette(
             "quick_terminal_hide_on_escape",
             vec![json!(false), json!("sometimes"), json!(null)],
         ),
+        (
+            "quick_terminal_window_padding",
+            vec![
+                json!(null),
+                json!(8),
+                json!({"middle": 8}),
+                json!({"left": "1em"}),
+                json!({"left": -1}),
+                json!({"top": "-2px"}),
+                json!({"bottom": "cell"}),
+                json!({"right": "1cell "}),
+            ],
+        ),
     ] {
         let before = settings.clone();
         for value in values {
@@ -324,4 +337,61 @@ fn quick_terminal_options_validate_atomically_and_colors_can_follow_the_palette(
             assert_eq!(settings, before);
         }
     }
+}
+
+#[test]
+fn quick_terminal_border_can_be_hidden() {
+    let mut settings = Settings::default();
+    settings
+        .set("quick_terminal_border_color", json!("none"))
+        .unwrap();
+    assert_eq!(
+        settings.quick_terminal_border_color.as_deref(),
+        Some("none")
+    );
+    assert!(
+        settings
+            .set("quick_terminal_background_color", json!("none"))
+            .is_err()
+    );
+}
+
+#[test]
+fn quick_terminal_padding_reads_sides_like_wezterm() {
+    use padding::{Dimension, Unit};
+    let mut settings = Settings::default();
+    assert_eq!(
+        settings.get("quick_terminal_window_padding"),
+        Some(json!({}))
+    );
+    settings
+        .set(
+            "quick_terminal_window_padding",
+            json!({"left": 8, "top": "0.5cell", "right": " 2 px", "bottom": "10%"}),
+        )
+        .unwrap();
+    let padding = &settings.quick_terminal_window_padding;
+    let parsed = ["left", "top", "right", "bottom"].map(|side| padding.side(side)?.parse());
+    assert_eq!(
+        parsed,
+        [
+            Some((8., Unit::Pixels)),
+            Some((0.5, Unit::Cells)),
+            Some((2., Unit::Pixels)),
+            Some((10., Unit::Percent)),
+        ]
+    );
+    assert_eq!(Dimension::from_text("12"), Ok(Dimension::Number(12.)));
+    assert_eq!(
+        Dimension::from_text("6pt").unwrap().parse(),
+        Some((6., Unit::Points))
+    );
+    assert!(Dimension::from_text("6 em").is_err());
+    settings
+        .set("quick_terminal_window_padding", json!({"top": 0}))
+        .unwrap();
+    assert_eq!(
+        settings.get("quick_terminal_window_padding"),
+        Some(json!({"top": 0}))
+    );
 }

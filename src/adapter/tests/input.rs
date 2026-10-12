@@ -855,11 +855,10 @@ fn quick_terminal_shortcut_opens_over_settings_and_leaves_terminal_keys_alone() 
     assert!(adapter.content_page());
     assert!(!adapter.text_input_active());
     assert_eq!(
-        adapter.terminal_input(Input::RawKey(&raw(
-            KeyCode::Char('`'),
-            window::Modifiers::CTRL,
-            false
-        ))),
+        adapter.terminal_input(
+            Input::RawKey(&raw(KeyCode::Char('`'), window::Modifiers::CTRL, false)),
+            HideOnEscape::Auto
+        ),
         TerminalKey::Handled
     );
     assert!(adapter.commands().is_empty());
@@ -869,7 +868,7 @@ fn quick_terminal_shortcut_opens_over_settings_and_leaves_terminal_keys_alone() 
         (KeyCode::Char('t'), window::Modifiers::SUPER),
     ] {
         assert_eq!(
-            adapter.terminal_input(Input::RawKey(&raw(key, mods, true))),
+            adapter.terminal_input(Input::RawKey(&raw(key, mods, true)), HideOnEscape::Auto),
             TerminalKey::Pass
         );
     }
@@ -877,17 +876,17 @@ fn quick_terminal_shortcut_opens_over_settings_and_leaves_terminal_keys_alone() 
     // By default the host judges whether anything runs before Escape hides the overlay.
     let escape = raw(KeyCode::Char('\u{1b}'), window::Modifiers::NONE, true);
     assert_eq!(
-        adapter.terminal_input(Input::RawKey(&escape)),
+        adapter.terminal_input(Input::RawKey(&escape), HideOnEscape::Auto),
         TerminalKey::Escape
     );
     let release = raw(KeyCode::Char('\u{1b}'), window::Modifiers::NONE, false);
     assert_eq!(
-        adapter.terminal_input(Input::RawKey(&release)),
+        adapter.terminal_input(Input::RawKey(&release), HideOnEscape::Auto),
         TerminalKey::Pass
     );
     assert!(adapter.commands().is_empty());
     assert_eq!(
-        adapter.terminal_input(Input::RawKey(&toggle)),
+        adapter.terminal_input(Input::RawKey(&toggle), HideOnEscape::Auto),
         TerminalKey::Handled
     );
     assert!(matches!(
@@ -903,33 +902,47 @@ fn escape_hides_the_quick_terminal_as_configured() {
     let escape = |down| raw(KeyCode::Char('\u{1b}'), window::Modifiers::NONE, down);
     let shifted = raw(KeyCode::Char('\u{1b}'), window::Modifiers::SHIFT, true);
     for (mode, press, release) in [
-        ("never", TerminalKey::Pass, TerminalKey::Pass),
-        ("always", TerminalKey::Handled, TerminalKey::Handled),
-        ("auto", TerminalKey::Escape, TerminalKey::Pass),
+        (HideOnEscape::Never, TerminalKey::Pass, TerminalKey::Pass),
+        (
+            HideOnEscape::Always,
+            TerminalKey::Handled,
+            TerminalKey::Handled,
+        ),
+        (HideOnEscape::Auto, TerminalKey::Escape, TerminalKey::Pass),
+    ] {
+        assert_eq!(
+            adapter.terminal_input(Input::RawKey(&escape(true)), mode),
+            press
+        );
+        let hides = matches!(
+            adapter.commands().as_slice(),
+            [Command::HideTerminalOverlay]
+        );
+        assert_eq!(hides, mode == HideOnEscape::Always);
+        assert_eq!(
+            adapter.terminal_input(Input::RawKey(&escape(false)), mode),
+            release
+        );
+        // Escape keeps its terminal meaning when modified.
+        assert_eq!(
+            adapter.terminal_input(Input::RawKey(&shifted), mode),
+            TerminalKey::Pass
+        );
+        assert!(adapter.commands().is_empty());
+    }
+    for (value, mode) in [
+        ("never", HideOnEscape::Never),
+        ("always", HideOnEscape::Always),
+        ("auto", HideOnEscape::Auto),
     ] {
         adapter
             .app
             .dispatch(core::Intent::SetSetting {
                 key: "quick_terminal_hide_on_escape".into(),
-                value: serde_json::json!(mode),
+                value: serde_json::json!(value),
             })
             .unwrap();
-        assert_eq!(adapter.terminal_input(Input::RawKey(&escape(true))), press);
-        let hides = matches!(
-            adapter.commands().as_slice(),
-            [Command::HideTerminalOverlay]
-        );
-        assert_eq!(hides, mode == "always");
-        assert_eq!(
-            adapter.terminal_input(Input::RawKey(&escape(false))),
-            release
-        );
-        // Escape keeps its terminal meaning when modified.
-        assert_eq!(
-            adapter.terminal_input(Input::RawKey(&shifted)),
-            TerminalKey::Pass
-        );
-        assert!(adapter.commands().is_empty());
+        assert_eq!(adapter.quick_terminal_config().hide_on_escape, mode);
     }
 }
 
@@ -948,7 +961,7 @@ fn quick_terminal_respects_remapping_and_disabled_shortcuts() {
     let replacement = raw(KeyCode::Function(12), window::Modifiers::NONE, true);
     assert!(!adapter.input(Input::RawKey(&original)));
     assert_eq!(
-        adapter.terminal_input(Input::RawKey(&original)),
+        adapter.terminal_input(Input::RawKey(&original), HideOnEscape::Auto),
         TerminalKey::Pass
     );
     assert!(adapter.input(Input::RawKey(&replacement)));
@@ -957,7 +970,7 @@ fn quick_terminal_respects_remapping_and_disabled_shortcuts() {
         [Command::ToggleTerminalOverlay]
     ));
     assert_eq!(
-        adapter.terminal_input(Input::RawKey(&replacement)),
+        adapter.terminal_input(Input::RawKey(&replacement), HideOnEscape::Auto),
         TerminalKey::Handled
     );
     assert!(matches!(
@@ -973,7 +986,7 @@ fn quick_terminal_respects_remapping_and_disabled_shortcuts() {
         .unwrap();
     assert!(!adapter.input(Input::RawKey(&replacement)));
     assert_eq!(
-        adapter.terminal_input(Input::RawKey(&replacement)),
+        adapter.terminal_input(Input::RawKey(&replacement), HideOnEscape::Auto),
         TerminalKey::Pass
     );
     adapter.message(serde_json::json!({"action": "quick_terminal"}));
@@ -1016,7 +1029,7 @@ fn quick_programs_toggle_by_their_command() {
 
     let toggle = raw(KeyCode::Char('`'), window::Modifiers::CTRL, true);
     assert_eq!(
-        adapter.terminal_input(Input::RawKey(&toggle)),
+        adapter.terminal_input(Input::RawKey(&toggle), HideOnEscape::Auto),
         TerminalKey::Handled
     );
     assert!(matches!(
@@ -1025,7 +1038,7 @@ fn quick_programs_toggle_by_their_command() {
     ));
     let close = raw(KeyCode::Char('w'), window::Modifiers::SUPER, true);
     assert_eq!(
-        adapter.terminal_input(Input::RawKey(&close)),
+        adapter.terminal_input(Input::RawKey(&close), HideOnEscape::Auto),
         TerminalKey::Handled
     );
     assert!(matches!(
@@ -1035,7 +1048,7 @@ fn quick_programs_toggle_by_their_command() {
 }
 
 #[test]
-fn quick_terminal_configuration_gates_effects_and_preserves_defaults() {
+fn quick_terminal_configuration_maps_settings_and_preserves_defaults() {
     config::designate_this_as_the_main_thread();
     let mut adapter = Adapter::new(9931);
     let defaults = adapter.quick_terminal_config();
@@ -1044,7 +1057,10 @@ fn quick_terminal_configuration_gates_effects_and_preserves_defaults() {
     assert_eq!(defaults.blur, 0.);
     assert!(defaults.preserve_shell);
     assert!(!defaults.auto_hide);
-    assert!(defaults.background_color.is_none() && defaults.border_color.is_none());
+    assert_eq!(defaults.hide_on_escape, HideOnEscape::Auto);
+    assert_eq!(defaults.padding, TerminalPadding::default());
+    assert_eq!(defaults.border, TerminalBorder::Palette);
+    assert!(defaults.background_color.is_none());
     for (key, value) in [
         ("quick_terminal_opacity", serde_json::json!(0.4)),
         ("quick_terminal_blur", serde_json::json!(12)),
@@ -1055,6 +1071,10 @@ fn quick_terminal_configuration_gates_effects_and_preserves_defaults() {
         ),
         ("quick_terminal_auto_hide", serde_json::json!(true)),
         ("quick_terminal_preserve_shell", serde_json::json!(false)),
+        (
+            "quick_terminal_window_padding",
+            serde_json::json!({"left": 4, "top": "1cell", "bottom": "50%"}),
+        ),
     ] {
         adapter
             .app
@@ -1068,17 +1088,25 @@ fn quick_terminal_configuration_gates_effects_and_preserves_defaults() {
     assert_eq!((translucent.opacity, translucent.blur), (0.4, 12.));
     assert!(translucent.auto_hide && !translucent.preserve_shell);
     assert_eq!(
-        translucent.border_color,
-        Some(window::color::LinearRgba(1., 0., 0., 1.))
+        translucent.border,
+        TerminalBorder::Color(window::color::LinearRgba(1., 0., 0., 1.))
     );
     assert!(translucent.background_color.is_some());
+    assert_eq!(
+        translucent.padding,
+        TerminalPadding {
+            left: Some(config::Dimension::Pixels(4.)),
+            top: Some(config::Dimension::Cells(1.)),
+            right: None,
+            bottom: Some(config::Dimension::Percent(0.5)),
+        }
+    );
     adapter
         .app
         .dispatch(core::Intent::SetSetting {
-            key: "quick_terminal_opacity".into(),
-            value: serde_json::json!(1),
+            key: "quick_terminal_border_color".into(),
+            value: serde_json::json!("none"),
         })
         .unwrap();
-    let opaque = adapter.quick_terminal_config();
-    assert_eq!((opaque.opacity, opaque.blur), (1., 0.));
+    assert_eq!(adapter.quick_terminal_config().border, TerminalBorder::None);
 }

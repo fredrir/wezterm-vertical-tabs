@@ -44,6 +44,7 @@ return {
     quick_terminal_opacity = 1.0,
     quick_terminal_preserve_shell = true,
     quick_terminal_width = 0.75,
+    quick_terminal_window_padding = {},
     rail = "expanded",
     reduced_motion = false,
     selected_background = "#34485f",
@@ -101,6 +102,13 @@ return {
       label = "Quick terminal height",
     },
     {
+      description = "Sides like WezTerm window_padding; unset sides follow it",
+      group = "quick_terminal",
+      key = "quick_terminal_window_padding",
+      kind = "padding",
+      label = "Padding",
+    },
+    {
       description = "Backdrop blur radius in logical pixels behind a translucent background",
       group = "quick_terminal",
       key = "quick_terminal_blur",
@@ -115,10 +123,10 @@ return {
       label = "Opacity",
     },
     {
-      description = "Null follows the terminal foreground at 22% opacity",
+      description = "Null follows the terminal foreground at 22% opacity; none hides it",
       group = "quick_terminal",
       key = "quick_terminal_border_color",
-      kind = "optional_color",
+      kind = "border",
       label = "Border color",
     },
     {

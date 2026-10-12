@@ -184,12 +184,65 @@ pub enum Input<'a> {
     Composition(&'a DeadKeyStatus),
     Focus(bool),
 }
-/// Runs in place of the overlay's shell; an omitted fraction keeps the shell's size.
-#[derive(Clone, Debug, PartialEq)]
+/// Runs in place of the overlay's shell; omitted values keep the quick terminal's.
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct TerminalProgram {
     pub spawn: SpawnCommand,
     pub width: Option<f32>,
     pub height: Option<f32>,
+    pub padding: TerminalPadding,
+    pub opacity: Option<f32>,
+    pub blur: Option<f32>,
+    pub border: Option<TerminalBorder>,
+    /// Over the window's palette; its background also fills the frame.
+    pub colors: Option<config::Palette>,
+    pub auto_hide: Option<bool>,
+    pub hide_on_escape: Option<HideOnEscape>,
+    /// Hiding keeps the program running for its next opening.
+    pub preserve: bool,
+}
+/// Sides left `None` follow the next level, and finally the window's `window_padding`.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct TerminalPadding {
+    pub left: Option<config::Dimension>,
+    pub top: Option<config::Dimension>,
+    pub right: Option<config::Dimension>,
+    pub bottom: Option<config::Dimension>,
+}
+impl TerminalPadding {
+    pub fn or(self, other: Self) -> Self {
+        Self {
+            left: self.left.or(other.left),
+            top: self.top.or(other.top),
+            right: self.right.or(other.right),
+            bottom: self.bottom.or(other.bottom),
+        }
+    }
+    pub fn resolve(self, window: &config::WindowPadding) -> config::WindowPadding {
+        config::WindowPadding {
+            left: self.left.unwrap_or(window.left),
+            top: self.top.unwrap_or(window.top),
+            right: self.right.unwrap_or(window.right),
+            bottom: self.bottom.unwrap_or(window.bottom),
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub enum TerminalBorder {
+    /// The terminal foreground at 22% opacity.
+    #[default]
+    Palette,
+    None,
+    Color(LinearRgba),
+}
+/// What an unmodified Escape does in the quick terminal.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum HideOnEscape {
+    Never,
+    Always,
+    /// Only while nothing runs in the pane.
+    #[default]
+    Auto,
 }
 /// What the quick terminal makes of a key.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -230,14 +283,37 @@ pub struct Surface {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct QuickTerminalConfig {
     pub size: (f32, f32),
+    pub padding: TerminalPadding,
     pub opacity: f32,
+    /// Applies only below full opacity.
     pub blur: f32,
-    pub border_color: Option<LinearRgba>,
+    pub border: TerminalBorder,
     pub background_color: Option<LinearRgba>,
     pub auto_hide: bool,
+    pub hide_on_escape: HideOnEscape,
     pub preserve_shell: bool,
     /// Size steps ease over this; zero while motion is off.
     pub transition: Duration,
+}
+impl QuickTerminalConfig {
+    /// `program`'s own values over these; its size stays with the overlay's steps.
+    pub fn with(self, program: &TerminalProgram) -> Self {
+        let background = program
+            .colors
+            .as_ref()
+            .and_then(|colors| colors.background)
+            .map(|color| color.to_linear());
+        Self {
+            padding: program.padding.or(self.padding),
+            opacity: program.opacity.unwrap_or(self.opacity),
+            blur: program.blur.unwrap_or(self.blur),
+            border: program.border.unwrap_or(self.border),
+            background_color: background.or(self.background_color),
+            auto_hide: program.auto_hide.unwrap_or(self.auto_hide),
+            hide_on_escape: program.hide_on_escape.unwrap_or(self.hide_on_escape),
+            ..self
+        }
+    }
 }
 
 pub trait Provider {
@@ -258,7 +334,8 @@ pub trait Provider {
         entries: crate::overlay::launcher::LauncherEntries,
     );
     fn input(&mut self, input: Input<'_>) -> bool;
-    fn terminal_input(&mut self, input: Input<'_>) -> TerminalKey;
+    /// `escape` is what the shown pane's settings make of an unmodified Escape.
+    fn terminal_input(&mut self, input: Input<'_>, escape: HideOnEscape) -> TerminalKey;
     fn glyph_scale(&self) -> f64;
     fn quick_terminal_config(&self) -> QuickTerminalConfig;
     fn message(&mut self, message: serde_json::Value);
@@ -1387,7 +1464,8 @@ impl TermWindow {
                     return false;
                 }
                 Input::Key(_) | Input::RawKey(_) => {
-                    let key = self.ui_host.as_mut().map(|ui| ui.provider.terminal_input(input));
+                    let escape = self.terminal_overlay_config().map(|config| config.hide_on_escape).unwrap_or_default();
+                    let key = self.ui_host.as_mut().map(|ui| ui.provider.terminal_input(input, escape));
                     let consumed = match key {
                         Some(TerminalKey::Handled) => {
                             let commands = self.ui_host.as_mut().unwrap().provider.commands();

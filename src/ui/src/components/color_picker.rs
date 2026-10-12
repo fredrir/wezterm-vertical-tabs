@@ -201,7 +201,9 @@ pub(crate) fn render(cx: &mut Canvas, area: Rect, form: &mut Form, editing: bool
             cx,
             Rect::new(preview_x, shades.y, width, plane_height),
             picker.original.unwrap_or(picker.fallback),
-            if picker.original.is_some() {
+            if picker.none.is_some_and(|none| none.original) {
+                "None"
+            } else if picker.original.is_some() {
                 "Aa"
             } else {
                 "Auto"
@@ -217,7 +219,9 @@ pub(crate) fn render(cx: &mut Canvas, area: Rect, form: &mut Form, editing: bool
                 plane_height,
             ),
             picker.preview(),
-            if picker.selected.is_some() {
+            if picker.none.is_some_and(|none| none.selected) {
+                "None"
+            } else if picker.selected.is_some() {
                 "Aa"
             } else {
                 "Auto"

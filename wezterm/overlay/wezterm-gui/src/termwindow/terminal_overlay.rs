@@ -1,9 +1,11 @@
 //! A PTY surface owned by the existing GUI window, outside its tab projection.
-use super::ui_host::{Bounds, QuickTerminalConfig, TerminalProgram};
+use super::ui_host::{Bounds, QuickTerminalConfig, TerminalBorder, TerminalProgram};
 use super::{TermWindow, TermWindowNotif};
 use crate::quad::{HeapQuadAllocator, TripleLayerQuadAllocator};
+use anyhow::Context;
 use codec::SpawnBesidePane;
 use config::keyassignment::{PaneDirection, SpawnCommand, SpawnTabDomain};
+use config::{DimensionContext, WindowPadding};
 use mux::domain::{Domain, DomainState};
 use mux::pane::{CachePolicy, CloseReason, Pane, PaneId};
 use mux::tab::{PositionedPane, TabId};
@@ -24,10 +26,6 @@ const SHELL_SIZE: (f32, f32) = (0.75, 0.75);
 /// Fewest columns and rows a size step leaves.
 const MIN_CELLS: (f32, f32) = (20., 5.);
 
-fn padding(dpi: u32) -> f32 {
-    12. * dpi as f32 / 96.
-}
-
 #[derive(Default)]
 pub(super) struct TerminalOverlay(Rc<RefCell<State>>, RefCell<Option<blur::BackdropBlur>>);
 
@@ -45,6 +43,8 @@ struct State {
     tab: Option<TabId>,
     /// Shown instead of the shell; exists only while visible.
     program: Option<Program>,
+    /// Hidden programs that `preserve` keeps running for their next opening.
+    kept: Vec<Program>,
     programs: u64,
 }
 
@@ -208,9 +208,65 @@ impl State {
             Slot::Shell(id) => self.pending == Some(id),
             Slot::Program(id) => self
                 .program
-                .as_ref()
-                .is_some_and(|program| program.id == id),
+                .iter()
+                .chain(&self.kept)
+                .any(|program| program.id == id),
         }
+    }
+
+    fn program_panes(&self) -> impl Iterator<Item = &Arc<dyn Pane>> {
+        self.program
+            .iter()
+            .chain(&self.kept)
+            .filter_map(|program| program.pane.as_ref())
+    }
+
+    /// Takes the shown program aside; its pane unless `preserve` keeps it running.
+    fn put_away(&mut self, alive: impl Fn(&Arc<dyn Pane>) -> bool) -> Option<Arc<dyn Pane>> {
+        let program = self.program.take()?;
+        if program.spec.preserve && program.pane.as_ref().map_or(true, alive) {
+            self.kept.push(program);
+            return None;
+        }
+        program.pane
+    }
+
+    /// Whether opening `spec` finds its command running, shown or kept.
+    fn reusable(&self, spec: &TerminalProgram, alive: impl Fn(&Arc<dyn Pane>) -> bool) -> bool {
+        self.program.iter().chain(&self.kept).any(|program| {
+            program.spec.preserve
+                && program.spec.spawn == spec.spawn
+                && program.pane.as_ref().map_or(true, &alive)
+        })
+    }
+
+    /// The kept program running `spec`'s command, under `spec`'s settings.
+    fn take_kept(&mut self, spec: &TerminalProgram) -> Option<Program> {
+        let index = self
+            .kept
+            .iter()
+            .position(|kept| kept.spec.spawn == spec.spawn)?;
+        let kept = self.kept.remove(index);
+        if kept.spec == *spec {
+            return Some(kept);
+        }
+        Some(Program {
+            pane: kept.pane,
+            ..Program::new(kept.id, spec.clone())
+        })
+    }
+
+    /// Kept programs whose pane ended, for removal.
+    fn prune(&mut self, alive: impl Fn(&Arc<dyn Pane>) -> bool) -> Vec<Arc<dyn Pane>> {
+        let mut ended = Vec::new();
+        self.kept.retain(|program| match &program.pane {
+            Some(pane) if !alive(pane) => {
+                ended.push(pane.clone());
+                false
+            }
+            _ => true,
+        });
+        ended
     }
 
     fn discard_shell(&mut self) -> Option<Arc<dyn Pane>> {
@@ -233,14 +289,26 @@ impl State {
                 self.tab = pane.as_ref().and_then(mirrored_tab);
                 self.pane = pane;
             }
-            (Slot::Program(_), Some(pane)) => {
-                if let Some(program) = &mut self.program {
+            (Slot::Program(id), Some(pane)) => {
+                if let Some(program) = self
+                    .program
+                    .iter_mut()
+                    .chain(&mut self.kept)
+                    .find(|program| program.id == id)
+                {
                     program.pane = Some(pane);
                 }
             }
-            (Slot::Program(_), None) => {
-                self.program = None;
-                self.visible = false;
+            (Slot::Program(id), None) => {
+                self.kept.retain(|program| program.id != id);
+                if self
+                    .program
+                    .as_ref()
+                    .is_some_and(|program| program.id == id)
+                {
+                    self.program = None;
+                    self.visible = false;
+                }
             }
         }
     }
@@ -286,10 +354,26 @@ fn remove(pane: &Arc<dyn Pane>) {
     }
 }
 
+fn alive(pane: &Arc<dyn Pane>) -> bool {
+    !pane.is_dead() && Mux::get().get_pane(pane.pane_id()).is_some()
+}
+
+/// The window's terminal config, with a program's `colors` over its palette.
+fn term_config(
+    config: &config::ConfigHandle,
+    colors: Option<&config::Palette>,
+) -> Arc<config::TermConfig> {
+    let term = config::TermConfig::with_config(config.clone());
+    if let Some(colors) = colors {
+        term.set_client_palette(config.resolved_palette.overlay_with(colors).into());
+    }
+    Arc::new(term)
+}
+
 impl Drop for State {
     fn drop(&mut self) {
-        let program = self.program.take().and_then(|program| program.pane);
-        for pane in self.pane.take().into_iter().chain(program) {
+        let programs: Vec<_> = self.program_panes().cloned().collect();
+        for pane in self.pane.take().into_iter().chain(programs) {
             remove(&pane);
         }
     }
@@ -333,9 +417,11 @@ struct Layout {
 }
 
 impl Layout {
+    /// `padding` is read as the main window reads `window_padding`, against the frame.
     fn new(
         bounds: Bounds,
         (width, height): (f32, f32),
+        padding: &WindowPadding,
         cell_width: f32,
         cell_height: f32,
         dpi: u32,
@@ -347,25 +433,38 @@ impl Layout {
             width: (bounds.width * width).round(),
             height: (bounds.height * height).round(),
         };
-        let padding = padding(dpi).min(frame.width / 4.).min(frame.height / 4.);
-        let cols = ((frame.width - 2. * padding) / cell_width).floor().max(1.) as usize;
-        let rows = ((frame.height - 2. * padding) / cell_height)
-            .floor()
-            .max(1.) as usize;
+        let side = |dimension: config::Dimension, pixel_max: f32, pixel_cell: f32| {
+            let context = DimensionContext {
+                dpi: dpi as f32,
+                pixel_max,
+                pixel_cell,
+            };
+            dimension
+                .evaluate_as_pixels(context)
+                .min(pixel_max / 4.)
+                .max(0.)
+                .floor()
+        };
+        let left = side(padding.left, frame.width, cell_width);
+        let right = side(padding.right, frame.width, cell_width);
+        let top = side(padding.top, frame.height, cell_height);
+        let bottom = side(padding.bottom, frame.height, cell_height);
+        let inner = Bounds {
+            x: frame.x + left,
+            y: frame.y + top,
+            width: (frame.width - left - right).max(0.),
+            height: (frame.height - top - bottom).max(0.),
+        };
+        let cols = (inner.width / cell_width).floor().max(1.) as usize;
+        let rows = (inner.height / cell_height).floor().max(1.) as usize;
         let width = cols as f32 * cell_width;
         let height = rows as f32 * cell_height;
-        let inset = padding.floor();
         Self {
             frame,
-            inner: Bounds {
-                x: frame.x + inset,
-                y: frame.y + inset,
-                width: (frame.width - 2. * inset).max(0.),
-                height: (frame.height - 2. * inset).max(0.),
-            },
+            inner,
             content: Bounds {
-                x: (frame.x + (frame.width - width) / 2.).floor(),
-                y: (frame.y + (frame.height - height) / 2.).floor(),
+                x: (inner.x + (inner.width - width) / 2.).floor(),
+                y: (inner.y + (inner.height - height) / 2.).floor(),
                 width,
                 height,
             },
@@ -387,22 +486,35 @@ impl TermWindow {
             .chain(self.vtabs_suspended.values())
             .all(|ui| {
                 let state = ui.terminal.0.borrow();
-                let program = state
-                    .program
-                    .as_ref()
-                    .and_then(|program| program.pane.as_ref());
-                state
-                    .pane
-                    .iter()
-                    .chain(program)
-                    .all(|pane| pane.can_close_without_prompting(mux::pane::CloseReason::Window))
+                let idle =
+                    state.pane.iter().chain(state.program_panes()).all(|pane| {
+                        pane.can_close_without_prompting(mux::pane::CloseReason::Window)
+                    });
+                idle
             })
     }
 
+    /// The quick terminal settings, with the shown program's own values over them.
+    pub(super) fn terminal_overlay_config(&self) -> Option<QuickTerminalConfig> {
+        let ui = self.ui_host.as_ref()?;
+        let config = ui.provider.quick_terminal_config();
+        let state = ui.terminal.0.borrow();
+        Some(match state.program.as_ref().filter(|_| state.visible) {
+            Some(program) => config.with(&program.spec),
+            None => config,
+        })
+    }
+
     fn terminal_overlay_layout_of(&self, size: (f32, f32)) -> Layout {
+        let padding = self
+            .terminal_overlay_config()
+            .map(|config| config.padding)
+            .unwrap_or_default()
+            .resolve(&self.config.window_padding);
         Layout::new(
             self.vtabs_geometry().ui_bounds(true),
             size,
+            &padding,
             self.render_metrics.cell_size.width as f32,
             self.render_metrics.cell_size.height as f32,
             self.dimensions.dpi as u32,
@@ -468,15 +580,12 @@ impl TermWindow {
     pub(super) fn terminal_overlay_owns(&self, pane_id: PaneId) -> bool {
         self.ui_host.as_ref().is_some_and(|ui| {
             let state = ui.terminal.0.borrow();
-            let program = state
-                .program
-                .as_ref()
-                .and_then(|program| program.pane.as_ref());
-            state
+            let owned = state
                 .pane
                 .iter()
-                .chain(program)
-                .any(|pane| pane.pane_id() == pane_id)
+                .chain(state.program_panes())
+                .any(|pane| pane.pane_id() == pane_id);
+            owned
         })
     }
 
@@ -532,12 +641,12 @@ impl TermWindow {
         if let Some(ui) = &self.ui_host {
             let panes = {
                 let mut state = ui.terminal.0.borrow_mut();
-                state.visible = false;
-                state.motion = None;
-                if let Some(pane) = &state.pane {
+                for pane in state.pane.iter().chain(state.program_panes()) {
                     pane.focus_changed(false);
                 }
-                let program = state.program.take().and_then(|program| program.pane);
+                state.visible = false;
+                state.motion = None;
+                let program = state.put_away(alive);
                 let shell = if ui.provider.quick_terminal_config().preserve_shell {
                     None
                 } else {
@@ -624,14 +733,28 @@ impl TermWindow {
             self.hide_terminal_overlay();
             return;
         }
-        let Some(launch) = self.terminal_launch(&program.spawn) else {
-            return;
+        let reusable = self
+            .ui_host
+            .as_ref()
+            .is_some_and(|ui| ui.terminal.0.borrow().reusable(&program, alive));
+        let launch = if reusable {
+            None
+        } else {
+            match self.terminal_launch(&program.spawn) {
+                Ok(launch) => Some(launch),
+                Err(error) => {
+                    let error = format!("Quick terminal: {error:#}");
+                    log::warn!("{error}");
+                    self.vtabs_message_for(self.mux_window_id, serde_json::json!({"error": error}));
+                    return;
+                }
+            }
         };
         self.show_terminal_overlay(Some((program, launch)));
     }
 
-    /// Resolved like a split of the active tab's pane; `None` without a pane to spawn beside.
-    fn terminal_launch(&self, spawn: &SpawnCommand) -> Option<Launch> {
+    /// Resolved like a split of the active tab's pane; `Beside` falls back to any pane of the domain.
+    fn terminal_launch(&self, spawn: &SpawnCommand) -> anyhow::Result<Launch> {
         let mux = Mux::get();
         let current = mux
             .get_active_tab_for_window(self.mux_window_id)
@@ -641,15 +764,23 @@ impl TermWindow {
             ui.provider.prepare_command(&mut spawn);
         }
         let domain = mux
-            .resolve_spawn_tab_domain(current.as_ref().map(|pane| pane.pane_id()), &spawn.domain)
-            .map_err(|error| log::warn!("Quick terminal: {error:#}"))
-            .ok()?;
+            .resolve_spawn_tab_domain(current.as_ref().map(|pane| pane.pane_id()), &spawn.domain)?;
         let current = current.filter(|pane| pane.domain_id() == domain.domain_id());
         let explicit = spawn.cwd.map(|cwd| cwd.to_string_lossy().into_owned());
         let (target, cwd) = if domain.downcast_ref::<ClientDomain>().is_some()
             && !local_pane_layout(&config::configuration(), domain.domain_name())
         {
-            let pane = current?.downcast_ref::<ClientPane>()?.remote_pane_id();
+            let pane = current
+                .or_else(|| {
+                    mux.iter_panes()
+                        .into_iter()
+                        .find(|pane| pane.domain_id() == domain.domain_id())
+                })
+                .with_context(|| format!("no pane open in {}", domain.domain_name()))?;
+            let pane = pane
+                .downcast_ref::<ClientPane>()
+                .context("not a client pane")?
+                .remote_pane_id();
             (Target::Beside(domain, pane), explicit)
         } else {
             let cwd = explicit.or_else(|| {
@@ -669,14 +800,15 @@ impl TermWindow {
             }
             command
         });
-        Some(Launch {
+        Ok(Launch {
             target,
             command,
             cwd,
         })
     }
 
-    fn show_terminal_overlay(&mut self, program: Option<(TerminalProgram, Launch)>) {
+    /// A program without a launch reopens its kept command.
+    fn show_terminal_overlay(&mut self, program: Option<(TerminalProgram, Option<Launch>)>) {
         let Some(window) = self.window.clone() else {
             return;
         };
@@ -697,11 +829,7 @@ impl TermWindow {
         self.current_mouse_capture = None;
         self.current_mouse_buttons.clear();
         self.dragging = None;
-        let previous = state_ref
-            .borrow_mut()
-            .program
-            .take()
-            .and_then(|program| program.pane);
+        let previous = state_ref.borrow_mut().put_away(alive);
         if let Some(pane) = previous {
             remove(&pane);
         }
@@ -710,8 +838,20 @@ impl TermWindow {
         state.motion = None;
         window.invalidate();
         if let Some((spec, launch)) = program {
+            if let Some(kept) = state.take_kept(&spec) {
+                if let Some(pane) = &kept.pane {
+                    pane.focus_changed(true);
+                }
+                state.program = Some(kept);
+                return;
+            }
+            let Some(launch) = launch else {
+                state.visible = false;
+                return;
+            };
             state.programs += 1;
             let id = state.programs;
+            let colors = spec.colors.clone();
             state.program = Some(Program::new(id, spec));
             drop(state);
             self.spawn_terminal_pane(
@@ -720,6 +860,7 @@ impl TermWindow {
                 Ok(launch.target),
                 launch.command,
                 launch.cwd,
+                colors,
             );
             return;
         }
@@ -744,11 +885,15 @@ impl TermWindow {
             domain: SpawnTabDomain::DomainName("local".into()),
             ..Default::default()
         };
-        let Some(launch) = self
+        let launch = self
             .terminal_launch(&SpawnCommand::default())
-            .or_else(|| self.terminal_launch(&local))
-        else {
-            return;
+            .or_else(|_| self.terminal_launch(&local));
+        let launch = match launch {
+            Ok(launch) => launch,
+            Err(error) => {
+                log::warn!("Quick terminal: {error:#}");
+                return;
+            }
         };
         if let Target::Beside(domain, _) = &launch.target {
             let workspace = quick_workspace(domain, self.mux_window_id, Slot::Shell(0));
@@ -773,6 +918,7 @@ impl TermWindow {
             Ok(launch.target),
             launch.command,
             launch.cwd,
+            None,
         );
     }
 
@@ -784,6 +930,7 @@ impl TermWindow {
         target: anyhow::Result<Target>,
         command: Option<CommandBuilder>,
         cwd: Option<String>,
+        colors: Option<config::Palette>,
     ) {
         let Some(window) = self.window.clone() else {
             return;
@@ -808,7 +955,17 @@ impl TermWindow {
                         let workspace = quick_workspace(&domain, window_id, slot);
                         // Programs a quit GUI couldn't end would otherwise outlive it.
                         if let Slot::Program(_) = slot {
-                            quick_panes(&workspace).iter().for_each(remove);
+                            let owned: Vec<PaneId> = state
+                                .upgrade()
+                                .map(|state| {
+                                    let state = state.borrow();
+                                    state.program_panes().map(|pane| pane.pane_id()).collect()
+                                })
+                                .unwrap_or_default();
+                            quick_panes(&workspace)
+                                .iter()
+                                .filter(|pane| !owned.contains(&pane.pane_id()))
+                                .for_each(remove);
                         }
                         let spawned =
                             ClientDomain::get_client_inner_for_domain(domain.domain_id())?
@@ -840,7 +997,7 @@ impl TermWindow {
             let mut state = state.borrow_mut();
             match result {
                 Ok(pane) => {
-                    pane.set_config(Arc::new(config::TermConfig::with_config(config)));
+                    pane.set_config(term_config(&config, colors.as_ref()));
                     state.settle(slot, Some(pane.clone()));
                     pane.focus_changed(
                         state
@@ -879,14 +1036,18 @@ impl TermWindow {
                 {
                     state.motion = None;
                 }
-                if !config.preserve_shell && (!state.visible || state.program.is_some()) {
+                let shell = if !config.preserve_shell && (!state.visible || state.program.is_some())
+                {
                     state.discard_shell()
                 } else {
                     None
-                }
+                };
+                let mut discarded = state.prune(alive);
+                discarded.extend(shell);
+                discarded
             };
-            if let Some(pane) = discarded {
-                remove(&pane);
+            for pane in &discarded {
+                remove(pane);
             }
         }
         let replacement = self
@@ -933,14 +1094,26 @@ impl TermWindow {
         };
         let bounds = self.vtabs_geometry().ui_bounds(true);
         let drawn = self.terminal_overlay_drawn();
-        let padding = 2. * padding(self.dimensions.dpi as u32);
+        let (frame, inner) = (drawn.layout.frame, drawn.layout.inner);
         let metrics = &self.render_metrics.cell_size;
-        let (extent, current, cell, cells) = if horizontal {
-            let frame = drawn.layout.frame.width;
-            (bounds.width, frame, metrics.width as f32, MIN_CELLS.0)
+        let (extent, current, padding, cell, cells) = if horizontal {
+            let padding = frame.width - inner.width;
+            (
+                bounds.width,
+                frame.width,
+                padding,
+                metrics.width as f32,
+                MIN_CELLS.0,
+            )
         } else {
-            let frame = drawn.layout.frame.height;
-            (bounds.height, frame, metrics.height as f32, MIN_CELLS.1)
+            let padding = frame.height - inner.height;
+            (
+                bounds.height,
+                frame.height,
+                padding,
+                metrics.height as f32,
+                MIN_CELLS.1,
+            )
         };
         let target = step(
             current,
@@ -969,21 +1142,31 @@ impl TermWindow {
 
     pub(crate) fn inspect_terminal_overlay(&self) -> serde_json::Value {
         let layout = self.terminal_overlay_layout();
-        let (pane, program) = self.ui_host.as_ref().map_or((None, None), |ui| {
-            let state = ui.terminal.0.borrow();
-            (
-                state.pane.as_ref().map(|pane| pane.pane_id()),
-                state
-                    .program
-                    .as_ref()
-                    .and_then(|program| program.pane.as_ref())
-                    .map(|pane| pane.pane_id()),
-            )
-        });
+        let (pane, program, kept) = self
+            .ui_host
+            .as_ref()
+            .map_or((None, None, Vec::new()), |ui| {
+                let state = ui.terminal.0.borrow();
+                (
+                    state.pane.as_ref().map(|pane| pane.pane_id()),
+                    state
+                        .program
+                        .as_ref()
+                        .and_then(|program| program.pane.as_ref())
+                        .map(|pane| pane.pane_id()),
+                    state
+                        .kept
+                        .iter()
+                        .filter_map(|program| program.pane.as_ref())
+                        .map(|pane| pane.pane_id())
+                        .collect(),
+                )
+            });
         serde_json::json!({
             "visible": self.terminal_overlay_visible(),
             "pane": pane,
             "program": program,
+            "kept": kept,
             "bounds": {"x": layout.frame.x, "y": layout.frame.y, "width": layout.frame.width, "height": layout.frame.height},
             "content": {"x": layout.content.x, "y": layout.content.y, "width": layout.content.width, "height": layout.content.height},
             "cols": layout.size.cols, "rows": layout.size.rows,
@@ -996,12 +1179,9 @@ impl TermWindow {
         }
         let drawn = self.terminal_overlay_drawn();
         let (layout, painted) = (drawn.layout, drawn.painted);
-        let config = self
-            .ui_host
-            .as_ref()
-            .unwrap()
-            .provider
-            .quick_terminal_config();
+        let Some(config) = self.terminal_overlay_config() else {
+            return Ok(());
+        };
         if drawn.moving {
             let interval = Duration::from_secs(1) / self.config.max_fps.clamp(1, 1000) as u32;
             self.update_next_frame_time(Some(Instant::now() + interval));
@@ -1028,11 +1208,18 @@ impl TermWindow {
                     .to_linear()
             })
             .mul_alpha(config.opacity);
-        let border = (self.dimensions.dpi as f32 / 96.).max(1.);
-        let border_color = config
-            .border_color
-            .unwrap_or_else(|| self.palette().foreground.to_linear().mul_alpha(0.22));
-        self.paint_terminal_border(&mut layers, painted.frame, border, border_color)?;
+        let scale = (self.dimensions.dpi as f32 / 96.).max(1.);
+        let border_color = match config.border {
+            TerminalBorder::None => None,
+            TerminalBorder::Palette => Some(self.palette().foreground.to_linear().mul_alpha(0.22)),
+            TerminalBorder::Color(color) => Some(color),
+        };
+        let border = if let Some(color) = border_color {
+            self.paint_terminal_border(&mut layers, painted.frame, scale, color)?;
+            scale
+        } else {
+            0.
+        };
         self.paint_vtabs_rounded_fill(
             &mut layers,
             Bounds {
@@ -1041,7 +1228,7 @@ impl TermWindow {
                 width: (painted.frame.width - 2. * border).max(0.),
                 height: (painted.frame.height - 2. * border).max(0.),
             },
-            11. * border,
+            12. * scale - border,
             background,
         )?;
         if let Some(pos) = self.positioned_terminal_overlay() {

@@ -1,6 +1,6 @@
 use serde_json::{Value, json};
 use std::time::Duration;
-use vtabs_core::{Intent, Model, Tab};
+use vtabs_core::{Dimension, Intent, Model, Tab};
 use vtabs_ui::{ElementId, Key, Modifiers, MouseButton, Rect, SidebarUi, UiInput, UiIntent};
 
 fn draw(ui: &mut SidebarUi, model: &Model) {
@@ -201,6 +201,57 @@ fn color_entry_accepts_hex_and_empty_restores_automatic() {
         let intents = ui.event(&model, UiInput::key(Key::Enter));
         assert_eq!(set(&intents, key), Some(expected), "{key}");
     }
+}
+
+#[test]
+fn border_color_takes_none_to_hide_the_border() {
+    for (key, expected) in [
+        ("quick_terminal_border_color", Some(json!("none"))),
+        ("quick_terminal_background_color", None),
+    ] {
+        let (mut ui, model) = settings("quick_terminal");
+        click(&mut ui, &model, ElementId::Setting(key.into()));
+        ui.event(&model, UiInput::key(Key::Backspace));
+        ui.event(&model, UiInput::Text("None".into()));
+        let intents = ui.event(&model, UiInput::key(Key::Enter));
+        assert_eq!(set(&intents, key), expected, "{key}");
+    }
+}
+
+#[test]
+fn padding_rows_edit_one_side_in_wezterm_units() {
+    for (typed, expected) in [
+        ("1cell", Some(json!({"left": "1cell", "top": 4}))),
+        ("12", Some(json!({"left": 12, "top": 4}))),
+        ("", Some(json!({"top": 4}))),
+        ("2em", None),
+    ] {
+        let (mut ui, mut model) = settings("quick_terminal");
+        model.settings.quick_terminal_window_padding.left = Some(Dimension::Number(8.));
+        model.settings.quick_terminal_window_padding.top = Some(Dimension::Number(4.));
+        let row = ElementId::Setting("quick_terminal_window_padding.left".into());
+        click(&mut ui, &model, row);
+        ui.event(&model, UiInput::key(Key::Backspace));
+        ui.event(&model, UiInput::Text(typed.into()));
+        let intents = ui.event(&model, UiInput::key(Key::Enter));
+        assert_eq!(
+            set(&intents, "quick_terminal_window_padding"),
+            expected,
+            "{typed}"
+        );
+    }
+
+    let (mut ui, mut model) = settings("quick_terminal");
+    model.settings.quick_terminal_window_padding.bottom = Some(Dimension::Text("10%".into()));
+    model.settings.quick_terminal_window_padding.right = Some(Dimension::Number(2.));
+    let row = ElementId::Setting("quick_terminal_window_padding.bottom".into());
+    click(&mut ui, &model, row);
+    ui.event(&model, UiInput::key(Key::Escape));
+    let intents = ui.event(&model, UiInput::key(Key::Backspace));
+    assert_eq!(
+        set(&intents, "quick_terminal_window_padding"),
+        Some(json!({"right": 2}))
+    );
 }
 
 #[test]

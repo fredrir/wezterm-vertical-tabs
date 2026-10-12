@@ -8,9 +8,10 @@
 ---@field rail? 'expanded'|'hidden' Sidebar visibility
 ---@field quick_terminal_width? number Fraction of the window width
 ---@field quick_terminal_height? number Fraction of the window height
+---@field quick_terminal_window_padding? TabsWindowPadding Sides like WezTerm window_padding; unset sides follow it
 ---@field quick_terminal_blur? integer Backdrop blur radius in logical pixels behind a translucent background
 ---@field quick_terminal_opacity? number Background opacity; 1 is opaque and text stays opaque
----@field quick_terminal_border_color? string Null follows the terminal foreground at 22% opacity
+---@field quick_terminal_border_color? string Null follows the terminal foreground at 22% opacity; none hides it
 ---@field quick_terminal_background_color? string Null follows the quick terminal palette background
 ---@field quick_terminal_auto_hide? boolean Hide the quick terminal when the window loses focus
 ---@field quick_terminal_preserve_shell? boolean Keep the shell when hidden; disable to start a fresh shell each time
@@ -55,6 +56,11 @@
 --- Argument to `vtabs.action` and `wezterm.vtabs.dispatch`.
 ---@alias TabsAction TabsUiAction|TabsIntent
 
+--- Pixels, or a string with a `px`, `%`, `pt` or `cell` unit, read like WezTerm's `window_padding`.
+---@alias TabsDimension number|string
+
+---@alias TabsHideOnEscape 'never'|'always'|'auto'
+
 ---@alias TabsIntent 'ActivateLast'|'NewTab'|'ResetSettings'|{ SelectSpace: string }|{ CreateSpace: { name: string } }|{ RenameSpace: { id: string, name: string } }|{ EditSpace: { accent?: string, icon: string, id: string, rules: TabsRoutingRule[] } }|{ DeleteSpace: { destination?: string, id: string } }|{ MoveSpace: { id: string, index: integer } }|{ ToggleSpace: string }|{ CreateFolder: { name: string } }|{ RenameFolder: { id: string, name: string } }|{ ToggleFolder: string }|{ DeleteFolder: string }|{ AssignFolder: { folder_id?: string, tab_id: integer } }|{ MoveFolder: { id: string, index: integer } }|{ ActivateTab: integer }|{ ActivateIndex: integer }|{ ActivateRelative: { delta: integer, wrap: boolean } }|{ NewTabInFolder: string }|{ CloseTab: integer }|{ CloseOthers: integer }|{ CloseBelow: integer }|{ RenameTab: { id: integer, title: string } }|{ PinTab: { id: integer, pinned: boolean } }|{ MoveTab: { id: integer, index: integer } }|{ AssignTab: { id: integer, space_id: string } }|{ ReturnToAuto: integer }|{ SetSetting: { key: TabsSettingKey, value: any } }|{ ResetSetting: TabsSettingKey }|{ SetRail: TabsRailMode }|{ MoveTabToNewWindow: integer }|{ CustomAction: string }
 
 ---@class TabsLaunchSpec
@@ -78,13 +84,22 @@
 ---@field id string
 ---@field label string
 
---- A fresh program in the quick terminal surface, in the active pane's domain; ends when hidden.
+--- A fresh program in the quick terminal surface; ends when hidden unless `preserve` is set.
 ---@class TabsQuickProgram
 ---@field args? string[] The domain's default program when empty.
+---@field auto_hide? boolean `quick_terminal_auto_hide` when omitted.
+---@field blur? integer Backdrop blur radius in logical pixels, at most 64; `quick_terminal_blur` when omitted.
+---@field border_color? string A WezTerm color, or `none`; `quick_terminal_border_color` when omitted.
+---@field colors? table WezTerm `colors` over the terminal palette; `background` also fills the frame.
 ---@field cwd? string The active pane's directory when omitted.
+---@field domain? TabsSpawnDomain The active pane's domain when omitted.
 ---@field height? number Fraction of the window height, above 0 and at most 1; `quick_terminal_height` when omitted.
+---@field hide_on_escape? TabsHideOnEscape `quick_terminal_hide_on_escape` when omitted.
+---@field preserve? boolean Keep the program running while hidden; it ends with the window.
 ---@field set_environment_variables? table<string, string>
 ---@field width? number Fraction of the window width, above 0 and at most 1; `quick_terminal_width` when omitted.
+---@field window_background_opacity? number From 0 through 1; `quick_terminal_opacity` when omitted.
+---@field window_padding? TabsWindowPadding Sides left out follow `quick_terminal_window_padding`.
 
 ---@alias TabsRailMode 'expanded'|'hidden'
 
@@ -92,7 +107,7 @@
 ---@field fields? { [1]: TabsMatchField, [2]: string[] }[]
 ---@field remote? boolean
 
----@alias TabsSettingKey 'keybinds'|'width'|'side'|'rail'|'quick_terminal_width'|'quick_terminal_height'|'quick_terminal_blur'|'quick_terminal_opacity'|'quick_terminal_border_color'|'quick_terminal_background_color'|'quick_terminal_auto_hide'|'quick_terminal_preserve_shell'|'quick_terminal_hide_on_escape'|'animations'|'reduced_motion'|'animation_ms'|'cards'|'show_indexes'|'show_metadata'|'show_close'|'tab_glyphs'|'glyph_size'|'tab_title'|'confirm_close'|'accent'|'background'|'foreground'|'muted'|'selected_background'|'hover_background'|'tab_foreground'|'selected_foreground'|'local_glyph_color'|'distro_colors'|'keyboard_shortcuts'|'default_domain'|'menus'
+---@alias TabsSettingKey 'keybinds'|'width'|'side'|'rail'|'quick_terminal_width'|'quick_terminal_height'|'quick_terminal_window_padding'|'quick_terminal_blur'|'quick_terminal_opacity'|'quick_terminal_border_color'|'quick_terminal_background_color'|'quick_terminal_auto_hide'|'quick_terminal_preserve_shell'|'quick_terminal_hide_on_escape'|'animations'|'reduced_motion'|'animation_ms'|'cards'|'show_indexes'|'show_metadata'|'show_close'|'tab_glyphs'|'glyph_size'|'tab_title'|'confirm_close'|'accent'|'background'|'foreground'|'muted'|'selected_background'|'hover_background'|'tab_foreground'|'selected_foreground'|'local_glyph_color'|'distro_colors'|'keyboard_shortcuts'|'default_domain'|'menus'
 
 ---@class TabsSpace
 ---@field accent? string
@@ -109,6 +124,9 @@
 ---@field id string
 ---@field name string
 ---@field rules TabsRoutingRule[]
+
+--- WezTerm's `SpawnTabDomain`.
+---@alias TabsSpawnDomain 'DefaultDomain'|'CurrentPaneDomain'|{ DomainName: string }|{ DomainId: integer }
 
 --- Host metadata is copied only when it changes; membership remains application-owned.
 ---@class TabsTab
@@ -159,6 +177,13 @@
 ---@field selected_space string
 ---@field settings TabsSettings
 ---@field space TabsSpace
+
+--- Sides left out follow WezTerm's `window_padding`; a quick program's follow the quick terminal's.
+---@class TabsWindowPadding
+---@field bottom? TabsDimension
+---@field left? TabsDimension
+---@field right? TabsDimension
+---@field top? TabsDimension
 
 ---@class TabsHooks
 ---@field title? fun(tab: TabsTab): string? Display title

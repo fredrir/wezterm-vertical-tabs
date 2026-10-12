@@ -8,9 +8,10 @@
 | `rail`                            | `"expanded"`  | `expanded`, `hidden`. Sidebar visibility                                                                 |
 | `quick_terminal_width`            | `0.75`        | Number above 0, at most 1. Fraction of the window width                                                  |
 | `quick_terminal_height`           | `0.75`        | Number above 0, at most 1. Fraction of the window height                                                 |
+| `quick_terminal_window_padding`   | `{}`          | `left`, `top`, `right`, `bottom` sides. Sides like WezTerm window_padding; unset sides follow it         |
 | `quick_terminal_blur`             | `0`           | Integer 0–64. Backdrop blur radius in logical pixels behind a translucent background                     |
 | `quick_terminal_opacity`          | `1.0`         | Number 0–1. Background opacity; 1 is opaque and text stays opaque                                        |
-| `quick_terminal_border_color`     | `null`        | Hex color `#RRGGBB` or null. Null follows the terminal foreground at 22% opacity                         |
+| `quick_terminal_border_color`     | `null`        | Hex color `#RRGGBB`, `none` or null. Null follows the terminal foreground at 22% opacity; none hides it  |
 | `quick_terminal_background_color` | `null`        | Hex color `#RRGGBB` or null. Null follows the quick terminal palette background                          |
 | `quick_terminal_auto_hide`        | `false`       | Boolean. Hide the quick terminal when the window loses focus                                             |
 | `quick_terminal_preserve_shell`   | `true`        | Boolean. Keep the shell when hidden; disable to start a fresh shell each time                            |

@@ -1,3 +1,4 @@
+use crate::padding::{Dimension, WindowPadding};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -47,6 +48,7 @@ pub struct Settings {
     pub rail: RailMode,
     pub quick_terminal_width: f64,
     pub quick_terminal_height: f64,
+    pub quick_terminal_window_padding: WindowPadding,
     pub quick_terminal_blur: u16,
     pub quick_terminal_opacity: f64,
     pub quick_terminal_border_color: Option<String>,
@@ -103,6 +105,7 @@ impl Default for Settings {
             rail: RailMode::Expanded,
             quick_terminal_width: 0.75,
             quick_terminal_height: 0.75,
+            quick_terminal_window_padding: WindowPadding::default(),
             quick_terminal_blur: 0,
             quick_terminal_opacity: 1.,
             quick_terminal_border_color: None,
@@ -157,6 +160,12 @@ pub enum SettingKind {
     Color,
     /// Null follows the terminal palette.
     OptionalColor,
+    /// An optional color, or `none`.
+    Border,
+    /// WezTerm `window_padding` sides.
+    Padding,
+    /// One `window_padding` side.
+    Dimension,
     /// Hex colors keyed by OS ID.
     Colors,
     Choice(&'static [&'static str]),
@@ -217,6 +226,13 @@ pub const DESCRIPTORS: &[SettingDescriptor] = &[
         description: "Fraction of the window height",
     },
     SettingDescriptor {
+        key: "quick_terminal_window_padding",
+        label: "Padding",
+        group: "quick_terminal",
+        kind: SettingKind::Padding,
+        description: "Sides like WezTerm window_padding; unset sides follow it",
+    },
+    SettingDescriptor {
         key: "quick_terminal_blur",
         label: "Blur",
         group: "quick_terminal",
@@ -234,8 +250,8 @@ pub const DESCRIPTORS: &[SettingDescriptor] = &[
         key: "quick_terminal_border_color",
         label: "Border color",
         group: "quick_terminal",
-        kind: SettingKind::OptionalColor,
-        description: "Null follows the terminal foreground at 22% opacity",
+        kind: SettingKind::Border,
+        description: "Null follows the terminal foreground at 22% opacity; none hides it",
     },
     SettingDescriptor {
         key: "quick_terminal_background_color",
@@ -469,6 +485,14 @@ pub fn validate_value(key: &str, value: &Value) -> Result<(), String> {
         SettingKind::Text => value.is_null() || value.as_str().is_some_and(|s| s.len() <= 4096),
         SettingKind::Color => value.as_str().is_some_and(valid_color),
         SettingKind::OptionalColor => value.is_null() || value.as_str().is_some_and(valid_color),
+        SettingKind::Border => {
+            value.is_null()
+                || value
+                    .as_str()
+                    .is_some_and(|s| s == "none" || valid_color(s))
+        }
+        SettingKind::Padding => serde_json::from_value::<WindowPadding>(value.clone()).is_ok(),
+        SettingKind::Dimension => serde_json::from_value::<Dimension>(value.clone()).is_ok(),
         SettingKind::Choice(choices) => value.as_str().is_some_and(|s| choices.contains(&s)),
         SettingKind::List => serde_json::from_value::<Vec<MenuEntry>>(value.clone())
             .is_ok_and(|v| validate_menus(&v, 0)),

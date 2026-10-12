@@ -46,6 +46,14 @@ pub(crate) struct ColorPicker {
     pub fallback: Color,
     pub rgb_entry: bool,
     pub swatch: usize,
+    /// Set where `none` is a value of its own.
+    pub none: Option<NoColor>,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct NoColor {
+    pub original: bool,
+    pub selected: bool,
 }
 
 impl ColorPicker {
@@ -65,9 +73,16 @@ impl ColorPicker {
             fallback,
             rgb_entry: false,
             swatch: 0,
+            none: None,
         };
         picker.select(original);
         picker
+    }
+
+    fn select_none(&mut self, selected: bool) {
+        if let Some(none) = &mut self.none {
+            none.selected = selected;
+        }
     }
 
     pub(crate) fn preview(&self) -> Color {
@@ -75,6 +90,7 @@ impl ColorPicker {
     }
 
     fn select(&mut self, color: Option<Color>) {
+        self.select_none(false);
         self.selected = color;
         let Color::Rgb(r, g, b) = self.preview() else {
             return;
@@ -127,11 +143,20 @@ impl ColorPicker {
     }
 
     pub(crate) fn edited(&mut self, text: &str) -> Result<(), &'static str> {
+        self.select_none(false);
+        if self.none.is_some() && text.trim().eq_ignore_ascii_case("none") {
+            self.select(None);
+            self.select_none(true);
+            return Ok(());
+        }
         self.select(self.parse(text)?);
         Ok(())
     }
 
     fn text(&self) -> String {
+        if self.none.is_some_and(|none| none.selected) {
+            return "none".into();
+        }
         match self.selected {
             Some(Color::Rgb(r, g, b)) if self.rgb_entry => format!("{r}, {g}, {b}"),
             Some(color) => hex(color),
@@ -152,6 +177,19 @@ impl SidebarUi {
         self.open_form(title, kind, value);
         if let Some(Overlay::Form(form)) = &mut self.overlays.current {
             form.color = Some(Box::new(ColorPicker::new(value, default, fallback)));
+        }
+    }
+
+    /// The open color form also takes `none`.
+    pub(crate) fn allow_no_color(&mut self) {
+        if let Some(Overlay::Form(form)) = &mut self.overlays.current
+            && let Some(color) = &mut form.color
+        {
+            let none = form.editor.text() == "none";
+            color.none = Some(NoColor {
+                original: none,
+                selected: none,
+            });
         }
     }
 
@@ -179,7 +217,10 @@ impl SidebarUi {
             }
             ElementId::ColorFormat => color.rgb_entry = !color.rgb_entry,
             ElementId::ColorReset => color.select(color.default),
-            ElementId::ColorOriginal => color.select(color.original),
+            ElementId::ColorOriginal => {
+                color.select(color.original);
+                color.select_none(color.none.is_some_and(|none| none.original));
+            }
             _ => {}
         });
         if id == ElementId::ColorFormat {

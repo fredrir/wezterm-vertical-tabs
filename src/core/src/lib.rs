@@ -5,12 +5,14 @@ pub mod keybinds;
 pub mod lua;
 mod managed;
 mod model;
+pub mod padding;
 mod routing;
 pub mod settings;
 
-pub use contract::{Action, QuickProgram, UiAction, WindowContext};
+pub use contract::{Action, QuickProgram, SpawnDomain, UiAction, WindowContext};
 pub use managed::Managed;
 pub use model::*;
+pub use padding::{Dimension, WindowPadding};
 pub use routing::{MatchField, RoutingRule, SpaceTemplate};
 pub use settings::{
     HideOnEscape, RailMode, SettingDescriptor, SettingKind, Settings, Side, TabTitle,

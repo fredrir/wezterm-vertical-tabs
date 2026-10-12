@@ -3,9 +3,9 @@ use crate::element::ElementId;
 use crate::input::TextEditor;
 use crate::intent::UiIntent;
 use crate::overlays::{Form, FormKind, Overlay};
-use crate::views::settings_page::set_distro_color;
+use crate::views::settings_page::{set_distro_color, set_padding_side};
 use serde_json::Value;
-use vtabs_core::{Intent, Model, SettingKind, distros, settings};
+use vtabs_core::{Dimension, Intent, Model, SettingKind, distros, padding, settings};
 
 impl SidebarUi {
     pub(crate) fn open_form(&mut self, title: impl Into<String>, kind: FormKind, value: &str) {
@@ -29,6 +29,7 @@ impl SidebarUi {
         };
         let value = if let Some(color) = &form.color {
             match color.parse(form.editor.text()) {
+                _ if color.none.is_some_and(|none| none.selected) => "none".into(),
                 Ok(value) => value.map_or_else(String::new, super::colors::hex),
                 Err(error) => {
                     form.error = Some(error.into());
@@ -114,6 +115,12 @@ impl SidebarUi {
                 FormKind::Setting(key) if let Some(id) = distros::id(key) => {
                     set_distro_color(model, id, value.clone())
                 }
+                FormKind::Setting(key) if let Some(side) = padding::side(key) => {
+                    let dimension = (!value.is_empty())
+                        .then(|| Dimension::from_text(&value))
+                        .transpose()?;
+                    set_padding_side(model, side, dimension)
+                }
                 FormKind::Setting(key) => {
                     let descriptor =
                         settings::descriptor(key).ok_or("This setting no longer exists")?;
@@ -125,7 +132,9 @@ impl SidebarUi {
                         | SettingKind::Colors
                         | SettingKind::List => serde_json::from_str(&value)
                             .map_err(|error| format!("Invalid value: {error}"))?,
-                        SettingKind::Text | SettingKind::OptionalColor if value.is_empty() => {
+                        SettingKind::Text | SettingKind::OptionalColor | SettingKind::Border
+                            if value.is_empty() =>
+                        {
                             Value::Null
                         }
                         _ => Value::String(value.clone()),

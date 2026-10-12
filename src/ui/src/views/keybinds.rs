@@ -4,9 +4,9 @@ use crate::icons;
 use crate::intent::UiIntent;
 use crate::overlays::{MenuItem, Overlay, next_enabled};
 use crate::views::launcher::{LauncherKind, filter_menu};
-use crate::views::settings_page::set_distro_color;
+use crate::views::settings_page::{set_distro_color, set_padding_side};
 use std::collections::BTreeMap;
-use vtabs_core::{Intent, Model, distros, keybinds};
+use vtabs_core::{Intent, Model, distros, keybinds, padding};
 
 /// The plugin action a keybind launcher edits.
 #[derive(Clone, Debug)]
@@ -277,6 +277,8 @@ impl SidebarUi {
         } else if let Some(id) = distros::id(key) {
             let color = distros::defaults().remove(id).unwrap_or_default();
             intents.push(UiIntent::Domain(set_distro_color(model, id, color)));
+        } else if let Some(side) = padding::side(key) {
+            intents.push(UiIntent::Domain(set_padding_side(model, side, None)));
         } else {
             intents.push(UiIntent::Domain(Intent::ResetSetting(key.into())));
         }

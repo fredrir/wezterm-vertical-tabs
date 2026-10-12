@@ -917,7 +917,7 @@ index d66908074090d5a2b541a5a5065c3311a78906f5..9ed208743675e95eb3e2a1dabe8da323
          // any key table rules. Therefore, we should pop all `until_unknown`
          // entries from the stack.
 diff --git a/wezterm-gui/src/termwindow/mod.rs b/wezterm-gui/src/termwindow/mod.rs
-index 27567d9dd36028a6de7b943a35a791532340cfe3..16924287cb2dfe1c3d05e2450e6407a0a7ee3f70 100644
+index 27567d9dd36028a6de7b943a35a791532340cfe3..b2897adae9205cebd2a2314009618bd95ce73a34 100644
 --- a/wezterm-gui/src/termwindow/mod.rs
 +++ b/wezterm-gui/src/termwindow/mod.rs
 @@ -1,13 +1,15 @@
@@ -961,7 +961,7 @@ index 27567d9dd36028a6de7b943a35a791532340cfe3..16924287cb2dfe1c3d05e2450e6407a0
      fn focus_changed(&mut self, focused: bool, window: &Window) {
          log::trace!("Setting focus to {:?}", focused);
          self.focused = if focused { Some(Instant::now()) } else { None };
-+        if !focused && self.ui_host.as_ref().is_some_and(|ui| ui.provider.quick_terminal_config().auto_hide) {
++        if !focused && self.terminal_overlay_config().is_some_and(|config| config.auto_hide) {
 +            self.hide_terminal_overlay();
 +        }
          self.quad_generation += 1;
@@ -1590,7 +1590,7 @@ index 3136f28e23d85c70d903a4a8b87d24f09b002c18..562cdf8cf85887543c9cd65a50ad521a
              .context("paint_window_borders")?;
          drop(layers);
 diff --git a/wezterm-gui/src/termwindow/render/pane.rs b/wezterm-gui/src/termwindow/render/pane.rs
-index 4af46389d8cf8479f1de450902f95bfb9ff6f4d7..7ce02c7f1eab6239db4ba1f46949d40a2ea4c211 100644
+index 4af46389d8cf8479f1de450902f95bfb9ff6f4d7..837ff83f39f9c430bfcf5204fe1f2d0a8bcfadad 100644
 --- a/wezterm-gui/src/termwindow/render/pane.rs
 +++ b/wezterm-gui/src/termwindow/render/pane.rs
 @@ -34,7 +34,7 @@ impl crate::TermWindow {
@@ -1610,7 +1610,7 @@ index 4af46389d8cf8479f1de450902f95bfb9ff6f4d7..7ce02c7f1eab6239db4ba1f46949d40a
 +        let quick_terminal = self.terminal_overlay_content(pos.pane.pane_id()).is_some();
 +        let mut palette = pos.pane.palette();
 +        if quick_terminal {
-+            if let Some(color) = self.ui_host.as_ref().and_then(|ui| ui.provider.quick_terminal_config().background_color) {
++            if let Some(color) = self.terminal_overlay_config().and_then(|config| config.background_color) {
 +                palette.background = color.to_srgb();
 +            }
 +        }

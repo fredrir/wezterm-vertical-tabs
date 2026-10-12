@@ -502,6 +502,10 @@ table.insert(cfg.keys,{key='F5',action=vtabs.action{QuickTerminal={
   args={'/bin/sh','-c',record},set_environment_variables={PROGRAM_MARK='started'},width=0.5,height=0.6,
 }}})
 table.insert(cfg.keys,{key='F6',action=vtabs.action{QuickTerminal={args={'/bin/sh','-c','exec cat'}}}})
+table.insert(cfg.keys,{key='F7',action=vtabs.action{QuickTerminal={
+  args={'/bin/sh','-c','echo $$ >> "$WEZ_VTABS_SCENARIO/kept-pids"; exec cat'},preserve=true,
+  window_padding={left=0,right=0,top=0,bottom=0},border_color='none',
+}}})
 return cfg
 """
 
@@ -673,6 +677,78 @@ def test_quick_terminal_background_opacity_and_blur_render_in_both_backends(
 @pytest.mark.parametrize(
     ("domain", "local_pane_layout"), [("local", False), ("unix", True), ("unix", False)]
 )
+def test_preserved_quick_programs_keep_running_with_their_own_padding(
+    wezterm_binaries, headless_display, tmp_path, domain, local_pane_layout
+):
+    probe, gui = quick_programs_probe(
+        wezterm_binaries, headless_display, tmp_path, domain, local_pane_layout
+    )
+    pids = probe.root / "kept-pids"
+
+    def quick(state):
+        return state["quick_terminal"]
+
+    def started():
+        return pids.read_text().split() if pids.exists() else []
+
+    def inset(state):
+        terminal = quick(state)
+        cell = terminal["content"]["width"] / terminal["cols"]
+        return (terminal["content"]["x"] - terminal["bounds"]["x"]) / cell
+
+    try:
+        probe.start()
+        gui.attach()
+        padding = {"left": "2cell", "right": "2cell"}
+        probe.intent({"SetSetting": {"key": "quick_terminal_window_padding", "value": padding}})
+        probe.wait(
+            lambda state: state["model"]["settings"]["quick_terminal_window_padding"] == padding
+        )
+        gui.key("F7")
+        opened = probe.wait(
+            lambda state: quick(state)["visible"] and quick(state)["program"] is not None
+        )
+        program = quick(opened)["program"]
+        probe.wait(lambda state: len(started()) == 1)
+        assert inset(opened) < 1
+
+        # Hiding keeps the process for the next opening.
+        gui.key("F7")
+        hidden = probe.wait(lambda state: not quick(state)["visible"])
+        assert quick(hidden)["program"] is None
+        assert quick(hidden)["kept"] == [program]
+        assert alive(int(started()[0]))
+        gui.key("F7")
+        probe.wait(lambda state: quick(state)["visible"] and quick(state)["program"] == program)
+
+        # Another program and the shell take over without ending it; the shell keeps its padding.
+        gui.key("F6")
+        other = probe.wait(lambda state: quick(state)["program"] not in (None, program))
+        assert quick(other)["kept"] == [program]
+        gui.key("ctrl+grave")
+        shell = probe.wait(
+            lambda state: quick(state)["pane"] is not None and quick(state)["program"] is None
+        )
+        assert inset(shell) >= 2
+        gui.key("F7")
+        probe.wait(lambda state: quick(state)["program"] == program)
+        assert len(started()) == 1
+
+        # Once the program exits, the next opening starts it again.
+        gui.key("ctrl+d")
+        ended = probe.wait(lambda state: not quick(state)["visible"])
+        assert not quick(ended)["kept"]
+        gui.key("F7")
+        probe.wait(lambda state: quick(state)["program"] not in (None, program))
+        probe.wait(lambda state: len(started()) == 2)
+    finally:
+        probe.close()
+
+
+@pytest.mark.gui
+@pytest.mark.parametrize(
+    ("domain", "local_pane_layout"), [("local", False), ("unix", True), ("unix", False)]
+)
 def test_quick_programs_start_fresh_in_the_active_pane_directory(
     wezterm_binaries, headless_display, tmp_path, domain, local_pane_layout
 ):
@@ -764,13 +840,14 @@ def test_quick_programs_start_fresh_in_the_active_pane_directory(
         )
         gui.key("ctrl+grave")
         sized = probe.wait(lambda state: quick(state)["visible"])
-        assert quick(sized)["bounds"]["width"] == pytest.approx(width * 0.6)
+        # The frame snaps to whole pixels.
+        assert quick(sized)["bounds"]["width"] == pytest.approx(width * 0.6, abs=1)
 
         # Programs replace the shell and each other; the shell keeps running.
         gui.key("F6")
         opened = probe.wait(lambda state: quick(state)["program"] is not None)
         other = quick(opened)["program"]
-        assert quick(opened)["bounds"]["width"] == pytest.approx(width * 0.6)
+        assert quick(opened)["bounds"]["width"] == pytest.approx(width * 0.6, abs=1)
         gui.key("F5")
         replaced = probe.wait(lambda state: quick(state)["program"] not in (None, other))
         assert quick(replaced)["pane"] == quick(shell)["pane"]

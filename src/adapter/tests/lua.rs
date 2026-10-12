@@ -73,12 +73,12 @@ fn lua_actions_are_typed_before_they_reach_a_window() {
     assert_eq!(
         action("return { QuickTerminal = { args = { 'yazi' }, cwd = '/tmp', height = 1 } }")
             .unwrap(),
-        core::Action::Ui(core::UiAction::QuickProgram(core::QuickProgram {
+        core::Action::Ui(core::UiAction::QuickProgram(Box::new(core::QuickProgram {
             args: vec!["yazi".into()],
             cwd: Some("/tmp".into()),
             height: Some(1.),
             ..Default::default()
-        }))
+        })))
     );
     assert_eq!(
         action("return { QuickTerminal = {} }").unwrap(),
@@ -97,6 +97,89 @@ fn lua_actions_are_typed_before_they_reach_a_window() {
     );
     assert!(error("return 'navigate'").contains("unknown action \"navigate\""));
     assert!(error("return { SelectSpace = 5 }").contains("expected a string"));
+}
+#[test]
+fn quick_programs_read_wezterm_values() {
+    use crate::termwindow::ui_host::{
+        HideOnEscape, TerminalBorder, TerminalPadding, TerminalProgram,
+    };
+    use config::Dimension;
+    let lua = Lua::new();
+    let program = |fields: &str| {
+        let source = format!("return {{ QuickTerminal = {{ {fields} }} }}");
+        let value = lua.load(source).eval::<mlua::Value>().unwrap();
+        match parse_action(&lua, value).map_err(|error| error.to_string())? {
+            core::Action::Ui(core::UiAction::QuickProgram(program)) => {
+                super::super::terminal_program(*program)
+            }
+            other => Err(format!("{other:?}")),
+        }
+    };
+    let lazygit = program(
+        "args = { 'lazygit' }, domain = { DomainName = 'local' }, preserve = true, \
+         window_padding = { left = 0, top = '0.5cell', right = '10%', bottom = '6pt' }, \
+         window_background_opacity = 0.9, blur = 20, border_color = 'none', \
+         auto_hide = true, hide_on_escape = 'never', colors = { background = '#1e1e2e', \
+         foreground = 'purple', ansi = { 'black', 'maroon', 'green', 'olive', 'navy', \
+         'purple', 'teal', 'silver' }, indexed = { [136] = '#af8700' } }",
+    )
+    .unwrap();
+    assert_eq!(
+        lazygit.spawn.domain,
+        config::keyassignment::SpawnTabDomain::DomainName("local".into())
+    );
+    assert!(lazygit.preserve);
+    assert_eq!(
+        lazygit.padding,
+        TerminalPadding {
+            left: Some(Dimension::Pixels(0.)),
+            top: Some(Dimension::Cells(0.5)),
+            right: Some(Dimension::Percent(0.1)),
+            bottom: Some(Dimension::Points(6.)),
+        }
+    );
+    assert_eq!((lazygit.opacity, lazygit.blur), (Some(0.9), Some(20.)));
+    assert_eq!(lazygit.border, Some(TerminalBorder::None));
+    assert_eq!(
+        (lazygit.auto_hide, lazygit.hide_on_escape),
+        (Some(true), Some(HideOnEscape::Never))
+    );
+    let colors = lazygit.colors.unwrap();
+    assert_eq!(colors.background, Some((0x1e, 0x1e, 0x2e).into()));
+    assert!(colors.foreground.is_some() && colors.ansi.is_some());
+    assert!(colors.indexed.contains_key(&136));
+
+    let defaults = program("").unwrap();
+    assert_eq!(defaults, TerminalProgram::default());
+    assert_eq!(
+        program("border_color = 'rgb(255, 0, 0)'").unwrap().border,
+        Some(TerminalBorder::Color(window::color::LinearRgba(
+            1., 0., 0., 1.
+        )))
+    );
+    let recursive = lua
+        .load("local t = { QuickTerminal = {} }; t.QuickTerminal.colors = t; return t")
+        .eval::<mlua::Value>()
+        .unwrap();
+    assert!(parse_action(&lua, recursive).is_err());
+    for (fields, error) in [
+        ("colors = { background = 'nope' }", "invalid colors"),
+        ("colors = { backgroud = '#000000' }", "invalid colors"),
+        ("border_color = 'nope'", "invalid border_color nope"),
+        ("blur = 65", "blur must be at most 64"),
+        ("window_background_opacity = 2", "window_background_opacity"),
+        ("window_padding = { left = '1em' }", "padding takes pixels"),
+        ("window_padding = { middle = 1 }", "unknown field"),
+        ("domain = 'Elsewhere'", "unknown variant `Elsewhere`"),
+        (
+            "hide_on_escape = 'sometimes'",
+            "unknown variant `sometimes`",
+        ),
+        ("preserve = 'yes'", "invalid type"),
+    ] {
+        let found = program(fields).unwrap_err();
+        assert!(found.contains(error), "{}: {}", fields, found);
+    }
 }
 #[test]
 fn managed_file_tables_round_trip_through_the_registry() {

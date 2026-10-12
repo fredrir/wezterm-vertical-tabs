@@ -148,10 +148,46 @@ impl WindowHookContext {
     }
 }
 
+/// JSON objects take string keys only; integer keys outside a sequence, as in `indexed`, become strings.
+fn string_keys<'lua>(
+    lua: &'lua Lua,
+    value: mlua::Value<'lua>,
+    depth: usize,
+) -> mlua::Result<mlua::Value<'lua>> {
+    let mlua::Value::Table(table) = value else {
+        return Ok(value);
+    };
+    if depth > 32 {
+        return Err(mlua::Error::external(
+            "invalid vtabs action: nested too deeply",
+        ));
+    }
+    let length = table.raw_len();
+    let pairs = table
+        .pairs::<mlua::Value, mlua::Value>()
+        .collect::<mlua::Result<Vec<_>>>()?;
+    let sequence = pairs.len() == length;
+    let normalized = lua.create_table()?;
+    for (key, value) in pairs {
+        let key = match key {
+            mlua::Value::Integer(index) if !sequence => {
+                mlua::Value::String(lua.create_string(index.to_string())?)
+            }
+            key => key,
+        };
+        normalized.raw_set(key, string_keys(lua, value, depth + 1)?)?;
+    }
+    Ok(mlua::Value::Table(normalized))
+}
+
 fn parse_action(lua: &Lua, action: mlua::Value) -> mlua::Result<core::Action> {
-    let value: Value = lua.from_value(action)?;
-    serde_json::from_value(value)
-        .map_err(|error| mlua::Error::external(format!("invalid vtabs action: {error}")))
+    let invalid = |error: String| mlua::Error::external(format!("invalid vtabs action: {error}"));
+    let value: Value = lua.from_value(string_keys(lua, action, 0)?)?;
+    let action = serde_json::from_value(value).map_err(|error| invalid(error.to_string()))?;
+    if let core::Action::Ui(core::UiAction::QuickProgram(program)) = &action {
+        super::terminal_program(program.as_ref().clone()).map_err(invalid)?;
+    }
+    Ok(action)
 }
 
 pub fn register(lua: &Lua) -> anyhow::Result<()> {

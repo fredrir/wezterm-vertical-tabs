@@ -104,31 +104,47 @@ return config
 | Start | Beside the active pane when a shell is created: same host, domain and directory |
 | Mux without `local_pane_layout` | Shell lives in a hidden workspace on the mux server; reattached after a GUI restart when preserved; follows `replace-pane` |
 | Lua action | `vtabs.action("quick_terminal")`; available with plugin shortcuts disabled |
-| Appearance | Settings → Quick terminal, or the same keys in Lua `settings`; applies to quick programs too |
+| Appearance | Settings → Quick terminal, or the same keys in Lua `settings`; quick programs follow them unless they set their own |
+| Padding | `quick_terminal_window_padding = { left, top, right, bottom }`, read like WezTerm's `window_padding`: numbers are pixels, strings take `px`, `%` (of the quick terminal), `pt` or `cell`; unset sides follow `window_padding` |
 | Opacity | `quick_terminal_opacity = 1.0` (opaque); below `1` reveals underlying WezTerm content; text stays opaque |
 | Blur | `quick_terminal_blur = 0`; radius `0`–`64` logical pixels behind the rounded frame, applies with opacity below `1` |
 | Colors | `quick_terminal_background_color`, `quick_terminal_border_color`: `#RRGGBB`; unset follows the terminal palette (border uses foreground at 22% opacity); clear the Settings field to restore |
+| Border | `quick_terminal_border_color = "none"` hides the border |
 
 **Quick programs**
 
 ```lua
 config.keys = {
-  { key = 'g', mods = 'CMD', action = vtabs.action { QuickTerminal = { args = { 'lazygit' }, width = 0.9, height = 0.9 } } },
+  { key = 'g', mods = 'CMD', action = vtabs.action { QuickTerminal = {
+    args = { 'lazygit' }, width = 0.9, height = 0.9, preserve = true,
+    window_padding = { left = 0, right = 0, top = '0.5cell', bottom = 0 },
+    border_color = 'none', colors = { background = '#1e1e2e' },
+  } } },
   { key = 'y', mods = 'CMD', action = vtabs.action { QuickTerminal = { args = { 'yazi' } } } },
 }
 ```
+
+Keys follow WezTerm's `SpawnCommand` and config names; anything left out follows the quick terminal settings.
 
 | Name | Value |
 | --- | --- |
 | `args` | Program and arguments; default the domain's default program |
 | `cwd` | Default the active pane's directory |
 | `set_environment_variables` | Added to the program's environment |
+| `domain` | `SpawnTabDomain` as in WezTerm: `'DefaultDomain'`, `'CurrentPaneDomain'`, `{ DomainName = 'name' }`, `{ DomainId = 1 }`; default the active pane's domain |
 | `width`, `height` | Window fraction above 0, at most 1; default `quick_terminal_width`, `quick_terminal_height` |
+| `window_padding` | Sides as in `quick_terminal_window_padding`; unset sides follow it |
+| `window_background_opacity` | `0`–`1`; default `quick_terminal_opacity` |
+| `blur` | `0`–`64`; default `quick_terminal_blur` |
+| `colors` | WezTerm `colors` table over the terminal palette; `background` also fills the frame over `quick_terminal_background_color` |
+| `border_color` | Any WezTerm color or `'none'`; default `quick_terminal_border_color` |
+| `auto_hide`, `hide_on_escape` | Default `quick_terminal_auto_hide`, `quick_terminal_hide_on_escape` |
+| `preserve` | `true` keeps the program running while hidden and shows it again on the next opening; ends with the window or when the program exits |
 | Resize | Axes without `width`/`height` share the quick terminal's resized size; set axes resize only that program |
-| Domain | Wherever the active pane runs; a mux without `local_pane_layout` spawns it in a hidden workspace and needs this build's mux server |
-| Session | Starts fresh on each opening; ends when hidden or when the program exits |
-| Toggle | Same binding hides; another binding or the quick terminal shortcut replaces it |
-| Hide | Repeat binding, click outside, close-tab shortcut; Escape goes to the program unless `quick_terminal_hide_on_escape = "always"` |
+| Domain | A mux without `local_pane_layout` spawns it in a hidden workspace beside one of the domain's panes and needs this build's mux server |
+| Session | Starts fresh on each opening unless `preserve`; ends when hidden or when the program exits |
+| Toggle | Same binding hides; another binding or the quick terminal shortcut replaces it; a binding running the same command reopens a preserved program with its own settings |
+| Hide | Repeat binding, click outside, close-tab shortcut; Escape follows `hide_on_escape`, where `"auto"` hides only while nothing runs in the program |
 
 **Launcher**
 

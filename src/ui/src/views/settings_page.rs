@@ -16,7 +16,8 @@ use serde_json::{Value, json};
 use std::collections::BTreeSet;
 use unicode_width::UnicodeWidthStr;
 use vtabs_core::{
-    Intent, Model, SettingDescriptor, SettingKind, Settings, distros, keybinds, settings,
+    Dimension, Intent, Model, SettingDescriptor, SettingKind, Settings, distros, keybinds, padding,
+    settings,
 };
 
 const CATEGORIES: &[(&str, &str, &str)] = &[
@@ -215,21 +216,36 @@ fn dimmed(model: &Model, key: &str) -> bool {
     }
 }
 
-/// Settings, keybind and remote glyph rows by key.
+/// Settings, keybind, remote glyph and padding rows by key.
 pub(crate) fn descriptor(key: &str) -> Option<&'static SettingDescriptor> {
     settings::descriptor(key).or_else(|| {
         keybinds::DESCRIPTORS
             .iter()
             .chain(distros::DESCRIPTORS)
+            .chain(padding::DESCRIPTORS)
             .find(|field| field.key == key)
     })
 }
 
-/// A remote glyph row reads its entry in `distro_colors`.
+/// A remote glyph row reads its entry in `distro_colors`, a padding row its side.
 pub(crate) fn setting_value(settings: &Settings, key: &str) -> Value {
-    match distros::id(key) {
-        Some(id) => json!(settings.distro_colors.get(id)),
+    if let Some(id) = distros::id(key) {
+        return json!(settings.distro_colors.get(id));
+    }
+    match padding::side(key) {
+        Some(side) => json!(settings.quick_terminal_window_padding.side(side)),
         None => settings.get(key).unwrap_or_default(),
+    }
+}
+
+pub(crate) fn set_padding_side(model: &Model, side: &str, value: Option<Dimension>) -> Intent {
+    let mut padding = model.settings.quick_terminal_window_padding.clone();
+    if let Some(slot) = padding.side_mut(side) {
+        *slot = value;
+    }
+    Intent::SetSetting {
+        key: "quick_terminal_window_padding".into(),
+        value: json!(padding),
     }
 }
 
@@ -305,9 +321,15 @@ impl Changed {
                 .keybinds
                 .get(action)
                 .is_some_and(|keys| *keys != keybinds::defaults(action)),
-            None => match distros::id(field.key) {
-                Some(id) => self.current["distro_colors"][id] != self.defaults["distro_colors"][id],
-                None => self.current.get(field.key) != self.defaults.get(field.key),
+            None => match (distros::id(field.key), padding::side(field.key)) {
+                (Some(id), _) => {
+                    self.current["distro_colors"][id] != self.defaults["distro_colors"][id]
+                }
+                (_, Some(side)) => {
+                    let padding = "quick_terminal_window_padding";
+                    self.current[padding][side] != self.defaults[padding][side]
+                }
+                _ => self.current.get(field.key) != self.defaults.get(field.key),
             },
         }
     }
@@ -318,6 +340,7 @@ impl SettingsPage {
         let key = match key {
             _ if key.starts_with("shortcut.") => "keybinds",
             _ if distros::id(key).is_some() => "distro_colors",
+            _ if padding::side(key).is_some() => "quick_terminal_window_padding",
             _ => key,
         };
         model.config_owned.contains(key) || self.config_owned.contains(key)
@@ -344,6 +367,7 @@ impl SettingsPage {
             .filter(|field| field.key != "keybinds")
             .flat_map(|field| match field.key {
                 "distro_colors" => distros::DESCRIPTORS,
+                "quick_terminal_window_padding" => padding::DESCRIPTORS,
                 _ => std::slice::from_ref(field),
             })
             .chain(keybinds::DESCRIPTORS.iter())
@@ -799,10 +823,16 @@ impl SettingsPage {
                 choice_label(value.as_str().unwrap_or_default()),
                 icons::EXPANDED
             ),
-            SettingKind::Color | SettingKind::OptionalColor => value
-                .as_str()
-                .map_or_else(|| "Auto".into(), |hex| format!("   {hex}")),
+            SettingKind::Color | SettingKind::OptionalColor | SettingKind::Border => {
+                match value.as_str() {
+                    None => "Auto".into(),
+                    Some("none") => "None".into(),
+                    Some(hex) => format!("   {hex}"),
+                }
+            }
             SettingKind::Text => value.as_str().map_or_else(|| "Auto".into(), display_text),
+            SettingKind::Dimension => serde_json::from_value::<Dimension>(value.clone())
+                .map_or_else(|_| "Auto".into(), |dimension| dimension.to_string()),
             SettingKind::List => format!("{} items", value.as_array().map_or(0, |v| v.len())),
             _ => return 0,
         };
@@ -818,7 +848,10 @@ impl SettingsPage {
             text,
             theme.base().bg(fill).fg(fg),
         );
-        if let (SettingKind::Color | SettingKind::OptionalColor, Some(color)) = (
+        if let (
+            SettingKind::Color | SettingKind::OptionalColor | SettingKind::Border,
+            Some(color),
+        ) = (
             &field.kind,
             value.as_str().and_then(crate::Theme::parse_color),
         ) {
