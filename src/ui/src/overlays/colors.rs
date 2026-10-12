@@ -40,25 +40,46 @@ pub(crate) struct ColorPicker {
     pub hue: f32,
     pub saturation: f32,
     pub value: f32,
-    pub original: Option<Color>,
-    pub selected: Option<Color>,
+    pub original: Pick,
+    pub selected: Pick,
     pub default: Option<Color>,
     pub fallback: Color,
     pub rgb_entry: bool,
     pub swatch: usize,
-    /// Set where `none` is a value of its own.
-    pub none: Option<NoColor>,
+    pub allows_none: bool,
 }
 
-#[derive(Clone, Copy, Debug, Default)]
-pub(crate) struct NoColor {
-    pub original: bool,
-    pub selected: bool,
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum Pick {
+    Auto,
+    NoColor,
+    Color(Color),
+}
+
+impl Pick {
+    fn of(color: Option<Color>) -> Self {
+        color.map_or(Self::Auto, Self::Color)
+    }
+
+    pub(crate) fn color(self) -> Option<Color> {
+        match self {
+            Self::Color(color) => Some(color),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Auto => "Auto",
+            Self::NoColor => "None",
+            Self::Color(_) => "Aa",
+        }
+    }
 }
 
 impl ColorPicker {
     fn new(value: &str, default: Option<&str>, fallback: Color) -> Self {
-        let original = Theme::parse_color(value);
+        let original = Pick::of(Theme::parse_color(value));
         let fallback = match fallback {
             Color::Rgb(..) => fallback,
             _ => Color::Rgb(128, 128, 128),
@@ -73,25 +94,18 @@ impl ColorPicker {
             fallback,
             rgb_entry: false,
             swatch: 0,
-            none: None,
+            allows_none: false,
         };
         picker.select(original);
         picker
     }
 
-    fn select_none(&mut self, selected: bool) {
-        if let Some(none) = &mut self.none {
-            none.selected = selected;
-        }
-    }
-
     pub(crate) fn preview(&self) -> Color {
-        self.selected.unwrap_or(self.fallback)
+        self.selected.color().unwrap_or(self.fallback)
     }
 
-    fn select(&mut self, color: Option<Color>) {
-        self.select_none(false);
-        self.selected = color;
+    fn select(&mut self, pick: Pick) {
+        self.selected = pick;
         let Color::Rgb(r, g, b) = self.preview() else {
             return;
         };
@@ -113,7 +127,7 @@ impl ColorPicker {
         }
         self.saturation = if max > 0. { delta / max } else { 0. };
         self.value = max;
-        if let Some(index) = PALETTE.iter().position(|c| Some(rgb(*c)) == color) {
+        if let Some(index) = PALETTE.iter().position(|c| Pick::Color(rgb(*c)) == pick) {
             self.swatch = index;
         }
     }
@@ -143,24 +157,20 @@ impl ColorPicker {
     }
 
     pub(crate) fn edited(&mut self, text: &str) -> Result<(), &'static str> {
-        self.select_none(false);
-        if self.none.is_some() && text.trim().eq_ignore_ascii_case("none") {
-            self.select(None);
-            self.select_none(true);
+        if self.allows_none && text.trim().eq_ignore_ascii_case("none") {
+            self.select(Pick::NoColor);
             return Ok(());
         }
-        self.select(self.parse(text)?);
+        self.select(Pick::of(self.parse(text)?));
         Ok(())
     }
 
     fn text(&self) -> String {
-        if self.none.is_some_and(|none| none.selected) {
-            return "none".into();
-        }
         match self.selected {
-            Some(Color::Rgb(r, g, b)) if self.rgb_entry => format!("{r}, {g}, {b}"),
-            Some(color) => hex(color),
-            None => String::new(),
+            Pick::Color(Color::Rgb(r, g, b)) if self.rgb_entry => format!("{r}, {g}, {b}"),
+            Pick::Color(color) => hex(color),
+            Pick::NoColor => "none".into(),
+            Pick::Auto => String::new(),
         }
     }
 }
@@ -180,16 +190,15 @@ impl SidebarUi {
         }
     }
 
-    /// The open color form also takes `none`.
     pub(crate) fn allow_no_color(&mut self) {
         if let Some(Overlay::Form(form)) = &mut self.overlays.current
             && let Some(color) = &mut form.color
         {
-            let none = form.editor.text() == "none";
-            color.none = Some(NoColor {
-                original: none,
-                selected: none,
-            });
+            color.allows_none = true;
+            if form.editor.text() == "none" {
+                color.original = Pick::NoColor;
+                color.selected = Pick::NoColor;
+            }
         }
     }
 
@@ -211,16 +220,13 @@ impl SidebarUi {
         self.change_color(|color| match id {
             ElementId::ColorSwatch(index) => {
                 if let Some(value) = PALETTE.get(index) {
-                    color.select(Some(rgb(*value)));
+                    color.select(Pick::Color(rgb(*value)));
                     color.swatch = index;
                 }
             }
             ElementId::ColorFormat => color.rgb_entry = !color.rgb_entry,
-            ElementId::ColorReset => color.select(color.default),
-            ElementId::ColorOriginal => {
-                color.select(color.original);
-                color.select_none(color.none.is_some_and(|none| none.original));
-            }
+            ElementId::ColorReset => color.select(Pick::of(color.default)),
+            ElementId::ColorOriginal => color.select(color.original),
             _ => {}
         });
         if id == ElementId::ColorFormat {
@@ -246,7 +252,7 @@ impl SidebarUi {
                 color.saturation = at(x, rect.x, rect.width, fx);
                 color.value = 1. - at(y, rect.y, rect.height, fy);
             }
-            color.selected = Some(hsv(color.hue, color.saturation, color.value));
+            color.selected = Pick::Color(hsv(color.hue, color.saturation, color.value));
         });
     }
 
@@ -326,7 +332,7 @@ impl SidebarUi {
                         } else {
                             color.value = (color.value + direction * step).clamp(0., 1.);
                         }
-                        color.selected = Some(hsv(color.hue, color.saturation, color.value));
+                        color.selected = Pick::Color(hsv(color.hue, color.saturation, color.value));
                     }),
                     ElementId::ColorSwatch(index) => {
                         let delta = match key {

@@ -216,6 +216,16 @@ fn border_color_takes_none_to_hide_the_border() {
         let intents = ui.event(&model, UiInput::key(Key::Enter));
         assert_eq!(set(&intents, key), expected, "{key}");
     }
+
+    let (mut ui, mut model) = settings("quick_terminal");
+    model.settings.quick_terminal_border_color = Some("none".into());
+    let row = ElementId::Setting("quick_terminal_border_color".into());
+    click(&mut ui, &model, row);
+    let intents = ui.event(&model, UiInput::key(Key::Enter));
+    assert_eq!(
+        set(&intents, "quick_terminal_border_color"),
+        Some(json!("none"))
+    );
 }
 
 #[test]

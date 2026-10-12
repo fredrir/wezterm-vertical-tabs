@@ -198,7 +198,6 @@ pub struct TerminalProgram {
     pub colors: Option<config::Palette>,
     pub auto_hide: Option<bool>,
     pub hide_on_escape: Option<HideOnEscape>,
-    /// Hiding keeps the program running for its next opening.
     pub preserve: bool,
 }
 /// Sides left `None` follow the next level, and finally the window's `window_padding`.
@@ -235,7 +234,6 @@ pub enum TerminalBorder {
     None,
     Color(LinearRgba),
 }
-/// What an unmodified Escape does in the quick terminal.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum HideOnEscape {
     Never,
@@ -296,7 +294,7 @@ pub struct QuickTerminalConfig {
     pub transition: Duration,
 }
 impl QuickTerminalConfig {
-    /// `program`'s own values over these; its size stays with the overlay's steps.
+    /// The program's size stays with the overlay's steps.
     pub fn with(self, program: &TerminalProgram) -> Self {
         let background = program
             .colors

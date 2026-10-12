@@ -358,7 +358,7 @@ fn quick_terminal_border_can_be_hidden() {
 
 #[test]
 fn quick_terminal_padding_reads_sides_like_wezterm() {
-    use padding::{Dimension, Unit};
+    use padding::{Dimension, Unit, WindowPadding};
     let mut settings = Settings::default();
     assert_eq!(
         settings.get("quick_terminal_window_padding"),
@@ -387,6 +387,17 @@ fn quick_terminal_padding_reads_sides_like_wezterm() {
         Some((6., Unit::Points))
     );
     assert!(Dimension::from_text("6 em").is_err());
+    for value in [
+        json!({"left": true}),
+        json!({"left": {}}),
+        json!({"left": "2em"}),
+    ] {
+        let error = serde_json::from_value::<WindowPadding>(value).unwrap_err();
+        assert!(
+            error.to_string().starts_with("padding takes pixels"),
+            "{error}"
+        );
+    }
     settings
         .set("quick_terminal_window_padding", json!({"top": 0}))
         .unwrap();

@@ -80,20 +80,14 @@ impl Serialize for Dimension {
 
 impl<'de> Deserialize<'de> for Dimension {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        #[derive(Deserialize)]
-        #[serde(untagged)]
-        enum Raw {
-            Number(f64),
-            Text(String),
-        }
-        let dimension = match Raw::deserialize(deserializer)? {
-            Raw::Number(amount) => Self::Number(amount),
-            Raw::Text(text) => Self::Text(text),
+        let dimension = match serde_json::Value::deserialize(deserializer)? {
+            serde_json::Value::Number(amount) => amount.as_f64().map(Self::Number),
+            serde_json::Value::String(text) => Some(Self::Text(text)),
+            _ => None,
         };
-        match dimension.parse() {
-            Some(_) => Ok(dimension),
-            None => Err(serde::de::Error::custom(INVALID)),
-        }
+        dimension
+            .filter(|dimension| dimension.parse().is_some())
+            .ok_or_else(|| serde::de::Error::custom(INVALID))
     }
 }
 
@@ -167,7 +161,6 @@ pub const DESCRIPTORS: &[SettingDescriptor] = &[
     },
 ];
 
-/// The side a padding row edits.
 pub fn side(key: &str) -> Option<&str> {
     key.strip_prefix("quick_terminal_window_padding.")
 }

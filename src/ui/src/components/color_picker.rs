@@ -3,7 +3,7 @@ use crate::components::text_input::TextInput;
 use crate::components::{centered, panel};
 use crate::element::ElementId;
 use crate::overlays::Form;
-use crate::overlays::colors::{ColorPicker, PALETTE, hsv, rgb};
+use crate::overlays::colors::{ColorPicker, PALETTE, Pick, hsv, rgb};
 use crate::runtime::canvas::{Canvas, RoundedSurface};
 use ratatui::layout::{Alignment, Rect};
 use ratatui::style::{Color, Modifier};
@@ -67,7 +67,7 @@ fn palette(cx: &mut Canvas, area: Rect, picker: &ColorPicker) {
         }
         let color = rgb(*value);
         let id = ElementId::ColorSwatch(index);
-        let selected = picker.selected == Some(color);
+        let selected = picker.selected == Pick::Color(color);
         let focused = cx.focused(&id) || cx.hovered(&id);
         cx.surface(rect, color, 6., if focused { 0.5 } else { 2. });
         if selected || focused {
@@ -200,14 +200,8 @@ pub(crate) fn render(cx: &mut Canvas, area: Rect, form: &mut Form, editing: bool
         preview(
             cx,
             Rect::new(preview_x, shades.y, width, plane_height),
-            picker.original.unwrap_or(picker.fallback),
-            if picker.none.is_some_and(|none| none.original) {
-                "None"
-            } else if picker.original.is_some() {
-                "Aa"
-            } else {
-                "Auto"
-            },
+            picker.original.color().unwrap_or(picker.fallback),
+            picker.original.label(),
             Some(ElementId::ColorOriginal),
         );
         preview(
@@ -219,13 +213,7 @@ pub(crate) fn render(cx: &mut Canvas, area: Rect, form: &mut Form, editing: bool
                 plane_height,
             ),
             picker.preview(),
-            if picker.none.is_some_and(|none| none.selected) {
-                "None"
-            } else if picker.selected.is_some() {
-                "Aa"
-            } else {
-                "Auto"
-            },
+            picker.selected.label(),
             None,
         );
         let hue_y = shades.bottom() + 1;

@@ -157,6 +157,24 @@ fn quick_programs_read_wezterm_values() {
             1., 0., 0., 1.
         )))
     );
+    struct Shade;
+    impl mlua::UserData for Shade {
+        fn add_methods<'lua, M: mlua::UserDataMethods<'lua, Self>>(methods: &mut M) {
+            methods.add_meta_method(mlua::MetaMethod::ToString, |_, _, ()| Ok("#ff0000"));
+        }
+    }
+    lua.globals().set("shade", Shade).unwrap();
+    let objects = program("border_color = shade, colors = { background = shade } ").unwrap();
+    assert_eq!(
+        objects.border,
+        Some(TerminalBorder::Color(window::color::LinearRgba(
+            1., 0., 0., 1.
+        )))
+    );
+    assert_eq!(
+        objects.colors.and_then(|colors| colors.background),
+        Some((255, 0, 0).into())
+    );
     let recursive = lua
         .load("local t = { QuickTerminal = {} }; t.QuickTerminal.colors = t; return t")
         .eval::<mlua::Value>()

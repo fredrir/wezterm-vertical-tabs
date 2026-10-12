@@ -148,14 +148,18 @@ impl WindowHookContext {
     }
 }
 
-/// JSON objects take string keys only; integer keys outside a sequence, as in `indexed`, become strings.
-fn string_keys<'lua>(
+/// For serde: WezTerm objects such as colors become values, integer keys outside a sequence strings.
+fn plain<'lua>(
     lua: &'lua Lua,
     value: mlua::Value<'lua>,
     depth: usize,
 ) -> mlua::Result<mlua::Value<'lua>> {
-    let mlua::Value::Table(table) = value else {
-        return Ok(value);
+    let table = match value {
+        mlua::Value::UserData(_) => {
+            return luahelper::dynamic_to_lua_value(lua, luahelper::lua_value_to_dynamic(value)?);
+        }
+        mlua::Value::Table(table) => table,
+        value => return Ok(value),
     };
     if depth > 32 {
         return Err(mlua::Error::external(
@@ -175,14 +179,14 @@ fn string_keys<'lua>(
             }
             key => key,
         };
-        normalized.raw_set(key, string_keys(lua, value, depth + 1)?)?;
+        normalized.raw_set(key, plain(lua, value, depth + 1)?)?;
     }
     Ok(mlua::Value::Table(normalized))
 }
 
 fn parse_action(lua: &Lua, action: mlua::Value) -> mlua::Result<core::Action> {
     let invalid = |error: String| mlua::Error::external(format!("invalid vtabs action: {error}"));
-    let value: Value = lua.from_value(string_keys(lua, action, 0)?)?;
+    let value: Value = lua.from_value(plain(lua, action, 0)?)?;
     let action = serde_json::from_value(value).map_err(|error| invalid(error.to_string()))?;
     if let core::Action::Ui(core::UiAction::QuickProgram(program)) = &action {
         super::terminal_program(program.as_ref().clone()).map_err(invalid)?;

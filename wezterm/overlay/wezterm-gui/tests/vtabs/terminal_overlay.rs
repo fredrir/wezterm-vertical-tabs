@@ -15,9 +15,8 @@ fn terminal_is_centered_in_three_quarters_of_the_window() {
         let layout = Layout::new(
             bounds,
             SHELL_SIZE,
-            &WindowPadding::default(),
-            8. * scale,
-            16. * scale,
+            &edges(WindowPadding::default()),
+            (8. * scale, 16. * scale),
             dpi,
         );
         assert_eq!(layout.frame.width, bounds.width * 0.75);
@@ -48,7 +47,13 @@ fn frame_and_content_sit_on_whole_pixels() {
         height: 777.3,
     };
     for size in [SHELL_SIZE, (0.77, 0.63), (0.333, 0.9)] {
-        let layout = Layout::new(bounds, size, &WindowPadding::default(), 8.4, 17.3, 144);
+        let layout = Layout::new(
+            bounds,
+            size,
+            &edges(WindowPadding::default()),
+            (8.4, 17.3),
+            144,
+        );
         for value in [
             layout.frame.x,
             layout.frame.y,
@@ -71,9 +76,8 @@ fn tiny_windows_still_have_a_valid_pty_size() {
             ..Default::default()
         },
         SHELL_SIZE,
-        &WindowPadding::default(),
-        8.,
-        16.,
+        &edges(WindowPadding::default()),
+        (8., 16.),
         96,
     );
     assert_eq!((layout.size.cols, layout.size.rows), (1, 1));
@@ -88,7 +92,13 @@ fn programs_choose_their_share_of_the_window() {
         height: 800.,
     };
     for size in [(0.5, 0.9), (1., 1.), (0.2, 0.35)] {
-        let layout = Layout::new(bounds, size, &WindowPadding::default(), 8., 16., 96);
+        let layout = Layout::new(
+            bounds,
+            size,
+            &edges(WindowPadding::default()),
+            (8., 16.),
+            96,
+        );
         assert!((layout.frame.width - bounds.width * size.0).abs() < 0.01);
         assert!((layout.frame.height - bounds.height * size.1).abs() < 0.01);
         let center = |start: f32, extent: f32| start + extent / 2.;
@@ -124,6 +134,14 @@ fn programs_without_a_size_follow_the_shell() {
     assert_eq!(program(None, None).size(shell), shell);
     assert_eq!(program(Some(0.5), None).size(shell), (0.5, 0.9));
     assert_eq!(program(Some(0.5), Some(1.)).size(shell), (0.5, 1.));
+}
+
+fn edges(padding: WindowPadding) -> Edges {
+    Edges {
+        border: 0.,
+        padding,
+        alignment: WindowContentAlignment::default(),
+    }
 }
 
 fn config(size: (f32, f32)) -> QuickTerminalConfig {
@@ -163,9 +181,8 @@ fn a_step_of_one_cell_changes_the_grid_by_one_cell() {
     let before = Layout::new(
         bounds,
         SHELL_SIZE,
-        &WindowPadding::default(),
-        cell_width,
-        cell_height,
+        &edges(WindowPadding::default()),
+        (cell_width, cell_height),
         192,
     );
     for amount in [1., 3.] {
@@ -174,9 +191,8 @@ fn a_step_of_one_cell_changes_the_grid_by_one_cell() {
         let after = Layout::new(
             bounds,
             (width, height),
-            &WindowPadding::default(),
-            cell_width,
-            cell_height,
+            &edges(WindowPadding::default()),
+            (cell_width, cell_height),
             192,
         );
         assert_eq!(after.size.cols, before.size.cols + amount as usize);
@@ -195,9 +211,8 @@ fn content_stays_inside_the_padding() {
                 height: 777.,
             },
             size,
-            &WindowPadding::default(),
-            8.,
-            17.,
+            &edges(WindowPadding::default()),
+            (8., 17.),
             dpi,
         );
         let (inner, content) = (layout.inner, layout.content);
@@ -354,7 +369,7 @@ fn padding_reads_wezterm_units_against_the_frame() {
         right: Dimension::Cells(2.),
         bottom: Dimension::Points(18.),
     };
-    let layout = Layout::new(bounds, (1., 1.), &padding, 10., 20., 144);
+    let layout = Layout::new(bounds, (1., 1.), &edges(padding), (10., 20.), 144);
     let (frame, inner) = (layout.frame, layout.inner);
     assert_eq!(inner.x - frame.x, 0.);
     assert_eq!(inner.y - frame.y, 100.);
@@ -378,7 +393,7 @@ fn padding_takes_at_most_a_quarter_of_each_side() {
         right: Dimension::Pixels(1e6),
         bottom: Dimension::Points(1e6),
     };
-    let layout = Layout::new(bounds, (1., 1.), &padding, 8., 16., 96);
+    let layout = Layout::new(bounds, (1., 1.), &edges(padding), (8., 16.), 96);
     assert_eq!((layout.inner.width, layout.inner.height), (400., 300.));
     assert_eq!((layout.size.cols, layout.size.rows), (50, 18));
 }
@@ -510,4 +525,122 @@ fn a_failed_kept_launch_leaves_the_shown_program_alone() {
     assert!(state.kept.is_empty());
     assert!(state.visible);
     assert_eq!(state.program.as_ref().map(|program| program.id), Some(2));
+}
+
+#[test]
+fn padding_is_measured_inside_the_border() {
+    let bounds = Bounds {
+        x: 0.,
+        y: 0.,
+        width: 1000.,
+        height: 600.,
+    };
+    let bordered = |padding| Edges {
+        border: 2.,
+        ..edges(padding)
+    };
+    let flush = WindowPadding {
+        left: Dimension::Pixels(0.),
+        top: Dimension::Pixels(0.),
+        right: Dimension::Pixels(0.),
+        bottom: Dimension::Pixels(0.),
+    };
+    let layout = Layout::new(bounds, (1., 1.), &bordered(flush), (10., 20.), 96);
+    assert_eq!((layout.inner.x, layout.inner.y), (2., 2.));
+    assert_eq!((layout.inner.width, layout.inner.height), (996., 596.));
+    let padded = WindowPadding {
+        left: Dimension::Percent(0.1),
+        top: Dimension::Cells(1.),
+        ..flush
+    };
+    let layout = Layout::new(bounds, (1., 1.), &bordered(padded), (10., 20.), 96);
+    assert_eq!((layout.inner.x, layout.inner.y), (2. + 99., 2. + 20.));
+}
+
+#[test]
+fn content_follows_window_content_alignment() {
+    let bounds = Bounds {
+        x: 0.,
+        y: 0.,
+        width: 1005.,
+        height: 610.,
+    };
+    let zero = WindowPadding {
+        left: Dimension::Pixels(0.),
+        top: Dimension::Pixels(0.),
+        right: Dimension::Pixels(0.),
+        bottom: Dimension::Pixels(0.),
+    };
+    let place = |horizontal, vertical| {
+        let edges = Edges {
+            alignment: WindowContentAlignment {
+                horizontal,
+                vertical,
+            },
+            ..edges(zero)
+        };
+        let content = Layout::new(bounds, (1., 1.), &edges, (10., 20.), 96).content;
+        (content.x, content.y)
+    };
+    use HorizontalWindowContentAlignment as H;
+    use VerticalWindowContentAlignment as V;
+    assert_eq!(place(H::Left, V::Top), (0., 0.));
+    assert_eq!(place(H::Center, V::Center), (2., 5.));
+    assert_eq!(place(H::Right, V::Bottom), (5., 10.));
+}
+
+#[test]
+fn steps_change_the_grid_by_whole_cells_through_percent_padding() {
+    // Ten percent each side, as `Layout` floors it.
+    let grid = |frame: f32| ((frame - 2. * (0.1 * frame).floor()) / 10.).floor();
+    let bounds = (100., 2000.);
+    for (current, cells) in [(500., 1.), (547., -1.), (500., 3.), (512., -1.)] {
+        let target = step_cells(current, cells, 10., bounds, grid);
+        assert_eq!(grid(target), grid(current) + cells, "{current} by {cells}");
+        assert!((target - current).abs() < (cells.abs() + 1.) * 10. / 0.8);
+    }
+    assert_eq!(step_cells(105., -1., 10., bounds, grid), 100.);
+    assert_eq!(step_cells(1995., 2., 10., bounds, grid), 2000.);
+}
+
+#[test]
+fn only_preserved_bindings_reopen_a_kept_program() {
+    let mut state = State::default();
+    state.program = Some(program(1, "lazygit", true));
+    state.put_away(|_| true);
+    let fresh = program(2, "lazygit", false).spec;
+    assert!(!state.reusable(&fresh, |_| true));
+    assert!(state.take_kept(&fresh).is_none());
+    assert_eq!(state.kept.len(), 1);
+    // A shown program without `preserve` ends when replaced, so it cannot be reopened.
+    let mut state = State::default();
+    state.program = Some(program(1, "lazygit", false));
+    assert!(!state.reusable(&program(2, "lazygit", true).spec, |_| true));
+}
+
+#[test]
+fn a_launch_takes_the_colors_its_program_has_when_it_lands() {
+    let mut state = State::default();
+    let mut lazygit = program(1, "lazygit", true);
+    lazygit.spec.colors = Some(config::Palette {
+        background: Some((1, 2, 3).into()),
+        ..Default::default()
+    });
+    state.program = Some(lazygit);
+    state.put_away(|_| true);
+    let light = TerminalProgram {
+        colors: Some(config::Palette {
+            background: Some((255, 255, 255).into()),
+            ..Default::default()
+        }),
+        ..state.kept[0].spec.clone()
+    };
+    state.program = state.take_kept(&light);
+    assert_eq!(
+        state
+            .colors(Slot::Program(1))
+            .and_then(|colors| colors.background),
+        Some((255, 255, 255).into())
+    );
+    assert!(state.colors(Slot::Shell(1)).is_none());
 }

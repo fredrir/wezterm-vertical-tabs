@@ -5,13 +5,17 @@ use crate::quad::{HeapQuadAllocator, TripleLayerQuadAllocator};
 use anyhow::Context;
 use codec::SpawnBesidePane;
 use config::keyassignment::{PaneDirection, SpawnCommand, SpawnTabDomain};
-use config::{DimensionContext, WindowPadding};
+use config::{
+    DimensionContext, HorizontalWindowContentAlignment, VerticalWindowContentAlignment,
+    WindowContentAlignment, WindowPadding,
+};
 use mux::domain::{Domain, DomainState};
 use mux::pane::{CachePolicy, CloseReason, Pane, PaneId};
 use mux::tab::{PositionedPane, TabId};
 use mux::window::WindowId as MuxWindowId;
 use mux::Mux;
 use portable_pty::CommandBuilder;
+use std::collections::HashSet;
 use std::time::{Duration, Instant};
 use std::{cell::RefCell, rc::Rc, sync::Arc};
 use wezterm_client::domain::ClientDomain;
@@ -43,9 +47,12 @@ struct State {
     tab: Option<TabId>,
     /// Shown instead of the shell; exists only while visible.
     program: Option<Program>,
-    /// Hidden programs that `preserve` keeps running for their next opening.
     kept: Vec<Program>,
     programs: u64,
+    /// Program workspaces cleared of what a quit GUI left behind.
+    swept: HashSet<String>,
+    /// The window config the quick panes last took.
+    applied: Option<config::ConfigHandle>,
 }
 
 struct Program {
@@ -110,6 +117,25 @@ fn axis(size: &mut (Option<f32>, Option<f32>), horizontal: bool) -> &mut Option<
     } else {
         &mut size.1
     }
+}
+
+/// `step` by `cells`, then by pixels until `grid` follows, since a percent padding grows with the frame.
+fn step_cells(
+    current: f32,
+    cells: f32,
+    cell: f32,
+    (minimum, maximum): (f32, f32),
+    grid: impl Fn(f32) -> f32,
+) -> f32 {
+    let mut target = step(current, cells * cell, minimum, maximum);
+    let want = grid(current) + cells;
+    while cells > 0. && grid(target) < want && target < maximum {
+        target = (target + 1.).min(maximum);
+    }
+    while cells < 0. && grid(target) > want && target > minimum {
+        target = (target - 1.).max(minimum);
+    }
+    target
 }
 
 /// `current` moved by `delta` within `minimum..=maximum`, never back past where it started.
@@ -221,7 +247,6 @@ impl State {
             .filter_map(|program| program.pane.as_ref())
     }
 
-    /// Takes the shown program aside; its pane unless `preserve` keeps it running.
     fn put_away(&mut self, alive: impl Fn(&Arc<dyn Pane>) -> bool) -> Option<Arc<dyn Pane>> {
         let program = self.program.take()?;
         if program.spec.preserve && program.pane.as_ref().map_or(true, alive) {
@@ -231,21 +256,21 @@ impl State {
         program.pane
     }
 
-    /// Whether opening `spec` finds its command running, shown or kept.
     fn reusable(&self, spec: &TerminalProgram, alive: impl Fn(&Arc<dyn Pane>) -> bool) -> bool {
-        self.program.iter().chain(&self.kept).any(|program| {
-            program.spec.preserve
-                && program.spec.spawn == spec.spawn
-                && program.pane.as_ref().map_or(true, &alive)
-        })
+        spec.preserve
+            && self.program.iter().chain(&self.kept).any(|program| {
+                program.spec.preserve
+                    && program.spec.spawn == spec.spawn
+                    && program.pane.as_ref().map_or(true, &alive)
+            })
     }
 
-    /// The kept program running `spec`'s command, under `spec`'s settings.
+    /// Takes on `spec`'s settings, so another binding running the same command reopens it as its own.
     fn take_kept(&mut self, spec: &TerminalProgram) -> Option<Program> {
         let index = self
             .kept
             .iter()
-            .position(|kept| kept.spec.spawn == spec.spawn)?;
+            .position(|kept| spec.preserve && kept.spec.spawn == spec.spawn)?;
         let kept = self.kept.remove(index);
         if kept.spec == *spec {
             return Some(kept);
@@ -256,7 +281,6 @@ impl State {
         })
     }
 
-    /// Kept programs whose pane ended, for removal.
     fn prune(&mut self, alive: impl Fn(&Arc<dyn Pane>) -> bool) -> Vec<Arc<dyn Pane>> {
         let mut ended = Vec::new();
         self.kept.retain(|program| match &program.pane {
@@ -267,6 +291,19 @@ impl State {
             _ => true,
         });
         ended
+    }
+
+    fn colors(&self, slot: Slot) -> Option<config::Palette> {
+        let Slot::Program(id) = slot else {
+            return None;
+        };
+        self.program
+            .iter()
+            .chain(&self.kept)
+            .find(|program| program.id == id)?
+            .spec
+            .colors
+            .clone()
     }
 
     fn discard_shell(&mut self) -> Option<Arc<dyn Pane>> {
@@ -358,7 +395,6 @@ fn alive(pane: &Arc<dyn Pane>) -> bool {
     !pane.is_dead() && Mux::get().get_pane(pane.pane_id()).is_some()
 }
 
-/// The window's terminal config, with a program's `colors` over its palette.
 fn term_config(
     config: &config::ConfigHandle,
     colors: Option<&config::Palette>,
@@ -407,23 +443,33 @@ fn directory(url: &url::Url) -> Option<String> {
         .ok()
 }
 
+fn border_width(dpi: u32) -> f32 {
+    (dpi as f32 / 96.).max(1.)
+}
+
+/// Between the frame and the grid, read as the main window reads its own settings.
+#[derive(Clone, Copy, Debug)]
+struct Edges {
+    border: f32,
+    padding: WindowPadding,
+    alignment: WindowContentAlignment,
+}
+
 #[derive(Clone, Copy, Debug)]
 struct Layout {
     frame: Bounds,
-    /// Inside the padding, which always holds the content.
+    /// Inside the border and padding, which always hold the content.
     inner: Bounds,
     content: Bounds,
     size: TerminalSize,
 }
 
 impl Layout {
-    /// `padding` is read as the main window reads `window_padding`, against the frame.
     fn new(
         bounds: Bounds,
         (width, height): (f32, f32),
-        padding: &WindowPadding,
-        cell_width: f32,
-        cell_height: f32,
+        edges: &Edges,
+        (cell_width, cell_height): (f32, f32),
         dpi: u32,
     ) -> Self {
         // Whole device pixels keep glyphs and frame edges crisp.
@@ -433,6 +479,8 @@ impl Layout {
             width: (bounds.width * width).round(),
             height: (bounds.height * height).round(),
         };
+        let border = edges.border.min(frame.width / 4.).min(frame.height / 4.);
+        let (edge_width, edge_height) = (frame.width - 2. * border, frame.height - 2. * border);
         let side = |dimension: config::Dimension, pixel_max: f32, pixel_cell: f32| {
             let context = DimensionContext {
                 dpi: dpi as f32,
@@ -445,10 +493,11 @@ impl Layout {
                 .max(0.)
                 .floor()
         };
-        let left = side(padding.left, frame.width, cell_width);
-        let right = side(padding.right, frame.width, cell_width);
-        let top = side(padding.top, frame.height, cell_height);
-        let bottom = side(padding.bottom, frame.height, cell_height);
+        let padding = &edges.padding;
+        let left = border + side(padding.left, edge_width, cell_width);
+        let right = border + side(padding.right, edge_width, cell_width);
+        let top = border + side(padding.top, edge_height, cell_height);
+        let bottom = border + side(padding.bottom, edge_height, cell_height);
         let inner = Bounds {
             x: frame.x + left,
             y: frame.y + top,
@@ -459,12 +508,22 @@ impl Layout {
         let rows = (inner.height / cell_height).floor().max(1.) as usize;
         let width = cols as f32 * cell_width;
         let height = rows as f32 * cell_height;
+        let x = match edges.alignment.horizontal {
+            HorizontalWindowContentAlignment::Left => inner.x,
+            HorizontalWindowContentAlignment::Center => inner.x + (inner.width - width) / 2.,
+            HorizontalWindowContentAlignment::Right => inner.x + inner.width - width,
+        };
+        let y = match edges.alignment.vertical {
+            VerticalWindowContentAlignment::Top => inner.y,
+            VerticalWindowContentAlignment::Center => inner.y + (inner.height - height) / 2.,
+            VerticalWindowContentAlignment::Bottom => inner.y + inner.height - height,
+        };
         Self {
             frame,
             inner,
             content: Bounds {
-                x: (inner.x + (inner.width - width) / 2.).floor(),
-                y: (inner.y + (inner.height - height) / 2.).floor(),
+                x: x.floor(),
+                y: y.floor(),
                 width,
                 height,
             },
@@ -494,7 +553,6 @@ impl TermWindow {
             })
     }
 
-    /// The quick terminal settings, with the shown program's own values over them.
     pub(super) fn terminal_overlay_config(&self) -> Option<QuickTerminalConfig> {
         let ui = self.ui_host.as_ref()?;
         let config = ui.provider.quick_terminal_config();
@@ -505,18 +563,32 @@ impl TermWindow {
         })
     }
 
+    fn terminal_overlay_edges(&self) -> Edges {
+        let config = self.terminal_overlay_config();
+        let bordered = config.map_or(true, |config| config.border != TerminalBorder::None);
+        Edges {
+            border: if bordered {
+                border_width(self.dimensions.dpi as u32)
+            } else {
+                0.
+            },
+            padding: config
+                .map(|config| config.padding)
+                .unwrap_or_default()
+                .resolve(&self.config.window_padding),
+            alignment: self.config.window_content_alignment,
+        }
+    }
+
     fn terminal_overlay_layout_of(&self, size: (f32, f32)) -> Layout {
-        let padding = self
-            .terminal_overlay_config()
-            .map(|config| config.padding)
-            .unwrap_or_default()
-            .resolve(&self.config.window_padding);
         Layout::new(
             self.vtabs_geometry().ui_bounds(true),
             size,
-            &padding,
-            self.render_metrics.cell_size.width as f32,
-            self.render_metrics.cell_size.height as f32,
+            &self.terminal_overlay_edges(),
+            (
+                self.render_metrics.cell_size.width as f32,
+                self.render_metrics.cell_size.height as f32,
+            ),
             self.dimensions.dpi as u32,
         )
     }
@@ -830,8 +902,9 @@ impl TermWindow {
         self.current_mouse_buttons.clear();
         self.dragging = None;
         let previous = state_ref.borrow_mut().put_away(alive);
-        if let Some(pane) = previous {
-            remove(&pane);
+        let ended = state_ref.borrow_mut().prune(alive);
+        for pane in previous.iter().chain(&ended) {
+            remove(pane);
         }
         let mut state = state_ref.borrow_mut();
         state.visible = true;
@@ -840,6 +913,7 @@ impl TermWindow {
         if let Some((spec, launch)) = program {
             if let Some(kept) = state.take_kept(&spec) {
                 if let Some(pane) = &kept.pane {
+                    pane.set_config(term_config(&self.config, kept.spec.colors.as_ref()));
                     pane.focus_changed(true);
                 }
                 state.program = Some(kept);
@@ -851,7 +925,6 @@ impl TermWindow {
             };
             state.programs += 1;
             let id = state.programs;
-            let colors = spec.colors.clone();
             state.program = Some(Program::new(id, spec));
             drop(state);
             self.spawn_terminal_pane(
@@ -860,7 +933,6 @@ impl TermWindow {
                 Ok(launch.target),
                 launch.command,
                 launch.cwd,
-                colors,
             );
             return;
         }
@@ -918,7 +990,6 @@ impl TermWindow {
             Ok(launch.target),
             launch.command,
             launch.cwd,
-            None,
         );
     }
 
@@ -930,7 +1001,6 @@ impl TermWindow {
         target: anyhow::Result<Target>,
         command: Option<CommandBuilder>,
         cwd: Option<String>,
-        colors: Option<config::Palette>,
     ) {
         let Some(window) = self.window.clone() else {
             return;
@@ -954,18 +1024,12 @@ impl TermWindow {
                             .ok_or_else(|| anyhow::anyhow!("not a client domain"))?;
                         let workspace = quick_workspace(&domain, window_id, slot);
                         // Programs a quit GUI couldn't end would otherwise outlive it.
-                        if let Slot::Program(_) = slot {
-                            let owned: Vec<PaneId> = state
-                                .upgrade()
-                                .map(|state| {
-                                    let state = state.borrow();
-                                    state.program_panes().map(|pane| pane.pane_id()).collect()
-                                })
-                                .unwrap_or_default();
-                            quick_panes(&workspace)
-                                .iter()
-                                .filter(|pane| !owned.contains(&pane.pane_id()))
-                                .for_each(remove);
+                        if matches!(slot, Slot::Program(_))
+                            && state.upgrade().is_some_and(|state| {
+                                state.borrow_mut().swept.insert(workspace.clone())
+                            })
+                        {
+                            quick_panes(&workspace).iter().for_each(remove);
                         }
                         let spawned =
                             ClientDomain::get_client_inner_for_domain(domain.domain_id())?
@@ -997,7 +1061,7 @@ impl TermWindow {
             let mut state = state.borrow_mut();
             match result {
                 Ok(pane) => {
-                    pane.set_config(term_config(&config, colors.as_ref()));
+                    pane.set_config(term_config(&config, state.colors(slot).as_ref()));
                     state.settle(slot, Some(pane.clone()));
                     pane.focus_changed(
                         state
@@ -1044,6 +1108,23 @@ impl TermWindow {
                 };
                 let mut discarded = state.prune(alive);
                 discarded.extend(shell);
+                let reloaded = state.applied.as_ref().map_or(true, |applied| {
+                    !std::ptr::eq::<config::Config>(&**applied, &*self.config)
+                });
+                if reloaded {
+                    state.applied = Some(self.config.clone());
+                    if let Some(pane) = &state.pane {
+                        pane.set_config(term_config(&self.config, None));
+                    }
+                    for program in state.program.iter().chain(&state.kept) {
+                        if let Some(pane) = &program.pane {
+                            pane.set_config(term_config(
+                                &self.config,
+                                program.spec.colors.as_ref(),
+                            ));
+                        }
+                    }
+                }
                 discarded
             };
             for pane in &discarded {
@@ -1096,7 +1177,7 @@ impl TermWindow {
         let drawn = self.terminal_overlay_drawn();
         let (frame, inner) = (drawn.layout.frame, drawn.layout.inner);
         let metrics = &self.render_metrics.cell_size;
-        let (extent, current, padding, cell, cells) = if horizontal {
+        let (extent, current, padding, cell, minimum_cells) = if horizontal {
             let padding = frame.width - inner.width;
             (
                 bounds.width,
@@ -1115,13 +1196,33 @@ impl TermWindow {
                 MIN_CELLS.1,
             )
         };
-        let target = step(
+        if extent <= 0. {
+            return;
+        }
+        let size = self.terminal_overlay_target().0;
+        let grid = |frame: f32| {
+            let size = if horizontal {
+                (frame / extent, size.1)
+            } else {
+                (size.0, frame / extent)
+            };
+            let layout = self.terminal_overlay_layout_of(size);
+            let cells = if horizontal {
+                layout.size.cols
+            } else {
+                layout.size.rows
+            };
+            cells as f32
+        };
+        let cells = sign * amount as f32;
+        let target = step_cells(
             current,
-            sign * amount as f32 * cell,
-            cells * cell + padding,
-            extent,
+            cells,
+            cell,
+            (minimum_cells * cell + padding, extent),
+            grid,
         );
-        if extent <= 0. || target == current {
+        if target == current {
             return;
         }
         let duration = ui.provider.quick_terminal_config().transition;
@@ -1208,10 +1309,16 @@ impl TermWindow {
                     .to_linear()
             })
             .mul_alpha(config.opacity);
-        let scale = (self.dimensions.dpi as f32 / 96.).max(1.);
+        let scale = border_width(self.dimensions.dpi as u32);
         let border_color = match config.border {
             TerminalBorder::None => None,
-            TerminalBorder::Palette => Some(self.palette().foreground.to_linear().mul_alpha(0.22)),
+            TerminalBorder::Palette => {
+                let foreground = self.terminal_overlay_pane().map_or_else(
+                    || self.palette().foreground,
+                    |pane| pane.palette().foreground,
+                );
+                Some(foreground.to_linear().mul_alpha(0.22))
+            }
             TerminalBorder::Color(color) => Some(color),
         };
         let border = if let Some(color) = border_color {

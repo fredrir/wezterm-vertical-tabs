@@ -2151,7 +2151,6 @@ fn hide_on_escape(mode: core::HideOnEscape) -> HideOnEscape {
         core::HideOnEscape::Auto => HideOnEscape::Auto,
     }
 }
-/// A WezTerm `colors` table; unknown keys are rejected.
 fn palette(colors: serde_json::Map<String, serde_json::Value>) -> Result<config::Palette, String> {
     use wezterm_dynamic::{FromDynamic, FromDynamicOptions, UnknownFieldAction};
     let options = FromDynamicOptions {

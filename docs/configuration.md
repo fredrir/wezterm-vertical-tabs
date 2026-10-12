@@ -105,7 +105,8 @@ return config
 | Mux without `local_pane_layout` | Shell lives in a hidden workspace on the mux server; reattached after a GUI restart when preserved; follows `replace-pane` |
 | Lua action | `vtabs.action("quick_terminal")`; available with plugin shortcuts disabled |
 | Appearance | Settings → Quick terminal, or the same keys in Lua `settings`; quick programs follow them unless they set their own |
-| Padding | `quick_terminal_window_padding = { left, top, right, bottom }`, read like WezTerm's `window_padding`: numbers are pixels, strings take `px`, `%` (of the quick terminal), `pt` or `cell`; unset sides follow `window_padding` |
+| Padding | `quick_terminal_window_padding = { left, top, right, bottom }`, read like WezTerm's `window_padding` inside the border: numbers are pixels, strings take `px`, `%` (of the quick terminal), `pt` or `cell`; unset sides follow `window_padding` |
+| Alignment | Leftover space follows WezTerm's `window_content_alignment` |
 | Opacity | `quick_terminal_opacity = 1.0` (opaque); below `1` reveals underlying WezTerm content; text stays opaque |
 | Blur | `quick_terminal_blur = 0`; radius `0`–`64` logical pixels behind the rounded frame, applies with opacity below `1` |
 | Colors | `quick_terminal_background_color`, `quick_terminal_border_color`: `#RRGGBB`; unset follows the terminal palette (border uses foreground at 22% opacity); clear the Settings field to restore |
@@ -136,14 +137,14 @@ Keys follow WezTerm's `SpawnCommand` and config names; anything left out follows
 | `window_padding` | Sides as in `quick_terminal_window_padding`; unset sides follow it |
 | `window_background_opacity` | `0`–`1`; default `quick_terminal_opacity` |
 | `blur` | `0`–`64`; default `quick_terminal_blur` |
-| `colors` | WezTerm `colors` table over the terminal palette; `background` also fills the frame over `quick_terminal_background_color` |
-| `border_color` | Any WezTerm color or `'none'`; default `quick_terminal_border_color` |
+| `colors` | WezTerm `colors` table over the terminal palette, color objects included; `background` also fills the frame over `quick_terminal_background_color` |
+| `border_color` | Any WezTerm color or `'none'`; default `quick_terminal_border_color`, drawn from the program's foreground when unset |
 | `auto_hide`, `hide_on_escape` | Default `quick_terminal_auto_hide`, `quick_terminal_hide_on_escape` |
-| `preserve` | `true` keeps the program running while hidden and shows it again on the next opening; ends with the window or when the program exits |
+| `preserve` | `true` keeps the program running while hidden and shows it again on the next opening; ends with the window or when the program exits; follows config reloads |
 | Resize | Axes without `width`/`height` share the quick terminal's resized size; set axes resize only that program |
 | Domain | A mux without `local_pane_layout` spawns it in a hidden workspace beside one of the domain's panes and needs this build's mux server |
 | Session | Starts fresh on each opening unless `preserve`; ends when hidden or when the program exits |
-| Toggle | Same binding hides; another binding or the quick terminal shortcut replaces it; a binding running the same command reopens a preserved program with its own settings |
+| Toggle | Same binding hides; another binding or the quick terminal shortcut replaces it; another `preserve` binding running the same command reopens a preserved program with its own settings |
 | Hide | Repeat binding, click outside, close-tab shortcut; Escape follows `hide_on_escape`, where `"auto"` hides only while nothing runs in the program |
 
 **Launcher**

@@ -2,6 +2,7 @@ use crate::SidebarUi;
 use crate::element::ElementId;
 use crate::input::TextEditor;
 use crate::intent::UiIntent;
+use crate::overlays::colors::Pick;
 use crate::overlays::{Form, FormKind, Overlay};
 use crate::views::settings_page::{set_distro_color, set_padding_side};
 use serde_json::Value;
@@ -29,7 +30,7 @@ impl SidebarUi {
         };
         let value = if let Some(color) = &form.color {
             match color.parse(form.editor.text()) {
-                _ if color.none.is_some_and(|none| none.selected) => "none".into(),
+                _ if color.selected == Pick::NoColor => "none".into(),
                 Ok(value) => value.map_or_else(String::new, super::colors::hex),
                 Err(error) => {
                     form.error = Some(error.into());
