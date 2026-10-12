@@ -1973,6 +1973,7 @@ impl Provider for Adapter {
             background_color: color(&settings.quick_terminal_background_color),
             auto_hide: settings.quick_terminal_auto_hide,
             preserve_shell: settings.quick_terminal_preserve_shell,
+            transition: ui::transition(settings),
         }
     }
     fn prepare_command(&self, command: &mut config::keyassignment::SpawnCommand) {

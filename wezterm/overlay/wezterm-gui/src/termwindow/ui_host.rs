@@ -15,7 +15,7 @@ use std::{
     collections::HashSet,
     rc::Rc,
     sync::Arc,
-    time::Instant,
+    time::{Duration, Instant},
 };
 use termwiz::surface::Line;
 use wezterm_term::color::ColorAttribute;
@@ -236,6 +236,8 @@ pub struct QuickTerminalConfig {
     pub background_color: Option<LinearRgba>,
     pub auto_hide: bool,
     pub preserve_shell: bool,
+    /// Size steps ease over this; zero while motion is off.
+    pub transition: Duration,
 }
 
 pub trait Provider {
@@ -1195,10 +1197,14 @@ impl TermWindow {
                 self.hide_terminal_overlay();
                 return true;
             }
+            if let AdjustPaneSize(direction, amount) = assignment {
+                self.adjust_terminal_overlay(*direction, *amount);
+                return true;
+            }
             // Structural actions refer to mux tabs, which don't own this pane.
             if matches!(assignment,
                 SplitHorizontal(_) | SplitVertical(_) | SplitPane(_) |
-                ActivatePaneDirection(_) | ActivatePaneByIndex(_) | AdjustPaneSize(_, _) |
+                ActivatePaneDirection(_) | ActivatePaneByIndex(_) |
                 TogglePaneZoomState | RotatePanes(_) | PaneSelect(_) |
                 ActivateTab(_) | ActivateTabRelative(_) | ActivateTabRelativeNoWrap(_) |
                 ActivateLastTab | MoveTab(_) | MoveTabRelative(_) |

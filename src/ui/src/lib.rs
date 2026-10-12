@@ -18,6 +18,7 @@ pub use keybinds::{matches_shortcut, shortcut_chord};
 pub use ratatui::{buffer::Buffer, layout::Rect};
 pub use runtime::canvas::{HitRegion, RoundedSurface};
 pub use runtime::frame::{FrameUpdate, SurfaceTransform};
+pub use runtime::motion::transition;
 pub use theme::Theme;
 pub use views::launcher::{AdoptablePane, CommandEntry, ForeignTab, LaunchMenuConfig};
 pub use views::sidebar::header_fits;

@@ -96,6 +96,7 @@ return config
 | --- | --- |
 | Surface | Centered inside the current window, without a sidebar |
 | Size | `quick_terminal_width`, `quick_terminal_height` settings; window fraction above 0, at most 1; default `0.75` |
+| Resize | WezTerm's `AdjustPaneSize` while shown, default Ctrl + Shift + Alt + arrow; steps in cells, Right and Down grow; per window until restart; changing a size setting resets its axis |
 | Shortcut | Ctrl + backtick; configurable as `quick_terminal` in Settings → Keybinds |
 | Hide | Escape, repeat shortcut, click outside, close-tab shortcut; `quick_terminal_auto_hide = true` also hides on focus loss (default `false`) |
 | Escape | `quick_terminal_hide_on_escape`: `"auto"` (default) hides only while nothing runs in the shell, judged by the pane's owning mux like closing a tab; `"always"`; `"never"` |
@@ -123,6 +124,7 @@ config.keys = {
 | `cwd` | Default the active pane's directory |
 | `set_environment_variables` | Added to the program's environment |
 | `width`, `height` | Window fraction above 0, at most 1; default `quick_terminal_width`, `quick_terminal_height` |
+| Resize | Axes without `width`/`height` share the quick terminal's resized size; set axes resize only that program |
 | Domain | Wherever the active pane runs; a mux without `local_pane_layout` spawns it in a hidden workspace and needs this build's mux server |
 | Session | Starts fresh on each opening; ends when hidden or when the program exits |
 | Toggle | Same binding hides; another binding or the quick terminal shortcut replaces it |

@@ -428,6 +428,24 @@ def test_quick_terminal_preserves_its_shell_without_creating_a_tab(
             resized["quick_terminal"]["cols"],
         ]
 
+        # WezTerm's default AdjustPaneSize keys step the shell in cells.
+        gui.key("ctrl+shift+alt+Right")
+        gui.key("ctrl+shift+alt+Up")
+        stepped = probe.wait(
+            lambda state: (
+                state["quick_terminal"]["cols"] == resized["quick_terminal"]["cols"] + 1
+                and state["quick_terminal"]["rows"] == resized["quick_terminal"]["rows"] - 1
+            )
+        )
+        assert stepped["quick_terminal"]["pane"] == pane
+        gui.text('stty size > "$WEZ_VTABS_SCENARIO/quick-stepped"')
+        gui.key("Return")
+        probe.wait(lambda state: (probe.root / "quick-stepped").exists())
+        assert [int(n) for n in (probe.root / "quick-stepped").read_text().split()] == [
+            stepped["quick_terminal"]["rows"],
+            stepped["quick_terminal"]["cols"],
+        ]
+
         # Escape reaches what runs in the shell, ahead of the keys typed after it.
         gui.text('cat -v > "$WEZ_VTABS_SCENARIO/quick-escape"')
         gui.key("Return")

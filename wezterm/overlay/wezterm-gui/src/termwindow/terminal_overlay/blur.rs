@@ -63,7 +63,7 @@ impl TermWindow {
             *cache = Some(BackdropBlur::new(context, size)?);
         }
         let scale = self.dimensions.dpi as f32 / 96.;
-        let bounds = self.terminal_overlay_layout().frame;
+        let bounds = self.terminal_overlay_bounds();
         Ok(Some((
             BlurParams {
                 bounds,

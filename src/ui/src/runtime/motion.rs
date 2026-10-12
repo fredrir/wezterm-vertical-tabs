@@ -18,6 +18,10 @@ pub(crate) fn span(settings: &Settings, numerator: u64, denominator: u64) -> Dur
     }
 }
 
+pub fn transition(settings: &Settings) -> Duration {
+    span(settings, 1, 1)
+}
+
 pub(crate) fn progress(elapsed: Duration, span: Duration) -> f32 {
     (elapsed.as_secs_f32() / span.as_secs_f32()).clamp(0.0, 1.0)
 }
