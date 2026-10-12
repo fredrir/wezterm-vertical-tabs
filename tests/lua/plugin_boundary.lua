@@ -24,7 +24,7 @@ host.config_dir = directory
 host.add_to_config_reload_watch_list = function(path)
   table.insert(watched, path)
 end
-local configured, dispatched
+local configured, dispatched, validated
 local hooks = {
   title = function(tab)
     return tab.title
@@ -37,6 +37,12 @@ host.vtabs = {
   end,
   dispatch = function(window, action)
     dispatched = { window, action }
+  end,
+  validate = function(action)
+    validated = action
+    if action == "navigate" then
+      error "invalid vtabs action"
+    end
   end,
 }
 host.action_callback = function(callback)
@@ -72,7 +78,9 @@ os.remove(directory)
 local window = {}
 local action = { CreateSpace = { name = "Work" } }
 plugin.action(action)(window)
-assert(dispatched[1] == window and dispatched[2] == action)
+assert(validated == action and dispatched[1] == window and dispatched[2] == action)
+ok, message = pcall(plugin.action, "navigate")
+assert(not ok and message:find("invalid vtabs action", 1, true))
 
 host.vtabs.configure = function()
   error "invalid configuration"

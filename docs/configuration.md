@@ -243,7 +243,7 @@ vtabs.apply_to_config(config, {
 
 **Optional actions**
 
-`vtabs.action(value)` returns a WezTerm callback action. It installs no bindings by itself.
+`vtabs.action(value)` returns a WezTerm callback action. It installs no bindings by itself. Invalid values fail the config load.
 
 | Value | Result |
 | --- | --- |
@@ -319,6 +319,7 @@ vtabs.apply_to_config(config, {
 | `wezterm.vtabs.capability` | Current integration contract marker |
 | `wezterm.vtabs.schema` | Rust settings schema |
 | `wezterm.vtabs.configure(options)` | Validated configuration update |
+| `wezterm.vtabs.validate(action)` | Raises on an invalid action |
 | `wezterm.vtabs.dispatch(window, action)` | Validated semantic action on one GUI window |
 | `wezterm.vtabs.inspect(window)` | Async diagnostic projection, geometry, model summary and CPU timing counters |
 

@@ -41,6 +41,9 @@ end
 
 ---@param action TabsAction
 function M.action(action)
+  if wezterm.vtabs then
+    wezterm.vtabs.validate(action)
+  end
   return wezterm.action_callback(function(window)
     wezterm.vtabs.dispatch(window, action)
   end)

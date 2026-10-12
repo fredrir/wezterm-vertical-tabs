@@ -148,6 +148,12 @@ impl WindowHookContext {
     }
 }
 
+fn parse_action(lua: &Lua, action: mlua::Value) -> mlua::Result<core::Action> {
+    let value: Value = lua.from_value(action)?;
+    serde_json::from_value(value)
+        .map_err(|error| mlua::Error::external(format!("invalid vtabs action: {error}")))
+}
+
 pub fn register(lua: &Lua) -> anyhow::Result<()> {
     let module = get_or_create_sub_module(lua, "vtabs")?;
     module.set("capability", 1)?;
@@ -164,10 +170,14 @@ pub fn register(lua: &Lua) -> anyhow::Result<()> {
         })?,
     )?;
     module.set(
+        "validate",
+        lua.create_function(|lua, action: mlua::Value| parse_action(lua, action).map(drop))?,
+    )?;
+    module.set(
         "dispatch",
         lua.create_function(
             |lua, (window, action): (mlua::UserDataRef<GuiWin>, mlua::Value)| {
-                let action: core::Action = lua.from_value(action)?;
+                let action = parse_action(lua, action)?;
                 let mux_window_id = window.mux_window_id;
                 window
                     .window

@@ -54,8 +54,9 @@ fn each_lua_configuration_keeps_its_own_validated_value() {
 fn lua_actions_are_typed_before_they_reach_a_window() {
     let lua = Lua::new();
     let action = |source: &str| -> mlua::Result<core::Action> {
-        lua.from_value(lua.load(source).eval::<mlua::Value>()?)
+        parse_action(&lua, lua.load(source).eval::<mlua::Value>()?)
     };
+    let error = |source: &str| action(source).unwrap_err().to_string();
     assert_eq!(
         action("return 'navigator'").unwrap(),
         core::Action::Ui(core::UiAction::Navigator)
@@ -90,6 +91,12 @@ fn lua_actions_are_typed_before_they_reach_a_window() {
     ] {
         assert!(action(&format!("return {{ QuickTerminal = {invalid} }}")).is_err());
     }
+    assert!(
+        error("return { QuickTerminal = { width = 100 } }")
+            .contains("invalid vtabs action: size must be above 0 and at most 1")
+    );
+    assert!(error("return 'navigate'").contains("unknown action \"navigate\""));
+    assert!(error("return { SelectSpace = 5 }").contains("expected a string"));
 }
 #[test]
 fn managed_file_tables_round_trip_through_the_registry() {
