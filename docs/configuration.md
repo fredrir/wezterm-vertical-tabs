@@ -5,7 +5,7 @@ The Rust application works with its defaults. Lua configuration is the source of
 ```lua
 local wezterm = require 'wezterm'
 local config = wezterm.config_builder()
-local vtabs = dofile('/absolute/path/to/wezterm-vertical-tabs/plugin/init.lua')
+local vtabs = dofile('/absolute/path/to/wezterm-vertical-tabs/plugin/init.lua') --[[@as TabsPlugin]]
 
 vtabs.apply_to_config(config, {
   settings = {

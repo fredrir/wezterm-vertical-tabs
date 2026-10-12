@@ -175,3 +175,8 @@
 ---@field templates? TabsSpaceTemplate[] Dynamic spaces derived from tab metadata
 ---@field hooks? TabsHooks
 ---@field settings_file? string File the settings UI writes; default `wezterm.config_dir .. "/vtabs_settings.lua"`
+
+--- Module returned by `plugin/init.lua`.
+---@class TabsPlugin
+---@field apply_to_config fun(config: table, options?: TabsOptions): table
+---@field action fun(action: TabsAction): { EmitEvent: string }

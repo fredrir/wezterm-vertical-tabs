@@ -1,4 +1,5 @@
 local wezterm = require "wezterm"
+---@class TabsPlugin
 local M = {}
 
 ---@param path string
