@@ -87,6 +87,12 @@ impl Bounds {
     pub fn contains(&self, x: f32, y: f32) -> bool {
         x >= self.x && y >= self.y && x < self.x + self.width && y < self.y + self.height
     }
+    pub fn intersects(&self, other: &Bounds) -> bool {
+        self.x < other.x + other.width
+            && other.x < self.x + self.width
+            && self.y < other.y + other.height
+            && other.y < self.y + self.height
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -293,6 +299,8 @@ pub fn spawn_failed(window: usize, context: serde_json::Value) {
 }
 
 const VTABS_UI_ZINDEX: i8 = 5;
+/// AppKit's traffic buttons in logical pixels at 96 dpi.
+const NATIVE_BUTTONS_WIDTH: f32 = 80.;
 fn vtabs_inset_bounds(mut bounds: Bounds, inset: f32, square: bool) -> Bounds {
     let inset = if inset.is_finite() { inset.max(0.) } else { 0. };
     if square {
@@ -582,7 +590,7 @@ impl TermWindow {
         let inset = if self.vtabs_right_width() > 0. {
             0.
         } else {
-            80. * self.dimensions.dpi as f32 / 96.
+            NATIVE_BUTTONS_WIDTH * self.dimensions.dpi as f32 / 96.
         };
         // Narrow left rails put their controls below AppKit's traffic buttons.
         self.ui_host
@@ -602,9 +610,25 @@ impl TermWindow {
         self.vtabs_native_header_inset()
             .or_else(|| self.vtabs_title_buttons_hidden().then_some(0.))
     }
+    /// AppKit draws the native buttons above a quick terminal reaching into their corner.
+    fn vtabs_title_buttons_covered(&self) -> bool {
+        if !self.vtabs_integrated_macos() || !self.terminal_overlay_visible() {
+            return false;
+        }
+        let border = self.get_os_border();
+        let buttons = Bounds {
+            x: border.left.get() as f32,
+            y: border.top.get() as f32,
+            width: NATIVE_BUTTONS_WIDTH * self.dimensions.dpi as f32 / 96.,
+            height: self.vtabs_titlebar_height(),
+        };
+        self.terminal_overlay_bounds().intersects(&buttons)
+    }
     fn update_vtabs_title_buttons(&self) {
         if let Some(window) = self.window.as_ref() {
-            window.set_title_buttons_hidden(self.vtabs_title_buttons_hidden());
+            window.set_title_buttons_hidden(
+                self.vtabs_title_buttons_hidden() || self.vtabs_title_buttons_covered(),
+            );
         }
     }
     /// Mirrors how mouse_event_impl maps window coordinates onto terminal cells.
