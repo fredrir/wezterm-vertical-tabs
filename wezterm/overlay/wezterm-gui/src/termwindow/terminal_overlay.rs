@@ -26,7 +26,7 @@ use window::{WindowOps, color::LinearRgba};
 mod blur;
 mod frame;
 mod session;
-use session::{Program, Slot, State};
+use session::{Open, Session, Slot};
 
 const SHELL_SIZE: (f32, f32) = (0.75, 0.75);
 /// Fewest columns and rows a size step leaves.
@@ -34,35 +34,8 @@ const MIN_CELLS: (f32, f32) = (20., 5.);
 
 #[derive(Default)]
 pub(super) struct TerminalOverlay {
-    session: Rc<RefCell<State>>,
+    session: Rc<RefCell<Session>>,
     blur: RefCell<Option<blur::BackdropBlur>>,
-}
-
-/// Eases the drawn frame and content from where a size step found them.
-#[derive(Clone, Copy, Debug)]
-struct Motion {
-    size: (f32, f32),
-    origin: (f32, f32),
-    start: Instant,
-    duration: Duration,
-    eased: f32,
-}
-
-impl Motion {
-    /// The sidebar's ease-out cubic; false once settled.
-    fn advance(&mut self, now: Instant) -> bool {
-        let t =
-            now.saturating_duration_since(self.start).as_secs_f32() / self.duration.as_secs_f32();
-        self.eased = 1. - (1. - t.min(1.)).powi(3);
-        t < 1.
-    }
-
-    fn lerp(&self, from: (f32, f32), to: (f32, f32)) -> (f32, f32) {
-        (
-            from.0 + (to.0 - from.0) * self.eased,
-            from.1 + (to.1 - from.1) * self.eased,
-        )
-    }
 }
 
 /// The frame and content as painted this frame, against the layout they ease toward.
@@ -73,10 +46,6 @@ struct Drawn {
     painted: Layout,
     origin: (f32, f32),
     moving: bool,
-}
-
-fn axis(size: &mut (Option<f32>, Option<f32>), horizontal: bool) -> &mut Option<f32> {
-    if horizontal { &mut size.0 } else { &mut size.1 }
 }
 
 /// `step` by `cells`, then by pixels until `grid` follows, since a percent padding grows with the frame.
@@ -288,10 +257,9 @@ impl TermWindow {
             .chain(self.vtabs_suspended.values())
             .all(|ui| {
                 let state = ui.terminal.session.borrow();
-                let idle =
-                    state.pane.iter().chain(state.program_panes()).all(|pane| {
-                        pane.can_close_without_prompting(mux::pane::CloseReason::Window)
-                    });
+                let idle = state
+                    .panes()
+                    .all(|pane| pane.can_close_without_prompting(mux::pane::CloseReason::Window));
                 idle
             })
     }
@@ -300,10 +268,7 @@ impl TermWindow {
         let ui = self.ui_host.as_ref()?;
         let config = ui.provider.quick_terminal_config();
         let state = ui.terminal.session.borrow();
-        Some(match state.program.as_ref().filter(|_| state.visible) {
-            Some(program) => config.with(&program.spec),
-            None => config,
-        })
+        Some(state.effective_config(config))
     }
 
     fn terminal_overlay_edges(&self) -> Edges {
@@ -336,25 +301,28 @@ impl TermWindow {
         )
     }
 
-    fn terminal_overlay_target(&self) -> ((f32, f32), Option<Motion>) {
-        self.ui_host.as_ref().map_or((SHELL_SIZE, None), |ui| {
-            let state = ui.terminal.session.borrow();
-            (
-                state.size(ui.provider.quick_terminal_config().size),
-                state.motion,
-            )
+    fn terminal_overlay_target(&self) -> (f32, f32) {
+        self.ui_host.as_ref().map_or(SHELL_SIZE, |ui| {
+            ui.terminal
+                .session
+                .borrow()
+                .size(ui.provider.quick_terminal_config().size)
         })
     }
 
     fn terminal_overlay_layout(&self) -> Layout {
-        self.terminal_overlay_layout_of(self.terminal_overlay_target().0)
+        self.terminal_overlay_layout_of(self.terminal_overlay_target())
     }
 
     fn terminal_overlay_drawn(&self) -> Drawn {
-        let (size, motion) = self.terminal_overlay_target();
+        let size = self.terminal_overlay_target();
         let layout = self.terminal_overlay_layout_of(size);
         let origin = (layout.content.x, layout.content.y);
-        let Some(motion) = motion else {
+        let animated = self
+            .ui_host
+            .as_ref()
+            .and_then(|ui| ui.terminal.session.borrow().animate_to(size, origin));
+        let Some((drawn, (x, y))) = animated else {
             return Drawn {
                 layout,
                 size,
@@ -363,8 +331,6 @@ impl TermWindow {
                 moving: false,
             };
         };
-        let drawn = motion.lerp(motion.size, size);
-        let (x, y) = motion.lerp(motion.origin, origin);
         Drawn {
             layout,
             size: drawn,
@@ -382,24 +348,20 @@ impl TermWindow {
     pub(super) fn terminal_overlay_visible(&self) -> bool {
         self.ui_host
             .as_ref()
-            .is_some_and(|ui| ui.terminal.session.borrow().visible)
+            .is_some_and(|ui| ui.terminal.session.borrow().visible())
     }
 
     fn terminal_overlay_program(&self) -> bool {
         self.ui_host.as_ref().is_some_and(|ui| {
             let state = ui.terminal.session.borrow();
-            state.visible && state.program.is_some()
+            state.showing_program()
         })
     }
 
     pub(super) fn terminal_overlay_owns(&self, pane_id: PaneId) -> bool {
         self.ui_host.as_ref().is_some_and(|ui| {
             let state = ui.terminal.session.borrow();
-            let owned = state
-                .pane
-                .iter()
-                .chain(state.program_panes())
-                .any(|pane| pane.pane_id() == pane_id);
+            let owned = state.panes().any(|pane| pane.pane_id() == pane_id);
             owned
         })
     }
@@ -454,22 +416,15 @@ impl TermWindow {
             return;
         }
         if let Some(ui) = &self.ui_host {
-            let panes = {
-                let mut state = ui.terminal.session.borrow_mut();
-                for pane in state.pane.iter().chain(state.program_panes()) {
-                    pane.focus_changed(false);
-                }
-                state.visible = false;
-                state.motion = None;
-                let program = state.put_away(alive);
-                let shell = if ui.provider.quick_terminal_config().preserve_shell {
-                    None
-                } else {
-                    state.discard_shell()
-                };
-                [program, shell]
-            };
-            for pane in panes.iter().flatten() {
+            let hidden = ui
+                .terminal
+                .session
+                .borrow_mut()
+                .hide(ui.provider.quick_terminal_config().preserve_shell, alive);
+            for pane in &hidden.unfocus {
+                pane.focus_changed(false);
+            }
+            for pane in &hidden.discarded {
                 remove(pane);
             }
             ui.terminal.blur.borrow_mut().take();
@@ -538,11 +493,7 @@ impl TermWindow {
     pub(super) fn toggle_terminal_program(&mut self, program: TerminalProgram) {
         let shown = self.ui_host.as_ref().is_some_and(|ui| {
             let state = ui.terminal.session.borrow();
-            state.visible
-                && state
-                    .program
-                    .as_ref()
-                    .is_some_and(|current| current.spec == program)
+            state.showing(&program)
         });
         if shown {
             self.hide_terminal_overlay();
@@ -633,70 +584,47 @@ impl TermWindow {
         };
         let preserve_shell = ui.provider.quick_terminal_config().preserve_shell;
         let state_ref = ui.terminal.session.clone();
-        if !preserve_shell {
-            let discarded = state_ref.borrow_mut().discard_shell();
-            if let Some(pane) = discarded {
-                remove(&pane);
-            }
-        }
         if let Some(pane) = self.get_active_pane_or_overlay() {
             pane.focus_changed(false);
         }
         self.current_mouse_capture = None;
         self.current_mouse_buttons.clear();
         self.dragging = None;
-        let previous = state_ref.borrow_mut().put_away(alive);
-        let ended = state_ref.borrow_mut().prune(alive);
-        for pane in previous.iter().chain(&ended) {
+        let (program, launch) = match program {
+            Some((spec, launch)) => (Some((spec, launch.is_some())), launch),
+            None => (None, None),
+        };
+        let opened = state_ref.borrow_mut().show(program, preserve_shell, alive);
+        for pane in &opened.discarded {
             remove(pane);
         }
-        let mut state = state_ref.borrow_mut();
-        state.visible = true;
-        state.motion = None;
         window.invalidate();
-        if let Some((spec, launch)) = program {
-            if let Some(kept) = state.take_kept(&spec) {
-                if let Some(pane) = &kept.pane {
-                    pane.set_config(term_config(&self.config, kept.spec.colors.as_ref()));
+        match opened.next {
+            Open::Shell(pane) => {
+                pane.focus_changed(true);
+                return;
+            }
+            Open::Program { pane, colors } => {
+                if let Some(pane) = pane {
+                    pane.set_config(term_config(&self.config, colors.as_ref()));
                     pane.focus_changed(true);
                 }
-                state.program = Some(kept);
                 return;
             }
-            let Some(launch) = launch else {
-                state.visible = false;
+            Open::LaunchProgram(slot) => {
+                let launch = launch.expect("program launch was resolved before opening");
+                self.spawn_terminal_pane(
+                    &state_ref,
+                    slot,
+                    Ok(launch.target),
+                    launch.command,
+                    launch.cwd,
+                );
                 return;
-            };
-            state.programs += 1;
-            let id = state.programs;
-            state.program = Some(Program::new(id, spec));
-            drop(state);
-            self.spawn_terminal_pane(
-                &state_ref,
-                Slot::Program(id),
-                Ok(launch.target),
-                launch.command,
-                launch.cwd,
-            );
-            return;
-        }
-        let dead = state
-            .pane
-            .as_ref()
-            .is_some_and(|pane| pane.is_dead() || Mux::get().get_pane(pane.pane_id()).is_none());
-        if dead {
-            if let Some(pane) = state.pane.take() {
-                Mux::get().remove_pane(pane.pane_id());
             }
+            Open::Pending => return,
+            Open::ResolveShell => {}
         }
-        if let Some(pane) = &state.pane {
-            pane.focus_changed(true);
-            return;
-        }
-        if state.pending.is_some() {
-            return;
-        }
-        drop(state);
         let local = SpawnCommand {
             domain: SpawnTabDomain::DomainName("local".into()),
             ..Default::default()
@@ -721,9 +649,7 @@ impl TermWindow {
                     self.config.clone(),
                 )));
                 pane.focus_changed(true);
-                let mut state = state_ref.borrow_mut();
-                state.tab = mirrored_tab(&pane);
-                state.pane = Some(pane);
+                state_ref.borrow_mut().restore_shell(pane);
                 return;
             }
         }
@@ -740,7 +666,7 @@ impl TermWindow {
     /// A pane arriving after its slot stopped wanting it is removed.
     fn spawn_terminal_pane(
         &self,
-        state: &Rc<RefCell<State>>,
+        state: &Rc<RefCell<Session>>,
         slot: Slot,
         target: anyhow::Result<Target>,
         command: Option<CommandBuilder>,
@@ -768,11 +694,9 @@ impl TermWindow {
                             .ok_or_else(|| anyhow::anyhow!("not a client domain"))?;
                         let workspace = quick_workspace(&domain, window_id, slot);
                         // Programs a quit GUI couldn't end would otherwise outlive it.
-                        if matches!(slot, Slot::Program(_))
-                            && state.upgrade().is_some_and(|state| {
-                                state.borrow_mut().swept.insert(workspace.clone())
-                            })
-                        {
+                        if state.upgrade().is_some_and(|state| {
+                            state.borrow_mut().sweep_workspace(slot, &workspace)
+                        }) {
                             quick_panes(&workspace).iter().for_each(remove);
                         }
                         let spawned =
@@ -796,17 +720,23 @@ impl TermWindow {
                 }
             }
             .await;
-            let Some(state) = state.upgrade().filter(|state| state.borrow().wants(slot)) else {
+            let Some(state) = state.upgrade() else {
                 if let Ok(pane) = result {
                     remove(&pane);
                 }
                 return;
             };
             let mut state = state.borrow_mut();
+            let pane = result.as_ref().ok().cloned();
+            if !state.complete(slot, pane) {
+                if let Ok(pane) = result {
+                    remove(&pane);
+                }
+                return;
+            }
             match result {
                 Ok(pane) => {
                     pane.set_config(term_config(&config, state.colors(slot).as_ref()));
-                    state.settle(slot, Some(pane.clone()));
                     pane.focus_changed(
                         state
                             .shown()
@@ -814,7 +744,6 @@ impl TermWindow {
                     );
                 }
                 Err(error) => {
-                    state.settle(slot, None);
                     window.notify(TermWindowNotif::Apply(Box::new(move |tw| {
                         tw.vtabs_message_for(
                             window_id,
@@ -831,47 +760,21 @@ impl TermWindow {
     pub(super) fn resize_terminal_overlay(&mut self) {
         if let Some(ui) = &self.ui_host {
             let config = ui.provider.quick_terminal_config();
-            let discarded = {
-                let mut state = ui.terminal.session.borrow_mut();
-                if state.configure(config) {
-                    self.quad_generation += 1;
-                }
-                let now = Instant::now();
-                if state
-                    .motion
-                    .as_mut()
-                    .is_some_and(|motion| !motion.advance(now))
-                {
-                    state.motion = None;
-                }
-                let shell = if !config.preserve_shell && (!state.visible || state.program.is_some())
-                {
-                    state.discard_shell()
-                } else {
-                    None
-                };
-                let mut discarded = state.prune(alive);
-                discarded.extend(shell);
-                let reloaded = state.applied.as_ref().map_or(true, |applied| {
-                    !std::ptr::eq::<config::Config>(&**applied, &*self.config)
-                });
-                if reloaded {
-                    state.applied = Some(self.config.clone());
-                    if let Some(pane) = &state.pane {
-                        pane.set_config(term_config(&self.config, None));
-                    }
-                    for program in state.program.iter().chain(&state.kept) {
-                        if let Some(pane) = &program.pane {
-                            pane.set_config(term_config(
-                                &self.config,
-                                program.spec.colors.as_ref(),
-                            ));
-                        }
-                    }
-                }
-                discarded
-            };
-            for pane in &discarded {
+            let refresh = ui.terminal.session.borrow_mut().refresh(
+                config,
+                &self.config,
+                Instant::now(),
+                alive,
+            );
+            if refresh.changed {
+                self.quad_generation += 1;
+            }
+            for update in refresh.configurations {
+                update
+                    .pane
+                    .set_config(term_config(&self.config, update.colors.as_ref()));
+            }
+            for pane in &refresh.discarded {
                 remove(pane);
             }
         }
@@ -943,7 +846,7 @@ impl TermWindow {
         if extent <= 0. {
             return;
         }
-        let size = self.terminal_overlay_target().0;
+        let size = self.terminal_overlay_target();
         let grid = |frame: f32| {
             let size = if horizontal {
                 (frame / extent, size.1)
@@ -970,16 +873,13 @@ impl TermWindow {
             return;
         }
         let duration = ui.provider.quick_terminal_config().transition;
-        let mut state = ui.terminal.session.borrow_mut();
-        state.adjust(horizontal, target / extent);
-        state.motion = (!duration.is_zero()).then(|| Motion {
-            size: drawn.size,
-            origin: drawn.origin,
-            start: Instant::now(),
+        ui.terminal.session.borrow_mut().resize(
+            horizontal,
+            target / extent,
+            (drawn.size, drawn.origin),
             duration,
-            eased: 0.,
-        });
-        drop(state);
+            Instant::now(),
+        );
         if let Some(window) = &self.window {
             window.invalidate();
         }
@@ -991,21 +891,7 @@ impl TermWindow {
             .ui_host
             .as_ref()
             .map_or((None, None, Vec::new()), |ui| {
-                let state = ui.terminal.session.borrow();
-                (
-                    state.pane.as_ref().map(|pane| pane.pane_id()),
-                    state
-                        .program
-                        .as_ref()
-                        .and_then(|program| program.pane.as_ref())
-                        .map(|pane| pane.pane_id()),
-                    state
-                        .kept
-                        .iter()
-                        .filter_map(|program| program.pane.as_ref())
-                        .map(|pane| pane.pane_id())
-                        .collect(),
-                )
+                ui.terminal.session.borrow().pane_ids()
             });
         serde_json::json!({
             "visible": self.terminal_overlay_visible(),

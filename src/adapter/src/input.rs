@@ -3,21 +3,38 @@ use super::*;
 use std::collections::VecDeque;
 use window::{KeyCode, MouseEventKind, MousePress};
 
-pub(super) const PASTE_TIMEOUT: Duration = Duration::from_secs(1);
+const PASTE_TIMEOUT: Duration = Duration::from_secs(1);
 pub(super) const MAX_PASTE_INPUTS: usize = 128;
 pub(super) const MAX_PASTE_INPUT_BYTES: usize = 16 * 1024;
 
-pub(super) struct PendingPaste {
-    pub token: u64,
-    pub deadline: Instant,
+struct PendingPaste {
+    token: u64,
+    deadline: Instant,
     inputs: VecDeque<ui::UiInput>,
     bytes: usize,
 }
 
 #[derive(Default)]
 pub(super) struct InputState {
-    pub epoch: u64,
-    pub pending: Option<PendingPaste>,
+    epoch: u64,
+    pending: Option<PendingPaste>,
+}
+
+/// Host delivery stays with the adapter; the input stream decides which events
+/// can be delivered and when a clipboard result is still valid.
+enum Delivery {
+    Deferred,
+    Input(ui::UiInput),
+    Replay(PasteReplay, Option<ui::UiInput>),
+}
+
+struct PasteReplay {
+    text: Option<String>,
+    failed: bool,
+    revision: u64,
+    inputs: VecDeque<ui::UiInput>,
+    pointer_gesture: bool,
+    started: bool,
 }
 
 impl InputState {
@@ -33,72 +50,97 @@ impl InputState {
 
     pub fn cancel_paste(&mut self) {
         self.pending = None;
+        self.advance();
+    }
+
+    pub fn deadline(&self) -> Option<Instant> {
+        self.pending.as_ref().map(|pending| pending.deadline)
+    }
+
+    fn advance(&mut self) {
         self.epoch = self.epoch.wrapping_add(1);
     }
-}
 
-impl Adapter {
-    pub(super) fn ui_input(&mut self, input: ui::UiInput) {
-        if self.input.pending.is_some() {
-            if !self.app.ui().text_input_active() {
-                self.cancel_paste();
-            } else if self.defer_until_paste(&input) {
-                if self.input.pending.as_ref().unwrap().deadline <= Instant::now() {
-                    self.finish_paste(None, Some(input));
-                    return;
-                }
-                let bytes = match &input {
-                    ui::UiInput::Text(text)
-                    | ui::UiInput::Paste(text)
-                    | ui::UiInput::ImeCommit(text)
-                    | ui::UiInput::ImePreedit { text, .. } => text.len(),
-                    _ => 0,
-                };
-                let pending = self.input.pending.as_mut().unwrap();
-                if pending.inputs.len() < MAX_PASTE_INPUTS
-                    && bytes <= MAX_PASTE_INPUT_BYTES.saturating_sub(pending.bytes)
-                {
-                    pending.bytes += bytes;
-                    pending.inputs.push_back(input);
-                    return;
-                }
-                self.finish_paste(None, Some(input));
-                return;
-            } else if !matches!(&input, ui::UiInput::PointerMove { .. })
-                && !matches!(&input, ui::UiInput::ImePreedit { text, .. } if text.is_empty())
-            {
-                self.cancel_paste();
-            } else {
-                self.expire_paste(Instant::now());
-            }
+    fn delivered(&mut self, input: &ui::UiInput, pointer_captured: bool) {
+        // Passive pointer motion and composition cleanup retain an outstanding paste.
+        let changes_input = match input {
+            ui::UiInput::PointerMove { .. } => pointer_captured,
+            ui::UiInput::ImePreedit { text, .. } => !text.is_empty(),
+            _ => true,
+        };
+        if changes_input {
+            self.advance();
         }
-        self.deliver_ui_input(input);
     }
 
-    pub(super) fn defer_until_paste(&self, input: &ui::UiInput) -> bool {
+    fn route(
+        &mut self,
+        input: ui::UiInput,
+        now: Instant,
+        app: &WindowApp,
+        pointer_captured: bool,
+    ) -> Delivery {
+        if self.pending.is_none() {
+            return Delivery::Input(input);
+        }
+        if !app.ui().text_input_active() {
+            self.cancel_paste();
+        } else if self.defer_until_paste(&input, app, pointer_captured) {
+            let bytes = match &input {
+                ui::UiInput::Text(text)
+                | ui::UiInput::Paste(text)
+                | ui::UiInput::ImeCommit(text)
+                | ui::UiInput::ImePreedit { text, .. } => text.len(),
+                _ => 0,
+            };
+            let pending = self.pending.as_mut().unwrap();
+            if now < pending.deadline
+                && pending.inputs.len() < MAX_PASTE_INPUTS
+                && bytes <= MAX_PASTE_INPUT_BYTES.saturating_sub(pending.bytes)
+            {
+                pending.bytes += bytes;
+                pending.inputs.push_back(input);
+                return Delivery::Deferred;
+            }
+            return self
+                .finish(None, Some(input), app)
+                .map_or(Delivery::Deferred, |replay| Delivery::Replay(replay, None));
+        } else if !matches!(&input, ui::UiInput::PointerMove { .. })
+            && !matches!(&input, ui::UiInput::ImePreedit { text, .. } if text.is_empty())
+        {
+            self.cancel_paste();
+        } else if let Some(replay) = self.expire(now, app) {
+            return Delivery::Replay(replay, Some(input));
+        }
+        Delivery::Input(input)
+    }
+
+    fn defer_until_paste(
+        &self,
+        input: &ui::UiInput,
+        app: &WindowApp,
+        pointer_captured: bool,
+    ) -> bool {
         match input {
             ui::UiInput::Key { key, modifiers } => {
                 *key != ui::Key::Escape
-                    && !ui::matches_shortcut(&self.app.model().settings, key, *modifiers)
+                    && !ui::matches_shortcut(&app.model().settings, key, *modifiers)
             }
             ui::UiInput::PointerDown { x, y, .. } => {
-                self.app
-                    .ui()
-                    .hit_test(*x, *y)
-                    .is_some_and(|hit| match &hit.id {
-                        ui::ElementId::Editor
-                        | ui::ElementId::SettingsSearch
-                        | ui::ElementId::Submit => true,
-                        ui::ElementId::Menu(id) => {
-                            matches!(id.as_str(), "cut" | "copy" | "paste" | "select-all")
-                        }
-                        _ => false,
-                    })
+                app.ui().hit_test(*x, *y).is_some_and(|hit| match &hit.id {
+                    ui::ElementId::Editor
+                    | ui::ElementId::SettingsSearch
+                    | ui::ElementId::Submit => true,
+                    ui::ElementId::Menu(id) => {
+                        matches!(id.as_str(), "cut" | "copy" | "paste" | "select-all")
+                    }
+                    _ => false,
+                })
             }
-            ui::UiInput::PointerMove { .. } => self.pointer_captured,
+            ui::UiInput::PointerMove { .. } => pointer_captured,
             ui::UiInput::ImePreedit { text, .. } => {
                 !text.is_empty()
-                    || self.input.pending.as_ref().is_some_and(|pending| {
+                    || self.pending.as_ref().is_some_and(|pending| {
                         pending.inputs.iter().any(|input| {
                             matches!(
                                 input,
@@ -118,6 +160,128 @@ impl Adapter {
         }
     }
 
+    fn expire(&mut self, now: Instant, app: &WindowApp) -> Option<PasteReplay> {
+        if self.deadline().is_some_and(|deadline| now >= deadline) {
+            self.finish(None, None, app)
+        } else {
+            None
+        }
+    }
+
+    fn complete(
+        &mut self,
+        token: u64,
+        text: Option<String>,
+        now: Instant,
+        app: &WindowApp,
+    ) -> Option<PasteReplay> {
+        if self.deadline().is_some_and(|deadline| now >= deadline) {
+            return self.finish(None, None, app);
+        }
+        if self
+            .pending
+            .as_ref()
+            .is_some_and(|pending| pending.token == token)
+        {
+            self.finish(text, None, app)
+        } else {
+            None
+        }
+    }
+
+    fn finish(
+        &mut self,
+        text: Option<String>,
+        trailing: Option<ui::UiInput>,
+        app: &WindowApp,
+    ) -> Option<PasteReplay> {
+        let mut pending = self.pending.take()?;
+        if pending.token != self.epoch || !app.ui().text_input_active() {
+            return None;
+        }
+        self.advance();
+        pending.inputs.extend(trailing);
+        Some(PasteReplay {
+            failed: text.is_none(),
+            text,
+            revision: app.model().revision,
+            inputs: pending.inputs,
+            pointer_gesture: false,
+            started: false,
+        })
+    }
+}
+
+impl PasteReplay {
+    fn next(&mut self, app: &WindowApp) -> Option<ui::UiInput> {
+        // Stop once replay submits or leaves the editor, but finish an in-flight
+        // pointer gesture so a deferred mouse-up cannot escape into another editor.
+        if self.started && !self.pointer_gesture && !self.same_editor(app) {
+            return None;
+        }
+        self.started = true;
+        while let Some(input) = self.inputs.pop_front() {
+            // A failed read must not save the old value or launch further clipboard
+            // work from a deadline repaint. Keep typed text and caret edits for retry.
+            if self.failed && !safe_after_failure(&input) {
+                continue;
+            }
+            match &input {
+                ui::UiInput::PointerDown { .. } => self.pointer_gesture = true,
+                ui::UiInput::PointerUp { .. } => self.pointer_gesture = false,
+                _ => {}
+            }
+            return Some(input);
+        }
+        None
+    }
+
+    fn same_editor(&self, app: &WindowApp) -> bool {
+        app.model().revision == self.revision && app.ui().text_input_active()
+    }
+}
+
+fn safe_after_failure(input: &ui::UiInput) -> bool {
+    match input {
+        ui::UiInput::Text(_) | ui::UiInput::ImeCommit(_) | ui::UiInput::ImePreedit { .. } => true,
+        ui::UiInput::Key { key, modifiers } => {
+            matches!(
+                key,
+                ui::Key::Character(_)
+                    | ui::Key::Backspace
+                    | ui::Key::Delete
+                    | ui::Key::Left
+                    | ui::Key::Right
+                    | ui::Key::Home
+                    | ui::Key::End
+            ) && !(modifiers.command()
+                && matches!(key, ui::Key::Character('c' | 'C' | 'x' | 'X' | 'v' | 'V')))
+        }
+        _ => false,
+    }
+}
+
+impl Adapter {
+    pub(super) fn ui_input(&mut self, input: ui::UiInput) {
+        self.ui_input_at(input, Instant::now());
+    }
+
+    pub(super) fn ui_input_at(&mut self, input: ui::UiInput, now: Instant) {
+        match self
+            .input
+            .route(input, now, &self.app, self.pointer_captured)
+        {
+            Delivery::Deferred => {}
+            Delivery::Input(input) => self.deliver_ui_input(input),
+            Delivery::Replay(replay, input) => {
+                self.replay_paste(replay);
+                if let Some(input) = input {
+                    self.deliver_ui_input(input);
+                }
+            }
+        }
+    }
+
     pub(super) fn cancel_paste(&mut self) {
         self.input.cancel_paste();
     }
@@ -129,70 +293,27 @@ impl Adapter {
     }
 
     pub(super) fn expire_paste(&mut self, now: Instant) {
-        if self
-            .input
-            .pending
-            .as_ref()
-            .is_some_and(|pending| now >= pending.deadline)
-        {
-            self.finish_paste(None, None);
+        if let Some(replay) = self.input.expire(now, &self.app) {
+            self.replay_paste(replay);
         }
     }
 
-    pub(super) fn finish_paste(&mut self, text: Option<String>, trailing: Option<ui::UiInput>) {
-        let Some(pending) = self.input.pending.take() else {
-            return;
-        };
-        if pending.token != self.input.epoch || !self.app.ui().text_input_active() {
-            return;
+    pub(super) fn complete_paste(&mut self, token: u64, text: Option<String>) {
+        if let Some(replay) = self.input.complete(token, text, Instant::now(), &self.app) {
+            self.replay_paste(replay);
         }
-        let failed = text.is_none();
-        let revision = self.app.model().revision;
-        self.input.epoch = self.input.epoch.wrapping_add(1);
-        if let Some(text) = text {
+    }
+
+    fn replay_paste(&mut self, mut replay: PasteReplay) {
+        if let Some(text) = replay.text.take() {
             self.deliver_ui_input(ui::UiInput::Paste(text));
         } else {
             log::warn!("tabs: clipboard read failed or timed out");
         }
-        let mut pointer_gesture = false;
-        for input in pending.inputs.into_iter().chain(trailing) {
-            // A failed read must not save the old value or launch further clipboard
-            // work from a deadline repaint. Keep typed text and caret edits for retry.
-            let safe_after_failure = match &input {
-                ui::UiInput::Text(_)
-                | ui::UiInput::ImeCommit(_)
-                | ui::UiInput::ImePreedit { .. } => true,
-                ui::UiInput::Key { key, modifiers } => {
-                    matches!(
-                        key,
-                        ui::Key::Character(_)
-                            | ui::Key::Backspace
-                            | ui::Key::Delete
-                            | ui::Key::Left
-                            | ui::Key::Right
-                            | ui::Key::Home
-                            | ui::Key::End
-                    ) && !(modifiers.command()
-                        && matches!(key, ui::Key::Character('c' | 'C' | 'x' | 'X' | 'v' | 'V')))
-                }
-                _ => false,
-            };
-            if failed && !safe_after_failure {
-                continue;
-            }
-            match &input {
-                ui::UiInput::PointerDown { .. } => pointer_gesture = true,
-                ui::UiInput::PointerUp { .. } => pointer_gesture = false,
-                _ => {}
-            }
+        while let Some(input) = replay.next(&self.app) {
             self.ui_input(input);
-            if !pointer_gesture
-                && (self.app.model().revision != revision || !self.app.ui().text_input_active())
-            {
-                break;
-            }
         }
-        if failed && self.app.model().revision == revision && self.app.ui().text_input_active() {
+        if replay.failed && replay.same_editor(&self.app) {
             self.app
                 .ui_mut()
                 .clipboard_failed("Clipboard unavailable. Try pasting again.");
@@ -200,15 +321,7 @@ impl Adapter {
     }
 
     pub(super) fn deliver_ui_input(&mut self, input: ui::UiInput) {
-        // Passive pointer motion and composition cleanup retain an outstanding paste.
-        let changes_input = match &input {
-            ui::UiInput::PointerMove { .. } => self.pointer_captured,
-            ui::UiInput::ImePreedit { text, .. } => !text.is_empty(),
-            _ => true,
-        };
-        if changes_input {
-            self.input.epoch = self.input.epoch.wrapping_add(1);
-        }
+        self.input.delivered(&input, self.pointer_captured);
         let before = self.app.model().revision;
         if matches!(
             input,

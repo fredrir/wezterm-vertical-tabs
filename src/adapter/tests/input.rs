@@ -194,7 +194,7 @@ fn delayed_paste_precedes_typed_text_and_enter_without_timing_assumptions() {
             .iter()
             .any(|space| space.name == "Project suffix")
     );
-    assert!(adapter.input.pending.is_none());
+    assert!(adapter.input.deadline().is_none());
     adapter.render(geometry(), Instant::now());
     assert!(!adapter.app.ui().has_overlay());
 }
@@ -219,7 +219,10 @@ fn delayed_pastes_preserve_copy_cut_and_multiple_read_order() {
     assert!(
         matches!(commands.as_slice(), [Command::Clipboard(copy), Command::Clipboard(cut), Command::Paste(_)] if copy == "First" && cut == "First")
     );
-    let second = adapter.input.pending.as_ref().unwrap().token;
+    let second = match commands.last().unwrap() {
+        Command::Paste(token) => *token,
+        _ => unreachable!(),
+    };
     assert_ne!(first, second);
     adapter.message(Message::Paste {
         text: Some("stale".into()),
@@ -246,14 +249,14 @@ fn failed_or_expired_paste_preserves_typing_but_never_submits_the_old_value() {
         editor_command(&mut adapter, 'x');
         editor_command(&mut adapter, 'v');
         if expired {
-            let deadline = adapter.input.pending.as_ref().unwrap().deadline;
+            let deadline = adapter.input.deadline().unwrap();
             assert!(adapter.deadline().unwrap() <= deadline);
             adapter.render(geometry(), deadline);
         } else {
             adapter.message(Message::Paste { token, text: None });
             adapter.render(geometry(), Instant::now());
         }
-        assert!(adapter.input.pending.is_none());
+        assert!(adapter.input.deadline().is_none());
         assert!(adapter.commands().is_empty());
         assert_eq!(adapter.app.model().spaces.len(), 1);
         assert!(adapter.app.ui().has_overlay());
@@ -287,7 +290,7 @@ fn pending_paste_bounds_release_input_and_ignore_late_completion() {
                 adapter.ui_input(ui::UiInput::key(ui::Key::Character('x')));
             }
         }
-        assert!(adapter.input.pending.is_none());
+        assert!(adapter.input.deadline().is_none());
         adapter.message(Message::Paste {
             text: Some("late".into()),
             token,
@@ -385,10 +388,10 @@ fn enter_arriving_after_the_paste_deadline_does_not_submit_stale_text() {
     adapter.app.open_create_space();
     adapter.ui_input(ui::UiInput::Text("Old".into()));
     let token = begin_paste(&mut adapter);
-    adapter.input.pending.as_mut().unwrap().deadline = Instant::now();
-    adapter.ui_input(ui::UiInput::key(ui::Key::Enter));
+    let deadline = adapter.input.deadline().unwrap();
+    adapter.ui_input_at(ui::UiInput::key(ui::Key::Enter), deadline);
     assert_eq!(adapter.app.model().spaces.len(), 1);
-    assert!(adapter.input.pending.is_none());
+    assert!(adapter.input.deadline().is_none());
     adapter.message(Message::Paste {
         text: Some("late".into()),
         token,

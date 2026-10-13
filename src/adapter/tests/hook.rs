@@ -43,39 +43,86 @@ fn hook_metadata_is_optional_and_survives_reconfiguration_and_retry() {
         let tab = &adapter.app.model().tabs[&1];
         assert_eq!(tab.process, process);
         assert_eq!(tab.space_id, format!("process-{process}"));
-        assert!(adapter.hooks.metadata.is_empty());
-        assert!(adapter.hooks.queued.is_empty());
+        assert!(adapter.hooks.take_batch(&adapter.app).is_none());
     }
 
-    // Enabling hooks must send current metadata even when the host facts have
+    // Enabling hooks sends current metadata even when the host facts have
     // not changed since a snapshot that ran with callbacks disabled.
-    adapter.hooks.enabled = true;
+    adapter.hooks.configure(true);
     adapter.apply_facts(snapshot(3, 0, "editor"));
-    assert_eq!(adapter.hooks.metadata[&1].process, "editor");
-    assert_eq!(adapter.hooks.queued[&1].process, "editor");
-    let stale = adapter.app.hook_token(Some(1));
-    adapter.hooks.queued.clear();
-    adapter.hooks.pending = true;
+    let batch = adapter.hooks.take_batch(&adapter.app).unwrap();
+    assert_eq!(batch.tabs.len(), 1);
+    assert_eq!(batch.tabs[0].1.process, "editor");
+    let stale = batch.tabs[0].0;
     adapter.apply_facts(snapshot(4, 0, "builder"));
-    assert_eq!(adapter.hooks.metadata[&1].process, "builder");
-    assert_eq!(adapter.hooks.queued[&1].process, "builder");
-    adapter.hooks.queued.clear();
+    assert!(adapter.hooks.take_batch(&adapter.app).is_none());
     adapter.message(Message::Hooks(vec![lua::HookCompletion {
         token: stale,
         result: app::HookResult::Title("stale".into()),
     }]));
-    assert_eq!(adapter.hooks.queued[&1].process, "builder");
+    let retry = adapter.hooks.take_batch(&adapter.app).unwrap();
+    assert_eq!(retry.tabs.len(), 1);
+    assert_eq!(retry.tabs[0].1.process, "builder");
     assert_eq!(adapter.app.model().tabs[&1].display_title(), "Tab: builder");
 
-    // A real configuration epoch change reads the default callback-free Lua
-    // configuration, releasing both retained metadata and queued retry work.
+    // Reconfiguration drops old work, but the in-flight callback retains its
+    // claim until its completion arrives, even across disable/enable.
     adapter.apply_facts(snapshot(5, 1, "builder"));
-    assert!(!adapter.hooks.enabled);
-    assert!(adapter.hooks.metadata.is_empty());
-    assert!(adapter.hooks.queued.is_empty());
-    adapter.hooks.enabled = true;
+    assert!(!adapter.hooks.enabled());
+    assert!(adapter.hooks.take_batch(&adapter.app).is_none());
+    adapter.hooks.configure(true);
     adapter.apply_facts(snapshot(6, 1, "builder"));
-    assert_eq!(adapter.hooks.metadata[&1].process, "builder");
-    assert_eq!(adapter.hooks.queued[&1].process, "builder");
+    assert!(adapter.hooks.take_batch(&adapter.app).is_none());
+    adapter.message(Message::Hooks(Vec::new()));
+    let batch = adapter.hooks.take_batch(&adapter.app).unwrap();
+    assert_eq!(batch.tabs.len(), 1);
+    assert_eq!(batch.tabs[0].1.process, "builder");
+    adapter.message(Message::Hooks(Vec::new()));
+    assert!(adapter.hooks.take_batch(&adapter.app).is_none());
     mux::Mux::shutdown();
+}
+
+#[test]
+fn hook_batches_are_bounded_and_drop_removed_tabs_before_dispatch() {
+    let mut app = WindowApp::default();
+    let tabs = (1..=lua::MAX_HOOK_TABS + 2)
+        .map(|id| core::Tab {
+            id: id as u64,
+            ..Default::default()
+        })
+        .collect::<Vec<_>>();
+    app.update(app::HostSnapshot {
+        revision: 1,
+        tabs: tabs.clone(),
+        active_tab: Some(1),
+        metrics: app::Metrics::default(),
+        focused: true,
+        configuration_epoch: 0,
+    })
+    .unwrap();
+    let mut hooks = hooks::Hooks::default();
+    hooks.configure(true);
+    hooks.observe(&tabs);
+    let first = hooks.take_batch(&app).unwrap();
+    assert_eq!(first.tabs.len(), lua::MAX_HOOK_TABS);
+    assert_eq!(first.tabs[0].1.id, 1);
+    assert_eq!(first.tabs.last().unwrap().1.id, lua::MAX_HOOK_TABS as u64);
+    assert!(hooks.take_batch(&app).is_none());
+    let remaining = &tabs[..tabs.len() - 1];
+    app.update(app::HostSnapshot {
+        revision: 2,
+        tabs: remaining.to_vec(),
+        active_tab: Some(1),
+        metrics: app::Metrics::default(),
+        focused: true,
+        configuration_epoch: 0,
+    })
+    .unwrap();
+    hooks.observe(remaining);
+    hooks.complete(true, false);
+    let second = hooks.take_batch(&app).unwrap();
+    assert_eq!(second.tabs.len(), 1);
+    assert_eq!(second.tabs[0].1.id, (lua::MAX_HOOK_TABS + 1) as u64);
+    hooks.complete(true, false);
+    assert!(hooks.take_batch(&app).is_none());
 }

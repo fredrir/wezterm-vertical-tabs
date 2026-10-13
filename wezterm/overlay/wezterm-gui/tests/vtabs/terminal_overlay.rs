@@ -118,19 +118,19 @@ fn programs_choose_their_share_of_the_window() {
 #[test]
 fn programs_without_a_size_follow_the_shell() {
     let program = |width, height| {
-        let mut state = State::default();
-        state.program = Some(Program::new(
-            1,
+        let mut session = Session::default();
+        open_program(
+            &mut session,
             TerminalProgram {
                 width,
                 height,
                 ..Default::default()
             },
-        ));
-        state
+        );
+        session
     };
     let shell = (0.6, 0.9);
-    assert_eq!(State::default().size(shell), shell);
+    assert_eq!(Session::default().size(shell), shell);
     assert_eq!(program(None, None).size(shell), shell);
     assert_eq!(program(Some(0.5), None).size(shell), (0.5, 0.9));
     assert_eq!(program(Some(0.5), Some(1.)).size(shell), (0.5, 1.));
@@ -233,57 +233,90 @@ fn content_stays_inside_the_padding() {
 #[test]
 fn steps_change_the_window_size_unless_the_program_sets_that_axis() {
     let configured = (0.75, 0.75);
-    let mut state = State::default();
-    state.adjust(true, 0.8);
+    let mut state = Session::default();
+    adjust(&mut state, true, 0.8);
     assert_eq!(state.size(configured), (0.8, 0.75));
-    state.program = Some(Program::new(
-        1,
+    open_program(
+        &mut state,
         TerminalProgram {
             height: Some(0.9),
             ..Default::default()
         },
-    ));
+    );
     assert_eq!(state.size(configured), (0.8, 0.9));
-    state.adjust(false, 0.5);
-    state.adjust(true, 0.6);
+    adjust(&mut state, false, 0.5);
+    adjust(&mut state, true, 0.6);
     assert_eq!(state.size(configured), (0.6, 0.5));
-    state.program = None;
+    state.hide(true, |_| true);
     assert_eq!(state.size(configured), (0.6, 0.75));
 }
 
 #[test]
 fn a_changed_size_setting_clears_its_axis_only() {
-    let mut state = State::default();
-    assert!(state.configure(config((0.75, 0.75))));
-    state.adjust(true, 0.8);
-    state.adjust(false, 0.6);
-    assert!(!state.configure(config((0.75, 0.75))));
+    let mut state = Session::default();
+    let applied = config::ConfigHandle::default_config();
+    let configure = |state: &mut Session, config| {
+        state
+            .refresh(config, &applied, Instant::now(), |_| true)
+            .changed
+    };
+    assert!(configure(&mut state, config((0.75, 0.75))));
+    adjust(&mut state, true, 0.8);
+    adjust(&mut state, false, 0.6);
+    assert!(!configure(&mut state, config((0.75, 0.75))));
     let mut faster = config((0.75, 0.75));
     faster.transition = Duration::ZERO;
-    assert!(state.configure(faster));
+    assert!(configure(&mut state, faster));
     assert_eq!(state.size((0.75, 0.75)), (0.8, 0.6));
-    assert!(state.configure(config((0.5, 0.75))));
+    assert!(configure(&mut state, config((0.5, 0.75))));
     assert_eq!(state.size((0.5, 0.75)), (0.5, 0.6));
 }
 
 #[test]
 fn motion_eases_out_and_settles_at_its_duration() {
+    let mut state = Session::default();
     let start = Instant::now();
-    let mut motion = Motion {
-        size: (0.5, 0.5),
-        origin: (100., 50.),
-        start,
-        duration: Duration::from_millis(100),
-        eased: 0.,
+    let applied = config::ConfigHandle::default_config();
+    let tick = |state: &mut Session, now| {
+        state.refresh(config(SHELL_SIZE), &applied, now, |_| true);
     };
-    assert!(motion.advance(start));
-    assert_eq!(motion.lerp((0.5, 0.5), (0.7, 0.9)), (0.5, 0.5));
-    assert!(motion.advance(start + Duration::from_millis(50)));
-    assert!((motion.eased - 0.875).abs() < 1e-6);
-    assert!(!motion.advance(start + Duration::from_millis(100)));
-    assert_eq!(motion.lerp((0.5, 0.5), (0.7, 0.9)), (0.7, 0.9));
-    assert!(!motion.advance(start + Duration::from_secs(1)));
-    assert_eq!(motion.eased, 1.);
+    let origin = (100., 50.);
+    state.resize(
+        true,
+        0.7,
+        ((0.5, 0.5), origin),
+        Duration::from_millis(100),
+        start,
+    );
+    tick(&mut state, start);
+    assert_eq!(
+        state.animate_to((0.7, 0.9), origin),
+        Some(((0.5, 0.5), origin))
+    );
+    tick(&mut state, start + Duration::from_millis(50));
+    let (size, _) = state.animate_to((0.7, 0.9), origin).unwrap();
+    assert!((size.0 - 0.675).abs() < 1e-6);
+    assert!((size.1 - 0.85).abs() < 1e-6);
+    tick(&mut state, start + Duration::from_millis(100));
+    assert!(state.animate_to((0.7, 0.9), origin).is_none());
+    tick(&mut state, start + Duration::from_secs(1));
+    assert!(state.animate_to((0.7, 0.9), origin).is_none());
+}
+
+#[test]
+fn hiding_or_switching_programs_ends_size_animation() {
+    let mut state = Session::default();
+    let start = Instant::now();
+    let drawn = ((0.5, 0.5), (100., 50.));
+    let duration = Duration::from_millis(100);
+    state.resize(true, 0.7, drawn, duration, start);
+    state.hide(true, |_| true);
+    assert!(state.animate_to((0.7, 0.9), drawn.1).is_none());
+    state.resize(true, 0.8, drawn, duration, start);
+    open_program(&mut state, program("yazi", false));
+    assert!(state.animate_to((0.8, 0.9), drawn.1).is_none());
+    state.resize(true, 0.9, drawn, Duration::ZERO, start);
+    assert!(state.animate_to((0.9, 0.9), drawn.1).is_none());
 }
 
 #[test]
@@ -302,28 +335,43 @@ fn directories_decode_whichever_host_reported_them() {
 
 #[test]
 fn discarded_shell_launch_cannot_replace_a_reopened_shell() {
-    let mut state = State::default();
-    state.visible = true;
+    let mut state = Session::default();
+    assert!(matches!(
+        state.show(None, true, |_| true).next,
+        Open::ResolveShell
+    ));
     let previous = state.launch_shell();
-    assert!(state.wants(previous));
-    state.discard_shell();
-    assert!(!state.wants(previous));
+    state.hide(false, |_| true);
+    assert!(matches!(
+        state.show(None, true, |_| true).next,
+        Open::ResolveShell
+    ));
     let current = state.launch_shell();
-    assert!(!state.wants(previous));
-    assert!(state.wants(current));
-    state.settle(current, None);
-    assert!(!state.visible);
-    assert!(state.pending.is_none());
+    assert_ne!(previous, current);
+    assert!(!state.complete(previous, None));
+    assert!(state.visible());
+    assert!(matches!(
+        state.show(None, true, |_| true).next,
+        Open::Pending
+    ));
+    assert!(state.complete(current, None));
+    assert!(!state.visible());
 }
 
 #[test]
 fn preserved_shell_launch_can_finish_while_hidden() {
-    let mut state = State::default();
+    let mut state = Session::default();
+    state.show(None, true, |_| true);
     let pending = state.launch_shell();
-    state.visible = false;
-    assert!(state.wants(pending));
-    state.visible = true;
-    assert!(state.wants(pending));
+    state.hide(true, |_| true);
+    assert!(!state.visible());
+    assert!(matches!(
+        state.show(None, true, |_| true).next,
+        Open::Pending
+    ));
+    state.hide(true, |_| true);
+    assert!(state.complete(pending, None));
+    assert!(!state.visible());
 }
 
 #[test]
@@ -438,64 +486,81 @@ fn program_values_override_the_quick_terminal_settings() {
     assert_eq!(merged.size, settings.size);
 }
 
-fn program(id: u64, command: &str, preserve: bool) -> Program {
-    Program::new(
-        id,
-        TerminalProgram {
-            spawn: SpawnCommand {
-                args: Some(vec![command.into()]),
-                ..Default::default()
-            },
-            preserve,
+fn program(command: &str, preserve: bool) -> TerminalProgram {
+    TerminalProgram {
+        spawn: SpawnCommand {
+            args: Some(vec![command.into()]),
             ..Default::default()
         },
-    )
+        preserve,
+        ..Default::default()
+    }
+}
+
+fn open_program(state: &mut Session, spec: TerminalProgram) -> Slot {
+    match state.show(Some((spec, true)), true, |_| true).next {
+        Open::LaunchProgram(slot) => slot,
+        _ => panic!("expected a fresh program launch"),
+    }
+}
+
+fn adjust(state: &mut Session, horizontal: bool, size: f32) {
+    state.resize(
+        horizontal,
+        size,
+        ((0.75, 0.75), (0., 0.)),
+        Duration::ZERO,
+        Instant::now(),
+    );
 }
 
 #[test]
 fn preserved_programs_wait_hidden_for_their_next_opening() {
-    let mut state = State::default();
-    state.visible = true;
-    state.program = Some(program(1, "lazygit", true));
-    assert!(state.put_away(|_| true).is_none());
-    assert!(state.program.is_none());
-    // A launch still in flight lands in the kept program.
-    assert!(state.wants(Slot::Program(1)));
-    let lazygit = state.kept[0].spec.clone();
+    let mut state = Session::default();
+    let lazygit = program("lazygit", true);
+    let pending = open_program(&mut state, lazygit.clone());
+    state.hide(true, |_| true);
+    assert!(!state.showing_program());
     assert!(state.reusable(&lazygit, |_| true));
-    assert!(!state.reusable(&program(2, "yazi", true).spec, |_| true));
+    assert!(!state.reusable(&program("yazi", true), |_| true));
     let larger = TerminalProgram {
         width: Some(0.9),
         ..lazygit
     };
-    let reopened = state.take_kept(&larger).unwrap();
-    assert_eq!(reopened.id, 1);
-    assert_eq!(reopened.size, (Some(0.9), None));
-    assert_eq!(reopened.spec, larger);
-    assert!(state.kept.is_empty());
+    assert!(matches!(
+        state
+            .show(Some((larger.clone(), false)), true, |_| true)
+            .next,
+        Open::Program { pane: None, .. }
+    ));
+    assert!(state.showing(&larger));
+    assert_eq!(state.size(SHELL_SIZE), (0.9, 0.75));
+    // Reopening a pending program retains its original launch token.
+    assert!(state.complete(pending, None));
+    assert!(!state.visible());
 }
 
 #[test]
 fn programs_without_preserve_end_when_put_away() {
-    let mut state = State::default();
-    state.program = Some(program(1, "lazygit", false));
-    state.put_away(|_| true);
-    assert!(state.program.is_none() && state.kept.is_empty());
-    assert!(!state.wants(Slot::Program(1)));
-    assert!(!state.reusable(&program(2, "lazygit", false).spec, |_| true));
+    let mut state = Session::default();
+    let spec = program("lazygit", false);
+    let pending = open_program(&mut state, spec.clone());
+    state.hide(true, |_| true);
+    assert!(!state.showing_program());
+    assert!(!state.complete(pending, None));
+    assert!(!state.reusable(&spec, |_| true));
 }
 
 #[test]
 fn a_failed_kept_launch_leaves_the_shown_program_alone() {
-    let mut state = State::default();
-    state.visible = true;
-    state.program = Some(program(1, "lazygit", true));
-    state.put_away(|_| true);
-    state.program = Some(program(2, "yazi", false));
-    state.settle(Slot::Program(1), None);
-    assert!(state.kept.is_empty());
-    assert!(state.visible);
-    assert_eq!(state.program.as_ref().map(|program| program.id), Some(2));
+    let mut state = Session::default();
+    let lazygit = program("lazygit", true);
+    let pending = open_program(&mut state, lazygit.clone());
+    let yazi = program("yazi", false);
+    open_program(&mut state, yazi.clone());
+    assert!(state.complete(pending, None));
+    assert!(!state.reusable(&lazygit, |_| true));
+    assert!(state.showing(&yazi));
 }
 
 #[test]
@@ -576,42 +641,77 @@ fn steps_change_the_grid_by_whole_cells_through_percent_padding() {
 
 #[test]
 fn only_preserved_bindings_reopen_a_kept_program() {
-    let mut state = State::default();
-    state.program = Some(program(1, "lazygit", true));
-    state.put_away(|_| true);
-    let fresh = program(2, "lazygit", false).spec;
+    let mut state = Session::default();
+    let preserved = program("lazygit", true);
+    let kept = open_program(&mut state, preserved.clone());
+    state.hide(true, |_| true);
+    let fresh = program("lazygit", false);
     assert!(!state.reusable(&fresh, |_| true));
-    assert!(state.take_kept(&fresh).is_none());
-    assert_eq!(state.kept.len(), 1);
-    // A shown program without `preserve` ends when replaced, so it cannot be reopened.
-    let mut state = State::default();
-    state.program = Some(program(1, "lazygit", false));
-    assert!(!state.reusable(&program(2, "lazygit", true).spec, |_| true));
+    let launched = open_program(&mut state, fresh);
+    assert_ne!(kept, launched);
+    assert!(state.reusable(&preserved, |_| true));
+    // A shown program without preservation ends when replaced.
+    let mut state = Session::default();
+    let discarded = open_program(&mut state, program("lazygit", false));
+    assert!(!state.reusable(&preserved, |_| true));
+    let pending = open_program(&mut state, preserved.clone());
+    assert!(!state.complete(discarded, None));
+    assert!(state.showing(&preserved));
+    assert!(state.complete(pending, None));
 }
 
 #[test]
 fn a_launch_takes_the_colors_its_program_has_when_it_lands() {
-    let mut state = State::default();
-    let mut lazygit = program(1, "lazygit", true);
-    lazygit.spec.colors = Some(config::Palette {
-        background: Some((1, 2, 3).into()),
-        ..Default::default()
-    });
-    state.program = Some(lazygit);
-    state.put_away(|_| true);
+    let mut state = Session::default();
+    let lazygit = TerminalProgram {
+        colors: Some(config::Palette {
+            background: Some((1, 2, 3).into()),
+            ..Default::default()
+        }),
+        ..program("lazygit", true)
+    };
+    let pending = open_program(&mut state, lazygit.clone());
+    state.hide(true, |_| true);
     let light = TerminalProgram {
         colors: Some(config::Palette {
             background: Some((255, 255, 255).into()),
             ..Default::default()
         }),
-        ..state.kept[0].spec.clone()
+        ..lazygit
     };
-    state.program = state.take_kept(&light);
+    assert!(matches!(
+        state.show(Some((light, false)), true, |_| true).next,
+        Open::Program { .. }
+    ));
     assert_eq!(
-        state
-            .colors(Slot::Program(1))
-            .and_then(|colors| colors.background),
+        state.colors(pending).and_then(|colors| colors.background),
         Some((255, 255, 255).into())
     );
     assert!(state.colors(Slot::Shell(1)).is_none());
+}
+
+#[test]
+fn disabling_shell_preservation_invalidates_only_a_background_shell_launch() {
+    let applied = config::ConfigHandle::default_config();
+    let settings = QuickTerminalConfig {
+        preserve_shell: false,
+        ..config(SHELL_SIZE)
+    };
+    for (visible, program_shown) in [(false, false), (true, false), (true, true)] {
+        let mut state = Session::default();
+        state.show(None, true, |_| true);
+        let pending = state.launch_shell();
+        let program = program("yazi", true);
+        if program_shown {
+            open_program(&mut state, program.clone());
+        }
+        if !visible {
+            state.hide(true, |_| true);
+        }
+        state.refresh(settings, &applied, Instant::now(), |_| true);
+        assert_eq!(state.complete(pending, None), visible && !program_shown);
+        if program_shown {
+            assert!(state.showing(&program));
+        }
+    }
 }

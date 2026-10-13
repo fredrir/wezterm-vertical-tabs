@@ -1,11 +1,97 @@
 //! Painting and quad reuse for the window-owned UI surface.
-use super::*;
-use crate::quad::{QuadTrait, TripleLayerQuadAllocator};
+use super::{Bounds, Geometry, RoundedSurface};
+use crate::quad::{HeapQuadAllocator, QuadTrait, TripleLayerQuadAllocator};
+use crate::termwindow::TermWindow;
 use crate::termwindow::render::RenderScreenLineParams;
 use crate::termwindow::render::corners::*;
+use mux::renderable::RenderableDimensions;
+use std::{rc::Rc, time::Instant};
+use termwiz::surface::Line;
 use wezterm_term::color::ColorAttribute;
+use window::{WindowOps, color::LinearRgba};
 
 use crate::customglyph::{BlockAlpha, BlockCoord, Poly, PolyCommand, PolyStyle};
+const VTABS_UI_ZINDEX: i8 = 5;
+
+#[derive(Default)]
+pub(super) struct RenderCache {
+    rows: Vec<RowCache>,
+    primitives: Vec<PrimitiveCache>,
+    primitive_key: (usize, usize, usize, u32, u32, u32, u32, u32),
+    row_key: (usize, usize, usize, usize, usize, bool, u64),
+    glyph_config: Option<((usize, u64), config::ConfigHandle)>,
+}
+impl RenderCache {
+    /// Patched Nerd Fonts size each icon set differently, so the bundled symbols font leads.
+    fn styled_config(&mut self, config: &config::ConfigHandle, scale: f64) -> config::ConfigHandle {
+        let key = (config.generation(), scale.to_bits());
+        if let Some((cached, handle)) = &self.glyph_config {
+            if *cached == key {
+                return handle.clone();
+            }
+        }
+        let symbols = config::FontAttributes {
+            scale: ordered_float::NotNan::new(scale).ok(),
+            ..config::FontAttributes::new("Symbols Nerd Font Mono")
+        };
+        let mut styled = (**config).clone();
+        for style in std::iter::once(&mut styled.font)
+            .chain(styled.font_rules.iter_mut().map(|rule| &mut rule.font))
+        {
+            style.font.insert(0, symbols.clone());
+        }
+        let handle = config.derive(styled);
+        self.glyph_config = Some((key, handle.clone()));
+        handle
+    }
+}
+
+fn vtabs_inset_bounds(mut bounds: Bounds, inset: f32, square: bool) -> Bounds {
+    let inset = if inset.is_finite() { inset.max(0.) } else { 0. };
+    if square {
+        let side = bounds.width.min(bounds.height).max(0.);
+        bounds.x += (bounds.width - side) / 2.;
+        bounds.y += (bounds.height - side) / 2.;
+        bounds.width = side;
+        bounds.height = side;
+    }
+    let x = inset.min(bounds.width.max(0.) / 2.);
+    let y = inset.min(bounds.height.max(0.) / 2.);
+    bounds.x += x;
+    bounds.y += y;
+    bounds.width = (bounds.width - x * 2.).max(0.);
+    bounds.height = (bounds.height - y * 2.).max(0.);
+    bounds
+}
+struct PrimitiveCache {
+    surface: RoundedSurface,
+    quads: HeapQuadAllocator,
+}
+struct RowCache {
+    line: Rc<Line>,
+    centered_ranges: Vec<(f32, f32)>,
+    quads: HeapQuadAllocator,
+    origin: (f32, f32),
+}
+impl RowCache {
+    fn matches(&self, line: &Rc<Line>, centered_ranges: &[(f32, f32)]) -> bool {
+        Rc::ptr_eq(&self.line, line) && self.centered_ranges == centered_ranges
+    }
+}
+fn vtabs_caret_rect(
+    geometry: Geometry,
+    offset: (f32, f32),
+    caret: (usize, usize),
+    whole_window: bool,
+) -> Option<window::Rect> {
+    let bounds = geometry.ui_bounds(whole_window);
+    let x = bounds.x + offset.0 + caret.0 as f32 * geometry.cell_width;
+    let y = bounds.y + offset.1 + caret.1 as f32 * geometry.cell_height;
+    let bounds: window::RectF = euclid::rect(bounds.x, bounds.y, bounds.width, bounds.height);
+    // Bounds lead so a NaN caret coordinate yields an empty intersection.
+    let caret = euclid::rect(x, y, geometry.cell_width, geometry.cell_height);
+    bounds.intersection(&caret)?.round_out().try_cast()
+}
 const FRAME_TOP_LEFT: &[Poly] = &[Poly {
     path: &[
         PolyCommand::MoveTo(BlockCoord::Zero, BlockCoord::Zero),
@@ -219,12 +305,14 @@ impl TermWindow {
         let result = (|| {
             let start = Instant::now();
             self.ensure_vtabs_titlebar(&mut ui, geometry.header_width())?;
-            if let Some(chrome) = &ui.chrome {
+            if let Some(chrome) = ui.chrome.element() {
                 self.render_element(chrome, self.render_state.as_ref().unwrap(), None)?;
             }
             ui.geometry = geometry;
             ui.provider.render(geometry, start);
-            let styled = ui.styled_config(&self.config);
+            let styled = ui
+                .render
+                .styled_config(&self.config, ui.provider.glyph_scale());
             let surface = ui.provider.surface();
             let bounds =
                 geometry.ui_bounds(ui.provider.content_page() || ui.provider.overlay_surface());
@@ -248,11 +336,11 @@ impl TermWindow {
                 rounded,
                 ui.provider.glyph_scale().to_bits(),
             );
-            if ui.cache_key != key {
-                ui.cache.clear();
-                ui.cache_key = key;
+            if ui.render.row_key != key {
+                ui.render.rows.clear();
+                ui.render.row_key = key;
             }
-            ui.cache.truncate(surface.rows.len());
+            ui.render.rows.truncate(surface.rows.len());
             let palette = self.palette().clone();
             let gl_state = self.render_state.as_ref().unwrap();
             let white_space = gl_state.util_sprites.white_space.texture_coords();
@@ -318,15 +406,18 @@ impl TermWindow {
                 bounds.x.to_bits(),
                 bounds.y.to_bits(),
             );
-            if ui.primitive_cache_key != primitive_key {
+            if ui.render.primitive_key != primitive_key {
                 // Corner glyph UVs belong to one atlas, even when surface geometry is unchanged.
-                ui.primitive_cache.clear();
-                ui.primitive_cache_key = primitive_key;
+                ui.render.primitives.clear();
+                ui.render.primitive_key = primitive_key;
             }
-            ui.primitive_cache.truncate(ui.provider.primitives().len());
+            ui.render
+                .primitives
+                .truncate(ui.provider.primitives().len());
             for (index, primitive) in ui.provider.primitives().iter().enumerate() {
                 if ui
-                    .primitive_cache
+                    .render
+                    .primitives
                     .get(index)
                     .is_none_or(|cached| cached.surface != *primitive)
                 {
@@ -349,13 +440,13 @@ impl TermWindow {
                         surface: *primitive,
                         quads,
                     };
-                    if index < ui.primitive_cache.len() {
-                        ui.primitive_cache[index] = cached;
+                    if index < ui.render.primitives.len() {
+                        ui.render.primitives[index] = cached;
                     } else {
-                        ui.primitive_cache.push(cached);
+                        ui.render.primitives.push(cached);
                     }
                 }
-                ui.primitive_cache[index].quads.apply_transformed(
+                ui.render.primitives[index].quads.apply_transformed(
                     layers,
                     surface.offset,
                     surface.opacity,
@@ -365,7 +456,8 @@ impl TermWindow {
             for (y, line) in surface.rows.iter().enumerate() {
                 let centered_ranges = surface.centered.get(y).map_or(&[][..], Vec::as_slice);
                 if ui
-                    .cache
+                    .render
+                    .rows
                     .get(y)
                     .is_none_or(|cached| !cached.matches(line, centered_ranges))
                 {
@@ -429,17 +521,17 @@ impl TermWindow {
                         quads,
                         origin,
                     };
-                    if y < ui.cache.len() {
-                        ui.cache[y] = cached;
+                    if y < ui.render.rows.len() {
+                        ui.render.rows[y] = cached;
                     } else {
-                        ui.cache.push(cached);
+                        ui.render.rows.push(cached);
                     }
                 }
-                ui.cache[y].quads.apply_transformed(
+                ui.render.rows[y].quads.apply_transformed(
                     layers,
                     (
-                        surface.offset.0 + origin.0 - ui.cache[y].origin.0,
-                        surface.offset.1 + origin.1 - ui.cache[y].origin.1,
+                        surface.offset.0 + origin.0 - ui.render.rows[y].origin.0,
+                        surface.offset.1 + origin.1 - ui.render.rows[y].origin.1,
                     ),
                     surface.opacity,
                     clip,

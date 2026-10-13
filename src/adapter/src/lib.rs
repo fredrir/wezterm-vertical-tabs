@@ -15,6 +15,7 @@ mod repos;
 mod settings_file;
 mod shutdown;
 mod storage;
+mod transfers;
 mod update;
 
 use crate::termwindow::ui_host::{
@@ -38,8 +39,6 @@ pub fn create(window_id: usize) -> Box<dyn Provider> {
     Box::new(Adapter::new(window_id))
 }
 
-const PLACEMENT_TIMEOUT: Duration = Duration::from_secs(3);
-
 struct Adapter {
     app: WindowApp,
     window_id: usize,
@@ -52,22 +51,17 @@ struct Adapter {
     launcher_entries: Vec<crate::overlay::launcher::Entry>,
     cursor: Option<(usize, usize)>,
     geometry: Geometry,
-    host_tabs: Vec<usize>,
-    remote_tabs: HashMap<u64, (usize, usize, Vec<usize>)>,
     config_generation: usize,
     managed_path: Option<std::path::PathBuf>,
     pointer_captured: bool,
-    next_spawn_space: Option<String>,
-    next_spawn_folder: Option<String>,
     outstanding: Option<u64>,
     hooks: hooks::Hooks,
     input: input::InputState,
+    transfers: transfers::Transfers,
     repos: repos::Repos,
     local_host: String,
     mux_window: Option<usize>,
-    placement: Option<(usize, Instant)>,
     published: Option<u64>,
-    pending_show: Option<core::TabId>,
     metadata: metadata::Refresh,
     adoptable_search: u64,
 }
@@ -101,22 +95,17 @@ impl Adapter {
             launcher_entries: Vec::new(),
             cursor: None,
             geometry: Geometry::default(),
-            host_tabs: Vec::new(),
-            remote_tabs: HashMap::new(),
             config_generation: usize::MAX,
             managed_path: config.managed_path,
             pointer_captured: false,
-            next_spawn_space: None,
-            next_spawn_folder: None,
             outstanding: None,
             hooks: hooks::Hooks::default(),
             input: input::InputState::default(),
+            transfers: transfers::Transfers::default(),
             repos: repos::Repos::default(),
             local_host: sysinfo::System::host_name().unwrap_or_default(),
             mux_window: None,
-            placement: None,
             published: None,
-            pending_show: None,
             metadata: metadata::Refresh::default(),
             adoptable_search: 0,
         }
@@ -257,7 +246,7 @@ impl Adapter {
         .detach();
     }
     fn finish_update(&mut self, before: u64) {
-        self.hooks.window_dirty |= before != self.app.model().revision;
+        self.hooks.changed(before != self.app.model().revision);
         self.schedule_hooks();
         self.publish();
     }
@@ -316,8 +305,7 @@ impl Adapter {
                     launch,
                     folder_id,
                 } => {
-                    self.next_spawn_folder = folder_id;
-                    self.next_spawn_space = Some(space_id);
+                    self.transfers.spawn_into(space_id, folder_id);
                     self.commands.push(Command::Spawn(spawn(launch), false));
                 }
                 C::Reorder { visible_order } => self.reorder(visible_order),
@@ -331,7 +319,7 @@ impl Adapter {
                     }
                 }
                 C::DetachPane { pane, index } => {
-                    self.placement = index.map(|index| (index, Instant::now()));
+                    self.transfers.place_detached(index, Instant::now());
                     let window = self.mux_window;
                     self.rearrange(async move {
                         mux::Mux::get()
@@ -553,32 +541,18 @@ impl Adapter {
     }
     /// Only a client domain can reattach, and only while the mux still knows it.
     fn remember_detached(&self, id: core::TabId) {
-        let Some(&(domain, remote, _)) = self.remote_tabs.get(&id) else {
-            return;
-        };
-        let Some(tab) = self.app.model().tabs.get(&id) else {
-            return;
-        };
-        if mux::Mux::get()
-            .get_domain(domain)
-            .is_none_or(|domain| domain.state() != mux::domain::DomainState::Detached)
+        if let Some(record) =
+            self.transfers
+                .detached_record(id, &self.app, self.window_id, |domain| {
+                    mux::Mux::get()
+                        .get_domain(domain)
+                        .is_some_and(|domain| domain.state() == mux::domain::DomainState::Detached)
+                })
         {
-            return;
+            directory::remember(record);
         }
-        let model = self.app.model();
-        directory::remember(directory::DetachedTab {
-            listing: ui::ForeignTab::new(
-                self.window_id as u64,
-                tab,
-                model.home.as_deref(),
-                format!("{}  detached", tab.domain),
-            ),
-            tab: tab.clone(),
-            domain,
-            remote,
-            show: false,
-        });
     }
+
     /// Reattached tabs return with new IDs; whichever window receives one restores it.
     fn restore_reattached(&mut self) {
         let mux = mux::Mux::get();
@@ -621,8 +595,11 @@ impl Adapter {
         }
     }
     fn schedule_hooks(&mut self) {
-        self.hooks
-            .schedule(self.window.as_ref(), &self.app, self.window_id);
+        if let Some(window) = self.window.as_ref() {
+            if let Some(batch) = self.hooks.take_batch(&self.app) {
+                lua::hooks(window.clone(), batch.tabs, batch.window, self.window_id);
+            }
+        }
     }
     fn storage(&mut self) {
         if let Some(window) = self.window.clone() {
@@ -668,20 +645,10 @@ impl Adapter {
         self.app.set_window_identity(snapshot.window_id as u64);
         self.mux_window = Some(snapshot.window_id);
         // A pane dragged out to a position becomes a tab there once the mux reports it.
-        let arrived = self
-            .placement
-            .take()
-            .filter(|(_, since)| since.elapsed() < PLACEMENT_TIMEOUT)
-            .and_then(|placement| {
-                let known: std::collections::HashSet<_> = self.host_tabs.iter().collect();
-                match snapshot.tabs.iter().find(|tab| !known.contains(&tab.id)) {
-                    Some(tab) => Some((tab.id as u64, placement.0)),
-                    None => {
-                        self.placement = Some(placement);
-                        None
-                    }
-                }
-            });
+        let arrived = self.transfers.observe_hosts(
+            snapshot.tabs.iter().map(|tab| tab.id).collect(),
+            Instant::now(),
+        );
         let before = self.app.model().revision;
         if self.config_generation != snapshot.config_epoch {
             self.config_generation = snapshot.config_epoch;
@@ -692,7 +659,6 @@ impl Adapter {
             let result = self.app.config(config.value());
             self.apply(result);
         }
-        self.host_tabs = snapshot.tabs.iter().map(|tab| tab.id).collect();
         let repos = &mut self.repos;
         let local_host = &self.local_host;
         let mux = mux::Mux::get();
@@ -765,7 +731,8 @@ impl Adapter {
             .collect::<Vec<_>>();
         self.hooks.observe(&tabs);
         let host_tabs = self
-            .host_tabs
+            .transfers
+            .hosts()
             .iter()
             .map(|id| *id as u64)
             .collect::<std::collections::HashSet<_>>();
@@ -789,27 +756,23 @@ impl Adapter {
         for id in detached {
             self.remember_detached(id);
         }
-        self.remote_tabs = {
+        self.transfers.observe_remotes({
             let mux = mux::Mux::get();
             tabs.iter()
                 .filter_map(|tab| {
                     let domain = mux.get_domain_by_name(&tab.domain)?;
                     let client = domain.downcast_ref::<wezterm_client::domain::ClientDomain>()?;
+                    mux.get_tab(tab.id as usize)?;
                     Some((
                         tab.id,
-                        (
-                            domain.domain_id(),
-                            client.local_to_remote_tab_id(tab.id as usize)?,
-                            mux.get_tab(tab.id as usize)?
-                                .iter_panes_ignoring_zoom()
-                                .iter()
-                                .map(|pane| pane.pane.pane_id())
-                                .collect(),
-                        ),
+                        transfers::RemoteTab {
+                            domain: domain.domain_id(),
+                            remote: client.local_to_remote_tab_id(tab.id as usize)?,
+                        },
                     ))
                 })
                 .collect()
-        };
+        });
         let result = self.app.update(app::HostSnapshot {
             revision: snapshot.revision,
             tabs,
@@ -819,16 +782,12 @@ impl Adapter {
             configuration_epoch: snapshot.config_epoch as u64,
         });
         self.apply(result);
-        self.hooks.window_dirty |= before != self.app.model().revision;
+        self.hooks.changed(before != self.app.model().revision);
         if let Some((id, index)) = arrived {
             self.dispatch(core::Intent::MoveTab { id, index });
         }
         self.restore_reattached();
-        if let Some(id) = self
-            .pending_show
-            .filter(|id| self.app.model().tabs.contains_key(id))
-        {
-            self.pending_show = None;
+        if let Some(id) = self.transfers.arrived_to_show(&self.app) {
             self.dispatch(core::Intent::ActivateTab(id));
         }
         self.schedule_hooks();
@@ -864,7 +823,7 @@ impl Adapter {
             model.settings.tab_title,
             core::TabTitle::Process | core::TabTitle::ProcessAndDirectory
         );
-        (self.hooks.enabled || process_rules || process_templates || process_titles)
+        (self.hooks.enabled() || process_rules || process_templates || process_titles)
             .then_some(std::time::Duration::from_secs(2))
     }
     /// Applies the sidebar's order to every tab of the mux window, keeping its active tab.
@@ -873,7 +832,8 @@ impl Adapter {
             visible_order.iter().map(|id| *id as usize).collect();
         let mut next = visible_order.into_iter();
         let order: Vec<usize> = self
-            .host_tabs
+            .transfers
+            .hosts()
             .iter()
             .map(|id| {
                 if visible.contains(id) {
@@ -972,7 +932,7 @@ impl Adapter {
     fn schedule_metadata(&mut self) {
         let schedule = self
             .metadata_interval()
-            .filter(|_| !self.host_tabs.is_empty())
+            .filter(|_| !self.transfers.hosts().is_empty())
             .map(|interval| {
                 (
                     interval.clamp(Duration::from_millis(500), Duration::from_secs(2)),
@@ -1257,7 +1217,7 @@ impl Provider for Adapter {
             .next_deadline()
             .map(|duration| self.epoch + duration)
             .into_iter()
-            .chain(self.input.pending.as_ref().map(|pending| pending.deadline))
+            .chain(self.input.deadline())
             .min()
     }
     fn caret(&self) -> Option<(usize, usize)> {
@@ -1314,19 +1274,7 @@ impl Provider for Adapter {
         new_window: bool,
         command: &config::keyassignment::SpawnCommand,
     ) -> SpawnContext {
-        let token = if new_window {
-            None
-        } else {
-            let space = self.next_spawn_space.take();
-            let token = match self.next_spawn_folder.take() {
-                Some(folder) => self.app.reserve_spawn_in_folder(&folder).ok(),
-                None => match space {
-                    Some(space) => self.app.reserve_spawn_in(&space).ok(),
-                    None => Some(self.app.reserve_spawn()),
-                },
-            };
-            token
-        };
+        let token = self.transfers.reserve_spawn(&mut self.app, new_window);
         let domain = match &command.domain {
             config::keyassignment::SpawnTabDomain::DomainName(name) => Some(name.clone()),
             config::keyassignment::SpawnTabDomain::DefaultDomain => {

@@ -84,10 +84,8 @@ impl Adapter {
             Message::ShowTab(id) => {
                 self.app.ui_mut().dismiss();
                 self.app.ui_mut().release_focus();
-                if self.app.model().tabs.contains_key(&id) {
+                if let Some(id) = self.transfers.show_when_present(id, &self.app) {
                     self.dispatch(core::Intent::ActivateTab(id));
-                } else {
-                    self.pending_show = Some(id);
                 }
             }
             Message::SpawnFailed(context) => {
@@ -95,17 +93,7 @@ impl Adapter {
                     self.app.cancel_spawn(&token);
                 }
             }
-            Message::Paste { token, text } => {
-                self.expire_paste(Instant::now());
-                if self
-                    .input
-                    .pending
-                    .as_ref()
-                    .is_some_and(|pending| token == pending.token)
-                {
-                    self.finish_paste(text, None);
-                }
-            }
+            Message::Paste { token, text } => self.complete_paste(token, text),
             Message::Managed(result) => {
                 let saved = result.is_ok();
                 self.app.complete_managed_write(result);
@@ -154,24 +142,24 @@ impl Adapter {
                 }
             }
             Message::Hooks(results) => {
-                self.hooks.pending = false;
                 let selection = (
                     self.app.model().selected_space.clone(),
                     self.app.model().selected_tab,
                 );
-                if !lua::complete(&mut self.app, results) {
-                    self.hooks.retry();
-                }
-                self.hooks.window_dirty |= selection
-                    != (
-                        self.app.model().selected_space.clone(),
-                        self.app.model().selected_tab,
-                    );
+                let accepted = lua::complete(&mut self.app, results);
+                self.hooks.complete(
+                    accepted,
+                    selection
+                        != (
+                            self.app.model().selected_space.clone(),
+                            self.app.model().selected_tab,
+                        ),
+                );
                 self.schedule_hooks();
             }
         }
         if !hook_completion {
-            self.hooks.window_dirty |= before != self.app.model().revision;
+            self.hooks.changed(before != self.app.model().revision);
         }
         self.schedule_hooks();
         self.storage();
