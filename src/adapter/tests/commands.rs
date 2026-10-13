@@ -1,7 +1,7 @@
 use super::input_tests::{geometry, logical_key, raw};
 use super::*;
 use config::keyassignment::KeyAssignment;
-use window::Modifiers;
+use window::{KeyCode, Modifiers};
 
 fn command(brief: &str, doc: &str, action: KeyAssignment) -> crate::commands::ExpandedCommand {
     crate::commands::ExpandedCommand {

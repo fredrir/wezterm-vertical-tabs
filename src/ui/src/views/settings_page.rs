@@ -9,6 +9,7 @@ use crate::icons;
 use crate::input::{EditResult, Key, Modifiers, TextEditor, display_text};
 use crate::intent::UiIntent;
 use crate::runtime::canvas::{Canvas, RoundedSurface};
+use crate::settings::SettingTarget;
 use ratatui::layout::{Alignment, Rect};
 use ratatui::style::{Color, Modifier};
 use ratatui::text::{Line, Span};
@@ -216,48 +217,6 @@ fn dimmed(model: &Model, key: &str) -> bool {
     }
 }
 
-/// Settings, keybind, remote glyph and padding rows by key.
-pub(crate) fn descriptor(key: &str) -> Option<&'static SettingDescriptor> {
-    settings::descriptor(key).or_else(|| {
-        keybinds::DESCRIPTORS
-            .iter()
-            .chain(distros::DESCRIPTORS)
-            .chain(padding::DESCRIPTORS)
-            .find(|field| field.key == key)
-    })
-}
-
-/// A remote glyph row reads its entry in `distro_colors`, a padding row its side.
-pub(crate) fn setting_value(settings: &Settings, key: &str) -> Value {
-    if let Some(id) = distros::id(key) {
-        return json!(settings.distro_colors.get(id));
-    }
-    match padding::side(key) {
-        Some(side) => json!(settings.quick_terminal_window_padding.side(side)),
-        None => settings.get(key).unwrap_or_default(),
-    }
-}
-
-pub(crate) fn set_padding_side(model: &Model, side: &str, value: Option<Dimension>) -> Intent {
-    let mut padding = model.settings.quick_terminal_window_padding.clone();
-    if let Some(slot) = padding.side_mut(side) {
-        *slot = value;
-    }
-    Intent::SetSetting {
-        key: "quick_terminal_window_padding".into(),
-        value: json!(padding),
-    }
-}
-
-pub(crate) fn set_distro_color(model: &Model, id: &str, color: String) -> Intent {
-    let mut colors = model.settings.distro_colors.clone();
-    colors.insert(id.into(), color);
-    Intent::SetSetting {
-        key: "distro_colors".into(),
-        value: json!(colors),
-    }
-}
-
 /// The heading above each row that starts a section: groups in All, remote glyphs anywhere.
 fn sections(fields: &[&SettingDescriptor], all: bool) -> Vec<Option<&'static str>> {
     let section = |field: &SettingDescriptor| match field.key {
@@ -314,35 +273,14 @@ impl Changed {
             defaults: serde_json::to_value(Settings::default()).unwrap_or_default(),
         }
     }
-    fn contains(&self, model: &Model, field: &SettingDescriptor) -> bool {
-        match action(field) {
-            Some(action) => model
-                .settings
-                .keybinds
-                .get(action)
-                .is_some_and(|keys| *keys != keybinds::defaults(action)),
-            None => match (distros::id(field.key), padding::side(field.key)) {
-                (Some(id), _) => {
-                    self.current["distro_colors"][id] != self.defaults["distro_colors"][id]
-                }
-                (_, Some(side)) => {
-                    let padding = "quick_terminal_window_padding";
-                    self.current[padding][side] != self.defaults[padding][side]
-                }
-                _ => self.current.get(field.key) != self.defaults.get(field.key),
-            },
-        }
+    fn contains(&self, field: &SettingDescriptor) -> bool {
+        SettingTarget::of(field.key).changed(&self.current, &self.defaults)
     }
 }
 
 impl SettingsPage {
     pub(crate) fn managed_in_lua(&self, model: &Model, key: &str) -> bool {
-        let key = match key {
-            _ if key.starts_with("shortcut.") => "keybinds",
-            _ if distros::id(key).is_some() => "distro_colors",
-            _ if padding::side(key).is_some() => "quick_terminal_window_padding",
-            _ => key,
-        };
+        let key = SettingTarget::of(key).setting_key();
         model.config_owned.contains(key) || self.config_owned.contains(key)
     }
 
@@ -681,7 +619,7 @@ impl SettingsPage {
                 );
                 y += above;
             }
-            let modified = changed.contains(model, field);
+            let modified = changed.contains(field);
             self.setting(
                 model,
                 field,
@@ -806,7 +744,7 @@ impl SettingsPage {
                 cx,
             );
         }
-        let value = setting_value(&model.settings, field.key);
+        let value = SettingTarget::of(field.key).value(&model.settings);
         let text = match field.kind {
             SettingKind::Bool => {
                 return switch(

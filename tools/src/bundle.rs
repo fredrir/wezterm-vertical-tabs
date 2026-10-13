@@ -460,11 +460,15 @@ fn package_from(
             .with_context(|| format!("missing build artifact: {name}"))?;
         let target = bindir.join(executable_name(name));
         copy_file(artifact, &target)?;
-        if let Some(expected) = metadata.configuration["artifact_sha256"][*name].as_str()
+        if let Some(expected) = metadata
+            .configuration
+            .compilation
+            .artifact_sha256
+            .get(*name)
             && !expected.is_empty()
         {
             ensure!(
-                hash_file(&target)? == expected,
+                hash_file(&target)? == *expected,
                 "build artifact changed while packaging: {name}"
             );
         }

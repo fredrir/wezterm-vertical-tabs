@@ -1,4 +1,5 @@
 mod build;
+mod build_identity;
 mod bundle;
 mod check;
 mod cli;

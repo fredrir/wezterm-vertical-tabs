@@ -841,7 +841,7 @@ index 28b9db9a5233be9a368c0df317e593eef8833c6a..7c940d23850edbee6b9236bea6bad52a
      size: TerminalSize,
      src_window_id: Option<MuxWindowId>,
      term_config: Arc<TermConfig>,
-+    vtabs_context: Option<serde_json::Value>,
++    vtabs_context: Option<crate::termwindow::ui_host::SpawnContext>,
  ) {
      let spawn = spawn.clone();
  
@@ -859,7 +859,7 @@ index 28b9db9a5233be9a368c0df317e593eef8833c6a..7c940d23850edbee6b9236bea6bad52a
      size: TerminalSize,
      src_window_id: Option<MuxWindowId>,
      term_config: Arc<TermConfig>,
-+    vtabs_context: Option<serde_json::Value>,
++    vtabs_context: Option<crate::termwindow::ui_host::SpawnContext>,
  ) -> anyhow::Result<()> {
      let mux = Mux::get();
      let activity = Activity::new();

@@ -76,15 +76,11 @@ pub enum Command {
 pub struct Update {
     pub commands: Vec<Command>,
     pub model_changed: bool,
-    pub layout_changed: bool,
-    pub projection_changed: bool,
 }
 impl Update {
     fn merge(&mut self, other: Self) {
         self.commands.extend(other.commands);
         self.model_changed |= other.model_changed;
-        self.layout_changed |= other.layout_changed;
-        self.projection_changed |= other.projection_changed;
     }
 }
 
@@ -319,10 +315,7 @@ impl WindowApp {
             self.ui.invalidate();
         }
         self.metrics = metrics;
-        Ok(Update {
-            layout_changed: changed,
-            ..Update::default()
-        })
+        Ok(Update::default())
     }
     pub fn set_focus(&mut self, focused: bool) {
         if self.focused != focused {
@@ -339,7 +332,6 @@ impl WindowApp {
             return Err(Error("Stale snapshot".into()));
         }
         validate_metrics(snapshot.metrics)?;
-        let old_projection = self.model.projection_revision();
         let old_active = self.model.selected_tab;
         let grid_changed = (self.metrics.cols, self.metrics.rows)
             != (snapshot.metrics.cols, snapshot.metrics.rows);
@@ -377,8 +369,6 @@ impl WindowApp {
             self.ui.cancel_effects();
             self.ui.invalidate();
         }
-        let projection_changed = old_projection != self.model.projection_revision()
-            || old_active != self.model.selected_tab;
         if old_active != self.model.selected_tab {
             self.selection_epoch = self.selection_epoch.wrapping_add(1);
         }
@@ -400,8 +390,6 @@ impl WindowApp {
         Ok(Update {
             commands,
             model_changed,
-            layout_changed,
-            projection_changed,
         })
     }
 
@@ -409,7 +397,6 @@ impl WindowApp {
         if self.teardown {
             return Ok(Update::default());
         }
-        let old_projection = self.model.projection_revision();
         let old_active = self.model.selected_tab;
         let old_space = self.model.selected_space.clone();
         let activates = matches!(
@@ -435,9 +422,6 @@ impl WindowApp {
         Ok(Update {
             commands,
             model_changed: transition.model_changed,
-            layout_changed: transition.layout_changed,
-            projection_changed: old_projection != self.model.projection_revision()
-                || old_active != self.model.selected_tab,
         })
     }
     pub fn input(&mut self, input: UiInput) -> Result<Update, Error> {
@@ -624,7 +608,6 @@ impl WindowApp {
             update.merge(self.dispatch(Intent::RenameTab { id, title })?);
         }
         if update.model_changed {
-            update.projection_changed = true;
             self.storage.observe_session(&self.model, self.now);
         }
         Ok(update)
@@ -638,8 +621,6 @@ impl WindowApp {
         Ok(Update {
             commands: vec![Command::Host(HostCommand::Activate(tab_id))],
             model_changed: true,
-            projection_changed: true,
-            layout_changed: false,
         })
     }
     pub fn reserve_spawn(&mut self) -> SpawnToken {
@@ -709,7 +690,6 @@ impl WindowApp {
         }
         let mut out = Update {
             model_changed: true,
-            projection_changed: true,
             ..Update::default()
         };
         if token.selection_epoch == self.selection_epoch {
@@ -740,7 +720,6 @@ impl WindowApp {
         self.ui.invalidate();
         Ok(Update {
             model_changed: true,
-            layout_changed: true,
             ..Update::default()
         })
     }
@@ -852,8 +831,6 @@ impl WindowApp {
         self.ui.invalidate();
         Ok(Update {
             model_changed: true,
-            layout_changed: true,
-            projection_changed: true,
             ..Update::default()
         })
     }
@@ -956,8 +933,6 @@ impl WindowApp {
         }
         Ok(Update {
             model_changed: changed,
-            layout_changed: changed,
-            projection_changed: changed,
             commands: Vec::new(),
         })
     }

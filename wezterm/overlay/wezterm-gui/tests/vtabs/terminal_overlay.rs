@@ -287,35 +287,6 @@ fn motion_eases_out_and_settles_at_its_duration() {
 }
 
 #[test]
-fn client_domains_spawn_untabbed_panes_only_with_local_layouts() {
-    let mut config = config::Config::default_config();
-    let unix = |name: &str, local_pane_layout: bool| config::UnixDomain {
-        name: name.into(),
-        local_pane_layout,
-        ..Default::default()
-    };
-    config.unix_domains = vec![unix("localmux", false), unix("laid-out", true)];
-    config.tls_clients = vec![config::TlsDomainClient {
-        name: "tls".into(),
-        local_pane_layout: true,
-        ..Default::default()
-    }];
-    config.ssh_domains = Some(vec![config::SshDomain {
-        name: "ssh".into(),
-        ..Default::default()
-    }]);
-    for (name, laid_out) in [
-        ("localmux", false),
-        ("laid-out", true),
-        ("tls", true),
-        ("ssh", false),
-        ("unknown", false),
-    ] {
-        assert_eq!(local_pane_layout(&config, name), laid_out, "{name}");
-    }
-}
-
-#[test]
 fn directories_decode_whichever_host_reported_them() {
     for (url, path) in [
         ("file://macie/Users/me/projects", "/Users/me/projects"),

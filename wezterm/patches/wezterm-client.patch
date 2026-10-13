@@ -149,7 +149,7 @@ index 02fac8cbc6a448d6cbcec7d45778796bdfa12db7..88bd734358b868f89092d1b5d273a2c9
  }
  
  impl ClientDomain {
-+    pub(crate) fn local_pane_layout(&self) -> bool {
++    pub fn local_pane_layout(&self) -> bool {
 +        self.config.local_pane_layout()
 +    }
 +

@@ -1,5 +1,5 @@
 //! A PTY surface owned by the existing GUI window, outside its tab projection.
-use super::ui_host::{Bounds, QuickTerminalConfig, TerminalBorder, TerminalProgram};
+use super::ui_host::{Bounds, Message, QuickTerminalConfig, TerminalBorder, TerminalProgram};
 use super::{TermWindow, TermWindowNotif};
 use crate::quad::{HeapQuadAllocator, TripleLayerQuadAllocator};
 use anyhow::Context;
@@ -9,11 +9,11 @@ use config::{
     DimensionContext, HorizontalWindowContentAlignment, VerticalWindowContentAlignment,
     WindowContentAlignment, WindowPadding,
 };
+use mux::Mux;
 use mux::domain::{Domain, DomainState};
 use mux::pane::{CachePolicy, CloseReason, Pane, PaneId};
 use mux::tab::{PositionedPane, TabId};
 use mux::window::WindowId as MuxWindowId;
-use mux::Mux;
 use portable_pty::CommandBuilder;
 use std::collections::HashSet;
 use std::time::{Duration, Instant};
@@ -21,57 +21,21 @@ use std::{cell::RefCell, rc::Rc, sync::Arc};
 use wezterm_client::domain::ClientDomain;
 use wezterm_client::pane::ClientPane;
 use wezterm_term::{KeyCode, KeyModifiers, TerminalSize};
-use window::{color::LinearRgba, WindowOps};
+use window::{WindowOps, color::LinearRgba};
 
 mod blur;
 mod frame;
+mod session;
+use session::{Program, Slot, State};
 
 const SHELL_SIZE: (f32, f32) = (0.75, 0.75);
 /// Fewest columns and rows a size step leaves.
 const MIN_CELLS: (f32, f32) = (20., 5.);
 
 #[derive(Default)]
-pub(super) struct TerminalOverlay(Rc<RefCell<State>>, RefCell<Option<blur::BackdropBlur>>);
-
-#[derive(Default)]
-struct State {
-    visible: bool,
-    pending: Option<u64>,
-    launches: u64,
-    config: Option<QuickTerminalConfig>,
-    /// Session size steps; a settings change clears its axis.
-    adjusted: (Option<f32>, Option<f32>),
-    motion: Option<Motion>,
-    pane: Option<Arc<dyn Pane>>,
-    /// The shell's mirrored tab, where `attach_mux` swaps in its replacement.
-    tab: Option<TabId>,
-    /// Shown instead of the shell; exists only while visible.
-    program: Option<Program>,
-    kept: Vec<Program>,
-    programs: u64,
-    /// Program workspaces cleared of what a quit GUI left behind.
-    swept: HashSet<String>,
-    /// The window config the quick panes last took.
-    applied: Option<config::ConfigHandle>,
-}
-
-struct Program {
-    id: u64,
-    spec: TerminalProgram,
-    /// The spec's size; steps change only the axes it sets.
-    size: (Option<f32>, Option<f32>),
-    pane: Option<Arc<dyn Pane>>,
-}
-
-impl Program {
-    fn new(id: u64, spec: TerminalProgram) -> Self {
-        Self {
-            id,
-            size: (spec.width, spec.height),
-            spec,
-            pane: None,
-        }
-    }
+pub(super) struct TerminalOverlay {
+    session: Rc<RefCell<State>>,
+    blur: RefCell<Option<blur::BackdropBlur>>,
 }
 
 /// Eases the drawn frame and content from where a size step found them.
@@ -112,11 +76,7 @@ struct Drawn {
 }
 
 fn axis(size: &mut (Option<f32>, Option<f32>), horizontal: bool) -> &mut Option<f32> {
-    if horizontal {
-        &mut size.0
-    } else {
-        &mut size.1
-    }
+    if horizontal { &mut size.0 } else { &mut size.1 }
 }
 
 /// `step` by `cells`, then by pixels until `grid` follows, since a percent padding grows with the frame.
@@ -158,197 +118,6 @@ struct Launch {
     target: Target,
     command: Option<CommandBuilder>,
     cwd: Option<String>,
-}
-
-#[derive(Clone, Copy)]
-enum Slot {
-    Shell(u64),
-    Program(u64),
-}
-
-impl State {
-    /// The shell's tab shows a different pane once `attach_mux` replaced it.
-    fn follow(&mut self) -> Option<Arc<dyn Pane>> {
-        let current = self.pane.as_ref()?;
-        let replacement = Mux::get().get_tab(self.tab?)?.get_active_pane()?;
-        (replacement.pane_id() != current.pane_id()).then(|| {
-            self.pane = Some(replacement.clone());
-            replacement
-        })
-    }
-
-    fn shown(&self) -> Option<Arc<dyn Pane>> {
-        if !self.visible {
-            return None;
-        }
-        match &self.program {
-            Some(program) => program.pane.clone(),
-            None => self.pane.clone(),
-        }
-    }
-
-    fn size(&self, configured: (f32, f32)) -> (f32, f32) {
-        let shell = (
-            self.adjusted.0.unwrap_or(configured.0),
-            self.adjusted.1.unwrap_or(configured.1),
-        );
-        self.program.as_ref().map_or(shell, |program| {
-            (
-                program.size.0.unwrap_or(shell.0),
-                program.size.1.unwrap_or(shell.1),
-            )
-        })
-    }
-
-    /// A program's own axis changes only that program; others change the window's size.
-    fn adjust(&mut self, horizontal: bool, size: f32) {
-        match self
-            .program
-            .as_mut()
-            .map(|program| axis(&mut program.size, horizontal))
-        {
-            Some(explicit) if explicit.is_some() => *explicit = Some(size),
-            _ => *axis(&mut self.adjusted, horizontal) = Some(size),
-        }
-    }
-
-    /// Whether the config changed; a changed size setting replaces that axis's steps.
-    fn configure(&mut self, config: QuickTerminalConfig) -> bool {
-        if self.config == Some(config) {
-            return false;
-        }
-        if let Some(previous) = self.config {
-            if previous.size.0 != config.size.0 {
-                self.adjusted.0 = None;
-            }
-            if previous.size.1 != config.size.1 {
-                self.adjusted.1 = None;
-            }
-        }
-        self.config = Some(config);
-        true
-    }
-
-    fn wants(&self, slot: Slot) -> bool {
-        match slot {
-            Slot::Shell(id) => self.pending == Some(id),
-            Slot::Program(id) => self
-                .program
-                .iter()
-                .chain(&self.kept)
-                .any(|program| program.id == id),
-        }
-    }
-
-    fn program_panes(&self) -> impl Iterator<Item = &Arc<dyn Pane>> {
-        self.program
-            .iter()
-            .chain(&self.kept)
-            .filter_map(|program| program.pane.as_ref())
-    }
-
-    fn put_away(&mut self, alive: impl Fn(&Arc<dyn Pane>) -> bool) -> Option<Arc<dyn Pane>> {
-        let program = self.program.take()?;
-        if program.spec.preserve && program.pane.as_ref().map_or(true, alive) {
-            self.kept.push(program);
-            return None;
-        }
-        program.pane
-    }
-
-    fn reusable(&self, spec: &TerminalProgram, alive: impl Fn(&Arc<dyn Pane>) -> bool) -> bool {
-        spec.preserve
-            && self.program.iter().chain(&self.kept).any(|program| {
-                program.spec.preserve
-                    && program.spec.spawn == spec.spawn
-                    && program.pane.as_ref().map_or(true, &alive)
-            })
-    }
-
-    /// Takes on `spec`'s settings, so another binding running the same command reopens it as its own.
-    fn take_kept(&mut self, spec: &TerminalProgram) -> Option<Program> {
-        let index = self
-            .kept
-            .iter()
-            .position(|kept| spec.preserve && kept.spec.spawn == spec.spawn)?;
-        let kept = self.kept.remove(index);
-        if kept.spec == *spec {
-            return Some(kept);
-        }
-        Some(Program {
-            pane: kept.pane,
-            ..Program::new(kept.id, spec.clone())
-        })
-    }
-
-    fn prune(&mut self, alive: impl Fn(&Arc<dyn Pane>) -> bool) -> Vec<Arc<dyn Pane>> {
-        let mut ended = Vec::new();
-        self.kept.retain(|program| match &program.pane {
-            Some(pane) if !alive(pane) => {
-                ended.push(pane.clone());
-                false
-            }
-            _ => true,
-        });
-        ended
-    }
-
-    fn colors(&self, slot: Slot) -> Option<config::Palette> {
-        let Slot::Program(id) = slot else {
-            return None;
-        };
-        self.program
-            .iter()
-            .chain(&self.kept)
-            .find(|program| program.id == id)?
-            .spec
-            .colors
-            .clone()
-    }
-
-    fn discard_shell(&mut self) -> Option<Arc<dyn Pane>> {
-        self.pending = None;
-        self.tab = None;
-        self.pane.take()
-    }
-
-    fn launch_shell(&mut self) -> Slot {
-        self.launches += 1;
-        self.pending = Some(self.launches);
-        Slot::Shell(self.launches)
-    }
-
-    fn settle(&mut self, slot: Slot, pane: Option<Arc<dyn Pane>>) {
-        match (slot, pane) {
-            (Slot::Shell(_), pane) => {
-                self.pending = None;
-                self.visible &= pane.is_some() || self.program.is_some();
-                self.tab = pane.as_ref().and_then(mirrored_tab);
-                self.pane = pane;
-            }
-            (Slot::Program(id), Some(pane)) => {
-                if let Some(program) = self
-                    .program
-                    .iter_mut()
-                    .chain(&mut self.kept)
-                    .find(|program| program.id == id)
-                {
-                    program.pane = Some(pane);
-                }
-            }
-            (Slot::Program(id), None) => {
-                self.kept.retain(|program| program.id != id);
-                if self
-                    .program
-                    .as_ref()
-                    .is_some_and(|program| program.id == id)
-                {
-                    self.program = None;
-                    self.visible = false;
-                }
-            }
-        }
-    }
 }
 
 fn mirrored_tab(pane: &Arc<dyn Pane>) -> Option<TabId> {
@@ -406,32 +175,6 @@ fn term_config(
     Arc::new(term)
 }
 
-impl Drop for State {
-    fn drop(&mut self) {
-        let programs: Vec<_> = self.program_panes().cloned().collect();
-        for pane in self.pane.take().into_iter().chain(programs) {
-            remove(&pane);
-        }
-    }
-}
-
-/// Client domains spawn panes outside tabs only with `local_pane_layout`.
-fn local_pane_layout(config: &config::Config, name: &str) -> bool {
-    config
-        .unix_domains
-        .iter()
-        .any(|unix| unix.name == name && unix.local_pane_layout)
-        || config
-            .tls_clients
-            .iter()
-            .any(|tls| tls.name == name && tls.local_pane_layout)
-        || config
-            .ssh_domains()
-            .iter()
-            .any(|ssh| ssh.name == name && ssh.local_pane_layout)
-}
-
-/// `to_file_path` refuses the host a shell's OSC 7 includes, so only the path is decoded.
 fn directory(url: &url::Url) -> Option<String> {
     let mut local = url::Url::parse("file:///").ok()?;
     local.set_path(url.path());
@@ -544,7 +287,7 @@ impl TermWindow {
             .iter()
             .chain(self.vtabs_suspended.values())
             .all(|ui| {
-                let state = ui.terminal.0.borrow();
+                let state = ui.terminal.session.borrow();
                 let idle =
                     state.pane.iter().chain(state.program_panes()).all(|pane| {
                         pane.can_close_without_prompting(mux::pane::CloseReason::Window)
@@ -556,7 +299,7 @@ impl TermWindow {
     pub(super) fn terminal_overlay_config(&self) -> Option<QuickTerminalConfig> {
         let ui = self.ui_host.as_ref()?;
         let config = ui.provider.quick_terminal_config();
-        let state = ui.terminal.0.borrow();
+        let state = ui.terminal.session.borrow();
         Some(match state.program.as_ref().filter(|_| state.visible) {
             Some(program) => config.with(&program.spec),
             None => config,
@@ -595,7 +338,7 @@ impl TermWindow {
 
     fn terminal_overlay_target(&self) -> ((f32, f32), Option<Motion>) {
         self.ui_host.as_ref().map_or((SHELL_SIZE, None), |ui| {
-            let state = ui.terminal.0.borrow();
+            let state = ui.terminal.session.borrow();
             (
                 state.size(ui.provider.quick_terminal_config().size),
                 state.motion,
@@ -639,19 +382,19 @@ impl TermWindow {
     pub(super) fn terminal_overlay_visible(&self) -> bool {
         self.ui_host
             .as_ref()
-            .is_some_and(|ui| ui.terminal.0.borrow().visible)
+            .is_some_and(|ui| ui.terminal.session.borrow().visible)
     }
 
     fn terminal_overlay_program(&self) -> bool {
         self.ui_host.as_ref().is_some_and(|ui| {
-            let state = ui.terminal.0.borrow();
+            let state = ui.terminal.session.borrow();
             state.visible && state.program.is_some()
         })
     }
 
     pub(super) fn terminal_overlay_owns(&self, pane_id: PaneId) -> bool {
         self.ui_host.as_ref().is_some_and(|ui| {
-            let state = ui.terminal.0.borrow();
+            let state = ui.terminal.session.borrow();
             let owned = state
                 .pane
                 .iter()
@@ -662,7 +405,7 @@ impl TermWindow {
     }
 
     pub(super) fn terminal_overlay_pane(&self) -> Option<Arc<dyn Pane>> {
-        self.ui_host.as_ref()?.terminal.0.borrow().shown()
+        self.ui_host.as_ref()?.terminal.session.borrow().shown()
     }
 
     pub(super) fn terminal_overlay_content(&self, pane_id: PaneId) -> Option<Bounds> {
@@ -712,7 +455,7 @@ impl TermWindow {
         }
         if let Some(ui) = &self.ui_host {
             let panes = {
-                let mut state = ui.terminal.0.borrow_mut();
+                let mut state = ui.terminal.session.borrow_mut();
                 for pane in state.pane.iter().chain(state.program_panes()) {
                     pane.focus_changed(false);
                 }
@@ -729,7 +472,7 @@ impl TermWindow {
             for pane in panes.iter().flatten() {
                 remove(pane);
             }
-            ui.terminal.1.borrow_mut().take();
+            ui.terminal.blur.borrow_mut().take();
         }
         self.current_mouse_capture = None;
         self.current_mouse_buttons.clear();
@@ -794,7 +537,7 @@ impl TermWindow {
 
     pub(super) fn toggle_terminal_program(&mut self, program: TerminalProgram) {
         let shown = self.ui_host.as_ref().is_some_and(|ui| {
-            let state = ui.terminal.0.borrow();
+            let state = ui.terminal.session.borrow();
             state.visible
                 && state
                     .program
@@ -808,7 +551,7 @@ impl TermWindow {
         let reusable = self
             .ui_host
             .as_ref()
-            .is_some_and(|ui| ui.terminal.0.borrow().reusable(&program, alive));
+            .is_some_and(|ui| ui.terminal.session.borrow().reusable(&program, alive));
         let launch = if reusable {
             None
         } else {
@@ -817,7 +560,7 @@ impl TermWindow {
                 Err(error) => {
                     let error = format!("Quick terminal: {error:#}");
                     log::warn!("{error}");
-                    self.vtabs_message_for(self.mux_window_id, serde_json::json!({"error": error}));
+                    self.vtabs_message_for(self.mux_window_id, Message::Error(error));
                     return;
                 }
             }
@@ -839,8 +582,9 @@ impl TermWindow {
             .resolve_spawn_tab_domain(current.as_ref().map(|pane| pane.pane_id()), &spawn.domain)?;
         let current = current.filter(|pane| pane.domain_id() == domain.domain_id());
         let explicit = spawn.cwd.map(|cwd| cwd.to_string_lossy().into_owned());
-        let (target, cwd) = if domain.downcast_ref::<ClientDomain>().is_some()
-            && !local_pane_layout(&config::configuration(), domain.domain_name())
+        let (target, cwd) = if domain
+            .downcast_ref::<ClientDomain>()
+            .is_some_and(|client| !client.local_pane_layout())
         {
             let pane = current
                 .or_else(|| {
@@ -888,7 +632,7 @@ impl TermWindow {
             return;
         };
         let preserve_shell = ui.provider.quick_terminal_config().preserve_shell;
-        let state_ref = ui.terminal.0.clone();
+        let state_ref = ui.terminal.session.clone();
         if !preserve_shell {
             let discarded = state_ref.borrow_mut().discard_shell();
             if let Some(pane) = discarded {
@@ -1074,7 +818,7 @@ impl TermWindow {
                     window.notify(TermWindowNotif::Apply(Box::new(move |tw| {
                         tw.vtabs_message_for(
                             window_id,
-                            serde_json::json!({"error": format!("Quick terminal: {error:#}")}),
+                            Message::Error(format!("Quick terminal: {error:#}")),
                         );
                     })));
                 }
@@ -1088,7 +832,7 @@ impl TermWindow {
         if let Some(ui) = &self.ui_host {
             let config = ui.provider.quick_terminal_config();
             let discarded = {
-                let mut state = ui.terminal.0.borrow_mut();
+                let mut state = ui.terminal.session.borrow_mut();
                 if state.configure(config) {
                     self.quad_generation += 1;
                 }
@@ -1134,7 +878,7 @@ impl TermWindow {
         let replacement = self
             .ui_host
             .as_ref()
-            .and_then(|ui| ui.terminal.0.borrow_mut().follow());
+            .and_then(|ui| ui.terminal.session.borrow_mut().follow());
         if let Some(pane) = replacement {
             pane.set_config(Arc::new(config::TermConfig::with_config(
                 self.config.clone(),
@@ -1226,7 +970,7 @@ impl TermWindow {
             return;
         }
         let duration = ui.provider.quick_terminal_config().transition;
-        let mut state = ui.terminal.0.borrow_mut();
+        let mut state = ui.terminal.session.borrow_mut();
         state.adjust(horizontal, target / extent);
         state.motion = (!duration.is_zero()).then(|| Motion {
             size: drawn.size,
@@ -1247,7 +991,7 @@ impl TermWindow {
             .ui_host
             .as_ref()
             .map_or((None, None, Vec::new()), |ui| {
-                let state = ui.terminal.0.borrow();
+                let state = ui.terminal.session.borrow();
                 (
                     state.pane.as_ref().map(|pane| pane.pane_id()),
                     state

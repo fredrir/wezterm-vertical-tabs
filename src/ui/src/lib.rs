@@ -8,6 +8,7 @@ mod intent;
 mod keybinds;
 mod overlays;
 mod runtime;
+mod settings;
 mod theme;
 mod views;
 

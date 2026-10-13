@@ -5,8 +5,11 @@ mod centering;
 mod commands;
 mod directory;
 mod facts;
+mod hooks;
+mod input;
 mod location;
 mod lua;
+mod message;
 mod metadata;
 mod repos;
 mod settings_file;
@@ -22,29 +25,20 @@ use crate::termwindow::ui_host::{
 use config::keyassignment::{SpawnCommand, SpawnTabDomain};
 use mux::{BACKING_WORKSPACE_PREFIX, DETACHED_WORKSPACE, QUICK_WORKSPACE_PREFIX};
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::HashMap,
     time::{Duration, Instant},
 };
 use vtabs_app::{self as app, WindowApp, core, ui};
-use window::{KeyCode, MouseEventKind, MousePress, Window, WindowOps};
+use window::{Window, WindowOps};
 
 pub use lua::register;
+pub use message::{Message, SpawnContext};
 
 pub fn create(window_id: usize) -> Box<dyn Provider> {
     Box::new(Adapter::new(window_id))
 }
 
-const PASTE_TIMEOUT: Duration = Duration::from_secs(1);
 const PLACEMENT_TIMEOUT: Duration = Duration::from_secs(3);
-const MAX_PASTE_INPUTS: usize = 128;
-const MAX_PASTE_INPUT_BYTES: usize = 16 * 1024;
-
-struct PendingPaste {
-    token: u64,
-    deadline: Instant,
-    inputs: VecDeque<ui::UiInput>,
-    bytes: usize,
-}
 
 struct Adapter {
     app: WindowApp,
@@ -65,14 +59,9 @@ struct Adapter {
     pointer_captured: bool,
     next_spawn_space: Option<String>,
     next_spawn_folder: Option<String>,
-    hook_metadata: HashMap<u64, core::Tab>,
     outstanding: Option<u64>,
-    hook_pending: bool,
-    hooks_enabled: bool,
-    window_hook_dirty: bool,
-    input_epoch: u64,
-    pending_paste: Option<PendingPaste>,
-    hook_queued: HashMap<u64, core::Tab>,
+    hooks: hooks::Hooks,
+    input: input::InputState,
     repos: repos::Repos,
     local_host: String,
     mux_window: Option<usize>,
@@ -84,27 +73,6 @@ struct Adapter {
 }
 
 impl Adapter {
-    fn record_shortcut(&mut self, key: &KeyCode, mods: window::Modifiers) {
-        let key = match key {
-            KeyCode::Physical(physical) => physical.to_key_code(),
-            key => key.clone(),
-        };
-        if key.is_modifier() || matches!(key, KeyCode::Composed(_) | KeyCode::VoidSymbol) {
-            return;
-        }
-        let shortcut = if key == KeyCode::Char('\u{1b}') {
-            String::new()
-        } else if self.app.ui().recording_keybind() {
-            let Some(code) = shortcut_key(&key, modifiers(mods)) else {
-                return;
-            };
-            ui::shortcut_chord(&code, modifiers(mods))
-        } else {
-            commands::shortcut_label(&key, mods)
-        };
-        self.ui_input(ui::UiInput::RecordShortcut(shortcut));
-    }
-
     fn new(window_id: usize) -> Self {
         let config = lua::configuration();
         let mut app = WindowApp::new(&config.profile);
@@ -140,14 +108,9 @@ impl Adapter {
             pointer_captured: false,
             next_spawn_space: None,
             next_spawn_folder: None,
-            hook_metadata: HashMap::new(),
             outstanding: None,
-            hook_pending: false,
-            hooks_enabled: false,
-            window_hook_dirty: true,
-            input_epoch: 0,
-            pending_paste: None,
-            hook_queued: HashMap::new(),
+            hooks: hooks::Hooks::default(),
+            input: input::InputState::default(),
             repos: repos::Repos::default(),
             local_host: sysinfo::System::host_name().unwrap_or_default(),
             mux_window: None,
@@ -203,8 +166,7 @@ impl Adapter {
         promise::spawn::spawn(async move {
             let mut busy = None;
             for entry in &remote {
-                let Some(client) = entry.downcast_ref::<wezterm_client::pane::ClientPane>()
-                else {
+                let Some(client) = entry.downcast_ref::<wezterm_client::pane::ClientPane>() else {
                     continue;
                 };
                 // A stock server cannot answer; keep upstream's cautious prompt for it.
@@ -218,12 +180,18 @@ impl Adapter {
                 }
             }
             if let (Some(window), Some(id)) = (window, id) {
-                window.notify(crate::termwindow::TermWindowNotif::Apply(Box::new(move |tw| {
-                    tw.vtabs_message_for(
-                        id,
-                        serde_json::json!({ "close_check": { "tab": tab, "pane": pane, "process": busy } }),
-                    );
-                })));
+                window.notify(crate::termwindow::TermWindowNotif::Apply(Box::new(
+                    move |tw| {
+                        tw.vtabs_message_for(
+                            id,
+                            Message::CloseCheck {
+                                tab,
+                                pane,
+                                process: busy,
+                            },
+                        );
+                    },
+                )));
             }
         })
         .detach();
@@ -281,15 +249,17 @@ impl Adapter {
             if let (Some(window), Some(id)) = (window, id) {
                 window.notify(crate::termwindow::TermWindowNotif::Apply(Box::new(
                     move |tw| {
-                        tw.vtabs_message_for(
-                            id,
-                            serde_json::json!({ "error": format!("{error:#}") }),
-                        );
+                        tw.vtabs_message_for(id, Message::Error(format!("{error:#}")));
                     },
                 )));
             }
         })
         .detach();
+    }
+    fn finish_update(&mut self, before: u64) {
+        self.hooks.window_dirty |= before != self.app.model().revision;
+        self.schedule_hooks();
+        self.publish();
     }
     fn dispatch(&mut self, intent: core::Intent) {
         self.transact(|app| app.dispatch(intent));
@@ -299,9 +269,7 @@ impl Adapter {
         let before = self.app.model().revision;
         let result = run(&mut self.app);
         self.apply(result);
-        self.window_hook_dirty |= before != self.app.model().revision;
-        self.schedule_hooks();
-        self.publish();
+        self.finish_update(before);
     }
     fn command(&mut self, command: app::Command) {
         use core::HostCommand as C;
@@ -332,13 +300,8 @@ impl Adapter {
                 }
             }
             app::Command::RequestClipboard => {
-                self.pending_paste = Some(PendingPaste {
-                    token: self.input_epoch,
-                    deadline: Instant::now() + PASTE_TIMEOUT,
-                    inputs: VecDeque::new(),
-                    bytes: 0,
-                });
-                self.commands.push(Command::Paste(self.input_epoch));
+                let token = self.input.request_paste(Instant::now());
+                self.commands.push(Command::Paste(token));
             }
             app::Command::Host(command) => match command {
                 C::Activate(id) => self.commands.push(Command::Activate(id as usize)),
@@ -399,191 +362,6 @@ impl Adapter {
                 C::CustomAction(name) => self.commands.push(Command::Semantic(name)),
             },
         }
-    }
-    fn ui_input(&mut self, input: ui::UiInput) {
-        if self.pending_paste.is_some() {
-            if !self.app.ui().text_input_active() {
-                self.cancel_paste();
-            } else if self.defer_until_paste(&input) {
-                if self.pending_paste.as_ref().unwrap().deadline <= Instant::now() {
-                    self.finish_paste(None, Some(input));
-                    return;
-                }
-                let bytes = match &input {
-                    ui::UiInput::Text(text)
-                    | ui::UiInput::Paste(text)
-                    | ui::UiInput::ImeCommit(text)
-                    | ui::UiInput::ImePreedit { text, .. } => text.len(),
-                    _ => 0,
-                };
-                let pending = self.pending_paste.as_mut().unwrap();
-                if pending.inputs.len() < MAX_PASTE_INPUTS
-                    && bytes <= MAX_PASTE_INPUT_BYTES.saturating_sub(pending.bytes)
-                {
-                    pending.bytes += bytes;
-                    pending.inputs.push_back(input);
-                    return;
-                }
-                self.finish_paste(None, Some(input));
-                return;
-            } else if !matches!(&input, ui::UiInput::PointerMove { .. })
-                && !matches!(&input, ui::UiInput::ImePreedit { text, .. } if text.is_empty())
-            {
-                self.cancel_paste();
-            } else {
-                self.expire_paste(Instant::now());
-            }
-        }
-        self.deliver_ui_input(input);
-    }
-
-    fn defer_until_paste(&self, input: &ui::UiInput) -> bool {
-        match input {
-            ui::UiInput::Key { key, modifiers } => {
-                *key != ui::Key::Escape
-                    && !ui::matches_shortcut(&self.app.model().settings, key, *modifiers)
-            }
-            ui::UiInput::PointerDown { x, y, .. } => {
-                self.app
-                    .ui()
-                    .hit_test(*x, *y)
-                    .is_some_and(|hit| match &hit.id {
-                        ui::ElementId::Editor
-                        | ui::ElementId::SettingsSearch
-                        | ui::ElementId::Submit => true,
-                        ui::ElementId::Menu(id) => {
-                            matches!(id.as_str(), "cut" | "copy" | "paste" | "select-all")
-                        }
-                        _ => false,
-                    })
-            }
-            ui::UiInput::PointerMove { .. } => self.pointer_captured,
-            ui::UiInput::ImePreedit { text, .. } => {
-                !text.is_empty()
-                    || self.pending_paste.as_ref().is_some_and(|pending| {
-                        pending.inputs.iter().any(|input| {
-                            matches!(
-                                input,
-                                ui::UiInput::ImePreedit { .. } | ui::UiInput::ImeCommit(_)
-                            )
-                        })
-                    })
-            }
-            ui::UiInput::PointerUp { .. }
-            | ui::UiInput::Scroll { .. }
-            | ui::UiInput::Text(_)
-            | ui::UiInput::Paste(_)
-            | ui::UiInput::ImeCommit(_) => true,
-            ui::UiInput::Focus(_) | ui::UiInput::Visibility(_) | ui::UiInput::RecordShortcut(_) => {
-                false
-            }
-        }
-    }
-
-    fn cancel_paste(&mut self) {
-        self.pending_paste = None;
-        self.input_epoch = self.input_epoch.wrapping_add(1);
-    }
-
-    fn show_terminal(&mut self, command: Command) {
-        self.cancel_paste();
-        self.app.ui_mut().interrupt();
-        self.commands.push(command);
-    }
-
-    fn expire_paste(&mut self, now: Instant) {
-        if self
-            .pending_paste
-            .as_ref()
-            .is_some_and(|pending| now >= pending.deadline)
-        {
-            self.finish_paste(None, None);
-        }
-    }
-
-    fn finish_paste(&mut self, text: Option<String>, trailing: Option<ui::UiInput>) {
-        let Some(pending) = self.pending_paste.take() else {
-            return;
-        };
-        if pending.token != self.input_epoch || !self.app.ui().text_input_active() {
-            return;
-        }
-        let failed = text.is_none();
-        let revision = self.app.model().revision;
-        self.input_epoch = self.input_epoch.wrapping_add(1);
-        if let Some(text) = text {
-            self.deliver_ui_input(ui::UiInput::Paste(text));
-        } else {
-            log::warn!("tabs: clipboard read failed or timed out");
-        }
-        let mut pointer_gesture = false;
-        for input in pending.inputs.into_iter().chain(trailing) {
-            // A failed read must not save the old value or launch further clipboard
-            // work from a deadline repaint. Keep typed text and caret edits for retry.
-            let safe_after_failure = match &input {
-                ui::UiInput::Text(_)
-                | ui::UiInput::ImeCommit(_)
-                | ui::UiInput::ImePreedit { .. } => true,
-                ui::UiInput::Key { key, modifiers } => {
-                    matches!(
-                        key,
-                        ui::Key::Character(_)
-                            | ui::Key::Backspace
-                            | ui::Key::Delete
-                            | ui::Key::Left
-                            | ui::Key::Right
-                            | ui::Key::Home
-                            | ui::Key::End
-                    ) && !(modifiers.command()
-                        && matches!(key, ui::Key::Character('c' | 'C' | 'x' | 'X' | 'v' | 'V')))
-                }
-                _ => false,
-            };
-            if failed && !safe_after_failure {
-                continue;
-            }
-            match &input {
-                ui::UiInput::PointerDown { .. } => pointer_gesture = true,
-                ui::UiInput::PointerUp { .. } => pointer_gesture = false,
-                _ => {}
-            }
-            self.ui_input(input);
-            if !pointer_gesture
-                && (self.app.model().revision != revision || !self.app.ui().text_input_active())
-            {
-                break;
-            }
-        }
-        if failed && self.app.model().revision == revision && self.app.ui().text_input_active() {
-            self.app
-                .ui_mut()
-                .clipboard_failed("Clipboard unavailable. Try pasting again.");
-        }
-    }
-
-    fn deliver_ui_input(&mut self, input: ui::UiInput) {
-        // Passive pointer motion and composition cleanup retain an outstanding paste.
-        let changes_input = match &input {
-            ui::UiInput::PointerMove { .. } => self.pointer_captured,
-            ui::UiInput::ImePreedit { text, .. } => !text.is_empty(),
-            _ => true,
-        };
-        if changes_input {
-            self.input_epoch = self.input_epoch.wrapping_add(1);
-        }
-        let before = self.app.model().revision;
-        if matches!(
-            input,
-            ui::UiInput::Key { .. } | ui::UiInput::PointerUp { .. }
-        ) {
-            self.sync_foreign();
-        }
-        self.app.ui_mut().set_clock(self.epoch.elapsed());
-        let result = self.app.input(input);
-        self.apply(result);
-        self.window_hook_dirty |= before != self.app.model().revision;
-        self.schedule_hooks();
-        self.publish();
     }
     /// Other windows list this one's tabs; republish only when they could have changed.
     fn publish(&mut self) {
@@ -705,7 +483,7 @@ impl Adapter {
         gui.window
             .notify(crate::termwindow::TermWindowNotif::Apply(Box::new(
                 move |tw| {
-                    tw.vtabs_message_for(window, serde_json::json!({ "show_tab": tab }));
+                    tw.vtabs_message_for(window, Message::ShowTab(tab));
                 },
             )));
     }
@@ -741,7 +519,7 @@ impl Adapter {
                 let tab = tab.tab_id();
                 window.notify(crate::termwindow::TermWindowNotif::Apply(Box::new(
                     move |tw| {
-                        tw.vtabs_message_for(id, serde_json::json!({ "show_tab": tab }));
+                        tw.vtabs_message_for(id, Message::ShowTab(tab as u64));
                     },
                 )));
             }
@@ -843,34 +621,8 @@ impl Adapter {
         }
     }
     fn schedule_hooks(&mut self) {
-        if !self.hooks_enabled {
-            self.hook_queued.clear();
-            self.window_hook_dirty = false;
-            return;
-        }
-        if self.hook_pending || (self.hook_queued.is_empty() && !self.window_hook_dirty) {
-            return;
-        }
-        if let Some(window) = self.window.clone() {
-            let model = self.app.model();
-            self.hook_queued.retain(|id, _| model.tabs.contains_key(id));
-            let mut ids = self.hook_queued.keys().copied().collect::<Vec<_>>();
-            ids.sort_unstable();
-            let mut batch = Vec::with_capacity(ids.len().min(lua::MAX_HOOK_TABS));
-            for id in ids.into_iter().take(lua::MAX_HOOK_TABS) {
-                if let Some(tab) = self.hook_queued.remove(&id) {
-                    batch.push((self.app.hook_token(Some(tab.id)), tab));
-                }
-            }
-            self.hook_pending = true;
-            self.window_hook_dirty = false;
-            lua::hooks(
-                window,
-                batch,
-                lua::WindowHookContext::from_app(&self.app),
-                self.window_id,
-            );
-        }
+        self.hooks
+            .schedule(self.window.as_ref(), &self.app, self.window_id);
     }
     fn storage(&mut self) {
         if let Some(window) = self.window.clone() {
@@ -933,9 +685,7 @@ impl Adapter {
         let before = self.app.model().revision;
         if self.config_generation != snapshot.config_epoch {
             self.config_generation = snapshot.config_epoch;
-            self.hooks_enabled = lua::hooks_enabled();
-            self.hook_metadata.clear();
-            self.window_hook_dirty = true;
+            self.hooks.configure(lua::hooks_enabled());
             self.cancel_paste();
             let config = lua::configuration();
             self.managed_path = config.managed_path.clone();
@@ -1013,22 +763,12 @@ impl Adapter {
                 }
             })
             .collect::<Vec<_>>();
-        // metadata still drives routing without Lua hooks. Retain extra copies
-        // only when callbacks need change detection or a stale completion retry.
-        let changed = if self.hooks_enabled {
-            tabs.iter()
-                .filter(|tab| self.hook_metadata.get(&tab.id) != Some(*tab))
-                .cloned()
-                .collect::<Vec<_>>()
-        } else {
-            Vec::new()
-        };
+        self.hooks.observe(&tabs);
         let host_tabs = self
             .host_tabs
             .iter()
             .map(|id| *id as u64)
             .collect::<std::collections::HashSet<_>>();
-        self.hook_metadata.retain(|id, _| host_tabs.contains(id));
         let detached = {
             let mux = mux::Mux::get();
             self.app
@@ -1070,9 +810,6 @@ impl Adapter {
                 })
                 .collect()
         };
-        for tab in &changed {
-            self.hook_metadata.insert(tab.id, tab.clone());
-        }
         let result = self.app.update(app::HostSnapshot {
             revision: snapshot.revision,
             tabs,
@@ -1082,10 +819,7 @@ impl Adapter {
             configuration_epoch: snapshot.config_epoch as u64,
         });
         self.apply(result);
-        self.window_hook_dirty |= before != self.app.model().revision;
-        for tab in changed {
-            self.hook_queued.insert(tab.id, tab);
-        }
+        self.hooks.window_dirty |= before != self.app.model().revision;
         if let Some((id, index)) = arrived {
             self.dispatch(core::Intent::MoveTab { id, index });
         }
@@ -1130,7 +864,7 @@ impl Adapter {
             model.settings.tab_title,
             core::TabTitle::Process | core::TabTitle::ProcessAndDirectory
         );
-        (self.hooks_enabled || process_rules || process_templates || process_titles)
+        (self.hooks.enabled || process_rules || process_templates || process_titles)
             .then_some(std::time::Duration::from_secs(2))
     }
     /// Applies the sidebar's order to every tab of the mux window, keeping its active tab.
@@ -1180,10 +914,14 @@ impl Adapter {
         let mux = mux::Mux::get();
         let Some(tab) = mux.get_tab(id) else { return };
         let context = match self.app.export_transfer(id as u64) {
-            Ok(transfer) => serde_json::json!({"new_window":true,"transfer":transfer}),
+            Ok(transfer) => SpawnContext {
+                new_window: true,
+                transfer: Some(transfer),
+                ..SpawnContext::default()
+            },
             Err(error) => {
                 log::warn!("tabs move: {error}");
-                serde_json::Value::Null
+                SpawnContext::default()
             }
         };
         if let Some(pane) = tab.get_active_pane() {
@@ -1192,7 +930,7 @@ impl Adapter {
                 .is_some()
             {
                 if tab.count_panes() != Some(1) {
-                    self.message(serde_json::json!({"error":"WezTerm mux supports moving single-pane tabs; this split tab stays in its window"}));
+                    self.message(Message::Error("WezTerm mux supports moving single-pane tabs; this split tab stays in its window".into()));
                     return;
                 }
                 let pane_id = pane.pane_id();
@@ -1223,7 +961,7 @@ impl Adapter {
         }
         if let Err(error) = mux.add_tab_to_window(&tab, destination) {
             let _ = mux.add_tab_to_window(&tab, self.window_id);
-            self.message(serde_json::json!({"error":format!("move tab: {error}")}));
+            self.message(Message::Error(format!("move tab: {error}")));
             return;
         }
         spawn_completed(destination, id, context);
@@ -1396,433 +1134,13 @@ impl Provider for Adapter {
         );
     }
     fn terminal_input(&mut self, input: Input<'_>, escape: HideOnEscape) -> TerminalKey {
-        let (code, mods, down) = match input {
-            Input::RawKey(key) => {
-                let mods = modifiers(key.modifiers);
-                (shortcut_key(&key.key, mods), mods, key.key_is_down)
-            }
-            Input::Key(key) => {
-                let mods = modifiers(key.raw.as_ref().map_or(key.modifiers, |raw| raw.modifiers));
-                let code = key.raw.as_ref().map_or_else(
-                    || logical_shortcut_key(&key.key, mods),
-                    |raw| shortcut_key(&raw.key, mods),
-                );
-                (code, mods, key.key_is_down)
-            }
-            _ => return TerminalKey::Pass,
-        };
-        let Some(code) = code else {
-            return TerminalKey::Pass;
-        };
-        let settings = &self.app.model().settings;
-        let escape =
-            (code == ui::Key::Escape && mods == ui::Modifiers::default()).then_some(escape);
-        let command = match escape {
-            Some(HideOnEscape::Always) => Command::HideTerminalOverlay,
-            Some(HideOnEscape::Auto) if down => return TerminalKey::Escape,
-            Some(HideOnEscape::Auto) => return TerminalKey::Pass,
-            _ => match core::keybinds::action(settings, &ui::shortcut_chord(&code, mods)) {
-                Some("quick_terminal") => Command::ToggleTerminalOverlay,
-                Some("close") => Command::HideTerminalOverlay,
-                _ => return TerminalKey::Pass,
-            },
-        };
-        if down {
-            self.commands.push(command);
-        }
-        TerminalKey::Handled
+        self.terminal_key(input, escape)
     }
     fn input(&mut self, input: Input<'_>) -> bool {
-        match input {
-            Input::RawKey(key) => {
-                if self.app.ui().recording_shortcut() {
-                    if key.key_is_down {
-                        self.record_shortcut(&key.key, key.modifiers);
-                    }
-                    return true;
-                }
-                let mods = modifiers(key.modifiers);
-                let code = self
-                    .app
-                    .ui()
-                    .text_input_active()
-                    .then(|| editor_clipboard_key(&key.key, mods))
-                    .flatten()
-                    .or_else(|| {
-                        shortcut_key(&key.key, mods).filter(|code| {
-                            ui::matches_shortcut(&self.app.model().settings, code, mods)
-                        })
-                    });
-                let Some(code) = code else {
-                    return false;
-                };
-                if key.key_is_down {
-                    self.ui_input(ui::UiInput::Key {
-                        key: code,
-                        modifiers: mods,
-                    });
-                }
-                true
-            }
-            Input::Key(key) => {
-                if self.app.ui().recording_shortcut() {
-                    if key.key_is_down {
-                        if let Some(raw) = &key.raw {
-                            self.record_shortcut(&raw.key, raw.modifiers);
-                        } else {
-                            let code = logical_shortcut_code(&key.key, modifiers(key.modifiers));
-                            self.record_shortcut(&code, key.modifiers);
-                        }
-                    }
-                    return true;
-                }
-                let mods = modifiers(key.raw.as_ref().map_or(key.modifiers, |raw| raw.modifiers));
-                if let Some(code) = self
-                    .app
-                    .ui()
-                    .text_input_active()
-                    .then(|| editor_clipboard_key(&key.key, mods))
-                    .flatten()
-                {
-                    if key.key_is_down {
-                        self.ui_input(ui::UiInput::Key {
-                            key: code,
-                            modifiers: mods,
-                        });
-                    }
-                    return true;
-                }
-                let shortcut_code = key.raw.as_ref().map_or_else(
-                    || logical_shortcut_key(&key.key, mods),
-                    |raw| shortcut_key(&raw.key, mods),
-                );
-                if let Some(code) = shortcut_code
-                    .as_ref()
-                    .filter(|code| ui::matches_shortcut(&self.app.model().settings, code, mods))
-                {
-                    if key.key_is_down {
-                        self.ui_input(ui::UiInput::Key {
-                            key: code.clone(),
-                            modifiers: mods,
-                        });
-                    }
-                    return true;
-                }
-                if !key.key_is_down {
-                    return self.keyboard_focus();
-                }
-                // Unclaimed Cmd/Ctrl chords are key bindings, never text, even in a modal.
-                let chord = key
-                    .modifiers
-                    .intersects(window::Modifiers::SUPER | window::Modifiers::CTRL);
-                if let KeyCode::Composed(text) = &key.key {
-                    if !self.keyboard_focus() || chord {
-                        return false;
-                    }
-                    self.ui_input(ui::UiInput::ImeCommit(text.clone()));
-                    return true;
-                }
-                let code = if chord {
-                    let Some(code) = shortcut_code else {
-                        return self.keyboard_focus();
-                    };
-                    code
-                } else {
-                    match &key.key {
-                        KeyCode::Char('\r' | '\n') => ui::Key::Enter,
-                        KeyCode::Char('\u{1b}') => ui::Key::Escape,
-                        KeyCode::Char('\u{8}') => ui::Key::Backspace,
-                        KeyCode::Char('\u{7f}') => ui::Key::Delete,
-                        KeyCode::Char('\t') => ui::Key::Tab,
-                        KeyCode::Char(c) => ui::Key::Character(*c),
-                        KeyCode::LeftArrow => ui::Key::Left,
-                        KeyCode::RightArrow => ui::Key::Right,
-                        KeyCode::UpArrow => ui::Key::Up,
-                        KeyCode::DownArrow => ui::Key::Down,
-                        KeyCode::Home => ui::Key::Home,
-                        KeyCode::End => ui::Key::End,
-                        KeyCode::PageUp => ui::Key::PageUp,
-                        KeyCode::PageDown => ui::Key::PageDown,
-                        KeyCode::Function(2) => ui::Key::F2,
-                        KeyCode::Function(10) => ui::Key::F10,
-                        _ => return self.keyboard_focus(),
-                    }
-                };
-                if !self.keyboard_focus() {
-                    return false;
-                }
-                if !key.key_is_down {
-                    return true;
-                }
-                // Navigation bindings are still when the rail itself has focus.
-                if chord && (!self.app.is_modal() || matches!(code, ui::Key::Character(_))) {
-                    return false;
-                }
-                self.ui_input(ui::UiInput::Key {
-                    key: code,
-                    modifiers: mods,
-                });
-                true
-            }
-            Input::Mouse(event, geometry) => {
-                let bounds = geometry.ui_bounds(self.content_page() || self.overlay_surface());
-                let inside = bounds.contains(event.coords.x as f32, event.coords.y as f32);
-                let modal = self.app.is_modal();
-                let in_sidebar = geometry
-                    .sidebar
-                    .contains(event.coords.x as f32, event.coords.y as f32);
-                if !in_sidebar && !modal && !self.pointer_captured {
-                    if matches!(event.kind, MouseEventKind::Press(_)) {
-                        self.app.ui_mut().release_focus();
-                        self.cancel_paste();
-                    } else if matches!(event.kind, MouseEventKind::Move) {
-                        self.ui_input(ui::UiInput::PointerMove {
-                            x: u16::MAX,
-                            y: u16::MAX,
-                        });
-                    }
-                    return false;
-                }
-                let x = (event.coords.x as f32 - bounds.x - self.surface.offset.0)
-                    / geometry.cell_width.max(1.);
-                let y = (event.coords.y as f32 - bounds.y - self.surface.offset.1)
-                    / geometry.cell_height.max(1.);
-                self.app
-                    .ui_mut()
-                    .set_pointer_fraction(x.rem_euclid(1.), y.rem_euclid(1.));
-                let (x, y) = (x.floor(), y.floor());
-                let (x, y) = if inside
-                    && x >= 0.
-                    && y >= 0.
-                    && x < self.surface.columns as f32
-                    && y < self.surface.rows.len() as f32
-                {
-                    (x as u16, y as u16)
-                } else {
-                    (u16::MAX, u16::MAX)
-                };
-                if geometry.header_height > 0.
-                    && (event.coords.y as f32) < bounds.y + geometry.header_height
-                    && !self.pointer_captured
-                    && !self.app.ui().has_overlay()
-                    && self.app.ui().hit_test(x, y).is_none()
-                {
-                    return false;
-                }
-                let mods = modifiers(event.modifiers);
-                let input = match event.kind {
-                    MouseEventKind::Press(button) => {
-                        self.pointer_captured = true;
-                        ui::UiInput::PointerDown {
-                            x,
-                            y,
-                            button: mouse_button(button),
-                            modifiers: mods,
-                        }
-                    }
-                    MouseEventKind::Release(button) => {
-                        self.pointer_captured = false;
-                        ui::UiInput::PointerUp {
-                            x,
-                            y,
-                            button: mouse_button(button),
-                        }
-                    }
-                    MouseEventKind::Move => ui::UiInput::PointerMove { x, y },
-                    MouseEventKind::VertWheel(rows) => ui::UiInput::Scroll {
-                        x,
-                        y,
-                        rows: -(rows as i32),
-                    },
-                    _ => return inside || modal,
-                };
-                self.ui_input(input);
-                true
-            }
-            Input::Composition(status) => {
-                if !self.keyboard_focus() {
-                    return false;
-                }
-                self.ui_input(ui::UiInput::ImePreedit {
-                    text: match status {
-                        window::DeadKeyStatus::Composing(text) => text.clone(),
-                        _ => String::new(),
-                    },
-                    cursor: None,
-                });
-                true
-            }
-            Input::Focus(focused) => {
-                if !focused {
-                    self.pointer_captured = false;
-                }
-                self.cancel_paste();
-                self.app.set_focus(focused);
-                if focused {
-                    self.app.refresh_storage();
-                    self.storage();
-                }
-                false
-            }
-        }
+        self.handle_input(input)
     }
-    fn message(&mut self, message: serde_json::Value) {
-        let before = self.app.model().revision;
-        let hook_completion = message.get("hooks").is_some();
-        if let Some(profile) = message.get("refresh_profile").and_then(|v| v.as_str()) {
-            if profile == self.app.model().profile {
-                self.app.refresh_storage();
-            }
-        } else if let Some(error) = message.get("error").and_then(|v| v.as_str()) {
-            self.app.ui_mut().set_error(error);
-        } else if let Some(check) = message.get("close_check") {
-            if let Some(tab) = check.get("tab").and_then(|v| v.as_u64()) {
-                self.close_checked(
-                    tab,
-                    check.get("pane").and_then(|v| v.as_u64()),
-                    check
-                        .get("process")
-                        .and_then(|v| v.as_str())
-                        .map(str::to_owned),
-                );
-            }
-        } else if let Some(context) = message.get("initialize") {
-            if let Some(transfer) = context.get("transfer") {
-                match serde_json::from_value::<app::WindowTransfer>(transfer.clone()) {
-                    Ok(mut transfer) => {
-                        if let Some(id) = message["tab_id"].as_u64() {
-                            transfer.tab.id = id;
-                        }
-                        if let Err(error) = self.app.import_transfer_before_snapshot(transfer) {
-                            self.app.ui_mut().set_error(error.to_string());
-                        }
-                    }
-                    Err(error) => self.app.ui_mut().set_error(error.to_string()),
-                }
-            }
-        } else if let Some(spawned) = message.get("spawned") {
-            if let Some(id) = spawned["tab_id"].as_u64() {
-                let context = &spawned["context"];
-                if context["new_window"] != true {
-                    if let Ok(token) =
-                        serde_json::from_value::<app::SpawnToken>(context["token"].clone())
-                    {
-                        let result = self.app.spawn_completed_with_token(id, token);
-                        self.apply(result);
-                    }
-                }
-                if let Ok(launch) =
-                    serde_json::from_value::<core::LaunchSpec>(context["launch"].clone())
-                {
-                    self.app.set_launch(id, launch).ok();
-                }
-            }
-        } else if let Some(id) = message.get("show_tab").and_then(|id| id.as_u64()) {
-            self.app.ui_mut().dismiss();
-            self.app.ui_mut().release_focus();
-            if self.app.model().tabs.contains_key(&id) {
-                self.dispatch(core::Intent::ActivateTab(id));
-            } else {
-                self.pending_show = Some(id);
-            }
-        } else if let Some(context) = message.get("spawn_failed") {
-            if let Ok(token) = serde_json::from_value::<app::SpawnToken>(context["token"].clone()) {
-                self.app.cancel_spawn(&token);
-            }
-        } else if message.get("paste").is_some() || message.get("paste_error").is_some() {
-            self.expire_paste(Instant::now());
-            if self
-                .pending_paste
-                .as_ref()
-                .is_some_and(|pending| message["token"].as_u64() == Some(pending.token))
-            {
-                self.finish_paste(
-                    message
-                        .get("paste")
-                        .and_then(|value| value.as_str())
-                        .map(str::to_owned),
-                    None,
-                );
-            }
-        } else if let Some(result) = message.get("managed") {
-            let result = match result.get("error").and_then(|e| e.as_str()) {
-                Some(error) => Err(error.to_owned()),
-                None => Ok(()),
-            };
-            let saved = result.is_ok();
-            self.app.complete_managed_write(result);
-            // Reloading applies the saved file to every window of this GUI.
-            if saved {
-                std::thread::spawn(config::reload);
-            }
-        } else if let Some(result) = message.get("store") {
-            self.outstanding = None;
-            if let Some(response) = result.get("ok") {
-                match serde_json::from_value(response.clone()) {
-                    Ok(response) => {
-                        let result = self.app.complete_storage(response);
-                        self.apply(result);
-                    }
-                    Err(err) => log::error!("tabs storage response: {err}"),
-                }
-            } else if let (Some(error), Some(request)) = (
-                result.get("error").and_then(|v| v.as_str()),
-                result.get("request_id").and_then(|v| v.as_u64()),
-            ) {
-                self.app.storage_failed(request, error);
-            }
-        } else if let Some(action) = message.get("action") {
-            self.cancel_paste();
-            match serde_json::from_value::<core::Action>(action.clone()) {
-                Ok(core::Action::Ui(core::UiAction::Settings)) => self.app.open_settings(),
-                Ok(core::Action::Ui(core::UiAction::CreateSpace)) => self.app.open_create_space(),
-                Ok(core::Action::Ui(core::UiAction::Navigator)) => self.open_tab_navigator(),
-                Ok(core::Action::Ui(core::UiAction::TabActions)) => self.app.open_tab_actions(),
-                Ok(core::Action::Ui(core::UiAction::QuickTerminal)) => {
-                    self.command(app::Command::QuickTerminal)
-                }
-                Ok(core::Action::Ui(core::UiAction::QuickProgram(program))) => {
-                    match terminal_program(*program) {
-                        Ok(program) => self.show_terminal(Command::ToggleTerminalProgram(program)),
-                        Err(error) => self.message(serde_json::json!({"error": error})),
-                    }
-                }
-                Ok(core::Action::Ui(core::UiAction::RetryStorage)) => self.app.retry_storage(),
-                Ok(core::Action::Intent(intent)) => self.dispatch(intent),
-                Err(err) => log::warn!("tabs action: {err}"),
-            }
-        } else if let Some(found) = message.get("adoptable") {
-            if found["search"].as_u64() == Some(self.adoptable_search) {
-                match adoption::entries(found["panes"].clone(), self.app.model().home.as_deref()) {
-                    Ok(panes) => self.app.set_adoptable_panes(panes),
-                    Err(error) => log::warn!("tabs adoptable: {error:#}"),
-                }
-            }
-        } else if message.get("hooks").is_some() {
-            self.hook_pending = false;
-            let selection = (
-                self.app.model().selected_space.clone(),
-                self.app.model().selected_tab,
-            );
-            if !lua::complete(&mut self.app, message) {
-                self.window_hook_dirty = true;
-                for (id, tab) in &self.hook_metadata {
-                    self.hook_queued.insert(*id, tab.clone());
-                }
-            }
-            self.window_hook_dirty |= selection
-                != (
-                    self.app.model().selected_space.clone(),
-                    self.app.model().selected_tab,
-                );
-            self.schedule_hooks();
-        }
-        if !hook_completion {
-            self.window_hook_dirty |= before != self.app.model().revision;
-        }
-        self.schedule_hooks();
-        self.storage();
-        self.publish();
+    fn message(&mut self, message: Message) {
+        self.handle_message(message);
     }
     fn projection(&self) -> Projection {
         let projection = self.app.projection();
@@ -1939,7 +1257,7 @@ impl Provider for Adapter {
             .next_deadline()
             .map(|duration| self.epoch + duration)
             .into_iter()
-            .chain(self.pending_paste.as_ref().map(|pending| pending.deadline))
+            .chain(self.input.pending.as_ref().map(|pending| pending.deadline))
             .min()
     }
     fn caret(&self) -> Option<(usize, usize)> {
@@ -1995,7 +1313,7 @@ impl Provider for Adapter {
         &mut self,
         new_window: bool,
         command: &config::keyassignment::SpawnCommand,
-    ) -> serde_json::Value {
+    ) -> SpawnContext {
         let token = if new_window {
             None
         } else {
@@ -2045,7 +1363,12 @@ impl Provider for Adapter {
                 .into_iter()
                 .collect(),
         };
-        serde_json::json!({"token":token,"new_window":new_window,"launch":launch})
+        SpawnContext {
+            token,
+            new_window,
+            launch: Some(launch),
+            transfer: None,
+        }
     }
     fn inspect(&self) -> serde_json::Value {
         let bounds = self
@@ -2188,22 +1511,6 @@ fn dynamic(value: &serde_json::Value) -> wezterm_dynamic::Value {
         ),
     }
 }
-fn modifiers(m: window::Modifiers) -> ui::Modifiers {
-    ui::Modifiers {
-        shift: m.contains(window::Modifiers::SHIFT),
-        control: m.contains(window::Modifiers::CTRL),
-        alt: m.contains(window::Modifiers::ALT),
-        super_key: m.contains(window::Modifiers::SUPER),
-    }
-}
-fn mouse_button(button: MousePress) -> ui::MouseButton {
-    match button {
-        MousePress::Right => ui::MouseButton::Right,
-        MousePress::Middle => ui::MouseButton::Middle,
-        _ => ui::MouseButton::Left,
-    }
-}
-
 #[cfg(test)]
 #[path = "../tests/hook.rs"]
 mod hook_tests;
@@ -2225,97 +1532,10 @@ fn linear_color(color: ratatui::style::Color) -> window::color::LinearRgba {
     }
 }
 
-// Raw and physical keys have not been encoded as Ctrl-letter bytes.
-fn shortcut_key(key: &KeyCode, mods: ui::Modifiers) -> Option<ui::Key> {
-    Some(match key {
-        KeyCode::Physical(code) => return shortcut_key(&code.to_key_code(), mods),
-        KeyCode::Char('\t') => ui::Key::Tab,
-        KeyCode::Char('\r' | '\n') => ui::Key::Enter,
-        KeyCode::Char('\u{1b}') => ui::Key::Escape,
-        KeyCode::Char('\u{8}') => ui::Key::Backspace,
-        KeyCode::Char('\u{7f}') => ui::Key::Delete,
-        KeyCode::Char(c) => {
-            let c = *c;
-            let c = if mods.shift {
-                match c {
-                    '<' => ',',
-                    '!' => '1',
-                    '@' => '2',
-                    '#' => '3',
-                    '$' => '4',
-                    '%' => '5',
-                    '^' => '6',
-                    '&' => '7',
-                    '*' => '8',
-                    '(' => '9',
-                    ')' => '0',
-                    '>' => '.',
-                    '?' => '/',
-                    ':' => ';',
-                    '"' => '\'',
-                    '_' => '-',
-                    '+' => '=',
-                    '{' => '[',
-                    '}' => ']',
-                    '|' => '\\',
-                    '~' => '`',
-                    _ => c,
-                }
-            } else {
-                c
-            };
-            ui::Key::Character(c)
-        }
-        KeyCode::LeftArrow => ui::Key::Left,
-        KeyCode::RightArrow => ui::Key::Right,
-        KeyCode::UpArrow => ui::Key::Up,
-        KeyCode::DownArrow => ui::Key::Down,
-        KeyCode::Home => ui::Key::Home,
-        KeyCode::End => ui::Key::End,
-        KeyCode::PageUp => ui::Key::PageUp,
-        KeyCode::PageDown => ui::Key::PageDown,
-        KeyCode::Function(2) => ui::Key::F2,
-        KeyCode::Function(10) => ui::Key::F10,
-        KeyCode::Function(n) => ui::Key::Function(*n),
-        _ => return None,
-    })
-}
-
-fn logical_shortcut_code(key: &KeyCode, mods: ui::Modifiers) -> KeyCode {
-    // Without raw metadata, Ctrl+H arrives as BS. Keep the host's Tab/Enter
-    // conventions while decoding other processed Ctrl-letter bytes.
-    match key {
-        KeyCode::Char(c)
-            if mods.control
-                && ('\u{1}'..='\u{1a}').contains(c)
-                && !matches!(c, '\t' | '\r' | '\n') =>
-        {
-            KeyCode::Char(char::from(*c as u8 + b'a' - 1))
-        }
-        _ => key.clone(),
-    }
-}
-
-fn logical_shortcut_key(key: &KeyCode, mods: ui::Modifiers) -> Option<ui::Key> {
-    shortcut_key(&logical_shortcut_code(key, mods), mods)
-}
-
-fn editor_clipboard_key(key: &KeyCode, mods: ui::Modifiers) -> Option<ui::Key> {
-    if !mods.command() || mods.alt {
-        return None;
-    }
-    logical_shortcut_key(key, mods).filter(|key| {
-        matches!(
-            key,
-            ui::Key::Character('a' | 'A' | 'c' | 'C' | 'x' | 'X' | 'v' | 'V')
-        )
-    })
-}
+#[cfg(test)]
+#[path = "../tests/commands.rs"]
+mod command_tests;
 
 #[cfg(test)]
 #[path = "../tests/input.rs"]
 mod input_tests;
-
-#[cfg(test)]
-#[path = "../tests/commands.rs"]
-mod command_tests;

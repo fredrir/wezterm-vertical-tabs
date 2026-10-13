@@ -1,6 +1,6 @@
 //! Unadopted remote panes for the tab search, asked of the mux that owns the window's layout.
+use super::Message;
 use crate::termwindow::TermWindowNotif;
-use serde_json::{Value, json};
 use vtabs_app::{core, ui};
 use window::{Window, WindowOps};
 
@@ -13,23 +13,15 @@ pub fn find(window: Window, mux_window: usize, search: u64) {
             Ok(panes) => panes,
             Err(error) => return log::warn!("tabs adoptable: {error:#}"),
         };
-        let panes = match serde_json::to_value(panes) {
-            Ok(panes) => panes,
-            Err(error) => return log::warn!("tabs adoptable: {error:#}"),
-        };
         window.notify(TermWindowNotif::Apply(Box::new(move |tw| {
-            tw.vtabs_message_for(
-                mux_window,
-                json!({ "adoptable": { "search": search, "panes": panes } }),
-            );
+            tw.vtabs_message_for(mux_window, Message::Adoptable { search, panes });
         })));
     })
     .detach();
 }
 
-pub fn entries(panes: Value, home: Option<&str>) -> anyhow::Result<Vec<ui::AdoptablePane>> {
-    let panes: Vec<codec::AdoptablePane> = serde_json::from_value(panes)?;
-    Ok(panes.into_iter().map(|found| entry(found, home)).collect())
+pub fn entries(panes: Vec<codec::AdoptablePane>, home: Option<&str>) -> Vec<ui::AdoptablePane> {
+    panes.into_iter().map(|found| entry(found, home)).collect()
 }
 
 /// The owner's location labels the pane like a tab of this window.
@@ -75,7 +67,7 @@ pub async fn adopt(
             .await?;
     if let Some(window) = window {
         window.notify(TermWindowNotif::Apply(Box::new(move |tw| {
-            tw.vtabs_message_for(mux_window, json!({ "show_tab": tab }));
+            tw.vtabs_message_for(mux_window, Message::ShowTab(tab as u64));
         })));
     }
     Ok(())

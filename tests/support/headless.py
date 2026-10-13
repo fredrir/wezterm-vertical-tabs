@@ -5,11 +5,13 @@ from __future__ import annotations
 import os
 import selectors
 import shutil
-import signal
 import subprocess
 import sys
 import time
+from contextlib import ExitStack
 from pathlib import Path
+
+from tests.support.process import stop_process
 
 
 class HeadlessDisplay:
@@ -135,25 +137,14 @@ class HeadlessDisplay:
                 os.close(write_fd)
 
     def close(self) -> None:
-        for process in (self.manager, self.xserver):
-            if process is None or process.poll() is not None:
-                continue
-            try:
-                os.killpg(process.pid, signal.SIGTERM)
-            except ProcessLookupError:
-                pass
-            try:
-                process.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                try:
-                    os.killpg(process.pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
-                process.wait(timeout=5)
-        self.env.pop("DISPLAY", None)
-        for log in self.logs:
-            log.close()
-        self.logs.clear()
+        with ExitStack() as cleanup:
+            cleanup.callback(self.logs.clear)
+            for log in self.logs:
+                cleanup.callback(log.close)
+            cleanup.callback(self.env.pop, "DISPLAY", None)
+            for process in (self.xserver, self.manager):
+                if process is not None:
+                    cleanup.callback(stop_process, process)
 
     def __enter__(self) -> HeadlessDisplay:
         return self.start()

@@ -213,3 +213,7 @@ fn adopt_into(
     mux.add_tab_to_window(&tab, window_id)?;
     Ok((tab, window_id, pane))
 }
+
+#[cfg(test)]
+#[path = "../../tests/vtabs/config.rs"]
+mod vtabs_config_tests;

@@ -6,6 +6,36 @@ import signal
 import subprocess
 from collections.abc import Mapping, Sequence
 from pathlib import Path
+from weakref import WeakSet
+
+_stopped_processes: WeakSet[subprocess.Popen] = WeakSet()
+
+
+def stop_process(process: subprocess.Popen, *, timeout_seconds: float = 5) -> None:
+    """Reap an owned process and its session, including children of an exited leader."""
+    if process in _stopped_processes:
+        return
+    if os.name == "nt":
+        if process.poll() is None:
+            process.terminate()
+    else:
+        try:
+            os.killpg(process.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+    try:
+        process.wait(timeout=timeout_seconds)
+    except subprocess.TimeoutExpired:
+        if os.name == "nt":
+            process.kill()
+    finally:
+        if os.name != "nt":
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+        process.wait(timeout=timeout_seconds)
+    _stopped_processes.add(process)
 
 
 async def run_process(

@@ -3,7 +3,8 @@ use crate::element::ElementId;
 use crate::input::{Key, Modifiers, TextEditor};
 use crate::intent::{HostAction, UiIntent};
 use crate::overlays::{FormKind, MenuItem, Overlay};
-use crate::views::settings_page::{self, choice_label};
+use crate::settings::SettingTarget;
+use crate::views::settings_page::choice_label;
 use crate::views::sidebar::{InlineRename, Slot};
 use crate::views::tab_name;
 use serde_json::Value;
@@ -331,17 +332,18 @@ impl SidebarUi {
         if self.overlays.current.is_some() {
             self.dismiss();
         }
-        if let Some(action) = key.strip_prefix("shortcut.") {
+        let target = SettingTarget::of(key);
+        if let SettingTarget::Shortcut(action) = target {
             self.open_keybinds(model, action);
             return;
         }
         if self.settings.managed_in_lua(model, key) {
             return;
         }
-        let Some(descriptor) = settings_page::descriptor(key) else {
+        let Some(descriptor) = target.descriptor() else {
             return;
         };
-        let value = settings_page::setting_value(&model.settings, key);
+        let value = target.value(&model.settings);
         match descriptor.kind {
             SettingKind::Bool => {
                 intents.push(UiIntent::Domain(Intent::SetSetting {
@@ -386,7 +388,7 @@ impl SidebarUi {
                 self.start_entry(model, key, None);
             }
             SettingKind::Color | SettingKind::OptionalColor | SettingKind::Border => {
-                let default = settings_page::setting_value(&vtabs_core::Settings::default(), key);
+                let default = target.value(&vtabs_core::Settings::default());
                 let fallback = match key {
                     "quick_terminal_background_color" => {
                         self.host.page_background.unwrap_or(self.theme.background)

@@ -43,38 +43,39 @@ fn hook_metadata_is_optional_and_survives_reconfiguration_and_retry() {
         let tab = &adapter.app.model().tabs[&1];
         assert_eq!(tab.process, process);
         assert_eq!(tab.space_id, format!("process-{process}"));
-        assert!(adapter.hook_metadata.is_empty());
-        assert!(adapter.hook_queued.is_empty());
+        assert!(adapter.hooks.metadata.is_empty());
+        assert!(adapter.hooks.queued.is_empty());
     }
 
     // Enabling hooks must send current metadata even when the host facts have
     // not changed since a snapshot that ran with callbacks disabled.
-    adapter.hooks_enabled = true;
+    adapter.hooks.enabled = true;
     adapter.apply_facts(snapshot(3, 0, "editor"));
-    assert_eq!(adapter.hook_metadata[&1].process, "editor");
-    assert_eq!(adapter.hook_queued[&1].process, "editor");
+    assert_eq!(adapter.hooks.metadata[&1].process, "editor");
+    assert_eq!(adapter.hooks.queued[&1].process, "editor");
     let stale = adapter.app.hook_token(Some(1));
-    adapter.hook_queued.clear();
-    adapter.hook_pending = true;
+    adapter.hooks.queued.clear();
+    adapter.hooks.pending = true;
     adapter.apply_facts(snapshot(4, 0, "builder"));
-    assert_eq!(adapter.hook_metadata[&1].process, "builder");
-    assert_eq!(adapter.hook_queued[&1].process, "builder");
-    adapter.hook_queued.clear();
-    adapter.message(serde_json::json!({"hooks":[{
-        "token":stale, "result":app::HookResult::Title("stale".into())
-    }]}));
-    assert_eq!(adapter.hook_queued[&1].process, "builder");
+    assert_eq!(adapter.hooks.metadata[&1].process, "builder");
+    assert_eq!(adapter.hooks.queued[&1].process, "builder");
+    adapter.hooks.queued.clear();
+    adapter.message(Message::Hooks(vec![lua::HookCompletion {
+        token: stale,
+        result: app::HookResult::Title("stale".into()),
+    }]));
+    assert_eq!(adapter.hooks.queued[&1].process, "builder");
     assert_eq!(adapter.app.model().tabs[&1].display_title(), "Tab: builder");
 
     // A real configuration epoch change reads the default callback-free Lua
     // configuration, releasing both retained metadata and queued retry work.
     adapter.apply_facts(snapshot(5, 1, "builder"));
-    assert!(!adapter.hooks_enabled);
-    assert!(adapter.hook_metadata.is_empty());
-    assert!(adapter.hook_queued.is_empty());
-    adapter.hooks_enabled = true;
+    assert!(!adapter.hooks.enabled);
+    assert!(adapter.hooks.metadata.is_empty());
+    assert!(adapter.hooks.queued.is_empty());
+    adapter.hooks.enabled = true;
     adapter.apply_facts(snapshot(6, 1, "builder"));
-    assert_eq!(adapter.hook_metadata[&1].process, "builder");
-    assert_eq!(adapter.hook_queued[&1].process, "builder");
+    assert_eq!(adapter.hooks.metadata[&1].process, "builder");
+    assert_eq!(adapter.hooks.queued[&1].process, "builder");
     mux::Mux::shutdown();
 }

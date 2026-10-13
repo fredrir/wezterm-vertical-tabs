@@ -1,3 +1,4 @@
+use super::Message;
 use crate::scripting::guiwin::GuiWin;
 use crate::termwindow::TermWindowNotif;
 use config::lua::{get_or_create_sub_module, mlua};
@@ -222,7 +223,7 @@ pub fn register(lua: &Lua) -> anyhow::Result<()> {
                 window
                     .window
                     .notify(TermWindowNotif::Apply(Box::new(move |tw| {
-                        tw.vtabs_message_for(mux_window_id, json!({"action":action}))
+                        tw.vtabs_message_for(mux_window_id, Message::Action(action))
                     })));
                 Ok(())
             },
@@ -249,9 +250,9 @@ pub fn register(lua: &Lua) -> anyhow::Result<()> {
 
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct HookCompletion {
-    token: HookToken,
-    result: HookResult,
+pub struct HookCompletion {
+    pub token: HookToken,
+    pub result: HookResult,
 }
 
 fn decode_result(name: &str, value: Value) -> anyhow::Result<Option<HookResult>> {
@@ -410,7 +411,7 @@ pub fn hooks(
             }
         };
         window.notify(TermWindowNotif::Apply(Box::new(move |tw| {
-            tw.vtabs_message_for(mux_window_id, json!({"hooks":results}))
+            tw.vtabs_message_for(mux_window_id, Message::Hooks(results))
         })));
     })
     .detach();
@@ -460,24 +461,14 @@ pub async fn adoptable_domains() -> Vec<String> {
     }
 }
 
-pub fn complete(app: &mut WindowApp, message: Value) -> bool {
-    let Some(hooks) = message.get("hooks").and_then(Value::as_array) else {
-        return true;
-    };
-    if hooks.is_empty() {
+pub fn complete(app: &mut WindowApp, results: Vec<HookCompletion>) -> bool {
+    if results.is_empty() {
         return true;
     }
-    if hooks.len() > MAX_HOOK_RESULTS {
+    if results.len() > MAX_HOOK_RESULTS {
         warn_once("hook result", "result count exceeds current contract");
         return true;
     }
-    let results = match serde_json::from_value::<Vec<HookCompletion>>(Value::Array(hooks.clone())) {
-        Ok(results) => results,
-        Err(error) => {
-            warn_once("hook result", error);
-            return true;
-        }
-    };
     match app.complete_hook_batch(
         results
             .into_iter()

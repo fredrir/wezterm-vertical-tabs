@@ -1,4 +1,6 @@
+use super::input::{MAX_PASTE_INPUT_BYTES, MAX_PASTE_INPUTS, logical_shortcut_key, shortcut_key};
 use super::*;
+use window::KeyCode;
 
 pub(super) fn raw(key: KeyCode, mods: window::Modifiers, down: bool) -> window::RawKeyEvent {
     window::RawKeyEvent {
@@ -180,7 +182,10 @@ fn delayed_paste_precedes_typed_text_and_enter_without_timing_assumptions() {
     adapter.ui_input(ui::UiInput::key(ui::Key::Enter));
     adapter.ui_input(ui::UiInput::Text("must not reach another editor".into()));
     assert_eq!(adapter.app.model().spaces.len(), 1);
-    adapter.message(serde_json::json!({"paste":"Project","token":token}));
+    adapter.message(Message::Paste {
+        text: Some("Project".into()),
+        token,
+    });
     assert!(
         adapter
             .app
@@ -189,7 +194,7 @@ fn delayed_paste_precedes_typed_text_and_enter_without_timing_assumptions() {
             .iter()
             .any(|space| space.name == "Project suffix")
     );
-    assert!(adapter.pending_paste.is_none());
+    assert!(adapter.input.pending.is_none());
     adapter.render(geometry(), Instant::now());
     assert!(!adapter.app.ui().has_overlay());
 }
@@ -206,15 +211,24 @@ fn delayed_pastes_preserve_copy_cut_and_multiple_read_order() {
     editor_command(&mut adapter, 'v');
     adapter.ui_input(ui::UiInput::Text(" tail".into()));
     assert!(adapter.commands().is_empty());
-    adapter.message(serde_json::json!({"paste":"First","token":first}));
+    adapter.message(Message::Paste {
+        text: Some("First".into()),
+        token: first,
+    });
     let commands = adapter.commands();
     assert!(
         matches!(commands.as_slice(), [Command::Clipboard(copy), Command::Clipboard(cut), Command::Paste(_)] if copy == "First" && cut == "First")
     );
-    let second = adapter.pending_paste.as_ref().unwrap().token;
+    let second = adapter.input.pending.as_ref().unwrap().token;
     assert_ne!(first, second);
-    adapter.message(serde_json::json!({"paste":"stale","token":first}));
-    adapter.message(serde_json::json!({"paste":"Second","token":second}));
+    adapter.message(Message::Paste {
+        text: Some("stale".into()),
+        token: first,
+    });
+    adapter.message(Message::Paste {
+        text: Some("Second".into()),
+        token: second,
+    });
     assert_eq!(editor_text(&mut adapter), "Second tail");
 }
 
@@ -232,14 +246,14 @@ fn failed_or_expired_paste_preserves_typing_but_never_submits_the_old_value() {
         editor_command(&mut adapter, 'x');
         editor_command(&mut adapter, 'v');
         if expired {
-            let deadline = adapter.pending_paste.as_ref().unwrap().deadline;
+            let deadline = adapter.input.pending.as_ref().unwrap().deadline;
             assert!(adapter.deadline().unwrap() <= deadline);
             adapter.render(geometry(), deadline);
         } else {
-            adapter.message(serde_json::json!({"paste_error":"unavailable","token":token}));
+            adapter.message(Message::Paste { token, text: None });
             adapter.render(geometry(), Instant::now());
         }
-        assert!(adapter.pending_paste.is_none());
+        assert!(adapter.input.pending.is_none());
         assert!(adapter.commands().is_empty());
         assert_eq!(adapter.app.model().spaces.len(), 1);
         assert!(adapter.app.ui().has_overlay());
@@ -251,7 +265,10 @@ fn failed_or_expired_paste_preserves_typing_but_never_submits_the_old_value() {
             .map(|cell| cell.symbol())
             .collect::<String>();
         assert!(rendered.contains("Clipboard unavailable"));
-        adapter.message(serde_json::json!({"paste":"late","token":token}));
+        adapter.message(Message::Paste {
+            text: Some("late".into()),
+            token,
+        });
         assert_eq!(editor_text(&mut adapter), "Old tail");
     }
 }
@@ -270,8 +287,11 @@ fn pending_paste_bounds_release_input_and_ignore_late_completion() {
                 adapter.ui_input(ui::UiInput::key(ui::Key::Character('x')));
             }
         }
-        assert!(adapter.pending_paste.is_none());
-        adapter.message(serde_json::json!({"paste":"late","token":token}));
+        assert!(adapter.input.pending.is_none());
+        adapter.message(Message::Paste {
+            text: Some("late".into()),
+            token,
+        });
         let expected = if bytes {
             ui::TextEditor::MAX_BYTES
         } else {
@@ -295,10 +315,15 @@ fn pending_paste_cancels_queued_input_on_escape_and_focus_departure() {
             adapter.input(Input::Focus(true));
         } else {
             adapter.ui_input(ui::UiInput::key(ui::Key::Escape));
-            adapter.message(serde_json::json!({"action":"create_space"}));
+            adapter.message(Message::Action(core::Action::Ui(
+                core::UiAction::CreateSpace,
+            )));
         }
         adapter.ui_input(ui::UiInput::Text("Keep".into()));
-        adapter.message(serde_json::json!({"paste":"late","token":token}));
+        adapter.message(Message::Paste {
+            text: Some("late".into()),
+            token,
+        });
         assert_eq!(editor_text(&mut adapter), "Keep");
         assert_eq!(adapter.app.model().spaces.len(), 1);
     }
@@ -313,7 +338,10 @@ fn pending_paste_precedes_clipboard_context_and_mouse_submit() {
     editor_command(&mut adapter, 'a');
     adapter.ui_input(ui::UiInput::key(ui::Key::F10));
     editor_command(&mut adapter, 'c');
-    adapter.message(serde_json::json!({"paste":"Project","token":token}));
+    adapter.message(Message::Paste {
+        text: Some("Project".into()),
+        token,
+    });
     assert_eq!(copied_text(&mut adapter), "Project");
     adapter.render(geometry(), Instant::now());
     let submit = adapter
@@ -336,7 +364,10 @@ fn pending_paste_precedes_clipboard_context_and_mouse_submit() {
         y: submit.y,
         button: ui::MouseButton::Left,
     });
-    adapter.message(serde_json::json!({"paste":"Mouse submit","token":token}));
+    adapter.message(Message::Paste {
+        text: Some("Mouse submit".into()),
+        token,
+    });
     assert!(
         adapter
             .app
@@ -354,11 +385,14 @@ fn enter_arriving_after_the_paste_deadline_does_not_submit_stale_text() {
     adapter.app.open_create_space();
     adapter.ui_input(ui::UiInput::Text("Old".into()));
     let token = begin_paste(&mut adapter);
-    adapter.pending_paste.as_mut().unwrap().deadline = Instant::now();
+    adapter.input.pending.as_mut().unwrap().deadline = Instant::now();
     adapter.ui_input(ui::UiInput::key(ui::Key::Enter));
     assert_eq!(adapter.app.model().spaces.len(), 1);
-    assert!(adapter.pending_paste.is_none());
-    adapter.message(serde_json::json!({"paste":"late","token":token}));
+    assert!(adapter.input.pending.is_none());
+    adapter.message(Message::Paste {
+        text: Some("late".into()),
+        token,
+    });
     assert_eq!(editor_text(&mut adapter), "Old");
 }
 
@@ -377,7 +411,10 @@ fn paste_replay_stops_at_focus_departure_and_preserves_ime_cancellation() {
         text: String::new(),
         cursor: None,
     });
-    adapter.message(serde_json::json!({"paste":"Project","token":token}));
+    adapter.message(Message::Paste {
+        text: Some("Project".into()),
+        token,
+    });
     adapter.render(geometry(), Instant::now());
     let rendered = adapter
         .app
@@ -391,7 +428,10 @@ fn paste_replay_stops_at_focus_departure_and_preserves_ime_cancellation() {
     adapter.ui_input(ui::UiInput::key(ui::Key::Tab));
     adapter.ui_input(ui::UiInput::Text("discarded".into()));
     adapter.ui_input(ui::UiInput::key(ui::Key::Enter));
-    adapter.message(serde_json::json!({"paste":" next","token":token}));
+    adapter.message(Message::Paste {
+        text: Some(" next".into()),
+        token,
+    });
     assert_eq!(adapter.app.ui().focused(), Some(&ui::ElementId::Submit));
     assert_eq!(adapter.app.model().spaces.len(), 1);
     adapter.ui_input(ui::UiInput::key(ui::Key::Enter));
@@ -434,7 +474,10 @@ fn editors_decode_clipboard_control_bytes_with_global_shortcuts_disabled() {
             window::Modifiers::CTRL
         ))));
         let token = paste_token(&mut adapter);
-        adapter.message(serde_json::json!({"paste":"Pasted 界","token":token}));
+        adapter.message(Message::Paste {
+            text: Some("Pasted 界".into()),
+            token,
+        });
         adapter.input(Input::Key(&logical_key(
             KeyCode::Char('\u{1}'),
             window::Modifiers::CTRL,
@@ -492,7 +535,10 @@ fn paste_survives_hover_and_empty_composition_notifications() {
         text: String::new(),
         cursor: None,
     });
-    adapter.message(serde_json::json!({"paste":"After","token":token}));
+    adapter.message(Message::Paste {
+        text: Some("After".into()),
+        token,
+    });
     adapter.input(Input::RawKey(&raw(
         KeyCode::Char('a'),
         window::Modifiers::CTRL,
@@ -520,7 +566,10 @@ fn paste_is_discarded_after_editing_focus_changes() {
     let token = paste_token(&mut adapter);
     adapter.input(Input::Focus(false));
     adapter.input(Input::Focus(true));
-    adapter.message(serde_json::json!({"paste":"Discard","token":token}));
+    adapter.message(Message::Paste {
+        text: Some("Discard".into()),
+        token,
+    });
     adapter.input(Input::RawKey(&raw(
         KeyCode::Char('a'),
         window::Modifiers::CTRL,
@@ -989,7 +1038,9 @@ fn quick_terminal_respects_remapping_and_disabled_shortcuts() {
         adapter.terminal_input(Input::RawKey(&replacement), HideOnEscape::Auto),
         TerminalKey::Pass
     );
-    adapter.message(serde_json::json!({"action": "quick_terminal"}));
+    adapter.message(Message::Action(core::Action::Ui(
+        core::UiAction::QuickTerminal,
+    )));
     assert!(matches!(
         adapter.commands().as_slice(),
         [Command::ToggleTerminalOverlay]
@@ -1006,7 +1057,7 @@ fn quick_programs_toggle_by_their_command() {
         "set_environment_variables": {"THEME": "dark"},
         "width": 0.9,
     }});
-    adapter.message(serde_json::json!({"action": program}));
+    adapter.message(Message::Action(serde_json::from_value(program).unwrap()));
     let commands = adapter.commands();
     let [Command::ToggleTerminalProgram(program)] = commands.as_slice() else {
         panic!("expected a quick program");

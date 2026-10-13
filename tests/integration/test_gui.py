@@ -8,9 +8,10 @@ from pathlib import Path
 
 import pytest
 
-from tests.scenarios.scenarios import Probe
 from tests.scenarios.tls_fixture import LocalTlsMux
-from tests.scenarios.ui_scenarios import GuiInput, scenarios
+from tests.scenarios.ui_scenarios import scenarios
+from tests.support.gui import GuiInput
+from tests.support.probe import Probe
 
 
 @pytest.mark.gui

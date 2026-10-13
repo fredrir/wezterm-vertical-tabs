@@ -1,3 +1,4 @@
+use super::Message;
 use crate::termwindow::TermWindowNotif;
 use std::{io::Write, path::PathBuf};
 use window::WindowOps;
@@ -20,10 +21,7 @@ fn write(path: PathBuf, source: &str) -> anyhow::Result<()> {
 pub fn save(window: window::Window, path: PathBuf, source: String, mux_window_id: usize) {
     promise::spawn::spawn(async move {
         let result = smol::unblock(move || write(path, &source)).await;
-        let message = match result {
-            Ok(()) => serde_json::json!({"managed": {"ok": true}}),
-            Err(error) => serde_json::json!({"managed": {"error": format!("{error:#}")}}),
-        };
+        let message = Message::Managed(result.map_err(|error| format!("{error:#}")));
         window.notify(TermWindowNotif::Apply(Box::new(move |tw| {
             tw.vtabs_message_for(mux_window_id, message);
         })));

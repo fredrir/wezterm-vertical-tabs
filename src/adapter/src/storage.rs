@@ -1,3 +1,4 @@
+use super::Message;
 use crate::termwindow::TermWindowNotif;
 use smol::io::{AsyncReadExt, AsyncWriteExt};
 use std::path::PathBuf;
@@ -117,19 +118,13 @@ pub fn request(window: window::Window, request: Request, mux_window_id: usize) {
                 })
             })
             .collect::<std::collections::BTreeSet<_>>();
-        let (result, committed) = match invoke(request).await {
-            Ok(response) => {
-                let committed = response.error.is_none();
-                (serde_json::json!({"ok": response}), committed)
-            }
-            Err(error) => (
-                serde_json::json!({"error": error.to_string(), "request_id": request_id}),
-                false,
-            ),
-        };
+        let result = invoke(request).await.map_err(|error| error.to_string());
+        let committed = result
+            .as_ref()
+            .is_ok_and(|response| response.error.is_none());
         let source = window.clone();
         window.notify(TermWindowNotif::Apply(Box::new(move |tw| {
-            tw.vtabs_message_for(mux_window_id, serde_json::json!({"store": result}));
+            tw.vtabs_message_for(mux_window_id, Message::Store { request_id, result });
             if committed && !profiles.is_empty() {
                 for gui in crate::frontend::front_end().gui_windows() {
                     if gui.window == source {
@@ -139,8 +134,7 @@ pub fn request(window: window::Window, request: Request, mux_window_id: usize) {
                         let profile = profile.clone();
                         gui.window
                             .notify(TermWindowNotif::Apply(Box::new(move |other| {
-                                other
-                                    .vtabs_message(serde_json::json!({"refresh_profile": profile}));
+                                other.vtabs_message(Message::RefreshProfile(profile));
                             })));
                     }
                 }

@@ -158,7 +158,8 @@ fn reserved_spawn_activates_captured_space_when_interaction_unchanged() {
     let result = app.spawn_completed_with_token(3, token).unwrap();
     assert_eq!(app.model().selected_space, space);
     assert_eq!(app.model().selected_tab, Some(3));
-    assert!(result.projection_changed);
+    assert_eq!(app.projection().active, Some(3));
+    assert!(app.projection().visible.contains(&3));
     // The snapshot already reports tab 3 active; repairing the empty projection
     // can select it before arrival delivery without requiring a duplicate host activation.
     assert!(result.commands.iter().all(|command| {

@@ -1,4 +1,5 @@
 use super::*;
+use window::KeyCode;
 
 #[test]
 fn confirm_close_closes_a_tab_the_mux_does_not_report_busy_without_prompting() {
@@ -154,7 +155,9 @@ fn hidden_sidebar_modals_use_window_bounds_without_resizing_it() {
         if action == "tab_navigator" {
             adapter.navigation(Navigation::Navigator);
         } else {
-            adapter.message(serde_json::json!({"action":action}));
+            adapter.message(Message::Action(
+                serde_json::from_value(serde_json::json!(action)).unwrap(),
+            ));
         }
         assert_eq!(adapter.reservation().width, original);
         assert!(adapter.keyboard_focus());

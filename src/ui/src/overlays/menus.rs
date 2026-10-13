@@ -4,7 +4,7 @@ use crate::element::ElementId;
 use crate::events::EditorSlot;
 use crate::input::Key;
 use crate::overlays::MenuItem;
-use crate::views::settings_page;
+use crate::settings::SettingTarget;
 use vtabs_core::{Intent, Model, RailMode, TabId, settings};
 
 impl SidebarUi {
@@ -173,7 +173,8 @@ impl SidebarUi {
                 self.menu(&space.name, items);
             }
             ElementId::Setting(key) => {
-                let title = settings_page::descriptor(&key)
+                let title = SettingTarget::of(&key)
+                    .descriptor()
                     .map_or(key.as_str(), |field| field.label)
                     .to_owned();
                 let mut items = vec![

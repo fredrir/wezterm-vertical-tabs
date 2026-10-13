@@ -245,8 +245,10 @@ pub fn test(ctx: &Context, suite: Suite, args: &[String]) -> Result<()> {
                 "upstream",
                 &serde_json::json!({"revision":metadata.upstream}),
             )?;
-            ctx.runner
-                .metadata("build_configuration", &metadata.configuration)?;
+            ctx.runner.metadata(
+                "build_configuration",
+                &serde_json::to_value(&metadata.configuration)?,
+            )?;
             ctx.runner.metadata(
                 "resolved_locks",
                 &serde_json::json!({

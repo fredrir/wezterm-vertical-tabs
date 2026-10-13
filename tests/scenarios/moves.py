@@ -5,10 +5,14 @@ import argparse
 import json
 import os
 import subprocess
+import sys
 import time
 from pathlib import Path
 
-from scenarios import Probe
+if __package__ in {None, ""}:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
+from tests.support.probe import Probe
 
 
 def run(probe, cli, external):

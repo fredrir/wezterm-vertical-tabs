@@ -9,7 +9,6 @@ import json
 import os
 import secrets
 import shutil
-import signal
 import socket
 import ssl
 import subprocess
@@ -17,6 +16,11 @@ import sys
 import tempfile
 import time
 from pathlib import Path
+
+if __package__ in {None, ""}:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
+from tests.support.process import stop_process
 
 
 def generate_certificates(root: Path, username: str) -> None:
@@ -215,26 +219,7 @@ class LocalTlsMux:
     def close(self) -> None:
         try:
             if self.process is not None:
-                if os.name == "nt":
-                    if self.process.poll() is None:
-                        self.process.terminate()
-                else:
-                    try:
-                        os.killpg(self.process.pid, signal.SIGTERM)
-                    except ProcessLookupError:
-                        pass
-                try:
-                    self.process.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    if os.name == "nt":
-                        self.process.kill()
-                finally:
-                    if os.name != "nt":
-                        try:
-                            os.killpg(self.process.pid, signal.SIGKILL)
-                        except ProcessLookupError:
-                            pass
-                    self.process.wait(timeout=5)
+                stop_process(self.process)
         finally:
             if self.log is not None:
                 self.log.close()

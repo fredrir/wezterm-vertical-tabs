@@ -4,9 +4,8 @@ use crate::input::TextEditor;
 use crate::intent::UiIntent;
 use crate::overlays::colors::Pick;
 use crate::overlays::{Form, FormKind, Overlay};
-use crate::views::settings_page::{set_distro_color, set_padding_side};
-use serde_json::Value;
-use vtabs_core::{Dimension, Intent, Model, SettingKind, distros, padding, settings};
+use crate::settings::SettingTarget;
+use vtabs_core::{Intent, Model, settings};
 
 impl SidebarUi {
     pub(crate) fn open_form(&mut self, title: impl Into<String>, kind: FormKind, value: &str) {
@@ -113,39 +112,7 @@ impl SidebarUi {
                         rules,
                     }
                 }
-                FormKind::Setting(key) if let Some(id) = distros::id(key) => {
-                    set_distro_color(model, id, value.clone())
-                }
-                FormKind::Setting(key) if let Some(side) = padding::side(key) => {
-                    let dimension = (!value.is_empty())
-                        .then(|| Dimension::from_text(&value))
-                        .transpose()?;
-                    set_padding_side(model, side, dimension)
-                }
-                FormKind::Setting(key) => {
-                    let descriptor =
-                        settings::descriptor(key).ok_or("This setting no longer exists")?;
-                    let value = match descriptor.kind {
-                        SettingKind::Number { .. }
-                        | SettingKind::Fraction
-                        | SettingKind::Opacity
-                        | SettingKind::Scale
-                        | SettingKind::Colors
-                        | SettingKind::List => serde_json::from_str(&value)
-                            .map_err(|error| format!("Invalid value: {error}"))?,
-                        SettingKind::Text | SettingKind::OptionalColor | SettingKind::Border
-                            if value.is_empty() =>
-                        {
-                            Value::Null
-                        }
-                        _ => Value::String(value.clone()),
-                    };
-                    settings::validate_value(key, &value)?;
-                    Intent::SetSetting {
-                        key: key.clone(),
-                        value,
-                    }
-                }
+                FormKind::Setting(key) => SettingTarget::of(key).submit(&model.settings, &value)?,
             })
         })();
         match intent {

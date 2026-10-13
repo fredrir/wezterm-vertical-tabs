@@ -38,7 +38,7 @@ impl TermWindow {
         };
         if !self.terminal_overlay_visible() || config.opacity >= 1. || config.blur <= 0. {
             // Release the full-window textures when no longer needed.
-            ui.terminal.1.borrow_mut().take();
+            ui.terminal.blur.borrow_mut().take();
             return Ok(None);
         }
         let size = (
@@ -49,7 +49,7 @@ impl TermWindow {
             return Ok(None);
         }
         let context = &self.render_state.as_ref().unwrap().context;
-        let mut cache = ui.terminal.1.borrow_mut();
+        let mut cache = ui.terminal.blur.borrow_mut();
         let matches = cache.as_ref().is_some_and(|blur| {
             blur.size == size
                 && match (&blur.context, context) {

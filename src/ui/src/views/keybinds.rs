@@ -4,9 +4,8 @@ use crate::icons;
 use crate::intent::UiIntent;
 use crate::overlays::{MenuItem, Overlay, next_enabled};
 use crate::views::launcher::{LauncherKind, filter_menu};
-use crate::views::settings_page::{set_distro_color, set_padding_side};
 use std::collections::BTreeMap;
-use vtabs_core::{Intent, Model, distros, keybinds, padding};
+use vtabs_core::{Intent, Model, keybinds};
 
 /// The plugin action a keybind launcher edits.
 #[derive(Clone, Debug)]
@@ -251,41 +250,18 @@ impl SidebarUi {
         self.frame.dirty = true;
     }
 
-    pub(crate) fn reset_setting(&mut self, model: &Model, key: &str, intents: &mut Vec<UiIntent>) {
-        if self.settings.managed_in_lua(model, key) {
-            return;
+    pub(crate) fn show_keybind_reset_conflict(&mut self, model: &Model, action: &str) {
+        // The clash shows where it can be resolved, in this action's launcher.
+        if self.binding().is_none() {
+            self.open_keybinds(model, action);
         }
-        let editing = self.binding().is_some();
-        if let Some(action) = key.strip_prefix("shortcut.") {
-            let mut bindings = model.settings.keybinds.clone();
-            bindings.remove(action);
-            if keybinds::validate(&bindings).is_err() {
-                // The clash shows where it can be resolved, in this action's launcher.
-                if !editing {
-                    self.open_keybinds(model, action);
-                }
-                let clash = keybinds::defaults(action)
-                    .into_iter()
-                    .find_map(|chord| Some((chord.clone(), owner(model, &chord)?.to_owned())));
-                if let Some(binding) = self.binding_mut() {
-                    binding.rejected = clash;
-                }
-                self.refresh_keybinds(model);
-                return;
-            }
-            intents.push(UiIntent::Domain(set_keybinds(bindings)));
-        } else if let Some(id) = distros::id(key) {
-            let color = distros::defaults().remove(id).unwrap_or_default();
-            intents.push(UiIntent::Domain(set_distro_color(model, id, color)));
-        } else if let Some(side) = padding::side(key) {
-            intents.push(UiIntent::Domain(set_padding_side(model, side, None)));
-        } else {
-            intents.push(UiIntent::Domain(Intent::ResetSetting(key.into())));
+        let clash = keybinds::defaults(action)
+            .into_iter()
+            .find_map(|chord| Some((chord.clone(), owner(model, &chord)?.to_owned())));
+        if let Some(binding) = self.binding_mut() {
+            binding.rejected = clash;
         }
-        if !editing {
-            self.dismiss();
-        }
-        self.frame.dirty = true;
+        self.refresh_keybinds(model);
     }
 }
 

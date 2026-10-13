@@ -16,12 +16,12 @@ pub fn plan(ctx: &Context, operation: &str) -> Result<Value> {
     let unchanged = previous
         .as_ref()
         .is_some_and(|old| inputs["source"].as_str() == Some(&old.source_digest));
-    let compile_changed = previous
-        .as_ref()
-        .is_none_or(|old| old.configuration["compile_inputs"] != inputs["compile"]);
-    let validation_changed = previous
-        .as_ref()
-        .is_none_or(|old| old.configuration["validation_inputs"] != inputs["validation"]);
+    let compile_changed = previous.as_ref().is_none_or(|old| {
+        Some(old.configuration.compilation.compile_inputs.as_str()) != inputs["compile"].as_str()
+    });
+    let validation_changed = previous.as_ref().is_none_or(|old| {
+        Some(old.configuration.validation_inputs.as_str()) != inputs["validation"].as_str()
+    });
     let upstream = ctx.upstream.clone().or_else(|| {
         if ctx.offline || operation == "dev" {
             previous.as_ref().map(|old| old.upstream.clone())

@@ -2,8 +2,8 @@
 
 import pytest
 
-from tests.scenarios.scenarios import Probe
 from tests.support.container_mux import ContainerSshMux
+from tests.support.probe import Probe
 
 
 @pytest.mark.container

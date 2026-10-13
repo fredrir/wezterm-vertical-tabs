@@ -3,6 +3,7 @@ name = "tools"
 version.workspace = true
 edition.workspace = true
 publish = false
+autotests = false
 
 [[bin]]
 name = "wez-vtabs"

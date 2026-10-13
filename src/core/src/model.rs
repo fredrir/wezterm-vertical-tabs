@@ -362,7 +362,6 @@ pub struct Transition {
     pub commands: Vec<HostCommand>,
     pub model_changed: bool,
     pub durable_changed: bool,
-    pub layout_changed: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1210,7 +1209,6 @@ impl Model {
                 }
                 self.managed_settings.insert(key, value);
                 out.durable_changed = true;
-                out.layout_changed = true;
             }
             Intent::ResetSetting(key) => {
                 if self.config_owned.contains(&key) {
@@ -1225,20 +1223,17 @@ impl Model {
                 }
                 self.settings.set(&key, value)?;
                 out.durable_changed = true;
-                out.layout_changed = true;
             }
             Intent::ResetSettings => {
                 self.managed_settings.clear();
                 self.rail_override = None;
                 self.rebuild_settings()?;
                 out.durable_changed = true;
-                out.layout_changed = true;
             }
             // A session toggle: Lua keeps the startup value and nothing is written.
             Intent::SetRail(rail) => {
                 self.rail_override = Some(rail);
                 self.settings.rail = rail;
-                out.layout_changed = true;
             }
             Intent::MoveTabToNewWindow(id) => {
                 self.require_tab(id)?;

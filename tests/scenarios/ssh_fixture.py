@@ -8,13 +8,18 @@ import json
 import os
 import shlex
 import shutil
-import signal
 import socket
 import subprocess
 import sys
 import tempfile
 import time
+from contextlib import ExitStack
 from pathlib import Path
+
+if __package__ in {None, ""}:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
+from tests.support.process import stop_process
 
 
 class LocalSshMux:
@@ -212,27 +217,13 @@ class LocalSshMux:
         return self.domain
 
     def close(self):
-        try:
-            for process in reversed(self.processes):
-                try:
-                    os.killpg(process.pid, signal.SIGTERM)
-                except ProcessLookupError:
-                    pass
-                try:
-                    process.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    pass
-                finally:
-                    try:
-                        os.killpg(process.pid, signal.SIGKILL)
-                    except ProcessLookupError:
-                        pass
-                    process.wait(timeout=5)
-        finally:
-            for log in self.logs:
-                log.close()
+        with ExitStack() as cleanup:
             for name in ("host_key", "client_key"):
-                (self.root / name).unlink(missing_ok=True)
+                cleanup.callback((self.root / name).unlink, missing_ok=True)
+            for log in self.logs:
+                cleanup.callback(log.close)
+            for process in self.processes:
+                cleanup.callback(stop_process, process)
 
 
 def main():

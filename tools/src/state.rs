@@ -92,7 +92,7 @@ pub struct BuildMetadata {
     #[serde(default)]
     pub built_at: u64,
     #[serde(default)]
-    pub configuration: serde_json::Value,
+    pub configuration: crate::build_identity::BuildConfiguration,
     #[serde(default)]
     pub artifacts: BTreeMap<String, PathBuf>,
 }

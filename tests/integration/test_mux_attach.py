@@ -13,6 +13,7 @@ from pathlib import Path
 import pytest
 
 from tests.scenarios.tls_fixture import LocalTlsMux
+from tests.support.process import stop_process
 
 pytestmark = pytest.mark.gui
 
@@ -90,16 +91,8 @@ class MuxServer:
 
     def close(self):
         try:
-            os.killpg(self.process.pid, signal.SIGTERM)
-        except ProcessLookupError:
-            pass
-        try:
-            self.process.wait(timeout=5)
+            stop_process(self.process)
         finally:
-            try:
-                os.killpg(self.process.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
             self.log.close()
 
 

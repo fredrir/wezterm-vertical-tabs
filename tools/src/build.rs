@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context as _, Result, bail, ensure};
 use serde_json::{Value, json};
 
+use crate::build_identity::{BuildConfiguration, CargoConfig, Compilation, LockDigests, Toolchain};
 use crate::process::{CommandSpec, RunReport, relevant_environment};
 use crate::source;
 use crate::state::{self, BuildMetadata, Context, Role};
@@ -117,7 +118,7 @@ fn configuration_files(ctx: &Context, worktree: &Path) -> Vec<PathBuf> {
     files.into_iter().collect()
 }
 
-fn config_records(ctx: &Context, worktree: &Path) -> Result<Value> {
+fn config_records(ctx: &Context, worktree: &Path) -> Result<Vec<CargoConfig>> {
     configuration_files(ctx, worktree)
         .iter()
         .map(|path| {
@@ -131,13 +132,13 @@ fn config_records(ctx: &Context, worktree: &Path) -> Result<Value> {
                     settings[key] = value.clone();
                 }
             }
-            Ok(
-                json!({"path":path,"sha256":state::hash_bytes(contents.as_bytes()),
-                "settings_toml":settings.to_string()}),
-            )
+            Ok(CargoConfig {
+                path: path.clone(),
+                sha256: state::hash_bytes(contents.as_bytes()),
+                settings_toml: settings.to_string(),
+            })
         })
         .collect::<Result<Vec<_>>>()
-        .map(Value::Array)
 }
 
 fn requested_target(ctx: &Context, worktree: &Path) -> Result<Option<String>> {
@@ -228,7 +229,8 @@ fn restore_replay(ctx: &Context, worktree: &Path, revision: &str) -> Result<Opti
     Ok(Some(report))
 }
 
-fn verify_replay(report: &RunReport, configuration: &Value) -> Result<()> {
+fn verify_replay(report: &RunReport, configuration: &BuildConfiguration) -> Result<()> {
+    let configuration = serde_json::to_value(configuration)?;
     let Some(recorded) = report.metadata.get("build_configuration") else {
         return Ok(());
     };
@@ -275,16 +277,20 @@ fn read_optional(path: &Path) -> Result<Option<String>> {
     }
 }
 
-fn capture_locks(ctx: &Context, worktree: &Path) -> Result<Value> {
+fn capture_locks(ctx: &Context, worktree: &Path) -> Result<LockDigests> {
     let locks = json!({
         "project":read_optional(&ctx.root.join("Cargo.lock"))?,
         "upstream":read_optional(&worktree.join("Cargo.lock"))?,
     });
     ctx.runner.metadata("resolved_locks", &locks)?;
-    Ok(json!({
-        "project":locks["project"].as_str().map(|v| state::hash_bytes(v.as_bytes())),
-        "upstream":locks["upstream"].as_str().map(|v| state::hash_bytes(v.as_bytes())),
-    }))
+    Ok(LockDigests {
+        project: locks["project"]
+            .as_str()
+            .map(|v| state::hash_bytes(v.as_bytes())),
+        upstream: locks["upstream"]
+            .as_str()
+            .map(|v| state::hash_bytes(v.as_bytes())),
+    })
 }
 
 fn collect_artifacts(
@@ -457,52 +463,31 @@ pub fn restage(ctx: &Context, previous: &BuildMetadata) -> Result<Option<BuildMe
             .upstream
             .as_ref()
             .is_some_and(|v| v != &previous.upstream)
-        || previous.configuration["compile_inputs"].as_str()
-            != Some(&source::compile_digest(&ctx.root)?)
-        || previous.configuration["environment"] != serde_json::to_value(relevant_environment())?
+        || previous.configuration.compilation.compile_inputs != source::compile_digest(&ctx.root)?
+        || previous.configuration.compilation.environment != relevant_environment()
     {
         return Ok(None);
     }
     let worktree = ctx.cache.join("worktree");
     if !worktree.is_dir()
-        || previous.configuration["cargo_configs"] != config_records(ctx, &worktree)?
-        || previous.configuration["worktree_digest"].as_str()
-            != Some(&worktree_digest(ctx, &worktree)?)
+        || previous.configuration.compilation.cargo_configs != config_records(ctx, &worktree)?
+        || previous.configuration.compilation.worktree_digest != worktree_digest(ctx, &worktree)?
     {
         return Ok(None);
     }
-    let is_dev = ctx.profile == "iterate" || ctx.profile == "dev";
     if !is_dev {
-        for (key, program, argument, cwd) in [
-            (
-                "rustc",
-                std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into()),
-                "-vV",
-                &worktree,
-            ),
-            ("cargo", "cargo".into(), "-V", &worktree),
-            (
-                "project_rustc",
-                std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into()),
-                "-vV",
-                &ctx.root,
-            ),
-            ("project_cargo", "cargo".into(), "-V", &ctx.root),
-        ] {
-            if previous.configuration[key].as_str()
-                != Some(
-                    &ctx.runner
-                        .capture(CommandSpec::new(program).arg(argument).cwd(cwd))?,
-                )
-            {
-                return Ok(None);
-            }
+        if previous.configuration.compilation.toolchain != Toolchain::capture(ctx, &worktree)? {
+            return Ok(None);
         }
         for name in previous.role.binaries() {
             let Some(path) = previous.artifacts.get(*name).filter(|path| path.is_file()) else {
                 return Ok(None);
             };
-            if previous.configuration["artifact_sha256"][*name].as_str()
+            if previous
+                .configuration
+                .compilation
+                .artifact_sha256
+                .get(*name)
                 != Some(&crate::bundle::hash_file(path)?)
             {
                 return Ok(None);
@@ -570,25 +555,15 @@ pub fn build(ctx: &Context) -> Result<BuildMetadata> {
     let worktree = source::prepare(ctx, &resolved)?;
     let replay = restore_replay(ctx, &worktree, &resolved.revision)?;
     let target_dir = resolved.checkout.join("target");
-    let rustc = std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into());
-    let toolchain = ctx
-        .runner
-        .capture(CommandSpec::new(&rustc).arg("-vV").cwd(&worktree))?;
-    let cargo_version = ctx
-        .runner
-        .capture(CommandSpec::new("cargo").arg("-V").cwd(&worktree))?;
-    let project_toolchain = ctx
-        .runner
-        .capture(CommandSpec::new(&rustc).arg("-vV").cwd(&ctx.root))?;
-    let project_cargo = ctx
-        .runner
-        .capture(CommandSpec::new("cargo").arg("-V").cwd(&ctx.root))?;
+    let toolchain = Toolchain::capture(ctx, &worktree)?;
     let host = toolchain
+        .rustc
         .lines()
         .find_map(|line| line.strip_prefix("host: "))
-        .context("rustc host target missing")?;
+        .context("rustc host target missing")?
+        .to_owned();
     let requested = requested_target(ctx, &worktree)?;
-    let target = requested.as_deref().unwrap_or(host).to_string();
+    let target = requested.as_deref().unwrap_or(&host).to_string();
     ensure!(
         target
             .bytes()
@@ -601,21 +576,33 @@ pub fn build(ctx: &Context) -> Result<BuildMetadata> {
         &ctx.profile
     };
     let binaries = ctx.role.binaries();
-    let mut configuration = json!({
-        "version":2,"rustc":toolchain,"cargo":cargo_version,"target":target,"profile":profile,"role":ctx.role,
-        "project_rustc":project_toolchain,"project_cargo":project_cargo,
-        "compile_inputs":compile_inputs,"validation_inputs":validation_inputs,
-        "environment":relevant_environment(),"cargo_configs":config_records(ctx,&worktree)?,
-        "project_root":ctx.root,"target_directory":target_dir,"offline":ctx.offline,
-        "locks":capture_locks(ctx,&worktree)?,
-    });
-    ctx.runner.metadata("build_configuration", &configuration)?;
+    let mut configuration = BuildConfiguration {
+        compilation: Compilation {
+            version: 2,
+            toolchain,
+            target: target.clone(),
+            profile: profile.into(),
+            role: ctx.role,
+            compile_inputs,
+            environment: relevant_environment(),
+            cargo_configs: config_records(ctx, &worktree)?,
+            project_root: ctx.root.clone(),
+            target_directory: target_dir.clone(),
+            locks: capture_locks(ctx, &worktree)?,
+            ..Compilation::default()
+        },
+        validation_inputs,
+        offline: ctx.offline,
+    };
+    ctx.runner.metadata(
+        "build_configuration",
+        &serde_json::to_value(&configuration)?,
+    )?;
     if let Some(report) = &replay {
         verify_replay(report, &configuration)?;
     }
     let previous: Option<BuildMetadata> = state::read_json(&ctx.cache.join("build.json"))?;
     let mut artifacts = BTreeMap::new();
-    let is_dev = ctx.profile == "iterate" || ctx.profile == "dev";
     let profile_dir = if let Some(target) = &requested {
         target_dir.join(target).join(profile)
     } else {
@@ -674,8 +661,11 @@ pub fn build(ctx: &Context) -> Result<BuildMetadata> {
     // Preserve the actual resulting lock even when compilation fails.
     let output = ctx.runner.capture(application);
     preserve_cargo_timings(ctx, &target_dir)?;
-    configuration["locks"] = capture_locks(ctx, &worktree)?;
-    ctx.runner.metadata("build_configuration", &configuration)?;
+    configuration.compilation.locks = capture_locks(ctx, &worktree)?;
+    ctx.runner.metadata(
+        "build_configuration",
+        &serde_json::to_value(&configuration)?,
+    )?;
     let app_str = output?;
     print_warnings(&app_str);
     collect_artifacts(&app_str, binaries, &mut artifacts)?;
@@ -697,7 +687,7 @@ pub fn build(ctx: &Context) -> Result<BuildMetadata> {
             .map(|(name, path)| crate::bundle::hash_file(path).map(|digest| (name.clone(), digest)))
             .collect::<Result<BTreeMap<_, _>>>()?
     };
-    configuration["artifact_sha256"] = serde_json::to_value(artifact_hashes)?;
+    configuration.compilation.artifact_sha256 = artifact_hashes;
 
     #[cfg(windows)]
     {
@@ -710,25 +700,11 @@ pub fn build(ctx: &Context) -> Result<BuildMetadata> {
         )?;
     }
 
-    configuration["worktree_digest"] = json!(worktree_digest(ctx, &worktree)?);
+    configuration.compilation.worktree_digest = worktree_digest(ctx, &worktree)?;
     let mux_digest = source::mux_digest(ctx, &worktree, &resolved.revision)?;
     drop(compile_stage);
-    // Network availability changes resolution policy, not compiled output.
-    let mut identity_configuration = configuration.clone();
-    identity_configuration
-        .as_object_mut()
-        .context("build configuration is not an object")?
-        .remove("offline");
-    identity_configuration
-        .as_object_mut()
-        .unwrap()
-        .remove("validation_inputs");
-    let compile_digest = state::hash_bytes(&serde_json::to_vec(&json!({
-        "source":compile_inputs,"upstream":resolved.revision,"configuration":identity_configuration,
-    }))?);
-    let validation_digest = state::hash_bytes(&serde_json::to_vec(&json!({
-        "compile":compile_digest,"validation":validation_inputs,
-    }))?);
+    let compile_digest = configuration.compile_digest(&resolved.revision)?;
+    let validation_digest = configuration.validation_digest(&compile_digest)?;
     if is_dev {
         if ctx.explain {
             eprintln!("tests: skip validation tests during dev profile iteration");
@@ -787,11 +763,12 @@ const PREBUILT_ASSETS: &[&str] = &[
 pub fn prebuilt(ctx: &Context, metadata: &BuildMetadata, output: &Path) -> Result<PathBuf> {
     let _stage = ctx.runner.stage("prebuilt");
     let worktree = ctx.cache.join("worktree");
-    let target_dir = metadata.configuration["target_directory"]
-        .as_str()
-        .map(PathBuf::from)
-        .context("build target directory missing")?;
-    let tool = cargo(ctx, &ctx.root, &target_dir, "build")
+    let target_dir = &metadata.configuration.compilation.target_directory;
+    ensure!(
+        !target_dir.as_os_str().is_empty(),
+        "build target directory missing"
+    );
+    let tool = cargo(ctx, &ctx.root, target_dir, "build")
         .args([
             "--locked",
             "--message-format=json-render-diagnostics",
