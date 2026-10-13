@@ -1,6 +1,6 @@
 use serde_json::{Value, json};
 use std::time::Duration;
-use vtabs_core::{Dimension, Intent, Model, Tab};
+use vtabs_core::{Dimension, HostTab, Intent, Model};
 use vtabs_ui::{ElementId, Key, Modifiers, MouseButton, Rect, SidebarUi, UiInput, UiIntent};
 
 fn draw(ui: &mut SidebarUi, model: &Model) {
@@ -804,12 +804,12 @@ fn tab_title_follows_its_source_unless_renamed_and_glyphs_can_hide() {
         let mut model = Model::default();
         model.settings.animations = false;
         model.home = Some("/home/me".into());
-        let tab = Tab {
+        let tab = HostTab {
             id: 1,
             title: "notes.md".into(),
             cwd: "/home/me/notes".into(),
             process: "/usr/bin/nvim".into(),
-            ..Tab::default()
+            ..HostTab::default()
         };
         model.reconcile(vec![tab], Some(1), true).unwrap();
         change(&mut model);
@@ -846,10 +846,10 @@ fn with_tabs(count: u64) -> (SidebarUi, Model) {
     let mut model = Model::default();
     model.settings.animations = false;
     let tabs = (1..=count)
-        .map(|id| Tab {
+        .map(|id| HostTab {
             id,
             title: format!("Tab {id}"),
-            ..Tab::default()
+            ..HostTab::default()
         })
         .collect();
     model.reconcile(tabs, Some(1), true).unwrap();

@@ -1,4 +1,27 @@
-use vtabs_core::{PaneId, SpaceId, TabId};
+use vtabs_core::{Model, PaneId, SpaceId, TabId};
+
+/// A model entity referenced by an interaction, independent of its visual control.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum EntityRef<'a> {
+    Tab(TabId),
+    Pane(TabId, PaneId),
+    Space(&'a str),
+    Folder(&'a str),
+}
+
+impl EntityRef<'_> {
+    pub(crate) fn exists(self, model: &Model) -> bool {
+        match self {
+            Self::Tab(id) => model.tabs.contains_key(&id),
+            Self::Pane(tab, pane) => model
+                .tabs
+                .get(&tab)
+                .is_some_and(|tab| tab.panes.iter().any(|entry| entry.id == pane)),
+            Self::Space(id) => model.spaces.iter().any(|space| space.id == id),
+            Self::Folder(id) => model.folders.iter().any(|folder| folder.id == id),
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ScrollArea {
@@ -48,6 +71,22 @@ pub enum ElementId {
 }
 
 impl ElementId {
+    pub(crate) fn entity(&self) -> Option<EntityRef<'_>> {
+        match self {
+            Self::Tab(id) | Self::CloseTab(id) => Some(EntityRef::Tab(*id)),
+            Self::Pane(tab, pane) | Self::ClosePane(tab, pane) => {
+                Some(EntityRef::Pane(*tab, *pane))
+            }
+            Self::Space(id) => Some(EntityRef::Space(id)),
+            Self::Folder(id) => Some(EntityRef::Folder(id)),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn exists(&self, model: &Model) -> bool {
+        self.entity().is_none_or(|entity| entity.exists(model))
+    }
+
     pub(crate) fn row(&self) -> ElementId {
         match self {
             Self::CloseTab(id) | Self::Pane(id, _) | Self::ClosePane(id, _) => Self::Tab(*id),

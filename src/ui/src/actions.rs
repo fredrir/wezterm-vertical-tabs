@@ -1,5 +1,5 @@
 use crate::SidebarUi;
-use crate::element::ElementId;
+use crate::element::{ElementId, EntityRef};
 use crate::input::{Key, Modifiers, TextEditor};
 use crate::intent::{HostAction, UiIntent};
 use crate::overlays::{FormKind, MenuItem, Overlay};
@@ -39,6 +39,91 @@ pub(crate) enum Action {
     Close,
 }
 
+impl Action {
+    pub(crate) fn prune(&mut self, model: &Model) -> bool {
+        match self {
+            Self::Submenu { items, .. } => items.retain_mut(|item| item.prune(model)),
+            Self::Confirm { action, .. } => return action.prune(model),
+            _ => {}
+        }
+        self.exists(model)
+    }
+
+    pub(crate) fn exists(&self, model: &Model) -> bool {
+        match self {
+            Self::Domain(
+                Intent::ActivateTab(id)
+                | Intent::CloseTab(id)
+                | Intent::CloseOthers(id)
+                | Intent::CloseBelow(id)
+                | Intent::ReturnToAuto(id)
+                | Intent::MoveTabToNewWindow(id)
+                | Intent::RenameTab { id, .. }
+                | Intent::PinTab { id, .. }
+                | Intent::MoveTab { id, .. },
+            )
+            | Self::RenameTab(id)
+            | Self::MoveTab(id)
+            | Self::MoveToFolder(id)
+            | Self::CloseTab(id)
+            | Self::Host(HostAction::CloseTab(id) | HostAction::MoveTabToNewWindow(id)) => {
+                EntityRef::Tab(*id).exists(model)
+            }
+            Self::Domain(Intent::AssignTab { id, space_id }) => {
+                EntityRef::Tab(*id).exists(model) && EntityRef::Space(space_id).exists(model)
+            }
+            Self::Domain(
+                Intent::SelectSpace(id)
+                | Intent::ToggleSpace(id)
+                | Intent::RenameSpace { id, .. }
+                | Intent::EditSpace { id, .. }
+                | Intent::MoveSpace { id, .. },
+            )
+            | Self::RenameSpace(id)
+            | Self::EditSpaceIcon(id)
+            | Self::EditSpaceAccent(id)
+            | Self::EditSpaceRules(id)
+            | Self::DeleteSpace(id) => EntityRef::Space(id).exists(model),
+            Self::Domain(Intent::DeleteSpace { id, destination }) => {
+                model.spaces.len() > 1
+                    && EntityRef::Space(id).exists(model)
+                    && destination
+                        .as_ref()
+                        .is_none_or(|id| EntityRef::Space(id).exists(model))
+            }
+            Self::Domain(
+                Intent::RenameFolder { id, .. }
+                | Intent::ToggleFolder(id)
+                | Intent::DeleteFolder(id)
+                | Intent::MoveFolder { id, .. }
+                | Intent::NewTabInFolder(id),
+            )
+            | Self::RenameFolder(id) => EntityRef::Folder(id).exists(model),
+            Self::Domain(Intent::AssignFolder { tab_id, folder_id }) => {
+                EntityRef::Tab(*tab_id).exists(model)
+                    && folder_id
+                        .as_ref()
+                        .is_none_or(|id| EntityRef::Folder(id).exists(model))
+            }
+            Self::KillPane(tab, pane)
+            | Self::Host(
+                HostAction::FocusPane(tab, pane)
+                | HostAction::ClosePane(tab, pane)
+                | HostAction::KillPane(tab, pane)
+                | HostAction::DetachPane { tab, pane, .. },
+            ) => EntityRef::Pane(*tab, *pane).exists(model),
+            Self::Host(HostAction::JoinTab { source, tab }) => {
+                EntityRef::Tab(*source).exists(model) && EntityRef::Tab(*tab).exists(model)
+            }
+            Self::EditorCommand { target, .. } => target.exists(model),
+            Self::Confirm { action, .. } => action.exists(model),
+            Self::Submenu { items, .. } => items.iter().any(|item| item.action.exists(model)),
+            // Foreign tabs and adoptable panes are deliberately outside this model.
+            _ => true,
+        }
+    }
+}
+
 impl SidebarUi {
     pub(crate) fn activate_element(
         &mut self,
@@ -46,6 +131,9 @@ impl SidebarUi {
         id: ElementId,
         intents: &mut Vec<UiIntent>,
     ) {
+        if !id.exists(model) {
+            return;
+        }
         match id {
             ElementId::Search => intents.push(UiIntent::Host(HostAction::SearchTabs)),
             ElementId::RecordShortcut => self.toggle_shortcut_recording(),
@@ -97,7 +185,7 @@ impl SidebarUi {
                 }));
             }
             ElementId::Menu(id) => {
-                let action = match &self.overlays.current {
+                let action = match self.overlays.current() {
                     Some(Overlay::Menu(menu)) => menu
                         .items
                         .iter()
@@ -114,7 +202,7 @@ impl SidebarUi {
                 self.edit_setting(model, &key, intents);
             }
             ElementId::MenuRemove(id) => {
-                let remove = match &self.overlays.current {
+                let remove = match self.overlays.current() {
                     Some(Overlay::Menu(menu)) => menu
                         .items
                         .iter()
@@ -146,6 +234,9 @@ impl SidebarUi {
         action: Action,
         intents: &mut Vec<UiIntent>,
     ) {
+        if !action.exists(model) {
+            return;
+        }
         match action {
             Action::Domain(intent) => {
                 intents.push(UiIntent::Domain(intent));
@@ -317,7 +408,7 @@ impl SidebarUi {
     }
 
     pub(crate) fn close_tab(&mut self, model: &Model, id: TabId, intents: &mut Vec<UiIntent>) {
-        if !model.tabs.contains_key(&id) {
+        if !EntityRef::Tab(id).exists(model) {
             return;
         }
         if model.settings.confirm_close {
@@ -329,7 +420,7 @@ impl SidebarUi {
     }
 
     pub(crate) fn edit_setting(&mut self, model: &Model, key: &str, intents: &mut Vec<UiIntent>) {
-        if self.overlays.current.is_some() {
+        if self.overlays.is_open() {
             self.dismiss();
         }
         let target = SettingTarget::of(key);
@@ -373,7 +464,7 @@ impl SidebarUi {
                     .find(|(anchored, _)| anchored == key)
                     .map(|(_, rect)| *rect);
                 self.push_menu(descriptor.label, items);
-                if let Some(Overlay::Menu(menu)) = &mut self.overlays.current {
+                if let Some(Overlay::Menu(menu)) = self.overlays.current_mut() {
                     menu.checked = choices
                         .iter()
                         .position(|choice| value.as_str() == Some(*choice));

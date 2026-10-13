@@ -2,8 +2,8 @@
 use super::*;
 
 pub(super) struct Hooks {
-    metadata: HashMap<u64, core::Tab>,
-    queued: HashMap<u64, core::Tab>,
+    metadata: HashMap<u64, core::HostTab>,
+    queued: HashMap<u64, core::HostTab>,
     pending: bool,
     enabled: bool,
     window_dirty: bool,
@@ -38,7 +38,7 @@ impl Hooks {
         self.window_dirty = true;
     }
 
-    pub fn observe(&mut self, tabs: &[core::Tab]) {
+    pub fn observe(&mut self, tabs: &[core::HostTab]) {
         let ids: std::collections::HashSet<_> = tabs.iter().map(|tab| tab.id).collect();
         self.metadata.retain(|id, _| ids.contains(id));
         if self.enabled {
@@ -82,7 +82,9 @@ impl Hooks {
         let mut tabs = Vec::with_capacity(ids.len().min(lua::MAX_HOOK_TABS));
         for id in ids.into_iter().take(lua::MAX_HOOK_TABS) {
             if let Some(tab) = self.queued.remove(&id) {
-                tabs.push((app.hook_token(Some(tab.id)), tab));
+                // Lua hooks keep their existing full-Tab wire shape, including
+                // default application fields that are absent from host facts.
+                tabs.push((app.hook_token(Some(tab.id)), tab.into()));
             }
         }
         self.pending = true;

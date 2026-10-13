@@ -125,12 +125,13 @@ impl SidebarUi {
         let hit = self.hit_test(x, y).map(|hit| hit.id.clone());
         if hit != self.pointer.hovered {
             self.pointer.hovered = hit;
-            self.tooltip.shown = false;
-            self.tooltip.deadline = (described
-                && self.overlays.current.is_none()
-                && self.host.focused
-                && !self.pointer.dragging)
-                .then_some(self.frame.now + motion::TOOLTIP_DELAY);
+            self.tooltip.arm(
+                (described
+                    && !self.overlays.is_open()
+                    && self.host.focused
+                    && !self.pointer.dragging)
+                    .then_some(self.frame.now + motion::TOOLTIP_DELAY),
+            );
             self.start_effect(model);
             self.frame.dirty = true;
         }
@@ -147,20 +148,19 @@ impl SidebarUi {
     ) {
         self.tooltip.hide();
         let hit = self.hit_test(x, y).map(|hit| hit.id.clone());
-        if self.settings.entry.is_some()
-            && hit.as_ref().and_then(ElementId::setting)
-                != self.settings.entry.as_ref().map(|entry| entry.key.as_str())
+        if self.settings.editing.has_entry()
+            && hit.as_ref().and_then(ElementId::setting) != self.settings.editing.entry_key()
         {
             self.commit_entry(intents);
         }
-        if self.settings.recording
-            && self.overlays.current.is_none()
+        if self.settings.editing.recording()
+            && !self.overlays.is_open()
             && !matches!(hit, Some(ElementId::SettingsRecord))
         {
-            self.settings.recording = false;
+            self.settings.editing.stop_recording();
             self.frame.dirty = true;
         }
-        if self.overlays.current.is_some() && !self.overlays.rect.contains(Position::new(x, y)) {
+        if self.overlays.is_open() && !self.overlays.rect().contains(Position::new(x, y)) {
             if let Some(target) = self.editor_menu_target() {
                 self.restore_editor(target);
             } else {
@@ -173,7 +173,7 @@ impl SidebarUi {
         }
         self.pointer.origin = Some((x, y));
         self.pointer.dragging = false;
-        if button == MouseButton::Right && self.overlays.current.is_none() {
+        if button == MouseButton::Right && !self.overlays.is_open() {
             self.set_anchor(x, y);
         }
         match (button, hit) {
@@ -196,7 +196,7 @@ impl SidebarUi {
             }
             (MouseButton::Left, Some(ElementId::Slider(key))) => {
                 if !self.settings.managed_in_lua(model, &key) {
-                    self.settings.entry = None;
+                    self.settings.editing.cancel_entry();
                     self.caret.stop();
                     self.settings_focus_setting(model, &key);
                     self.pointer.drag = Some(ElementId::Slider(key.clone()));
@@ -225,7 +225,7 @@ impl SidebarUi {
                 self.start_rename(model, id);
             }
             (MouseButton::Left, Some(id)) => {
-                if matches!(self.overlays.current, Some(Overlay::Form(_))) {
+                if matches!(self.overlays.current(), Some(Overlay::Form(_))) {
                     self.caret.stop();
                 }
                 self.pointer.press = Some(Press {
@@ -243,7 +243,7 @@ impl SidebarUi {
                 self.pointer.drag = Some(id);
                 self.frame.dirty = true;
             }
-            (MouseButton::Right, None) if self.overlays.current.is_none() => self.root_menu(model),
+            (MouseButton::Right, None) if !self.overlays.is_open() => self.root_menu(model),
             _ => {}
         }
     }
@@ -273,28 +273,21 @@ impl SidebarUi {
             return;
         }
         if let Some(ElementId::Slider(key)) = &down {
-            if let Some((dragged, value)) = self.settings.drag.take()
-                && &dragged == key
-                && let Some(range) =
-                    vtabs_core::settings::descriptor(key).and_then(|field| Range::of(&field.kind))
-            {
-                intents.push(UiIntent::Domain(vtabs_core::Intent::SetSetting {
-                    key: dragged,
-                    value: range.json(value),
-                }));
+            if let Some(intent) = self.settings.editing.commit_slider(key) {
+                intents.push(UiIntent::Domain(intent));
             }
             return;
         }
         let up = self.hit_test(x, y).map(|hit| hit.id.clone());
         if down.is_some() && down == up {
             let to = up.unwrap();
-            if self.overlays.current.is_none() {
+            if !self.overlays.is_open() {
                 self.set_anchor(x, y);
             }
             self.pointer.last_click = Some((to.clone(), self.frame.now));
             self.activate_element(model, to, intents);
-            if self.overlays.current.is_none() {
-                self.overlays.anchor = None;
+            if !self.overlays.is_open() {
+                self.overlays.set_anchor(None);
             }
             return;
         }
@@ -305,7 +298,7 @@ impl SidebarUi {
     }
 
     pub(crate) fn scroll(&mut self, model: &Model, x: u16, y: u16, rows: i32) {
-        if let Some(overlay) = &mut self.overlays.current {
+        if let Some(overlay) = self.overlays.current_mut() {
             match overlay {
                 Overlay::Menu(menu) => menu.scroll_by(rows),
                 Overlay::Form(_) => {}
@@ -323,7 +316,7 @@ impl SidebarUi {
 
     fn scrollbar(&self, area: ScrollArea) -> Option<Scrollbar> {
         match area {
-            ScrollArea::Launcher => match &self.overlays.current {
+            ScrollArea::Launcher => match self.overlays.current() {
                 Some(Overlay::Menu(menu)) => menu.search.as_ref()?.scrollbar,
                 _ => None,
             },
@@ -339,7 +332,7 @@ impl SidebarUi {
         let offset = scrollbar.offset(y, self.pointer.scrollbar_grab);
         match area {
             ScrollArea::Launcher => {
-                if let Some(Overlay::Menu(menu)) = &mut self.overlays.current {
+                if let Some(Overlay::Menu(menu)) = self.overlays.current_mut() {
                     menu.scroll = offset;
                 }
             }
@@ -364,12 +357,12 @@ impl SidebarUi {
         };
         let at = (f32::from(x) - f32::from(track.x) + self.pointer.fraction.0 - 1.)
             / f32::from(track.width.saturating_sub(2).max(1));
-        self.settings.drag = Some((key.into(), range.at(at)));
+        self.settings.editing.preview_slider(key, range.at(at));
         self.frame.dirty = true;
     }
 
     fn double_clicked_title(&self, id: TabId, x: u16, y: u16) -> bool {
-        self.overlays.current.is_none()
+        !self.overlays.is_open()
             && self
                 .sidebar
                 .title_rects
@@ -382,10 +375,10 @@ impl SidebarUi {
 
     fn set_anchor(&mut self, x: u16, y: u16) {
         let origin = self.sidebar.rect;
-        self.overlays.anchor = Some((
+        self.overlays.set_anchor(Some((
             i32::from(x) - i32::from(origin.x),
             i32::from(y) - i32::from(origin.y),
-        ));
+        )));
     }
 
     pub(crate) fn anchor_focused(&mut self, id: &ElementId) {
@@ -400,7 +393,7 @@ impl SidebarUi {
             (i32::from(base) + offset).clamp(0, i32::from(u16::MAX)) as u16
         };
         self.overlays
-            .anchor
+            .anchor()
             .map(|(x, y)| Position::new(resolve(origin.x, x), resolve(origin.y, y)))
     }
 }

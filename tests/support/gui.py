@@ -8,6 +8,7 @@ import time
 from pathlib import Path
 
 from tests.support.headless import HeadlessDisplay
+from tests.support.polling import check_process, log_diagnostics, wait_until
 from tests.support.probe import Probe
 
 
@@ -29,8 +30,7 @@ class GuiInput:
         ).stdout.strip()
 
     def attach(self):
-        deadline = time.monotonic() + 10
-        while time.monotonic() < deadline:
+        def ready():
             result = subprocess.run(
                 ["xdotool", "search", "--onlyvisible", "--class", self.probe.identity],
                 env=self.display.env,
@@ -42,11 +42,17 @@ class GuiInput:
                 windows = result.stdout.splitlines()
                 if len(windows) != 1:
                     raise AssertionError(f"Expected one owned GUI window, found {windows}")
-                self.window = windows[0]
-                self.command("windowactivate", "--sync", self.window)
-                return
-            time.sleep(0.05)
-        raise AssertionError("Owned GUI window was not mapped on the private display")
+                return windows[0]
+            return None
+
+        self.window = wait_until(
+            ready,
+            timeout=10,
+            message="Owned GUI window was not mapped on the private display",
+            check_live=lambda: check_process(self.probe.gui_process, "GUI"),
+            diagnostics=lambda: log_diagnostics(self.probe.root / "gui.log"),
+        )
+        self.command("windowactivate", "--sync", self.window)
 
     def key(self, chord):
         self.command("key", "--clearmodifiers", chord)
@@ -156,11 +162,14 @@ class GuiInput:
         )
         self.key("Return")
         path = self.probe.root / "physical-input.bin"
-        deadline = time.monotonic() + 5
-        while not path.exists():
-            if time.monotonic() > deadline:
-                raise AssertionError("Physical terminal input capture did not start")
-            time.sleep(0.02)
+        wait_until(
+            path.exists,
+            timeout=5,
+            interval=0.02,
+            message="Physical terminal input capture did not start",
+            check_live=lambda: check_process(self.probe.gui_process, "GUI"),
+            diagnostics=lambda: log_diagnostics(self.probe.root / "gui.log"),
+        )
         return path
 
     def focus_terminal(self):

@@ -1,20 +1,87 @@
-//! Remote panes in this host's backing workspace: spawned, adopted and restored here.
+//! Remote pane operations: mirrored launches and this host's backing workspace.
 use crate::client::Client;
 use crate::domain::snapshot::leaves;
 use crate::domain::{ClientDomain, ClientInner};
 use crate::pane::ClientPane;
 use anyhow::anyhow;
-use codec::{GetCodecVersionResponse, ListPanesResponse, MovePaneToNewTab, SpawnV2};
+use codec::{
+    GetCodecVersionResponse, ListPanesResponse, MovePaneToNewTab, SpawnBesidePane, SpawnV2,
+};
 use config::keyassignment::SpawnTabDomain;
+use mux::Mux;
 use mux::pane::{Pane, PaneId};
 use mux::tab::{PaneEntry, Tab};
 use mux::window::WindowId;
-use mux::Mux;
 use portable_pty::CommandBuilder;
 use std::sync::Arc;
 use wezterm_term::TerminalSize;
 
 impl ClientDomain {
+    /// Checks a local launch target before the caller changes its visible session.
+    pub fn validate_spawn_beside_pane(&self, local_pane_id: PaneId) -> anyhow::Result<()> {
+        self.spawn_beside_remote_pane(local_pane_id).map(|_| ())
+    }
+
+    fn spawn_beside_remote_pane(&self, local_pane_id: PaneId) -> anyhow::Result<PaneId> {
+        anyhow::ensure!(
+            !self.local_pane_layout(),
+            "spawn beside a pane requires a mirrored client domain"
+        );
+        let pane = Mux::get()
+            .get_pane(local_pane_id)
+            .ok_or_else(|| anyhow!("pane {local_pane_id} is no longer open"))?;
+        anyhow::ensure!(
+            pane.domain_id() == self.local_domain_id,
+            "pane {local_pane_id} does not belong to this client domain"
+        );
+        pane.downcast_ref::<ClientPane>()
+            .map(ClientPane::remote_pane_id)
+            .ok_or_else(|| anyhow!("not a client pane"))
+    }
+
+    /// Spawns alongside a local pane's server-side process in `workspace`, then
+    /// returns the pane from this client's mirror of the new remote tab.
+    pub async fn spawn_beside_pane(
+        &self,
+        local_pane_id: PaneId,
+        size: TerminalSize,
+        command: Option<CommandBuilder>,
+        command_dir: Option<String>,
+        workspace: String,
+    ) -> anyhow::Result<Arc<dyn Pane>> {
+        let pane_id = self.spawn_beside_remote_pane(local_pane_id)?;
+        let inner = self
+            .inner()
+            .ok_or_else(|| anyhow!("domain has no assigned client"))?;
+        let spawned = inner
+            .client
+            .spawn_beside_pane(SpawnBesidePane {
+                pane_id,
+                command,
+                command_dir,
+                size,
+                workspace,
+            })
+            .await?;
+        self.ensure_spawn_client(&inner)?;
+        Self::resync_inner(Arc::clone(&inner)).await?;
+        self.ensure_spawn_client(&inner)?;
+        inner
+            .remote_to_local_pane_id(spawned.pane_id)
+            .and_then(|id| Mux::get().get_pane(id))
+            .ok_or_else(|| anyhow!("pane {} not mirrored", spawned.pane_id))
+    }
+
+    fn ensure_spawn_client(&self, expected: &Arc<ClientInner>) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            self.inner()
+                .as_ref()
+                .is_some_and(|current| Arc::ptr_eq(current, expected)),
+            "client domain detached or replaced while spawning a pane"
+        );
+        Ok(())
+    }
+
     /// Remote panes this mux could show; see [`adoptable`].
     pub async fn adoptable_panes(&self) -> anyhow::Result<Vec<PaneEntry>> {
         let inner = self.adoption_inner()?;

@@ -5,7 +5,7 @@ fn discover(app: &mut WindowApp, revision: u64, ids: &[u64]) {
         revision,
         tabs: ids
             .iter()
-            .map(|id| core::Tab {
+            .map(|id| core::HostTab {
                 id: *id,
                 ..Default::default()
             })

@@ -12,13 +12,13 @@ import socket
 import subprocess
 import sys
 import tempfile
-import time
 from contextlib import ExitStack
 from pathlib import Path
 
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
+from tests.support.polling import check_process, log_diagnostics, wait_until
 from tests.support.process import stop_process
 
 
@@ -126,17 +126,28 @@ class LocalSshMux:
             str(port),
             f"{user}@127.0.0.1",
         ]
-        deadline = time.monotonic() + 5
-        while True:
-            if daemon.poll() is not None:
-                raise RuntimeError((self.root / "sshd.log").read_text())
+        connection_error = None
+
+        def listening():
+            nonlocal connection_error
             try:
                 with socket.create_connection(("127.0.0.1", port), timeout=0.1):
-                    break
+                    return True
             except OSError as error:
-                if time.monotonic() > deadline:
-                    raise RuntimeError("isolated sshd did not begin listening") from error
-                time.sleep(0.05)
+                connection_error = error
+                return False
+
+        wait_until(
+            listening,
+            timeout=5,
+            message="isolated sshd did not begin listening",
+            check_live=lambda: check_process(daemon, "isolated sshd", error=RuntimeError),
+            diagnostics=lambda: (
+                f"last connection error: {connection_error!r}\n"
+                + log_diagnostics(self.root / "sshd.log")
+            ),
+            error=RuntimeError,
+        )
         subprocess.run(
             self.ssh + ["printf VTABS_SSH_OK"],
             check=True,
@@ -168,13 +179,14 @@ class LocalSshMux:
         }
         env.update(remote)
         mux = self.launch([str(server), "--config-file", str(config)], "mux.log", env)
-        deadline = time.monotonic() + 10
-        while not socket_path.exists():
-            if mux.poll() is not None or time.monotonic() > deadline:
-                raise RuntimeError(
-                    "isolated mux startup failed: " + (self.root / "mux.log").read_text()
-                )
-            time.sleep(0.05)
+        wait_until(
+            socket_path.exists,
+            timeout=10,
+            message="isolated mux startup failed",
+            check_live=lambda: check_process(mux, "isolated mux", error=RuntimeError),
+            diagnostics=lambda: log_diagnostics(self.root / "mux.log"),
+            error=RuntimeError,
+        )
         command = ["env"] + [f"{key}={value}" for key, value in remote.items()]
         command += [
             str(cli),

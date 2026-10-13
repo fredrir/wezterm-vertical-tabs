@@ -6,7 +6,7 @@ use std::{
     sync::atomic::{AtomicBool, AtomicU64, Ordering::Relaxed},
     time::{Duration, Instant},
 };
-use vtabs_core::{Folder, Intent, LaunchSpec, Model, Tab};
+use vtabs_core::{Folder, HostTab, Intent, LaunchSpec, Model};
 use vtabs_store::{Key, Operation, Request, Scope, sqlite};
 use vtabs_ui::{ElementId, Rect, SidebarUi, UiInput};
 
@@ -104,9 +104,9 @@ impl Bench {
     }
 }
 
-fn fixture(count: usize, folder_count: usize) -> (Model, Vec<Tab>) {
+fn fixture(count: usize, folder_count: usize) -> (Model, Vec<HostTab>) {
     let tabs: Vec<_> = (1..=count)
-        .map(|id| Tab {
+        .map(|id| HostTab {
             id: id as u64,
             title: format!("Terminal {id}"),
             cwd: format!("/home/user/projects/project-{}", id % 20),
@@ -114,7 +114,7 @@ fn fixture(count: usize, folder_count: usize) -> (Model, Vec<Tab>) {
             host: "workstation".into(),
             user: "user".into(),
             process: "zsh".into(),
-            ..Tab::default()
+            ..HostTab::default()
         })
         .collect();
     let mut model = Model::default();

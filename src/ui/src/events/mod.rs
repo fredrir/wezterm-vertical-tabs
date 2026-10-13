@@ -37,13 +37,7 @@ impl EditorSlot {
 
 impl SidebarUi {
     pub fn event(&mut self, model: &Model, event: UiInput) -> Vec<UiIntent> {
-        if self
-            .overlays
-            .pending_form
-            .is_some_and(|revision| revision != model.revision)
-        {
-            self.dismiss();
-        }
+        self.prepare(model, self.frame.now);
         let mut intents = Vec::new();
         match event {
             UiInput::Focus(focused) => {
@@ -105,11 +99,17 @@ impl SidebarUi {
     }
 
     pub fn clipboard_failed(&mut self, message: &str) {
-        if matches!(self.overlays.current, Some(Overlay::Form(_))) {
+        if matches!(self.overlays.current(), Some(Overlay::Form(_))) {
             self.set_error(message);
         } else {
-            self.overlays.stash();
-            self.show_error(message);
+            self.push_menu(
+                message,
+                vec![crate::overlays::MenuItem::new(
+                    "dismiss",
+                    "Dismiss",
+                    crate::actions::Action::Close,
+                )],
+            );
         }
     }
 
@@ -157,7 +157,7 @@ impl SidebarUi {
     }
 
     pub(crate) fn edited(&mut self, slot: EditorSlot) {
-        match (slot, &mut self.overlays.current) {
+        match (slot, self.overlays.current_mut()) {
             (EditorSlot::Form, Some(Overlay::Form(form))) => {
                 form.error = form
                     .color
@@ -199,7 +199,7 @@ impl SidebarUi {
     }
 
     pub(crate) fn active_editor(&self) -> Option<EditorSlot> {
-        match &self.overlays.current {
+        match self.overlays.current() {
             Some(Overlay::Form(_)) => {
                 (self.focused == Some(ElementId::Editor)).then_some(EditorSlot::Form)
             }
@@ -209,14 +209,16 @@ impl SidebarUi {
                 .filter(|search| search.edits_query())
                 .map(|_| EditorSlot::Palette),
             None if self.sidebar.rename.is_some() => Some(EditorSlot::Rename),
-            None if self.settings.open && self.settings.entry.is_some() => Some(EditorSlot::Entry),
+            None if self.settings.open && self.settings.editing.has_entry() => {
+                Some(EditorSlot::Entry)
+            }
             None => (self.settings.open && self.focused == Some(ElementId::SettingsSearch))
                 .then_some(EditorSlot::SettingsSearch),
         }
     }
 
     pub(crate) fn editor_slot(&self, id: &ElementId) -> Option<EditorSlot> {
-        match (id, &self.overlays.current) {
+        match (id, self.overlays.current()) {
             (ElementId::Editor, Some(Overlay::Form(_))) => Some(EditorSlot::Form),
             (ElementId::Editor, Some(Overlay::Menu(menu))) => menu
                 .search
@@ -227,28 +229,30 @@ impl SidebarUi {
             (ElementId::SettingsSearch, None) => {
                 self.settings.open.then_some(EditorSlot::SettingsSearch)
             }
-            (ElementId::SettingsEntry, None) => {
-                self.settings.entry.as_ref().map(|_| EditorSlot::Entry)
-            }
+            (ElementId::SettingsEntry, None) => self
+                .settings
+                .editing
+                .has_entry()
+                .then_some(EditorSlot::Entry),
             _ => None,
         }
     }
 
     pub(crate) fn editor(&self, slot: EditorSlot) -> Option<&TextEditor> {
-        match (slot, &self.overlays.current) {
+        match (slot, self.overlays.current()) {
             (EditorSlot::Form, Some(Overlay::Form(form))) => Some(&form.editor),
             (EditorSlot::Palette, Some(Overlay::Menu(menu))) => {
                 menu.search.as_ref().map(|search| &search.editor)
             }
             (EditorSlot::Rename, _) => self.sidebar.rename.as_ref().map(|rename| &rename.editor),
             (EditorSlot::SettingsSearch, _) => Some(&self.settings.query),
-            (EditorSlot::Entry, _) => self.settings.entry.as_ref().map(|entry| &entry.editor),
+            (EditorSlot::Entry, _) => self.settings.editing.editor(),
             _ => None,
         }
     }
 
     fn editor_mut(&mut self, slot: EditorSlot) -> Option<&mut TextEditor> {
-        match (slot, &mut self.overlays.current) {
+        match (slot, self.overlays.current_mut()) {
             (EditorSlot::Form, Some(Overlay::Form(form))) => Some(&mut form.editor),
             (EditorSlot::Palette, Some(Overlay::Menu(menu))) => {
                 menu.search.as_mut().map(|search| &mut search.editor)
@@ -259,7 +263,7 @@ impl SidebarUi {
                 .as_mut()
                 .map(|rename| &mut rename.editor),
             (EditorSlot::SettingsSearch, _) => Some(&mut self.settings.query),
-            (EditorSlot::Entry, _) => self.settings.entry.as_mut().map(|entry| &mut entry.editor),
+            (EditorSlot::Entry, _) => self.settings.editing.editor_mut(),
             _ => None,
         }
     }

@@ -158,6 +158,25 @@ pub fn source_digest(root: &Path) -> Result<String> {
     digest_paths(root, &source_files(root)?)
 }
 
+pub fn is_compile_input(relative: &Path) -> bool {
+    matches!(
+        relative.to_str(),
+        Some("Cargo.toml" | "Cargo.lock" | "rust-toolchain" | "rust-toolchain.toml")
+    ) || relative.starts_with(".cargo")
+        || relative.starts_with("wezterm")
+        || (relative.starts_with("src")
+            && !relative.components().any(|part| {
+                matches!(
+                    part.as_os_str().to_str(),
+                    Some("tests" | "benches" | "examples")
+                )
+            })
+            && !matches!(
+                relative.extension().and_then(|v| v.to_str()),
+                Some("md" | "rst")
+            ))
+}
+
 pub fn compile_digest(root: &Path) -> Result<String> {
     let files = source_files(root)?;
     digest_paths(
@@ -166,26 +185,7 @@ pub fn compile_digest(root: &Path) -> Result<String> {
             let relative = path
                 .strip_prefix(root)
                 .expect("source file belongs to root");
-            if relative == Path::new("Cargo.toml")
-                || relative == Path::new("Cargo.lock")
-                || relative == Path::new("rust-toolchain")
-                || relative == Path::new("rust-toolchain.toml")
-                || relative.starts_with(".cargo")
-                || relative.starts_with("wezterm")
-            {
-                return true;
-            }
-            relative.starts_with("src")
-                && !relative.components().any(|part| {
-                    matches!(
-                        part.as_os_str().to_str(),
-                        Some("tests" | "benches" | "examples")
-                    )
-                })
-                && !matches!(
-                    path.extension().and_then(|v| v.to_str()),
-                    Some("md" | "rst")
-                )
+            is_compile_input(relative)
         }),
     )
 }

@@ -12,6 +12,7 @@ from contextlib import ExitStack
 from pathlib import Path
 
 from tests.support.headless import HeadlessDisplay
+from tests.support.polling import check_process, log_diagnostics, wait_until
 from tests.support.process import stop_process
 
 CONFIG = r"""
@@ -292,12 +293,14 @@ class Probe:
             if os.name == "nt":
                 raise RuntimeError("Unix mux is unavailable on Windows; use local or SSH")
             server = self.gui.with_name("wezterm-mux-server")
-            self.start_process([server, "--config-file", self.config], "mux.log")
-            deadline = time.monotonic() + 15
-            while not (self.root / "mux.sock").exists():
-                if time.monotonic() > deadline:
-                    raise AssertionError("owned Unix mux did not start")
-                time.sleep(0.05)
+            mux = self.start_process([server, "--config-file", self.config], "mux.log")
+            wait_until(
+                (self.root / "mux.sock").exists,
+                timeout=15,
+                message="owned Unix mux did not start",
+                check_live=lambda: check_process(mux, "owned Unix mux"),
+                diagnostics=lambda: log_diagnostics(self.root / "mux.log"),
+            )
         args = [
             self.gui,
             "--config-file",
@@ -349,19 +352,28 @@ class Probe:
             self.latest[state["window"]] = state
 
     def wait(self, predicate, timeout=10, any_window=False):
-        deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
+        def ready():
             self.read()
             candidates = (
                 list(self.latest.values()) if any_window else [self.latest.get(self.window, {})]
             )
             for state in candidates:
                 if predicate(state):
-                    return state
-            if hasattr(self, "gui_process") and self.gui_process.poll() is not None:
-                raise AssertionError(f"GUI exited: {self.root / 'gui.log'}")
-            time.sleep(0.008)
-        raise AssertionError(f"scenario condition timed out: {self.root / 'samples.jsonl'}")
+                    return (state,)
+            if hasattr(self, "gui_process"):
+                check_process(self.gui_process, "GUI")
+            return None
+
+        return wait_until(
+            ready,
+            timeout=timeout,
+            interval=0.008,
+            message="scenario condition timed out",
+            diagnostics=lambda: (
+                f"samples: {self.root / 'samples.jsonl'}\nlatest: {self.latest!r}\n"
+                + log_diagnostics(self.root / "gui.log")
+            ),
+        )[0]
 
     def sample_for(self, duration):
         start = len(self.samples)

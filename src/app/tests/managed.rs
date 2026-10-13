@@ -1,11 +1,11 @@
 use super::{core::*, *};
 use serde_json::json;
 
-fn tab(id: u64) -> Tab {
-    Tab {
+fn tab(id: u64) -> HostTab {
+    HostTab {
         id,
         title: format!("Tab {id}"),
-        ..Tab::default()
+        ..HostTab::default()
     }
 }
 fn configured(value: serde_json::Value) -> WindowApp {

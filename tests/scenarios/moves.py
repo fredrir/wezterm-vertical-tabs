@@ -6,12 +6,12 @@ import json
 import os
 import subprocess
 import sys
-import time
 from pathlib import Path
 
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
+from tests.support.polling import wait_until
 from tests.support.probe import Probe
 
 
@@ -34,14 +34,19 @@ def run(probe, cli, external):
         return json.loads(remote_command("list", "--format", "json"))
 
     def remote_wait(predicate, message):
-        deadline = time.monotonic() + 5
-        while True:
+        panes = None
+
+        def ready():
+            nonlocal panes
             panes = remote_list()
-            if predicate(panes):
-                return
-            if time.monotonic() > deadline:
-                raise AssertionError(f"{message}: {panes!r}")
-            time.sleep(0.05)
+            return predicate(panes)
+
+        wait_until(
+            ready,
+            timeout=5,
+            message=message,
+            diagnostics=lambda: f"last panes: {panes!r}",
+        )
 
     remote_pane = None
     if probe.domain == "unix":

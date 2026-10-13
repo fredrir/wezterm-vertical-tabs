@@ -3,7 +3,6 @@ use super::ui_host::{Bounds, Message, QuickTerminalConfig, TerminalBorder, Termi
 use super::{TermWindow, TermWindowNotif};
 use crate::quad::{HeapQuadAllocator, TripleLayerQuadAllocator};
 use anyhow::Context;
-use codec::SpawnBesidePane;
 use config::keyassignment::{PaneDirection, SpawnCommand, SpawnTabDomain};
 use config::{
     DimensionContext, HorizontalWindowContentAlignment, VerticalWindowContentAlignment,
@@ -533,9 +532,9 @@ impl TermWindow {
             .resolve_spawn_tab_domain(current.as_ref().map(|pane| pane.pane_id()), &spawn.domain)?;
         let current = current.filter(|pane| pane.domain_id() == domain.domain_id());
         let explicit = spawn.cwd.map(|cwd| cwd.to_string_lossy().into_owned());
-        let (target, cwd) = if domain
+        let (target, cwd) = if let Some(client) = domain
             .downcast_ref::<ClientDomain>()
-            .is_some_and(|client| !client.local_pane_layout())
+            .filter(|client| !client.local_pane_layout())
         {
             let pane = current
                 .or_else(|| {
@@ -544,10 +543,8 @@ impl TermWindow {
                         .find(|pane| pane.domain_id() == domain.domain_id())
                 })
                 .with_context(|| format!("no pane open in {}", domain.domain_name()))?;
-            let pane = pane
-                .downcast_ref::<ClientPane>()
-                .context("not a client pane")?
-                .remote_pane_id();
+            let pane = pane.pane_id();
+            client.validate_spawn_beside_pane(pane)?;
             (Target::Beside(domain, pane), explicit)
         } else {
             let cwd = explicit.or_else(|| {
@@ -679,6 +676,7 @@ impl TermWindow {
         let size = self.terminal_overlay_layout().size;
         let config = self.config.clone();
         let window_id = self.mux_window_id;
+        let endpoint = super::ui_host::WindowEndpoint::new(window.clone(), window_id);
         promise::spawn::spawn(async move {
             let result = async {
                 match target? {
@@ -699,23 +697,9 @@ impl TermWindow {
                         }) {
                             quick_panes(&workspace).iter().for_each(remove);
                         }
-                        let spawned =
-                            ClientDomain::get_client_inner_for_domain(domain.domain_id())?
-                                .client
-                                .spawn_beside_pane(SpawnBesidePane {
-                                    pane_id,
-                                    command,
-                                    command_dir: cwd,
-                                    size,
-                                    workspace,
-                                })
-                                .await?;
-                        // The pane arrives with this client's mirror of the server's hidden tab.
-                        client.resync().await?;
                         client
-                            .remote_to_local_pane_id(spawned.pane_id)
-                            .and_then(|id| Mux::get().get_pane(id))
-                            .ok_or_else(|| anyhow::anyhow!("pane {} not mirrored", spawned.pane_id))
+                            .spawn_beside_pane(pane_id, size, command, cwd, workspace)
+                            .await
                     }
                 }
             }
@@ -744,12 +728,7 @@ impl TermWindow {
                     );
                 }
                 Err(error) => {
-                    window.notify(TermWindowNotif::Apply(Box::new(move |tw| {
-                        tw.vtabs_message_for(
-                            window_id,
-                            Message::Error(format!("Quick terminal: {error:#}")),
-                        );
-                    })));
+                    endpoint.send(Message::Error(format!("Quick terminal: {error:#}")));
                 }
             }
             window.invalidate();

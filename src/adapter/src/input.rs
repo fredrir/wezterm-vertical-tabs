@@ -1,6 +1,6 @@
 //! Clipboard sequencing belongs to the input stream, including queued IME and pointer events.
 use super::*;
-use std::collections::VecDeque;
+use std::{borrow::Cow, collections::VecDeque};
 use window::{KeyCode, MouseEventKind, MousePress};
 
 const PASTE_TIMEOUT: Duration = Duration::from_secs(1);
@@ -336,9 +336,65 @@ impl Adapter {
     }
 }
 
+/// Shortcut identity comes from raw metadata when present; text and IME retain
+/// the processed event's key and modifiers. These representations are distinct
+/// even when the host reports them together in one event.
+struct DecodedKey<'a> {
+    down: bool,
+    modifiers: ui::Modifiers,
+    shortcut: Option<ui::Key>,
+    clipboard: Option<ui::Key>,
+    recording: Cow<'a, KeyCode>,
+    native_modifiers: window::Modifiers,
+    text: Option<TextKey<'a>>,
+}
+
+struct TextKey<'a> {
+    code: &'a KeyCode,
+    command: bool,
+}
+
+impl<'a> DecodedKey<'a> {
+    fn raw(key: &'a window::RawKeyEvent) -> Self {
+        let mods = modifiers(key.modifiers);
+        Self {
+            down: key.key_is_down,
+            modifiers: mods,
+            shortcut: shortcut_key(&key.key, mods),
+            clipboard: editor_clipboard_key(&key.key, mods),
+            recording: Cow::Borrowed(&key.key),
+            native_modifiers: key.modifiers,
+            text: None,
+        }
+    }
+
+    fn processed(key: &'a window::KeyEvent) -> Self {
+        let native_modifiers = key.raw.as_ref().map_or(key.modifiers, |raw| raw.modifiers);
+        let mods = modifiers(native_modifiers);
+        let recording = key.raw.as_ref().map_or_else(
+            || logical_shortcut_code(&key.key, mods),
+            |raw| Cow::Borrowed(&raw.key),
+        );
+        Self {
+            down: key.key_is_down,
+            modifiers: mods,
+            shortcut: shortcut_key(&recording, mods),
+            clipboard: editor_clipboard_key(&key.key, mods),
+            recording,
+            native_modifiers,
+            text: Some(TextKey {
+                code: &key.key,
+                command: key
+                    .modifiers
+                    .intersects(window::Modifiers::SUPER | window::Modifiers::CTRL),
+            }),
+        }
+    }
+}
+
 impl Adapter {
-    fn record_shortcut(&mut self, key: &KeyCode, mods: window::Modifiers) {
-        let key = match key {
+    fn record_shortcut(&mut self, input: &DecodedKey<'_>) {
+        let key = match input.recording.as_ref() {
             KeyCode::Physical(physical) => physical.to_key_code(),
             key => key.clone(),
         };
@@ -348,185 +404,114 @@ impl Adapter {
         let shortcut = if key == KeyCode::Char('\u{1b}') {
             String::new()
         } else if self.app.ui().recording_keybind() {
-            let Some(code) = shortcut_key(&key, modifiers(mods)) else {
+            let Some(code) = &input.shortcut else {
                 return;
             };
-            ui::shortcut_chord(&code, modifiers(mods))
+            ui::shortcut_chord(code, input.modifiers)
         } else {
-            commands::shortcut_label(&key, mods)
+            commands::shortcut_label(&key, input.native_modifiers)
         };
         self.ui_input(ui::UiInput::RecordShortcut(shortcut));
     }
 
     pub(super) fn terminal_key(&mut self, input: Input<'_>, escape: HideOnEscape) -> TerminalKey {
-        let (code, mods, down) = match input {
-            Input::RawKey(key) => {
-                let mods = modifiers(key.modifiers);
-                (shortcut_key(&key.key, mods), mods, key.key_is_down)
-            }
-            Input::Key(key) => {
-                let mods = modifiers(key.raw.as_ref().map_or(key.modifiers, |raw| raw.modifiers));
-                let code = key.raw.as_ref().map_or_else(
-                    || logical_shortcut_key(&key.key, mods),
-                    |raw| shortcut_key(&raw.key, mods),
-                );
-                (code, mods, key.key_is_down)
-            }
+        let key = match input {
+            Input::RawKey(key) => DecodedKey::raw(key),
+            Input::Key(key) => DecodedKey::processed(key),
             _ => return TerminalKey::Pass,
         };
-        let Some(code) = code else {
+        let Some(code) = key.shortcut else {
             return TerminalKey::Pass;
         };
         let settings = &self.app.model().settings;
-        let escape =
-            (code == ui::Key::Escape && mods == ui::Modifiers::default()).then_some(escape);
+        let escape = (code == ui::Key::Escape && key.modifiers == ui::Modifiers::default())
+            .then_some(escape);
         let command = match escape {
             Some(HideOnEscape::Always) => Command::HideTerminalOverlay,
-            Some(HideOnEscape::Auto) if down => return TerminalKey::Escape,
+            Some(HideOnEscape::Auto) if key.down => return TerminalKey::Escape,
             Some(HideOnEscape::Auto) => return TerminalKey::Pass,
-            _ => match core::keybinds::action(settings, &ui::shortcut_chord(&code, mods)) {
-                Some("quick_terminal") => Command::ToggleTerminalOverlay,
-                Some("close") => Command::HideTerminalOverlay,
-                _ => return TerminalKey::Pass,
-            },
+            _ => {
+                match core::keybinds::action(settings, &ui::shortcut_chord(&code, key.modifiers)) {
+                    Some("quick_terminal") => Command::ToggleTerminalOverlay,
+                    Some("close") => Command::HideTerminalOverlay,
+                    _ => return TerminalKey::Pass,
+                }
+            }
         };
-        if down {
+        if key.down {
             self.commands.push(command);
         }
         TerminalKey::Handled
     }
-    pub(super) fn handle_input(&mut self, input: Input<'_>) -> bool {
-        match input {
-            Input::RawKey(key) => {
-                if self.app.ui().recording_shortcut() {
-                    if key.key_is_down {
-                        self.record_shortcut(&key.key, key.modifiers);
-                    }
-                    return true;
-                }
-                let mods = modifiers(key.modifiers);
-                let code = self
-                    .app
-                    .ui()
-                    .text_input_active()
-                    .then(|| editor_clipboard_key(&key.key, mods))
-                    .flatten()
-                    .or_else(|| {
-                        shortcut_key(&key.key, mods).filter(|code| {
-                            ui::matches_shortcut(&self.app.model().settings, code, mods)
-                        })
-                    });
-                let Some(code) = code else {
-                    return false;
-                };
-                if key.key_is_down {
-                    self.ui_input(ui::UiInput::Key {
-                        key: code,
-                        modifiers: mods,
-                    });
-                }
-                true
+    fn handle_key(&mut self, key: DecodedKey<'_>) -> bool {
+        if self.app.ui().recording_shortcut() {
+            if key.down {
+                self.record_shortcut(&key);
             }
-            Input::Key(key) => {
-                if self.app.ui().recording_shortcut() {
-                    if key.key_is_down {
-                        if let Some(raw) = &key.raw {
-                            self.record_shortcut(&raw.key, raw.modifiers);
-                        } else {
-                            let code = logical_shortcut_code(&key.key, modifiers(key.modifiers));
-                            self.record_shortcut(&code, key.modifiers);
-                        }
-                    }
-                    return true;
-                }
-                let mods = modifiers(key.raw.as_ref().map_or(key.modifiers, |raw| raw.modifiers));
-                if let Some(code) = self
-                    .app
-                    .ui()
-                    .text_input_active()
-                    .then(|| editor_clipboard_key(&key.key, mods))
-                    .flatten()
-                {
-                    if key.key_is_down {
-                        self.ui_input(ui::UiInput::Key {
-                            key: code,
-                            modifiers: mods,
-                        });
-                    }
-                    return true;
-                }
-                let shortcut_code = key.raw.as_ref().map_or_else(
-                    || logical_shortcut_key(&key.key, mods),
-                    |raw| shortcut_key(&raw.key, mods),
-                );
-                if let Some(code) = shortcut_code
-                    .as_ref()
-                    .filter(|code| ui::matches_shortcut(&self.app.model().settings, code, mods))
-                {
-                    if key.key_is_down {
-                        self.ui_input(ui::UiInput::Key {
-                            key: code.clone(),
-                            modifiers: mods,
-                        });
-                    }
-                    return true;
-                }
-                if !key.key_is_down {
-                    return self.keyboard_focus();
-                }
-                // Unclaimed Cmd/Ctrl chords are key bindings, never text, even in a modal.
-                let chord = key
-                    .modifiers
-                    .intersects(window::Modifiers::SUPER | window::Modifiers::CTRL);
-                if let KeyCode::Composed(text) = &key.key {
-                    if !self.keyboard_focus() || chord {
-                        return false;
-                    }
-                    self.ui_input(ui::UiInput::ImeCommit(text.clone()));
-                    return true;
-                }
-                let code = if chord {
-                    let Some(code) = shortcut_code else {
-                        return self.keyboard_focus();
-                    };
-                    code
-                } else {
-                    match &key.key {
-                        KeyCode::Char('\r' | '\n') => ui::Key::Enter,
-                        KeyCode::Char('\u{1b}') => ui::Key::Escape,
-                        KeyCode::Char('\u{8}') => ui::Key::Backspace,
-                        KeyCode::Char('\u{7f}') => ui::Key::Delete,
-                        KeyCode::Char('\t') => ui::Key::Tab,
-                        KeyCode::Char(c) => ui::Key::Character(*c),
-                        KeyCode::LeftArrow => ui::Key::Left,
-                        KeyCode::RightArrow => ui::Key::Right,
-                        KeyCode::UpArrow => ui::Key::Up,
-                        KeyCode::DownArrow => ui::Key::Down,
-                        KeyCode::Home => ui::Key::Home,
-                        KeyCode::End => ui::Key::End,
-                        KeyCode::PageUp => ui::Key::PageUp,
-                        KeyCode::PageDown => ui::Key::PageDown,
-                        KeyCode::Function(2) => ui::Key::F2,
-                        KeyCode::Function(10) => ui::Key::F10,
-                        _ => return self.keyboard_focus(),
-                    }
-                };
-                if !self.keyboard_focus() {
-                    return false;
-                }
-                if !key.key_is_down {
-                    return true;
-                }
-                // Navigation bindings are still when the rail itself has focus.
-                if chord && (!self.app.is_modal() || matches!(code, ui::Key::Character(_))) {
-                    return false;
-                }
+            return true;
+        }
+        let code = self
+            .app
+            .ui()
+            .text_input_active()
+            .then_some(key.clipboard.as_ref())
+            .flatten()
+            .or_else(|| {
+                key.shortcut.as_ref().filter(|code| {
+                    ui::matches_shortcut(&self.app.model().settings, code, key.modifiers)
+                })
+            })
+            .cloned();
+        if let Some(code) = code {
+            if key.down {
                 self.ui_input(ui::UiInput::Key {
                     key: code,
-                    modifiers: mods,
+                    modifiers: key.modifiers,
                 });
-                true
             }
+            return true;
+        }
+        // Raw events only claim shortcuts; text belongs to the processed event.
+        let Some(text) = key.text else {
+            return false;
+        };
+        if !key.down {
+            return self.keyboard_focus();
+        }
+        // Unclaimed Cmd/Ctrl chords are key bindings, never text, even in a modal.
+        if let KeyCode::Composed(text_value) = text.code {
+            if !self.keyboard_focus() || text.command {
+                return false;
+            }
+            self.ui_input(ui::UiInput::ImeCommit(text_value.clone()));
+            return true;
+        }
+        let code = if text.command {
+            key.shortcut
+        } else {
+            ui_key(text.code).filter(|code| !matches!(code, ui::Key::Function(_)))
+        };
+        let Some(code) = code else {
+            return self.keyboard_focus();
+        };
+        if !self.keyboard_focus() {
+            return false;
+        }
+        // Navigation bindings still belong to the terminal when the rail has focus.
+        if text.command && (!self.app.is_modal() || matches!(code, ui::Key::Character(_))) {
+            return false;
+        }
+        self.ui_input(ui::UiInput::Key {
+            key: code,
+            modifiers: key.modifiers,
+        });
+        true
+    }
+
+    pub(super) fn handle_input(&mut self, input: Input<'_>) -> bool {
+        match input {
+            Input::RawKey(key) => self.handle_key(DecodedKey::raw(key)),
+            Input::Key(key) => self.handle_key(DecodedKey::processed(key)),
             Input::Mouse(event, geometry) => {
                 let bounds = geometry.ui_bounds(self.content_page() || self.overlay_surface());
                 let inside = bounds.contains(event.coords.x as f32, event.coords.y as f32);
@@ -649,45 +634,47 @@ fn mouse_button(button: MousePress) -> ui::MouseButton {
 
 // Raw and physical keys have not been encoded as Ctrl-letter bytes.
 pub(super) fn shortcut_key(key: &KeyCode, mods: ui::Modifiers) -> Option<ui::Key> {
+    if let KeyCode::Physical(code) = key {
+        return shortcut_key(&code.to_key_code(), mods);
+    }
+    let mut key = ui_key(key)?;
+    if let (ui::Key::Character(c), true) = (&mut key, mods.shift) {
+        *c = match *c {
+            '<' => ',',
+            '!' => '1',
+            '@' => '2',
+            '#' => '3',
+            '$' => '4',
+            '%' => '5',
+            '^' => '6',
+            '&' => '7',
+            '*' => '8',
+            '(' => '9',
+            ')' => '0',
+            '>' => '.',
+            '?' => '/',
+            ':' => ';',
+            '"' => '\'',
+            '_' => '-',
+            '+' => '=',
+            '{' => '[',
+            '}' => ']',
+            '|' => '\\',
+            '~' => '`',
+            c => c,
+        };
+    }
+    Some(key)
+}
+
+fn ui_key(key: &KeyCode) -> Option<ui::Key> {
     Some(match key {
-        KeyCode::Physical(code) => return shortcut_key(&code.to_key_code(), mods),
         KeyCode::Char('\t') => ui::Key::Tab,
         KeyCode::Char('\r' | '\n') => ui::Key::Enter,
         KeyCode::Char('\u{1b}') => ui::Key::Escape,
         KeyCode::Char('\u{8}') => ui::Key::Backspace,
         KeyCode::Char('\u{7f}') => ui::Key::Delete,
-        KeyCode::Char(c) => {
-            let c = *c;
-            let c = if mods.shift {
-                match c {
-                    '<' => ',',
-                    '!' => '1',
-                    '@' => '2',
-                    '#' => '3',
-                    '$' => '4',
-                    '%' => '5',
-                    '^' => '6',
-                    '&' => '7',
-                    '*' => '8',
-                    '(' => '9',
-                    ')' => '0',
-                    '>' => '.',
-                    '?' => '/',
-                    ':' => ';',
-                    '"' => '\'',
-                    '_' => '-',
-                    '+' => '=',
-                    '{' => '[',
-                    '}' => ']',
-                    '|' => '\\',
-                    '~' => '`',
-                    _ => c,
-                }
-            } else {
-                c
-            };
-            ui::Key::Character(c)
-        }
+        KeyCode::Char(c) => ui::Key::Character(*c),
         KeyCode::LeftArrow => ui::Key::Left,
         KeyCode::RightArrow => ui::Key::Right,
         KeyCode::UpArrow => ui::Key::Up,
@@ -703,7 +690,7 @@ pub(super) fn shortcut_key(key: &KeyCode, mods: ui::Modifiers) -> Option<ui::Key
     })
 }
 
-fn logical_shortcut_code(key: &KeyCode, mods: ui::Modifiers) -> KeyCode {
+fn logical_shortcut_code(key: &KeyCode, mods: ui::Modifiers) -> Cow<'_, KeyCode> {
     // Without raw metadata, Ctrl+H arrives as BS. Keep the host's Tab/Enter
     // conventions while decoding other processed Ctrl-letter bytes.
     match key {
@@ -712,9 +699,9 @@ fn logical_shortcut_code(key: &KeyCode, mods: ui::Modifiers) -> KeyCode {
                 && ('\u{1}'..='\u{1a}').contains(c)
                 && !matches!(c, '\t' | '\r' | '\n') =>
         {
-            KeyCode::Char(char::from(*c as u8 + b'a' - 1))
+            Cow::Owned(KeyCode::Char(char::from(*c as u8 + b'a' - 1)))
         }
-        _ => key.clone(),
+        _ => Cow::Borrowed(key),
     }
 }
 

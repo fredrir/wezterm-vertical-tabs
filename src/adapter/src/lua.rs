@@ -1,4 +1,4 @@
-use super::Message;
+use super::{Message, WindowEndpoint};
 use crate::scripting::guiwin::GuiWin;
 use crate::termwindow::TermWindowNotif;
 use config::lua::{get_or_create_sub_module, mlua};
@@ -12,7 +12,7 @@ use std::{
     time::Duration,
 };
 use vtabs_app::{HookResult, HookToken, WindowApp, core};
-use window::{Window, WindowOps};
+use window::WindowOps;
 
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -219,12 +219,8 @@ pub fn register(lua: &Lua) -> anyhow::Result<()> {
         lua.create_function(
             |lua, (window, action): (mlua::UserDataRef<GuiWin>, mlua::Value)| {
                 let action = parse_action(lua, action)?;
-                let mux_window_id = window.mux_window_id;
-                window
-                    .window
-                    .notify(TermWindowNotif::Apply(Box::new(move |tw| {
-                        tw.vtabs_message_for(mux_window_id, Message::Action(action))
-                    })));
+                WindowEndpoint::new(window.window.clone(), window.mux_window_id)
+                    .send(Message::Action(action));
                 Ok(())
             },
         )?,
@@ -345,10 +341,9 @@ async fn call_hook<'lua>(
 }
 
 pub fn hooks(
-    window: Window,
+    endpoint: WindowEndpoint,
     batch: Vec<(HookToken, core::Tab)>,
     context: WindowHookContext,
-    mux_window_id: usize,
 ) {
     // Completion belongs to the outer future: serialization, registry errors and timeout
     // all clear the adapter's outstanding flag instead of permanently wedging its queue.
@@ -410,9 +405,7 @@ pub fn hooks(
                 Vec::new()
             }
         };
-        window.notify(TermWindowNotif::Apply(Box::new(move |tw| {
-            tw.vtabs_message_for(mux_window_id, Message::Hooks(results))
-        })));
+        endpoint.send(Message::Hooks(results));
     })
     .detach();
 }

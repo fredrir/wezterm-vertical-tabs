@@ -86,7 +86,7 @@ fn hook_metadata_is_optional_and_survives_reconfiguration_and_retry() {
 fn hook_batches_are_bounded_and_drop_removed_tabs_before_dispatch() {
     let mut app = WindowApp::default();
     let tabs = (1..=lua::MAX_HOOK_TABS + 2)
-        .map(|id| core::Tab {
+        .map(|id| core::HostTab {
             id: id as u64,
             ..Default::default()
         })
@@ -125,4 +125,50 @@ fn hook_batches_are_bounded_and_drop_removed_tabs_before_dispatch() {
     assert_eq!(second.tabs[0].1.id, (lua::MAX_HOOK_TABS + 1) as u64);
     hooks.complete(true, false);
     assert!(hooks.take_batch(&app).is_none());
+}
+
+#[test]
+fn host_fact_batches_keep_the_full_tab_wire_contract() {
+    let facts = core::HostTab {
+        id: 7,
+        title: "Host title".into(),
+        cwd: "/work".into(),
+        remote: true,
+        ..Default::default()
+    };
+    let mut app = WindowApp::default();
+    app.update(app::HostSnapshot {
+        revision: 1,
+        tabs: vec![facts.clone()],
+        active_tab: Some(7),
+        metrics: app::Metrics::default(),
+        focused: true,
+        configuration_epoch: 0,
+    })
+    .unwrap();
+    app.dispatch(core::Intent::PinTab {
+        id: 7,
+        pinned: true,
+    })
+    .unwrap();
+    app.dispatch(core::Intent::RenameTab {
+        id: 7,
+        title: "App title".into(),
+    })
+    .unwrap();
+    let mut hooks = hooks::Hooks::default();
+    hooks.configure(true);
+    hooks.observe(&[facts]);
+    let batch = hooks.take_batch(&app).unwrap();
+    assert_eq!(batch.tabs.len(), 1);
+    assert_eq!(
+        serde_json::to_value(&batch.tabs[0].1).unwrap(),
+        serde_json::json!({
+            "id": 7, "title": "Host title", "icon": "", "cwd": "/work", "repo_root": null,
+            "home": null, "domain": "", "host": "", "user": "", "process": "", "remote": true,
+            "os": "", "panes": [], "unread": false, "bell": false, "pinned": false,
+            "folder_id": null, "space_id": "", "manual_assignment": false, "launch": null,
+            "title_override": null, "title_hook": null,
+        })
+    );
 }

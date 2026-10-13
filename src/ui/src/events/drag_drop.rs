@@ -1,5 +1,5 @@
 use crate::SidebarUi;
-use crate::element::ElementId;
+use crate::element::{ElementId, EntityRef};
 use crate::events::Press;
 use crate::intent::{HostAction, UiIntent};
 use crate::runtime::motion;
@@ -19,6 +19,18 @@ pub(crate) enum DropTarget {
     Folder(String),
     NewTab,
     Space(SpaceId),
+}
+
+impl DropTarget {
+    pub(crate) fn exists(&self, model: &Model) -> bool {
+        match self {
+            Self::Beside { row, .. } => row.exists(model),
+            Self::Into(tab) => EntityRef::Tab(*tab).exists(model),
+            Self::Folder(id) => EntityRef::Folder(id).exists(model),
+            Self::Space(id) => EntityRef::Space(id).exists(model),
+            Self::NewTab => true,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -80,14 +92,7 @@ impl SidebarUi {
             }
             _ => None,
         }
-        .filter(|target| match target {
-            DropTarget::Beside {
-                row: ElementId::Tab(tab),
-                ..
-            }
-            | DropTarget::Into(tab) => model.tabs.contains_key(tab),
-            _ => true,
-        })
+        .filter(|target| target.exists(model))
     }
 
     pub(crate) fn aim_drop(&mut self, model: &Model, x: u16, y: u16) {
@@ -128,6 +133,9 @@ impl SidebarUi {
         target: DropTarget,
         intents: &mut Vec<UiIntent>,
     ) {
+        if !source.exists(model) || !target.exists(model) {
+            return;
+        }
         match (source, target) {
             (ElementId::Pane(tab, pane), DropTarget::Into(target)) => {
                 intents.push(UiIntent::Host(HostAction::JoinPane { pane, tab: target }));

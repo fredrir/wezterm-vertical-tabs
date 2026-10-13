@@ -21,6 +21,50 @@ def cargo_commands(log, subcommand):
     ]
 
 
+@pytest.mark.parametrize("profile", ["dev", "iterate"])
+def test_dev_build_asks_cargo_to_validate_all_cached_role_binaries(
+    tools_sandbox, local_upstream, recording_cargo, profile
+):
+    _, revision = local_upstream
+    (recording_cargo.parent / "honor-target-dir").touch()
+
+    def build():
+        before = len(cargo_commands(recording_cargo, "build")) if recording_cargo.exists() else 0
+        tools_sandbox.run("--upstream", revision, "--profile", profile, "build")
+        commands = cargo_commands(recording_cargo, "build")[before:]
+        assert len(commands) == 2
+        packages = [
+            command[index + 1]
+            for command in commands
+            for index, argument in enumerate(command[:-1])
+            if argument == "-p"
+        ]
+        assert set(packages) == {
+            "vtabs-store",
+            "wezterm-gui",
+            "wezterm",
+            "wezterm-mux-server",
+            "strip-ansi-escapes",
+        }
+
+    build()
+    cached_artifacts = metadata(tools_sandbox)["artifacts"]
+    assert all(f"/{profile}/" in path for path in cached_artifacts.values())
+    # Existing outputs and unchanged helper sources do not establish freshness.
+    build()
+    for path, contents in (
+        ("src/app/src/lib.rs", "pub fn changed_dependency() {}\n"),
+        ("Cargo.lock", "version = 4\n# dependency resolution changed\n"),
+        ("Cargo.toml", '[workspace]\nmembers = []\nresolver = "3"\n'),
+        (".cargo/config.toml", "[build]\nincremental = false\n"),
+    ):
+        write_file(tools_sandbox.root, path, contents)
+        build()
+    tools_sandbox.env["RUSTFLAGS"] = "-C debuginfo=1"
+    build()
+    assert not cargo_commands(recording_cargo, "test")
+
+
 def test_build_reuses_validation_for_docs_but_rechecks_test_and_toolchain_changes(
     tools_sandbox, local_upstream, recording_cargo
 ):

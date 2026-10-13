@@ -142,7 +142,29 @@ impl TabPane {
     }
 }
 
-/// Host metadata is copied only when it changes; membership remains application-owned.
+/// Facts discovered by the host, without application membership or title overrides.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct HostTab {
+    pub id: TabId,
+    pub title: String,
+    pub icon: String,
+    pub cwd: String,
+    pub repo_root: Option<String>,
+    pub home: Option<String>,
+    pub domain: String,
+    pub host: String,
+    pub user: String,
+    pub process: String,
+    pub remote: bool,
+    pub os: String,
+    pub panes: Vec<TabPane>,
+    pub unread: bool,
+    pub bell: bool,
+    /// Discovery's launch hint is adopted only until the application has a launch.
+    pub launch: Option<LaunchSpec>,
+}
+
+/// Host metadata and application-owned state, also used by the transfer contract.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct Tab {
     pub id: TabId,
@@ -211,12 +233,30 @@ impl Tab {
         )
     }
 
-    fn reconcile_host_metadata(&mut self, incoming: Self) -> bool {
+    fn reconcile_host_metadata(&mut self, incoming: HostTab) -> bool {
+        let HostTab {
+            id,
+            title,
+            icon,
+            cwd,
+            repo_root,
+            home,
+            domain,
+            host,
+            user,
+            process,
+            remote,
+            os,
+            panes,
+            unread,
+            bell,
+            launch,
+        } = incoming;
         let mut changed = false;
         macro_rules! update {
             ($($field:ident),+ $(,)?) => {
-                $(if self.$field != incoming.$field {
-                    self.$field = incoming.$field;
+                $(if self.$field != $field {
+                    self.$field = $field;
                     changed = true;
                 })+
             };
@@ -227,11 +267,66 @@ impl Tab {
         );
         // Membership and title overrides belong to the application. discovery
         // supplies only domain/cwd; retain captured launch arguments and environment.
-        if self.launch.is_none() && incoming.launch.is_some() {
-            self.launch = incoming.launch;
+        if self.launch.is_none() && launch.is_some() {
+            self.launch = launch;
             changed = true;
         }
         changed
+    }
+}
+
+impl From<HostTab> for Tab {
+    fn from(facts: HostTab) -> Self {
+        let mut tab = Self::default();
+        tab.reconcile_host_metadata(facts);
+        tab
+    }
+}
+
+impl From<Tab> for HostTab {
+    fn from(tab: Tab) -> Self {
+        let Tab {
+            id,
+            title,
+            icon,
+            cwd,
+            repo_root,
+            home,
+            domain,
+            host,
+            user,
+            process,
+            remote,
+            os,
+            panes,
+            unread,
+            bell,
+            launch,
+            pinned: _,
+            folder_id: _,
+            space_id: _,
+            manual_assignment: _,
+            title_override: _,
+            title_hook: _,
+        } = tab;
+        Self {
+            id,
+            title,
+            icon,
+            cwd,
+            repo_root,
+            home,
+            domain,
+            host,
+            user,
+            process,
+            remote,
+            os,
+            panes,
+            unread,
+            bell,
+            launch,
+        }
     }
 }
 
@@ -716,7 +811,7 @@ impl Model {
     /// This prevents an empty selected space from exposing the mux's still-active hidden tab.
     pub fn reconcile(
         &mut self,
-        incoming: Vec<Tab>,
+        incoming: Vec<HostTab>,
         active: Option<TabId>,
         follow_active: bool,
     ) -> Result<bool, Error> {
@@ -771,10 +866,7 @@ impl Model {
                 }
                 self.hook_routes.remove(&id);
             } else {
-                if tab.space_id.is_empty() {
-                    tab.space_id = self.selected_space.clone();
-                }
-                self.tabs.insert(id, tab);
+                self.insert_tab(tab.into());
                 projection_changed = true;
             }
             projection_changed |= self.route_tab(id);
@@ -811,6 +903,31 @@ impl Model {
             self.touch();
         }
         Ok(self.revision != before)
+    }
+
+    /// Initialize an empty destination from a trusted application transfer.
+    /// Host snapshots use `reconcile` and cannot supply this application state.
+    pub fn import_transferred_tab(&mut self, tab: Tab) -> Result<(), Error> {
+        if !self.tabs.is_empty() {
+            return Err(Error(
+                "Window transfer must initialize an empty window".into(),
+            ));
+        }
+        let id = tab.id;
+        self.insert_tab(tab);
+        self.order.push(id);
+        self.route_tab(id);
+        self.rebuild_visible();
+        self.activate(id);
+        self.touch();
+        Ok(())
+    }
+
+    fn insert_tab(&mut self, mut tab: Tab) {
+        if tab.space_id.is_empty() {
+            tab.space_id = self.selected_space.clone();
+        }
+        self.tabs.insert(tab.id, tab);
     }
 
     pub fn dispatch(&mut self, intent: Intent) -> Result<Transition, Error> {

@@ -21,7 +21,7 @@ mod update;
 use crate::termwindow::ui_host::{
     Bounds, Command, Geometry, HideOnEscape, Input, Navigation, Projection, Provider,
     QuickTerminalConfig, Reservation, RoundedSurface, Snapshot, Surface, TerminalBorder,
-    TerminalKey, TerminalPadding, TerminalProgram, spawn_completed,
+    TerminalKey, TerminalPadding, TerminalProgram, WindowEndpoint, spawn_completed,
 };
 use config::keyassignment::{SpawnCommand, SpawnTabDomain};
 use mux::{BACKING_WORKSPACE_PREFIX, DETACHED_WORKSPACE, QUICK_WORKSPACE_PREFIX};
@@ -67,6 +67,12 @@ struct Adapter {
 }
 
 impl Adapter {
+    fn endpoint(&self, mux_window_id: usize) -> Option<WindowEndpoint> {
+        self.window
+            .clone()
+            .map(|window| WindowEndpoint::new(window, mux_window_id))
+    }
+
     fn new(window_id: usize) -> Self {
         let config = lua::configuration();
         let mut app = WindowApp::new(&config.profile);
@@ -151,7 +157,7 @@ impl Adapter {
         if busy.is_some() || remote.is_empty() {
             return self.close_checked(tab, pane, busy);
         }
-        let (window, id) = (self.window.clone(), self.mux_window);
+        let endpoint = self.mux_window.and_then(|id| self.endpoint(id));
         promise::spawn::spawn(async move {
             let mut busy = None;
             for entry in &remote {
@@ -168,19 +174,12 @@ impl Adapter {
                     break;
                 }
             }
-            if let (Some(window), Some(id)) = (window, id) {
-                window.notify(crate::termwindow::TermWindowNotif::Apply(Box::new(
-                    move |tw| {
-                        tw.vtabs_message_for(
-                            id,
-                            Message::CloseCheck {
-                                tab,
-                                pane,
-                                process: busy,
-                            },
-                        );
-                    },
-                )));
+            if let Some(endpoint) = endpoint {
+                endpoint.send(Message::CloseCheck {
+                    tab,
+                    pane,
+                    process: busy,
+                });
             }
         })
         .detach();
@@ -230,17 +229,12 @@ impl Adapter {
     }
     /// The mux moves panes asynchronously; a refusal surfaces as the sidebar's error.
     fn rearrange(&self, work: impl std::future::Future<Output = anyhow::Result<()>> + 'static) {
-        let window = self.window.clone();
-        let id = self.mux_window;
+        let endpoint = self.mux_window.and_then(|id| self.endpoint(id));
         promise::spawn::spawn(async move {
             let Err(error) = work.await else { return };
             log::warn!("tabs: {error:#}");
-            if let (Some(window), Some(id)) = (window, id) {
-                window.notify(crate::termwindow::TermWindowNotif::Apply(Box::new(
-                    move |tw| {
-                        tw.vtabs_message_for(id, Message::Error(format!("{error:#}")));
-                    },
-                )));
+            if let Some(endpoint) = endpoint {
+                endpoint.send(Message::Error(format!("{error:#}")));
             }
         })
         .detach();
@@ -285,7 +279,7 @@ impl Adapter {
             app::Command::SearchTabs => self.open_tab_navigator(),
             app::Command::AdoptPane { domain, pane } => {
                 if let Some(id) = self.mux_window {
-                    self.rearrange(adoption::adopt(self.window.clone(), id, domain, pane));
+                    self.rearrange(adoption::adopt(self.endpoint(id), id, domain, pane));
                 }
             }
             app::Command::RequestClipboard => {
@@ -440,8 +434,8 @@ impl Adapter {
         self.app.set_adoptable_panes(Vec::new());
         self.app.open_tab_navigator();
         self.adoptable_search += 1;
-        if let (Some(window), Some(id)) = (self.window.clone(), self.mux_window) {
-            adoption::find(window, id, self.adoptable_search);
+        if let Some(endpoint) = self.mux_window.and_then(|id| self.endpoint(id)) {
+            adoption::find(endpoint, self.adoptable_search);
         }
     }
     /// Detached tabs come into this window; others are shown where they live.
@@ -468,12 +462,7 @@ impl Adapter {
             return mux.set_active_workspace(&workspace);
         };
         gui.window.focus();
-        gui.window
-            .notify(crate::termwindow::TermWindowNotif::Apply(Box::new(
-                move |tw| {
-                    tw.vtabs_message_for(window, Message::ShowTab(tab));
-                },
-            )));
+        WindowEndpoint::new(gui.window, window).send(Message::ShowTab(tab));
     }
     /// The tab's active pane becomes a tab here and its other panes rejoin it.
     fn adopt(&mut self, tab: core::TabId) {
@@ -487,7 +476,8 @@ impl Adapter {
             return;
         };
         let rest: Vec<_> = panes.collect();
-        let (window, id) = (self.window.clone(), self.mux_window);
+        let endpoint = self.mux_window.and_then(|id| self.endpoint(id));
+        let id = self.mux_window;
         self.rearrange(async move {
             let mux = mux::Mux::get();
             let (tab, _) = mux.move_pane_to_new_tab(first, id, None).await?;
@@ -503,13 +493,8 @@ impl Adapter {
                 )
                 .await?;
             }
-            if let (Some(window), Some(id)) = (window, id) {
-                let tab = tab.tab_id();
-                window.notify(crate::termwindow::TermWindowNotif::Apply(Box::new(
-                    move |tw| {
-                        tw.vtabs_message_for(id, Message::ShowTab(tab as u64));
-                    },
-                )));
+            if let Some(endpoint) = endpoint {
+                endpoint.send(Message::ShowTab(tab.tab_id() as u64));
             }
             Ok(())
         });
@@ -595,21 +580,21 @@ impl Adapter {
         }
     }
     fn schedule_hooks(&mut self) {
-        if let Some(window) = self.window.as_ref() {
+        if let Some(endpoint) = self.endpoint(self.window_id) {
             if let Some(batch) = self.hooks.take_batch(&self.app) {
-                lua::hooks(window.clone(), batch.tabs, batch.window, self.window_id);
+                lua::hooks(endpoint, batch.tabs, batch.window);
             }
         }
     }
     fn storage(&mut self) {
-        if let Some(window) = self.window.clone() {
+        if let Some(endpoint) = self.endpoint(self.window_id) {
             if let Some(request) = self.app.take_storage_request(self.epoch.elapsed()) {
                 self.outstanding = Some(request.request_id);
-                storage::request(window.clone(), request, self.window_id);
+                storage::request(endpoint.clone(), request);
             }
             if let Some(source) = self.app.take_managed_write() {
                 match self.managed_path.clone() {
-                    Some(path) => settings_file::save(window, path, source, self.window_id),
+                    Some(path) => settings_file::save(endpoint, path, source),
                     None => self
                         .app
                         .complete_managed_write(Err("no settings_file configured".into())),
@@ -708,7 +693,7 @@ impl Adapter {
                         }
                     })
                     .collect();
-                core::Tab {
+                core::HostTab {
                     id: tab.id as u64,
                     title: tab.title,
                     cwd: tab.cwd.clone(),
@@ -725,7 +710,6 @@ impl Adapter {
                     launch,
                     host: tab.user_vars.get("hostname").cloned().unwrap_or(tab.host),
                     user: tab.user_vars.get("username").cloned().unwrap_or(tab.user),
-                    ..Default::default()
                 }
             })
             .collect::<Vec<_>>();
@@ -1132,21 +1116,13 @@ impl Provider for Adapter {
                 .ceil()
                 .clamp(0., u16::MAX as f32) as u16,
         );
+        let elapsed = now.saturating_duration_since(self.epoch);
+        self.app.prepare_render(elapsed);
         let metrics = self.metrics(geometry);
         if let Err(err) = self.app.resize(metrics) {
             log::error!("tabs geometry: {err}");
         }
-        let elapsed = now.saturating_duration_since(self.epoch);
-        let mut frame = self.app.render(elapsed);
-        // A successful form can dismiss itself while rendering the updated model.
-        // Publish cells and hit regions only after their viewport matches that state.
-        let settled_metrics = self.metrics(geometry);
-        if settled_metrics != metrics {
-            if let Err(err) = self.app.resize(settled_metrics) {
-                log::error!("tabs geometry: {err}");
-            }
-            frame = self.app.render(elapsed);
-        }
+        let frame = self.app.render(elapsed);
         if let Some(frame) = frame {
             cells::update(&mut self.surface, self.app.buffer(), &frame, geometry);
             let grid_offset = cells::grid_offset(

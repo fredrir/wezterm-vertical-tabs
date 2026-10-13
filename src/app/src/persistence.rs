@@ -1,9 +1,12 @@
+mod codec;
+
+use codec::{Field, profile_values, session_values};
 use serde_json::{Value, json};
 use std::{
     collections::{BTreeMap, BTreeSet},
     time::Duration,
 };
-use vtabs_core::{Error, Folder, Model, Space};
+use vtabs_core::{Error, Model};
 use vtabs_store::{
     Key, MAX_OPERATIONS, Operation, PROTOCOL_VERSION, Record, Request, Response, Scope,
 };
@@ -118,39 +121,14 @@ impl Persistence {
         let Some(scope) = &self.session else {
             return Ok(false);
         };
-        let mut changed = false;
-        for (key, record) in &self.known {
-            if &key.scope != scope || key.field != "membership" || self.touched.contains(key) {
-                continue;
-            }
-            let Some(id) = key
-                .entity
-                .strip_prefix("tab:")
-                .and_then(|id| id.parse::<u64>().ok())
-            else {
-                continue;
-            };
-            if !model.tabs.contains_key(&id) {
-                continue;
-            }
-            let Some(value) = &record.value else { continue };
-            let Some(space) = value.get("space").and_then(Value::as_str) else {
-                continue;
-            };
-            changed |= model.restore_tab_membership(
-                id,
-                space,
-                value
-                    .get("manual")
-                    .and_then(Value::as_bool)
-                    .unwrap_or(false),
-                value
-                    .get("pinned")
-                    .and_then(Value::as_bool)
-                    .unwrap_or(false),
-                value.get("folder").and_then(Value::as_str),
-            )?;
-        }
+        let changed = codec::restore_memberships(
+            model,
+            scope,
+            self.known
+                .iter()
+                .filter(|(key, _)| !self.touched.contains(*key))
+                .filter_map(|(key, record)| record.value.as_ref().map(|value| (key, value))),
+        )?;
         if changed {
             self.observed.retain(|key, _| &key.scope != scope);
             self.observed
@@ -279,11 +257,7 @@ impl Persistence {
             // Folder order is one semantic field, but simultaneous creation in two GUI
             // clients must retain both new IDs. Local reorder wins for existing entries;
             // append remote additions unless this client explicitly deleted that folder.
-            let key = Key {
-                scope: self.profile.clone(),
-                entity: "catalog".into(),
-                field: "folder_order".into(),
-            };
+            let key = Field::FolderOrder.key(&self.profile);
             if let (Some(Some(local)), Some(remote)) = (
                 self.dirty.get(&key),
                 self.known.get(&key).and_then(|r| r.value.as_ref()),
@@ -294,11 +268,7 @@ impl Persistence {
                     let Some(id) = value.as_str() else {
                         return true;
                     };
-                    let name = Key {
-                        scope: self.profile.clone(),
-                        entity: format!("folder:{id}"),
-                        field: "name".into(),
-                    };
+                    let name = Field::FolderName(id).key(&self.profile);
                     !self
                         .known
                         .get(&name)
@@ -306,11 +276,8 @@ impl Persistence {
                         || matches!(self.dirty.get(&name), Some(Some(_)))
                 });
                 for id in remote.iter().filter_map(Value::as_str) {
-                    let deleted = self.dirty.get(&Key {
-                        scope: self.profile.clone(),
-                        entity: format!("folder:{id}"),
-                        field: "name".into(),
-                    }) == Some(&None);
+                    let deleted =
+                        self.dirty.get(&Field::FolderName(id).key(&self.profile)) == Some(&None);
                     if !deleted && !order.iter().any(|v| v.as_str() == Some(id)) {
                         order.push(json!(id));
                     }
@@ -367,140 +334,9 @@ impl Persistence {
                 .filter(|(key, _)| self.touched.contains(*key))
                 .map(|(k, v)| (k.clone(), v.clone())),
         );
-        let mut changed = false;
-        // Spaces are declared in Lua; only derived spaces and collapse state live here.
-        let mut spaces = model.spaces.clone();
-        if let Some(value) = values.get(&Key {
-            scope: self.profile.clone(),
-            entity: "catalog".into(),
-            field: "derived".into(),
-        }) {
-            let derived = serde_json::from_value::<Vec<Space>>(value.clone())
-                .map_err(|e| Error(e.to_string()))?;
-            for space in derived {
-                if space.template.is_some() && !spaces.iter().any(|s| s.id == space.id) {
-                    spaces.push(space);
-                }
-            }
-        }
-        for space in &mut spaces {
-            if let Some(collapsed) = values
-                .get(&Key {
-                    scope: self.profile.clone(),
-                    entity: format!("space:{}", space.id),
-                    field: "collapsed".into(),
-                })
-                .and_then(Value::as_bool)
-            {
-                space.collapsed = collapsed;
-            }
-        }
-        if spaces != model.spaces {
-            model.load_catalog(spaces, model.templates.clone())?;
-            changed = true;
-        }
-        let folder_order_key = Key {
-            scope: self.profile.clone(),
-            entity: "catalog".into(),
-            field: "folder_order".into(),
-        };
-        if let Some(value) = values.get(&folder_order_key) {
-            let order = value
-                .as_array()
-                .ok_or_else(|| Error("Invalid folder order".into()))?;
-            if order.len() > 256 {
-                return Err(Error("At most 256 folders are supported".into()));
-            }
-            let mut folders = Vec::with_capacity(order.len());
-            for value in order {
-                let id = value
-                    .as_str()
-                    .ok_or_else(|| Error("Invalid folder ID".into()))?;
-                let get = |field: &str| {
-                    values.get(&Key {
-                        scope: self.profile.clone(),
-                        entity: format!("folder:{id}"),
-                        field: field.into(),
-                    })
-                };
-                let name = get("name")
-                    .and_then(Value::as_str)
-                    .ok_or_else(|| Error("Folder name is missing".into()))?;
-                let space = get("space")
-                    .and_then(Value::as_str)
-                    .ok_or_else(|| Error("Folder space is missing".into()))?;
-                // A simultaneous space deletion wins over an older folder catalog entry.
-                if !model.spaces.iter().any(|item| item.id == space) {
-                    continue;
-                }
-                let collapsed = get("collapsed")
-                    .map(|value| {
-                        value
-                            .as_bool()
-                            .ok_or_else(|| Error("Invalid folder collapse state".into()))
-                    })
-                    .transpose()?
-                    .unwrap_or(false);
-                folders.push(Folder {
-                    id: id.into(),
-                    name: name.into(),
-                    space_id: space.into(),
-                    collapsed,
-                });
-            }
-            if folders != model.folders {
-                model.load_folders(folders)?;
-                changed = true;
-            }
-        }
+        let mut changed = codec::restore_profile(model, &self.profile, &values)?;
         if let Some(scope) = &self.session {
-            for (key, value) in &values {
-                if &key.scope != scope || key.field != "membership" {
-                    continue;
-                }
-                let Some(id) = key
-                    .entity
-                    .strip_prefix("tab:")
-                    .and_then(|id| id.parse::<u64>().ok())
-                else {
-                    continue;
-                };
-                if !model.tabs.contains_key(&id) {
-                    continue;
-                }
-                let Some(space) = value.get("space").and_then(Value::as_str) else {
-                    continue;
-                };
-                let manual = value
-                    .get("manual")
-                    .and_then(Value::as_bool)
-                    .unwrap_or(false);
-                let pinned = value
-                    .get("pinned")
-                    .and_then(Value::as_bool)
-                    .unwrap_or(false);
-                changed |= model.restore_tab_membership(
-                    id,
-                    space,
-                    manual,
-                    pinned,
-                    value.get("folder").and_then(Value::as_str),
-                )?;
-            }
-        }
-        if let (Some(scope), Some(id)) = (&self.session, self.window_id)
-            && let Some(space) = values
-                .get(&Key {
-                    scope: scope.clone(),
-                    entity: format!("window:{id}"),
-                    field: "selected_space".into(),
-                })
-                .and_then(Value::as_str)
-            && model.spaces.iter().any(|s| s.id == space)
-            && model.selected_space != space
-        {
-            model.dispatch(vtabs_core::Intent::SelectSpace(space.into()))?;
-            changed = true;
+            changed |= codec::restore_session(model, scope, self.window_id, &values)?;
         }
         self.observed = profile_values(model, &self.profile);
         if let Some(scope) = &self.session {
@@ -531,86 +367,4 @@ impl Persistence {
             self.deadline = Some(now);
         }
     }
-}
-
-fn profile_values(model: &Model, scope: &Scope) -> BTreeMap<Key, Value> {
-    let mut values = BTreeMap::new();
-    let mut insert = |entity: &str, field: &str, value: Value| {
-        values.insert(
-            Key {
-                scope: scope.clone(),
-                entity: entity.into(),
-                field: field.into(),
-            },
-            value,
-        );
-    };
-    insert(
-        "catalog",
-        "derived",
-        json!(
-            model
-                .spaces
-                .iter()
-                .filter(|space| space.template.is_some())
-                .map(|space| Space {
-                    collapsed: false,
-                    ..space.clone()
-                })
-                .collect::<Vec<_>>()
-        ),
-    );
-    insert(
-        "catalog",
-        "folder_order",
-        json!(
-            model
-                .folders
-                .iter()
-                .map(|folder| &folder.id)
-                .collect::<Vec<_>>()
-        ),
-    );
-    for folder in &model.folders {
-        let entity = format!("folder:{}", folder.id);
-        insert(&entity, "name", json!(folder.name));
-        insert(&entity, "space", json!(folder.space_id));
-        insert(&entity, "collapsed", json!(folder.collapsed));
-    }
-    for space in &model.spaces {
-        insert(
-            &format!("space:{}", space.id),
-            "collapsed",
-            json!(space.collapsed),
-        );
-    }
-    values
-}
-fn session_values(model: &Model, scope: &Scope, window_id: Option<u64>) -> BTreeMap<Key, Value> {
-    let mut values: BTreeMap<Key, Value> = model
-        .tabs
-        .values()
-        .filter(|tab| tab.manual_assignment || tab.pinned || tab.folder_id.is_some())
-        .map(|tab| {
-            (
-                Key {
-                    scope: scope.clone(),
-                    entity: format!("tab:{}", tab.id),
-                    field: "membership".into(),
-                },
-                json!({"space":tab.space_id,"manual":tab.manual_assignment,"pinned":tab.pinned,"folder":tab.folder_id}),
-            )
-        })
-        .collect();
-    if let Some(id) = window_id {
-        values.insert(
-            Key {
-                scope: scope.clone(),
-                entity: format!("window:{id}"),
-                field: "selected_space".into(),
-            },
-            json!(model.selected_space),
-        );
-    }
-    values
 }

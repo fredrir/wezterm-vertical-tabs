@@ -102,7 +102,7 @@ impl SidebarUi {
         self.focused.as_ref()
     }
     pub fn is_modal(&self) -> bool {
-        self.overlays.current.is_some() || self.settings.open
+        self.overlays.is_open() || self.settings.open
     }
     pub fn theme(&self) -> &Theme {
         &self.theme
@@ -145,14 +145,12 @@ impl SidebarUi {
         self.open_overlay(Overlay::Menu(Menu::new(message, items)));
     }
     pub fn set_error(&mut self, message: impl Into<String>) {
-        self.overlays.pending_form = None;
-        if let Some(Overlay::Form(form)) = &mut self.overlays.current {
-            form.error = Some(message.into());
-            self.frame.dirty = true;
-        } else {
-            self.show_error(message);
+        match self.overlays.fail(message.into()) {
+            Ok(()) => self.frame.dirty = true,
+            Err(message) => self.show_error(message),
         }
     }
+
     pub fn invalidate(&mut self) {
         self.frame.dirty = true;
     }
@@ -233,11 +231,7 @@ impl SidebarUi {
         self.frame.dirty = true;
     }
     pub fn dismiss(&mut self) {
-        self.overlays.current = None;
-        self.overlays.pending_form = None;
-        self.overlays.stack.clear();
-        self.overlays.anchor = None;
-        self.focused = self.overlays.restore_focus.take();
+        self.focused = self.overlays.dismiss();
         self.caret.stop();
         self.tooltip.hide();
         self.cancel_effects();
@@ -287,18 +281,16 @@ impl SidebarUi {
         self.caret.stop();
     }
     fn cancel_settings_input(&mut self) {
-        self.settings.recording = false;
-        self.settings.entry = None;
-        self.settings.drag = None;
+        self.settings.editing.cancel();
     }
     pub fn has_overlay(&self) -> bool {
-        self.overlays.current.is_some()
+        self.overlays.is_open()
     }
     pub fn content_page(&self) -> bool {
         self.settings.open
     }
     pub fn overlay_surface(&self) -> bool {
-        self.overlays.current.is_some() || self.tooltip.pending()
+        self.overlays.is_open() || self.tooltip.pending()
     }
     pub fn rounded_surfaces(&self) -> &[RoundedSurface] {
         &self.paint.surfaces

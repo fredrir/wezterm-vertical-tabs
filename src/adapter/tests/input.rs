@@ -634,6 +634,44 @@ fn composed_release_does_not_duplicate_text_and_caret_is_visible() {
 }
 
 #[test]
+fn processed_text_and_clipboard_keep_their_identity_with_raw_metadata() {
+    config::designate_this_as_the_main_thread();
+    let mut adapter = Adapter::new(9930);
+    adapter
+        .app
+        .config(serde_json::json!({"settings":{"keyboard_shortcuts":false}}))
+        .unwrap();
+    adapter.app.open_create_space();
+    assert!(!adapter.input(Input::RawKey(&raw(
+        KeyCode::Char('z'),
+        window::Modifiers::NONE,
+        true,
+    ))));
+    let mut text = logical_key(KeyCode::Char('a'), window::Modifiers::NONE);
+    text.raw = Some(raw(KeyCode::Char('q'), window::Modifiers::NONE, true));
+    assert!(adapter.input(Input::Key(&text)));
+
+    // IME commits use processed modifiers even when raw metadata still has Ctrl.
+    let mut composed = logical_key(KeyCode::Composed("界".into()), window::Modifiers::NONE);
+    composed.raw = Some(raw(KeyCode::Char('q'), window::Modifiers::CTRL, true));
+    assert!(adapter.input(Input::Key(&composed)));
+    composed.key_is_down = false;
+    assert!(adapter.input(Input::Key(&composed)));
+    composed.key_is_down = true;
+    composed.modifiers = window::Modifiers::CTRL;
+    composed.raw.as_mut().unwrap().modifiers = window::Modifiers::NONE;
+    assert!(!adapter.input(Input::Key(&composed)));
+
+    // Clipboard identity uses the delivered logical key and raw modifiers.
+    for code in ['\u{1}', '\u{3}'] {
+        let mut event = logical_key(KeyCode::Char(code), window::Modifiers::NONE);
+        event.raw = Some(raw(KeyCode::Char('q'), window::Modifiers::CTRL, true));
+        assert!(adapter.input(Input::Key(&event)));
+    }
+    assert_eq!(copied_text(&mut adapter), "a界");
+}
+
+#[test]
 fn unclaimed_command_chords_reach_host_bindings_while_search_is_open() {
     config::designate_this_as_the_main_thread();
     let mut adapter = Adapter::new(9860);
@@ -1048,6 +1086,87 @@ fn quick_terminal_respects_remapping_and_disabled_shortcuts() {
         adapter.commands().as_slice(),
         [Command::ToggleTerminalOverlay]
     ));
+}
+
+#[test]
+fn raw_metadata_selects_shortcuts_but_processed_press_state_controls_delivery() {
+    config::designate_this_as_the_main_thread();
+    for down in [false, true] {
+        let mut event = logical_key(
+            KeyCode::Composed("ignored".into()),
+            window::Modifiers::SUPER,
+        );
+        event.key_is_down = down;
+        event.raw = Some(raw(
+            KeyCode::Physical(window::PhysKeyCode::F12),
+            window::Modifiers::CTRL,
+            !down,
+        ));
+
+        let mut adapter = Adapter::new(9931);
+        adapter
+            .app
+            .dispatch(core::Intent::SetSetting {
+                key: "keybinds".into(),
+                value: serde_json::json!({"commands": ["Ctrl+F12"]}),
+            })
+            .unwrap();
+        assert!(adapter.input(Input::Key(&event)));
+        assert_eq!(
+            matches!(adapter.commands().as_slice(), [Command::OpenCommandPalette]),
+            down
+        );
+
+        adapter
+            .app
+            .dispatch(core::Intent::SetSetting {
+                key: "keybinds".into(),
+                value: serde_json::json!({"quick_terminal": ["Ctrl+F12"]}),
+            })
+            .unwrap();
+        assert_eq!(
+            adapter.terminal_input(Input::Key(&event), HideOnEscape::Auto),
+            TerminalKey::Handled
+        );
+        assert_eq!(
+            matches!(
+                adapter.commands().as_slice(),
+                [Command::ToggleTerminalOverlay]
+            ),
+            down
+        );
+    }
+}
+
+#[test]
+fn palette_recording_keeps_native_raw_labels_for_processed_events() {
+    config::designate_this_as_the_main_thread();
+    let mut adapter = Adapter::new(9932);
+    let native_key = KeyCode::Char('<');
+    let native_modifiers = window::Modifiers::CTRL | window::Modifiers::SHIFT;
+    adapter.app.ui_mut().open_commands(vec![ui::CommandEntry {
+        label: "Native binding".into(),
+        shortcuts: vec![commands::shortcut_label(&native_key, native_modifiers)],
+        description: String::new(),
+    }]);
+    click(&mut adapter, ui::ElementId::RecordShortcut);
+    let mut event = logical_key(KeyCode::Composed("ignored".into()), window::Modifiers::NONE);
+    event.raw = Some(raw(native_key, native_modifiers, true));
+    assert!(adapter.input(Input::Key(&event)));
+    assert!(adapter.commands().is_empty());
+    adapter.render(geometry(), Instant::now());
+    let results = adapter
+        .app
+        .ui()
+        .hit_regions()
+        .iter()
+        .filter_map(|hit| match &hit.id {
+            ui::ElementId::Menu(id) => Some(id.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(results, ["command/0"]);
+    assert!(adapter.app.ui().recording_shortcut());
 }
 
 #[test]

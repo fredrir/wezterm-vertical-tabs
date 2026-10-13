@@ -6,7 +6,7 @@ pub use vtabs_core as core;
 pub use vtabs_store as store;
 pub use vtabs_ui as ui;
 
-use core::{Error, HostCommand, Intent, Model, Tab, TabId};
+use core::{Error, HostCommand, HostTab, Intent, Model, Tab, TabId};
 use serde_json::Value;
 use std::{collections::BTreeMap, time::Duration};
 use ui::{FrameUpdate, HostAction, SidebarUi, UiInput, UiIntent};
@@ -39,7 +39,7 @@ impl Default for Metrics {
 #[derive(Clone, Debug)]
 pub struct HostSnapshot {
     pub revision: u64,
-    pub tabs: Vec<Tab>,
+    pub tabs: Vec<HostTab>,
     pub active_tab: Option<TabId>,
     pub metrics: Metrics,
     pub focused: bool,
@@ -257,10 +257,7 @@ impl WindowApp {
             candidate.managed.loaded(managed);
             candidate.managed.touch();
         }
-        let id = transfer.tab.id;
-        candidate
-            .model
-            .reconcile(vec![transfer.tab], Some(id), true)?;
+        candidate.model.import_transferred_tab(transfer.tab)?;
         candidate.storage = persistence::Persistence::new(&candidate.model);
         // Preserve current public edits while a source-window helper is still draining.
         candidate.storage.observe(&candidate.model, Duration::ZERO);
@@ -553,8 +550,14 @@ impl WindowApp {
         }
         Ok(update)
     }
-    pub fn render(&mut self, now: Duration) -> Option<FrameUpdate> {
+    pub fn prepare_render(&mut self, now: Duration) {
         self.now = now;
+        if !self.teardown {
+            self.ui.prepare(&self.model, now);
+        }
+    }
+    pub fn render(&mut self, now: Duration) -> Option<FrameUpdate> {
+        self.prepare_render(now);
         if self.teardown {
             return None;
         }

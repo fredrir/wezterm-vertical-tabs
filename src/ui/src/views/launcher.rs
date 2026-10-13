@@ -150,7 +150,7 @@ impl SidebarUi {
             items,
             selected,
         );
-        if let Some(Overlay::Menu(menu)) = &mut self.overlays.current {
+        if let Some(Overlay::Menu(menu)) = self.overlays.current_mut() {
             menu.selected = menu.selected.min(menu.items.len().saturating_sub(1));
             menu.search.as_mut().unwrap().launch_menu = Some(Box::new(LaunchMenu {
                 filtering: config.fuzzy,
@@ -168,7 +168,7 @@ impl SidebarUi {
         modifiers: Modifiers,
         intents: &mut Vec<UiIntent>,
     ) -> bool {
-        let Some(Overlay::Menu(menu)) = &mut self.overlays.current else {
+        let Some(Overlay::Menu(menu)) = self.overlays.current_mut() else {
             return false;
         };
         let Some(search) = &mut menu.search else {
@@ -259,17 +259,17 @@ impl SidebarUi {
     /// Settings record plugin chords; the command search records host key labels.
     pub fn recording_keybind(&self) -> bool {
         self.binding().is_some()
-            || (self.settings.open && self.settings.recording && self.overlays.current.is_none())
+            || (self.settings.open && self.settings.editing.recording() && !self.overlays.is_open())
     }
 
     pub fn recording_shortcut(&self) -> bool {
         self.recording_keybind()
-            || matches!(&self.overlays.current, Some(Overlay::Menu(menu))
+            || matches!(self.overlays.current(), Some(Overlay::Menu(menu))
             if menu.search.as_ref().is_some_and(|search| search.recording))
     }
 
     pub(crate) fn toggle_shortcut_recording(&mut self) {
-        if let Some(Overlay::Menu(menu)) = &mut self.overlays.current
+        if let Some(Overlay::Menu(menu)) = self.overlays.current_mut()
             && let Some(search) = &mut menu.search
             && search.kind == LauncherKind::Commands
         {
@@ -297,7 +297,7 @@ impl SidebarUi {
             self.settings_recorded(&shortcut);
             return;
         }
-        if let Some(Overlay::Menu(menu)) = &mut self.overlays.current
+        if let Some(Overlay::Menu(menu)) = self.overlays.current_mut()
             && let Some(search) = &mut menu.search
             && search.recording
         {
@@ -449,7 +449,7 @@ impl SidebarUi {
     pub fn set_adoptable_panes(&mut self, panes: Vec<AdoptablePane>) {
         let items: Vec<_> = panes.iter().map(|pane| self.adoptable_item(pane)).collect();
         self.launchers.adoptable = panes;
-        let Some(Overlay::Menu(menu)) = self.overlays.current.as_mut() else {
+        let Some(Overlay::Menu(menu)) = self.overlays.current_mut() else {
             return;
         };
         let Some(search) = menu

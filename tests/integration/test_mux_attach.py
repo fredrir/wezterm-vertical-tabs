@@ -13,6 +13,7 @@ from pathlib import Path
 import pytest
 
 from tests.scenarios.tls_fixture import LocalTlsMux
+from tests.support.polling import check_process, log_diagnostics, wait_until
 from tests.support.process import stop_process
 
 pytestmark = pytest.mark.gui
@@ -56,7 +57,13 @@ class MuxServer:
             stderr=subprocess.STDOUT,
             start_new_session=True,
         )
-        wait_for(lambda: self.socket.exists())
+        wait_until(
+            self.socket.exists,
+            timeout=10,
+            message="mux socket did not become ready",
+            check_live=lambda: check_process(self.process, "mux server"),
+            diagnostics=lambda: log_diagnostics(self.root / "mux.log"),
+        )
 
     def restart(self):
         """Stands in for a reboot: local shells die, remote shells outlive their proxies."""
@@ -120,13 +127,7 @@ class RemoteCli:
 
 
 def wait_for(condition):
-    deadline = time.monotonic() + 10
-    while time.monotonic() < deadline:
-        value = condition()
-        if value:
-            return value
-        time.sleep(0.05)
-    raise AssertionError("mux state did not converge")
+    return wait_until(condition, timeout=10, message="mux state did not converge")
 
 
 @pytest.fixture

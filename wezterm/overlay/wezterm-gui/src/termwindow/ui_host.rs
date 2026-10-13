@@ -2,16 +2,17 @@
 use crate::termwindow::{TabInformation, TermWindow, TermWindowNotif};
 use mux::{Mux, MuxNotification, tab::TabId};
 use std::collections::HashSet;
-use window::WindowOps;
 
 mod chrome;
 mod contract;
+mod endpoint;
 mod geometry;
 mod render;
 mod routing;
 mod scheduler;
 
 pub use contract::*;
+pub use endpoint::WindowEndpoint;
 pub use geometry::{Bounds, Geometry, Reservation};
 
 thread_local! {
@@ -31,10 +32,7 @@ pub fn spawn_completed(window: usize, tab: usize, context: SpawnContext) {
 }
 pub fn spawn_failed(window: usize, context: SpawnContext) {
     if let Some(gui) = crate::frontend::front_end().gui_window_for_mux_window(window) {
-        gui.window
-            .notify(TermWindowNotif::Apply(Box::new(move |tw| {
-                tw.vtabs_message_for(window, Message::SpawnFailed(context))
-            })));
+        WindowEndpoint::new(gui.window, window).send(Message::SpawnFailed(context));
     }
 }
 

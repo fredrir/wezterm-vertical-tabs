@@ -4,10 +4,10 @@ fn model() -> Model {
     model
         .reconcile(
             (1..=3)
-                .map(|id| Tab {
+                .map(|id| HostTab {
                     id,
                     title: format!("{id}"),
-                    ..Tab::default()
+                    ..HostTab::default()
                 })
                 .collect(),
             Some(1),
@@ -30,7 +30,7 @@ fn same_space_activation_keeps_cached_projection() {
 fn unchanged_metadata_does_not_rebuild_projection() {
     let mut model = model();
     let revision = model.projection_revision();
-    let metadata = model.tabs.values().cloned().collect();
+    let metadata = model.tabs.values().cloned().map(HostTab::from).collect();
     assert!(!model.reconcile(metadata, Some(1), false).unwrap());
     assert_eq!(model.projection_revision(), revision);
 }

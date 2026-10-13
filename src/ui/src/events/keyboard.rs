@@ -29,7 +29,7 @@ impl SidebarUi {
         if self.shortcut(model, &key, modifiers, intents) {
             return;
         }
-        if self.overlays.current.is_none() && self.sidebar.rename.is_some() {
+        if !self.overlays.is_open() && self.sidebar.rename.is_some() {
             match self.editor_key(EditorSlot::Rename, &key, modifiers, intents) {
                 EditResult::Submit => self.finish_rename(true, intents),
                 EditResult::Cancel => self.finish_rename(false, intents),
@@ -51,8 +51,9 @@ impl SidebarUi {
             {
                 self.restore_editor(target);
             }
-        } else if key == Key::F10 && self.text_input_active() && self.settings.entry.is_none() {
-            let target = if self.overlays.current.is_some() {
+        } else if key == Key::F10 && self.text_input_active() && !self.settings.editing.has_entry()
+        {
+            let target = if self.overlays.is_open() {
                 ElementId::Editor
             } else {
                 ElementId::SettingsSearch
@@ -61,7 +62,7 @@ impl SidebarUi {
             self.context_menu(model, target);
             return;
         }
-        if matches!(self.overlays.current, Some(Overlay::Form(_))) {
+        if matches!(self.overlays.current(), Some(Overlay::Form(_))) {
             if self.color_key(model, &key, modifiers, intents) {
                 return;
             }
@@ -113,7 +114,7 @@ impl SidebarUi {
             return;
         }
         let edits_query = matches!(
-            &self.overlays.current,
+            self.overlays.current(),
             Some(Overlay::Menu(Menu { search: Some(search), .. }))
                 if search.edits_query() && matches!(
                     key,
@@ -130,7 +131,7 @@ impl SidebarUi {
             self.editor_key(EditorSlot::Palette, &key, modifiers, intents);
             return;
         }
-        if let Some(Overlay::Menu(menu)) = &mut self.overlays.current {
+        if let Some(Overlay::Menu(menu)) = self.overlays.current_mut() {
             match key {
                 Key::Left | Key::Right if menu.message.is_some() => {
                     menu.selected = next_enabled(&menu.items, menu.selected, 1);
@@ -248,7 +249,7 @@ impl SidebarUi {
         modifiers: Modifiers,
         intents: &mut Vec<UiIntent>,
     ) -> bool {
-        let (Key::Character(c), Some(Overlay::Menu(menu))) = (key, &self.overlays.current) else {
+        let (Key::Character(c), Some(Overlay::Menu(menu))) = (key, self.overlays.current()) else {
             return false;
         };
         if modifiers.command() || modifiers.alt {

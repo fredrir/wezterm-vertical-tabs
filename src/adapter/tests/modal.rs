@@ -10,7 +10,7 @@ fn confirm_close_closes_a_tab_the_mux_does_not_report_busy_without_prompting() {
         .app
         .update(app::HostSnapshot {
             revision: 1,
-            tabs: vec![core::Tab {
+            tabs: vec![core::HostTab {
                 id: 1,
                 title: "Shell".into(),
                 ..Default::default()
@@ -122,7 +122,13 @@ fn form_completion_publishes_settled_grid_and_pointer_origin() {
             modifiers: ui::Modifiers::default(),
         });
         assert!(adapter.overlay_surface());
+        let before = adapter.surface.revision;
         adapter.render(geometry, Instant::now());
+        assert_eq!(
+            adapter.surface.revision,
+            before + 1,
+            "completion renders once"
+        );
         assert!(!adapter.overlay_surface());
         assert_eq!(adapter.surface.columns, 25);
         assert_eq!(adapter.app.buffer().area.width, 25);
@@ -255,7 +261,7 @@ fn hidden_sidebar_modals_use_window_bounds_without_resizing_it() {
 fn tab_moves_and_last_tab_act_on_the_settings_page_not_the_tab_beneath() {
     config::designate_this_as_the_main_thread();
     let mut adapter = Adapter::new(9932);
-    let tab = |id| core::Tab {
+    let tab = |id| core::HostTab {
         id,
         title: format!("Tab {id}"),
         ..Default::default()

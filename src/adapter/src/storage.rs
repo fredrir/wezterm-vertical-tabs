@@ -1,4 +1,4 @@
-use super::Message;
+use super::{Message, WindowEndpoint};
 use crate::termwindow::TermWindowNotif;
 use smol::io::{AsyncReadExt, AsyncWriteExt};
 use std::path::PathBuf;
@@ -100,7 +100,7 @@ pub(super) async fn invoke(request: Request) -> anyhow::Result<Response> {
     .await
 }
 
-pub fn request(window: window::Window, request: Request, mux_window_id: usize) {
+pub fn request(endpoint: WindowEndpoint, request: Request) {
     promise::spawn::spawn(async move {
         let request_id = request.request_id;
         let profiles = request
@@ -122,9 +122,10 @@ pub fn request(window: window::Window, request: Request, mux_window_id: usize) {
         let committed = result
             .as_ref()
             .is_ok_and(|response| response.error.is_none());
+        let window = endpoint.window().clone();
         let source = window.clone();
         window.notify(TermWindowNotif::Apply(Box::new(move |tw| {
-            tw.vtabs_message_for(mux_window_id, Message::Store { request_id, result });
+            endpoint.deliver(tw, Message::Store { request_id, result });
             if committed && !profiles.is_empty() {
                 for gui in crate::frontend::front_end().gui_windows() {
                     if gui.window == source {

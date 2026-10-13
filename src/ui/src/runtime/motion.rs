@@ -105,17 +105,32 @@ impl Caret {
 pub(crate) struct Tooltip {
     pub deadline: Option<Duration>,
     pub shown: bool,
+    orphaned: bool,
 }
 
 impl Tooltip {
     pub fn hide(&mut self) {
         self.shown = false;
         self.deadline = None;
+        self.orphaned = false;
+    }
+    pub fn arm(&mut self, deadline: Option<Duration>) {
+        self.hide();
+        self.deadline = deadline;
+    }
+    /// Keep this frame's surface reservation until the next preparation phase.
+    pub fn orphaned(&mut self, now: Duration) {
+        self.orphaned = true;
+        self.deadline = Some(now);
     }
     pub fn pending(&self) -> bool {
         self.shown || self.deadline.is_some()
     }
     pub fn tick(&mut self, now: Duration, hovering: bool) -> bool {
+        if self.orphaned {
+            self.hide();
+            return true;
+        }
         if self.deadline.is_some_and(|deadline| now >= deadline) {
             self.deadline = None;
             self.shown = hovering;

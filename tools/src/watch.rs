@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 use anyhow::{Context as _, Result};
 
 use crate::{
-    build, bundle, install,
+    build, bundle, install, source,
     state::{BuildMetadata, Context, Lock, read_json},
 };
 
@@ -299,13 +299,25 @@ struct FileStat {
 
 fn scan_source_stats(root: &Path) -> BTreeMap<PathBuf, FileStat> {
     let mut stats = BTreeMap::new();
-    let dirs = ["src", "plugin", "wezterm"];
-    for dir_name in dirs {
-        let dir = root.join(dir_name);
-        if !dir.is_dir() {
+    // Derive watched roots from the same inventory and classification used by
+    // compilation fingerprints. Plugin edits only need resource restaging.
+    for item in source::SOURCE_ITEMS
+        .iter()
+        .filter(|item| source::is_compile_input(Path::new(item)) || **item == "plugin")
+    {
+        let path = root.join(item);
+        if !path.exists() {
             continue;
         }
-        for entry in walkdir::WalkDir::new(&dir).follow_links(false) {
+        for entry in walkdir::WalkDir::new(&path)
+            .follow_links(false)
+            .into_iter()
+            .filter_entry(|entry| {
+                !source::IGNORED
+                    .iter()
+                    .any(|ignored| entry.file_name() == *ignored)
+            })
+        {
             let entry = match entry {
                 Ok(e) => e,
                 Err(_) => continue,
@@ -332,20 +344,6 @@ fn scan_source_stats(root: &Path) -> BTreeMap<PathBuf, FileStat> {
                     );
                 }
             }
-        }
-    }
-    for file_name in ["Cargo.toml", "Cargo.lock", "rust-toolchain.toml"] {
-        let file = root.join(file_name);
-        if let Ok(meta) = file.metadata()
-            && let Ok(mtime) = meta.modified()
-        {
-            stats.insert(
-                PathBuf::from(file_name),
-                FileStat {
-                    mtime,
-                    len: meta.len(),
-                },
-            );
         }
     }
     stats

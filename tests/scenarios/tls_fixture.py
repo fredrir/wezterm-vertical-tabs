@@ -14,12 +14,12 @@ import ssl
 import subprocess
 import sys
 import tempfile
-import time
 from pathlib import Path
 
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
+from tests.support.polling import check_process, log_diagnostics, wait_until
 from tests.support.process import stop_process
 
 
@@ -201,20 +201,24 @@ class LocalTlsMux:
         context.load_cert_chain(
             str(self.certificates / "client.pem"), str(self.certificates / "client.key")
         )
-        deadline = time.monotonic() + 15
-        while True:
-            if self.process.poll() is not None or time.monotonic() > deadline:
-                raise RuntimeError(
-                    "isolated TLS mux startup failed: "
-                    + (self.root / "mux.log").read_text(encoding="utf-8")
-                )
+
+        def ready():
             try:
                 with socket.create_connection(self.address, timeout=0.5) as connection:
                     with context.wrap_socket(connection, server_hostname="localhost") as secure:
                         self.protocol = secure.version()
                 return self.domain
             except (ConnectionRefusedError, TimeoutError):
-                time.sleep(0.05)
+                return None
+
+        return wait_until(
+            ready,
+            timeout=15,
+            message="isolated TLS mux startup failed",
+            check_live=lambda: check_process(self.process, "isolated TLS mux", error=RuntimeError),
+            diagnostics=lambda: log_diagnostics(self.root / "mux.log"),
+            error=RuntimeError,
+        )
 
     def close(self) -> None:
         try:

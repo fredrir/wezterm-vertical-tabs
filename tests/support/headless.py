@@ -7,10 +7,10 @@ import selectors
 import shutil
 import subprocess
 import sys
-import time
 from contextlib import ExitStack
 from pathlib import Path
 
+from tests.support.polling import log_diagnostics, wait_until
 from tests.support.process import stop_process
 
 
@@ -113,20 +113,27 @@ class HeadlessDisplay:
                 stderr=subprocess.STDOUT,
                 start_new_session=True,
             )
-            deadline = time.monotonic() + 10
-            while True:
-                self.assert_live()
-                ready = subprocess.run(
+
+            def ready():
+                result = subprocess.run(
                     [xdotool, "get_desktop"],
                     env=self.env,
                     capture_output=True,
                     timeout=2,
                 )
-                if ready.returncode == 0:
-                    break
-                if time.monotonic() >= deadline:
-                    raise RuntimeError(f"Openbox did not become ready: {self.root / 'openbox.log'}")
-                time.sleep(0.02)
+                return result.returncode == 0
+
+            wait_until(
+                ready,
+                timeout=10,
+                interval=0.02,
+                message="Openbox did not become ready",
+                check_live=self.assert_live,
+                diagnostics=lambda: "\n".join(
+                    log_diagnostics(self.root / name) for name in ("xvfb.log", "openbox.log")
+                ),
+                error=RuntimeError,
+            )
             return self
         except BaseException:
             self.close()

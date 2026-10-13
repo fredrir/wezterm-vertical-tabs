@@ -7,7 +7,6 @@ import argparse
 import json
 import sys
 import tempfile
-import time
 from pathlib import Path
 
 if __package__ in {None, ""}:
@@ -15,6 +14,7 @@ if __package__ in {None, ""}:
 
 from tests.support.gui import GuiInput
 from tests.support.headless import HeadlessDisplay
+from tests.support.polling import check_process, log_diagnostics, wait_until
 from tests.support.probe import Probe, pane_shape
 
 
@@ -223,13 +223,14 @@ def scenarios(probe: Probe, gui: GuiInput):
     gui.text('printf "VTABS_TERMINAL_KEYS_OK\\n" > "$WEZ_VTABS_SCENARIO/terminal-keys-ok"')
     gui.key("Return")
     terminal_keys = probe.root / "terminal-keys-ok"
-    deadline = time.monotonic() + 5
-    while not terminal_keys.exists():
-        if time.monotonic() > deadline:
-            raise AssertionError(
-                "Plain Ctrl+C and terminal text were not delivered after leaving the UI"
-            )
-        time.sleep(0.02)
+    wait_until(
+        terminal_keys.exists,
+        timeout=5,
+        interval=0.02,
+        message="Plain Ctrl+C and terminal text were not delivered after leaving the UI",
+        check_live=lambda: check_process(probe.gui_process, "GUI"),
+        diagnostics=lambda: log_diagnostics(probe.root / "gui.log"),
+    )
     assert terminal_keys.read_text() == "VTABS_TERMINAL_KEYS_OK\n"
     return {
         "tabs": ids,

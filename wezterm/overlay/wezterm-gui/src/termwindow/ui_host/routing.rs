@@ -395,17 +395,15 @@ impl TermWindow {
                     }
                 }
                 Command::Paste(token) => {
-                    let window_id = self.mux_window_id;
                     if let Some(window) = self.window.clone() {
+                        let endpoint =
+                            super::WindowEndpoint::new(window.clone(), self.mux_window_id);
                         promise::spawn::spawn(async move {
                             let text = window
                                 .get_clipboard(window::Clipboard::Clipboard)
                                 .await
                                 .ok();
-                            let message = Message::Paste { token, text };
-                            window.notify(TermWindowNotif::Apply(Box::new(move |tw| {
-                                tw.vtabs_message_for(window_id, message)
-                            })));
+                            endpoint.send(Message::Paste { token, text });
                         })
                         .detach();
                     }

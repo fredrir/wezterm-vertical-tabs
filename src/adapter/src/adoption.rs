@@ -1,21 +1,20 @@
 //! Unadopted remote panes for the tab search, asked of the mux that owns the window's layout.
-use super::Message;
-use crate::termwindow::TermWindowNotif;
+use super::{Message, WindowEndpoint};
 use vtabs_app::{core, ui};
-use window::{Window, WindowOps};
 
 /// Answers with an `adoptable` message naming `search`, so a later search drops it.
-pub fn find(window: Window, mux_window: usize, search: u64) {
+pub fn find(endpoint: WindowEndpoint, search: u64) {
     promise::spawn::spawn(async move {
         let domains = super::lua::adoptable_domains().await;
-        let panes = match wezterm_client::domain::adoption::find_for(mux_window, domains).await {
-            Ok(panes) if panes.is_empty() => return,
-            Ok(panes) => panes,
-            Err(error) => return log::warn!("tabs adoptable: {error:#}"),
-        };
-        window.notify(TermWindowNotif::Apply(Box::new(move |tw| {
-            tw.vtabs_message_for(mux_window, Message::Adoptable { search, panes });
-        })));
+        let panes =
+            match wezterm_client::domain::adoption::find_for(endpoint.mux_window_id(), domains)
+                .await
+            {
+                Ok(panes) if panes.is_empty() => return,
+                Ok(panes) => panes,
+                Err(error) => return log::warn!("tabs adoptable: {error:#}"),
+            };
+        endpoint.send(Message::Adoptable { search, panes });
     })
     .detach();
 }
@@ -57,7 +56,7 @@ fn entry(found: codec::AdoptablePane, home: Option<&str>) -> ui::AdoptablePane {
 
 /// Shows the adopted pane's new tab in `mux_window`.
 pub async fn adopt(
-    window: Option<Window>,
+    endpoint: Option<WindowEndpoint>,
     mux_window: usize,
     domain: String,
     pane: u64,
@@ -65,10 +64,8 @@ pub async fn adopt(
     let tab =
         wezterm_client::domain::adoption::adopt_into(mux_window, domain, pane as mux::pane::PaneId)
             .await?;
-    if let Some(window) = window {
-        window.notify(TermWindowNotif::Apply(Box::new(move |tw| {
-            tw.vtabs_message_for(mux_window, Message::ShowTab(tab as u64));
-        })));
+    if let Some(endpoint) = endpoint {
+        endpoint.send(Message::ShowTab(tab as u64));
     }
     Ok(())
 }

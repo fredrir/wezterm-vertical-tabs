@@ -35,14 +35,14 @@ fn owner(model: &Model, chord: &str) -> Option<&'static str> {
 
 impl SidebarUi {
     pub(crate) fn binding(&self) -> Option<&Binding> {
-        match &self.overlays.current {
+        match self.overlays.current() {
             Some(Overlay::Menu(menu)) => menu.search.as_ref()?.binding.as_deref(),
             _ => None,
         }
     }
 
     fn binding_mut(&mut self) -> Option<&mut Binding> {
-        match &mut self.overlays.current {
+        match self.overlays.current_mut() {
             Some(Overlay::Menu(menu)) => menu.search.as_mut()?.binding.as_deref_mut(),
             _ => None,
         }
@@ -54,8 +54,8 @@ impl SidebarUi {
         }
         let row = self.focused.clone();
         self.open_launcher(LauncherKind::Keybinds, label(action), "", Vec::new(), 0);
-        self.overlays.restore_focus = row;
-        if let Some(Overlay::Menu(menu)) = &mut self.overlays.current
+        self.overlays.restore_focus_to(row);
+        if let Some(Overlay::Menu(menu)) = self.overlays.current_mut()
             && let Some(search) = &mut menu.search
         {
             search.recording = true;
@@ -74,7 +74,7 @@ impl SidebarUi {
         let label = self.settings.chord_label;
         let danger = self.theme.danger;
         let accent = self.theme.accent;
-        let Some(Overlay::Menu(menu)) = &mut self.overlays.current else {
+        let Some(Overlay::Menu(menu)) = self.overlays.current_mut() else {
             return;
         };
         let Some(search) = &mut menu.search else {
@@ -147,7 +147,7 @@ impl SidebarUi {
             return;
         };
         let step = |ui: &mut Self, delta| {
-            if let Some(Overlay::Menu(menu)) = &mut ui.overlays.current {
+            if let Some(Overlay::Menu(menu)) = ui.overlays.current_mut() {
                 menu.selected = next_enabled(&menu.items, menu.selected, delta);
             }
             ui.frame.dirty = true;
@@ -164,7 +164,7 @@ impl SidebarUi {
             "Up" | "Shift+Tab" => step(self, -1),
             "Down" | "Tab" => step(self, 1),
             "Enter" | "Space" => {
-                let action = match &self.overlays.current {
+                let action = match self.overlays.current() {
                     Some(Overlay::Menu(menu)) => menu
                         .items
                         .get(menu.selected)
@@ -177,7 +177,7 @@ impl SidebarUi {
                 }
             }
             "Delete" | "Backspace" => {
-                let remove = match &self.overlays.current {
+                let remove = match self.overlays.current() {
                     Some(Overlay::Menu(menu)) => menu
                         .items
                         .get(menu.selected)

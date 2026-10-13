@@ -1,11 +1,11 @@
 use super::*;
 use std::collections::BTreeMap;
 
-fn host_tab(id: TabId) -> Tab {
-    Tab {
+fn host_tab(id: TabId) -> HostTab {
+    HostTab {
         id,
         title: format!("Tab {id}"),
-        ..Tab::default()
+        ..HostTab::default()
     }
 }
 
@@ -22,7 +22,7 @@ fn changed_metadata_updates_display_without_rebuilding_projection() {
     let mut model = model();
     let revision = model.revision;
     let projection = model.projection_revision();
-    let changed = Tab {
+    let changed = HostTab {
         id: 2,
         title: "Build output".into(),
         icon: "!".into(),
@@ -34,7 +34,7 @@ fn changed_metadata_updates_display_without_rebuilding_projection() {
         remote: true,
         unread: true,
         bell: true,
-        ..Tab::default()
+        ..HostTab::default()
     };
     assert!(
         model
@@ -48,7 +48,7 @@ fn changed_metadata_updates_display_without_rebuilding_projection() {
         model.tabs[&2],
         Tab {
             space_id: DEFAULT_SPACE.into(),
-            ..changed
+            ..changed.into()
         }
     );
 }
@@ -82,10 +82,6 @@ fn updates_preserve_application_membership_titles_and_launch() {
     };
     model.set_launch(2, launch.clone()).unwrap();
     let mut incoming = host_tab(2);
-    incoming.space_id = "ignored-host-space".into();
-    incoming.folder_id = Some("ignored-host-folder".into());
-    incoming.title_override = Some("ignored-host-title".into());
-    incoming.title_hook = Some("ignored-host-hook".into());
     incoming.launch = Some(LaunchSpec {
         cwd: Some("/new/host_tab/cwd".into()),
         ..LaunchSpec::default()
@@ -214,4 +210,107 @@ fn duplicate_identity_is_rejected_before_any_mutation() {
     assert_eq!(model.tabs, tabs);
     assert_eq!(model.tab_order(), &[1, 2]);
     assert_eq!(model.visible_ids(), &[1, 2]);
+}
+
+#[test]
+fn host_projection_preserves_facts_but_cannot_import_saved_application_state() {
+    let saved = Tab {
+        id: 7,
+        title: "Host title".into(),
+        icon: "!".into(),
+        cwd: "/work/project".into(),
+        repo_root: Some("/work".into()),
+        home: Some("/home/user".into()),
+        domain: "ssh:builder".into(),
+        host: "builder".into(),
+        user: "developer".into(),
+        process: "cargo".into(),
+        remote: true,
+        os: "arch".into(),
+        panes: vec![TabPane {
+            id: 17,
+            title: "Pane".into(),
+            ..TabPane::default()
+        }],
+        unread: true,
+        bell: true,
+        pinned: true,
+        folder_id: Some("saved-folder".into()),
+        space_id: "saved-space".into(),
+        manual_assignment: true,
+        launch: Some(LaunchSpec {
+            domain: Some("ssh:builder".into()),
+            ..LaunchSpec::default()
+        }),
+        title_override: Some("Saved title".into()),
+        title_hook: Some("Saved hook".into()),
+    };
+    let mut expected = saved.clone();
+    expected.pinned = false;
+    expected.folder_id = None;
+    expected.space_id.clear();
+    expected.manual_assignment = false;
+    expected.title_override = None;
+    expected.title_hook = None;
+
+    let facts = HostTab::from(saved);
+    assert_eq!(Tab::from(facts.clone()), expected);
+    expected.space_id = DEFAULT_SPACE.into();
+    // Rebuilding an empty model selects its first tab and acknowledges activity.
+    expected.unread = false;
+    expected.bell = false;
+    let mut model = Model::default();
+    model.reconcile(vec![facts], None, false).unwrap();
+    assert_eq!(model.tabs[&7], expected);
+    assert_eq!(model.visible_ids(), &[7]);
+}
+
+#[test]
+fn transferred_automatic_tab_routes_and_acknowledges_activity_on_activation() {
+    let mut model = Model::default();
+    let mut work = Space::new("work", "Work");
+    work.rules.push(RoutingRule {
+        remote: Some(true),
+        fields: Vec::new(),
+    });
+    model
+        .load_catalog(vec![Space::new(DEFAULT_SPACE, "Home"), work], Vec::new())
+        .unwrap();
+    let tab = Tab {
+        id: 7,
+        remote: true,
+        unread: true,
+        bell: true,
+        pinned: true,
+        title_override: Some("Application title".into()),
+        title_hook: Some("Hook title".into()),
+        ..Tab::default()
+    };
+    model.import_transferred_tab(tab).unwrap();
+    assert_eq!(model.selected_space, "work");
+    assert_eq!(model.selected_tab, Some(7));
+    assert_eq!(model.tab_order(), &[7]);
+    assert_eq!(model.visible_ids(), &[7]);
+    let tab = &model.tabs[&7];
+    assert_eq!(tab.space_id, "work");
+    assert!(!tab.manual_assignment);
+    assert!(tab.pinned);
+    assert!(!tab.unread);
+    assert!(!tab.bell);
+    assert_eq!(tab.title_override.as_deref(), Some("Application title"));
+    assert_eq!(tab.title_hook.as_deref(), Some("Hook title"));
+
+    let revision = model.revision;
+    let tabs = model.tabs.clone();
+    assert!(
+        model
+            .import_transferred_tab(Tab {
+                id: 8,
+                ..Tab::default()
+            })
+            .is_err()
+    );
+    assert_eq!(model.revision, revision);
+    assert_eq!(model.tabs, tabs);
+    assert_eq!(model.tab_order(), &[7]);
 }

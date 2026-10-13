@@ -5,7 +5,7 @@ pub(crate) mod menus;
 use crate::SidebarUi;
 use crate::actions::Action;
 use crate::components::list;
-use crate::element::ElementId;
+use crate::element::{ElementId, EntityRef};
 use crate::input::TextEditor;
 use crate::views::launcher::Launcher;
 use ratatui::layout::Rect;
@@ -28,6 +28,20 @@ pub(crate) struct MenuItem {
 }
 
 impl MenuItem {
+    pub(crate) fn prune(&mut self, model: &Model) -> bool {
+        if !self.action.prune(model) {
+            return false;
+        }
+        if self
+            .remove
+            .as_mut()
+            .is_some_and(|action| !action.prune(model))
+        {
+            self.remove = None;
+        }
+        true
+    }
+
     pub(crate) fn new(id: impl Into<String>, label: impl Into<String>, action: Action) -> Self {
         Self {
             id: id.into(),
@@ -116,6 +130,24 @@ pub(crate) enum FormKind {
     Setting(String),
 }
 
+impl FormKind {
+    pub(crate) fn entity(&self) -> Option<EntityRef<'_>> {
+        match self {
+            Self::RenameFolder(id) => Some(EntityRef::Folder(id)),
+            Self::RenameTab(id) => Some(EntityRef::Tab(*id)),
+            Self::RenameSpace(id)
+            | Self::SpaceIcon(id)
+            | Self::SpaceAccent(id)
+            | Self::SpaceRules(id) => Some(EntityRef::Space(id)),
+            Self::CreateFolder | Self::CreateSpace | Self::Setting(_) => None,
+        }
+    }
+
+    pub(crate) fn exists(&self, model: &Model) -> bool {
+        self.entity().is_none_or(|entity| entity.exists(model))
+    }
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct Form {
     pub title: String,
@@ -131,42 +163,137 @@ pub(crate) enum Overlay {
     Form(Form),
 }
 
+impl Overlay {
+    pub(crate) fn prune(&mut self, model: &Model) -> bool {
+        match self {
+            Self::Form(form) => form.kind.exists(model),
+            Self::Menu(menu) => {
+                menu.items.retain_mut(|item| item.prune(model));
+                if let Some(search) = &mut menu.search {
+                    search.all_items.retain_mut(|item| item.prune(model));
+                }
+                menu.selected = menu.selected.min(menu.items.len().saturating_sub(1));
+                true
+            }
+        }
+    }
+}
+
 #[derive(Default)]
 pub(crate) struct Overlays {
-    pub current: Option<Overlay>,
-    pub stack: Vec<Overlay>,
-    pub restore_focus: Option<ElementId>,
-    pub pending_form: Option<u64>,
-    pub rect: Rect,
-    pub anchor: Option<(i32, i32)>,
+    current: Option<Overlay>,
+    stack: Vec<Overlay>,
+    restore_focus: Option<ElementId>,
+    pending_form: Option<u64>,
+    rect: Rect,
+    anchor: Option<(i32, i32)>,
 }
 
 impl Overlays {
-    pub(crate) fn stash(&mut self) {
+    pub(crate) fn current(&self) -> Option<&Overlay> {
+        self.current.as_ref()
+    }
+    pub(crate) fn current_mut(&mut self) -> Option<&mut Overlay> {
+        self.current.as_mut()
+    }
+    pub(crate) fn is_open(&self) -> bool {
+        self.current.is_some()
+    }
+    pub(crate) fn rect(&self) -> Rect {
+        self.rect
+    }
+    pub(crate) fn set_rect(&mut self, rect: Rect) {
+        self.rect = rect;
+    }
+    pub(crate) fn anchor(&self) -> Option<(i32, i32)> {
+        self.anchor
+    }
+    pub(crate) fn set_anchor(&mut self, anchor: Option<(i32, i32)>) {
+        self.anchor = anchor;
+    }
+    pub(crate) fn restore_focus_to(&mut self, focus: Option<ElementId>) {
+        self.restore_focus = focus;
+    }
+    fn open(&mut self, overlay: Overlay, focus: Option<ElementId>) {
+        if self.current.is_none() && self.stack.is_empty() {
+            self.restore_focus = focus;
+        }
+        self.pending_form = None;
+        self.current = Some(overlay);
+    }
+    fn push(&mut self, overlay: Overlay, focus: Option<ElementId>) {
         if let Some(overlay) = self.current.take() {
             self.stack.push(overlay);
         }
+        self.open(overlay, focus);
+    }
+    fn back(&mut self) -> bool {
+        let Some(previous) = self.stack.pop() else {
+            return false;
+        };
+        self.pending_form = None;
+        self.current = Some(previous);
+        true
+    }
+    pub(crate) fn dismiss(&mut self) -> Option<ElementId> {
+        self.current = None;
+        self.pending_form = None;
+        self.stack.clear();
+        self.anchor = None;
+        self.restore_focus.take()
+    }
+    pub(crate) fn submitted(&mut self, revision: u64) {
+        if matches!(self.current, Some(Overlay::Form(_))) {
+            self.pending_form = Some(revision);
+        }
+    }
+    pub(crate) fn fail(&mut self, message: String) -> Result<(), String> {
+        self.pending_form = None;
+        match &mut self.current {
+            Some(Overlay::Form(form)) => {
+                form.error = Some(message);
+                Ok(())
+            }
+            _ => Err(message),
+        }
+    }
+    pub(crate) fn should_dismiss(&mut self, model: &Model) -> bool {
+        if self
+            .restore_focus
+            .as_ref()
+            .is_some_and(|id| !id.exists(model))
+        {
+            self.restore_focus = None;
+        }
+        self.pending_form.is_some_and(|revision| revision != model.revision)
+            || self.current.as_mut().is_some_and(|overlay| !overlay.prune(model))
+            // Editor context menus depend on their stashed forms.
+            || self.stack.iter_mut().any(|overlay| !overlay.prune(model))
     }
 }
 
 impl SidebarUi {
     pub(crate) fn open_overlay(&mut self, overlay: Overlay) {
-        self.settings.recording = false;
-        self.settings.entry = None;
+        self.overlays.open(overlay, self.focused.clone());
+        self.overlay_opened();
+    }
+
+    pub(crate) fn push_overlay(&mut self, overlay: Overlay) {
+        self.overlays.push(overlay, self.focused.clone());
+        self.overlay_opened();
+    }
+
+    fn overlay_opened(&mut self) {
+        self.cancel_settings_input();
         self.cancel_effects();
         self.caret.stop();
         self.caret.visible = true;
         self.tooltip.hide();
-        if self.overlays.current.is_none() && self.overlays.stack.is_empty() {
-            self.overlays.restore_focus = self.focused.clone();
-        }
-        self.overlays.current = Some(overlay);
         self.frame.dirty = true;
     }
 
     pub(crate) fn back(&mut self) {
-        if let Some(previous) = self.overlays.stack.pop() {
-            self.overlays.current = Some(previous);
+        if self.overlays.back() {
             self.caret.stop();
             self.frame.dirty = true;
         } else {
@@ -181,12 +308,11 @@ impl SidebarUi {
         accept: &str,
         action: Action,
     ) {
-        self.overlays.stash();
         let items = vec![
             MenuItem::new("cancel", "Cancel", Action::Close),
             MenuItem::new("confirm", accept, action),
         ];
-        self.open_overlay(Overlay::Menu(Menu {
+        self.push_overlay(Overlay::Menu(Menu {
             message: Some(message.into()),
             selected: 1,
             ..Menu::new(title, items)
@@ -199,8 +325,7 @@ impl SidebarUi {
     }
 
     pub(crate) fn push_menu(&mut self, title: impl Into<String>, items: Vec<MenuItem>) {
-        self.overlays.stash();
-        self.menu(title, items);
+        self.push_overlay(Overlay::Menu(Menu::new(title, items)));
     }
 
     pub(crate) fn editor_menu_target(&self) -> Option<ElementId> {
@@ -225,53 +350,4 @@ impl SidebarUi {
 
 pub(crate) fn next_enabled(items: &[MenuItem], current: usize, delta: isize) -> usize {
     list::next_enabled(items, current, delta, |item| item.enabled)
-}
-
-pub(crate) fn action_exists(model: &Model, action: &Action) -> bool {
-    use vtabs_core::Intent;
-    match action {
-        Action::Domain(
-            Intent::ActivateTab(id)
-            | Intent::CloseTab(id)
-            | Intent::CloseOthers(id)
-            | Intent::CloseBelow(id)
-            | Intent::ReturnToAuto(id)
-            | Intent::MoveTabToNewWindow(id)
-            | Intent::RenameTab { id, .. }
-            | Intent::PinTab { id, .. }
-            | Intent::MoveTab { id, .. },
-        )
-        | Action::RenameTab(id)
-        | Action::MoveTab(id) => model.tabs.contains_key(id),
-        Action::Domain(Intent::AssignTab { id, space_id }) => {
-            model.tabs.contains_key(id) && model.spaces.iter().any(|space| &space.id == space_id)
-        }
-        Action::Domain(
-            Intent::SelectSpace(id)
-            | Intent::RenameSpace { id, .. }
-            | Intent::EditSpace { id, .. }
-            | Intent::MoveSpace { id, .. },
-        )
-        | Action::RenameSpace(id)
-        | Action::EditSpaceIcon(id)
-        | Action::EditSpaceAccent(id)
-        | Action::EditSpaceRules(id)
-        | Action::DeleteSpace(id) => model.spaces.iter().any(|space| &space.id == id),
-        Action::Domain(Intent::DeleteSpace { id, destination }) => {
-            model.spaces.len() > 1
-                && model.spaces.iter().any(|space| &space.id == id)
-                && destination.as_ref().is_none_or(|destination| {
-                    model.spaces.iter().any(|space| &space.id == destination)
-                })
-        }
-        Action::KillPane(tab, pane) => model
-            .tabs
-            .get(tab)
-            .is_some_and(|tab| tab.panes.iter().any(|entry| entry.id == *pane)),
-        Action::Confirm { action, .. } => action_exists(model, action),
-        Action::Submenu { items, .. } => {
-            items.iter().any(|item| action_exists(model, &item.action))
-        }
-        _ => true,
-    }
 }

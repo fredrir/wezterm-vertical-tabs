@@ -2,11 +2,11 @@ use super::*;
 use serde_json::json;
 use std::collections::BTreeMap;
 
-fn tab(id: u64) -> Tab {
-    Tab {
+fn tab(id: u64) -> HostTab {
+    HostTab {
         id,
         title: format!("tab {id}"),
-        ..Tab::default()
+        ..HostTab::default()
     }
 }
 fn model() -> Model {
@@ -179,7 +179,7 @@ fn routing_templates_and_manual_return_to_auto() {
         }],
     )
     .unwrap();
-    let remote = Tab {
+    let remote = HostTab {
         id: 4,
         host: "server".into(),
         remote: true,

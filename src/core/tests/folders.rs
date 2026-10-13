@@ -1,11 +1,11 @@
 use super::*;
 use serde_json::json;
 
-fn tab(id: TabId) -> Tab {
-    Tab {
+fn tab(id: TabId) -> HostTab {
+    HostTab {
         id,
         title: format!("Terminal {id}"),
-        ..Tab::default()
+        ..HostTab::default()
     }
 }
 

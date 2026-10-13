@@ -185,13 +185,13 @@ impl SidebarUi {
         fallback: Color,
     ) {
         self.open_form(title, kind, value);
-        if let Some(Overlay::Form(form)) = &mut self.overlays.current {
+        if let Some(Overlay::Form(form)) = self.overlays.current_mut() {
             form.color = Some(Box::new(ColorPicker::new(value, default, fallback)));
         }
     }
 
     pub(crate) fn allow_no_color(&mut self) {
-        if let Some(Overlay::Form(form)) = &mut self.overlays.current
+        if let Some(Overlay::Form(form)) = self.overlays.current_mut()
             && let Some(color) = &mut form.color
         {
             color.allows_none = true;
@@ -203,7 +203,7 @@ impl SidebarUi {
     }
 
     fn change_color(&mut self, change: impl FnOnce(&mut ColorPicker)) {
-        let Some(Overlay::Form(form)) = &mut self.overlays.current else {
+        let Some(Overlay::Form(form)) = self.overlays.current_mut() else {
             return;
         };
         let Some(color) = &mut form.color else {
@@ -263,7 +263,7 @@ impl SidebarUi {
         modifiers: Modifiers,
         intents: &mut Vec<UiIntent>,
     ) -> bool {
-        let Some(Overlay::Form(form)) = &self.overlays.current else {
+        let Some(Overlay::Form(form)) = self.overlays.current() else {
             return false;
         };
         let Some(color) = &form.color else {

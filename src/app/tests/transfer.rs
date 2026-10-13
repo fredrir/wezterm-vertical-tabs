@@ -5,10 +5,10 @@ use std::{collections::BTreeMap, time::Duration};
 fn snapshot(id: u64) -> HostSnapshot {
     HostSnapshot {
         revision: 1,
-        tabs: vec![Tab {
+        tabs: vec![HostTab {
             id,
             title: "Host title".into(),
-            ..Tab::default()
+            ..HostTab::default()
         }],
         active_tab: Some(id),
         metrics: Metrics::default(),

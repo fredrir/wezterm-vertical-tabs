@@ -1,5 +1,5 @@
 use std::time::Duration;
-use vtabs_core::{Intent, Model, Tab};
+use vtabs_core::{HostTab, Intent, Model, Tab};
 use vtabs_ui::{
     AdoptablePane, CommandEntry, ElementId, HostAction, Key, Modifiers, MouseButton, Rect,
     SidebarUi, UiInput, UiIntent,
@@ -44,10 +44,10 @@ fn click(ui: &mut SidebarUi, model: &Model, id: &ElementId) {
 fn with_tabs(count: u64, selected: u64) -> Model {
     let mut model = model();
     let tabs = (1..=count)
-        .map(|id| Tab {
+        .map(|id| HostTab {
             id,
             title: format!("Tab {id}"),
-            ..Tab::default()
+            ..HostTab::default()
         })
         .collect();
     model.reconcile(tabs, Some(selected), true).unwrap();

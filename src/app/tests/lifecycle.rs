@@ -5,14 +5,14 @@ use super::{
 use serde_json::json;
 use std::{collections::BTreeMap, time::Duration};
 
-fn tab(id: u64) -> Tab {
-    Tab {
+fn tab(id: u64) -> HostTab {
+    HostTab {
         id,
         title: format!("Tab {id}"),
-        ..Tab::default()
+        ..HostTab::default()
     }
 }
-fn snapshot(revision: u64, active: Option<u64>, tabs: Vec<Tab>) -> HostSnapshot {
+fn snapshot(revision: u64, active: Option<u64>, tabs: Vec<HostTab>) -> HostSnapshot {
     HostSnapshot {
         revision,
         active_tab: active,

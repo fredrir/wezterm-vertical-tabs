@@ -1,3 +1,5 @@
+mod editing;
+
 use crate::SidebarUi;
 use crate::components::button::{Button, Tone};
 use crate::components::scrollbar::Scrollbar;
@@ -10,6 +12,7 @@ use crate::input::{EditResult, Key, Modifiers, TextEditor, display_text};
 use crate::intent::UiIntent;
 use crate::runtime::canvas::{Canvas, RoundedSurface};
 use crate::settings::SettingTarget;
+use editing::Editing;
 use ratatui::layout::{Alignment, Rect};
 use ratatui::style::{Color, Modifier};
 use ratatui::text::{Line, Span};
@@ -17,7 +20,7 @@ use serde_json::{Value, json};
 use std::collections::BTreeSet;
 use unicode_width::UnicodeWidthStr;
 use vtabs_core::{
-    Dimension, Intent, Model, SettingDescriptor, SettingKind, Settings, distros, keybinds, padding,
+    Dimension, Model, SettingDescriptor, SettingKind, Settings, distros, keybinds, padding,
     settings,
 };
 
@@ -53,11 +56,6 @@ const ALSO_IN: &[(&str, &str, &str)] = &[
 
 const VALUE_CELLS: u16 = 5;
 
-pub(crate) struct Entry {
-    pub key: String,
-    pub editor: TextEditor,
-}
-
 pub(crate) struct SettingsPage {
     pub open: bool,
     pub listed: bool,
@@ -71,9 +69,7 @@ pub(crate) struct SettingsPage {
     pub rect: Rect,
     pub scrollbar: Option<Scrollbar>,
     pub config_owned: BTreeSet<String>,
-    pub recording: bool,
-    pub entry: Option<Entry>,
-    pub drag: Option<(String, f64)>,
+    pub editing: Editing,
     /// Where each dropdown value sits, so its menu can open beneath it.
     pub anchors: Vec<(String, Rect)>,
     pub chord_label: fn(&str) -> String,
@@ -94,9 +90,7 @@ impl Default for SettingsPage {
             rect: Rect::default(),
             scrollbar: None,
             config_owned: BTreeSet::new(),
-            recording: false,
-            entry: None,
-            drag: None,
+            editing: Editing::default(),
             anchors: Vec::new(),
             chord_label: crate::keybinds::display_chord,
         }
@@ -435,10 +429,12 @@ impl SettingsPage {
         );
         TextInput::new(ElementId::SettingsSearch, &mut self.query, theme.card)
             .active(
-                cx.focused == Some(&ElementId::SettingsSearch) && !overlay_open && !self.recording,
+                cx.focused == Some(&ElementId::SettingsSearch)
+                    && !overlay_open
+                    && !self.editing.recording(),
             )
             .shift(if rect.height == 2 { 0.5 } else { 0.0 })
-            .placeholder(if self.recording {
+            .placeholder(if self.editing.recording() {
                 "Recording keys"
             } else {
                 "Search settings"
@@ -446,7 +442,7 @@ impl SettingsPage {
             .render(edit, cx);
         if button > 0 {
             Button::action(ElementId::SettingsRecord, icons::KEYBOARD, Tone::Neutral)
-                .selected(self.recording)
+                .selected(self.editing.recording())
                 .label_right_padding(1)
                 .render(
                     Rect::new(rect.right() - button - 1, rect.y, button + 1, rect.height),
@@ -822,12 +818,14 @@ impl SettingsPage {
         cx: &mut Canvas,
     ) -> u16 {
         let theme = cx.theme;
-        let entry = self.entry.as_mut().filter(|entry| entry.key == key);
-        let value = match (&entry, &self.drag) {
-            (Some(entry), _) => range.parse(entry.editor.text()).unwrap_or(value),
-            (_, Some((dragged, preview))) if dragged == key => *preview,
-            _ => value,
-        };
+        let value = self.editing.slider_value(key).unwrap_or(value);
+        let entry = (self.editing.entry_key() == Some(key))
+            .then(|| self.editing.editor_mut())
+            .flatten();
+        let value = entry
+            .as_ref()
+            .and_then(|editor| range.parse(editor.text()))
+            .unwrap_or(value);
         let text = Rect::new(
             area.right().saturating_sub(VALUE_CELLS),
             area.y,
@@ -840,8 +838,8 @@ impl SettingsPage {
             let field = Rect::new(x, area.y, edge.saturating_sub(x), area.height);
             let surface = theme.lift(base, 10);
             cx.fill(flush(field, surface, 6.0));
-            let typed = (entry.editor.text().width() as u16 + 1).clamp(2, text.width);
-            TextInput::new(ElementId::SettingsEntry, &mut entry.editor, surface)
+            let typed = (entry.text().width() as u16 + 1).clamp(2, text.width);
+            TextInput::new(ElementId::SettingsEntry, entry, surface)
                 .active(true)
                 .shift(if area.height == 2 { 0.5 } else { 0.0 })
                 .render(Rect::new(text.right() - typed, text.y, typed, 1), cx);
@@ -972,7 +970,7 @@ impl SidebarUi {
         {
             self.settings.selected = index;
             self.focused = Some(ElementId::Setting(key.into()));
-            if self.settings.entry.is_none() {
+            if !self.settings.editing.has_entry() {
                 self.caret.stop();
             }
             self.frame.dirty = true;
@@ -987,7 +985,7 @@ impl SidebarUi {
 
     pub(crate) fn toggle_settings_recording(&mut self, intents: &mut Vec<UiIntent>) {
         self.commit_entry(intents);
-        self.settings.recording = !self.settings.recording;
+        self.settings.editing.toggle_recording();
         self.focused = Some(ElementId::SettingsRecord);
         self.caret.stop();
         self.frame.dirty = true;
@@ -997,7 +995,7 @@ impl SidebarUi {
     pub(crate) fn settings_recorded(&mut self, chord: &str) {
         self.frame.dirty = true;
         if chord.is_empty() {
-            self.settings.recording = false;
+            self.settings.editing.stop_recording();
             return;
         }
         self.settings.chord = Some(chord.into());
@@ -1007,82 +1005,37 @@ impl SidebarUi {
     }
 
     pub(crate) fn start_entry(&mut self, model: &Model, key: &str, typed: Option<char>) {
-        let Some(range) = settings::descriptor(key).and_then(|field| Range::of(&field.kind)) else {
-            return;
-        };
         if self.settings.managed_in_lua(model, key) {
             return;
         }
         self.settings_focus_setting(model, key);
-        if typed.is_none()
-            && self
-                .settings
-                .entry
-                .as_ref()
-                .is_some_and(|entry| entry.key == key)
-        {
-            return;
+        if self.settings.editing.begin_entry(model, key, typed) {
+            self.reset_caret();
+            self.frame.dirty = true;
         }
-        let mut editor = TextEditor::new(range.entry_text(number(model, key)));
-        editor.select_all();
-        if let Some(typed) = typed {
-            editor = TextEditor::new(range.sanitize(&typed.to_string()));
-        }
-        self.settings.entry = Some(Entry {
-            key: key.into(),
-            editor,
-        });
-        self.reset_caret();
-        self.frame.dirty = true;
     }
 
     pub(crate) fn sanitize_entry(&mut self) {
-        let Some(entry) = &mut self.settings.entry else {
-            return;
-        };
-        let Some(range) = settings::descriptor(&entry.key).and_then(|field| Range::of(&field.kind))
-        else {
-            return;
-        };
-        let clean = range.sanitize(entry.editor.text());
-        if clean != entry.editor.text() {
-            entry.editor = TextEditor::new(clean);
-        }
+        self.settings.editing.sanitize_entry();
     }
 
     pub(crate) fn commit_entry(&mut self, intents: &mut Vec<UiIntent>) {
-        let Some(entry) = self.settings.entry.take() else {
+        if !self.settings.editing.has_entry() {
             return;
-        };
+        }
+        if let Some(intent) = self.settings.editing.commit_entry() {
+            intents.push(UiIntent::Domain(intent));
+        }
         self.caret.stop();
         self.frame.dirty = true;
-        let Some(range) = settings::descriptor(&entry.key).and_then(|field| Range::of(&field.kind))
-        else {
-            return;
-        };
-        if let Some(value) = range.parse(entry.editor.text()) {
-            intents.push(UiIntent::Domain(Intent::SetSetting {
-                key: entry.key,
-                value: range.json(value),
-            }));
-        }
     }
 
     /// Steps the value being typed, like a number field; Enter still applies it.
     fn step_entry(&mut self, model: &Model, steps: i32) {
-        let Some(entry) = &mut self.settings.entry else {
-            return;
-        };
-        let Some(range) = settings::descriptor(&entry.key).and_then(|field| Range::of(&field.kind))
-        else {
-            return;
-        };
-        let current = range
-            .parse(entry.editor.text())
-            .unwrap_or_else(|| number(model, &entry.key));
-        entry.editor = TextEditor::new(range.entry_text(range.step(current, steps)));
-        self.reset_caret();
-        self.frame.dirty = true;
+        if self.settings.editing.step_entry(model, steps) {
+            self.reset_caret();
+            self.frame.dirty = true;
+        }
     }
 
     /// Switches like the tab row; focus stays in the list when it was there.
@@ -1106,10 +1059,10 @@ impl SidebarUi {
         mods: Modifiers,
         intents: &mut Vec<UiIntent>,
     ) {
-        if self.settings.entry.is_some() {
+        if self.settings.editing.has_entry() {
             match key {
                 Key::Escape => {
-                    self.settings.entry = None;
+                    self.settings.editing.cancel_entry();
                     self.caret.stop();
                     self.frame.dirty = true;
                     return;

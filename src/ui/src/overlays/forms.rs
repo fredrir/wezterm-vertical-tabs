@@ -9,10 +9,9 @@ use vtabs_core::{Intent, Model, settings};
 
 impl SidebarUi {
     pub(crate) fn open_form(&mut self, title: impl Into<String>, kind: FormKind, value: &str) {
-        self.overlays.stash();
         let mut editor = TextEditor::new(value);
         editor.select_all();
-        self.open_overlay(Overlay::Form(Form {
+        self.push_overlay(Overlay::Form(Form {
             title: title.into(),
             kind,
             editor,
@@ -24,7 +23,7 @@ impl SidebarUi {
     }
 
     pub(crate) fn submit_form(&mut self, model: &Model, intents: &mut Vec<UiIntent>) {
-        let Some(Overlay::Form(form)) = &mut self.overlays.current else {
+        let Some(Overlay::Form(form)) = self.overlays.current_mut() else {
             return;
         };
         let value = if let Some(color) = &form.color {
@@ -118,11 +117,11 @@ impl SidebarUi {
         match intent {
             Ok(intent) => {
                 intents.push(UiIntent::Domain(intent));
-                self.overlays.pending_form = Some(model.revision);
+                self.overlays.submitted(model.revision);
                 self.frame.dirty = true;
             }
             Err(error) => {
-                if let Some(Overlay::Form(form)) = &mut self.overlays.current {
+                if let Some(Overlay::Form(form)) = self.overlays.current_mut() {
                     form.error = Some(error);
                 }
                 self.frame.dirty = true;

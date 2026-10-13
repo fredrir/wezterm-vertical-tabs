@@ -4,10 +4,10 @@ fn discover(app: &mut WindowApp, revision: u64, active: TabId) {
     app.update(HostSnapshot {
         revision,
         tabs: (1..=active)
-            .map(|id| Tab {
+            .map(|id| HostTab {
                 id,
                 title: format!("Terminal {id}"),
-                ..Tab::default()
+                ..HostTab::default()
             })
             .collect(),
         active_tab: Some(active),

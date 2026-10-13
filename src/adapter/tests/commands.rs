@@ -186,7 +186,7 @@ fn recording_cmd_digit_filters_commands_without_activating_the_tab() {
             tabs: [1, 2]
                 .iter()
                 .copied()
-                .map(|id| core::Tab {
+                .map(|id| core::HostTab {
                     id,
                     title: format!("Tab {id}"),
                     ..Default::default()

@@ -187,10 +187,10 @@ fn discover(app: &mut WindowApp, revision: u64, ids: &[TabId]) {
         revision,
         tabs: ids
             .iter()
-            .map(|id| Tab {
+            .map(|id| HostTab {
                 id: *id,
                 title: format!("Terminal {id}"),
-                ..Tab::default()
+                ..HostTab::default()
             })
             .collect(),
         active_tab: ids.first().copied(),
@@ -489,4 +489,127 @@ fn space_collapse_state_round_trips_through_the_store() {
         Operation::Put { key, value, .. }
             if key.entity == "space:home" && key.field == "collapsed" && value == &json!(false)
     )));
+}
+
+#[test]
+fn membership_defaults_match_before_and_after_tab_discovery() {
+    let cases = [
+        (json!({"space":"work"}), "work", false, false, None),
+        (
+            json!({"space":"work","manual":"yes","pinned":1,"folder":false}),
+            "work",
+            false,
+            false,
+            None,
+        ),
+        (
+            json!({"space":"work","manual":true,"pinned":true,"folder":"missing"}),
+            "work",
+            true,
+            true,
+            None,
+        ),
+        (
+            json!({"space":"work","folder":"tools"}),
+            "work",
+            false,
+            true,
+            Some("tools"),
+        ),
+        (
+            json!({"space":"missing","manual":true}),
+            "home",
+            false,
+            false,
+            None,
+        ),
+        (
+            json!({"space":17,"manual":true}),
+            "home",
+            false,
+            false,
+            None,
+        ),
+        (json!({"manual":true}), "home", false, false, None),
+        (json!(null), "home", false, false, None),
+    ];
+    for (value, space, manual, pinned, folder) in cases {
+        for discovered in [false, true] {
+            let mut app = WindowApp::default();
+            app.set_verified_session(Some("verified".into()));
+            declare(
+                &mut app,
+                json!([
+                    {"id":"home","name":"Home"},
+                    {"id":"work","name":"Work"},
+                ]),
+            );
+            if discovered {
+                discover(&mut app, 1, &[1]);
+            }
+            let request = app.take_storage_request(Duration::ZERO).unwrap();
+            let mut records = vec![profile_record("catalog", "folder_order", json!(["tools"]))];
+            records.extend(folder_records("tools", "Tools", "work"));
+            let mut membership = membership_record("verified", 1, "tools");
+            membership.value = Some(value.clone());
+            records.push(membership);
+            app.complete_storage(response(&request, records)).unwrap();
+            if !discovered {
+                discover(&mut app, 1, &[1]);
+            }
+            let tab = &app.model().tabs[&1];
+            assert_eq!(
+                (
+                    tab.space_id.as_str(),
+                    tab.manual_assignment,
+                    tab.pinned,
+                    tab.folder_id.as_deref()
+                ),
+                (space, manual, pinned, folder),
+                "record {value}, discovered before read: {discovered}",
+            );
+        }
+    }
+}
+
+#[test]
+fn session_writes_keep_the_existing_membership_and_window_wire_format() {
+    let mut app = WindowApp::default();
+    app.set_verified_session(Some("verified".into()));
+    app.set_window_identity(7);
+    initial(&mut app);
+    discover(&mut app, 1, &[1, 2]);
+    app.dispatch(Intent::AssignTab {
+        id: 1,
+        space_id: "home".into(),
+    })
+    .unwrap();
+    let request = app.take_storage_request(Duration::from_secs(1)).unwrap();
+    let session_values = request
+        .operations
+        .iter()
+        .filter_map(|operation| match operation {
+            Operation::Put { key, value, .. } if matches!(key.scope, Scope::Session { .. }) => {
+                assert_eq!(
+                    key.scope,
+                    Scope::Session {
+                        profile: "default".into(),
+                        incarnation: "verified".into()
+                    }
+                );
+                Some(((key.entity.as_str(), key.field.as_str()), value.clone()))
+            }
+            _ => None,
+        })
+        .collect::<std::collections::BTreeMap<_, _>>();
+    assert_eq!(
+        session_values,
+        std::collections::BTreeMap::from([
+            (
+                ("tab:1", "membership"),
+                json!({"space":"home","manual":true,"pinned":false,"folder":null})
+            ),
+            (("window:7", "selected_space"), json!("home")),
+        ])
+    );
 }

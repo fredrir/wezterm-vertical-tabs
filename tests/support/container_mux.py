@@ -9,9 +9,10 @@ import platform
 import shutil
 import socket
 import subprocess
-import time
 import uuid
 from pathlib import Path
+
+from tests.support.polling import wait_until
 
 _ENGINE_XDG = {
     key: os.environ.get(key)
@@ -107,8 +108,8 @@ class ContainerSshMux:
         if host != "127.0.0.1" or not separator or not port.isdecimal():
             raise RuntimeError(f"SSH mux container did not publish a loopback port: {address!r}")
         self.port = int(port)
-        deadline = time.monotonic() + 20
-        while True:
+
+        def ready():
             ready = self.command("exec", self.name, "test", "-S", "/tmp/mux/mux.sock", check=False)
             if ready.returncode == 0:
                 try:
@@ -117,7 +118,7 @@ class ContainerSshMux:
                     ) as connection:
                         with connection.makefile("rb") as stream:
                             if stream.readline(256).startswith(b"SSH-2.0-"):
-                                break
+                                return True
                 except (ConnectionError, TimeoutError):
                     pass
             running = self.command(
@@ -125,9 +126,15 @@ class ContainerSshMux:
             )
             if running.returncode or running.stdout.strip() != "true":
                 raise RuntimeError("SSH mux container exited before its socket became ready")
-            if time.monotonic() >= deadline:
-                raise RuntimeError("SSH mux socket did not become ready within 20 seconds")
-            time.sleep(0.1)
+            return False
+
+        wait_until(
+            ready,
+            timeout=20,
+            interval=0.1,
+            message="SSH mux socket did not become ready",
+            error=RuntimeError,
+        )
         host_key = self.command(
             "exec", self.name, "cat", "/etc/ssh/ssh_host_ed25519_key.pub"
         ).stdout

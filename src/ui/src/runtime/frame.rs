@@ -2,8 +2,8 @@ use crate::SidebarUi;
 use crate::components::palette::palette;
 use crate::components::tooltip::tooltip;
 use crate::components::{dialog, list, menu};
-use crate::element::ElementId;
-use crate::overlays::{Form, FormKind, Overlay, action_exists};
+use crate::element::{ElementId, EntityRef};
+use crate::overlays::Overlay;
 use crate::runtime::canvas::Canvas;
 use crate::runtime::motion;
 use crate::views::sidebar::SidebarProps;
@@ -12,6 +12,14 @@ use ratatui::layout::{Position, Rect};
 use ratatui::widgets::{Block, Widget};
 use std::time::Duration;
 use vtabs_core::Model;
+
+#[cfg(test)]
+#[path = "targets_tests.rs"]
+mod targets_tests;
+
+#[cfg(test)]
+#[path = "preparation_tests.rs"]
+mod preparation_tests;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct SurfaceTransform {
@@ -35,6 +43,7 @@ pub(crate) struct Frame {
     pub buffer: Buffer,
     pub staging: Buffer,
     pub model_revision: Option<u64>,
+    pub prepared_revision: Option<u64>,
     pub number: u64,
     pub dirty: bool,
     pub last: Duration,
@@ -48,6 +57,7 @@ impl Default for Frame {
             buffer: Buffer::default(),
             staging: Buffer::default(),
             model_revision: None,
+            prepared_revision: None,
             number: 0,
             dirty: true,
             last: Duration::ZERO,
@@ -58,8 +68,24 @@ impl Default for Frame {
 }
 
 impl SidebarUi {
-    pub fn render(&mut self, model: &Model, area: Rect, now: Duration) -> Option<FrameUpdate> {
+    /// Settle interaction state before the host chooses the surface's viewport.
+    /// Repeated calls with the same model and time are harmless.
+    pub fn prepare(&mut self, model: &Model, now: Duration) {
         self.frame.now = now;
+        if self.frame.prepared_revision != Some(model.revision) {
+            self.prune_targets(model);
+            if self.overlays.should_dismiss(model) {
+                self.dismiss();
+            }
+            self.frame.prepared_revision = Some(model.revision);
+        }
+        if self.tooltip.tick(now, self.pointer.hovered.is_some()) {
+            self.frame.dirty = true;
+        }
+    }
+
+    pub fn render(&mut self, model: &Model, area: Rect, now: Duration) -> Option<FrameUpdate> {
+        self.prepare(model, now);
         let resized = self.frame.buffer.area != area;
         if resized {
             self.sidebar.reveal_selection = true;
@@ -69,13 +95,6 @@ impl SidebarUi {
             self.frame.dirty = true;
         }
         if self.frame.model_revision != Some(model.revision) {
-            if self
-                .overlays
-                .pending_form
-                .is_some_and(|revision| revision != model.revision)
-            {
-                self.dismiss();
-            }
             self.frame.model_revision = Some(model.revision);
             self.theme.apply(model);
             self.settings.config_owned.clone_from(&model.config_owned);
@@ -132,13 +151,12 @@ impl SidebarUi {
             if !motion::enabled(&model.settings) {
                 self.cancel_effects();
             }
-            self.prune_targets(model);
             self.refresh_keybinds(model);
         }
         if !self.host.visible {
             return None;
         }
-        if self.caret.tick(now) | self.tooltip.tick(now, self.pointer.hovered.is_some()) {
+        if self.caret.tick(now) {
             self.frame.dirty = true;
         }
         self.advance_press(model, now);
@@ -243,21 +261,12 @@ impl SidebarUi {
         }
     }
 
-    fn prune_targets(&mut self, model: &Model) {
-        let valid = |id: &ElementId| match id {
-            ElementId::Tab(id) | ElementId::CloseTab(id) => model.tabs.contains_key(id),
-            ElementId::Pane(id, pane) | ElementId::ClosePane(id, pane) => model
-                .tabs
-                .get(id)
-                .is_some_and(|tab| tab.panes.iter().any(|entry| entry.id == *pane)),
-            ElementId::Space(id) => model.spaces.iter().any(|space| &space.id == id),
-            _ => true,
-        };
+    pub(crate) fn prune_targets(&mut self, model: &Model) {
         if self
             .sidebar
             .rename
             .as_ref()
-            .is_some_and(|rename| !model.tabs.contains_key(&rename.id))
+            .is_some_and(|rename| !EntityRef::Tab(rename.id).exists(model))
         {
             self.sidebar.rename = None;
             self.caret.stop();
@@ -269,58 +278,47 @@ impl SidebarUi {
             .pointer
             .press
             .as_ref()
-            .is_some_and(|press| !valid(&press.id))
+            .is_some_and(|press| !press.id.exists(model))
         {
             self.pointer.press = None;
         }
-        if self.focused.as_ref().is_some_and(|id| !valid(id)) {
+        if self.focused.as_ref().is_some_and(|id| !id.exists(model)) {
             self.focused = None;
         }
-        if self.pointer.hovered.as_ref().is_some_and(|id| !valid(id)) {
+        if self
+            .pointer
+            .hovered
+            .as_ref()
+            .is_some_and(|id| !id.exists(model))
+        {
             self.pointer.hovered = None;
-            self.tooltip.shown = false;
-        }
-        if self.pointer.drag.as_ref().is_some_and(|id| !valid(id)) {
-            self.pointer.drag = None;
-        }
-        let prune = |overlay: &mut Overlay| {
-            if let Overlay::Menu(menu) = overlay {
-                menu.items.retain(|item| action_exists(model, &item.action));
-                if let Some(search) = &mut menu.search {
-                    search
-                        .all_items
-                        .retain(|item| action_exists(model, &item.action));
-                }
-                menu.selected = menu.selected.min(menu.items.len().saturating_sub(1));
-            }
-        };
-        if let Some(overlay) = &mut self.overlays.current {
-            prune(overlay);
-        }
-        for overlay in &mut self.overlays.stack {
-            prune(overlay);
+            self.tooltip.hide();
         }
         if self
-            .overlays
-            .current
+            .pointer
+            .drag
             .as_ref()
-            .is_some_and(|overlay| match overlay {
-                Overlay::Form(Form {
-                    kind: FormKind::RenameTab(id),
-                    ..
-                }) => !model.tabs.contains_key(id),
-                Overlay::Form(Form {
-                    kind:
-                        FormKind::RenameSpace(id)
-                        | FormKind::SpaceIcon(id)
-                        | FormKind::SpaceAccent(id)
-                        | FormKind::SpaceRules(id),
-                    ..
-                }) => !model.spaces.iter().any(|space| &space.id == id),
-                _ => false,
-            })
+            .is_some_and(|id| !id.exists(model))
         {
-            self.dismiss();
+            self.pointer.cancel_drag();
+            self.pointer.origin = None;
+        }
+        if self
+            .pointer
+            .drop
+            .as_ref()
+            .is_some_and(|target| !target.exists(model))
+        {
+            self.pointer.drop = None;
+            self.pointer.drop_motion = None;
+        }
+        if self
+            .pointer
+            .last_click
+            .as_ref()
+            .is_some_and(|(id, _)| !id.exists(model))
+        {
+            self.pointer.last_click = None;
         }
     }
 
@@ -366,7 +364,7 @@ impl SidebarUi {
             if covers {
                 cx.paint.clear_targets();
             }
-            let overlay_open = self.overlays.current.is_some();
+            let overlay_open = self.overlays.is_open();
             let sidebar_theme = cx.theme;
             cx.theme = page_theme.as_ref().unwrap_or(sidebar_theme);
             self.settings
@@ -378,9 +376,9 @@ impl SidebarUi {
             self.settings.chord_label,
             &mut cx.paint.hits,
         );
-        if let Some(overlay) = &mut self.overlays.current {
+        if let Some(overlay) = self.overlays.current_mut() {
             cx.paint.clear_targets();
-            self.overlays.rect = match overlay {
+            let rect = match overlay {
                 Overlay::Menu(menu) if menu.search.is_some() => palette(&mut cx, area, menu),
                 Overlay::Menu(menu) if menu.message.is_some() && dialog::fits(area) => {
                     dialog::confirm(&mut cx, area, menu)
@@ -392,6 +390,7 @@ impl SidebarUi {
                 Overlay::Menu(menu) => menu::menu(&mut cx, area, anchor, menu),
                 Overlay::Form(form) => dialog::form(&mut cx, area, form, editing),
             };
+            self.overlays.set_rect(rect);
         } else if self.tooltip.shown {
             let target = self
                 .pointer
@@ -401,7 +400,7 @@ impl SidebarUi {
                 .cloned();
             match target {
                 Some(target) => tooltip(&mut cx, area, sidebar, &target),
-                None => self.tooltip.hide(),
+                None => self.tooltip.orphaned(self.frame.now),
             }
         }
     }

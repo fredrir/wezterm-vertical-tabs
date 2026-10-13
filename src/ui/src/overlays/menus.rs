@@ -188,14 +188,13 @@ impl SidebarUi {
                 for item in &mut items {
                     item.enabled = !self.settings.managed_in_lua(model, &key);
                 }
-                self.overlays.stash();
-                self.menu(title, items);
+                self.push_menu(title, items);
             }
             ElementId::SettingsTab | ElementId::CloseSettingsTab => self.menu(
                 "Settings",
                 vec![MenuItem::new("close", "Close", Action::CloseSettings)],
             ),
-            _ if self.overlays.current.is_none() => self.root_menu(model),
+            _ if !self.overlays.is_open() => self.root_menu(model),
             _ => {}
         }
     }

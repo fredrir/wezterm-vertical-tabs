@@ -1,7 +1,5 @@
-use super::Message;
-use crate::termwindow::TermWindowNotif;
+use super::{Message, WindowEndpoint};
 use std::{io::Write, path::PathBuf};
-use window::WindowOps;
 
 fn write(path: PathBuf, source: &str) -> anyhow::Result<()> {
     // A dotfiles symlink keeps pointing at the rewritten file.
@@ -18,13 +16,11 @@ fn write(path: PathBuf, source: &str) -> anyhow::Result<()> {
 }
 
 /// Atomically replace the managed Lua file, then report back to the owning window.
-pub fn save(window: window::Window, path: PathBuf, source: String, mux_window_id: usize) {
+pub fn save(endpoint: WindowEndpoint, path: PathBuf, source: String) {
     promise::spawn::spawn(async move {
         let result = smol::unblock(move || write(path, &source)).await;
         let message = Message::Managed(result.map_err(|error| format!("{error:#}")));
-        window.notify(TermWindowNotif::Apply(Box::new(move |tw| {
-            tw.vtabs_message_for(mux_window_id, message);
-        })));
+        endpoint.send(message);
     })
     .detach();
 }
