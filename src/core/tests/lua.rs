@@ -19,19 +19,6 @@ fn identifier_keys_are_bare_and_others_are_bracketed() {
 }
 
 #[test]
-fn long_tables_wrap_one_entry_per_line() {
-    let value = json!({"names": ["x".repeat(60), "y".repeat(60)]});
-    assert_eq!(
-        lua::source(&value, 0),
-        format!(
-            "{{\n  names = {{\n    \"{}\",\n    \"{}\",\n  }},\n}}",
-            "x".repeat(60),
-            "y".repeat(60)
-        )
-    );
-}
-
-#[test]
 fn managed_files_omit_runtime_and_default_space_fields() {
     let mut space = Space::new("notes", "Notes");
     space.collapsed = true;

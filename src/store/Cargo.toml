@@ -17,8 +17,3 @@ rusqlite             = { version = "0.40.2", features = ["bundled"], optional = 
 name              = "wez-vtabs-store"
 path              = "src/main.rs"
 required-features = ["sqlite"]
-
-[[test]]
-name              = "helper"
-path              = "tests/helper.rs"
-required-features = ["sqlite"]

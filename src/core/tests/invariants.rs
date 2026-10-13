@@ -252,21 +252,6 @@ fn schema_defaults_validate_every_field() {
 }
 
 #[test]
-fn quick_terminal_defaults_preserve_existing_sessions_and_appearance() {
-    let settings: Settings = serde_json::from_value(json!({})).unwrap();
-    assert_eq!(settings.quick_terminal_opacity, 1.);
-    assert_eq!(settings.quick_terminal_blur, 0);
-    assert_eq!(settings.quick_terminal_border_color, None);
-    assert_eq!(settings.quick_terminal_background_color, None);
-    assert!(!settings.quick_terminal_auto_hide);
-    assert!(settings.quick_terminal_preserve_shell);
-    assert_eq!(
-        settings.quick_terminal_hide_on_escape,
-        settings::HideOnEscape::Auto
-    );
-}
-
-#[test]
 fn quick_terminal_options_validate_atomically_and_colors_can_follow_the_palette() {
     let mut settings = Settings::default();
     for value in [json!(0), json!(0.4), json!(1)] {

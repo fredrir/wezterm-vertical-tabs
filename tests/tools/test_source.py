@@ -174,7 +174,9 @@ def test_adapter_sync_reuses_checkout_and_removes_deleted_modules(tools_sandbox,
         }
 
 
-def test_pinned_revision_can_prepare_offline_after_upstream_moves(tools_sandbox, local_upstream):
+def test_offline_prepare_keeps_the_pin_and_rejects_uncached_revisions(
+    tools_sandbox, local_upstream
+):
     upstream, revision = local_upstream
     tools_sandbox.run("--upstream", revision, "prepare")
     write_file(upstream, "later.txt", "new upstream commit\n")
@@ -187,12 +189,6 @@ def test_pinned_revision_can_prepare_offline_after_upstream_moves(tools_sandbox,
     prepared = json.loads((tools_sandbox.cache / "prepared.json").read_text())
     assert prepared["upstream"] == revision
     assert not (tools_sandbox.cache / "worktree/later.txt").exists()
-
-
-def test_offline_missing_revision_fails_without_fetching(tools_sandbox, local_upstream):
-    _, revision = local_upstream
-    tools_sandbox.run("--upstream", revision, "prepare")
-
     result = tools_sandbox.run("--upstream", "f" * 40, "--offline", "prepare", check=False)
 
     assert result.returncode != 0
@@ -346,37 +342,6 @@ def test_overlay_file_refuses_a_path_upstream_later_adds(tools_sandbox, local_up
     assert not (tools_sandbox.cache / "prepared.json").exists()
 
 
-def test_export_after_prepare_changes_nothing(tools_sandbox, local_upstream, tmp_path):
-    upstream, revision = local_upstream
-    use_entry_patches(
-        tools_sandbox.root,
-        upstream,
-        revision,
-        {
-            "wezterm-gui/src/main.rs": "mod owned;\nfn main() {}\n",
-            "termwiz/data/wezterm.terminfo": "patched terminfo\n",
-        },
-        tmp_path / "patch-source",
-    )
-    write_file(tools_sandbox.root, "wezterm/overlay/wezterm-gui/src/owned.rs", "pub fn a() {}\n")
-    tools_sandbox.run("--upstream", revision, "prepare")
-    project = tools_sandbox.root / "wezterm"
-    before = files(project)
-    mtimes = {path: path.stat().st_mtime_ns for path in project.rglob("*")}
-
-    result = tools_sandbox.json("patch", "export")
-
-    assert result == {
-        "upstream": revision,
-        "patches": 2,
-        "overlay": 1,
-        "written": [],
-        "removed": [],
-    }
-    assert files(project) == before
-    assert {path: path.stat().st_mtime_ns for path in project.rglob("*")} == mtimes
-
-
 def test_export_writes_worktree_edits_and_prepare_reuses_the_worktree(
     tools_sandbox, local_upstream, tmp_path
 ):
@@ -435,7 +400,13 @@ def test_export_writes_worktree_edits_and_prepare_reuses_the_worktree(
         name: (checkout / name).stat().st_mtime_ns
         for name in ("wezterm-gui/src/main.rs", "termwiz/data/wezterm.terminfo")
     } == mtimes
-    assert tools_sandbox.json("patch", "export")["written"] == []
+    project = tools_sandbox.root / "wezterm"
+    before = files(project)
+    mtimes = {path: path.stat().st_mtime_ns for path in project.rglob("*")}
+    unchanged = tools_sandbox.json("patch", "export")
+    assert unchanged["written"] == unchanged["removed"] == []
+    assert files(project) == before
+    assert {path: path.stat().st_mtime_ns for path in project.rglob("*")} == mtimes
 
 
 def test_export_migrates_an_ordered_series(tools_sandbox, local_upstream):

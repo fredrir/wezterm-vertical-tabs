@@ -66,9 +66,11 @@ def calls(log: Path) -> list[list[str]]:
     return [json.loads(line) for line in log.read_text().splitlines()]
 
 
-def test_to_selects_the_machine_platform_and_role(fleet):
+def test_to_selects_platform_and_role_while_on_local_overrides_the_default(fleet, tmp_path):
+    log = fake_commands(fleet, tmp_path / "bin")
     data = fleet.json("--explain", "build", "--to", "ntnu", "--on", "local")
 
+    assert not log.exists()
     assert data["platform"] == "ubuntu-26.04"
     assert data["role"] == "mux"
     assert data["command"][-6:-2] == ["package", "--role", "mux", "--no-archive"]
@@ -114,15 +116,6 @@ def test_tests_run_on_the_default_machine_against_the_synced_working_tree(fleet,
         f'cd {SOURCE} && exec cargo xtask --project-root "$HOME/{SOURCE}" '
         '--cache "$HOME/.cache/wez-vtabs/remote/macie/cache" test lua --on local -- -k plugin'
     )
-
-
-def test_on_local_overrides_the_default_machine(fleet, tmp_path):
-    log = fake_commands(fleet, tmp_path / "bin")
-
-    result = fleet.run("lint", "--on", "local", check=False)
-
-    assert not log.exists()
-    assert "Unreachable" not in result.stderr
 
 
 def test_deploy_on_the_receiving_machine_runs_there(fleet, tmp_path):

@@ -54,7 +54,6 @@ def create_bundle(
     name: str,
     tools_binary: Path,
     target: str,
-    wezterm_binaries: dict[str, Path] | None = None,
     role: str = "desktop",
 ) -> Path:
     binaries = binary_dir(bundle)
@@ -79,9 +78,7 @@ def create_bundle(
     )
     for executable in executables:
         destination = binaries / executable_name(executable)
-        if wezterm_binaries is not None:
-            shutil.copy2(wezterm_binaries[executable], destination)
-        elif os.name == "nt":
+        if os.name == "nt":
             shutil.copy2(tools_binary, destination)
         else:
             destination.write_text(

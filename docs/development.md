@@ -126,7 +126,7 @@ role = "mux"
 | `wezterm/overlay` | Project files copied into WezTerm at the same upstream paths |
 | `plugin` | Optional Lua configuration and generated contracts |
 | `tools/src` | Rust CLI, process runner, source/build state, packaging and updates |
-| `tests/tools` | pytest/tui-test tooling behavior through the compiled CLI |
+| `tests/tools` | pytest tooling behavior through the compiled CLI |
 | `tests` | uv-managed pytest, production process boundaries and isolated scenarios |
 
 `vtabs-store` has no default features. The GUI links protocol types only; the `sqlite` feature builds the helper.
@@ -233,8 +233,8 @@ uv run --locked pytest -n 2 tests/integration --run-gui --run-container \
 
 | Check | Value |
 | --- | --- |
-| Default suite | Tooling, production Rust schema/storage processes, headless Lua plugin boundary and CLI PTYs |
-| Python tools | pytest, pytest-asyncio, pytest-xdist, Ruff, tui-test; exact versions in `uv.lock` |
+| Default suite | Tooling, production Rust schema/storage processes and headless Lua plugin boundary |
+| Python tools | pytest, pytest-asyncio, pytest-xdist, Ruff; exact versions in `uv.lock` |
 | Worker count | `-n 2`; each test receives separate state and temporary files |
 | Tools binary | `--tools-bin=PATH`; built once under `target/pytest`, coordinated across workers |
 | Rust binaries | Cached project-only build coordinated across workers; `--rust-bin-dir=PATH` uses supplied `gen-schema` and `wez-vtabs-store` |
@@ -244,14 +244,13 @@ uv run --locked pytest -n 2 tests/integration --run-gui --run-container \
 | Display | Linux Xvfb and Openbox owned by the fixture; inherited desktop/session endpoints removed |
 | Mouse and screenshots | xdotool and ImageMagick; only the owned headless display |
 | SSH mux | `--run-container`; loopback-only container, temporary keys, owned mux, Podman or Docker |
-| PTY | tui-test drives real CLI processes; the group also exercises an isolated installed `wez-vtabs` launcher |
 | Startup/render/shutdown | Local and Unix mux sessions with visible content, sidebar rendering and clean shutdown; TLS tab lifecycle |
 | Desktop | No suite or scenario opens a GUI on the user's desktop |
 
 | Rust layer | Value |
 | --- | --- |
 | Unit modules | `cargo test --workspace --all-features`; bodies in `src/<crate>/tests` |
-| Process boundary | `schema.rs` and `helper.rs` `[[test]]` targets; need `CARGO_BIN_EXE_*` |
+| Process boundary | `tests/rust` exercises the compiled schema generator and storage helper through pytest |
 | Patched WezTerm | `wezterm/overlay/<crate>/tests/vtabs/*.rs`; run with `just build` |
 
 **Extended GUI scenarios**

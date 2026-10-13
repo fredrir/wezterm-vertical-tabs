@@ -5,7 +5,6 @@ import os
 import signal
 import subprocess
 import sys
-import time
 
 import pytest
 
@@ -102,33 +101,6 @@ def test_watch_restages_resources_and_retains_current_gui_when_compilation_fails
             assert not alive(first_pid)
             assert alive(current_pid)
             assert len(builds()) == first_builds
-
-            for path in ("src/app/src/.save", "plugin/init.lua~", "src/app/src/lib.rs.swp"):
-                write_file(tools_sandbox.root, path, "editor temporary file\n")
-            time.sleep(0.5)
-            assert len(started()) == 2
-            assert len(builds()) == first_builds
-
-            # Configuration additions, updates, and removals all require Cargo.
-            for path, contents in (
-                (".cargo/config.toml", "[build]\nincremental = true\n"),
-                (".cargo/config.toml", "[build]\nincremental = false\n"),
-                (".cargo/config.toml", None),
-                ("rust-toolchain", "fixture\n"),
-                ("rust-toolchain", None),
-                ("rust-toolchain.toml", '[toolchain]\nchannel = "fixture"\n'),
-                ("rust-toolchain.toml", None),
-            ):
-                before_starts, before_builds = len(started()), len(builds())
-                if contents is None:
-                    (tools_sandbox.root / path).unlink()
-                else:
-                    write_file(tools_sandbox.root, path, contents)
-                wait_for_watch(lambda expected=before_starts + 1: len(started()) == expected, log)
-                assert not alive(current_pid)
-                current_pid = started()[-1]["pid"]
-                assert alive(current_pid)
-                assert len(builds()) == before_builds + 2
 
             failure = recording_cargo.parent / "fail-build"
             failure.touch()

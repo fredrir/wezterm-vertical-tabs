@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 5
 requires-python = ">=3.12"
 
 [[package]]
@@ -133,21 +133,6 @@ wheels = [
 ]
 
 [[package]]
-name = "tui-test"
-version = "0.1.0b3"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/1b/cb/9ae4ca87a3ba81d54d7718a0606fdb25b77399490078e1d71cbbcee78d20/tui_test-0.1.0b3.tar.gz", hash = "sha256:6afa857e55db635a00018a53a89ad3dc7d3105754629eececa12aea1a991b211", size = 4166105, upload-time = "2026-09-01T20:59:10.985Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/62/ea/d8a77ef31e2ce979d847f0675549e6e4925a93ba5218075d87f440cfce43/tui_test-0.1.0b3-cp38-abi3-macosx_10_12_x86_64.whl", hash = "sha256:63a740b51cbf189de1e39976c1ccbafc8483a5da67132f1af068c59137251bef", size = 6000583, upload-time = "2026-09-01T20:58:57.904Z" },
-    { url = "https://files.pythonhosted.org/packages/62/9e/c170bc7ddc6446da3bfd88a7e3294f3a6c79ebc71d57083ba604f16ee140/tui_test-0.1.0b3-cp38-abi3-macosx_11_0_arm64.whl", hash = "sha256:5c0f1d498b85a4ab41ef35d75ad89728afd1337b715c63663e76a9ce791988d4", size = 5689571, upload-time = "2026-09-01T20:58:59.663Z" },
-    { url = "https://files.pythonhosted.org/packages/1a/f3/eeba9a29226e93f5b5ad464e0057f8dea2b3379e4eb845449a45f7559981/tui_test-0.1.0b3-cp38-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:e68f5dea6fb9b81569bd811df941b7283148e0147cf50cf4ac9762922f55083f", size = 6041001, upload-time = "2026-09-01T20:59:01.419Z" },
-    { url = "https://files.pythonhosted.org/packages/f4/24/42bca975f7b00ed1559fe5a97212da64de77725de369a082a8d3a919a753/tui_test-0.1.0b3-cp38-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:4e74c02cce7f5a7dc0b97dce9523d21e01a7d450de0e161a6da5150bf6bb03f7", size = 6489268, upload-time = "2026-09-01T20:59:03.134Z" },
-    { url = "https://files.pythonhosted.org/packages/89/51/d51efeb35ff9d8c8b63c9f1e2650fde90a171a1843f7dd63f2b3a163adbc/tui_test-0.1.0b3-cp38-abi3-musllinux_1_2_aarch64.whl", hash = "sha256:804a200a9a2183187e4a55ac2aba67e1319242add81584c57734bd6c81ed8aec", size = 12553367, upload-time = "2026-09-01T20:59:04.766Z" },
-    { url = "https://files.pythonhosted.org/packages/44/9b/da8a189e520b905afca6ac04a7277d4c11562d6d6fc2e3db1b1793122035/tui_test-0.1.0b3-cp38-abi3-musllinux_1_2_x86_64.whl", hash = "sha256:824d2e4210093edf9cb75299e668fd925a40351deb5f7e9004ef89acbd061d93", size = 13106374, upload-time = "2026-09-01T20:59:07.267Z" },
-    { url = "https://files.pythonhosted.org/packages/86/42/9a2011004cfbbb7541b67f663bc28b972793936dd2a6be819144cee3d33f/tui_test-0.1.0b3-cp38-abi3-win_amd64.whl", hash = "sha256:6205601815e7fe4b8efbd235249ea7ecad2b61004faea76eb2e62b878a9bb16b", size = 6514618, upload-time = "2026-09-01T20:59:09.311Z" },
-]
-
-[[package]]
 name = "typing-extensions"
 version = "4.16.0"
 source = { registry = "https://pypi.org/simple" }
@@ -168,7 +153,6 @@ dev = [
     { name = "pytest-asyncio" },
     { name = "pytest-xdist" },
     { name = "ruff" },
-    { name = "tui-test" },
 ]
 
 [package.metadata]
@@ -180,5 +164,4 @@ dev = [
     { name = "pytest-asyncio", specifier = ">=1.4.0,<2" },
     { name = "pytest-xdist", specifier = ">=3.8.0,<4" },
     { name = "ruff", specifier = ">=0.16.6,<0.17" },
-    { name = "tui-test", specifier = "==0.1.0b3" },
 ]

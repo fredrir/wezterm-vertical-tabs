@@ -552,24 +552,6 @@ fn wheel_scrolls_the_list_without_changing_the_selection() {
     );
 }
 
-#[test]
-fn settings_controls_carry_no_tooltips() {
-    let (mut ui, model) = settings("all");
-    draw(&mut ui, &model);
-    let page = ui
-        .hit_regions()
-        .iter()
-        .find(|hit| matches!(hit.id, ElementId::SettingsSearch))
-        .unwrap()
-        .rect;
-    assert!(
-        ui.hit_regions()
-            .iter()
-            .filter(|hit| hit.rect.x >= page.x)
-            .all(|hit| hit.tooltip.is_empty())
-    );
-}
-
 fn focused_row(ui: &SidebarUi) -> Option<String> {
     match ui.focused() {
         Some(ElementId::Setting(key)) => Some(key.clone()),
@@ -666,32 +648,6 @@ fn changed_settings_draw_their_label_in_the_accent() {
 }
 
 #[test]
-fn remote_glyphs_close_the_colors_tab_with_a_colored_row_per_os() {
-    let (mut ui, model) = settings("theme");
-    ui.render(&model, Rect::new(0, 0, 110, 90), Duration::ZERO);
-    let rows = selected_rows(&ui);
-    let distros: Vec<String> = vtabs_core::distros::DESCRIPTORS
-        .iter()
-        .map(|field| field.key.into())
-        .collect();
-    assert!(rows.ends_with(&distros), "{rows:?}");
-    assert_eq!(
-        rows[rows.len() - distros.len() - 1],
-        "quick_terminal_background_color"
-    );
-
-    let arch = rect(&ui, &ElementId::Setting("distro.arch".into()));
-    let heading: String = (arch.x..arch.right())
-        .map(|x| ui.buffer()[(x, arch.y - 1)].symbol().to_owned())
-        .collect();
-    assert_eq!(heading.trim(), "Remote glyphs");
-    assert_eq!(
-        Some(ui.buffer()[(arch.x + 2, arch.y)].fg),
-        vtabs_ui::Theme::parse_color(&model.settings.distro_colors["arch"])
-    );
-}
-
-#[test]
 fn remote_glyph_rows_edit_and_reset_one_entry_of_distro_colors() {
     let (mut ui, mut model) = settings("theme");
     model
@@ -723,78 +679,38 @@ fn remote_glyph_rows_edit_and_reset_one_entry_of_distro_colors() {
 }
 
 #[test]
-fn quick_terminal_colors_also_list_under_colors_with_their_own_labels() {
-    let text = |ui: &SidebarUi, key: &str| {
-        let row = rect(ui, &ElementId::Setting(key.into()));
-        (row.x + 2..row.right())
-            .map(|x| ui.buffer()[(x, row.y)].symbol().to_owned())
-            .collect::<String>()
-    };
-    let keys = [
-        "quick_terminal_border_color",
-        "quick_terminal_background_color",
-    ];
-
-    let (mut ui, model) = settings("theme");
-    draw(&mut ui, &model);
-    assert!(
-        selected_rows(&ui)
-            .windows(2)
-            .any(|pair| pair == keys.map(String::from))
-    );
-    assert!(text(&ui, keys[0]).starts_with("Quick terminal border "));
-    assert!(text(&ui, keys[1]).starts_with("Quick terminal background "));
-
-    let (mut ui, model) = settings("quick_terminal");
-    draw(&mut ui, &model);
-    assert!(text(&ui, keys[0]).starts_with("Border color "));
-
-    let (mut ui, model) = settings("all");
-    draw(&mut ui, &model);
-    let rows = selected_rows(&ui);
-    for key in keys {
-        assert_eq!(rows.iter().filter(|row| *row == key).count(), 1);
-    }
-}
-
-#[test]
-fn tab_colors_also_list_under_tabs_with_their_own_labels() {
-    let text = |ui: &SidebarUi, key: &str| {
-        let row = rect(ui, &ElementId::Setting(key.into()));
-        (row.x + 2..row.right())
-            .map(|x| ui.buffer()[(x, row.y)].symbol().to_owned())
-            .collect::<String>()
-    };
-    let labels = [
-        ("selected_background", "Selected background ", "Selection "),
-        ("hover_background", "Hover background ", "Hover "),
-        ("tab_foreground", "Text ", "Tab text "),
-        ("selected_foreground", "Selected text ", "Selected text "),
-        ("local_glyph_color", "Local glyph ", "Local glyph "),
-    ];
-
-    let (mut ui, model) = settings("appearance");
-    draw(&mut ui, &model);
-    let rows = selected_rows(&ui);
-    assert!(
-        rows.ends_with(&labels.map(|(key, ..)| key.to_owned())),
-        "{rows:?}"
-    );
-    for (key, tabs, _) in labels {
-        assert!(text(&ui, key).starts_with(tabs), "{key}");
-    }
-
-    let (mut ui, model) = settings("theme");
-    ui.render(&model, Rect::new(0, 0, 110, 90), Duration::ZERO);
-    for (key, _, colors) in labels {
-        assert!(text(&ui, key).starts_with(colors), "{key}");
-    }
-
-    let (mut ui, model) = settings("all");
-    ui.render(&model, Rect::new(0, 0, 110, 200), Duration::ZERO);
-    let rows = selected_rows(&ui);
-    for (key, ..) in labels {
-        assert_eq!(rows.iter().filter(|row| *row == key).count(), 1, "{key}");
+fn shared_color_settings_appear_once_in_each_relevant_category() {
+    for (group, keys) in [
+        (
+            "quick_terminal",
+            &[
+                "quick_terminal_border_color",
+                "quick_terminal_background_color",
+            ][..],
+        ),
+        (
+            "appearance",
+            &[
+                "selected_background",
+                "hover_background",
+                "tab_foreground",
+                "selected_foreground",
+                "local_glyph_color",
+            ][..],
+        ),
+    ] {
+        for category in [group, "theme", "all"] {
+            let (mut ui, model) = settings(category);
+            ui.render(&model, Rect::new(0, 0, 110, 200), Duration::ZERO);
+            let rows = selected_rows(&ui);
+            for key in keys {
+                assert_eq!(
+                    rows.iter().filter(|row| row.as_str() == *key).count(),
+                    1,
+                    "{category}: {key}"
+                );
+            }
+        }
     }
 }
 

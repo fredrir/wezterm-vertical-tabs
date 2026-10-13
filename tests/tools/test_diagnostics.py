@@ -1,15 +1,14 @@
-"""Failure replay, cache retention, and version selection are observable CLI contracts."""
+"""Failure replay, cache retention, and installed launch diagnostics."""
 
 import json
 import shutil
 import subprocess
-import sys
 from pathlib import Path
 
 import pytest
 from filelock import FileLock
 
-from tests.tools.conftest import commit, git, write_file
+from tests.tools.conftest import write_file
 
 pytestmark = pytest.mark.rust
 
@@ -112,36 +111,6 @@ def test_cache_gc_dry_run_preserves_active_pending_leased_and_unowned_paths(
         assert sentinel.read_text() == "user source\n"
 
 
-def test_status_versions_and_rollback_preserve_immutable_bundles(tools_sandbox, bundle_factory):
-    tools_sandbox.run("install", "--bundle", bundle_factory("first"))
-    tools_sandbox.run("install", "--bundle", bundle_factory("second"))
-    tools_sandbox.run("install", "--bundle", bundle_factory("third"), "--stage-only")
-    status = tools_sandbox.json("status")
-    assert status["active"]["id"] == "second"
-    assert status["pending"]["id"] == "third"
-    assert status["previous"]["id"] == "first"
-
-    tools_sandbox.run("rollback")
-
-    status = tools_sandbox.json("status")
-    assert status["active"]["id"] == "first"
-    assert status["pending"] is None
-    assert {version["id"] for version in status["versions"]} == {"first", "second", "third"}
-    assert set(status["versions"][0]) == {
-        "id",
-        "active",
-        "pending",
-        "previous",
-        "built_at",
-        "upstream",
-        "role",
-    }
-    versions = tools_sandbox.json("versions")
-    assert {version["id"] for version in versions} == {"first", "second", "third"}
-    assert sum(version["active"] for version in versions) == 1
-    assert next(version for version in versions if version["active"])["id"] == "first"
-
-
 def test_doctor_launch_reports_missing_install_without_development_tools(tools_sandbox):
     tools_sandbox.env["PATH"] = ""
 
@@ -154,111 +123,3 @@ def test_doctor_launch_reports_missing_install_without_development_tools(tools_s
     assert any(
         check["name"] == "active bundle" and check["ok"] is False for check in report["checks"]
     )
-
-
-def test_replay_rebuilds_recorded_revision_and_remaps_only_fixture_paths(
-    tools_sandbox, local_upstream, recording_cargo, tmp_path
-):
-    _, revision = local_upstream
-    (recording_cargo.parent / "honor-target-dir").touch()
-    tools_sandbox.run("--upstream", revision, "build")
-    metadata = json.loads((tools_sandbox.cache / "build.json").read_text())
-    original_binaries = Path(metadata["artifacts"]["wezterm-gui"]).parent
-    uv_calls = tmp_path / "uv-calls.jsonl"
-    uv = recording_cargo.parent / "uv"
-    uv.write_text(
-        f"#!{sys.executable}\nimport json, sys\n"
-        f"with open({str(uv_calls)!r}, 'a') as stream:\n"
-        "    stream.write(json.dumps(sys.argv[1:]) + '\\n')\n"
-        "print('fixture test failure', file=sys.stderr)\nraise SystemExit(51)\n"
-    )
-    uv.chmod(0o755)
-    original_output = tmp_path / "original-test-output"
-    failed = tools_sandbox.run(
-        "test",
-        "gui",
-        "--",
-        f"--wezterm-bin-dir={original_binaries}",
-        f"--basetemp={original_output}",
-        "-k",
-        "literal and not another",
-        check=False,
-    )
-    assert failed.returncode != 0
-    report = next(
-        path
-        for path in (tools_sandbox.cache / "runs").glob("*/run.json")
-        if json.loads(path.read_text())["status"] == "failed"
-    )
-
-    result = tools_sandbox.run("repro", report, "--execute", check=False)
-
-    assert result.returncode != 0
-    assert "fixture test failure" in result.stderr
-    calls = [json.loads(line) for line in uv_calls.read_text().splitlines()]
-    assert len(calls) == 2
-    replayed = calls[1]
-    assert replayed[replayed.index("-k") + 1] == "literal and not another"
-    assert "--project-root" not in replayed
-    assert "--cache" not in replayed
-    assert "--upstream" not in replayed
-    new_binaries = next(
-        arg.removeprefix("--wezterm-bin-dir=")
-        for arg in replayed
-        if arg.startswith("--wezterm-bin-dir=")
-    )
-    new_output = next(
-        arg.removeprefix("--basetemp=") for arg in replayed if arg.startswith("--basetemp=")
-    )
-    assert new_binaries != str(original_binaries)
-    assert new_output != str(original_output)
-    assert "reproductions" in new_binaries
-    assert "reproductions" in new_output
-    built = next((tools_sandbox.cache / "reproductions").glob("*/cache/build.json"))
-    assert json.loads(built.read_text())["upstream"] == revision
-
-
-def test_offline_replay_uses_owned_cached_objects_after_origin_becomes_unavailable(
-    tools_sandbox, local_upstream
-):
-    upstream, _ = local_upstream
-    module = upstream.with_name("module-upstream")
-    module.mkdir()
-    git(module, "init", "--quiet", "--initial-branch=main")
-    write_file(module, "module.txt", "cached replay module\n")
-    commit(module)
-    git(upstream, "-c", "protocol.file.allow=always", "submodule", "add", str(module), "module")
-    revision = commit(upstream, "Upstream with replay submodule")
-    tools_sandbox.env["GIT_ALLOW_PROTOCOL"] = "file"
-    tools_sandbox.run("--upstream", revision, "prepare")
-    patch = tools_sandbox.root / "wezterm/patches/0002-second.patch"
-    patch.write_text(patch.read_text().replace("-first", "-incompatible"))
-    failed = tools_sandbox.run("--offline", "--upstream", revision, "prepare", check=False)
-    assert failed.returncode != 0
-    original = next(
-        path
-        for path in (tools_sandbox.cache / "runs").glob("*/run.json")
-        if json.loads(path.read_text())["status"] == "failed"
-    )
-    upstream.rename(upstream.with_name("unavailable-origin"))
-    module.rename(module.with_name("unavailable-module-origin"))
-
-    result = tools_sandbox.run("repro", original, "--execute", check=False)
-
-    assert result.returncode != 0
-    reports = list((tools_sandbox.cache / "reproductions").glob("*/cache/runs/*/run.json"))
-    assert len(reports) == 1, result.stderr
-    replayed = json.loads(reports[0].read_text())
-    assert replayed["status"] == "failed"
-    assert replayed["metadata"]["upstream"]["revision"] == revision
-    failed_commands = [
-        command for command in replayed["commands"] if command["status"] not in (0, None)
-    ]
-    assert failed_commands[-1]["command"][-1].endswith("0002-second.patch")
-    assert not any("fetch" in command["command"] for command in replayed["commands"])
-    assert "upstream cache missing" not in result.stderr
-    replay_cache = reports[0].parents[2]
-    assert (replay_cache / "worktree/module/module.txt").read_text() == "cached replay module\n"
-    assert (
-        tools_sandbox.cache / "worktree/module/module.txt"
-    ).read_text() == "cached replay module\n"

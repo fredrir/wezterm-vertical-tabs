@@ -20,7 +20,7 @@ def archive_path(bundle):
     )
 
 
-def test_package_existing_bundle_recovers_missing_archive_and_manifest(
+def test_package_recovers_missing_archive_files_but_rejects_corruption(
     tools_sandbox, bundle_factory
 ):
     bundle = bundle_factory("archive-recovery")
@@ -36,18 +36,10 @@ def test_package_existing_bundle_recovers_missing_archive_and_manifest(
     archive.unlink()
     tools_sandbox.run("package", "--bundle", bundle)
     assert archive.is_file()
-    sidecar.unlink()
-    tools_sandbox.run("package", "--bundle", bundle)
-    assert sidecar.is_file()
     assert (bundle / "checksums.json").read_bytes() == original
     assert not list(bundle.parent.glob(".archive-*"))
     assert not (tools_sandbox.cache / "upstream").exists()
-
-
-def test_package_rejects_a_corrupted_existing_archive(tools_sandbox, bundle_factory):
-    bundle = bundle_factory("corrupted-archive")
-    tools_sandbox.run("package", "--bundle", bundle)
-    archive_path(bundle).write_bytes(b"interrupted or modified archive")
+    archive.write_bytes(b"interrupted or modified archive")
 
     result = tools_sandbox.run("package", "--bundle", bundle, check=False)
 
@@ -84,19 +76,25 @@ def test_package_assembles_platform_runtime_assets_tool_and_reproducible_source(
     for name, contents in fixtures.items():
         write_file(tools_sandbox.root, name, contents)
     write_file(tools_sandbox.root, "tests/__pycache__/generated.pyc", "generated\n")
+    signer = "B" * 40
+    if sys.platform == "darwin":
+        (recording_cargo.parent / "identities.txt").write_text(
+            f'  1) {signer} "Developer ID Application: Fixture Person (TEAM123456)"\n'
+        )
 
-    result = tools_sandbox.json("--upstream", revision, "package")
+    result = tools_sandbox.json("--upstream", revision, "package", "--no-archive")
 
     bundle = Path(result["bundle"])
     binaries = binary_dir(bundle)
-    for name in (
+    names = (
         "wezterm-gui",
         "wezterm",
         "wezterm-mux-server",
         "strip-ansi-escapes",
         "wez-vtabs-store",
         "wez-vtabs",
-    ):
+    )
+    for name in names:
         assert (binaries / executable_name(name)).is_file()
     resources = (
         bundle / "WezTerm.app/Contents/Resources" if sys.platform == "darwin" else bundle / "share"
@@ -115,9 +113,21 @@ def test_package_assembles_platform_runtime_assets_tool_and_reproducible_source(
     if sys.platform == "darwin":
         assert (resources / "wezterm.sh").is_file()
         assert (resources / "shell-completion/bash").is_file()
+        calls = [
+            json.loads(line)
+            for line in (recording_cargo.parent / "codesign.jsonl").read_text().splitlines()
+        ]
+        signed = [call for call in calls if "--sign" in call]
+        app = Path(calls[-1][-1])
+        assert app.name == "WezTerm.app"
+        assert [Path(call[-1]).relative_to(app) for call in signed] == [
+            *(Path("Contents/MacOS") / name for name in sorted(names) if name != "wezterm-gui"),
+            Path("."),
+        ]
+        assert all(call[call.index("--sign") + 1] == signer for call in signed)
+        assert calls[-1] == ["--verify", "--deep", "--strict", str(app)]
     elif sys.platform.startswith("linux"):
         assert (bundle / "etc/profile.d/wezterm.sh").is_file()
         assert (bundle / "share/bash-completion/completions/wezterm").is_file()
         assert (bundle / "share/zsh/site-functions/_wezterm").is_file()
     tools_sandbox.run("verify", "--bundle", bundle)
-    assert archive_path(bundle).is_file()

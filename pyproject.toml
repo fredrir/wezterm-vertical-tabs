@@ -11,7 +11,6 @@ dev = [
   "pytest-asyncio>=1.4.0,<2",
   "pytest-xdist>=3.8.0,<4",
   "ruff>=0.16.6,<0.17",
-  "tui-test==0.1.0b3",
 ]
 
 [tool.uv]
@@ -27,7 +26,6 @@ asyncio_default_test_loop_scope = "function"
 filterwarnings = ["error"]
 markers = [
   "rust: behavior exercised through a production Rust process",
-  "pty: terminal behavior exercised through an isolated PTY",
   "lua: behavior exercised through the public Lua plugin interface",
   "luals: Lua language-server contract validation requiring --run-luals",
   "container: isolated container integration requiring --run-container",

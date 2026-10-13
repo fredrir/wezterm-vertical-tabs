@@ -1,7 +1,6 @@
 """Readiness waits preserve observations and report failures without waiting out dead owners."""
 
 import os
-import ssl
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -101,12 +100,13 @@ def test_dead_process_fails_before_the_readiness_probe(clock):
     assert not clock.sleeps
 
 
-@pytest.mark.parametrize("error", [ssl.SSLCertVerificationError("untrusted"), KeyError("state")])
-def test_probe_errors_propagate_without_retry(clock, error):
+def test_probe_errors_propagate_without_retry(clock):
+    error = RuntimeError("probe failed")
+
     def failed():
         raise error
 
-    with pytest.raises(type(error)) as failure:
+    with pytest.raises(RuntimeError, match="probe failed") as failure:
         polling.wait_until(failed, timeout=1, message="fixture not ready")
     assert failure.value is error
     assert not clock.sleeps

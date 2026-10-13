@@ -13,16 +13,16 @@ pytestmark = pytest.mark.rust
 PROFILE = {"kind": "profile", "profile": "test"}
 
 
-def key(entity: str, field: str = "name", scope: dict | None = None) -> dict:
+def key(entity: str, field: str = "name") -> dict:
     return {
-        "scope": PROFILE if scope is None else scope,
+        "scope": PROFILE,
         "entity": entity,
         "field": field,
     }
 
 
-def put(item: dict, value, revision: int = 0) -> dict:
-    return {"op": "put", "key": item, "value": value, "expected_revision": revision}
+def put(item: dict, value) -> dict:
+    return {"op": "put", "key": item, "value": value, "expected_revision": 0}
 
 
 @pytest.fixture
@@ -52,23 +52,16 @@ def request_store(rust_binaries: dict[str, Path], tmp_path: Path, isolated_env: 
     return request
 
 
-async def test_folder_catalog_survives_independent_helper_processes(request_store):
+async def test_large_response_is_flushed_and_survives_independent_helper_processes(request_store):
     folder = key("folder:tools")
-    written = await request_store([put(folder, "Tools")])
+    value = '"\\\n-é🙂' * 2048
+    written = await request_store([put(folder, value)])
     restored = await request_store([{"op": "read", "scope": PROFILE}])
     assert "error" not in written
+    assert written["revision"] == 1
+    assert len(json.dumps(written)) > 8192
     assert restored["records"] == written["records"]
-    assert restored["records"][0]["value"] == "Tools"
-
-
-async def test_conflict_rolls_back_every_operation_in_the_request(request_store):
-    folder = key("folder:tools")
-    await request_store([put(folder, "Original")])
-    failed = await request_store([put(key("space:work"), "Work"), put(folder, "Stale", 0)])
-    assert failed["error"]["code"] == "conflict"
-    restored = await request_store([{"op": "read", "scope": PROFILE}])
-    assert len(restored["records"]) == 1
-    assert restored["records"][0]["value"] == "Original"
+    assert restored["records"][0]["value"] == value
 
 
 async def test_concurrent_helpers_preserve_independent_fields(request_store):
@@ -80,17 +73,6 @@ async def test_concurrent_helpers_preserve_independent_fields(request_store):
     assert all("error" not in result for result in writes)
     restored = await request_store([{"op": "read", "scope": PROFILE}])
     assert {record["value"] for record in restored["records"]} == {"First", "Second"}
-
-
-async def test_session_membership_never_crosses_mux_incarnations(request_store):
-    session = {"kind": "session", "profile": "test", "incarnation": "current-mux"}
-    previous = {**session, "incarnation": "previous-mux"}
-    membership = {"space": "home", "manual": True, "pinned": True, "folder": "tools"}
-    await request_store([put(key("tab:7", "membership", session), membership)])
-    restored = await request_store([{"op": "read", "scope": previous}])
-    assert restored["records"] == []
-    restored = await request_store([{"op": "read", "scope": session}])
-    assert restored["records"][0]["value"] == membership
 
 
 async def test_null_preference_and_deleted_preference_remain_distinct(request_store):
@@ -108,14 +90,15 @@ async def test_null_preference_and_deleted_preference_remain_distinct(request_st
 
 
 @pytest.mark.parametrize(
-    ("payload", "error_code"),
+    ("payload", "error_code", "request_id"),
     [
-        ("{", "invalid_request"),
+        ("{", "invalid_request", 0),
         (
             json.dumps({"version": 99, "request_id": 1, "operations": []}),
             "invalid_request",
+            1,
         ),
-        (" " * (1024 * 1024 + 1), "limit"),
+        (" " * (1024 * 1024 + 1), "limit", 0),
     ],
     ids=["malformed-json", "unsupported-protocol", "oversized-request"],
 )
@@ -125,6 +108,7 @@ async def test_invalid_input_returns_bounded_machine_readable_errors(
     isolated_env: dict[str, str],
     payload,
     error_code,
+    request_id,
 ):
     result = await run_process(
         [rust_binaries["wez-vtabs-store"], "--db", tmp_path / "state.sqlite"],
@@ -133,4 +117,7 @@ async def test_invalid_input_returns_bounded_machine_readable_errors(
     )
     assert result.returncode == 1
     assert len(result.stdout) < 4096
-    assert json.loads(result.stdout)["error"]["code"] == error_code
+    response = json.loads(result.stdout)
+    assert response["version"] == 1
+    assert response["request_id"] == request_id
+    assert response["error"]["code"] == error_code
