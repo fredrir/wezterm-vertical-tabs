@@ -19,10 +19,10 @@ use wezterm_term::TerminalSize;
 impl ClientDomain {
     /// Checks a local launch target before the caller changes its visible session.
     pub fn validate_spawn_beside_pane(&self, local_pane_id: PaneId) -> anyhow::Result<()> {
-        self.spawn_beside_remote_pane(local_pane_id).map(|_| ())
+        self.remote_pane_for_spawn(local_pane_id).map(|_| ())
     }
 
-    fn spawn_beside_remote_pane(&self, local_pane_id: PaneId) -> anyhow::Result<PaneId> {
+    fn remote_pane_for_spawn(&self, local_pane_id: PaneId) -> anyhow::Result<PaneId> {
         anyhow::ensure!(
             !self.local_pane_layout(),
             "spawn beside a pane requires a mirrored client domain"
@@ -49,7 +49,7 @@ impl ClientDomain {
         command_dir: Option<String>,
         workspace: String,
     ) -> anyhow::Result<Arc<dyn Pane>> {
-        let pane_id = self.spawn_beside_remote_pane(local_pane_id)?;
+        let pane_id = self.remote_pane_for_spawn(local_pane_id)?;
         let inner = self
             .inner()
             .ok_or_else(|| anyhow!("domain has no assigned client"))?;
@@ -282,5 +282,5 @@ fn adopt_into(
 }
 
 #[cfg(test)]
-#[path = "../../tests/vtabs/config.rs"]
-mod vtabs_config_tests;
+#[path = "../../tests/vtabs/spawn.rs"]
+mod vtabs_spawn_tests;

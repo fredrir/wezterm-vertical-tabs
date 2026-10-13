@@ -97,6 +97,46 @@ def test_build_reuses_validation_for_docs_but_rechecks_test_and_toolchain_change
     assert len(cargo_commands(recording_cargo, "test")) == 12
 
 
+def test_build_preserves_cargo_config_target_precedence(
+    tools_sandbox, local_upstream, recording_cargo, tmp_path
+):
+    _, revision = local_upstream
+    tools_sandbox.env.pop("CARGO_BUILD_TARGET", None)
+    tools_sandbox.env["CARGO_HOME"] = str(tmp_path / "cargo-home")
+    tools_sandbox.run("--upstream", revision, "prepare")
+    locations = [
+        tools_sandbox.cache / "worktree/.cargo",
+        tools_sandbox.root / ".cargo",
+        tmp_path / "cargo-home",
+    ]
+    configs = [
+        (
+            write_file(directory, name, f'[build]\ntarget = "fixture-{scope}-{name}"\n'),
+            f"fixture-{scope}-{name}",
+        )
+        for scope, directory in enumerate(locations)
+        for name in ("config", "config.toml")
+    ]
+    effective = {directory: directory / "config" for directory in locations}
+    for path, target in configs:
+        before = len(cargo_commands(recording_cargo, "build")) if recording_cargo.exists() else 0
+        tools_sandbox.run("--upstream", revision, "build")
+        built = metadata(tools_sandbox)
+        assert built["target"] == target
+        assert all(
+            command[command.index("--target") + 1] == target
+            for command in cargo_commands(recording_cargo, "build")[before:]
+        )
+        assert [record["path"] for record in built["configuration"]["cargo_configs"]] == sorted(
+            map(str, effective.values())
+        )
+        path.unlink()
+        if path.name == "config":
+            effective[path.parent] = path.with_suffix(".toml")
+        else:
+            del effective[path.parent]
+
+
 def replacement_patch(path, before, after):
     return (
         f"diff --git a/{path} b/{path}\n--- a/{path}\n+++ b/{path}\n"

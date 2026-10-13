@@ -75,7 +75,6 @@ struct Prepared {
     version: u32,
     upstream: String,
     patch_digest: String,
-    adapter_digest: String,
     root: PathBuf,
     #[serde(default)]
     overlay: BTreeMap<String, String>,
@@ -1050,11 +1049,6 @@ pub fn prepare(ctx: &Context, resolved: &ResolvedSource) -> Result<PathBuf> {
     let patch_files = patches(&ctx.root)?;
     let patch_digest = digest_paths(&ctx.root, &patch_files)?;
     let overlay = overlay_files(&ctx.root)?;
-    let adapter_files = source_files(&ctx.root)?
-        .into_iter()
-        .filter(|v| v.starts_with(ctx.root.join("src/adapter")))
-        .collect::<Vec<_>>();
-    let adapter_digest = digest_paths(&ctx.root, &adapter_files)?;
     // Legacy preparation records use a single integration digest and require
     // one rebuild. They remain valid evidence for cache ownership above.
     let raw: Option<serde_json::Value> = state::read_json(&ctx.cache.join("prepared.json"))?;
@@ -1119,7 +1113,6 @@ pub fn prepare(ctx: &Context, resolved: &ResolvedSource) -> Result<PathBuf> {
             version: PREPARATION_VERSION,
             upstream: resolved.revision.clone(),
             patch_digest,
-            adapter_digest,
             root,
             overlay: content_digests(&overlay),
         },

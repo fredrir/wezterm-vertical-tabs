@@ -610,13 +610,7 @@ impl TermWindow {
             }
             Open::LaunchProgram(slot) => {
                 let launch = launch.expect("program launch was resolved before opening");
-                self.spawn_terminal_pane(
-                    &state_ref,
-                    slot,
-                    Ok(launch.target),
-                    launch.command,
-                    launch.cwd,
-                );
+                self.spawn_terminal_pane(&state_ref, slot, launch);
                 return;
             }
             Open::Pending => return,
@@ -651,24 +645,11 @@ impl TermWindow {
             }
         }
         let slot = state_ref.borrow_mut().launch_shell();
-        self.spawn_terminal_pane(
-            &state_ref,
-            slot,
-            Ok(launch.target),
-            launch.command,
-            launch.cwd,
-        );
+        self.spawn_terminal_pane(&state_ref, slot, launch);
     }
 
     /// A pane arriving after its slot stopped wanting it is removed.
-    fn spawn_terminal_pane(
-        &self,
-        state: &Rc<RefCell<Session>>,
-        slot: Slot,
-        target: anyhow::Result<Target>,
-        command: Option<CommandBuilder>,
-        cwd: Option<String>,
-    ) {
+    fn spawn_terminal_pane(&self, state: &Rc<RefCell<Session>>, slot: Slot, launch: Launch) {
         let Some(window) = self.window.clone() else {
             return;
         };
@@ -678,8 +659,13 @@ impl TermWindow {
         let window_id = self.mux_window_id;
         let endpoint = super::ui_host::WindowEndpoint::new(window.clone(), window_id);
         promise::spawn::spawn(async move {
+            let Launch {
+                target,
+                command,
+                cwd,
+            } = launch;
             let result = async {
-                match target? {
+                match target {
                     Target::Domain(domain) => {
                         if domain.state() == DomainState::Detached {
                             domain.attach(Some(window_id)).await?;

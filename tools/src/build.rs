@@ -87,39 +87,35 @@ fn preserve_cargo_timings(ctx: &Context, target_dir: &Path) -> Result<()> {
 }
 
 fn configuration_files(ctx: &Context, worktree: &Path) -> Vec<PathBuf> {
-    let mut files = BTreeSet::new();
-    for root in [&ctx.root, worktree] {
-        for directory in root.ancestors() {
-            // Cargo prefers legacy config when both spellings exist.
-            let old = directory.join(".cargo/config");
-            let new = directory.join(".cargo/config.toml");
-            if old.is_file() {
-                files.insert(old);
-            } else if new.is_file() {
-                files.insert(new);
-            }
-        }
-    }
     let home = std::env::var_os("CARGO_HOME")
         .map(PathBuf::from)
         .or_else(|| {
             std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
                 .map(|value| PathBuf::from(value).join(".cargo"))
         });
-    if let Some(home) = home {
-        let old = home.join("config");
-        let new = home.join("config.toml");
-        if old.is_file() {
-            files.insert(old);
-        } else if new.is_file() {
-            files.insert(new);
-        }
-    }
-    files.into_iter().collect()
+    let mut seen = BTreeSet::new();
+    // Preserve target lookup precedence: upstream workspace, project, Cargo home.
+    worktree
+        .ancestors()
+        .chain(ctx.root.ancestors())
+        .map(|directory| directory.join(".cargo"))
+        .chain(home)
+        .filter_map(|directory| {
+            // Cargo prefers legacy config when both spellings exist.
+            ["config", "config.toml"]
+                .into_iter()
+                .map(|name| directory.join(name))
+                .find(|path| path.is_file())
+        })
+        .filter(|path| seen.insert(path.clone()))
+        .collect()
 }
 
 fn config_records(ctx: &Context, worktree: &Path) -> Result<Vec<CargoConfig>> {
-    configuration_files(ctx, worktree)
+    let mut files = configuration_files(ctx, worktree);
+    // Identities use a stable path order, independent of target lookup precedence.
+    files.sort();
+    files
         .iter()
         .map(|path| {
             let contents = fs::read_to_string(path)?;
@@ -151,41 +147,13 @@ fn requested_target(ctx: &Context, worktree: &Path) -> Result<Option<String>> {
     }
     // Read the effective workspace target. Passing it explicitly keeps
     // the project store helper on the same target as the application.
-    for directory in worktree.ancestors().chain(ctx.root.ancestors()) {
-        let old = directory.join(".cargo/config");
-        let new = directory.join(".cargo/config.toml");
-        let path = if old.is_file() { old } else { new };
-        if path.is_file() {
-            let document = fs::read_to_string(&path)?.parse::<toml_edit::DocumentMut>()?;
-            if let Some(target) = document.get("build").and_then(|v| v.get("target")) {
-                return target
-                    .as_str()
-                    .map(|v| Some(v.to_owned()))
-                    .context("builds require one Cargo build.target triple");
-            }
-        }
-    }
-    // CARGO_HOME is lower precedence than the workspace and its ancestors.
-    let home = std::env::var_os("CARGO_HOME")
-        .map(PathBuf::from)
-        .or_else(|| {
-            std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
-                .map(|value| PathBuf::from(value).join(".cargo"))
-        });
-    if let Some(home) = home {
-        let path = if home.join("config").is_file() {
-            home.join("config")
-        } else {
-            home.join("config.toml")
-        };
-        if path.is_file() {
-            let document = fs::read_to_string(path)?.parse::<toml_edit::DocumentMut>()?;
-            if let Some(target) = document.get("build").and_then(|v| v.get("target")) {
-                return target
-                    .as_str()
-                    .map(|v| Some(v.to_owned()))
-                    .context("builds require one Cargo build.target triple");
-            }
+    for path in configuration_files(ctx, worktree) {
+        let document = fs::read_to_string(path)?.parse::<toml_edit::DocumentMut>()?;
+        if let Some(target) = document.get("build").and_then(|v| v.get("target")) {
+            return target
+                .as_str()
+                .map(|v| Some(v.to_owned()))
+                .context("builds require one Cargo build.target triple");
         }
     }
     Ok(None)

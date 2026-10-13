@@ -107,9 +107,6 @@ impl SidebarUi {
     pub fn theme(&self) -> &Theme {
         &self.theme
     }
-    pub fn has_focus(&self) -> bool {
-        self.focused.is_some() || self.is_modal()
-    }
     pub fn release_focus(&mut self) {
         self.hide_settings();
         if self.sidebar.rename.take().is_some() {
@@ -195,19 +192,6 @@ impl SidebarUi {
         .into_iter()
         .flatten()
         .min()
-    }
-    pub fn has_animation(&self) -> bool {
-        self.effects.cell.is_some()
-            || self.effects.surface.is_some()
-            || self
-                .pointer
-                .press
-                .as_ref()
-                .is_some_and(|press| press.animating)
-            || self
-                .pointer
-                .drop_motion
-                .is_some_and(|motion| motion.progress < 1.0)
     }
     pub fn set_pointer_fraction(&mut self, x: f32, y: f32) {
         self.pointer.fraction = (x.clamp(0.0, 1.0), y.clamp(0.0, 1.0));

@@ -144,6 +144,10 @@ def test_adapter_sync_reuses_checkout_and_removes_deleted_modules(tools_sandbox,
     previous_mtime = module.stat().st_mtime_ns
     test_module = checkout / "wezterm-gui/src/vtabs/tests/storage.rs"
     previous_test_mtime = test_module.stat().st_mtime_ns
+    record = tools_sandbox.cache / "prepared.json"
+    prepared = json.loads(record.read_text())
+    prepared["adapter_digest"] = "retired-field-from-an-earlier-build"
+    record.write_text(json.dumps(prepared))
     removed = tools_sandbox.root / "src/adapter/src/obsolete/nested.rs"
     removed.unlink()
     removed.parent.rmdir()

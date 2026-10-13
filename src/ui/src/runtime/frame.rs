@@ -14,11 +14,11 @@ use std::time::Duration;
 use vtabs_core::Model;
 
 #[cfg(test)]
-#[path = "targets_tests.rs"]
+#[path = "../../tests/targets.rs"]
 mod targets_tests;
 
 #[cfg(test)]
-#[path = "preparation_tests.rs"]
+#[path = "../../tests/preparation.rs"]
 mod preparation_tests;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]

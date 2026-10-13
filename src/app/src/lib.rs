@@ -845,16 +845,6 @@ impl WindowApp {
             tab_id,
         }
     }
-    pub fn complete_hook(&mut self, token: HookToken, result: HookResult) -> Result<bool, Error> {
-        self.complete_hook_batch(vec![(token, result)])
-    }
-    pub fn complete_hooks(
-        &mut self,
-        token: HookToken,
-        results: Vec<HookResult>,
-    ) -> Result<bool, Error> {
-        self.complete_hook_batch(results.into_iter().map(|result| (token, result)).collect())
-    }
     /// Validate every token against the same pre-transaction revision, then publish all
     /// semantic changes together. A bad item or stale token cannot publish a partial batch.
     pub fn complete_hook_batch(

@@ -211,9 +211,16 @@ fn pane_tab_and_space_targets_keep_their_existing_liveness_rules() {
     ui.focused = Some(ElementId::Pane(1, 10));
     ui.confirm_close_pane(1, 10, "shell");
 
-    let mut tab = model.tabs[&1].clone();
-    tab.panes.clear();
-    model.reconcile(vec![tab.into()], Some(1), true).unwrap();
+    model
+        .reconcile(
+            vec![HostTab {
+                id: 1,
+                ..HostTab::default()
+            }],
+            Some(1),
+            true,
+        )
+        .unwrap();
     draw(&mut ui, &model);
     let Some(Overlay::Menu(menu)) = ui.overlays.current() else {
         panic!("expected confirmation");

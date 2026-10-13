@@ -78,7 +78,7 @@ fn stale_snapshot_and_hook_cannot_restore_old_view() {
     app.update(snapshot(2, Some(2), vec![tab(1), tab(2)]))
         .unwrap();
     assert!(
-        !app.complete_hook(token, HookResult::Title("Old title".into()))
+        !app.complete_hook_batch(vec![(token, HookResult::Title("Old title".into()))])
             .unwrap()
     );
     assert!(app.update(snapshot(1, Some(1), vec![tab(1)])).is_err());
@@ -98,7 +98,7 @@ fn pixel_only_resize_rejects_stale_hooks_without_cell_recomposition() {
     })
     .unwrap();
     assert!(
-        !app.complete_hook(token, HookResult::Title("Stale geometry".into()))
+        !app.complete_hook_batch(vec![(token, HookResult::Title("Stale geometry".into()))])
             .unwrap()
     );
     assert!(app.render(Duration::from_millis(1)).is_none());

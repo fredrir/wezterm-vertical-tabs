@@ -15,10 +15,10 @@ from tests.tools.conftest import write_file
 pytestmark = [pytest.mark.rust, pytest.mark.skipif(os.name == "nt", reason="POSIX process fixture")]
 
 
-def wait_for_watch(predicate, log, timeout=20):
+def wait_for_watch(predicate, log):
     wait_until(
         predicate,
-        timeout=timeout,
+        timeout=20,
         message="Watch condition did not become ready",
         diagnostics=lambda: log_diagnostics(log),
         error=pytest.fail.Exception,

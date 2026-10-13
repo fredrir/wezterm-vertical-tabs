@@ -28,7 +28,6 @@ pub(crate) struct Persistence {
     touched: BTreeSet<Key>,
     reads: Vec<Scope>,
     flight: Option<Flight>,
-    request_id: u64,
     deadline: Option<Duration>,
     failures: u8,
     window_id: Option<u64>,
@@ -46,7 +45,6 @@ impl Persistence {
             touched: BTreeSet::new(),
             reads: vec![profile],
             flight: None,
-            request_id: 0,
             deadline: Some(Duration::ZERO),
             failures: 0,
             window_id: None,
@@ -206,8 +204,8 @@ impl Persistence {
             return None;
         }
         static REQUEST_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
-        self.request_id = REQUEST_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let request = Request::new(self.request_id, operations.clone());
+        let request_id = REQUEST_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let request = Request::new(request_id, operations.clone());
         self.flight = Some(Flight {
             id: request.request_id,
             operations,

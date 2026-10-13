@@ -12,7 +12,7 @@ mod routing;
 mod scheduler;
 
 pub use contract::*;
-pub use endpoint::WindowEndpoint;
+pub(crate) use endpoint::WindowEndpoint;
 pub use geometry::{Bounds, Geometry, Reservation};
 
 thread_local! {

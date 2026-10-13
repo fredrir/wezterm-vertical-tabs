@@ -5,9 +5,10 @@ import os
 import signal
 import subprocess
 import sys
-import time
 
 import pytest
+
+from tests.support.polling import check_process, log_diagnostics, wait_until
 
 pytestmark = [pytest.mark.rust, pytest.mark.skipif(os.name == "nt", reason="POSIX fork fixture")]
 
@@ -45,10 +46,14 @@ def test_cancellation_terminates_descendant_after_command_leader_exits(tools_san
             start_new_session=True,
         )
         try:
-            deadline = time.monotonic() + 5
-            while not child_pid.exists() and time.monotonic() < deadline:
-                time.sleep(0.02)
-            assert child_pid.exists(), log.read_text()
+            wait_until(
+                child_pid.exists,
+                timeout=5,
+                interval=0.02,
+                message="Fixture descendant did not start",
+                check_live=lambda: check_process(process, "management CLI"),
+                diagnostics=lambda: log_diagnostics(log),
+            )
             process.send_signal(signal.SIGINT)
             try:
                 status = process.wait(timeout=5)

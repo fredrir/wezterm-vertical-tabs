@@ -213,8 +213,14 @@ fn duplicate_identity_is_rejected_before_any_mutation() {
 }
 
 #[test]
-fn host_projection_preserves_facts_but_cannot_import_saved_application_state() {
-    let saved = Tab {
+fn new_host_tab_uses_selected_space_and_application_defaults() {
+    let mut model = Model::default();
+    model
+        .dispatch(Intent::CreateSpace {
+            name: "Work".into(),
+        })
+        .unwrap();
+    let facts = HostTab {
         id: 7,
         title: "Host title".into(),
         icon: "!".into(),
@@ -234,34 +240,38 @@ fn host_projection_preserves_facts_but_cannot_import_saved_application_state() {
         }],
         unread: true,
         bell: true,
-        pinned: true,
-        folder_id: Some("saved-folder".into()),
-        space_id: "saved-space".into(),
-        manual_assignment: true,
         launch: Some(LaunchSpec {
             domain: Some("ssh:builder".into()),
             ..LaunchSpec::default()
         }),
-        title_override: Some("Saved title".into()),
-        title_hook: Some("Saved hook".into()),
     };
-    let mut expected = saved.clone();
-    expected.pinned = false;
-    expected.folder_id = None;
-    expected.space_id.clear();
-    expected.manual_assignment = false;
-    expected.title_override = None;
-    expected.title_hook = None;
+    model.reconcile(vec![facts.clone()], None, false).unwrap();
 
-    let facts = HostTab::from(saved);
-    assert_eq!(Tab::from(facts.clone()), expected);
-    expected.space_id = DEFAULT_SPACE.into();
-    // Rebuilding an empty model selects its first tab and acknowledges activity.
-    expected.unread = false;
-    expected.bell = false;
-    let mut model = Model::default();
-    model.reconcile(vec![facts], None, false).unwrap();
-    assert_eq!(model.tabs[&7], expected);
+    let tab = &model.tabs[&7];
+    assert_eq!(tab.id, facts.id);
+    assert_eq!(tab.title, facts.title);
+    assert_eq!(tab.icon, facts.icon);
+    assert_eq!(tab.cwd, facts.cwd);
+    assert_eq!(tab.repo_root, facts.repo_root);
+    assert_eq!(tab.home, facts.home);
+    assert_eq!(tab.domain, facts.domain);
+    assert_eq!(tab.host, facts.host);
+    assert_eq!(tab.user, facts.user);
+    assert_eq!(tab.process, facts.process);
+    assert_eq!(tab.remote, facts.remote);
+    assert_eq!(tab.os, facts.os);
+    assert_eq!(tab.panes, facts.panes);
+    assert_eq!(tab.launch, facts.launch);
+    assert_eq!(tab.space_id, model.selected_space);
+    assert!(!tab.pinned);
+    assert!(!tab.manual_assignment);
+    assert_eq!(tab.folder_id, None);
+    assert_eq!(tab.title_override, None);
+    assert_eq!(tab.title_hook, None);
+    // Selecting the first discovered tab acknowledges its activity.
+    assert!(!tab.unread);
+    assert!(!tab.bell);
+    assert_eq!(model.selected_tab, Some(7));
     assert_eq!(model.visible_ids(), &[7]);
 }
 

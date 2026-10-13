@@ -115,16 +115,6 @@ impl WindowPadding {
             _ => None,
         }
     }
-
-    pub fn side_mut(&mut self, side: &str) -> Option<&mut Option<Dimension>> {
-        match side {
-            "left" => Some(&mut self.left),
-            "top" => Some(&mut self.top),
-            "right" => Some(&mut self.right),
-            "bottom" => Some(&mut self.bottom),
-            _ => None,
-        }
-    }
 }
 
 const ROW: &str = "Pixels, or px, %, pt or cell; empty follows WezTerm window_padding";

@@ -1,19 +1,16 @@
 use super::*;
+fn host_tabs() -> Vec<HostTab> {
+    (1..=3)
+        .map(|id| HostTab {
+            id,
+            title: format!("{id}"),
+            ..HostTab::default()
+        })
+        .collect()
+}
 fn model() -> Model {
     let mut model = Model::default();
-    model
-        .reconcile(
-            (1..=3)
-                .map(|id| HostTab {
-                    id,
-                    title: format!("{id}"),
-                    ..HostTab::default()
-                })
-                .collect(),
-            Some(1),
-            true,
-        )
-        .unwrap();
+    model.reconcile(host_tabs(), Some(1), true).unwrap();
     model
 }
 #[test]
@@ -30,8 +27,7 @@ fn same_space_activation_keeps_cached_projection() {
 fn unchanged_metadata_does_not_rebuild_projection() {
     let mut model = model();
     let revision = model.projection_revision();
-    let metadata = model.tabs.values().cloned().map(HostTab::from).collect();
-    assert!(!model.reconcile(metadata, Some(1), false).unwrap());
+    assert!(!model.reconcile(host_tabs(), Some(1), false).unwrap());
     assert_eq!(model.projection_revision(), revision);
 }
 #[test]

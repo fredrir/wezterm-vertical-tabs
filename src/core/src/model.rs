@@ -283,53 +283,6 @@ impl From<HostTab> for Tab {
     }
 }
 
-impl From<Tab> for HostTab {
-    fn from(tab: Tab) -> Self {
-        let Tab {
-            id,
-            title,
-            icon,
-            cwd,
-            repo_root,
-            home,
-            domain,
-            host,
-            user,
-            process,
-            remote,
-            os,
-            panes,
-            unread,
-            bell,
-            launch,
-            pinned: _,
-            folder_id: _,
-            space_id: _,
-            manual_assignment: _,
-            title_override: _,
-            title_hook: _,
-        } = tab;
-        Self {
-            id,
-            title,
-            icon,
-            cwd,
-            repo_root,
-            home,
-            domain,
-            host,
-            user,
-            process,
-            remote,
-            os,
-            panes,
-            unread,
-            bell,
-            launch,
-        }
-    }
-}
-
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub enum Intent {
     SelectSpace(SpaceId),
@@ -1410,15 +1363,6 @@ impl Model {
         }
         self.tabs.get_mut(&id).unwrap().launch = Some(launch);
         Ok(())
-    }
-    pub fn restore_tab_state(
-        &mut self,
-        id: TabId,
-        space: &str,
-        manual: bool,
-        pinned: bool,
-    ) -> Result<bool, Error> {
-        self.restore_tab_membership(id, space, manual, pinned, None)
     }
     pub fn restore_tab_membership(
         &mut self,
