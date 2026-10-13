@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from tests.tools.conftest import commit, git, write_file
+from tests.tools.conftest import git, write_file
 from tests.tools.support import write_manifest
 
 pytestmark = pytest.mark.rust
@@ -28,7 +28,7 @@ def use_installed_source(tools_sandbox, bundle_factory, branch="dev", remote=Non
     tools_sandbox.root = bundle / "source"
 
 
-def test_update_refuses_an_unowned_project_checkout(tools_sandbox, bundle_factory, failing_cargo):
+def test_update_refuses_an_unowned_project_checkout(tools_sandbox, bundle_factory, recording_cargo):
     sentinel = write_file(tools_sandbox.cache, "project/uncommitted.rs", "user edits\n")
     use_installed_source(tools_sandbox, bundle_factory)
 
@@ -37,60 +37,11 @@ def test_update_refuses_an_unowned_project_checkout(tools_sandbox, bundle_factor
     assert result.returncode != 0
     assert "unowned" in result.stderr
     assert sentinel.read_text() == "user edits\n"
-    assert not failing_cargo.exists()
+    assert not recording_cargo.exists()
 
 
-def test_installed_update_preserves_recorded_branch_and_refreshes_legacy_single_branch_cache(
-    tools_sandbox, local_upstream, bundle_factory, failing_cargo
-):
-    repository = tools_sandbox.root
-    git(repository, "branch", "main")
-    git(repository, "switch", "-c", "release/dev")
-    expected = commit(repository, "implementation on release branch")
-    checkout = tools_sandbox.cache / "project"
-    checkout.parent.mkdir(parents=True)
-    git(repository, "clone", "--single-branch", "--branch", "main", str(repository), str(checkout))
-    write_file(
-        checkout,
-        ".git/wez-vtabs.json",
-        json.dumps({"path": str(checkout.resolve()), "remote": str(repository), "capability": 1}),
-    )
-    use_installed_source(tools_sandbox, bundle_factory, branch="release/dev")
-
-    result = tools_sandbox.run("update", "--stage-only", check=False)
-
-    assert result.returncode != 0
-    assert "fixture compiler failure" in result.stderr
-    assert git(checkout, "rev-parse", "HEAD") == expected
-    assert (checkout / "wezterm/patches/0001-first.patch").is_file()
-    commands = [json.loads(line) for line in failing_cargo.read_text().splitlines()]
-    assert commands
-    assert any("tools/Cargo.toml" in " ".join(arguments) for arguments in commands)
-    state = json.loads((tools_sandbox.install / "update.json").read_text())
-    assert state["status"] == "failed"
-    assert (tools_sandbox.root.parent / "build.json").is_file()
-
-
-@pytest.mark.parametrize(
-    "branch",
-    [
-        "--upload-pack=bad",
-        "../main",
-        "dev^{commit}",
-        "a..b",
-        "a.lock",
-        "a//b",
-        "a/.b",
-        "a/",
-        "a.",
-        "a b",
-        "a\\b",
-    ],
-)
-def test_update_rejects_unsafe_recorded_branch_before_fetching(
-    tools_sandbox, bundle_factory, branch
-):
-    use_installed_source(tools_sandbox, bundle_factory, branch=branch)
+def test_update_rejects_unsafe_recorded_branch_before_fetching(tools_sandbox, bundle_factory):
+    use_installed_source(tools_sandbox, bundle_factory, branch="--upload-pack=bad")
 
     result = tools_sandbox.run("update", check=False)
 

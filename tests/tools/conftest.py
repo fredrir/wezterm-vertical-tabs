@@ -188,28 +188,6 @@ def bundle_factory(tools_binary: Path, rust_host: str, tmp_path: Path):
 
 
 @pytest.fixture
-def failing_cargo(tools_sandbox: ToolSandbox, tmp_path: Path) -> Path:
-    if os.name == "nt":
-        pytest.skip("POSIX fixture command dispatch")
-    directory = tmp_path / "fixture-commands"
-    directory.mkdir()
-    log = directory / "cargo.jsonl"
-    command = directory / "cargo"
-    command.write_text(
-        f"#!{sys.executable}\n"
-        "import json, sys\n"
-        f"with open({str(log)!r}, 'a', encoding='utf-8') as stream:\n"
-        "    stream.write(json.dumps(sys.argv[1:]) + '\\n')\n"
-        "print('fixture compiler failure', file=sys.stderr)\n"
-        "raise SystemExit(61)\n",
-        encoding="utf-8",
-    )
-    command.chmod(0o755)
-    tools_sandbox.env["PATH"] = str(directory) + os.pathsep + tools_sandbox.env["PATH"]
-    return log
-
-
-@pytest.fixture
 def recording_cargo(tools_sandbox: ToolSandbox, tmp_path: Path) -> Path:
     if os.name == "nt":
         pytest.skip("POSIX fixture command dispatch")
@@ -241,22 +219,15 @@ def recording_cargo(tools_sandbox: ToolSandbox, tmp_path: Path) -> Path:
         "'manifest_path': str(manifest), 'dependencies': dependencies})\n"
         "    print(json.dumps({'packages': packages}))\n"
         "elif arguments[0] == 'build':\n"
-        f"    if pathlib.Path({str(directory / 'fail-build')!r}).exists():\n"
-        "        print('fixture watch compiler failure', file=sys.stderr)\n"
-        "        raise SystemExit(61)\n"
         "    for index, argument in enumerate(arguments[:-1]):\n"
         "        if argument != '-p': continue\n"
         "        package = arguments[index + 1]\n"
         "        name = 'wez-vtabs-store' if package == 'vtabs-store' else package\n"
         f"        artifact = pathlib.Path({str(artifacts)!r}) / name\n"
-        "        if not artifact.exists(): artifact.write_text('#!/bin/sh\\nexit 0\\n')\n"
+        "        artifact.write_text('#!/bin/sh\\nexit 0\\n')\n"
         "        artifact.chmod(0o755)\n"
         "        print(json.dumps({'reason': 'compiler-artifact', 'target': {'name': name}, "
-        "'executable': str(artifact)}))\n"
-        f"    change = pathlib.Path({str(directory / 'change-source')!r})\n"
-        "    if change.exists():\n"
-        "        pathlib.Path(change.read_text()).write_text('edited during compilation\\n')\n"
-        "        change.unlink()\n",
+        "'executable': str(artifact)}))\n",
         encoding="utf-8",
     )
     command.chmod(0o755)

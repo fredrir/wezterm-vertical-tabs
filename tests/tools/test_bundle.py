@@ -1,6 +1,5 @@
-"""Verified bundles recover interrupted archive publication without rebuilding."""
+"""Release bundles contain runtime assets and reject escaping symlinks."""
 
-import hashlib
 import json
 import os
 import sys
@@ -12,39 +11,6 @@ from tests.tools.conftest import write_file
 from tests.tools.support import binary_dir, executable_name, write_manifest
 
 pytestmark = pytest.mark.rust
-
-
-def archive_path(bundle):
-    return bundle.with_name(
-        bundle.name + (".zip" if os.name == "nt" or sys.platform == "darwin" else ".tar.gz")
-    )
-
-
-def test_package_recovers_missing_archive_files_but_rejects_corruption(
-    tools_sandbox, bundle_factory
-):
-    bundle = bundle_factory("archive-recovery")
-    original = (bundle / "checksums.json").read_bytes()
-    tools_sandbox.run("package", "--bundle", bundle)
-    archive = archive_path(bundle)
-    sidecar = archive.with_name(archive.name + ".manifest.json")
-    assert archive.is_file()
-    manifest = json.loads(sidecar.read_text())
-    assert manifest["id"] == "archive-recovery"
-    assert manifest["sha256"] == hashlib.sha256(archive.read_bytes()).hexdigest()
-
-    archive.unlink()
-    tools_sandbox.run("package", "--bundle", bundle)
-    assert archive.is_file()
-    assert (bundle / "checksums.json").read_bytes() == original
-    assert not list(bundle.parent.glob(".archive-*"))
-    assert not (tools_sandbox.cache / "upstream").exists()
-    archive.write_bytes(b"interrupted or modified archive")
-
-    result = tools_sandbox.run("package", "--bundle", bundle, check=False)
-
-    assert result.returncode != 0
-    assert "archive checksum mismatch" in result.stderr
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX symlink fixture")

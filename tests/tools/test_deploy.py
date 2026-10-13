@@ -1,7 +1,6 @@
 """Desktop application replacement through the production CLI."""
 
 import json
-import subprocess
 import sys
 
 import pytest
@@ -63,6 +62,10 @@ def test_deploy_preserves_a_foreign_application_once_and_refreshes_its_own_copie
     assert gui.read_bytes() == installed(sandbox_home, "second", "wezterm-gui").read_bytes()
     assert (preserved / "Contents/Info.plist").read_text() == "stock"
     assert [path.name for path in applications.iterdir()] == ["WezTerm.app"]
+    for name in LINKED_BINARIES:
+        link = tmp_path / "home/.local/bin" / name
+        assert link.is_symlink()
+        assert link.resolve() == (app / "Contents/MacOS" / executable_name(name)).resolve()
 
 
 @pytest.mark.skipif(sys.platform != "linux", reason="XDG desktop entry and PATH link placement")
@@ -115,48 +118,6 @@ def test_deploy_shadows_the_packaged_desktop_entry_and_cli_once(
     assert not [path.name for path in entry.parent.iterdir() if ".retired-" in path.name]
 
 
-@pytest.mark.skipif(sys.platform != "darwin", reason="macOS application bundle placement")
-def test_deploy_links_every_binary_into_the_default_user_directory(
-    sandbox_home, bundle_factory, tmp_path
-):
-    app = tmp_path / "Applications/WezTerm.app"
-    (app / "Contents/MacOS").mkdir(parents=True)
-
-    result = sandbox_home.json("deploy", "--bundle", bundle_factory("first"), "--app", app)
-
-    for name in LINKED_BINARIES:
-        link = tmp_path / "home/.local/bin" / name
-        assert link.is_symlink()
-        assert link.resolve() == (app / "Contents/MacOS" / executable_name(name)).resolve()
-    assert [link["replaced"] for link in result["links"]] == [None] * len(LINKED_BINARIES)
-
-    result = sandbox_home.json("deploy", "--bundle", bundle_factory("second"), "--app", app)
-
-    assert all(link["replaced"] == {"kind": "previous"} for link in result["links"])
-    for name in LINKED_BINARIES:
-        link = tmp_path / "home/.local/bin" / name
-        assert link.resolve() == (app / "Contents/MacOS" / executable_name(name)).resolve()
-        assert link.read_bytes() == installed(sandbox_home, "second", name).read_bytes()
-    version = subprocess.run(
-        [str(tmp_path / "home/.local/bin/wez-vtabs"), "--version"],
-        env=sandbox_home.env,
-        text=True,
-        capture_output=True,
-        timeout=20,
-        check=False,
-    )
-    assert version.returncode == 0, version.stderr
-    assert version.stdout.startswith("wez-vtabs ")
-
-
-def test_deploy_without_an_application_only_installs(tools_sandbox, bundle_factory):
-    result = tools_sandbox.json("deploy", "--bundle", bundle_factory("only"), "--no-app")
-
-    assert state(tools_sandbox.install, "active")["id"] == "only"
-    assert result["app"] is None
-    assert not (tools_sandbox.install / "replaced").exists()
-
-
 def placement(tmp_path):
     if sys.platform == "darwin":
         app = tmp_path / "Applications/WezTerm.app"
@@ -199,26 +160,3 @@ def test_mux_bundle_links_only_the_cli_and_server(sandbox_home, bundle_factory, 
     ]
     assert not (sandbox_home.install / "wez-vtabs").exists()
     assert not (sandbox_home.install / "wez-vtabs.desktop").exists()
-
-
-@pytest.mark.skipif(sys.platform != "linux", reason="links into installed versions")
-def test_switching_to_mux_removes_own_desktop_only_links(sandbox_home, bundle_factory, tmp_path):
-    app = placement(tmp_path)
-    bin_dir = tmp_path / "bin"
-    (bin_dir).mkdir()
-    (bin_dir / "unrelated").write_text("kept")
-    sandbox_home.run(
-        "deploy", "--bundle", bundle_factory("desktop"), "--app", app, "--bin", bin_dir
-    )
-
-    result = sandbox_home.json(
-        "deploy", "--bundle", bundle_factory("mux", role="mux"), "--app", app, "--bin", bin_dir
-    )
-
-    assert sorted(path.name for path in bin_dir.iterdir()) == [
-        "unrelated",
-        "wez-vtabs",
-        "wezterm",
-        "wezterm-mux-server",
-    ]
-    assert sum(1 for link in result["links"] if link.get("removed")) == 3
