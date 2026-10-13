@@ -58,8 +58,11 @@ pub enum Commands {
         #[arg(last = true)]
         args: Vec<String>,
     },
-    /// Run the same project checks as CI.
-    Check,
+    /// Run the same project checks as CI; extra pytest arguments follow --.
+    Check {
+        #[arg(last = true)]
+        args: Vec<String>,
+    },
     /// Formatting, Clippy, Ruff and generated files; --fix rewrites them.
     Lint {
         #[arg(long)]
@@ -82,11 +85,6 @@ pub enum Commands {
         check: bool,
         #[command(flatten)]
         on: On,
-    },
-    /// Generate or verify schema, Lua types and option documentation.
-    Generate {
-        #[arg(long)]
-        check: bool,
     },
     /// Build a verified platform bundle and compressed archive.
     Package {
@@ -158,25 +156,15 @@ pub enum Commands {
         #[arg(last = true)]
         args: Vec<String>,
     },
-    /// Diagnose prerequisites for a command.
-    Doctor {
-        #[arg(long = "for", default_value = "build")]
-        operation: String,
-    },
     /// Explain operation inputs and cache decisions without fetching or building.
     Plan {
-        #[arg(default_value = "build", value_parser = ["build", "prepare", "dev", "check", "package"])]
+        #[arg(default_value = "build", value_parser = ["build", "prepare", "dev", "check", "package", "deploy"])]
         operation: String,
     },
     /// Active, pending and previous versions.
     Status {
         #[command(flatten)]
         to: To,
-    },
-    Versions,
-    /// Select an installed version, or the preceding version.
-    Rollback {
-        id: Option<String>,
     },
     Cache {
         #[command(subcommand)]
@@ -192,16 +180,44 @@ pub enum Commands {
         #[arg(long)]
         execute: bool,
     },
-    /// Create a checksum manifest for a locally assembled bundle.
-    Manifest {
-        #[arg(long)]
-        bundle: PathBuf,
-    },
     /// Verify bundle identity, contents and target.
     Verify {
         #[arg(long)]
         bundle: PathBuf,
     },
+}
+
+impl Commands {
+    /// Operation whose plan `--explain` prints before running; `None` when nothing is built here.
+    pub fn explained_operation(&self) -> Option<&'static str> {
+        match self {
+            Commands::Build(args) if args.platform.is_none() => Some("build"),
+            Commands::Package { bundle: None, .. } => Some("package"),
+            Commands::Deploy {
+                bundle: None,
+                rollback: None,
+                prebuilt: None,
+                ..
+            } => Some("deploy"),
+            Commands::Dev { .. } => Some("dev"),
+            Commands::Prepare => Some("prepare"),
+            _ => None,
+        }
+    }
+
+    /// Commands whose run report records a project source snapshot.
+    pub fn snapshots_source(&self) -> bool {
+        matches!(
+            self,
+            Commands::Prepare
+                | Commands::Deps
+                | Commands::Patch { .. }
+                | Commands::Check { .. }
+                | Commands::Lint { .. }
+                | Commands::Test { .. }
+                | Commands::Setup { .. }
+        )
+    }
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]

@@ -64,8 +64,7 @@ impl Hooks {
         self.changed(selection_changed);
     }
 
-    /// Claim one batch before dispatch so another update cannot schedule a
-    /// second callback while this batch is in flight. The adapter owns dispatch.
+    /// Claimed before dispatch so no second callback starts while this batch is in flight.
     pub fn take_batch(&mut self, app: &WindowApp) -> Option<Batch> {
         if !self.enabled {
             self.queued.clear();
@@ -82,8 +81,7 @@ impl Hooks {
         let mut tabs = Vec::with_capacity(ids.len().min(lua::MAX_HOOK_TABS));
         for id in ids.into_iter().take(lua::MAX_HOOK_TABS) {
             if let Some(tab) = self.queued.remove(&id) {
-                // Lua hooks keep their existing full-Tab wire shape, including
-                // default application fields that are absent from host facts.
+                // Lua hooks keep the full Tab wire shape, defaults included.
                 tabs.push((app.hook_token(Some(tab.id)), tab.into()));
             }
         }
@@ -95,3 +93,7 @@ impl Hooks {
         })
     }
 }
+
+#[cfg(test)]
+#[path = "../tests/hooks.rs"]
+mod tests;

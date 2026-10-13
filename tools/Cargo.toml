@@ -15,18 +15,26 @@ clap = { version = "4.6.7", features = ["derive", "env"] }
 clap_complete = { version = "4.6.11", features = ["unstable-dynamic"] }
 serde.workspace = true
 serde_json.workspace = true
-sha2 = "0.10"
+sha2 = "0.11.1"
+base16ct = { version = "1.0.0", features = ["alloc"] }
 walkdir = "2"
 tempfile = "3"
-fs2 = "0.4"
-toml_edit = "0.22"
+toml_edit = "0.25.17"
 toml = "1.1.6"
 gethostname = "1.1.0"
 flate2 = "1"
 tar = "0.4"
-zip = { version = "2", default-features = false, features = ["deflate-flate2", "flate2"] }
+zip = { version = "9.0.2", default-features = false, features = ["deflate-flate2"] }
 plist = "1"
 ctrlc = "3"
+notify = "8.2.0"
+notify-debouncer-full = "0.7.0"
+process-wrap = { version = "10.0.1", default-features = false, features = ["std", "process-group", "job-object", "creation-flags"] }
+which = "8.0.6"
+shlex = "2.0.1"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62.2", features = ["Win32_System_Threading"] }

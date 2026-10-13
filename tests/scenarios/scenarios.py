@@ -13,6 +13,7 @@ from pathlib import Path
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
+from tests.support.polling import check_process, log_diagnostics, wait_until
 from tests.support.probe import Probe, pane_shape
 
 
@@ -106,15 +107,6 @@ def geometry_scenarios(probe):
     }
 
 
-def wait_for_managed(probe, path, text, failure):
-    deadline = time.monotonic() + 5
-    while time.monotonic() < deadline:
-        if path.exists() and text in path.read_text(encoding="utf-8"):
-            return
-        probe.sample_for(0.05)
-    raise AssertionError(failure)
-
-
 def feature_scenarios(probe):
     state = probe.latest[probe.window]
     home = state["model"]["selected_space"]
@@ -158,7 +150,13 @@ def feature_scenarios(probe):
     probe.intent({"SetSetting": {"key": "width", "value": 300}})
     probe.wait(lambda state: state.get("model", {}).get("settings", {}).get("width") == 300)
     managed = probe.root / "vtabs_settings.lua"
-    wait_for_managed(probe, managed, "width = 300", "settings write did not reach the Lua file")
+    wait_until(
+        lambda: managed.exists() and "width = 300" in managed.read_text(encoding="utf-8"),
+        timeout=5,
+        message="settings write did not reach the Lua file",
+        check_live=lambda: check_process(probe.gui_process, "GUI"),
+        diagnostics=lambda: log_diagnostics(probe.root / "gui.log"),
+    )
     return {
         "empty_space": space,
         "idle_samples": len(idle),

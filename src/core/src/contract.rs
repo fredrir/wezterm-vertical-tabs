@@ -1,12 +1,12 @@
 //! Values exchanged with Lua; `gen-schema types` derives the plugin's annotations from them.
 use crate::{Intent, Model, Settings, Space, SpaceId, TabId, WindowPadding, settings};
-use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 use std::collections::BTreeMap;
 
 /// Sidebar surfaces opened by `vtabs.action`, besides domain intents.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum UiAction {
     Settings,
@@ -20,7 +20,8 @@ pub enum UiAction {
 }
 
 /// A fresh program in the quick terminal surface; ends when hidden unless `preserve` is set.
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct QuickProgram {
     /// The domain's default program when empty.
@@ -61,7 +62,8 @@ pub struct QuickProgram {
 }
 
 /// WezTerm's `SpawnTabDomain`.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum SpawnDomain {
     DefaultDomain,
     CurrentPaneDomain,
@@ -106,7 +108,8 @@ fn blur<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<u16>, D::Er
 }
 
 /// Argument to `vtabs.action` and `wezterm.vtabs.dispatch`.
-#[derive(Clone, Debug, PartialEq, Serialize, JsonSchema)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(untagged)]
 pub enum Action {
     Ui(UiAction),
@@ -149,13 +152,14 @@ impl<'de> Deserialize<'de> for Action {
 }
 
 /// Input to the window-level `theme` and `footer` hooks.
-#[derive(Clone, Debug, Serialize, JsonSchema)]
+#[derive(Clone, Debug, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct WindowContext {
     pub profile: String,
     pub selected_space: SpaceId,
     pub space: Space,
     pub active_tab: Option<TabId>,
-    #[schemars(with = "settings::Overrides")]
+    #[cfg_attr(feature = "schema", schemars(with = "settings::Overrides"))]
     pub settings: Settings,
 }
 

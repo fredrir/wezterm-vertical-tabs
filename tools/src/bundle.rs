@@ -11,6 +11,7 @@ use sha2::{Digest, Sha256};
 use walkdir::WalkDir;
 
 use crate::process::CommandSpec;
+use crate::source::inventory;
 use crate::state::{self, BuildMetadata, Context, Role};
 
 const MANIFEST: &str = "checksums.json";
@@ -69,7 +70,7 @@ pub fn hash_file(path: &Path) -> Result<String> {
         }
         hash.update(&buffer[..count]);
     }
-    Ok(format!("{:x}", hash.finalize()))
+    Ok(state::hex(hash.finalize()))
 }
 
 pub fn safe_relative(path: &Path) -> Result<()> {
@@ -170,8 +171,7 @@ fn inventory(root: &Path) -> Result<BTreeMap<String, FileDigest>> {
 }
 
 fn metadata(bundle: &Path) -> Result<BuildMetadata> {
-    let metadata: BuildMetadata =
-        state::read_json(&bundle.join("build.json"))?.context("bundle metadata missing")?;
+    let metadata = BuildMetadata::read(bundle)?.context("bundle metadata missing")?;
     ensure!(metadata.capability == 1, "bundle metadata incompatible");
     state::safe_id(&metadata.id)?;
     ensure!(
@@ -183,7 +183,7 @@ fn metadata(bundle: &Path) -> Result<BuildMetadata> {
     Ok(metadata)
 }
 
-pub fn write_manifest(bundle: &Path) -> Result<serde_json::Value> {
+fn write_manifest(bundle: &Path) -> Result<()> {
     let metadata = metadata(bundle)?;
     let manifest = BundleManifest {
         schema_version: 1,
@@ -192,8 +192,7 @@ pub fn write_manifest(bundle: &Path) -> Result<serde_json::Value> {
         source_digest: metadata.source_digest,
         files: inventory(bundle)?,
     };
-    state::write_json(&bundle.join(MANIFEST), &manifest)?;
-    Ok(serde_json::to_value(manifest)?)
+    state::write_json(&bundle.join(MANIFEST), &manifest)
 }
 
 pub fn verify(bundle: &Path) -> Result<BuildMetadata> {
@@ -356,8 +355,7 @@ pub fn package(
 
 /// Packages and signs binaries cross-compiled elsewhere; see `build::prebuilt`.
 pub fn package_prebuilt(ctx: &Context, prebuilt: &Path, output: &Path) -> Result<PathBuf> {
-    let mut metadata: BuildMetadata =
-        state::read_json(&prebuilt.join("build.json"))?.context("prebuilt metadata missing")?;
+    let mut metadata = BuildMetadata::read(prebuilt)?.context("prebuilt metadata missing")?;
     for path in metadata.artifacts.values_mut() {
         *path = prebuilt.join(&path);
     }
@@ -372,7 +370,7 @@ fn package_from(
     archive: bool,
 ) -> Result<PathBuf> {
     let _stage = ctx.runner.stage("bundle");
-    crate::source::verify_source(&ctx.root, metadata)?;
+    inventory::verify_source(&ctx.root, metadata)?;
     ensure!(
         metadata.role == Role::Desktop || cfg!(target_os = "linux"),
         "mux bundles are Linux-only"
@@ -516,10 +514,10 @@ fn package_from(
     drop(runtime_copy);
     {
         let _stage = ctx.runner.stage("copy-source");
-        crate::source::copy_source(&ctx.root, &bundle.join("source"))?;
-        crate::source::verify_source(&bundle.join("source"), metadata)?;
+        inventory::copy_source(&ctx.root, &bundle.join("source"))?;
+        inventory::verify_source(&bundle.join("source"), metadata)?;
     }
-    state::write_json(&bundle.join("build.json"), metadata)?;
+    metadata.write(bundle)?;
     let (marker_dir, relative_root, relative_tool) = if cfg!(target_os = "macos") {
         (
             &resources,
@@ -639,8 +637,7 @@ pub fn archive_bundle(destination: &Path) -> Result<PathBuf> {
         writer.into_inner()?.finish()?.sync_all()?;
     }
     if archive.exists() {
-        // An archive without its manifest is an interrupted publication. Its
-        // replacement is ready before removing it, including on Windows.
+        // An archive without its manifest is an interrupted publication; its replacement is ready.
         fs::remove_file(&archive)?;
     }
     fs::rename(&temporary, &archive)?;
@@ -656,8 +653,7 @@ pub fn archive_bundle(destination: &Path) -> Result<PathBuf> {
     Ok(archive)
 }
 
-/// Extract only regular files, directories and safe relative symlinks. Symlinks
-/// are created last so no archive entry can write through a previous link.
+/// Extracts regular files, directories and safe relative symlinks; links last so none is written through.
 pub fn extract_archive(archive: &Path, destination: &Path) -> Result<PathBuf> {
     fs::create_dir_all(destination)?;
     let mut links = Vec::new();
@@ -724,8 +720,7 @@ pub fn extract_archive(archive: &Path, destination: &Path) -> Result<PathBuf> {
             !path.exists(),
             "archive symlink conflicts with existing entry"
         );
-        // Link parents must be real directories. No earlier symlink may
-        // redirect creation of another archive entry outside this staging root.
+        // Link parents must be real directories so no earlier link redirects outside the staging root.
         let mut ancestor = destination.to_path_buf();
         for part in path
             .parent()

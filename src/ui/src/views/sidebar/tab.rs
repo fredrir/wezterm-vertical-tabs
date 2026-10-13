@@ -1,16 +1,18 @@
+use crate::SidebarUi;
 use crate::components::row::{Content, Row, RowLayout, Trailing, trailing_control};
 use crate::components::text_input::TextInput;
 use crate::components::{DROP_TINT, ICON_CELLS, NESTED_INSET, TRAILING_CELLS};
 use crate::element::ElementId;
 use crate::icons;
 use crate::input::{TextEditor, display_text};
+use crate::intent::UiIntent;
 use crate::runtime::canvas::{Canvas, RoundedSurface};
 use crate::views::sidebar::{Sidebar, View};
 use crate::views::{spans_machines, tab_machine, tab_name};
 use ratatui::layout::Rect;
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
-use vtabs_core::{Tab, TabId, TabPane};
+use vtabs_core::{Intent, Model, Tab, TabId, TabPane};
 
 const OCCLUDER_INSET: f32 = 6.0;
 
@@ -21,6 +23,45 @@ pub(crate) struct InlineRename {
     pub id: TabId,
     pub initial: String,
     pub editor: TextEditor,
+}
+
+impl SidebarUi {
+    pub(crate) fn start_rename(&mut self, model: &Model, id: TabId) {
+        let Some(tab) = model.tabs.get(&id) else {
+            return;
+        };
+        let initial =
+            tab_name(tab, model.home.as_deref(), model.settings.tab_title).unwrap_or_default();
+        let mut editor = TextEditor::new(&initial);
+        editor.select_all();
+        self.sidebar.rename = Some(InlineRename {
+            id,
+            initial,
+            editor,
+        });
+        self.focused = Some(ElementId::Editor);
+        self.pointer.drag = None;
+        self.pointer.press = None;
+        self.pointer.last_click = None;
+        self.reset_caret();
+        self.frame.dirty = true;
+    }
+
+    pub(crate) fn finish_rename(&mut self, commit: bool, intents: &mut Vec<UiIntent>) {
+        let Some(rename) = self.sidebar.rename.take() else {
+            return;
+        };
+        let title: String = rename.editor.text().trim().chars().take(512).collect();
+        if commit && title != rename.initial {
+            intents.push(UiIntent::Domain(Intent::RenameTab {
+                id: rename.id,
+                title,
+            }));
+        }
+        self.focused = None;
+        self.caret.stop();
+        self.frame.dirty = true;
+    }
 }
 
 #[derive(Debug, PartialEq, Eq)]

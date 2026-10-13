@@ -1,9 +1,8 @@
-//! Two separable GPU passes over the content below the quick terminal's layer.
-//! The final pass restores the unblurred scene outside its rounded frame.
+//! Two separable GPU blur passes below the quick terminal; the second restores outside its frame.
 use super::*;
 use crate::renderstate::RenderContext;
 use crate::termwindow::webgpu::WebGpuState;
-use std::cell::RefMut;
+use std::cell::{Cell, RefMut};
 use wgpu::util::DeviceExt;
 use window::glium::{self, Surface};
 
@@ -29,24 +28,123 @@ enum Backend {
     WebGpu(WebGpuBlur),
 }
 
-impl TermWindow {
-    pub(crate) fn prepare_terminal_blur(
+/// Layers below the quick terminal draw into the blur's scene, composited before the layers above.
+pub(crate) struct Backdrop<'a> {
+    blur: Option<(BlurParams, RefMut<'a, BackdropBlur>)>,
+    composited: Cell<bool>,
+}
+
+impl<'a> Backdrop<'a> {
+    fn new(blur: Option<(BlurParams, RefMut<'a, BackdropBlur>)>) -> Self {
+        Self {
+            blur,
+            composited: Cell::new(false),
+        }
+    }
+
+    fn below(&self, zindex: i8) -> bool {
+        if !self.composited.get() && zindex >= ZINDEX {
+            self.composited.set(true);
+        }
+        !self.composited.get()
+    }
+
+    /// Cleared alongside the frame.
+    pub(crate) fn gl_scene(
         &self,
-    ) -> anyhow::Result<Option<(BlurParams, RefMut<'_, BackdropBlur>)>> {
-        let (Some(ui), Some(config)) = (&self.ui_host, self.terminal_overlay_config()) else {
+    ) -> anyhow::Result<Option<glium::framebuffer::SimpleFrameBuffer<'_>>> {
+        let Some((_, blur)) = &self.blur else {
             return Ok(None);
+        };
+        let mut scene = blur.gl_scene()?;
+        scene.clear_color(0., 0., 0., 0.);
+        Ok(Some(scene))
+    }
+
+    pub(crate) fn gl_target<'t, 's>(
+        &self,
+        zindex: i8,
+        frame: &'t mut glium::Frame,
+        scene: &'t mut Option<glium::framebuffer::SimpleFrameBuffer<'s>>,
+    ) -> anyhow::Result<GlTarget<'t, 's>> {
+        let composited = self.composited.get();
+        if self.below(zindex) {
+            if let Some(scene) = scene {
+                return Ok(GlTarget::Scene(scene));
+            }
+        } else if !composited {
+            if let Some((params, blur)) = &self.blur {
+                blur.draw_gl(frame, *params)?;
+            }
+        }
+        Ok(GlTarget::Frame(frame))
+    }
+
+    /// Where a layer at `zindex` draws; the blur fills `view` when the first layer above begins.
+    pub(crate) fn view<'v>(
+        &'v self,
+        zindex: i8,
+        gpu: &WebGpuState,
+        encoder: &mut wgpu::CommandEncoder,
+        view: &'v wgpu::TextureView,
+        cleared: &mut bool,
+    ) -> &'v wgpu::TextureView {
+        let composited = self.composited.get();
+        let below = self.below(zindex);
+        match &self.blur {
+            Some((_, blur)) if below => blur.webgpu_scene(),
+            Some((params, blur)) if !composited => {
+                blur.draw_webgpu(gpu, encoder, view, *params);
+                *cleared = true;
+                view
+            }
+            _ => view,
+        }
+    }
+}
+
+pub(crate) enum GlTarget<'t, 's> {
+    Frame(&'t mut glium::Frame),
+    Scene(&'t mut glium::framebuffer::SimpleFrameBuffer<'s>),
+}
+
+impl GlTarget<'_, '_> {
+    pub(crate) fn draw<'a, 'b, V, I, U>(
+        &mut self,
+        vertices: V,
+        indices: I,
+        program: &glium::Program,
+        uniforms: &U,
+        parameters: &glium::DrawParameters<'_>,
+    ) -> Result<(), glium::DrawError>
+    where
+        V: glium::vertex::MultiVerticesSource<'b>,
+        I: Into<glium::index::IndicesSource<'a>>,
+        U: glium::uniforms::Uniforms,
+    {
+        match self {
+            Self::Frame(frame) => frame.draw(vertices, indices, program, uniforms, parameters),
+            Self::Scene(scene) => scene.draw(vertices, indices, program, uniforms, parameters),
+        }
+    }
+}
+
+impl TermWindow {
+    pub(crate) fn prepare_terminal_blur(&self) -> anyhow::Result<Backdrop<'_>> {
+        let (Some(ui), Some(config)) = (&self.ui_host, self.terminal_overlay_config()) else {
+            return Ok(Backdrop::new(None));
         };
         if !self.terminal_overlay_visible() || config.opacity >= 1. || config.blur <= 0. {
             // Release the full-window textures when no longer needed.
             ui.terminal.blur.borrow_mut().take();
-            return Ok(None);
+            return Ok(Backdrop::new(None));
         }
         let size = (
             self.dimensions.pixel_width as u32,
             self.dimensions.pixel_height as u32,
         );
         if size.0 == 0 || size.1 == 0 {
-            return Ok(None);
+            return Ok(Backdrop::new(None));
         }
         let context = &self.render_state.as_ref().unwrap().context;
         let mut cache = ui.terminal.blur.borrow_mut();
@@ -63,16 +161,16 @@ impl TermWindow {
         }
         let scale = self.dimensions.dpi as f32 / 96.;
         let bounds = self.terminal_overlay_bounds();
-        Ok(Some((
+        Ok(Backdrop::new(Some((
             BlurParams {
                 bounds,
                 radius: config.blur * scale,
-                corner: (12. * scale.max(1.))
+                corner: corner_radius(self.dimensions.dpi as u32)
                     .min(bounds.width / 2.)
                     .min(bounds.height / 2.),
             },
             RefMut::map(cache, |cache| cache.as_mut().unwrap()),
-        )))
+        ))))
     }
 }
 

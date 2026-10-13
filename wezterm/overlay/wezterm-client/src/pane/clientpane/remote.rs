@@ -1,17 +1,35 @@
-//! Requests the server behind this pane answers: its screen, location and close policy.
+//! The server behind this pane: its identity, tab, screen, location and close policy.
+use crate::domain::ClientInner;
 use crate::pane::clientpane::ClientPane;
 use crate::pane::renderable::hydrate_lines;
 use codec::{
     GetLines, GetPaneCloseInfo, GetPaneCloseInfoResponse, GetPaneLocation, GetPaneLocationResponse,
     GetPaneRenderableDimensions, SendKeyDownIfBusy,
 };
-use mux::pane::{CachePolicy, Pane};
+use mux::pane::{CachePolicy, Pane, PaneId};
+use mux::tab::TabId;
 use std::future::Future;
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use url::Url;
 use wezterm_term::{KeyCode, KeyModifiers, StableRowIndex};
 
 impl ClientPane {
+    pub(crate) fn update_remote_tab_id(&self, tab_id: TabId) {
+        self.remote_tab_id.store(tab_id, Ordering::Relaxed);
+    }
+
+    pub(crate) fn remote_tab_id(&self) -> TabId {
+        self.remote_tab_id.load(Ordering::Relaxed)
+    }
+
+    /// Whether this pane shows `remote_pane_id` of the server behind `inner`, by any route.
+    pub(crate) fn shows(&self, inner: &ClientInner, remote_pane_id: PaneId) -> bool {
+        self.remote_pane_id == remote_pane_id
+            && (self.client.local_domain_id == inner.local_domain_id
+                || (inner.server.is_some() && self.client.server == inner.server))
+    }
+
     /// Load the visible screen, directory and owner before this proxy enters the local split tree.
     pub(crate) async fn prefetch(&self, working_dir: Option<Url>) -> anyhow::Result<()> {
         let location = {
@@ -58,7 +76,7 @@ impl ClientPane {
         Ok(())
     }
 
-    /// The owner's latest answer, possibly for an earlier `cwd`; `None` while pending or from a stock server.
+    /// The owner's latest answer, maybe for an older `cwd`; `None` if pending or a stock server.
     pub fn location(&self) -> Option<GetPaneLocationResponse> {
         self.renderable.lock().inner.borrow().location.get()
     }

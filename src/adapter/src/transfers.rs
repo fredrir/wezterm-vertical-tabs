@@ -1,5 +1,4 @@
-//! Per-window spawn destinations and tab arrivals. The adapter executes mux work;
-//! this component owns the state retained between requests and host snapshots.
+//! Spawn destinations and tab arrivals kept between requests and host snapshots.
 use super::*;
 
 const PLACEMENT_TIMEOUT: Duration = Duration::from_secs(3);

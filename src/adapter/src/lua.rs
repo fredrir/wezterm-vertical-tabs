@@ -91,8 +91,7 @@ fn configuration_from_lua(lua: &Lua) -> anyhow::Result<Configuration> {
     Ok(lua.from_value(value)?)
 }
 
-/// Only configuration/new-window paths call this. Reading the current published Lua
-/// state means a failed reload cannot replace the last valid configuration.
+/// Reads the published Lua state, so a failed reload keeps the last valid configuration.
 pub fn configuration() -> Configuration {
     match config::run_immediate_with_lua_config(|lua| match lua {
         Some(lua) => configuration_from_lua(&lua),
@@ -190,7 +189,7 @@ fn parse_action(lua: &Lua, action: mlua::Value) -> mlua::Result<core::Action> {
     let value: Value = lua.from_value(plain(lua, action, 0)?)?;
     let action = serde_json::from_value(value).map_err(|error| invalid(error.to_string()))?;
     if let core::Action::Ui(core::UiAction::QuickProgram(program)) = &action {
-        super::terminal_program(program.as_ref().clone()).map_err(invalid)?;
+        super::terminal_program::quick_program(program.as_ref().clone()).map_err(invalid)?;
     }
     Ok(action)
 }
@@ -345,8 +344,7 @@ pub fn hooks(
     batch: Vec<(HookToken, core::Tab)>,
     context: WindowHookContext,
 ) {
-    // Completion belongs to the outer future: serialization, registry errors and timeout
-    // all clear the adapter's outstanding flag instead of permanently wedging its queue.
+    // Every outcome, errors and timeout included, completes so the hook queue never wedges.
     promise::spawn::spawn(async move {
         let operation = config::with_lua_config_on_main_thread(move |lua| async move {
             let Some(lua) = lua else {

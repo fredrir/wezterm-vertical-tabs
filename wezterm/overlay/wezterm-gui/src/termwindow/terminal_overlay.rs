@@ -8,28 +8,30 @@ use config::{
     DimensionContext, HorizontalWindowContentAlignment, VerticalWindowContentAlignment,
     WindowContentAlignment, WindowPadding,
 };
-use mux::Mux;
 use mux::domain::{Domain, DomainState};
 use mux::pane::{CachePolicy, CloseReason, Pane, PaneId};
 use mux::tab::{PositionedPane, TabId};
 use mux::window::WindowId as MuxWindowId;
+use mux::Mux;
 use portable_pty::CommandBuilder;
 use std::collections::HashSet;
 use std::time::{Duration, Instant};
 use std::{cell::RefCell, rc::Rc, sync::Arc};
 use wezterm_client::domain::ClientDomain;
 use wezterm_client::pane::ClientPane;
+use wezterm_term::color::ColorPalette;
 use wezterm_term::{KeyCode, KeyModifiers, TerminalSize};
-use window::{WindowOps, color::LinearRgba};
+use window::{color::LinearRgba, WindowOps};
 
 mod blur;
 mod frame;
+mod launch;
+mod layout;
 mod session;
 use session::{Open, Session, Slot};
 
-const SHELL_SIZE: (f32, f32) = (0.75, 0.75);
-/// Fewest columns and rows a size step leaves.
-const MIN_CELLS: (f32, f32) = (20., 5.);
+/// The quick terminal's render layer, above the sidebar UI's.
+const ZINDEX: i8 = 6;
 
 #[derive(Default)]
 pub(super) struct TerminalOverlay {
@@ -37,88 +39,10 @@ pub(super) struct TerminalOverlay {
     blur: RefCell<Option<blur::BackdropBlur>>,
 }
 
-/// The frame and content as painted this frame, against the layout they ease toward.
-#[derive(Clone, Copy, Debug)]
-struct Drawn {
-    layout: Layout,
-    size: (f32, f32),
-    painted: Layout,
-    origin: (f32, f32),
-    moving: bool,
-}
-
-/// `step` by `cells`, then by pixels until `grid` follows, since a percent padding grows with the frame.
-fn step_cells(
-    current: f32,
-    cells: f32,
-    cell: f32,
-    (minimum, maximum): (f32, f32),
-    grid: impl Fn(f32) -> f32,
-) -> f32 {
-    let mut target = step(current, cells * cell, minimum, maximum);
-    let want = grid(current) + cells;
-    while cells > 0. && grid(target) < want && target < maximum {
-        target = (target + 1.).min(maximum);
-    }
-    while cells < 0. && grid(target) > want && target > minimum {
-        target = (target - 1.).max(minimum);
-    }
-    target
-}
-
-/// `current` moved by `delta` within `minimum..=maximum`, never back past where it started.
-fn step(current: f32, delta: f32, minimum: f32, maximum: f32) -> f32 {
-    if delta > 0. {
-        (current + delta).min(maximum).max(current)
-    } else {
-        (current + delta).max(minimum).min(current)
-    }
-}
-
-enum Target {
-    Domain(Arc<dyn Domain>),
-    /// A client without `local_pane_layout` mirrors its server's tabs, so the server spawns
-    /// beside its pane in a hidden workspace.
-    Beside(Arc<dyn Domain>, PaneId),
-}
-
-struct Launch {
-    target: Target,
-    command: Option<CommandBuilder>,
-    cwd: Option<String>,
-}
-
 fn mirrored_tab(pane: &Arc<dyn Pane>) -> Option<TabId> {
     Mux::get()
         .resolve_pane_id(pane.pane_id())
         .map(|(_, _, tab)| tab)
-}
-
-/// Keyed by the server window, which outlives this GUI, so a restart finds what it left.
-fn quick_workspace(domain: &Arc<dyn Domain>, window: MuxWindowId, slot: Slot) -> String {
-    let window = domain
-        .downcast_ref::<ClientDomain>()
-        .and_then(|client| client.local_to_remote_window_id(window))
-        .map_or_else(|| format!("local{window}"), |id| id.to_string());
-    let kind = match slot {
-        Slot::Shell(_) => "shell",
-        Slot::Program(_) => "program",
-    };
-    format!("{}{window}:{kind}", mux::QUICK_WORKSPACE_PREFIX)
-}
-
-fn quick_panes(workspace: &str) -> Vec<Arc<dyn Pane>> {
-    let mux = Mux::get();
-    mux.iter_windows_in_workspace(workspace)
-        .into_iter()
-        .filter_map(|id| mux.get_window(id))
-        .flat_map(|window| {
-            window
-                .iter_tabs()
-                .filter_map(|tab| tab.get_active_pane())
-                .collect::<Vec<_>>()
-        })
-        .collect()
 }
 
 fn remove(pane: &Arc<dyn Pane>) {
@@ -143,110 +67,12 @@ fn term_config(
     Arc::new(term)
 }
 
-fn directory(url: &url::Url) -> Option<String> {
-    let mut local = url::Url::parse("file:///").ok()?;
-    local.set_path(url.path());
-    local
-        .to_file_path()
-        .ok()?
-        .into_os_string()
-        .into_string()
-        .ok()
-}
-
 fn border_width(dpi: u32) -> f32 {
     (dpi as f32 / 96.).max(1.)
 }
 
-/// Between the frame and the grid, read as the main window reads its own settings.
-#[derive(Clone, Copy, Debug)]
-struct Edges {
-    border: f32,
-    padding: WindowPadding,
-    alignment: WindowContentAlignment,
-}
-
-#[derive(Clone, Copy, Debug)]
-struct Layout {
-    frame: Bounds,
-    /// Inside the border and padding, which always hold the content.
-    inner: Bounds,
-    content: Bounds,
-    size: TerminalSize,
-}
-
-impl Layout {
-    fn new(
-        bounds: Bounds,
-        (width, height): (f32, f32),
-        edges: &Edges,
-        (cell_width, cell_height): (f32, f32),
-        dpi: u32,
-    ) -> Self {
-        // Whole device pixels keep glyphs and frame edges crisp.
-        let frame = Bounds {
-            x: (bounds.x + bounds.width * (1. - width) / 2.).round(),
-            y: (bounds.y + bounds.height * (1. - height) / 2.).round(),
-            width: (bounds.width * width).round(),
-            height: (bounds.height * height).round(),
-        };
-        let border = edges.border.min(frame.width / 4.).min(frame.height / 4.);
-        let (edge_width, edge_height) = (frame.width - 2. * border, frame.height - 2. * border);
-        let side = |dimension: config::Dimension, pixel_max: f32, pixel_cell: f32| {
-            let context = DimensionContext {
-                dpi: dpi as f32,
-                pixel_max,
-                pixel_cell,
-            };
-            dimension
-                .evaluate_as_pixels(context)
-                .min(pixel_max / 4.)
-                .max(0.)
-                .floor()
-        };
-        let padding = &edges.padding;
-        let left = border + side(padding.left, edge_width, cell_width);
-        let right = border + side(padding.right, edge_width, cell_width);
-        let top = border + side(padding.top, edge_height, cell_height);
-        let bottom = border + side(padding.bottom, edge_height, cell_height);
-        let inner = Bounds {
-            x: frame.x + left,
-            y: frame.y + top,
-            width: (frame.width - left - right).max(0.),
-            height: (frame.height - top - bottom).max(0.),
-        };
-        let cols = (inner.width / cell_width).floor().max(1.) as usize;
-        let rows = (inner.height / cell_height).floor().max(1.) as usize;
-        let width = cols as f32 * cell_width;
-        let height = rows as f32 * cell_height;
-        let x = match edges.alignment.horizontal {
-            HorizontalWindowContentAlignment::Left => inner.x,
-            HorizontalWindowContentAlignment::Center => inner.x + (inner.width - width) / 2.,
-            HorizontalWindowContentAlignment::Right => inner.x + inner.width - width,
-        };
-        let y = match edges.alignment.vertical {
-            VerticalWindowContentAlignment::Top => inner.y,
-            VerticalWindowContentAlignment::Center => inner.y + (inner.height - height) / 2.,
-            VerticalWindowContentAlignment::Bottom => inner.y + inner.height - height,
-        };
-        Self {
-            frame,
-            inner,
-            content: Bounds {
-                x: x.floor(),
-                y: y.floor(),
-                width,
-                height,
-            },
-            size: TerminalSize {
-                cols,
-                rows,
-                pixel_width: width as usize,
-                pixel_height: height as usize,
-                dpi,
-            },
-        }
-    }
+fn corner_radius(dpi: u32) -> f32 {
+    12. * border_width(dpi)
 }
 
 impl TermWindow {
@@ -268,80 +94,6 @@ impl TermWindow {
         let config = ui.provider.quick_terminal_config();
         let state = ui.terminal.session.borrow();
         Some(state.effective_config(config))
-    }
-
-    fn terminal_overlay_edges(&self) -> Edges {
-        let config = self.terminal_overlay_config();
-        let bordered = config.map_or(true, |config| config.border != TerminalBorder::None);
-        Edges {
-            border: if bordered {
-                border_width(self.dimensions.dpi as u32)
-            } else {
-                0.
-            },
-            padding: config
-                .map(|config| config.padding)
-                .unwrap_or_default()
-                .resolve(&self.config.window_padding),
-            alignment: self.config.window_content_alignment,
-        }
-    }
-
-    fn terminal_overlay_layout_of(&self, size: (f32, f32)) -> Layout {
-        Layout::new(
-            self.vtabs_geometry().ui_bounds(true),
-            size,
-            &self.terminal_overlay_edges(),
-            (
-                self.render_metrics.cell_size.width as f32,
-                self.render_metrics.cell_size.height as f32,
-            ),
-            self.dimensions.dpi as u32,
-        )
-    }
-
-    fn terminal_overlay_target(&self) -> (f32, f32) {
-        self.ui_host.as_ref().map_or(SHELL_SIZE, |ui| {
-            ui.terminal
-                .session
-                .borrow()
-                .size(ui.provider.quick_terminal_config().size)
-        })
-    }
-
-    fn terminal_overlay_layout(&self) -> Layout {
-        self.terminal_overlay_layout_of(self.terminal_overlay_target())
-    }
-
-    fn terminal_overlay_drawn(&self) -> Drawn {
-        let size = self.terminal_overlay_target();
-        let layout = self.terminal_overlay_layout_of(size);
-        let origin = (layout.content.x, layout.content.y);
-        let animated = self
-            .ui_host
-            .as_ref()
-            .and_then(|ui| ui.terminal.session.borrow().animate_to(size, origin));
-        let Some((drawn, (x, y))) = animated else {
-            return Drawn {
-                layout,
-                size,
-                painted: layout,
-                origin,
-                moving: false,
-            };
-        };
-        Drawn {
-            layout,
-            size: drawn,
-            painted: self.terminal_overlay_layout_of(drawn),
-            origin: (x.round(), y.round()),
-            moving: true,
-        }
-    }
-
-    /// The frame as painted, mid step included.
-    pub(super) fn terminal_overlay_bounds(&self) -> Bounds {
-        self.terminal_overlay_drawn().painted.frame
     }
 
     pub(super) fn terminal_overlay_visible(&self) -> bool {
@@ -369,45 +121,50 @@ impl TermWindow {
         self.ui_host.as_ref()?.terminal.session.borrow().shown()
     }
 
-    pub(super) fn terminal_overlay_content(&self, pane_id: PaneId) -> Option<Bounds> {
+    pub(super) fn terminal_overlay_shows(&self, pane_id: PaneId) -> bool {
+        self.terminal_overlay_pane()
+            .is_some_and(|pane| pane.pane_id() == pane_id)
+    }
+
+    /// The shown pane, or the overlay (such as copy mode) above it.
+    pub(super) fn terminal_overlay_active_pane(&self) -> Option<Arc<dyn Pane>> {
         let pane = self.terminal_overlay_pane()?;
-        let overlay = self
-            .pane_state(pane.pane_id())
-            .overlay
-            .as_ref()
-            .map(|overlay| overlay.pane.pane_id());
-        (pane.pane_id() == pane_id || overlay == Some(pane_id))
-            .then(|| self.terminal_overlay_layout().content)
+        let state = self.pane_state(pane.pane_id());
+        let overlay = state.overlay.as_ref().map(|overlay| overlay.pane.clone());
+        Some(overlay.unwrap_or(pane))
     }
 
-    pub(super) fn pane_padding_left_top(&self, pane_id: PaneId) -> (f32, f32) {
-        if let Some(bounds) = self.terminal_overlay_content(pane_id) {
-            let border = self.get_os_border();
-            (
-                bounds.x - border.left.get() as f32,
-                bounds.y - border.top.get() as f32,
-            )
-        } else {
-            self.padding_left_top()
+    /// The pane's palette, with the quick terminal's background while it shows the pane.
+    pub(super) fn terminal_overlay_palette(&self, pane: &Arc<dyn Pane>) -> ColorPalette {
+        let mut palette = pane.palette();
+        if self.terminal_overlay_content(pane.pane_id()).is_some() {
+            let config = self.terminal_overlay_config();
+            if let Some(color) = config.and_then(|config| config.background_color) {
+                palette.background = color.to_srgb();
+            }
         }
+        palette
     }
 
-    pub(super) fn positioned_terminal_overlay(&self) -> Option<PositionedPane> {
-        self.terminal_overlay_pane()?;
-        let pane = self.get_active_pane_or_overlay()?;
-        let size = self.terminal_overlay_layout().size;
-        Some(PositionedPane {
-            pane,
-            index: 0,
-            is_active: true,
-            is_zoomed: false,
-            left: 0,
-            top: 0,
-            width: size.cols,
-            height: size.rows,
-            pixel_width: size.pixel_width,
-            pixel_height: size.pixel_height,
-        })
+    /// Painted beneath the quick terminal, which takes their focus while it shows.
+    pub(super) fn panes_beneath_terminal_overlay(&self) -> Vec<PositionedPane> {
+        let mut panes = self.get_background_panes();
+        if self.terminal_overlay_visible() {
+            for pane in &mut panes {
+                pane.is_active = false;
+            }
+        }
+        panes
+    }
+
+    pub(super) fn terminal_overlay_focus_changed(&mut self, focused: bool) {
+        if !focused
+            && self
+                .terminal_overlay_config()
+                .is_some_and(|config| config.auto_hide)
+        {
+            self.hide_terminal_overlay();
+        }
     }
 
     pub(super) fn hide_terminal_overlay(&mut self) {
@@ -489,239 +246,6 @@ impl TermWindow {
         self.show_terminal_overlay(None);
     }
 
-    pub(super) fn toggle_terminal_program(&mut self, program: TerminalProgram) {
-        let shown = self.ui_host.as_ref().is_some_and(|ui| {
-            let state = ui.terminal.session.borrow();
-            state.showing(&program)
-        });
-        if shown {
-            self.hide_terminal_overlay();
-            return;
-        }
-        let reusable = self
-            .ui_host
-            .as_ref()
-            .is_some_and(|ui| ui.terminal.session.borrow().reusable(&program, alive));
-        let launch = if reusable {
-            None
-        } else {
-            match self.terminal_launch(&program.spawn) {
-                Ok(launch) => Some(launch),
-                Err(error) => {
-                    let error = format!("Quick terminal: {error:#}");
-                    log::warn!("{error}");
-                    self.vtabs_message_for(self.mux_window_id, Message::Error(error));
-                    return;
-                }
-            }
-        };
-        self.show_terminal_overlay(Some((program, launch)));
-    }
-
-    /// Resolved like a split of the active tab's pane; `Beside` falls back to any pane of the domain.
-    fn terminal_launch(&self, spawn: &SpawnCommand) -> anyhow::Result<Launch> {
-        let mux = Mux::get();
-        let current = mux
-            .get_active_tab_for_window(self.mux_window_id)
-            .and_then(|tab| tab.get_active_pane());
-        let mut spawn = spawn.clone();
-        if let Some(ui) = &self.ui_host {
-            ui.provider.prepare_command(&mut spawn);
-        }
-        let domain = mux
-            .resolve_spawn_tab_domain(current.as_ref().map(|pane| pane.pane_id()), &spawn.domain)?;
-        let current = current.filter(|pane| pane.domain_id() == domain.domain_id());
-        let explicit = spawn.cwd.map(|cwd| cwd.to_string_lossy().into_owned());
-        let (target, cwd) = if let Some(client) = domain
-            .downcast_ref::<ClientDomain>()
-            .filter(|client| !client.local_pane_layout())
-        {
-            let pane = current
-                .or_else(|| {
-                    mux.iter_panes()
-                        .into_iter()
-                        .find(|pane| pane.domain_id() == domain.domain_id())
-                })
-                .with_context(|| format!("no pane open in {}", domain.domain_name()))?;
-            let pane = pane.pane_id();
-            client.validate_spawn_beside_pane(pane)?;
-            (Target::Beside(domain, pane), explicit)
-        } else {
-            let cwd = explicit.or_else(|| {
-                current
-                    .and_then(|pane| pane.get_current_working_dir(CachePolicy::FetchImmediate))
-                    .and_then(|url| directory(&url))
-            });
-            (Target::Domain(domain), cwd)
-        };
-        let (args, env) = (spawn.args, spawn.set_environment_variables);
-        let command = (args.is_some() || !env.is_empty()).then(|| {
-            let mut command = args
-                .map(|args| CommandBuilder::from_argv(args.into_iter().map(Into::into).collect()))
-                .unwrap_or_else(CommandBuilder::new_default_prog);
-            for (key, value) in env {
-                command.env(key, value);
-            }
-            command
-        });
-        Ok(Launch {
-            target,
-            command,
-            cwd,
-        })
-    }
-
-    /// A program without a launch reopens its kept command.
-    fn show_terminal_overlay(&mut self, program: Option<(TerminalProgram, Option<Launch>)>) {
-        let Some(window) = self.window.clone() else {
-            return;
-        };
-        let Some(ui) = self.ui_host.as_ref() else {
-            return;
-        };
-        let preserve_shell = ui.provider.quick_terminal_config().preserve_shell;
-        let state_ref = ui.terminal.session.clone();
-        if let Some(pane) = self.get_active_pane_or_overlay() {
-            pane.focus_changed(false);
-        }
-        self.current_mouse_capture = None;
-        self.current_mouse_buttons.clear();
-        self.dragging = None;
-        let (program, launch) = match program {
-            Some((spec, launch)) => (Some((spec, launch.is_some())), launch),
-            None => (None, None),
-        };
-        let opened = state_ref.borrow_mut().show(program, preserve_shell, alive);
-        for pane in &opened.discarded {
-            remove(pane);
-        }
-        window.invalidate();
-        match opened.next {
-            Open::Shell(pane) => {
-                pane.focus_changed(true);
-                return;
-            }
-            Open::Program { pane, colors } => {
-                if let Some(pane) = pane {
-                    pane.set_config(term_config(&self.config, colors.as_ref()));
-                    pane.focus_changed(true);
-                }
-                return;
-            }
-            Open::LaunchProgram(slot) => {
-                let launch = launch.expect("program launch was resolved before opening");
-                self.spawn_terminal_pane(&state_ref, slot, launch);
-                return;
-            }
-            Open::Pending => return,
-            Open::ResolveShell => {}
-        }
-        let local = SpawnCommand {
-            domain: SpawnTabDomain::DomainName("local".into()),
-            ..Default::default()
-        };
-        let launch = self
-            .terminal_launch(&SpawnCommand::default())
-            .or_else(|_| self.terminal_launch(&local));
-        let launch = match launch {
-            Ok(launch) => launch,
-            Err(error) => {
-                log::warn!("Quick terminal: {error:#}");
-                return;
-            }
-        };
-        if let Target::Beside(domain, _) = &launch.target {
-            let workspace = quick_workspace(domain, self.mux_window_id, Slot::Shell(0));
-            let panes = quick_panes(&workspace);
-            if !preserve_shell {
-                panes.iter().for_each(remove);
-            } else if let Some(pane) = panes.into_iter().next() {
-                pane.set_config(Arc::new(config::TermConfig::with_config(
-                    self.config.clone(),
-                )));
-                pane.focus_changed(true);
-                state_ref.borrow_mut().restore_shell(pane);
-                return;
-            }
-        }
-        let slot = state_ref.borrow_mut().launch_shell();
-        self.spawn_terminal_pane(&state_ref, slot, launch);
-    }
-
-    /// A pane arriving after its slot stopped wanting it is removed.
-    fn spawn_terminal_pane(&self, state: &Rc<RefCell<Session>>, slot: Slot, launch: Launch) {
-        let Some(window) = self.window.clone() else {
-            return;
-        };
-        let state = Rc::downgrade(state);
-        let size = self.terminal_overlay_layout().size;
-        let config = self.config.clone();
-        let window_id = self.mux_window_id;
-        let endpoint = super::ui_host::WindowEndpoint::new(window.clone(), window_id);
-        promise::spawn::spawn(async move {
-            let Launch {
-                target,
-                command,
-                cwd,
-            } = launch;
-            let result = async {
-                match target {
-                    Target::Domain(domain) => {
-                        if domain.state() == DomainState::Detached {
-                            domain.attach(Some(window_id)).await?;
-                        }
-                        domain.spawn_pane(size, command, cwd).await
-                    }
-                    Target::Beside(domain, pane_id) => {
-                        let client = domain
-                            .downcast_ref::<ClientDomain>()
-                            .ok_or_else(|| anyhow::anyhow!("not a client domain"))?;
-                        let workspace = quick_workspace(&domain, window_id, slot);
-                        // Programs a quit GUI couldn't end would otherwise outlive it.
-                        if state.upgrade().is_some_and(|state| {
-                            state.borrow_mut().sweep_workspace(slot, &workspace)
-                        }) {
-                            quick_panes(&workspace).iter().for_each(remove);
-                        }
-                        client
-                            .spawn_beside_pane(pane_id, size, command, cwd, workspace)
-                            .await
-                    }
-                }
-            }
-            .await;
-            let Some(state) = state.upgrade() else {
-                if let Ok(pane) = result {
-                    remove(&pane);
-                }
-                return;
-            };
-            let mut state = state.borrow_mut();
-            let pane = result.as_ref().ok().cloned();
-            if !state.complete(slot, pane) {
-                if let Ok(pane) = result {
-                    remove(&pane);
-                }
-                return;
-            }
-            match result {
-                Ok(pane) => {
-                    pane.set_config(term_config(&config, state.colors(slot).as_ref()));
-                    pane.focus_changed(
-                        state
-                            .shown()
-                            .is_some_and(|shown| shown.pane_id() == pane.pane_id()),
-                    );
-                }
-                Err(error) => {
-                    endpoint.send(Message::Error(format!("Quick terminal: {error:#}")));
-                }
-            }
-            window.invalidate();
-        })
-        .detach();
-    }
-
     pub(super) fn resize_terminal_overlay(&mut self) {
         if let Some(ui) = &self.ui_host {
             let config = ui.provider.quick_terminal_config();
@@ -773,83 +297,6 @@ impl TermWindow {
         }
     }
 
-    /// `AdjustPaneSize` in cells; Right and Down grow, and the frame stays centered.
-    pub(super) fn adjust_terminal_overlay(&mut self, direction: PaneDirection, amount: usize) {
-        let (horizontal, sign) = match direction {
-            PaneDirection::Right => (true, 1.),
-            PaneDirection::Left => (true, -1.),
-            PaneDirection::Down => (false, 1.),
-            PaneDirection::Up => (false, -1.),
-            PaneDirection::Next | PaneDirection::Prev => return,
-        };
-        let Some(ui) = &self.ui_host else {
-            return;
-        };
-        let bounds = self.vtabs_geometry().ui_bounds(true);
-        let drawn = self.terminal_overlay_drawn();
-        let (frame, inner) = (drawn.layout.frame, drawn.layout.inner);
-        let metrics = &self.render_metrics.cell_size;
-        let (extent, current, padding, cell, minimum_cells) = if horizontal {
-            let padding = frame.width - inner.width;
-            (
-                bounds.width,
-                frame.width,
-                padding,
-                metrics.width as f32,
-                MIN_CELLS.0,
-            )
-        } else {
-            let padding = frame.height - inner.height;
-            (
-                bounds.height,
-                frame.height,
-                padding,
-                metrics.height as f32,
-                MIN_CELLS.1,
-            )
-        };
-        if extent <= 0. {
-            return;
-        }
-        let size = self.terminal_overlay_target();
-        let grid = |frame: f32| {
-            let size = if horizontal {
-                (frame / extent, size.1)
-            } else {
-                (size.0, frame / extent)
-            };
-            let layout = self.terminal_overlay_layout_of(size);
-            let cells = if horizontal {
-                layout.size.cols
-            } else {
-                layout.size.rows
-            };
-            cells as f32
-        };
-        let cells = sign * amount as f32;
-        let target = step_cells(
-            current,
-            cells,
-            cell,
-            (minimum_cells * cell + padding, extent),
-            grid,
-        );
-        if target == current {
-            return;
-        }
-        let duration = ui.provider.quick_terminal_config().transition;
-        ui.terminal.session.borrow_mut().resize(
-            horizontal,
-            target / extent,
-            (drawn.size, drawn.origin),
-            duration,
-            Instant::now(),
-        );
-        if let Some(window) = &self.window {
-            window.invalidate();
-        }
-    }
-
     pub(crate) fn inspect_terminal_overlay(&self) -> serde_json::Value {
         let layout = self.terminal_overlay_layout();
         let (pane, program, kept) = self
@@ -858,106 +305,20 @@ impl TermWindow {
             .map_or((None, None, Vec::new()), |ui| {
                 ui.terminal.session.borrow().pane_ids()
             });
+        let rect = |b: Bounds| {
+            serde_json::json!({
+                "x": b.x, "y": b.y, "width": b.width, "height": b.height,
+            })
+        };
         serde_json::json!({
             "visible": self.terminal_overlay_visible(),
             "pane": pane,
             "program": program,
             "kept": kept,
-            "bounds": {"x": layout.frame.x, "y": layout.frame.y, "width": layout.frame.width, "height": layout.frame.height},
-            "content": {"x": layout.content.x, "y": layout.content.y, "width": layout.content.width, "height": layout.content.height},
+            "bounds": rect(layout.frame),
+            "content": rect(layout.content),
             "cols": layout.size.cols, "rows": layout.size.rows,
         })
-    }
-
-    pub(super) fn paint_terminal_overlay(&mut self) -> anyhow::Result<()> {
-        if !self.terminal_overlay_visible() {
-            return Ok(());
-        }
-        let drawn = self.terminal_overlay_drawn();
-        let (layout, painted) = (drawn.layout, drawn.painted);
-        let Some(config) = self.terminal_overlay_config() else {
-            return Ok(());
-        };
-        if drawn.moving {
-            let interval = Duration::from_secs(1) / self.config.max_fps.clamp(1, 1000) as u32;
-            self.update_next_frame_time(Some(Instant::now() + interval));
-        }
-        let layer = self.render_state.as_ref().unwrap().layer_for_zindex(6)?;
-        let mut layers = layer.quad_allocator();
-        self.filled_rectangle(
-            &mut layers,
-            0,
-            euclid::rect(
-                0.,
-                0.,
-                self.dimensions.pixel_width as f32,
-                self.dimensions.pixel_height as f32,
-            ),
-            LinearRgba::with_components(0., 0., 0., 0.2),
-        )?;
-        let background = config
-            .background_color
-            .unwrap_or_else(|| {
-                self.terminal_overlay_pane()
-                    .map(|pane| pane.palette().background)
-                    .unwrap_or(self.palette().background)
-                    .to_linear()
-            })
-            .mul_alpha(config.opacity);
-        let scale = border_width(self.dimensions.dpi as u32);
-        let border_color = match config.border {
-            TerminalBorder::None => None,
-            TerminalBorder::Palette => {
-                let foreground = self.terminal_overlay_pane().map_or_else(
-                    || self.palette().foreground,
-                    |pane| pane.palette().foreground,
-                );
-                Some(foreground.to_linear().mul_alpha(0.22))
-            }
-            TerminalBorder::Color(color) => Some(color),
-        };
-        let border = if let Some(color) = border_color {
-            self.paint_terminal_border(&mut layers, painted.frame, scale, color)?;
-            scale
-        } else {
-            0.
-        };
-        self.paint_vtabs_rounded_fill(
-            &mut layers,
-            Bounds {
-                x: painted.frame.x + border,
-                y: painted.frame.y + border,
-                width: (painted.frame.width - 2. * border).max(0.),
-                height: (painted.frame.height - 2. * border).max(0.),
-            },
-            12. * scale - border,
-            background,
-        )?;
-        if let Some(pos) = self.positioned_terminal_overlay() {
-            self.update_text_cursor(&pos);
-            if self.focused.is_some() {
-                pos.pane.advise_focus();
-            }
-            let mut quads = HeapQuadAllocator::default();
-            self.paint_pane(&pos, &mut TripleLayerQuadAllocator::Heap(&mut quads))?;
-            let x = self.dimensions.pixel_width as f32 / 2.;
-            let y = self.dimensions.pixel_height as f32 / 2.;
-            let content = layout.content;
-            let offset = (drawn.origin.0 - content.x, drawn.origin.1 - content.y);
-            let inner = painted.inner;
-            quads.apply_transformed(
-                &mut layers,
-                offset,
-                1.,
-                (
-                    drawn.origin.0.max(inner.x) - x,
-                    drawn.origin.1.max(inner.y) - y,
-                    (drawn.origin.0 + content.width).min(inner.x + inner.width) - x,
-                    (drawn.origin.1 + content.height).min(inner.y + inner.height) - y,
-                ),
-            );
-        }
-        Ok(())
     }
 }
 

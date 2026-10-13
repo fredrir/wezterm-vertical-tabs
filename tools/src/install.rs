@@ -96,12 +96,10 @@ pub fn current_bundle(root: &Path, promote: bool) -> Result<PathBuf> {
         );
         activate(root, &pending)?;
     }
-    let active = pointer(root, "active")?.context("bundle not installed; run just install")?;
+    let active = pointer(root, "active")?.context("bundle not installed; run just deploy")?;
     let bundle = root.join("versions").join(&active.id);
-    // Hashing the complete source distribution on every launch would delay
-    // startup. Installation and promotion verify it; launch checks essentials.
-    let metadata: state::BuildMetadata =
-        state::read_json(&bundle.join("build.json"))?.context("active bundle missing")?;
+    // Installation and promotion verify every file; launch checks essentials only.
+    let metadata = state::BuildMetadata::read(&bundle)?.context("active bundle missing")?;
     ensure!(
         metadata.id == active.id && metadata.capability == 1,
         "active bundle identity mismatch"
@@ -132,7 +130,7 @@ pub fn rollback(root: &Path, id: Option<&str>) -> Result<PathBuf> {
     Ok(path)
 }
 
-pub fn versions(root: &Path) -> Result<Value> {
+fn versions(root: &Path) -> Result<Value> {
     let active = pointer(root, "active")?.map(|value| value.id);
     let pending = pointer(root, "pending")?.map(|value| value.id);
     let previous = pointer(root, "previous")?.map(|value| value.id);
@@ -146,8 +144,7 @@ pub fn versions(root: &Path) -> Result<Value> {
                 continue;
             }
             state::safe_id(&id)?;
-            let metadata: Option<state::BuildMetadata> =
-                state::read_json(&entry.path().join("build.json"))?;
+            let metadata = state::BuildMetadata::read(&entry.path())?;
             versions.push(json!({"id":id,"path":entry.path(),"active":active.as_deref()==Some(&id),"pending":pending.as_deref()==Some(&id),"previous":previous.as_deref()==Some(&id),"metadata":metadata}));
         }
     }
@@ -187,10 +184,6 @@ pub(crate) fn atomic_text(path: &Path, text: &str, executable: bool) -> Result<(
     temporary.as_file().sync_all()?;
     temporary.persist(path)?;
     Ok(())
-}
-
-fn shell_quote(value: &str) -> String {
-    format!("'{}'", value.replace('\'', "'\\''"))
 }
 
 fn desktop_quote(value: &str) -> String {
@@ -237,9 +230,7 @@ fn install_entry(root: &Path, bundle: &Path) -> Result<()> {
         temporary.as_file().sync_all()?;
         temporary.persist_noclobber(&dispatcher)?;
     }
-    // The stable dispatcher is intentionally installed once. Every launch
-    // delegates to the current immutable version, including on Windows where
-    // replacing an executing .exe would fail.
+    // Installed once and never replaced, since Windows cannot replace a running .exe.
     if cfg!(windows) {
         atomic_text(
             &root.join("wez-vtabs.cmd"),
@@ -249,7 +240,7 @@ fn install_entry(root: &Path, bundle: &Path) -> Result<()> {
     } else {
         let script = format!(
             "#!/bin/sh\nexec {} launch -- \"$@\"\n",
-            shell_quote(&dispatcher.to_string_lossy())
+            shlex::try_quote(&dispatcher.to_string_lossy())?
         );
         atomic_text(&root.join("wez-vtabs"), &script, true)?;
         if cfg!(target_os = "macos") {
@@ -299,7 +290,7 @@ pub fn managed_context(executable: &Path) -> Result<Option<(PathBuf, PathBuf)>> 
         return Ok(None);
     };
     if directory.join("active.json").is_file() || directory.join("pending.json").is_file() {
-        // First staged installs do not have an active version until launched.
+        // A first staged install has no active version until launched.
         let active = pointer(directory, "active")?
             .or(pointer(directory, "pending")?)
             .context("installed version missing")?;
@@ -334,8 +325,7 @@ pub fn managed_context(executable: &Path) -> Result<Option<(PathBuf, PathBuf)>> 
             .context("install root missing")?
             .to_path_buf()
     } else {
-        // Uninstalled runtime tools still know their source; retain the configured
-        // install location rather than enabling implicit updates for dev bundles.
+        // Uninstalled dev bundles keep the configured install root and never update implicitly.
         return Ok(None);
     };
     Ok(Some((bundle.join("source"), install)))
@@ -362,22 +352,8 @@ pub fn launch(ctx: &Context, arguments: &[String]) -> Result<i32> {
     if !offline {
         crate::update::queue_daily_update(&bundle, &ctx.install)?;
     }
-    let leases = ctx.install.join("leases");
-    fs::create_dir_all(&leases)?;
-    let marker = leases.join(format!(
-        "{}.lock",
-        bundle
-            .file_name()
-            .context("version missing")?
-            .to_string_lossy()
-    ));
-    let lease = fs::OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .read(true)
-        .write(true)
-        .open(marker)?;
-    fs2::FileExt::lock_shared(&lease)?;
+    let version = bundle.file_name().context("version missing")?;
+    let lease = Lock::shared(&state::lease(&ctx.install, &version.to_string_lossy()))?;
     let args = if arguments.is_empty() {
         vec!["start".to_owned()]
     } else {

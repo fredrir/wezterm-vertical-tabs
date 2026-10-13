@@ -38,8 +38,7 @@ pub struct GetPaneCloseInfoResponse {
     pub process: String,
 }
 
-/// The owner sends the key only while something runs in the pane, judged as a close is;
-/// handled in arrival order, so it stays ahead of the `SendKeyDown`s that follow.
+/// The owner sends the key only while the pane is busy, ahead of later `SendKeyDown`s.
 #[derive(Deserialize, Serialize, PartialEq, Debug)]
 pub struct SendKeyDownIfBusy {
     pub pane_id: PaneId,
@@ -51,8 +50,7 @@ pub struct SendKeyDownIfBusyResponse {
     pub sent: bool,
 }
 
-/// Only the machine that owns a pane can see its host, home and Git work tree.
-/// Relayed hop by hop; stock servers reject it and keep upstream labels.
+/// Answered by the pane's owning machine, relayed hop by hop; stock servers reject it.
 #[derive(Deserialize, Serialize, PartialEq, Debug)]
 pub struct GetPaneLocation {
     /// `None` asks about the server itself.
@@ -81,8 +79,7 @@ pub struct ListAdoptablePanesResponse {
     pub panes: Vec<PaneEntry>,
 }
 
-/// Remote panes a mux could show, once per server: through `domains` first, attached when
-/// needed, then through every connected `local_pane_layout` domain.
+/// Remote panes a mux could show, once per server: `domains` first, then connected ones.
 #[derive(Deserialize, Serialize, PartialEq, Debug)]
 pub struct FindAdoptablePanes {
     pub domains: Vec<String>,

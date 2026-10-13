@@ -2,7 +2,7 @@
 use super::{Command, Input, Message, Navigation, SpawnContext, TerminalKey};
 use crate::termwindow::{TermWindow, TermWindowNotif};
 use config::keyassignment::SpawnCommand;
-use mux::{Mux, tab::TabId};
+use mux::{tab::TabId, Mux};
 use std::time::Instant;
 use window::{KeyEvent, WindowOps};
 
@@ -158,18 +158,19 @@ impl TermWindow {
         }
         self.vtabs_relayout(before);
     }
+    /// False only without a sidebar host, leaving WezTerm's launcher overlay.
     pub fn vtabs_open_launcher(
         &mut self,
-        mut args: config::keyassignment::LauncherActionArgs,
+        args: &config::keyassignment::LauncherActionArgs,
         initial_choice_idx: usize,
-    ) {
+    ) -> bool {
+        if self.ui_host.is_none() {
+            return false;
+        }
         self.hide_terminal_overlay();
         self.vtabs_sync();
-        let Some(window) = self.window.clone() else {
-            return;
-        };
-        let Some(ui) = self.ui_host.as_ref() else {
-            return;
+        let (Some(window), Some(ui)) = (self.window.clone(), self.ui_host.as_ref()) else {
+            return true;
         };
         let visible_tabs = ui.projection.tabs.clone();
         let mux_window_id = self.mux_window_id;
@@ -178,13 +179,13 @@ impl TermWindow {
             .map(|pane| pane.domain_id())
             .unwrap_or_else(|| Mux::get().default_domain().domain_id());
         let config = self.config.clone();
+        let mut args = args.clone();
         args.alphabet
             .get_or_insert_with(|| config.launcher_alphabet.clone());
         promise::spawn::spawn(async move {
-            let entries =
-                crate::overlay::launcher::LauncherArgs::new(args.flags, visible_tabs, domain)
-                    .await
-                    .build_entries(&config, initial_choice_idx);
+            let entries = super::launcher::LauncherArgs::new(args.flags, visible_tabs, domain)
+                .await
+                .build_entries(&config, initial_choice_idx);
             window.notify(TermWindowNotif::Apply(Box::new(move |tw| {
                 // Domain labels may run Lua; the window can switch workspaces while awaiting them.
                 if tw.mux_window_id != mux_window_id {
@@ -200,6 +201,7 @@ impl TermWindow {
             })));
         })
         .detach();
+        true
     }
     pub fn vtabs_message_for(&mut self, window_id: usize, message: Message) {
         if window_id == self.mux_window_id {
@@ -220,6 +222,26 @@ impl TermWindow {
             ui.needs_commit = true;
         }
         self.vtabs_relayout(before);
+    }
+    /// Accelerators run before terminal bindings consume the raw key; a focused sidebar keeps it.
+    pub fn vtabs_raw_key(&mut self, key: &window::RawKeyEvent) -> bool {
+        if self.vtabs_input(Input::RawKey(key)) {
+            key.set_handled();
+            return true;
+        }
+        !self.terminal_overlay_visible()
+            && self
+                .ui_host
+                .as_ref()
+                .map_or(false, |ui| ui.provider.keyboard_focus())
+    }
+    pub fn vtabs_mouse(&mut self, event: &window::MouseEvent) -> bool {
+        let geometry = self.vtabs_geometry();
+        self.vtabs_input(Input::Mouse(event, geometry)) || self.vtabs_terminal_hidden()
+    }
+    /// A page or an empty sidebar covers the terminal, and no quick terminal shows.
+    pub fn vtabs_terminal_hidden(&self) -> bool {
+        self.vtabs_content_hidden() && !self.terminal_overlay_visible()
     }
     pub fn vtabs_input(&mut self, input: Input<'_>) -> bool {
         self.vtabs_sync();

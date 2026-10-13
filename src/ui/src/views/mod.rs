@@ -1,5 +1,3 @@
-mod keybinds;
-pub(crate) mod launcher;
 pub(crate) mod settings_page;
 pub(crate) mod sidebar;
 

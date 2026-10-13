@@ -7,14 +7,13 @@ import subprocess
 import time
 from pathlib import Path
 
-from tests.support.headless import HeadlessDisplay
 from tests.support.polling import check_process, log_diagnostics, wait_until
 from tests.support.probe import Probe
 
 
 class GuiInput:
-    def __init__(self, probe: Probe, display: HeadlessDisplay, output: Path):
-        self.probe, self.display, self.output = probe, display, output
+    def __init__(self, probe: Probe, output: Path):
+        self.probe, self.display, self.output = probe, probe.display, output
         self.window = None
         self.captures = []
 
@@ -127,31 +126,29 @@ class GuiInput:
         self.captures.append(str(path))
         return path
 
-    def terminal_text_pixels(self, capture):
-        state = self.state()
-        cell = state["model"]["grid"]
-        content = state["content"]
-        x = round(content["x"] + 2 * cell["cell_width"])
-        y = round(content["y"] + cell["cell_height"])
-        width, height = round(18 * cell["cell_width"]), round(cell["cell_height"])
+    def pixels(self, capture, x, y, width=1, height=1):
         command = shutil.which("magick") or shutil.which("convert")
         if command is None:
-            raise RuntimeError("ImageMagick is required for terminal rendering checks")
-        pixels = subprocess.run(
-            [
-                command,
-                str(capture),
-                "-crop",
-                f"{width}x{height}+{x}+{y}",
-                "-depth",
-                "8",
-                "rgb:-",
-            ],
+            raise RuntimeError("ImageMagick is required for rendering checks")
+        return subprocess.run(
+            [command, capture, "-crop", f"{width}x{height}+{x}+{y}", "-depth", "8", "rgb:-"],
             env=self.display.env,
             check=True,
             capture_output=True,
             timeout=10,
         ).stdout
+
+    def terminal_text_pixels(self, capture):
+        state = self.state()
+        cell = state["model"]["grid"]
+        content = state["content"]
+        pixels = self.pixels(
+            capture,
+            round(content["x"] + 2 * cell["cell_width"]),
+            round(content["y"] + cell["cell_height"]),
+            round(18 * cell["cell_width"]),
+            round(cell["cell_height"]),
+        )
         assert len(set(pixels)) > 8, "Terminal fixture text is not visible"
         return pixels
 

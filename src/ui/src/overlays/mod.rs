@@ -1,13 +1,19 @@
-pub(crate) mod colors;
+mod color_picker;
+mod colors;
+pub(crate) mod command_palette;
+mod context_menus;
+pub(crate) mod dialog;
 mod forms;
-pub(crate) mod menus;
+mod keybinds;
+pub(crate) mod launcher;
+pub(crate) mod menu;
 
 use crate::SidebarUi;
 use crate::actions::Action;
 use crate::components::list;
 use crate::element::{ElementId, EntityRef};
 use crate::input::TextEditor;
-use crate::views::launcher::Launcher;
+use launcher::Launcher;
 use ratatui::layout::Rect;
 use vtabs_core::{Model, SpaceId, TabId};
 

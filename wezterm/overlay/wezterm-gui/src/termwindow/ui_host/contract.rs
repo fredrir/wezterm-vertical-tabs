@@ -27,7 +27,6 @@ pub struct RoundedSurface {
 }
 pub struct Snapshot {
     pub revision: u64,
-    pub window_id: usize,
     pub tabs: Vec<Arc<mux::tab::Tab>>,
     /// Tabs whose bell rang since they were last active.
     pub bells: HashSet<TabId>,
@@ -133,7 +132,7 @@ pub enum Command {
     ToggleTerminalProgram(TerminalProgram),
     OpenCommandPalette,
     RunPaletteCommand(crate::commands::ExpandedCommand),
-    RunLauncherEntry(crate::overlay::launcher::Entry),
+    RunLauncherEntry(super::launcher::Entry),
     Activate(TabId),
     Close(TabId, bool),
     Spawn(SpawnCommand, bool),
@@ -203,7 +202,7 @@ pub trait Provider {
     fn open_launcher(
         &mut self,
         args: config::keyassignment::LauncherActionArgs,
-        entries: crate::overlay::launcher::LauncherEntries,
+        entries: super::launcher::LauncherEntries,
     );
     fn input(&mut self, input: Input<'_>) -> bool;
     /// `escape` is what the shown pane's settings make of an unmodified Escape.

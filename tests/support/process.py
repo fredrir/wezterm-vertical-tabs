@@ -38,6 +38,22 @@ def stop_process(process: subprocess.Popen, *, timeout_seconds: float = 5) -> No
     _stopped_processes.add(process)
 
 
+def spawn_logged(
+    command: Sequence[str | Path], log: Path, *, env: Mapping[str, str], **options
+) -> subprocess.Popen:
+    """Start an owned session whose output appends to `log`; the child keeps the only handle."""
+    with log.open("ab") as output:
+        return subprocess.Popen(
+            [str(argument) for argument in command],
+            env=env,
+            stdin=subprocess.DEVNULL,
+            stdout=output,
+            stderr=subprocess.STDOUT,
+            start_new_session=os.name != "nt",
+            **options,
+        )
+
+
 async def run_process(
     command: Sequence[str | Path],
     *,

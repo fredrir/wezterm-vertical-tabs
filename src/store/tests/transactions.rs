@@ -211,16 +211,13 @@ fn concurrent_openers_migrate_a_fresh_database_once() {
 }
 
 #[test]
-fn unverified_session_keys_are_rejected() {
+fn empty_scope_keys_are_rejected() {
     let db = Database::new();
     let mut connection = sqlite::open(&db.0).unwrap();
     let invalid = Request::new(
         2,
         vec![Operation::Read {
-            scope: Scope::Session {
-                profile: "default".into(),
-                incarnation: String::new(),
-            },
+            scope: Scope::profile(""),
         }],
     );
     assert_eq!(
@@ -238,42 +235,6 @@ fn unverified_session_keys_are_rejected() {
     )
     .unwrap();
     assert_eq!(read.revision, 0);
-    assert!(read.records.is_empty());
-}
-
-#[test]
-fn session_incarnations_never_share_reused_tab_ids() {
-    let db = Database::new();
-    let mut connection = sqlite::open(&db.0).unwrap();
-    let first = Scope::Session {
-        profile: "default".into(),
-        incarnation: "connection-a".into(),
-    };
-    let second = Scope::Session {
-        profile: "default".into(),
-        incarnation: "connection-b".into(),
-    };
-    sqlite::execute(
-        &mut connection,
-        &Request::new(
-            1,
-            vec![Operation::Put {
-                key: Key {
-                    scope: first,
-                    entity: "tab:1".into(),
-                    field: "space".into(),
-                },
-                value: json!("work"),
-                expected_revision: Some(0),
-            }],
-        ),
-    )
-    .unwrap();
-    let read = sqlite::execute(
-        &mut connection,
-        &Request::new(2, vec![Operation::Read { scope: second }]),
-    )
-    .unwrap();
     assert!(read.records.is_empty());
 }
 
@@ -394,10 +355,7 @@ fn exact_wire_limit_accepts_escaped_unicode_and_rolls_back_one_extra_byte() {
         records: (0..64)
             .map(|index| Record {
                 key: Key {
-                    scope: Scope::Session {
-                        profile: "profile-\"\\\n-é".into(),
-                        incarnation: "session-🙂".into(),
-                    },
+                    scope: Scope::profile("profile-\"\\\n-é-🙂"),
                     entity: "entity-\t-雪".into(),
                     field: format!("field-{index:02}-\"\\\n-é"),
                 },

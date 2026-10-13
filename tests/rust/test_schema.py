@@ -21,7 +21,7 @@ async def test_public_schema_describes_every_setting_default(
     assert schema["defaults"]["default_domain"] is None
 
 
-@pytest.mark.parametrize("format_name", ["lua", "types", "markdown"])
+@pytest.mark.parametrize("format_name", ["types", "markdown"])
 async def test_generated_files_accept_platform_line_endings_and_reject_content_changes(
     rust_binaries: dict[str, Path],
     tmp_path: Path,

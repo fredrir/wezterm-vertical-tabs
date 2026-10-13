@@ -1,16 +1,13 @@
 pub(crate) mod button;
-pub(crate) mod color_picker;
-pub(crate) mod dialog;
 pub(crate) mod list;
-pub(crate) mod menu;
-pub(crate) mod palette;
 pub(crate) mod row;
 pub(crate) mod scrollbar;
+pub(crate) mod search_field;
 pub(crate) mod text_input;
 pub(crate) mod tooltip;
 
 use crate::runtime::canvas::Canvas;
-use ratatui::layout::{Position, Rect};
+use ratatui::layout::Rect;
 
 pub(crate) const SURFACE_RADIUS: f32 = 9.0;
 pub(crate) const ROW_INSET: f32 = 1.5;
@@ -22,27 +19,16 @@ pub(crate) const DROP_TINT: u16 = 24;
 pub(crate) const ICON_CELLS: u16 = 3;
 pub(crate) const TRAILING_CELLS: u16 = 3;
 
-pub(crate) fn centered(area: Rect, width: u16, height: u16) -> Rect {
-    let width = width.min(area.width);
-    let height = height.min(area.height);
-    Rect::new(
-        area.x + (area.width - width) / 2,
-        area.y + (area.height - height) / 2,
-        width,
-        height,
-    )
-}
-
-pub(crate) fn anchored(area: Rect, anchor: Position, width: u16, height: u16) -> Rect {
+/// Beneath `anchor` when it fits, else above it, else against the bottom of `area`.
+pub(crate) fn anchored(area: Rect, anchor: Rect, width: u16, height: u16) -> Rect {
+    let anchor = anchor.clamp(area);
     let width = width.min(area.width);
     let height = height.min(area.height);
     let x = anchor.x.clamp(area.x, area.right() - width);
-    let anchor_y = anchor.y.clamp(area.y, area.bottom() - 1);
-    let below = anchor_y + 1;
-    let y = if below + height <= area.bottom() {
-        below
-    } else if anchor_y >= area.y + height {
-        anchor_y - height
+    let y = if anchor.bottom() + height <= area.bottom() {
+        anchor.bottom()
+    } else if anchor.y >= area.y + height {
+        anchor.y - height
     } else {
         area.bottom() - height
     };

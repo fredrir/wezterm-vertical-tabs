@@ -12,7 +12,7 @@ fn repository_roots_cover_ancestors_and_cache_every_directory() {
     fs::create_dir_all(repo.join(".git")).unwrap();
     let repository = repo.to_str().unwrap();
 
-    let mut repos = repos::Repos::default();
+    let mut repos = Repos::default();
     assert_eq!(repos.root(nested.to_str().unwrap()), Some(repository));
     assert_eq!(repos.root(nested.to_str().unwrap()), Some(repository));
     assert_eq!(repos.root(repository), Some(repository));

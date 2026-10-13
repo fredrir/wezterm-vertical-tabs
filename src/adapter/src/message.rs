@@ -122,7 +122,7 @@ impl Adapter {
                         self.command(app::Command::QuickTerminal)
                     }
                     core::Action::Ui(core::UiAction::QuickProgram(program)) => {
-                        match terminal_program(*program) {
+                        match terminal_program::quick_program(*program) {
                             Ok(program) => {
                                 self.show_terminal(Command::ToggleTerminalProgram(program))
                             }
@@ -155,7 +155,6 @@ impl Adapter {
                             self.app.model().selected_tab,
                         ),
                 );
-                self.schedule_hooks();
             }
         }
         if !hook_completion {

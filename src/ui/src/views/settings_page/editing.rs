@@ -1,6 +1,6 @@
-use super::{Range, number};
+use super::range::{Range, number};
 use crate::input::TextEditor;
-use vtabs_core::{Intent, Model, settings};
+use vtabs_core::{Intent, Model};
 
 struct Entry {
     key: String,
@@ -68,7 +68,7 @@ impl Editing {
         self.entry_mut().map(|entry| &mut entry.editor)
     }
     pub fn begin_entry(&mut self, model: &Model, key: &str, typed: Option<char>) -> bool {
-        let Some(range) = range(key) else {
+        let Some(range) = Range::for_key(key) else {
             return false;
         };
         if typed.is_none() && self.entry().is_some_and(|entry| entry.key == key) {
@@ -94,7 +94,7 @@ impl Editing {
         let Some(entry) = self.entry_mut() else {
             return;
         };
-        let Some(range) = range(&entry.key) else {
+        let Some(range) = Range::for_key(&entry.key) else {
             return;
         };
         let clean = range.sanitize(entry.editor.text());
@@ -107,7 +107,7 @@ impl Editing {
         let Mode::Entry(entry) = std::mem::take(&mut self.mode) else {
             unreachable!();
         };
-        let range = range(&entry.key)?;
+        let range = Range::for_key(&entry.key)?;
         let value = range.parse(entry.editor.text())?;
         Some(Intent::SetSetting {
             key: entry.key,
@@ -118,7 +118,7 @@ impl Editing {
         let Some(entry) = self.entry_mut() else {
             return false;
         };
-        let Some(range) = range(&entry.key) else {
+        let Some(range) = Range::for_key(&entry.key) else {
             return false;
         };
         let current = range
@@ -158,11 +158,7 @@ impl Editing {
         }
         Some(Intent::SetSetting {
             key: dragged,
-            value: range(key)?.json(value),
+            value: Range::for_key(key)?.json(value),
         })
     }
-}
-
-fn range(key: &str) -> Option<Range> {
-    settings::descriptor(key).and_then(|field| Range::of(&field.kind))
 }

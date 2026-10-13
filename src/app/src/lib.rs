@@ -1,141 +1,25 @@
 //! Per-window, single-event-loop coordinator for the statically linked UI.
+mod commands;
+mod config;
+mod hooks;
 mod managed;
 mod persistence;
+mod spawn;
+mod transfer;
+mod types;
 
 pub use vtabs_core as core;
 pub use vtabs_store as store;
 pub use vtabs_ui as ui;
 
-use core::{Error, HostCommand, HostTab, Intent, Model, Tab, TabId};
-use serde_json::Value;
+pub use hooks::{HookResult, HookToken};
+pub use spawn::SpawnToken;
+pub use transfer::WindowTransfer;
+pub use types::{Command, HostSnapshot, Metrics, Projection, Update};
+
+use core::{Error, HostCommand, Intent, Model, Tab, TabId};
 use std::{collections::BTreeMap, time::Duration};
-use ui::{FrameUpdate, HostAction, SidebarUi, UiInput, UiIntent};
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Metrics {
-    pub cols: u16,
-    pub rows: u16,
-    pub pixel_width: u32,
-    pub pixel_height: u32,
-    pub cell_width: f32,
-    pub cell_height: f32,
-    pub dpi: f32,
-}
-impl Default for Metrics {
-    fn default() -> Self {
-        Self {
-            cols: 32,
-            rows: 40,
-            pixel_width: 256,
-            pixel_height: 640,
-            cell_width: 8.,
-            cell_height: 16.,
-            dpi: 96.,
-        }
-    }
-}
-
-/// Revision belongs to the host, and covers topology, active ID, geometry and configuration.
-#[derive(Clone, Debug)]
-pub struct HostSnapshot {
-    pub revision: u64,
-    pub tabs: Vec<HostTab>,
-    pub active_tab: Option<TabId>,
-    pub metrics: Metrics,
-    pub focused: bool,
-    pub configuration_epoch: u64,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Command {
-    OpenCommands,
-    RunCommand(usize),
-    QuickTerminal,
-    Refresh,
-    Host(HostCommand),
-    SetClipboard(String),
-    RequestClipboard,
-    /// Close directly when the tab is idle; otherwise call `SidebarUi::confirm_close_tab`.
-    ConfirmClose(TabId),
-    /// The same for one split, answered with `SidebarUi::confirm_close_pane`.
-    ConfirmClosePane(TabId, core::PaneId),
-    /// A tab another window owns, or one this window lost to a detached domain.
-    ShowTab {
-        window: u64,
-        tab: TabId,
-    },
-    /// Lists foreign tabs and unadopted panes, then opens the tab search.
-    SearchTabs,
-    /// A remote pane no mux shows, adopted into this window.
-    AdoptPane {
-        domain: String,
-        pane: u64,
-    },
-}
-#[derive(Clone, Debug, Default)]
-pub struct Update {
-    pub commands: Vec<Command>,
-    pub model_changed: bool,
-}
-impl Update {
-    fn merge(&mut self, other: Self) {
-        self.commands.extend(other.commands);
-        self.model_changed |= other.model_changed;
-    }
-}
-
-#[derive(Clone, Copy, Debug)]
-pub struct Projection<'a> {
-    pub revision: u64,
-    pub host_revision: u64,
-    pub visible: &'a [TabId],
-    pub active: Option<TabId>,
-}
-
-/// Tokens prevent an async semantic completion from changing a newer view.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub struct HookToken {
-    pub host_revision: u64,
-    pub model_revision: u64,
-    pub configuration_epoch: u64,
-    pub tab_id: Option<TabId>,
-}
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
-#[serde(tag = "kind", content = "value", rename_all = "snake_case")]
-pub enum HookResult {
-    Route(Option<String>),
-    Title(String),
-    Filter(bool),
-    Theme(BTreeMap<String, Value>),
-    Footer(String),
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub struct SpawnToken {
-    pub request_id: u64,
-    pub space_id: String,
-    #[serde(default)]
-    pub folder_id: Option<String>,
-    selection_epoch: u64,
-}
-
-/// Serialized only for an explicit in-GUI move. No content or pane layout is represented.
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct WindowTransfer {
-    pub version: u32,
-    pub profile: String,
-    pub spaces: Vec<core::Space>,
-    #[serde(default)]
-    pub folders: Vec<core::Folder>,
-    pub templates: Vec<core::SpaceTemplate>,
-    pub preferences: BTreeMap<String, Value>,
-    pub configuration: BTreeMap<String, Value>,
-    pub configured_spaces: Vec<core::Space>,
-    pub configured_templates: Vec<core::SpaceTemplate>,
-    pub managed: Option<core::Managed>,
-    pub tab: core::Tab,
-}
+use ui::{FrameUpdate, SidebarUi, UiInput};
 
 pub struct WindowApp {
     model: Model,
@@ -204,70 +88,6 @@ impl WindowApp {
     pub fn set_home(&mut self, home: Option<String>) {
         self.model.set_home(home);
     }
-    pub fn export_transfer(&self, id: TabId) -> Result<WindowTransfer, Error> {
-        let tab = self
-            .model
-            .tabs
-            .get(&id)
-            .ok_or_else(|| Error("Moved tab no longer exists".into()))?;
-        Ok(WindowTransfer {
-            version: 1,
-            profile: self.model.profile.clone(),
-            spaces: self.model.spaces.clone(),
-            folders: self.model.folders.clone(),
-            templates: self.model.templates.clone(),
-            preferences: self.model.managed_settings().clone(),
-            configuration: self.model.configured_settings().clone(),
-            configured_spaces: self.configured_spaces.clone(),
-            configured_templates: self.configured_templates.clone(),
-            managed: self.managed.baseline().cloned(),
-            tab: tab.clone(),
-        })
-    }
-    pub fn import_transfer_before_snapshot(
-        &mut self,
-        transfer: WindowTransfer,
-    ) -> Result<(), Error> {
-        if transfer.version != 1 {
-            return Err(Error("Unsupported window transfer contract".into()));
-        }
-        if !self.model.tabs.is_empty() {
-            return Err(Error(
-                "Window transfer must initialize an empty window".into(),
-            ));
-        }
-        if transfer.profile.is_empty()
-            || transfer.profile.len() > 128
-            || transfer.profile.chars().any(char::is_control)
-        {
-            return Err(Error("Invalid transferred profile".into()));
-        }
-        let mut candidate = WindowApp::new(transfer.profile);
-        candidate
-            .model
-            .load_catalog(transfer.spaces, transfer.templates)?;
-        candidate.model.load_folders(transfer.folders)?;
-        candidate
-            .model
-            .load_managed_settings(transfer.preferences)?;
-        candidate.model.apply_config(transfer.configuration)?;
-        candidate.configured_spaces = transfer.configured_spaces;
-        candidate.configured_templates = transfer.configured_templates;
-        if let Some(managed) = transfer.managed {
-            candidate.managed.loaded(managed);
-            candidate.managed.touch();
-        }
-        candidate.model.import_transferred_tab(transfer.tab)?;
-        candidate.storage = persistence::Persistence::new(&candidate.model);
-        // Preserve current public edits while a source-window helper is still draining.
-        candidate.storage.observe(&candidate.model, Duration::ZERO);
-        candidate
-            .ui
-            .set_config_owned(candidate.model.config_owned.iter().cloned());
-        candidate.ui.set_chord_label(self.ui.chord_label());
-        *self = candidate;
-        Ok(())
-    }
     pub fn ui(&self) -> &SidebarUi {
         &self.ui
     }
@@ -280,16 +100,11 @@ impl WindowApp {
     pub fn now(&self) -> Duration {
         self.now
     }
-    pub fn storage_deadline(&self) -> Option<Duration> {
-        self.storage.deadline()
-    }
     pub fn buffer(&self) -> &ui::Buffer {
         self.ui.buffer()
     }
     pub fn projection(&self) -> Projection<'_> {
         Projection {
-            revision: self.model.revision,
-            host_revision: self.host_revision.unwrap_or(0),
             visible: self.model.visible_ids(),
             active: self.model.selected_tab,
         }
@@ -303,15 +118,9 @@ impl WindowApp {
     /// Fast resize path: no tab metadata cloning, routing, persistence, or host commands.
     pub fn resize(&mut self, metrics: Metrics) -> Result<Update, Error> {
         validate_metrics(metrics)?;
-        let changed = self.metrics != metrics;
-        if changed {
-            self.geometry_revision = self.geometry_revision.wrapping_add(1);
+        if self.set_metrics(metrics) {
+            self.redraw();
         }
-        if (self.metrics.cols, self.metrics.rows) != (metrics.cols, metrics.rows) {
-            self.ui.cancel_effects();
-            self.ui.invalidate();
-        }
-        self.metrics = metrics;
         Ok(Update::default())
     }
     pub fn set_focus(&mut self, focused: bool) {
@@ -330,12 +139,6 @@ impl WindowApp {
         }
         validate_metrics(snapshot.metrics)?;
         let old_active = self.model.selected_tab;
-        let grid_changed = (self.metrics.cols, self.metrics.rows)
-            != (snapshot.metrics.cols, snapshot.metrics.rows);
-        let layout_changed = self.metrics != snapshot.metrics;
-        if layout_changed {
-            self.geometry_revision = self.geometry_revision.wrapping_add(1);
-        }
         let config_changed = self.configuration_epoch != snapshot.configuration_epoch;
         let incoming_spawn = !self.pending_spawns.is_empty()
             && snapshot
@@ -343,10 +146,8 @@ impl WindowApp {
                 .is_some_and(|id| !self.model.tabs.contains_key(&id));
         let follow = !incoming_spawn
             && (self.host_revision.is_none() || self.host_active != snapshot.active_tab);
-        let mut model_changed = self
-            .model
+        self.model
             .reconcile(snapshot.tabs, snapshot.active_tab, follow)?;
-        model_changed |= self.storage.restore_discovered(&mut self.model)?;
         // The host activated another tab; a closed tab beneath the page is not a switch away.
         if follow
             && old_active != self.model.selected_tab
@@ -357,20 +158,15 @@ impl WindowApp {
         self.host_active = snapshot.active_tab;
         self.host_revision = Some(snapshot.revision);
         self.configuration_epoch = snapshot.configuration_epoch;
-        self.metrics = snapshot.metrics;
-        if self.focused != snapshot.focused {
-            self.focused = snapshot.focused;
-            let _ = self.ui.event(&self.model, UiInput::Focus(snapshot.focused));
-        }
+        let grid_changed = self.set_metrics(snapshot.metrics);
+        self.set_focus(snapshot.focused);
         if grid_changed || config_changed {
-            self.ui.cancel_effects();
-            self.ui.invalidate();
+            self.redraw();
         }
         if old_active != self.model.selected_tab {
             self.selection_epoch = self.selection_epoch.wrapping_add(1);
         }
-        // close may leave another space's tab active. The visible successor is the
-        // application decision; the host runs this command after releasing its mux locks.
+        // A close can leave another space's tab active; the host then activates our successor.
         let commands = if old_active.is_some_and(|id| !self.model.tabs.contains_key(&id))
             && self.model.selected_tab != self.host_active
         {
@@ -381,13 +177,7 @@ impl WindowApp {
         } else {
             Vec::new()
         };
-        if model_changed {
-            self.storage.observe_session(&self.model, self.now);
-        }
-        Ok(Update {
-            commands,
-            model_changed,
-        })
+        Ok(Update { commands })
     }
 
     pub fn dispatch(&mut self, intent: Intent) -> Result<Update, Error> {
@@ -416,10 +206,7 @@ impl WindowApp {
             self.managed.touch();
         }
         let commands = transition.commands.into_iter().map(Command::Host).collect();
-        Ok(Update {
-            commands,
-            model_changed: transition.model_changed,
-        })
+        Ok(Update { commands })
     }
     pub fn input(&mut self, input: UiInput) -> Result<Update, Error> {
         if self.teardown {
@@ -445,110 +232,6 @@ impl WindowApp {
     }
     pub fn move_settings_relative(&mut self, delta: isize) {
         self.ui.move_settings_relative(&self.model, delta);
-    }
-    fn owns_pane(&self, tab: TabId, pane: core::PaneId) -> bool {
-        self.model
-            .tabs
-            .get(&tab)
-            .is_some_and(|entry| entry.panes.iter().any(|entry| entry.id == pane))
-    }
-    fn run(&mut self, intents: Vec<UiIntent>) -> Result<Update, Error> {
-        let mut update = Update::default();
-        for intent in intents {
-            match intent {
-                UiIntent::Host(HostAction::OpenCommands) => {
-                    update.commands.push(Command::OpenCommands)
-                }
-                UiIntent::Host(HostAction::RunCommand(id)) => {
-                    update.commands.push(Command::RunCommand(id))
-                }
-                UiIntent::Host(HostAction::QuickTerminal) => {
-                    update.commands.push(Command::QuickTerminal)
-                }
-                UiIntent::Host(HostAction::SearchTabs) => update.commands.push(Command::SearchTabs),
-                UiIntent::Refresh => {
-                    self.refresh_storage();
-                    update.commands.push(Command::Refresh);
-                }
-                UiIntent::Domain(intent) => update.merge(self.dispatch(intent)?),
-                UiIntent::SetClipboard(text) => update.commands.push(Command::SetClipboard(text)),
-                UiIntent::RequestClipboard => update.commands.push(Command::RequestClipboard),
-                UiIntent::Host(HostAction::Custom(action)) => update
-                    .commands
-                    .push(Command::Host(HostCommand::CustomAction(action))),
-                UiIntent::Host(HostAction::MoveTabToNewWindow(id)) => {
-                    self.model
-                        .tabs
-                        .get(&id)
-                        .ok_or_else(|| Error("Tab no longer exists".into()))?;
-                    update
-                        .commands
-                        .push(Command::Host(HostCommand::MoveTabToNewWindow(id)));
-                }
-                UiIntent::Host(HostAction::CloseTab(id)) => {
-                    if self.model.tabs.contains_key(&id) {
-                        update.commands.push(Command::ConfirmClose(id));
-                    }
-                }
-                UiIntent::Host(HostAction::ClosePane(tab, pane)) => {
-                    if self.owns_pane(tab, pane) {
-                        update.commands.push(Command::ConfirmClosePane(tab, pane));
-                    }
-                }
-                UiIntent::Host(HostAction::KillPane(tab, pane)) => {
-                    if self.owns_pane(tab, pane) {
-                        update
-                            .commands
-                            .push(Command::Host(HostCommand::KillPane(pane)));
-                    }
-                }
-                UiIntent::Host(HostAction::DetachPane { tab, pane, index }) => {
-                    if self.owns_pane(tab, pane) {
-                        update
-                            .commands
-                            .push(Command::Host(HostCommand::DetachPane { pane, index }));
-                    }
-                }
-                UiIntent::Host(HostAction::JoinPane { pane, tab }) => {
-                    let owner = self
-                        .model
-                        .tabs
-                        .values()
-                        .find(|entry| entry.panes.iter().any(|entry| entry.id == pane))
-                        .map(|entry| entry.id);
-                    if owner.is_some_and(|owner| owner != tab) && self.model.tabs.contains_key(&tab)
-                    {
-                        update
-                            .commands
-                            .push(Command::Host(HostCommand::JoinPane { pane, tab }));
-                    }
-                }
-                UiIntent::Host(HostAction::JoinTab { source, tab }) => {
-                    if source != tab
-                        && self.model.tabs.contains_key(&source)
-                        && self.model.tabs.contains_key(&tab)
-                    {
-                        update
-                            .commands
-                            .push(Command::Host(HostCommand::JoinTab { source, tab }));
-                    }
-                }
-                UiIntent::Host(HostAction::ShowTab { window, tab }) => {
-                    update.commands.push(Command::ShowTab { window, tab });
-                }
-                UiIntent::Host(HostAction::AdoptPane { domain, pane }) => {
-                    update.commands.push(Command::AdoptPane { domain, pane });
-                }
-                UiIntent::Host(HostAction::FocusPane(tab, pane)) => {
-                    if self.owns_pane(tab, pane) {
-                        update
-                            .commands
-                            .push(Command::Host(HostCommand::FocusPane { tab, pane }));
-                    }
-                }
-            }
-        }
-        Ok(update)
     }
     pub fn prepare_render(&mut self, now: Duration) {
         self.now = now;
@@ -597,362 +280,37 @@ impl WindowApp {
     }
     /// A tab that returns under a new ID takes back the place and name it left with.
     pub fn restore_tab(&mut self, id: TabId, previous: &Tab) -> Result<Update, Error> {
-        let mut update = Update {
-            model_changed: self.model.restore_tab_membership(
-                id,
-                &previous.space_id,
-                previous.manual_assignment,
-                previous.pinned,
-                previous.folder_id.as_deref(),
-            )?,
-            ..Update::default()
-        };
-        if let Some(title) = previous.title_override.clone() {
-            update.merge(self.dispatch(Intent::RenameTab { id, title })?);
-        }
-        if update.model_changed {
-            self.storage.observe_session(&self.model, self.now);
-        }
-        Ok(update)
-    }
-
-    /// Call after the spawned tab exists in an accepted snapshot. Identity is explicit; never
-    /// infer the spawn result by taking whichever tab is active when a future completes.
-    pub fn spawn_completed(&mut self, tab_id: TabId, space_id: &str) -> Result<Update, Error> {
-        self.model.assign_spawn(tab_id, space_id)?;
-        self.storage.observe_session(&self.model, self.now);
-        Ok(Update {
-            commands: vec![Command::Host(HostCommand::Activate(tab_id))],
-            model_changed: true,
-        })
-    }
-    pub fn reserve_spawn(&mut self) -> SpawnToken {
-        self.spawn_sequence = self.spawn_sequence.wrapping_add(1);
-        let token = SpawnToken {
-            request_id: self.spawn_sequence,
-            space_id: self.model.selected_space.clone(),
-            folder_id: None,
-            selection_epoch: self.selection_epoch,
-        };
-        self.pending_spawns.insert(token.request_id, token.clone());
-        token
-    }
-    pub fn reserve_spawn_in(&mut self, space_id: &str) -> Result<SpawnToken, Error> {
-        if !self.model.spaces.iter().any(|s| s.id == space_id) {
-            return Err(Error("Spawn space no longer exists".into()));
-        }
-        let mut token = self.reserve_spawn();
-        token.space_id = space_id.into();
-        self.pending_spawns.insert(token.request_id, token.clone());
-        Ok(token)
-    }
-    pub fn reserve_spawn_in_folder(&mut self, folder_id: &str) -> Result<SpawnToken, Error> {
-        let space = self
-            .model
-            .folders
-            .iter()
-            .find(|folder| folder.id == folder_id)
-            .map(|folder| folder.space_id.clone())
-            .ok_or_else(|| Error("Spawn folder no longer exists".into()))?;
-        let mut token = self.reserve_spawn_in(&space)?;
-        token.folder_id = Some(folder_id.into());
-        self.pending_spawns.insert(token.request_id, token.clone());
-        Ok(token)
-    }
-    pub fn cancel_spawn(&mut self, token: &SpawnToken) {
-        if self.pending_spawns.get(&token.request_id) == Some(token) {
-            self.pending_spawns.remove(&token.request_id);
+        self.model.restore_tab_membership(
+            id,
+            &previous.space_id,
+            previous.manual_assignment,
+            previous.pinned,
+            previous.folder_id.as_deref(),
+        )?;
+        match previous.title_override.clone() {
+            Some(title) => self.dispatch(Intent::RenameTab { id, title }),
+            None => Ok(Update::default()),
         }
     }
-    pub fn spawn_completed_with_token(
-        &mut self,
-        tab_id: TabId,
-        token: SpawnToken,
-    ) -> Result<Update, Error> {
-        if self.pending_spawns.get(&token.request_id) != Some(&token) || self.teardown {
-            return Ok(Update::default());
-        }
-        self.pending_spawns.remove(&token.request_id);
-        let space = if self.model.spaces.iter().any(|s| s.id == token.space_id) {
-            token.space_id
-        } else {
-            self.model.selected_space.clone()
-        };
-        self.model.assign_spawn_membership(tab_id, &space)?;
-        if let Some(folder_id) = token.folder_id
-            && self
-                .model
-                .folders
-                .iter()
-                .any(|folder| folder.id == folder_id && folder.space_id == space)
-        {
-            self.model.dispatch(Intent::AssignFolder {
-                tab_id,
-                folder_id: Some(folder_id),
-            })?;
-        }
-        let mut out = Update {
-            model_changed: true,
-            ..Update::default()
-        };
-        if token.selection_epoch == self.selection_epoch {
-            out.merge(self.dispatch(Intent::ActivateTab(tab_id))?);
-        } else if let Some(id) = self
-            .model
-            .selected_tab
-            .filter(|id| Some(*id) != self.host_active)
-        {
-            out.commands.push(Command::Host(HostCommand::Activate(id)));
-        }
-        self.storage.observe_session(&self.model, self.now);
-        Ok(out)
-    }
-    pub fn apply_config(
-        &mut self,
-        values: BTreeMap<String, Value>,
-        epoch: u64,
-    ) -> Result<Update, Error> {
-        if epoch < self.configuration_epoch {
-            return Err(Error("Stale configuration".into()));
-        }
-        self.model.apply_config(values)?;
-        self.configuration_epoch = epoch;
-        self.ui
-            .set_config_owned(self.model.config_owned.iter().cloned());
-        self.ui.cancel_effects();
-        self.ui.invalidate();
-        Ok(Update {
-            model_changed: true,
-            ..Update::default()
-        })
-    }
-    fn managed_projection(&self) -> core::Managed {
-        managed::ManagedFile::projection(
-            &self.model,
-            &self.configured_spaces,
-            &self.configured_templates,
-        )
-    }
-    /// Lua source for the managed settings file after a UI edit; one write is in flight.
-    pub fn take_managed_write(&mut self) -> Option<String> {
-        let (model, spaces, templates) = (
-            &self.model,
-            &self.configured_spaces,
-            &self.configured_templates,
-        );
-        self.managed
-            .take(|| managed::ManagedFile::projection(model, spaces, templates))
-    }
-    pub fn complete_managed_write(&mut self, result: Result<(), String>) {
-        self.managed.written();
-        if let Err(error) = result {
-            self.errors.push(format!("Settings file: {error}"));
-        }
-    }
-    /// Lua registration sends a JSON-compatible table. The Rust schema validates every
-    /// setting before mutation; callbacks are registered separately and return HookResult.
-    /// Precedence: Rust defaults, then the managed file, then values written in the config.
-    pub fn config(&mut self, value: Value) -> Result<Update, Error> {
-        #[derive(serde::Deserialize, Default)]
-        #[serde(default, deny_unknown_fields)]
-        struct Config {
-            settings: BTreeMap<String, Value>,
-            spaces: Vec<core::Space>,
-            templates: Vec<core::SpaceTemplate>,
-            profile: Option<String>,
-            managed: Option<core::Managed>,
-        }
-
-        let config: Config =
-            serde_json::from_value(value).map_err(|e| Error(format!("UI configuration: {e}")))?;
-        if self.model.profile.is_empty()
-            || self.model.profile.len() > 128
-            || self.model.profile.chars().any(char::is_control)
-        {
-            return Err(Error("Profile must contain 1–128 printable bytes".into()));
-        }
-        if config.profile.is_some_and(|p| p != self.model.profile) {
-            return Err(Error(
-                "Profile is chosen when creating the window application".into(),
-            ));
-        }
-        let current = self.managed_projection();
-        let file = config.managed.filter(|_| !self.managed.pending(&current));
-        let loaded = file.is_some();
-        let initial = self.model.tabs.is_empty()
-            && self.model.spaces.len() == 1
-            && self.model.spaces[0].id == core::DEFAULT_SPACE;
-        let managed = file.unwrap_or_else(|| core::Managed {
-            spaces: if initial { Vec::new() } else { current.spaces },
-            ..current
-        });
-
-        let mut spaces = config.spaces.clone();
-        for space in managed.spaces.iter().chain(
-            self.model
-                .spaces
-                .iter()
-                .filter(|space| space.template.is_some()),
-        ) {
-            if !spaces.iter().any(|s| s.id == space.id) {
-                spaces.push(space.clone());
-            }
-        }
-        if spaces.is_empty() {
-            spaces.push(core::Space::new(core::DEFAULT_SPACE, "Home"));
-        }
-        for space in &mut spaces {
-            if let Some(existing) = self.model.spaces.iter().find(|s| s.id == space.id) {
-                space.collapsed = existing.collapsed;
-            }
-        }
-        let mut templates = config.templates.clone();
-        for template in managed.templates {
-            if !templates.iter().any(|t| t.id == template.id) {
-                templates.push(template);
-            }
-        }
-
-        // Validate every layer on a detached model before publishing any of them.
-        let mut candidate = self.model.clone();
-        candidate.load_managed_settings(managed.settings)?;
-        candidate.apply_config(config.settings)?;
-        if spaces != candidate.spaces || templates != candidate.templates {
-            candidate.load_catalog(spaces, templates)?;
-        }
-        self.model = candidate;
-        self.configured_spaces = config.spaces;
-        self.configured_templates = config.templates;
-        if loaded {
-            let projection = self.managed_projection();
-            self.managed.loaded(projection);
-        }
-        self.configuration_epoch = self.configuration_epoch.wrapping_add(1);
-        self.ui
-            .set_config_owned(self.model.config_owned.iter().cloned());
-        self.ui.cancel_effects();
-        self.ui.invalidate();
-        Ok(Update {
-            model_changed: true,
-            ..Update::default()
-        })
-    }
-    pub fn hook_token(&self, tab_id: Option<TabId>) -> HookToken {
-        HookToken {
-            host_revision: self.host_revision.unwrap_or(0),
-            model_revision: self.model.revision.wrapping_add(self.geometry_revision),
-            configuration_epoch: self.configuration_epoch,
-            tab_id,
-        }
-    }
-    /// Validate every token against the same pre-transaction revision, then publish all
-    /// semantic changes together. A bad item or stale token cannot publish a partial batch.
-    pub fn complete_hook_batch(
-        &mut self,
-        batch: Vec<(HookToken, HookResult)>,
-    ) -> Result<bool, Error> {
-        if batch.len() > 4096 {
-            return Err(Error("Hook batch exceeds supported limit".into()));
-        }
-        if self.teardown || batch.is_empty() {
-            return Ok(false);
-        }
-        if batch.iter().any(|(token, _)| {
-            token.host_revision != self.host_revision.unwrap_or(0)
-                || token.model_revision != self.model.revision.wrapping_add(self.geometry_revision)
-                || token.configuration_epoch != self.configuration_epoch
-        }) {
-            return Ok(false);
-        }
-        let mut candidate = self.model.clone();
-        for (token, result) in batch {
-            match result {
-                HookResult::Route(space) => candidate.apply_route_hook(
-                    token
-                        .tab_id
-                        .ok_or_else(|| Error("Route hook needs tab ID".into()))?,
-                    space,
-                )?,
-                HookResult::Title(title) => candidate.apply_title_hook(
-                    token
-                        .tab_id
-                        .ok_or_else(|| Error("Title hook needs tab ID".into()))?,
-                    title,
-                )?,
-                HookResult::Filter(visible) => candidate.apply_filter_hook(
-                    token
-                        .tab_id
-                        .ok_or_else(|| Error("Filter hook needs tab ID".into()))?,
-                    visible,
-                )?,
-                HookResult::Footer(footer) => candidate.apply_footer_hook(footer)?,
-                HookResult::Theme(values) => {
-                    for (key, value) in &values {
-                        if !core::settings::is_theme(key) {
-                            return Err(Error("Theme hooks may only set theme colors".into()));
-                        }
-                        core::settings::validate_value(key, value).map_err(Error)?;
-                    }
-                    for (key, value) in values {
-                        candidate.settings.set(&key, value).map_err(Error)?;
-                    }
-                }
-            }
-        }
-        candidate.revision = self.model.revision.wrapping_add(1);
-        self.model = candidate;
-        self.ui.invalidate();
-        Ok(true)
-    }
-    /// An incarnation is accepted only when the adapter can prove it identifies this mux
-    /// session across attachments. Passing None intentionally disables live-state restore.
-    pub fn set_verified_session(&mut self, incarnation: Option<String>) {
-        self.storage.set_session(&self.model, incarnation);
-    }
-    pub fn set_window_identity(&mut self, window_id: u64) {
-        self.storage.set_window_identity(window_id);
-    }
-    pub fn refresh_storage(&mut self) {
-        self.storage.refresh(self.now);
-    }
-    pub fn take_storage_request(&mut self, now: Duration) -> Option<store::Request> {
-        self.now = now;
-        self.storage.take_request(now)
-    }
-    pub fn complete_storage(&mut self, response: store::Response) -> Result<Update, Error> {
-        let changed = self.storage.complete(&mut self.model, response, self.now)?;
-        if changed {
-            self.ui.invalidate();
-        }
-        Ok(Update {
-            model_changed: changed,
-            commands: Vec::new(),
-        })
-    }
-    pub fn storage_failed(&mut self, request_id: u64, message: impl Into<String>) {
-        let message = message.into();
-        self.storage.failed(request_id, self.now);
-        if !self.errors.contains(&message) {
-            self.errors.push(message);
-        }
-    }
-    pub fn retry_storage(&mut self) {
-        self.storage.retry(self.now);
-    }
-    pub fn restart_storage_after_cancel(&mut self, request_id: u64) {
-        self.storage.failed(request_id, self.now);
-        self.storage.retry(self.now);
-    }
-    /// Prevent new interactions and effects; adapter may drain pending writes until its own
-    /// bounded shutdown deadline using take_storage_request/complete_storage.
+    /// Stops interaction and effects; pending storage writes may still be drained.
     pub fn teardown(&mut self) {
         self.teardown = true;
         self.ui.dismiss();
         self.ui.cancel_effects();
         self.storage.retry(self.now);
     }
-    pub fn storage_pending(&self) -> bool {
-        self.storage.pending()
+    /// Returns whether the cell grid changed.
+    fn set_metrics(&mut self, metrics: Metrics) -> bool {
+        if self.metrics != metrics {
+            self.geometry_revision = self.geometry_revision.wrapping_add(1);
+        }
+        let grid_changed = (self.metrics.cols, self.metrics.rows) != (metrics.cols, metrics.rows);
+        self.metrics = metrics;
+        grid_changed
+    }
+    fn redraw(&mut self) {
+        self.ui.cancel_effects();
+        self.ui.invalidate();
     }
 }
 

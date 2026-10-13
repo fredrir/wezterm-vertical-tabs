@@ -10,30 +10,17 @@ import sys
 from contextlib import ExitStack
 from pathlib import Path
 
+from tests.support.environment import clean_env, xdg_tree
 from tests.support.polling import log_diagnostics, wait_until
-from tests.support.process import stop_process
+from tests.support.process import spawn_logged, stop_process
 
 
 class HeadlessDisplay:
     def __init__(self, root: Path):
         self.root = root.resolve()
-        self.env = {
-            key: value
-            for key, value in os.environ.items()
-            if key
-            not in {
-                "DISPLAY",
-                "WAYLAND_DISPLAY",
-                "XAUTHORITY",
-                "SSH_AUTH_SOCK",
-                "DBUS_SESSION_BUS_ADDRESS",
-            }
-            and not key.startswith("XDG_SESSION")
-            and not key.startswith(("WEZTERM_", "WEZ_VTABS_"))
-        }
+        self.env = clean_env()
         self.xserver: subprocess.Popen | None = None
         self.manager: subprocess.Popen | None = None
-        self.logs: list = []
 
     @property
     def owned(self) -> bool:
@@ -59,23 +46,15 @@ class HeadlessDisplay:
         if not xvfb or not openbox or not xdotool:
             raise RuntimeError("install Xvfb, Openbox, and xdotool to run isolated tests")
         self.root.mkdir(mode=0o700, parents=True, exist_ok=True)
-        runtime = self.root / "runtime"
-        runtime.mkdir(mode=0o700, exist_ok=True)
-        runtime.chmod(0o700)
-        self.env["XDG_RUNTIME_DIR"] = str(runtime)
-        config = self.root / "config"
-        config.mkdir(mode=0o700, exist_ok=True)
-        self.env["XDG_CONFIG_HOME"] = str(config)
+        self.env.update(xdg_tree(self.root))
         manager_config = self.root / "openbox.xml"
         manager_config.write_text(
             '<openbox_config xmlns="http://openbox.org/3.4/rc"><keyboard/><mouse/></openbox_config>\n',
             encoding="utf-8",
         )
         read_fd, write_fd = os.pipe()
-        log = (self.root / "xvfb.log").open("wb")
-        self.logs.append(log)
         try:
-            self.xserver = subprocess.Popen(
+            self.xserver = spawn_logged(
                 [
                     xvfb,
                     "-displayfd",
@@ -86,12 +65,9 @@ class HeadlessDisplay:
                     "-nolisten",
                     "tcp",
                 ],
-                pass_fds=(write_fd,),
+                self.root / "xvfb.log",
                 env=self.env,
-                stdin=subprocess.DEVNULL,
-                stdout=log,
-                stderr=subprocess.STDOUT,
-                start_new_session=True,
+                pass_fds=(write_fd,),
             )
             os.close(write_fd)
             write_fd = -1
@@ -103,15 +79,10 @@ class HeadlessDisplay:
             if not number.isdecimal():
                 raise RuntimeError(f"Xvfb failed to allocate a display: {self.root / 'xvfb.log'}")
             self.env["DISPLAY"] = f":{number}"
-            log = (self.root / "openbox.log").open("wb")
-            self.logs.append(log)
-            self.manager = subprocess.Popen(
-                [openbox, "--sm-disable", "--config-file", str(manager_config)],
+            self.manager = spawn_logged(
+                [openbox, "--sm-disable", "--config-file", manager_config],
+                self.root / "openbox.log",
                 env=self.env,
-                stdin=subprocess.DEVNULL,
-                stdout=log,
-                stderr=subprocess.STDOUT,
-                start_new_session=True,
             )
 
             def ready():
@@ -145,9 +116,6 @@ class HeadlessDisplay:
 
     def close(self) -> None:
         with ExitStack() as cleanup:
-            cleanup.callback(self.logs.clear)
-            for log in self.logs:
-                cleanup.callback(log.close)
             cleanup.callback(self.env.pop, "DISPLAY", None)
             for process in (self.xserver, self.manager):
                 if process is not None:

@@ -10,7 +10,7 @@
 | Runtime tools | Python, Git, Rust and platform build dependencies required for source updates |
 | Rendering | Retained Ratatui text with rounded surfaces and window framing |
 | Animation | TachyonFX modifies cells; it is not a GPU shader language |
-| Live restoration | Current upstream integration cannot verify a persistent mux incarnation; discovered tabs are rerouted after GUI restart/reconnect. Folder catalogs/settings persist; in-GUI workspace switches retain selection, assignments and pins |
+| Restart | Tab assignments, pins and folder membership reset after GUI restart or reconnect; folder catalogs and settings persist |
 | Tab tearoff | Local moves preserve the whole split tree. Remote single-pane tabs can move; remote split-tab moves are rejected because upstream only exposes pane moves |
 | Repository marker | Owning mux resolves home and repository root; stock servers label remote directories as `/NAME` |
 | Multiple GUI clients | Normal upstream shared-mux focus and resize semantics still apply |

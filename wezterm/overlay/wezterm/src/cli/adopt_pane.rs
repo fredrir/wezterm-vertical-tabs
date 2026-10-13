@@ -8,9 +8,7 @@ use wezterm_client::client::Client;
 
 #[derive(Debug, Parser, Clone)]
 pub struct AdoptPane {
-    /// The local_pane_layout client domain that reaches the remote mux.
-    /// It is attached first when needed, which restores this host's
-    /// orphaned backing tabs into the "__detached" workspace.
+    /// The local_pane_layout domain of the remote mux; attaching restores orphans to "__detached".
     #[arg(long)]
     domain_name: String,
 
@@ -25,8 +23,7 @@ pub struct AdoptPane {
     #[arg(long, required_unless_present = "list")]
     remote_pane_id: Option<PaneId>,
 
-    /// The window that receives the new tab.
-    /// If omitted, the tab gets a new window in the "__detached" workspace.
+    /// Window for the new tab; a new one in the "__detached" workspace if omitted.
     #[arg(long)]
     window_id: Option<WindowId>,
 }

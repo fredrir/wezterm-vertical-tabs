@@ -34,8 +34,7 @@ fn mirrored_spawn_rejects_invalid_targets_before_connecting() {
                 .to_string(),
             expected
         );
-        // The async operation repeats preflight: callers cannot bypass it or
-        // keep using a pane that disappeared before the future was polled.
+        // The future repeats preflight, so a pane gone before polling still fails.
         let error = futures::executor::block_on(domain.spawn_beside_pane(
             123,
             wezterm_term::TerminalSize::default(),

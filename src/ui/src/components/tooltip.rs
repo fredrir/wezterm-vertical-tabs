@@ -1,7 +1,7 @@
 use crate::components::anchored;
 use crate::input::display_text;
 use crate::runtime::canvas::{Canvas, HitRegion};
-use ratatui::layout::{Position, Rect};
+use ratatui::layout::Rect;
 use ratatui::text::Line;
 use ratatui::widgets::{Paragraph, Widget, Wrap};
 use unicode_width::UnicodeWidthStr;
@@ -91,7 +91,11 @@ fn place(cx: &Canvas, area: Rect, sidebar: Rect, target: Rect, width: u16, heigh
         None => cx.clear_of_rows(
             anchored(
                 area,
-                Position::new(target.x, target.bottom().saturating_sub(1)),
+                Rect {
+                    y: target.bottom().saturating_sub(1),
+                    height: 1,
+                    ..target
+                },
                 width,
                 height,
             ),

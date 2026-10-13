@@ -1,9 +1,9 @@
 use crate::SidebarUi;
-use crate::components::palette::palette;
+use crate::components::list;
 use crate::components::tooltip::tooltip;
-use crate::components::{dialog, list, menu};
 use crate::element::{ElementId, EntityRef};
-use crate::overlays::Overlay;
+use crate::overlays::command_palette::palette;
+use crate::overlays::{Overlay, dialog, menu};
 use crate::runtime::canvas::Canvas;
 use crate::runtime::motion;
 use crate::views::sidebar::SidebarProps;
@@ -11,6 +11,7 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::{Position, Rect};
 use ratatui::widgets::{Block, Widget};
 use std::time::Duration;
+use tachyonfx::{Interpolatable, Interpolation};
 use vtabs_core::Model;
 
 #[cfg(test)]
@@ -68,8 +69,7 @@ impl Default for Frame {
 }
 
 impl SidebarUi {
-    /// Settle interaction state before the host chooses the surface's viewport.
-    /// Repeated calls with the same model and time are harmless.
+    /// Settles interaction state before the host picks the viewport; safe to repeat.
     pub fn prepare(&mut self, model: &Model, now: Duration) {
         self.frame.now = now;
         if self.frame.prepared_revision != Some(model.revision) {
@@ -97,7 +97,6 @@ impl SidebarUi {
         if self.frame.model_revision != Some(model.revision) {
             self.frame.model_revision = Some(model.revision);
             self.theme.apply(model);
-            self.settings.config_owned.clone_from(&model.config_owned);
             if self
                 .frame
                 .last_rail
@@ -229,7 +228,7 @@ impl SidebarUi {
         };
         if let Some(surface) = self.effects.surface {
             let t = motion::progress(now.saturating_sub(surface.start), surface.duration);
-            transform.translate_x = motion::lerp(surface.from, surface.to, motion::ease_out(t));
+            transform.translate_x = surface.from.tween(&surface.to, t, Interpolation::CubicOut);
             if t >= 1.0 {
                 self.effects.surface = None;
             }
@@ -262,64 +261,27 @@ impl SidebarUi {
     }
 
     pub(crate) fn prune_targets(&mut self, model: &Model) {
-        if self
-            .sidebar
-            .rename
-            .as_ref()
-            .is_some_and(|rename| !EntityRef::Tab(rename.id).exists(model))
-        {
-            self.sidebar.rename = None;
+        if clear_stale(&mut self.sidebar.rename, |rename| {
+            EntityRef::Tab(rename.id).exists(model)
+        }) {
             self.caret.stop();
             if self.focused == Some(ElementId::Editor) {
                 self.focused = None;
             }
         }
-        if self
-            .pointer
-            .press
-            .as_ref()
-            .is_some_and(|press| !press.id.exists(model))
-        {
-            self.pointer.press = None;
-        }
-        if self.focused.as_ref().is_some_and(|id| !id.exists(model)) {
-            self.focused = None;
-        }
-        if self
-            .pointer
-            .hovered
-            .as_ref()
-            .is_some_and(|id| !id.exists(model))
-        {
-            self.pointer.hovered = None;
+        clear_stale(&mut self.pointer.press, |press| press.id.exists(model));
+        clear_stale(&mut self.focused, |id| id.exists(model));
+        if clear_stale(&mut self.pointer.hovered, |id| id.exists(model)) {
             self.tooltip.hide();
         }
-        if self
-            .pointer
-            .drag
-            .as_ref()
-            .is_some_and(|id| !id.exists(model))
-        {
+        if clear_stale(&mut self.pointer.drag, |id| id.exists(model)) {
             self.pointer.cancel_drag();
             self.pointer.origin = None;
         }
-        if self
-            .pointer
-            .drop
-            .as_ref()
-            .is_some_and(|target| !target.exists(model))
-        {
-            self.pointer.drop = None;
+        if clear_stale(&mut self.pointer.drop, |target| target.exists(model)) {
             self.pointer.drop_motion = None;
         }
-        if self
-            .pointer
-            .last_click
-            .as_ref()
-            .is_some_and(|(id, _)| !id.exists(model))
-        {
-            self.pointer.last_click = None;
-        }
+        clear_stale(&mut self.pointer.last_click, |(id, _)| id.exists(model));
     }
 
     fn compose(&mut self, model: &Model, area: Rect) {
@@ -404,4 +366,12 @@ impl SidebarUi {
             }
         }
     }
+}
+
+fn clear_stale<T>(target: &mut Option<T>, exists: impl FnOnce(&T) -> bool) -> bool {
+    let stale = target.as_ref().is_some_and(|target| !exists(target));
+    if stale {
+        *target = None;
+    }
+    stale
 }

@@ -2,7 +2,11 @@
 use super::*;
 
 fn axis(size: &mut (Option<f32>, Option<f32>), horizontal: bool) -> &mut Option<f32> {
-    if horizontal { &mut size.0 } else { &mut size.1 }
+    if horizontal {
+        &mut size.0
+    } else {
+        &mut size.1
+    }
 }
 
 #[derive(Default)]
@@ -402,7 +406,7 @@ impl Session {
             })
     }
 
-    /// Takes on `spec`'s settings, so another binding running the same command reopens it as its own.
+    /// Takes on `spec`'s settings, so another binding with the same command reopens it as its own.
     fn take_kept(&mut self, spec: &TerminalProgram) -> Option<Program> {
         let index = self
             .kept

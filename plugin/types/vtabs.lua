@@ -128,13 +128,13 @@
 --- WezTerm's `SpawnTabDomain`.
 ---@alias TabsSpawnDomain 'DefaultDomain'|'CurrentPaneDomain'|{ DomainName: string }|{ DomainId: integer }
 
---- Host metadata is copied only when it changes; membership remains application-owned.
+--- Host metadata and application-owned state, also used by the transfer contract.
 ---@class TabsTab
 ---@field bell? boolean
 ---@field cwd? string
 ---@field domain? string
 ---@field folder_id? string
----@field home? string The owning machine's home; `None` falls back to this host's.
+---@field home? string The owning machine's home; this host's when omitted.
 ---@field host? string
 ---@field icon? string
 ---@field id integer
@@ -157,7 +157,7 @@
 ---@field active? boolean
 ---@field cwd? string
 ---@field height? integer
----@field home? string The owning machine's home; `None` falls back to this host's.
+---@field home? string The owning machine's home; this host's when omitted.
 ---@field id integer
 ---@field left? integer Cell extent inside the tab, so the sidebar can mirror the split layout.
 ---@field os? string

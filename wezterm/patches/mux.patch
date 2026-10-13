@@ -103,7 +103,7 @@ index 6d1a74619b512fdad47918b11bcd690158dd223b..85fb91a7f444a8b0b90e38fc385aa16b
  pub const DEFAULT_WORKSPACE: &str = "default";
  
 diff --git a/mux/src/localpane.rs b/mux/src/localpane.rs
-index bffc5213cd9bf963ae521a6d79f0af124cea8e77..8b774de0654ce39680aa141d5ef8378928e880b6 100644
+index bffc5213cd9bf963ae521a6d79f0af124cea8e77..2a213155fb38d5286cc8579a28f86a1a01695ad7 100644
 --- a/mux/src/localpane.rs
 +++ b/mux/src/localpane.rs
 @@ -1044,25 +1044,40 @@ impl LocalPane {
@@ -200,7 +200,7 @@ index bffc5213cd9bf963ae521a6d79f0af124cea8e77..8b774de0654ce39680aa141d5ef83789
 -                });
 +                };
 +                let process = self.process.lock();
-+                if !matches!(&*process, ProcessState::Running { pid: Some(current), .. } if *current == pid) {
++                if !matches!(&*process, ProcessState::Running { pid: Some(id), .. } if *id == pid) {
 +                    return None;
 +                }
 +                proc_list = self.proc_list.lock();

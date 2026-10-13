@@ -339,6 +339,7 @@ fn folder_spawn_command_captures_folder_and_space_without_mutating_selection() {
     let mut model = model();
     let folder = create(&mut model, "Tools");
     model.dispatch(Intent::SelectSpace("work".into())).unwrap();
+    let revision = model.revision;
     let transition = model
         .dispatch(Intent::NewTabInFolder(folder.clone()))
         .unwrap();
@@ -346,7 +347,7 @@ fn folder_spawn_command_captures_folder_and_space_without_mutating_selection() {
         matches!(&transition.commands[..], [HostCommand::Spawn { space_id, folder_id: Some(id), .. }] if space_id == "home" && id == &folder)
     );
     assert_eq!(model.selected_space, "work");
-    assert!(!transition.model_changed);
+    assert_eq!(model.revision, revision);
     assert!(
         model
             .dispatch(Intent::NewTabInFolder("missing".into()))

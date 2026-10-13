@@ -12,9 +12,7 @@ use termwiz::{
 };
 use vtabs_app::ui::FrameUpdate;
 
-/// `FrameUpdate::changed_cells` is the UI's row-major Ratatui diff. Unchanged rows retain
-/// their Rc identity and cached quads. A retained previous frame forces copy-on-write
-/// only for rows that change; the GUI publishes the updated surface after this returns.
+/// Applies the row-major `changed_cells` diff; unchanged rows keep their Rc identity and quads.
 pub fn update(surface: &mut Surface, buffer: &Buffer, frame: &FrameUpdate, geometry: Geometry) {
     let columns = usize::from(buffer.area.width);
     let rows = usize::from(buffer.area.height);
@@ -53,6 +51,7 @@ pub fn update(surface: &mut Surface, buffer: &Buffer, frame: &FrameUpdate, geome
             let line = Rc::make_mut(row);
             let mut covered_until = buffer.area.x;
             for &(x, _) in row_changes {
+                // A cleared VS16 trailing cell stays covered by its wide lead.
                 if x < covered_until || x >= buffer.area.right() {
                     continue;
                 }
@@ -62,9 +61,7 @@ pub fn update(surface: &mut Surface, buffer: &Buffer, frame: &FrameUpdate, geome
                 let old_width = assign_cell(line, relative_x, cell, width, sequence);
                 covered_until = x + width as u16;
                 let mut repair_until = relative_x.saturating_add(old_width).min(columns);
-                // A narrow replacement must restore every formerly covered cell, including
-                // attributes Ratatui may omit because they are invisible on a blank. Repair
-                // can encounter a shifted wide glyph; extend through its former coverage.
+                // A narrower glyph restores every cell it covered, through shifted wide glyphs.
                 while usize::from(covered_until - buffer.area.x) < repair_until {
                     let next_x = usize::from(covered_until - buffer.area.x);
                     let next = &buffer[(covered_until, y)];
@@ -74,8 +71,6 @@ pub fn update(surface: &mut Surface, buffer: &Buffer, frame: &FrameUpdate, geome
                         repair_until.max(next_x.saturating_add(previous_width).min(columns));
                     covered_until += next_width as u16;
                 }
-                // Ratatui may explicitly clear a VS16 emoji's trailing cell. lines
-                // already clear that coverage; writing it again would erase the wide lead.
             }
         }
     }
@@ -109,16 +104,13 @@ fn assign_cell(
     width: usize,
     sequence: usize,
 ) -> usize {
-    // Indexed reads avoid Line::get_cell's linear visible-cell search. Termwiz vector
-    // storage is materialized once, and is retained between changes.
+    // Indexed access avoids Line::get_cell's linear visible-cell search.
     let previous = &line.cells_mut()[index];
     let previous_width = previous.width().max(1);
     let same_glyph = previous.str() == cell.symbol() && previous_width == width;
     let attributes = attributes(cell);
     if same_glyph {
-        // TachyonFX color transitions reuse grapheme storage. Sequence changes
-        // still invalidate upstream's line shape key, which includes foreground/background.
-        // Styles on the covered cells must agree with their lead's attributes.
+        // Color-only changes reuse grapheme storage; covered cells share their lead's attributes.
         let cells = line.cells_mut_for_attr_changes_only();
         for cell in &mut cells[index..index + width] {
             *cell.attrs_mut() = attributes.clone();
@@ -131,8 +123,7 @@ fn assign_cell(
 }
 
 fn cell_width(cell: &UiCell, remaining: u16) -> usize {
-    // Use Ratatui's policy, including forced widths and halfwidth kana marks. Recomputing
-    // width through Termwiz (or bare unicode-width) can disagree with the composed grid.
+    // Ratatui's width policy, including forced widths, so cells match the composed grid.
     usize::from(cell.cell_width().max(1).min(remaining))
 }
 

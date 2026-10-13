@@ -6,6 +6,7 @@ use crate::intent::UiIntent;
 use crate::overlays::{FormKind, Overlay};
 use crate::theme::Theme;
 use ratatui::style::Color;
+use tachyonfx::{color_from_hsv, color_to_hsv};
 use vtabs_core::Model;
 
 // Light, vivid and deep shades, ordered by hue with a neutral column.
@@ -16,10 +17,6 @@ pub(crate) const PALETTE: [u32; 30] = [
     0x1e3a8a, 0x4c1d95, 0x701a75,
 ];
 
-pub(crate) fn rgb(value: u32) -> Color {
-    Color::Rgb((value >> 16) as u8, (value >> 8) as u8, value as u8)
-}
-
 pub(crate) fn hex(color: Color) -> String {
     match color {
         Color::Rgb(r, g, b) => format!("#{r:02x}{g:02x}{b:02x}"),
@@ -27,14 +24,7 @@ pub(crate) fn hex(color: Color) -> String {
     }
 }
 
-pub(crate) fn hsv(h: f32, s: f32, v: f32) -> Color {
-    let channel = |offset: f32| {
-        let k = (offset + h / 60.) % 6.;
-        (255. * v * (1. - s * k.min(4. - k).clamp(0., 1.))).round() as u8
-    };
-    Color::Rgb(channel(5.), channel(3.), channel(1.))
-}
-
+/// Hue in degrees; saturation and value in percent, as tachyonfx expects.
 #[derive(Clone, Debug)]
 pub(crate) struct ColorPicker {
     pub hue: f32,
@@ -106,30 +96,23 @@ impl ColorPicker {
 
     fn select(&mut self, pick: Pick) {
         self.selected = pick;
-        let Color::Rgb(r, g, b) = self.preview() else {
-            return;
-        };
-        let [r, g, b] = [r, g, b].map(|channel| f32::from(channel) / 255.);
-        let max = r.max(g).max(b);
-        let min = r.min(g).min(b);
-        let delta = max - min;
+        let (hue, saturation, value) = color_to_hsv(&self.preview());
         // Keep the hue while passing through grey or black.
-        if delta > 0. {
-            self.hue = (60.
-                * if max == r {
-                    (g - b) / delta
-                } else if max == g {
-                    (b - r) / delta + 2.
-                } else {
-                    (r - g) / delta + 4.
-                })
-            .rem_euclid(360.);
+        if saturation > 0. {
+            self.hue = hue;
         }
-        self.saturation = if max > 0. { delta / max } else { 0. };
-        self.value = max;
-        if let Some(index) = PALETTE.iter().position(|c| Pick::Color(rgb(*c)) == pick) {
+        self.saturation = saturation;
+        self.value = value;
+        if let Some(index) = PALETTE
+            .iter()
+            .position(|c| Pick::Color(Color::from_u32(*c)) == pick)
+        {
             self.swatch = index;
         }
+    }
+
+    fn select_hsv(&mut self) {
+        self.selected = Pick::Color(color_from_hsv(self.hue, self.saturation, self.value));
     }
 
     pub(crate) fn parse(&self, text: &str) -> Result<Option<Color>, &'static str> {
@@ -220,7 +203,7 @@ impl SidebarUi {
         self.change_color(|color| match id {
             ElementId::ColorSwatch(index) => {
                 if let Some(value) = PALETTE.get(index) {
-                    color.select(Pick::Color(rgb(*value)));
+                    color.select(Pick::Color(Color::from_u32(*value)));
                     color.swatch = index;
                 }
             }
@@ -249,10 +232,10 @@ impl SidebarUi {
             if *id == ElementId::ColorHue {
                 color.hue = at(x, rect.x, rect.width, fx) * 359.;
             } else {
-                color.saturation = at(x, rect.x, rect.width, fx);
-                color.value = 1. - at(y, rect.y, rect.height, fy);
+                color.saturation = at(x, rect.x, rect.width, fx) * 100.;
+                color.value = (1. - at(y, rect.y, rect.height, fy)) * 100.;
             }
-            color.selected = Pick::Color(hsv(color.hue, color.saturation, color.value));
+            color.select_hsv();
         });
     }
 
@@ -322,17 +305,17 @@ impl SidebarUi {
                 } else {
                     1.
                 };
-                let step = if modifiers.shift { 0.1 } else { 0.01 };
+                let step = direction * if modifiers.shift { 10. } else { 1. };
                 match id {
                     ElementId::ColorPlane | ElementId::ColorHue => self.change_color(|color| {
                         if id == ElementId::ColorHue {
-                            color.hue = (color.hue + direction * step * 100.).rem_euclid(360.);
+                            color.hue = (color.hue + step).rem_euclid(360.);
                         } else if matches!(key, Key::Left | Key::Right) {
-                            color.saturation = (color.saturation + direction * step).clamp(0., 1.);
+                            color.saturation = (color.saturation + step).clamp(0., 100.);
                         } else {
-                            color.value = (color.value + direction * step).clamp(0., 1.);
+                            color.value = (color.value + step).clamp(0., 100.);
                         }
-                        color.selected = Pick::Color(hsv(color.hue, color.saturation, color.value));
+                        color.select_hsv();
                     }),
                     ElementId::ColorSwatch(index) => {
                         let delta = match key {

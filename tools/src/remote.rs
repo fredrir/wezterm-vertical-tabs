@@ -9,9 +9,10 @@ use anyhow::{Context as _, Result, ensure};
 use serde_json::{Value, json};
 
 use crate::process::CommandSpec;
+use crate::source::{inventory, project};
 use crate::state::{self, BuildMetadata, Context};
 use crate::targets::{LOCAL, Plan, Platform, Target};
-use crate::{build, bundle, container, deploy, source};
+use crate::{container, deploy};
 
 const PATH: &str =
     r#"export PATH="$HOME/.local/bin:$HOME/.cargo/bin:/opt/homebrew/bin:/usr/local/bin:$PATH""#;
@@ -114,18 +115,6 @@ fn same_machine(a: &str, b: &str) -> bool {
     name(a) == name(b)
 }
 
-pub fn quote(value: &str) -> String {
-    if !value.is_empty()
-        && value
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b"-_./=:@+,".contains(&b))
-    {
-        value.into()
-    } else {
-        format!("'{}'", value.replace('\'', "'\\''"))
-    }
-}
-
 /// Paths relative to the remote home, separate per originating machine.
 struct Layout(String);
 
@@ -152,23 +141,23 @@ impl Layout {
 fn sync(ctx: &Context, host: &Host) -> Result<Layout> {
     let _stage = ctx.runner.stage("sync-source");
     let layout = Layout::new();
-    let record = json!({"project_source": source::project_source(ctx)?}).to_string();
+    let record = json!({"project_source": project::source(ctx)?}).to_string();
     host.capture(
         ctx,
         &format!(
             "mkdir -p {source} && printf '%s' {record} > {base}/build.json",
             source = layout.source(),
-            record = quote(&record),
+            record = shlex::try_quote(&record)?,
             base = layout.0,
         ),
     )?;
     let mut rsync = CommandSpec::new("rsync")
         .args(["-a", "--delete"])
         .cwd(&ctx.root);
-    for ignored in source::IGNORED {
+    for ignored in inventory::IGNORED {
         rsync = rsync.arg(format!("--exclude={ignored}"));
     }
-    for item in source::SOURCE_ITEMS {
+    for item in inventory::SOURCE_ITEMS {
         if ctx.root.join(item).exists() {
             rsync = rsync.arg(item);
         }
@@ -179,14 +168,13 @@ fn sync(ctx: &Context, host: &Host) -> Result<Layout> {
 }
 
 fn xtask(ctx: &Context, host: &Host, layout: &Layout, arguments: &[String]) -> Result<i32> {
-    let arguments: Vec<String> = arguments.iter().map(|value| quote(value)).collect();
     host.run(
         ctx,
         &format!(
             r#"cd {source} && exec cargo xtask --project-root "$HOME/{source}" --cache "$HOME/{cache}" {arguments}"#,
             source = layout.source(),
             cache = layout.cache(),
-            arguments = arguments.join(" "),
+            arguments = shlex::try_join(arguments.iter().map(String::as_str))?,
         ),
     )
 }
@@ -221,8 +209,7 @@ pub fn pinned_upstream(ctx: &Context) -> Result<Option<String>> {
     if let Some(revision) = recorded.as_ref().and_then(|v| v["revision"].as_str()) {
         return Ok(Some(revision.into()));
     }
-    let previous: Option<BuildMetadata> = state::read_json(&ctx.cache.join("build.json"))?;
-    Ok(previous.map(|previous| previous.upstream))
+    Ok(ctx.last_build()?.map(|previous| previous.upstream))
 }
 
 pub fn record_upstream(ctx: &Context, revision: &str) -> Result<()> {
@@ -247,14 +234,13 @@ fn for_target(ctx: &Context, target: &Target) -> Result<Context> {
 }
 
 /// Bundle for a machine other than this one, built here; prebuilt when macOS is cross-compiled.
-pub fn bundle_for(ctx: &Context, target: &Target, output: &Path) -> Result<PathBuf> {
-    let ctx = &for_target(ctx, target)?;
-    if target.platform == Platform::Macos && cfg!(target_os = "macos") {
-        let metadata = build::build(ctx)?;
-        return bundle::package(ctx, &metadata, output, false);
-    }
-    let options = container::Options::default();
-    container::build(ctx, &target.platform, &options, output)
+fn bundle_for(ctx: &Context, target: &Target, output: &Path) -> Result<PathBuf> {
+    container::bundle(
+        &for_target(ctx, target)?,
+        &target.platform,
+        &container::Options::default(),
+        output,
+    )
 }
 
 /// The macOS SDK is licensed with Xcode on this Mac; builders get a copy their linker accepts.
@@ -283,7 +269,7 @@ fn ensure_sdk(ctx: &Context, host: &Host) -> Result<()> {
     } else {
         format!(
             "mv {directory}.new/{} {directory}.new/MacOSX.sdk; ",
-            quote(&name.to_string_lossy())
+            shlex::try_quote(&name.to_string_lossy())?
         )
     };
     let mut tar = Command::new("tar")
@@ -298,7 +284,7 @@ fn ensure_sdk(ctx: &Context, host: &Host) -> Result<()> {
     // LLVM rejects the arm64e.x1 slices newer SDK stubs list; nothing links against them.
     let script = format!(
         r#"set -e; rm -rf {directory}.new; mkdir -p {directory}.new; tar -xf - -C {directory}.new; {rename}find {directory}.new/MacOSX.sdk -type f -name '*.tbd' -exec grep -l 'arm64e\.x1-' {{}} + | xargs -r perl -0777 -pi -e 's/\s*,\s*arm64e\.x1-[a-z]+//g; s/arm64e\.x1-[a-z]+\s*,\s*//g'; printf '%s' {version} > {directory}.new/version; rm -rf {directory}; mv {directory}.new {directory}"#,
-        version = quote(&version),
+        version = shlex::try_quote(&version)?,
     );
     eprintln!("+ tar {} | ssh {} (sdk)", path.display(), host.0);
     let status = Command::new("ssh")
@@ -363,7 +349,11 @@ pub fn deploy(
     let role = target.role.name();
     if let Some(id) = rollback {
         let host = Host::connect(&target.host)?;
-        let id = id.as_deref().map(quote).unwrap_or_default();
+        let id = id
+            .as_deref()
+            .map(shlex::try_quote)
+            .transpose()?
+            .unwrap_or_default();
         let status = host.run(
             ctx,
             &format!("exec {INSTALLED_TOOL} deploy --rollback {id}"),
@@ -433,8 +423,7 @@ pub fn deploy(
             bundle_for(ctx, target, &ctx.cache.join("out").join(&target.name))?
         }
     };
-    let metadata: BuildMetadata =
-        state::read_json(&bundle.join("build.json"))?.context("bundle metadata missing")?;
+    let metadata = BuildMetadata::read(&bundle)?.context("bundle metadata missing")?;
     record_upstream(ctx, &metadata.upstream)?;
     let prebuilt = bundle.join("prebuilt.json").is_file();
     if target.local && prebuilt {
@@ -475,7 +464,7 @@ pub fn build(ctx: &Context, plan: &Plan, request: &Request) -> Result<(Value, i3
         }
         None => {
             let output = ctx.root.join("dist");
-            if ctx.explain && !(target.platform == Platform::Macos && cfg!(target_os = "macos")) {
+            if ctx.explain && !container::native(&target.platform) {
                 let ctx = &for_target(ctx, target)?;
                 let options = container::Options::default();
                 return Ok((
@@ -505,7 +494,7 @@ pub fn delegate(
 /// Runs the deployed tool on the target; no source is needed.
 pub fn installed(ctx: &Context, target: &Target, command: &[&str]) -> Result<(Value, i32)> {
     let host = Host::connect(&target.host)?;
-    let command: Vec<String> = command.iter().map(|value| quote(value)).collect();
-    let status = host.run(ctx, &format!("exec {INSTALLED_TOOL} {}", command.join(" ")))?;
+    let command = shlex::try_join(command.iter().copied())?;
+    let status = host.run(ctx, &format!("exec {INSTALLED_TOOL} {command}"))?;
     Ok((Value::Null, status))
 }

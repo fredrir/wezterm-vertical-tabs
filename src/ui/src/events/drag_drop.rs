@@ -2,10 +2,10 @@ use crate::SidebarUi;
 use crate::element::{ElementId, EntityRef};
 use crate::events::Press;
 use crate::intent::{HostAction, UiIntent};
-use crate::runtime::motion;
 use crate::views::sidebar::Slot;
 use ratatui::layout::Position;
 use std::time::Duration;
+use tachyonfx::Interpolatable;
 use vtabs_core::{Intent, Model, SpaceId, TabId};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -43,7 +43,7 @@ pub(crate) struct DropMotion {
 
 impl DropMotion {
     pub(crate) fn position(&self) -> f32 {
-        motion::lerp(self.from, self.to, self.progress)
+        self.from.lerp(&self.to, self.progress)
     }
 }
 

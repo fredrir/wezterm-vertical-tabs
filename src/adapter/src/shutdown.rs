@@ -4,9 +4,7 @@ use vtabs_app::WindowApp;
 
 const SHUTDOWN_BUDGET: Duration = Duration::from_secs(3);
 
-/// The caller keeps WezTerm's activity guard alive while this future runs. Pending GUI
-/// callbacks cannot reach a destroyed provider, so their logical requests are retried with
-/// the store's normal optimistic revisions. No window or mux lock is retained here.
+/// Retries pending storage with optimistic revisions while the caller holds the activity guard.
 pub async fn drain(mut app: WindowApp, outstanding: Option<u64>) {
     let started = Instant::now();
     let base = app.now();
@@ -42,8 +40,7 @@ pub async fn drain(mut app: WindowApp, outstanding: Option<u64>) {
             } else if let Some(deadline) = app.storage_deadline() {
                 let remaining = deadline.saturating_sub(now);
                 if remaining.is_zero() {
-                    // A due request that cannot be taken indicates exhausted limits or a
-                    // detached flight. Yielding repeatedly would spin the GUI executor.
+                    // Waiting on a due request that cannot be taken would spin the GUI executor.
                     return Err("pending storage could not advance at its deadline");
                 }
                 smol::Timer::after(remaining).await;

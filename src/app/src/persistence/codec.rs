@@ -1,9 +1,7 @@
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
-use vtabs_core::{Error, Folder, Model, Space, Tab, TabId};
+use vtabs_core::{Error, Folder, MAX_FOLDERS, Model, Space};
 use vtabs_store::{Key, Scope};
-
-const MEMBERSHIP: &str = "membership";
 
 /// Application fields within the store's generic entity/field protocol.
 pub(super) enum Field<'a> {
@@ -13,8 +11,6 @@ pub(super) enum Field<'a> {
     FolderSpace(&'a str),
     FolderCollapsed(&'a str),
     SpaceCollapsed(&'a str),
-    TabMembership(TabId),
-    WindowSelection(u64),
 }
 
 impl Field<'_> {
@@ -26,61 +22,12 @@ impl Field<'_> {
             Self::FolderSpace(id) => (format!("folder:{id}"), "space"),
             Self::FolderCollapsed(id) => (format!("folder:{id}"), "collapsed"),
             Self::SpaceCollapsed(id) => (format!("space:{id}"), "collapsed"),
-            Self::TabMembership(id) => (format!("tab:{id}"), MEMBERSHIP),
-            Self::WindowSelection(id) => (format!("window:{id}"), "selected_space"),
         };
         Key {
             scope: scope.clone(),
             entity,
             field: field.into(),
         }
-    }
-}
-
-struct Membership<'a> {
-    space: &'a str,
-    manual: bool,
-    pinned: bool,
-    folder: Option<&'a str>,
-}
-
-impl<'a> Membership<'a> {
-    fn from_tab(tab: &'a Tab) -> Self {
-        Self {
-            space: &tab.space_id,
-            manual: tab.manual_assignment,
-            pinned: tab.pinned,
-            folder: tab.folder_id.as_deref(),
-        }
-    }
-
-    fn decode(value: &'a Value) -> Option<Self> {
-        Some(Self {
-            space: value.get("space")?.as_str()?,
-            // Older records may omit optional fields. Preserve the same defaults
-            // for malformed optional values when restoring either early or late.
-            manual: value
-                .get("manual")
-                .and_then(Value::as_bool)
-                .unwrap_or(false),
-            pinned: value
-                .get("pinned")
-                .and_then(Value::as_bool)
-                .unwrap_or(false),
-            folder: value.get("folder").and_then(Value::as_str),
-        })
-    }
-
-    fn explicit(&self) -> bool {
-        self.manual || self.pinned || self.folder.is_some()
-    }
-
-    fn encode(&self) -> Value {
-        json!({"space":self.space,"manual":self.manual,"pinned":self.pinned,"folder":self.folder})
-    }
-
-    fn restore(self, model: &mut Model, id: TabId) -> Result<bool, Error> {
-        model.restore_tab_membership(id, self.space, self.manual, self.pinned, self.folder)
     }
 }
 
@@ -131,53 +78,6 @@ pub(super) fn profile_values(model: &Model, scope: &Scope) -> BTreeMap<Key, Valu
     values
 }
 
-pub(super) fn session_values(
-    model: &Model,
-    scope: &Scope,
-    window_id: Option<u64>,
-) -> BTreeMap<Key, Value> {
-    let mut values = BTreeMap::new();
-    for tab in model.tabs.values() {
-        let membership = Membership::from_tab(tab);
-        if membership.explicit() {
-            values.insert(Field::TabMembership(tab.id).key(scope), membership.encode());
-        }
-    }
-    if let Some(id) = window_id {
-        values.insert(
-            Field::WindowSelection(id).key(scope),
-            json!(model.selected_space),
-        );
-    }
-    values
-}
-
-pub(super) fn restore_memberships<'a>(
-    model: &mut Model,
-    scope: &Scope,
-    values: impl IntoIterator<Item = (&'a Key, &'a Value)>,
-) -> Result<bool, Error> {
-    let mut changed = false;
-    for (key, value) in values {
-        if &key.scope != scope || key.field != MEMBERSHIP {
-            continue;
-        }
-        let Some(id) = key
-            .entity
-            .strip_prefix("tab:")
-            .and_then(|id| id.parse::<TabId>().ok())
-        else {
-            continue;
-        };
-        if model.tabs.contains_key(&id)
-            && let Some(membership) = Membership::decode(value)
-        {
-            changed |= membership.restore(model, id)?;
-        }
-    }
-    Ok(changed)
-}
-
 pub(super) fn restore_profile(
     model: &mut Model,
     scope: &Scope,
@@ -211,8 +111,10 @@ pub(super) fn restore_profile(
         let order = value
             .as_array()
             .ok_or_else(|| Error("Invalid folder order".into()))?;
-        if order.len() > 256 {
-            return Err(Error("At most 256 folders are supported".into()));
+        if order.len() > MAX_FOLDERS {
+            return Err(Error(format!(
+                "At most {MAX_FOLDERS} folders are supported"
+            )));
         }
         let mut folders = Vec::with_capacity(order.len());
         for value in order {
@@ -251,26 +153,6 @@ pub(super) fn restore_profile(
             model.load_folders(folders)?;
             changed = true;
         }
-    }
-    Ok(changed)
-}
-
-pub(super) fn restore_session(
-    model: &mut Model,
-    scope: &Scope,
-    window_id: Option<u64>,
-    values: &BTreeMap<Key, Value>,
-) -> Result<bool, Error> {
-    let mut changed = restore_memberships(model, scope, values)?;
-    if let Some(id) = window_id
-        && let Some(space) = values
-            .get(&Field::WindowSelection(id).key(scope))
-            .and_then(Value::as_str)
-        && model.spaces.iter().any(|item| item.id == space)
-        && model.selected_space != *space
-    {
-        model.dispatch(vtabs_core::Intent::SelectSpace(space.into()))?;
-        changed = true;
     }
     Ok(changed)
 }

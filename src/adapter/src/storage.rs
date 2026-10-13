@@ -113,8 +113,7 @@ pub fn request(endpoint: WindowEndpoint, request: Request) {
                     vtabs_store::Operation::Read { .. } => return None,
                 };
                 Some(match &key.scope {
-                    vtabs_store::Scope::Profile { profile }
-                    | vtabs_store::Scope::Session { profile, .. } => profile.clone(),
+                    vtabs_store::Scope::Profile { profile } => profile.clone(),
                 })
             })
             .collect::<std::collections::BTreeSet<_>>();

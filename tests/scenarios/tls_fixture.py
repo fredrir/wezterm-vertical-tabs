@@ -19,8 +19,9 @@ from pathlib import Path
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
+from tests.support.environment import clean_env, xdg_tree
 from tests.support.polling import check_process, log_diagnostics, wait_until
-from tests.support.process import stop_process
+from tests.support.process import spawn_logged, stop_process
 
 
 def generate_certificates(root: Path, username: str) -> None:
@@ -114,7 +115,6 @@ class LocalTlsMux:
         self.certificates = self.root / "certificates"
         self.domain = self.root / "tls.json"
         self.process = None
-        self.log = None
         self.owns_certificates = False
 
     def start(self) -> Path:
@@ -176,26 +176,9 @@ class LocalTlsMux:
             + "}}}}\n",
             encoding="utf-8",
         )
-        env = {
-            key: value
-            for key, value in os.environ.items()
-            if not key.startswith(("WEZTERM_", "WEZ_VTABS_", "TMUX"))
-            and key not in {"ZDOTDIR", "ENV", "BASH_ENV", "HWIRE_SESSION"}
-        }
-        for name in ("config", "cache", "data", "state", "runtime"):
-            directory = self.root / name
-            directory.mkdir(mode=0o700)
-            variable = "XDG_RUNTIME_DIR" if name == "runtime" else f"XDG_{name.upper()}_HOME"
-            env[variable] = str(directory)
-        env["USER"] = username
-        self.log = (self.root / "mux.log").open("wb")
-        self.process = subprocess.Popen(
-            [str(self.server), "--config-file", str(self.config)],
-            env=env,
-            stdin=subprocess.DEVNULL,
-            stdout=self.log,
-            stderr=subprocess.STDOUT,
-            start_new_session=os.name != "nt",
+        env = clean_env() | xdg_tree(self.root) | {"USER": username}
+        self.process = spawn_logged(
+            [self.server, "--config-file", self.config], self.root / "mux.log", env=env
         )
         context = ssl.create_default_context(cafile=ca)
         context.load_cert_chain(
@@ -225,8 +208,6 @@ class LocalTlsMux:
             if self.process is not None:
                 stop_process(self.process)
         finally:
-            if self.log is not None:
-                self.log.close()
             if self.owns_certificates:
                 for key in self.certificates.glob("*.key"):
                     key.unlink(missing_ok=True)

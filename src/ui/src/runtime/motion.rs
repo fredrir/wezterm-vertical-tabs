@@ -1,7 +1,7 @@
 use crate::SidebarUi;
 use ratatui::layout::Rect;
 use std::time::Duration;
-use tachyonfx::{Effect, fx};
+use tachyonfx::{Effect, Interpolation, fx};
 use vtabs_core::{Model, Settings};
 
 pub(crate) const FRAME: Duration = Duration::from_millis(8);
@@ -26,20 +26,12 @@ pub(crate) fn progress(elapsed: Duration, span: Duration) -> f32 {
     (elapsed.as_secs_f32() / span.as_secs_f32()).clamp(0.0, 1.0)
 }
 
-pub(crate) fn ease_out(t: f32) -> f32 {
-    1.0 - (1.0 - t).powi(3)
-}
-
 fn eased(now: Duration, from: Duration, span: Duration) -> f32 {
     if span.is_zero() {
         1.0
     } else {
-        ease_out(progress(now.saturating_sub(from), span))
+        Interpolation::CubicOut.alpha(progress(now.saturating_sub(from), span))
     }
-}
-
-pub(crate) fn lerp(from: f32, to: f32, t: f32) -> f32 {
-    from + (to - from) * t
 }
 
 #[derive(Clone, Copy, Debug)]

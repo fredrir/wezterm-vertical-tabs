@@ -94,8 +94,7 @@ pub fn schedule() {
                 use std::os::windows::process::CommandExt;
                 command.creation_flags(0x08000000); // CREATE_NO_WINDOW
             }
-            // The worker owns its build lifetime and an OS lock. A GUI exit cannot
-            // cancel an update midway through installing the next immutable version.
+            // The worker outlives the GUI, so an exit cannot cancel an install midway.
             smol::process::Command::from(command)
                 .stdin(Stdio::null())
                 .stdout(log.try_clone()?)

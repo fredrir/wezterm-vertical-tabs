@@ -111,51 +111,6 @@ fn space_ids_are_unique_across_window_apps() {
     assert_ne!(a.model().selected_space, b.model().selected_space);
 }
 #[test]
-fn window_preferences_require_verified_session() {
-    let mut app = WindowApp::default();
-    app.set_window_identity(7);
-    initial(&mut app);
-    app.dispatch(Intent::CreateSpace {
-        name: "Work".into(),
-    })
-    .unwrap();
-    let write = app.take_storage_request(Duration::from_secs(1)).unwrap();
-    assert!(write.operations.iter().all(|op| match op {
-        Operation::Put { key, .. } | Operation::Delete { key, .. } =>
-            !matches!(key.scope, Scope::Session { .. }),
-        Operation::Read { scope } => !matches!(scope, Scope::Session { .. }),
-    }));
-}
-#[test]
-fn verified_window_preferences_restore_only_exact_window() {
-    let mut app = WindowApp::default();
-    app.set_window_identity(7);
-    app.set_verified_session(Some("verified".into()));
-    declare(
-        &mut app,
-        json!([{"id": "home", "name": "Home"}, {"id": "work", "name": "Work"}]),
-    );
-    let request = app.take_storage_request(Duration::ZERO).unwrap();
-    let scope = Scope::Session {
-        profile: "default".into(),
-        incarnation: "verified".into(),
-    };
-    app.complete_storage(response(
-        &request,
-        vec![Record {
-            key: Key {
-                scope,
-                entity: "window:7".into(),
-                field: "selected_space".into(),
-            },
-            value: Some(json!("work")),
-            revision: 1,
-        }],
-    ))
-    .unwrap();
-    assert_eq!(app.model().selected_space, "work");
-}
-#[test]
 fn shutdown_retries_cancelled_io_using_same_clock_domain() {
     let mut app = WindowApp::default();
     initial(&mut app);
@@ -201,64 +156,16 @@ fn discover(app: &mut WindowApp, revision: u64, ids: &[TabId]) {
     .unwrap();
 }
 
-fn membership_record(incarnation: &str, id: TabId, folder: &str) -> Record {
-    Record {
-        key: Key {
-            scope: Scope::Session {
-                profile: "default".into(),
-                incarnation: incarnation.into(),
-            },
-            entity: format!("tab:{id}"),
-            field: "membership".into(),
-        },
-        value: Some(json!({"space":"home","manual":true,"pinned":true,"folder":folder})),
-        revision: 1,
-    }
-}
-
 #[test]
-fn folder_catalog_restores_without_a_session_but_membership_requires_verification() {
-    for verified in [false, true] {
-        let mut app = WindowApp::default();
-        if verified {
-            app.set_verified_session(Some("verified".into()));
-        }
-        discover(&mut app, 1, &[1]);
-        let request = app.take_storage_request(Duration::ZERO).unwrap();
-        let mut records = vec![profile_record("catalog", "folder_order", json!(["tools"]))];
-        records.extend(folder_records("tools", "Tools", "home"));
-        records.push(membership_record("verified", 1, "tools"));
-        app.complete_storage(response(&request, records)).unwrap();
-        assert_eq!(app.model().folders[0].name, "Tools");
-        assert!(app.model().folders[0].collapsed);
-        assert_eq!(
-            app.model().tabs[&1].folder_id.as_deref(),
-            verified.then_some("tools")
-        );
-    }
-}
-
-#[test]
-fn delayed_discovery_restores_only_matching_session_folder_membership() {
+fn folder_catalog_restores_from_the_profile_scope() {
     let mut app = WindowApp::default();
-    app.set_verified_session(Some("verified".into()));
+    discover(&mut app, 1, &[1]);
     let request = app.take_storage_request(Duration::ZERO).unwrap();
     let mut records = vec![profile_record("catalog", "folder_order", json!(["tools"]))];
     records.extend(folder_records("tools", "Tools", "home"));
-    records.extend([
-        membership_record("verified", 1, "tools"),
-        membership_record("old", 2, "tools"),
-    ]);
     app.complete_storage(response(&request, records)).unwrap();
-    discover(&mut app, 1, &[1, 2]);
-    assert_eq!(app.model().tabs[&1].folder_id.as_deref(), Some("tools"));
-    assert!(app.model().tabs[&2].folder_id.is_none());
-    app.dispatch(Intent::AssignFolder {
-        tab_id: 1,
-        folder_id: None,
-    })
-    .unwrap();
-    discover(&mut app, 2, &[1, 2]);
+    assert_eq!(app.model().folders[0].name, "Tools");
+    assert!(app.model().folders[0].collapsed);
     assert!(app.model().tabs[&1].folder_id.is_none());
 }
 
@@ -489,127 +396,4 @@ fn space_collapse_state_round_trips_through_the_store() {
         Operation::Put { key, value, .. }
             if key.entity == "space:home" && key.field == "collapsed" && value == &json!(false)
     )));
-}
-
-#[test]
-fn membership_defaults_match_before_and_after_tab_discovery() {
-    let cases = [
-        (json!({"space":"work"}), "work", false, false, None),
-        (
-            json!({"space":"work","manual":"yes","pinned":1,"folder":false}),
-            "work",
-            false,
-            false,
-            None,
-        ),
-        (
-            json!({"space":"work","manual":true,"pinned":true,"folder":"missing"}),
-            "work",
-            true,
-            true,
-            None,
-        ),
-        (
-            json!({"space":"work","folder":"tools"}),
-            "work",
-            false,
-            true,
-            Some("tools"),
-        ),
-        (
-            json!({"space":"missing","manual":true}),
-            "home",
-            false,
-            false,
-            None,
-        ),
-        (
-            json!({"space":17,"manual":true}),
-            "home",
-            false,
-            false,
-            None,
-        ),
-        (json!({"manual":true}), "home", false, false, None),
-        (json!(null), "home", false, false, None),
-    ];
-    for (value, space, manual, pinned, folder) in cases {
-        for discovered in [false, true] {
-            let mut app = WindowApp::default();
-            app.set_verified_session(Some("verified".into()));
-            declare(
-                &mut app,
-                json!([
-                    {"id":"home","name":"Home"},
-                    {"id":"work","name":"Work"},
-                ]),
-            );
-            if discovered {
-                discover(&mut app, 1, &[1]);
-            }
-            let request = app.take_storage_request(Duration::ZERO).unwrap();
-            let mut records = vec![profile_record("catalog", "folder_order", json!(["tools"]))];
-            records.extend(folder_records("tools", "Tools", "work"));
-            let mut membership = membership_record("verified", 1, "tools");
-            membership.value = Some(value.clone());
-            records.push(membership);
-            app.complete_storage(response(&request, records)).unwrap();
-            if !discovered {
-                discover(&mut app, 1, &[1]);
-            }
-            let tab = &app.model().tabs[&1];
-            assert_eq!(
-                (
-                    tab.space_id.as_str(),
-                    tab.manual_assignment,
-                    tab.pinned,
-                    tab.folder_id.as_deref()
-                ),
-                (space, manual, pinned, folder),
-                "record {value}, discovered before read: {discovered}",
-            );
-        }
-    }
-}
-
-#[test]
-fn session_writes_keep_the_existing_membership_and_window_wire_format() {
-    let mut app = WindowApp::default();
-    app.set_verified_session(Some("verified".into()));
-    app.set_window_identity(7);
-    initial(&mut app);
-    discover(&mut app, 1, &[1, 2]);
-    app.dispatch(Intent::AssignTab {
-        id: 1,
-        space_id: "home".into(),
-    })
-    .unwrap();
-    let request = app.take_storage_request(Duration::from_secs(1)).unwrap();
-    let session_values = request
-        .operations
-        .iter()
-        .filter_map(|operation| match operation {
-            Operation::Put { key, value, .. } if matches!(key.scope, Scope::Session { .. }) => {
-                assert_eq!(
-                    key.scope,
-                    Scope::Session {
-                        profile: "default".into(),
-                        incarnation: "verified".into()
-                    }
-                );
-                Some(((key.entity.as_str(), key.field.as_str()), value.clone()))
-            }
-            _ => None,
-        })
-        .collect::<std::collections::BTreeMap<_, _>>();
-    assert_eq!(
-        session_values,
-        std::collections::BTreeMap::from([
-            (
-                ("tab:1", "membership"),
-                json!({"space":"home","manual":true,"pinned":false,"folder":null})
-            ),
-            (("window:7", "selected_space"), json!("home")),
-        ])
-    );
 }

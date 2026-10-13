@@ -13,117 +13,12 @@ from pathlib import Path
 import pytest
 
 from tests.scenarios.tls_fixture import LocalTlsMux
-from tests.support.polling import check_process, log_diagnostics, wait_until
-from tests.support.process import stop_process
+from tests.support.polling import wait_until
+from tests.support.wezterm import MuxServer, WeztermCli
 
 pytestmark = pytest.mark.gui
 
 BACKING = "__backing:" + socket.gethostname().split(".")[0]
-
-
-class MuxServer:
-    def __init__(self, root, binaries, environment, clients, unix_domains=()):
-        self.root, self.binaries = root, binaries
-        root.mkdir()
-        self.socket = root / "mux.sock"
-        self.config = root / "mux.lua"
-        own = {"name": "fixture", "socket_path": str(self.socket), "no_serve_automatically": True}
-        self.config.write_text(
-            "local wezterm = require 'wezterm'\nreturn {"
-            "check_for_updates=false,automatically_reload_config=false,"
-            "default_prog={'/bin/sh'},initial_cols=120,initial_rows=40,"
-            "unix_domains=wezterm.json_parse([=["
-            + json.dumps([own, *unix_domains])
-            + "]=]),tls_clients=wezterm.json_parse([=["
-            + json.dumps(clients)
-            + "]=])}\n"
-        )
-        self.env = {
-            key: value
-            for key, value in environment.items()
-            if not key.startswith("TMUX")
-            and key not in {"ZDOTDIR", "ENV", "BASH_ENV", "HWIRE_SESSION"}
-        }
-        self.env["WEZTERM_UNIX_SOCKET"] = str(self.socket)
-        self.start()
-
-    def start(self):
-        self.log = (self.root / "mux.log").open("a")
-        self.process = subprocess.Popen(
-            [str(self.binaries["wezterm-mux-server"]), "--config-file", str(self.config)],
-            env=self.env,
-            stdin=subprocess.DEVNULL,
-            stdout=self.log,
-            stderr=subprocess.STDOUT,
-            start_new_session=True,
-        )
-        wait_until(
-            self.socket.exists,
-            timeout=10,
-            message="mux socket did not become ready",
-            check_live=lambda: check_process(self.process, "mux server"),
-            diagnostics=lambda: log_diagnostics(self.root / "mux.log"),
-        )
-
-    def restart(self):
-        """Stands in for a reboot: local shells die, remote shells outlive their proxies."""
-        self.close()
-        self.socket.unlink(missing_ok=True)
-        self.start()
-
-    def cli(self, *args):
-        return subprocess.run(
-            [
-                str(self.binaries["wezterm"]),
-                "--config-file",
-                str(self.config),
-                "cli",
-                "--no-auto-start",
-                *map(str, args),
-            ],
-            env=self.env,
-            capture_output=True,
-            text=True,
-            check=True,
-            timeout=20,
-        ).stdout.strip()
-
-    def panes(self):
-        return json.loads(self.cli("list", "--format", "json"))
-
-    def adoptable(self, domain):
-        return json.loads(
-            self.cli("adopt-pane", "--domain-name", domain, "--list", "--format", "json")
-        )
-
-    def close(self):
-        try:
-            stop_process(self.process)
-        finally:
-            self.log.close()
-
-
-class RemoteCli:
-    def __init__(self, remote, binaries, environment):
-        self.process = remote.process
-        self.command = [
-            str(binaries["wezterm"]),
-            "--config-file",
-            str(remote.config),
-            "cli",
-            "--no-auto-start",
-        ]
-        self.env = {**environment, "WEZTERM_UNIX_SOCKET": str(remote.root / "mux.sock")}
-
-    def __call__(self, *args):
-        return subprocess.run(
-            [*self.command, *map(str, args)],
-            env=self.env,
-            check=True,
-            capture_output=True,
-            text=True,
-            timeout=20,
-        ).stdout.strip()
 
 
 def wait_for(condition):
@@ -131,50 +26,44 @@ def wait_for(condition):
 
 
 @pytest.fixture
-def mux_pair(wezterm_binaries, isolated_env):
+def attach_root():
     # Keep Unix sockets below macOS's path-length limit.
     with tempfile.TemporaryDirectory(prefix="vt-attach-", dir="/tmp") as directory:
-        root = Path(directory)
-        remote = LocalTlsMux(root / "remote", wezterm_binaries["wezterm-mux-server"])
-        local = None
-        try:
-            remote.start()
-            clients = []
-            for name, local_layout in (("peer", True), ("peer-alt", True), ("shared", False)):
-                clients.append(
-                    {
-                        **json.loads(remote.domain.read_text()),
-                        "name": name,
-                        "local_pane_layout": local_layout,
-                    }
-                )
-            clients.append({**clients[0], "name": "offline", "remote_address": "127.0.0.1:1"})
-            # Stands in for `ssh -T HOST wezterm cli proxy`.
-            proxy = [
-                "/usr/bin/env",
-                f"WEZTERM_UNIX_SOCKET={remote.root / 'mux.sock'}",
-                str(wezterm_binaries["wezterm"]),
-                "--config-file",
-                str(remote.config),
-                "cli",
-                "--no-auto-start",
-                "proxy",
-            ]
-            proxied = {"name": "proxied", "proxy_command": proxy, "local_pane_layout": True}
-            local = MuxServer(root / "local", wezterm_binaries, isolated_env, clients, [proxied])
+        yield Path(directory)
 
-            remote_cli = RemoteCli(remote, wezterm_binaries, isolated_env)
-            for pane in local.panes():
-                local.cli("kill-pane", "--pane-id", pane["pane_id"])
-            for pane in json.loads(remote_cli("list", "--format", "json")):
-                remote_cli("kill-pane", "--pane-id", pane["pane_id"])
-            wait_for(lambda: not local.panes())
-            wait_for(lambda: not json.loads(remote_cli("list", "--format", "json")))
-            yield local, remote_cli
-        finally:
-            if local is not None:
-                local.close()
-            remote.close()
+
+@pytest.fixture
+def tls_server(attach_root, wezterm_binaries):
+    server = LocalTlsMux(attach_root / "remote", wezterm_binaries["wezterm-mux-server"])
+    try:
+        server.start()
+        yield server
+    finally:
+        server.close()
+
+
+@pytest.fixture
+def mux_pair(attach_root, tls_server, wezterm_binaries, isolated_env):
+    remote = WeztermCli(
+        wezterm_binaries["wezterm"], tls_server.config, tls_server.root / "mux.sock", isolated_env
+    )
+    clients = [
+        {**json.loads(tls_server.domain.read_text()), "name": name, "local_pane_layout": layout}
+        for name, layout in (("peer", True), ("peer-alt", True), ("shared", False))
+    ]
+    clients.append({**clients[0], "name": "offline", "remote_address": "127.0.0.1:1"})
+    proxied = remote.proxy_domain("proxied", local_pane_layout=True)
+    local = MuxServer(attach_root / "local", wezterm_binaries, isolated_env, clients, [proxied])
+    try:
+        for pane in local.cli.panes():
+            local.cli("kill-pane", "--pane-id", pane["pane_id"])
+        for pane in remote.panes():
+            remote("kill-pane", "--pane-id", pane["pane_id"])
+        wait_for(lambda: not local.cli.panes())
+        wait_for(lambda: not remote.panes())
+        yield local, remote
+    finally:
+        local.close()
 
 
 def geometry(pane):
@@ -186,36 +75,34 @@ def test_tls_replacement_preserves_siblings_and_closes_independently(mux_pair):
     existing = int(remote("spawn", "--new-window"))
     left = int(local.cli("spawn", "--new-window"))
     right = int(local.cli("split-pane", "--pane-id", left, "--right"))
-    before = {p["pane_id"]: p for p in local.panes()}
+    before = {p["pane_id"]: p for p in local.cli.panes()}
     original_tab = before[left]["tab_id"]
     original_window = before[left]["window_id"]
     fresh = int(local.cli("replace-pane", "--pane-id", right, "--domain-name", "peer"))
-    panes = wait_for(lambda: len(p := local.panes()) == 2 and p)
+    panes = wait_for(lambda: len(p := local.cli.panes()) == 2 and p)
     assert {p["tab_id"] for p in panes} == {original_tab}
     assert {p["window_id"] for p in panes} == {original_window}
     assert geometry(next(p for p in panes if p["pane_id"] == left)) == geometry(before[left])
     assert geometry(next(p for p in panes if p["pane_id"] == fresh)) == geometry(before[right])
-    assert len(json.loads(remote("list", "--format", "json"))) == 2
+    assert len(remote.panes()) == 2
 
     # A second route to the same server must not import another copy of its panes.
     second = int(local.cli("replace-pane", "--pane-id", left, "--domain-name", "peer-alt"))
     sibling = int(local.cli("split-pane", "--pane-id", fresh, "--right"))
     local.cli("adjust-pane-size", "--pane-id", sibling, "--amount", 3, "Left")
-    panes = wait_for(lambda: len(p := local.panes()) == 3 and p)
+    panes = wait_for(lambda: len(p := local.cli.panes()) == 3 and p)
     assert {p["pane_id"] for p in panes} == {fresh, second, sibling}
     assert {p["tab_id"] for p in panes} == {original_tab}
     local.cli("kill-pane", "--pane-id", fresh)
-    panes = wait_for(lambda: len(p := local.panes()) == 2 and p)
+    panes = wait_for(lambda: len(p := local.cli.panes()) == 2 and p)
     assert {p["pane_id"] for p in panes} == {second, sibling}
-    remote_panes = wait_for(
-        lambda: len(p := json.loads(remote("list", "--format", "json"))) == 3 and p
-    )
+    remote_panes = wait_for(lambda: len(p := remote.panes()) == 3 and p)
     assert existing in {p["pane_id"] for p in remote_panes}
 
     # Returning to this computer creates a local shell in the same slot.
     before_return = next(p for p in panes if p["pane_id"] == second)
     returned = int(local.cli("replace-pane", "--pane-id", second, "--domain-name", "local"))
-    panes = wait_for(lambda: len(p := local.panes()) == 2 and p)
+    panes = wait_for(lambda: len(p := local.cli.panes()) == 2 and p)
     assert {p["pane_id"] for p in panes} == {returned, sibling}
     assert geometry(next(p for p in panes if p["pane_id"] == returned)) == geometry(before_return)
 
@@ -224,29 +111,29 @@ def test_unix_proxy_replacement_preserves_siblings_and_closes_independently(mux_
     local, remote = mux_pair
     left = int(local.cli("spawn", "--new-window"))
     right = int(local.cli("split-pane", "--pane-id", left, "--right"))
-    before = {p["pane_id"]: p for p in local.panes()}
+    before = {p["pane_id"]: p for p in local.cli.panes()}
     fresh = int(local.cli("replace-pane", "--pane-id", right, "--domain-name", "proxied"))
-    panes = wait_for(lambda: len(p := local.panes()) == 2 and p)
+    panes = wait_for(lambda: len(p := local.cli.panes()) == 2 and p)
     assert {p["tab_id"] for p in panes} == {before[left]["tab_id"]}
     assert geometry(next(p for p in panes if p["pane_id"] == left)) == geometry(before[left])
     wait_for(
         lambda: (
-            geometry(next(p for p in local.panes() if p["pane_id"] == fresh))
+            geometry(next(p for p in local.cli.panes() if p["pane_id"] == fresh))
             == geometry(before[right])
         )
     )
-    assert len(json.loads(remote("list", "--format", "json"))) == 1
+    assert len(remote.panes()) == 1
 
     # A second proxied shell reuses the attachment instead of importing the first.
     second = int(local.cli("split-pane", "--pane-id", fresh, "--right"))
-    panes = wait_for(lambda: len(p := local.panes()) == 3 and p)
+    panes = wait_for(lambda: len(p := local.cli.panes()) == 3 and p)
     assert {p["pane_id"] for p in panes} == {left, fresh, second}
-    assert len(json.loads(remote("list", "--format", "json"))) == 2
+    assert len(remote.panes()) == 2
 
     local.cli("kill-pane", "--pane-id", fresh)
-    panes = wait_for(lambda: len(p := local.panes()) == 2 and p)
+    panes = wait_for(lambda: len(p := local.cli.panes()) == 2 and p)
     assert {p["pane_id"] for p in panes} == {left, second}
-    wait_for(lambda: len(json.loads(remote("list", "--format", "json"))) == 1)
+    wait_for(lambda: len(remote.panes()) == 1)
 
     # The proxied domain is not served, so local shells keep the served socket.
     command = ("/bin/sh", "-c", 'echo "<$WEZTERM_UNIX_SOCKET>"; exec sleep 30')
@@ -266,12 +153,12 @@ def test_shared_mux_concurrent_spawns_do_not_duplicate_proxies(mux_pair):
                 range(16),
             )
         )
-    panes = local.panes()
+    panes = local.cli.panes()
     assert len(panes) == len(spawned) + 1
     assert {p["pane_id"] for p in panes} == {source, *spawned}
-    assert len(json.loads(remote("list", "--format", "json"))) == len(spawned)
+    assert len(remote.panes()) == len(spawned)
     local.cli("kill-pane", "--pane-id", spawned[0])
-    panes = wait_for(lambda: len(p := local.panes()) == len(spawned) and p)
+    panes = wait_for(lambda: len(p := local.cli.panes()) == len(spawned) and p)
     assert {p["pane_id"] for p in panes} == {source, *spawned[1:]}
 
 
@@ -281,32 +168,32 @@ def test_shared_mux_split_moves_translate_pane_ids(mux_pair):
     first = int(local.cli("spawn", "--pane-id", source, "--domain-name", "shared"))
     second = int(local.cli("spawn", "--pane-id", source, "--domain-name", "shared"))
     local.cli("split-pane", "--pane-id", first, "--move-pane-id", second, "--right")
-    panes = wait_for(lambda: len(p := local.panes()) == 3 and p)
+    panes = wait_for(lambda: len(p := local.cli.panes()) == 3 and p)
     tabs = {p["pane_id"]: p["tab_id"] for p in panes}
     assert tabs[first] == tabs[second] != tabs[source]
-    assert len(json.loads(remote("list", "--format", "json"))) == 2
+    assert len(remote.panes()) == 2
     local.cli("kill-pane", "--pane-id", first)
-    panes = wait_for(lambda: len(p := local.panes()) == 2 and p)
+    panes = wait_for(lambda: len(p := local.cli.panes()) == 2 and p)
     assert {p["pane_id"] for p in panes} == {source, second}
 
 
 def test_failed_remote_connection_preserves_the_source(mux_pair):
     local, remote = mux_pair
     source = int(local.cli("spawn", "--new-window"))
-    before = local.panes()
+    before = local.cli.panes()
     with pytest.raises(subprocess.CalledProcessError):
         local.cli("replace-pane", "--pane-id", source, "--domain-name", "offline")
-    after = local.panes()
+    after = local.cli.panes()
     assert source in {p["pane_id"] for p in after}
     assert geometry(next(p for p in after if p["pane_id"] == source)) == geometry(before[0])
-    assert json.loads(remote("list", "--format", "json")) == []
+    assert remote.panes() == []
 
 
 @pytest.mark.parametrize("domain", ["peer", "proxied"])
 def test_first_attach_adds_no_tab_to_the_callers_window(mux_pair, domain):
     local, _ = mux_pair
     source = int(local.cli("spawn", "--new-window"))
-    (tab,) = {p["tab_id"] for p in local.panes()}
+    (tab,) = {p["tab_id"] for p in local.cli.panes()}
     seen = set()
     with concurrent.futures.ThreadPoolExecutor() as pool:
         # The default shell never reports readiness, so the replacement stays in flight a second.
@@ -320,7 +207,7 @@ def test_first_attach_adds_no_tab_to_the_callers_window(mux_pair, domain):
             "--wait-for-ready",
         )
         while not result.done():
-            seen |= {p["tab_id"] for p in local.panes()}
+            seen |= {p["tab_id"] for p in local.cli.panes()}
         result.result()
     assert seen == {tab}
 
@@ -332,29 +219,19 @@ def test_relayed_commands_run_with_the_remote_environment(mux_pair, tmp_path, do
     local, _ = mux_pair
     source = int(local.cli("spawn", "--new-window"))
     result = tmp_path / "seen"
-    subprocess.run(
-        [
-            str(local.binaries["wezterm"]),
-            "--config-file",
-            str(local.config),
-            "cli",
-            "--no-auto-start",
-            "replace-pane",
-            "--pane-id",
-            str(source),
-            "--domain-name",
-            domain,
-            "--",
-            "/bin/sh",
-            "-c",
-            'printf %s "${VTABS_CLIENT_ONLY-unset}" > "$1"; exec sleep 30',
-            "sh",
-            str(result),
-        ],
-        env=dict(local.env, VTABS_CLIENT_ONLY="client"),
-        check=True,
-        capture_output=True,
-        timeout=20,
+    local.cli(
+        "replace-pane",
+        "--pane-id",
+        source,
+        "--domain-name",
+        domain,
+        "--",
+        "/bin/sh",
+        "-c",
+        'printf %s "${VTABS_CLIENT_ONLY-unset}" > "$1"; exec sleep 30',
+        "sh",
+        result,
+        env={"VTABS_CLIENT_ONLY": "client"},
     )
     assert wait_for(lambda: result.exists() and result.read_text()) == seen
 
@@ -365,9 +242,9 @@ def test_replacement_keeps_old_screen_until_prompt_ready(mux_pair, tmp_path, dom
     source = int(local.cli("spawn", "--new-window"))
     if domain != "local":
         # Connect first: the authentication UI is separate from a warm host switch.
-        local.adoptable(domain)
-        wait_for(lambda: {p["pane_id"] for p in local.panes()} == {source})
-    before = local.panes()
+        local.cli.adoptable(domain)
+        wait_for(lambda: {p["pane_id"] for p in local.cli.panes()} == {source})
+    before = local.cli.panes()
     started, gate = tmp_path / "started", tmp_path / "gate"
     command = (
         'touch "$1"; while [ ! -f "$2" ]; do sleep 0.01; done; '
@@ -393,7 +270,7 @@ def test_replacement_keeps_old_screen_until_prompt_ready(mux_pair, tmp_path, dom
         )
         try:
             wait_for(started.exists)
-            observed = local.panes()
+            observed = local.cli.panes()
             assert {p["pane_id"]: geometry(p) for p in observed} == {
                 p["pane_id"]: geometry(p) for p in before
             }, observed
@@ -403,7 +280,7 @@ def test_replacement_keeps_old_screen_until_prompt_ready(mux_pair, tmp_path, dom
             gate.touch()
         fresh = int(result.result(timeout=10))
     assert "READY_PROMPT" in local.cli("get-text", "--pane-id", fresh)
-    panes = local.panes()
+    panes = local.cli.panes()
     assert len(panes) == 1
     assert panes[0]["pane_id"] == fresh
     assert geometry(panes[0]) == geometry(before[0])
@@ -441,7 +318,7 @@ def test_replacement_exiting_before_readiness_preserves_source(mux_pair):
             "-c",
             "exit 1",
         )
-    assert {p["pane_id"] for p in local.panes()} == {source}
+    assert {p["pane_id"] for p in local.cli.panes()} == {source}
 
 
 @pytest.mark.parametrize("domain", ["local", "peer", "proxied"])
@@ -450,11 +327,11 @@ def test_replacement_starts_at_full_size_and_retains_focus(mux_pair, domain, zoo
     local, _ = mux_pair
     left = int(local.cli("spawn", "--new-window"))
     source = int(local.cli("split-pane", "--pane-id", left, "--right"))
-    before = {p["pane_id"]: p for p in local.panes()}
+    before = {p["pane_id"]: p for p in local.cli.panes()}
     local.cli("activate-pane", "--pane-id", source)
     if zoomed:
         local.cli("zoom-pane", "--pane-id", source, "--zoom")
-    expected = next(p for p in local.panes() if p["pane_id"] == source)
+    expected = next(p for p in local.cli.panes() if p["pane_id"] == source)
     fresh = int(
         local.cli(
             "replace-pane",
@@ -470,21 +347,21 @@ def test_replacement_starts_at_full_size_and_retains_focus(mux_pair, domain, zoo
     )
     rows, cols = expected["size"]["rows"], expected["size"]["cols"]
     wait_for(lambda: f"INITIAL:{rows} {cols}" in local.cli("get-text", "--pane-id", fresh))
-    panes = {p["pane_id"]: p for p in local.panes()}
+    panes = {p["pane_id"]: p for p in local.cli.panes()}
     assert set(panes) == {left, fresh}
     assert panes[fresh]["tab_id"] == before[source]["tab_id"]
     assert panes[fresh]["is_active"]
     assert geometry(panes[fresh]) == geometry(expected)
     if zoomed:
         local.cli("zoom-pane", "--pane-id", fresh, "--unzoom")
-        panes = {p["pane_id"]: p for p in local.panes()}
+        panes = {p["pane_id"]: p for p in local.cli.panes()}
     assert geometry(panes[left]) == geometry(before[left])
     assert geometry(panes[fresh]) == geometry(before[source])
 
 
 @pytest.mark.parametrize("domain", ["peer", "proxied"])
-def test_racing_focus_changes_settle(mux_pair, domain):
-    local, remote = mux_pair
+def test_racing_focus_changes_settle(mux_pair, tls_server, domain):
+    local, _ = mux_pair
     left = int(local.cli("spawn", "--new-window"))
     right = int(local.cli("split-pane", "--pane-id", left, "--right"))
     panes = [
@@ -493,16 +370,18 @@ def test_racing_focus_changes_settle(mux_pair, domain):
     ]
     local.cli("activate-pane", "--pane-id", panes[-1])
     # Stale echoes of both requests used to flip focus between the panes forever.
-    os.kill(remote.process.pid, signal.SIGSTOP)
+    os.kill(tls_server.process.pid, signal.SIGSTOP)
     try:
         for pane in panes:
             local.cli("activate-pane", "--pane-id", pane)
     finally:
-        os.kill(remote.process.pid, signal.SIGCONT)
+        os.kill(tls_server.process.pid, signal.SIGCONT)
     time.sleep(0.5)
     active = set()
     for _ in range(20):
-        active |= {p["pane_id"] for p in local.panes() if p["is_active"] and p["pane_id"] in panes}
+        active |= {
+            p["pane_id"] for p in local.cli.panes() if p["is_active"] and p["pane_id"] in panes
+        }
         time.sleep(0.05)
     assert active == {panes[-1]}
 
@@ -512,26 +391,24 @@ def test_unsupported_replacement_domain_preserves_source_and_sibling(mux_pair, d
     local, _ = mux_pair
     source = int(local.cli("spawn", "--new-window"))
     local.cli("split-pane", "--pane-id", source, "--right")
-    before = {p["pane_id"]: geometry(p) for p in local.panes()}
+    before = {p["pane_id"]: geometry(p) for p in local.cli.panes()}
     with pytest.raises(subprocess.CalledProcessError):
         local.cli("replace-pane", "--pane-id", source, "--domain-name", domain)
-    assert {p["pane_id"]: geometry(p) for p in local.panes()} == before
+    assert {p["pane_id"]: geometry(p) for p in local.cli.panes()} == before
 
 
 def test_shared_client_removal_does_not_resize_an_unaffected_sibling(mux_pair):
     local, remote = mux_pair
     source = int(remote("spawn", "--new-window"))
     sibling = int(remote("split-pane", "--pane-id", source, "--right"))
-    expected = geometry(
-        next(p for p in json.loads(remote("list", "--format", "json")) if p["pane_id"] == sibling)
-    )
+    expected = geometry(next(p for p in remote.panes() if p["pane_id"] == sibling))
     local.cli("spawn", "--new-window", "--domain-name", "shared")
-    wait_for(lambda: len(local.panes()) == 3)
+    wait_for(lambda: len(local.cli.panes()) == 3)
 
     # Remote notifications can reach a shared client before its replacement
     # tree. Pruning the old proxy must not send its interim expansion upstream.
     for iteration in range(6):
-        prior = {p["pane_id"] for p in local.panes()}
+        prior = {p["pane_id"] for p in local.cli.panes()}
         prompt = f"READY_{iteration}"
         replacement = int(
             remote(
@@ -547,20 +424,19 @@ def test_shared_client_removal_does_not_resize_an_unaffected_sibling(mux_pair):
         )
         updated = wait_for(
             lambda prior=prior: (
-                len(p := local.panes()) == 3 and {v["pane_id"] for v in p} != prior and p
+                len(p := local.cli.panes()) == 3 and {v["pane_id"] for v in p} != prior and p
             )
         )
         (proxy,) = {p["pane_id"] for p in updated} - prior
         # The first read after the tree changes must already contain the prompt.
         assert prompt in local.cli("get-text", "--pane-id", proxy)
         source = replacement
-        panes = json.loads(remote("list", "--format", "json"))
+        panes = remote.panes()
         assert geometry(next(p for p in panes if p["pane_id"] == sibling)) == expected
 
 
 def workspace_of(remote, pane_id):
-    panes = json.loads(remote("list", "--format", "json"))
-    return next(p["workspace"] for p in panes if p["pane_id"] == pane_id)
+    return next(p["workspace"] for p in remote.panes() if p["pane_id"] == pane_id)
 
 
 @pytest.mark.parametrize(("domain", "alternate"), [("peer", "peer-alt"), ("proxied", None)])
@@ -569,24 +445,22 @@ def test_restarted_mux_restores_its_backing_tabs_as_detached(mux_pair, domain, a
     source = int(local.cli("spawn", "--new-window"))
     backed = int(local.cli("replace-pane", "--pane-id", source, "--domain-name", domain))
     local.cli("send-text", "--pane-id", backed, "--no-paste", "echo restored-marker\n")
-    (backing,) = wait_for(
-        lambda: len(p := json.loads(remote("list", "--format", "json"))) == 1 and p
-    )
+    (backing,) = wait_for(lambda: len(p := remote.panes()) == 1 and p)
     assert backing["workspace"] == BACKING
     wait_for(lambda: "restored-marker" in remote("get-text", "--pane-id", backing["pane_id"]))
 
     local.restart()
     # Listing attaches the domain, which restores the orphan before listing what remains.
-    assert local.adoptable(domain) == []
-    (restored,) = [p for p in local.panes() if p["workspace"] == "__detached"]
+    assert local.cli.adoptable(domain) == []
+    (restored,) = [p for p in local.cli.panes() if p["workspace"] == "__detached"]
     wait_for(lambda: "restored-marker" in local.cli("get-text", "--pane-id", restored["pane_id"]))
     if alternate:
         # Another route to the same server must not restore a second copy.
-        assert local.adoptable(alternate) == []
-        assert len([p for p in local.panes() if p["workspace"] == "__detached"]) == 1
+        assert local.cli.adoptable(alternate) == []
+        assert len([p for p in local.cli.panes() if p["workspace"] == "__detached"]) == 1
 
     local.cli("kill-pane", "--pane-id", restored["pane_id"])
-    wait_for(lambda: not json.loads(remote("list", "--format", "json")))
+    wait_for(lambda: not remote.panes())
 
 
 def test_adopting_a_remote_pane_takes_over_its_backing_tab(mux_pair):
@@ -594,8 +468,8 @@ def test_adopting_a_remote_pane_takes_over_its_backing_tab(mux_pair):
     existing = int(remote("spawn", "--new-window"))
     foreign = int(remote("spawn", "--new-window", "--workspace", "__backing:elsewhere"))
     source = int(local.cli("spawn", "--new-window"))
-    window = next(p["window_id"] for p in local.panes() if p["pane_id"] == source)
-    assert [p["pane_id"] for p in local.adoptable("peer")] == [existing]
+    window = next(p["window_id"] for p in local.cli.panes() if p["pane_id"] == source)
+    assert [p["pane_id"] for p in local.cli.adoptable("peer")] == [existing]
     with pytest.raises(subprocess.CalledProcessError):
         local.cli("adopt-pane", "--domain-name", "peer", "--remote-pane-id", foreign)
 
@@ -610,37 +484,20 @@ def test_adopting_a_remote_pane_takes_over_its_backing_tab(mux_pair):
             window,
         )
     )
-    panes = {p["pane_id"]: p for p in local.panes()}
+    panes = {p["pane_id"]: p for p in local.cli.panes()}
     assert panes[adopted]["window_id"] == window
     assert panes[adopted]["tab_id"] != panes[source]["tab_id"]
     assert workspace_of(remote, existing) == BACKING
     assert workspace_of(remote, foreign) == "__backing:elsewhere"
-    assert local.adoptable("peer") == []
-    assert local.adoptable("peer-alt") == []
+    assert local.cli.adoptable("peer") == []
+    assert local.cli.adoptable("peer-alt") == []
 
     local.cli("kill-pane", "--pane-id", adopted)
-    wait_for(
-        lambda: (
-            existing not in {p["pane_id"] for p in json.loads(remote("list", "--format", "json"))}
-        )
-    )
+    wait_for(lambda: existing not in {p["pane_id"] for p in remote.panes()})
 
 
 def observer_of(local, wezterm_binaries, isolated_env, local_pane_layout):
-    hop = {
-        "name": "hop",
-        "local_pane_layout": local_pane_layout,
-        "proxy_command": [
-            "/usr/bin/env",
-            f"WEZTERM_UNIX_SOCKET={local.socket}",
-            str(wezterm_binaries["wezterm"]),
-            "--config-file",
-            str(local.config),
-            "cli",
-            "--no-auto-start",
-            "proxy",
-        ],
-    }
+    hop = local.cli.proxy_domain("hop", local_pane_layout=local_pane_layout)
     return MuxServer(local.root.parent / "observer", wezterm_binaries, isolated_env, [], [hop])
 
 
@@ -648,10 +505,10 @@ def test_adoption_skips_panes_the_server_only_relays(mux_pair, wezterm_binaries,
     local, _ = mux_pair
     plain = int(local.cli("spawn", "--new-window"))
     local.cli("spawn", "--new-window", "--domain-name", "shared")
-    wait_for(lambda: len(local.panes()) == 2)
+    wait_for(lambda: len(local.cli.panes()) == 2)
     observer = observer_of(local, wezterm_binaries, isolated_env, local_pane_layout=True)
     try:
-        assert [p["pane_id"] for p in observer.adoptable("hop")] == [plain]
+        assert [p["pane_id"] for p in observer.cli.adoptable("hop")] == [plain]
     finally:
         observer.close()
 
@@ -674,7 +531,7 @@ def test_relayed_scrollback_reaches_a_client_of_the_relaying_mux(
         def mirrors(pane):
             return "\n3000" in observer.cli("get-text", "--pane-id", pane["pane_id"])
 
-        (mirrored,) = wait_for(lambda: [p["pane_id"] for p in observer.panes() if mirrors(p)])
+        (mirrored,) = wait_for(lambda: [p["pane_id"] for p in observer.cli.panes() if mirrors(p)])
         scrollback = "\n".join(map(str, range(1, 3001)))
         wait_for(
             lambda: (
@@ -693,7 +550,7 @@ def test_idle_replacement_reports_its_directory_to_a_client_of_the_owning_mux(
     observer = observer_of(local, wezterm_binaries, isolated_env, local_pane_layout=False)
     try:
         observer.cli("spawn", "--new-window", "--domain-name", "hop")
-        (source,) = wait_for(lambda: [p["pane_id"] for p in local.panes()])
+        (source,) = wait_for(lambda: [p["pane_id"] for p in local.cli.panes()])
         # The directory is reported before readiness; afterwards the shell stays silent.
         shell = (
             'mkdir -p "$1" && cd "$1"'
@@ -716,6 +573,6 @@ def test_idle_replacement_reports_its_directory_to_a_client_of_the_owning_mux(
             "sh",
             directory,
         )
-        wait_for(lambda: any(p["cwd"].endswith(directory.name) for p in observer.panes()))
+        wait_for(lambda: any(p["cwd"].endswith(directory.name) for p in observer.cli.panes()))
     finally:
         observer.close()

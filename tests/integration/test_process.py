@@ -73,45 +73,33 @@ def test_cleanup_retries_after_a_signal_failure(monkeypatch):
         stop_process(process, timeout_seconds=0.2)
 
 
-@pytest.mark.parametrize("kind", ["probe", "headless", "ssh"])
+@pytest.mark.parametrize("kind", ["probe", "headless"])
 def test_fixture_cleanup_finishes_other_resources_after_a_process_error(
     kind, tmp_path, monkeypatch
 ):
-    from tests.scenarios import ssh_fixture
     from tests.support import headless, probe
 
     with ExitStack() as cleanup:
-        logs = [cleanup.enter_context((tmp_path / f"{index}.log").open("wb")) for index in range(2)]
         processes = []
-        for log in logs:
+        for _ in range(2):
             process = subprocess.Popen(
                 [sys.executable, "-c", "import time; time.sleep(60)"],
-                stdout=log,
-                stderr=log,
+                stdout=subprocess.DEVNULL,
                 start_new_session=os.name != "nt",
             )
             processes.append(process)
             cleanup.callback(stop_process, process, timeout_seconds=0.2)
-        display = None
         if kind == "probe":
             module = probe
             fixture = probe.Probe(tmp_path / "probe", Path(sys.executable), None, "local")
-            fixture.processes, fixture.outputs = processes, logs
+            fixture.processes = processes
             display = fixture.display
-        elif kind == "headless":
+        else:
             module = headless
             fixture = headless.HeadlessDisplay(tmp_path / "display")
             fixture.xserver, fixture.manager = processes
-            fixture.logs = list(logs)
             display = fixture
-        else:
-            module = ssh_fixture
-            fixture = ssh_fixture.LocalSshMux(tmp_path, Path("unused"), Path("unused"))
-            fixture.processes, fixture.logs = processes, logs
-            for name in ("host_key", "client_key"):
-                (tmp_path / name).write_text("fixture key")
-        if display is not None:
-            display.env["DISPLAY"] = ":fixture"
+        display.env["DISPLAY"] = ":fixture"
 
         def denied(process, **kwargs):
             if process is processes[-1]:
@@ -125,11 +113,6 @@ def test_fixture_cleanup_finishes_other_resources_after_a_process_error(
 
         assert processes[0].poll() is not None
         assert processes[1].poll() is None
-        assert all(log.closed for log in logs)
-        if display is not None:
-            assert "DISPLAY" not in display.env
-        if kind == "ssh":
-            assert not (tmp_path / "host_key").exists()
-            assert not (tmp_path / "client_key").exists()
+        assert "DISPLAY" not in display.env
         fixture.close()
         assert all(process.poll() is not None for process in processes)

@@ -1,5 +1,4 @@
-//! Builds in containers with their own cache: x86_64 Linux bundles, and macOS binaries
-//! cross-compiled for a Mac to package and sign.
+//! Container builds with their own cache: x86_64 Linux bundles and macOS binaries for a Mac to sign.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -7,8 +6,9 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context as _, Result, bail, ensure};
 use serde_json::{Value, json};
 
+use crate::cli::BuildArgs;
 use crate::process::CommandSpec;
-use crate::state::{self, BuildMetadata, Context};
+use crate::state::{BuildMetadata, Context};
 use crate::targets::Platform;
 
 const PLATFORM: &str = "linux/amd64";
@@ -66,11 +66,14 @@ pub struct Options {
 /// `start` launches Docker Desktop when x86_64 builds on a Mac need it.
 pub fn detect_runtime(explicit: Option<&str>, start: bool) -> Result<String> {
     if let Some(runtime) = explicit {
-        ensure!(which(runtime), "container runtime not found: {runtime}");
+        ensure!(
+            which::which(runtime).is_ok(),
+            "container runtime not found: {runtime}"
+        );
         return Ok(runtime.to_string());
     }
     for var in ["VTABS_CONTAINER_RUNTIME", "VTABS_TEST_CONTAINER_RUNTIME"] {
-        if let Some(runtime) = std::env::var(var).ok().filter(|r| which(r)) {
+        if let Some(runtime) = std::env::var(var).ok().filter(|r| which::which(r).is_ok()) {
             return Ok(runtime);
         }
     }
@@ -80,11 +83,11 @@ pub fn detect_runtime(explicit: Option<&str>, start: bool) -> Result<String> {
     let candidates = ["podman", "docker"];
     if let Some(&candidate) = candidates
         .iter()
-        .find(|&&c| which(c) && is_runtime_working(c))
+        .find(|&&c| which::which(c).is_ok() && is_runtime_working(c))
     {
         return Ok(candidate.to_string());
     }
-    if let Some(&candidate) = candidates.iter().find(|&&c| which(c)) {
+    if let Some(&candidate) = candidates.iter().find(|&&c| which::which(c).is_ok()) {
         return Ok(candidate.to_string());
     }
     bail!("container build requires Podman or Docker in PATH");
@@ -93,7 +96,7 @@ pub fn detect_runtime(explicit: Option<&str>, start: bool) -> Result<String> {
 /// Docker Desktop runs x86_64 containers through Rosetta; podman's default libkrun VM cannot.
 fn docker_desktop(start: bool) -> Result<String> {
     ensure!(
-        which("docker"),
+        which::which("docker").is_ok(),
         "x86_64 builds on Apple silicon need Docker Desktop"
     );
     if start && !is_runtime_working("docker") {
@@ -114,14 +117,6 @@ fn docker_desktop(start: bool) -> Result<String> {
     Ok("docker".into())
 }
 
-fn which(cmd: &str) -> bool {
-    if Path::new(cmd).is_absolute() {
-        return Path::new(cmd).is_file();
-    }
-    std::env::var_os("PATH")
-        .is_some_and(|path| std::env::split_paths(&path).any(|dir| dir.join(cmd).is_file()))
-}
-
 fn is_runtime_working(cmd: &str) -> bool {
     std::process::Command::new(cmd)
         .arg("info")
@@ -140,6 +135,7 @@ fn image_exists(runtime: &str, tag: &str) -> bool {
         .is_ok_and(|s| s.success())
 }
 
+#[cfg(unix)]
 fn is_podman(runtime: &str) -> bool {
     Path::new(runtime)
         .file_name()
@@ -302,8 +298,7 @@ fn pinned_upstream(ctx: &Context, cache: &Path) -> Result<Option<String>> {
     if ctx.upstream.is_some() {
         return Ok(ctx.upstream.clone());
     }
-    let previous: Option<BuildMetadata> = state::read_json(&cache.join("build.json"))?;
-    Ok(previous.map(|previous| previous.upstream))
+    Ok(BuildMetadata::read(cache)?.map(|previous| previous.upstream))
 }
 
 fn tool_arguments(
@@ -357,13 +352,43 @@ pub fn plan(ctx: &Context, platform: &Platform, options: &Options, output: &Path
     }))
 }
 
-/// Linux: a verified bundle directory. macOS: a prebuilt directory for `deploy --prebuilt`.
-pub fn build(
+/// macOS bundles for a Mac are built natively on a Mac.
+pub fn native(platform: &Platform) -> bool {
+    *platform == Platform::Macos && cfg!(target_os = "macos")
+}
+
+/// `build --platform`, or its plan with `--explain`.
+pub fn run(ctx: &Context, args: &BuildArgs, platform: &str) -> Result<Value> {
+    let platform = Platform::parse(platform)?;
+    let output = args.output.clone().unwrap_or_else(|| ctx.root.join("dist"));
+    let options = Options {
+        image: args.image.clone(),
+        runtime: args.container_runtime.clone(),
+        clean: args.clean_builder,
+    };
+    if ctx.explain && !native(&platform) {
+        return plan(ctx, &platform, &options, &output);
+    }
+    Ok(json!({"bundle": bundle(ctx, &platform, &options, &output)?}))
+}
+
+/// A verified bundle for `platform`, natively when possible.
+pub fn bundle(
     ctx: &Context,
     platform: &Platform,
     options: &Options,
     output: &Path,
 ) -> Result<PathBuf> {
+    if native(platform) {
+        let _lock = ctx.lock_build()?;
+        let metadata = crate::build::build(ctx)?;
+        return crate::bundle::package(ctx, &metadata, output, false);
+    }
+    build(ctx, platform, options, output)
+}
+
+/// Linux: a verified bundle directory. macOS: a prebuilt directory for `deploy --prebuilt`.
+fn build(ctx: &Context, platform: &Platform, options: &Options, output: &Path) -> Result<PathBuf> {
     let sdk = sdk_dir();
     if *platform == Platform::Macos {
         ensure!(

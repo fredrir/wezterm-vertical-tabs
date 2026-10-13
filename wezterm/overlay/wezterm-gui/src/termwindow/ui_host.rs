@@ -1,12 +1,14 @@
 //! Window-owned surfaces. Product state lives in the registered provider.
 use crate::termwindow::{TabInformation, TermWindow, TermWindowNotif};
-use mux::{Mux, MuxNotification, tab::TabId};
-use std::collections::HashSet;
+use mux::{tab::TabId, Mux, MuxNotification};
+use std::cell::RefCell;
+use std::collections::{HashMap, HashSet};
 
 mod chrome;
 mod contract;
 mod endpoint;
 mod geometry;
+pub mod launcher;
 mod render;
 mod routing;
 mod scheduler;
@@ -16,7 +18,7 @@ pub(crate) use endpoint::WindowEndpoint;
 pub use geometry::{Bounds, Geometry, Reservation};
 
 thread_local! {
-    static ARRIVALS: std::cell::RefCell<std::collections::HashMap<usize, Vec<Message>>> = Default::default();
+    static ARRIVALS: RefCell<HashMap<usize, Vec<Message>>> = Default::default();
 }
 pub fn spawn_completed(window: usize, tab: usize, context: SpawnContext) {
     ARRIVALS.with(|arrivals| {
@@ -30,7 +32,10 @@ pub fn spawn_completed(window: usize, tab: usize, context: SpawnContext) {
             })
     });
 }
-pub fn spawn_failed(window: usize, context: SpawnContext) {
+pub fn spawn_failed(window: Option<usize>, context: Option<SpawnContext>) {
+    let (Some(window), Some(context)) = (window, context) else {
+        return;
+    };
     if let Some(gui) = crate::frontend::front_end().gui_window_for_mux_window(window) {
         WindowEndpoint::new(gui.window, window).send(Message::SpawnFailed(context));
     }
@@ -77,6 +82,11 @@ impl UiHost {
                 host.initialize(arrivals);
             }
         });
+        host
+    }
+    pub async fn initialized(window_id: usize) -> Self {
+        let mut host = Self::new(window_id);
+        host.provider.initialize().await;
         host
     }
     fn initialize(&mut self, arrivals: &[Message]) {
@@ -161,6 +171,17 @@ impl TermWindow {
             ui.dirty = true;
         }
     }
+    pub fn vtabs_refresh(&mut self) {
+        self.vtabs_mark_dirty();
+        self.vtabs_sync();
+    }
+    /// Shows a tab by window index, bypassing the sidebar's visible order.
+    pub fn vtabs_show_tab_idx(&mut self, tab_idx: usize) {
+        if let Some(mut window) = Mux::get().get_window_mut(self.mux_window_id) {
+            window.remember_and_set_active_tab_idx(tab_idx);
+        }
+        self.vtabs_refresh();
+    }
     pub fn vtabs_sync(&mut self) {
         let before = self.vtabs_reservation();
         let Some(mut ui) = self.ui_host.take() else {
@@ -206,7 +227,6 @@ impl TermWindow {
             ui.known = tabs.iter().map(|tab| tab.tab_id()).collect();
             ui.provider.snapshot(Snapshot {
                 revision: ui.revision,
-                window_id: self.mux_window_id,
                 tabs,
                 bells: ui.bells.clone(),
                 active,
@@ -281,6 +301,18 @@ impl TermWindow {
                 }
             }
         }
+    }
+    /// The newly shown mux window adopts this layout; hosts of closed windows end.
+    pub fn vtabs_switched_window(&mut self, window: &window::Window) {
+        let mux = Mux::get();
+        let closed = self
+            .vtabs_suspended
+            .extract_if(|id, _| mux.get_window(*id).is_none());
+        for (_, ui) in closed {
+            ui.shutdown();
+        }
+        self.vtabs_sync();
+        self.apply_dimensions(&self.dimensions.clone(), None, window);
     }
     pub fn vtabs_shutdown(&mut self) {
         if let Some(ui) = self.ui_host.take() {

@@ -5,8 +5,8 @@ use crate::element::ElementId;
 use crate::events::EditorSlot;
 use crate::input::{EditResult, Key, Modifiers};
 use crate::intent::UiIntent;
+use crate::overlays::launcher::LauncherKind;
 use crate::overlays::{Menu, Overlay, next_enabled};
-use crate::views::launcher::LauncherKind;
 use vtabs_core::Model;
 
 impl SidebarUi {

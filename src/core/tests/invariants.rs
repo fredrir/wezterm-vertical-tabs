@@ -246,7 +246,7 @@ fn quick_terminal_sizes_are_window_fractions() {
 #[test]
 fn schema_defaults_validate_every_field() {
     let defaults = Settings::default();
-    for d in settings::descriptors() {
+    for d in settings::DESCRIPTORS {
         settings::validate_value(d.key, &defaults.get(d.key).unwrap()).unwrap();
     }
 }

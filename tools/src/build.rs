@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 
 use crate::build_identity::{BuildConfiguration, CargoConfig, Compilation, LockDigests, Toolchain};
 use crate::process::{CommandSpec, RunReport, relevant_environment};
-use crate::source;
+use crate::source::{self, inventory, patches, project, upstream};
 use crate::state::{self, BuildMetadata, Context, Role};
 
 fn cargo(ctx: &Context, cwd: &Path, target_dir: &Path, command: &str) -> CommandSpec {
@@ -121,8 +121,7 @@ fn config_records(ctx: &Context, worktree: &Path) -> Result<Vec<CargoConfig>> {
             let contents = fs::read_to_string(path)?;
             let original = contents.parse::<toml_edit::DocumentMut>()?;
             let mut settings = toml_edit::DocumentMut::new();
-            // Preserve reproducible compiler settings without credentials,
-            // registry tokens, HTTP headers or credential-provider configuration.
+            // Compiler settings only; credentials, tokens and HTTP headers stay out of identities.
             for key in ["build", "profile", "target"] {
                 if let Some(value) = original.get(key) {
                     settings[key] = value.clone();
@@ -145,8 +144,7 @@ fn requested_target(ctx: &Context, worktree: &Path) -> Result<Option<String>> {
         ensure!(!target.is_empty(), "CARGO_BUILD_TARGET must not be empty");
         return Ok(Some(target));
     }
-    // Read the effective workspace target. Passing it explicitly keeps
-    // the project store helper on the same target as the application.
+    // Passed explicitly so the store helper builds for the same target as the application.
     for path in configuration_files(ctx, worktree) {
         let document = fs::read_to_string(path)?.parse::<toml_edit::DocumentMut>()?;
         if let Some(target) = document.get("build").and_then(|v| v.get("target")) {
@@ -303,8 +301,7 @@ fn worktree_digest(ctx: &Context, worktree: &Path) -> Result<String> {
         ".",
     ]))?;
     ctx.runner.metadata("upstream_diff", &json!(diff))?;
-    // The injected adapter is untracked and already included in compile_digest.
-    // Include other non-ignored additions because a build script may read them.
+    // Untracked additions count too: build scripts may read them; the adapter is also in compile_digest.
     let untracked = ctx.runner.capture(source::git(ctx, worktree).args([
         "ls-files",
         "--others",
@@ -336,14 +333,15 @@ fn validate_wezterm(
     target: Option<&str>,
 ) -> Result<()> {
     let _stage = ctx.runner.stage("validate");
+    let desktop = ctx.role == Role::Desktop;
+    // Validation only runs host binaries; window's tests cover its macOS menu.
     let packages = [
-        ("wezterm-gui", false),
-        ("wezterm-mux-server-impl", true),
-        ("wezterm-client", true),
-        ("wezterm-input-types", true),
+        ("wezterm-gui", false, desktop),
+        ("wezterm-mux-server-impl", true, true),
+        ("wezterm-client", true, true),
+        ("window", true, desktop && cfg!(target_os = "macos")),
     ];
-    let without_gui = usize::from(ctx.role == Role::Mux);
-    for &(package, library) in &packages[without_gui..] {
+    for (package, library, _) in packages.into_iter().filter(|package| package.2) {
         let mut command =
             cargo(ctx, worktree, target_dir, "test").args(["--locked", "-p", package]);
         if let Some(target) = target {
@@ -362,13 +360,13 @@ fn validate_wezterm(
 fn snapshot(ctx: &Context, digest: &str) -> Result<()> {
     let _stage = ctx.runner.stage("snapshot");
     let first = ctx.runner.directory().join("source");
-    let destination = if first.exists() && source::source_digest(&first)? != digest {
+    let destination = if first.exists() && inventory::source_digest(&first)? != digest {
         ctx.runner.directory().join(format!("source-{digest}"))
     } else {
         first
     };
     if !destination.exists() {
-        source::copy_source(&ctx.root, &destination)?;
+        inventory::copy_source(&ctx.root, &destination)?;
     }
     ctx.runner.metadata(
         "source_snapshot",
@@ -379,7 +377,7 @@ fn snapshot(ctx: &Context, digest: &str) -> Result<()> {
         ),
     )?;
     ensure!(
-        source::source_digest(&destination)? == digest,
+        inventory::source_digest(&destination)? == digest,
         "project source changed while capturing reproduction snapshot; run again"
     );
     Ok(())
@@ -410,11 +408,10 @@ fn bundle_id(metadata: &BuildMetadata) -> Result<String> {
     Ok(identifier)
 }
 
-/// Restage resource changes without compilation. The previous validation
-/// identity is retained so a later build can validate changed test inputs.
+/// Restages resources without compiling; keeps the previous validation identity for a later build.
 pub fn restage(ctx: &Context, previous: &BuildMetadata) -> Result<Option<BuildMetadata>> {
     let _stage = ctx.runner.stage("restage");
-    let source_digest = source::source_digest(&ctx.root)?;
+    let source_digest = inventory::source_digest(&ctx.root)?;
     let is_dev = ctx.profile == "iterate" || ctx.profile == "dev";
     if !is_dev {
         snapshot(ctx, &source_digest)?;
@@ -431,7 +428,8 @@ pub fn restage(ctx: &Context, previous: &BuildMetadata) -> Result<Option<BuildMe
             .upstream
             .as_ref()
             .is_some_and(|v| v != &previous.upstream)
-        || previous.configuration.compilation.compile_inputs != source::compile_digest(&ctx.root)?
+        || previous.configuration.compilation.compile_inputs
+            != inventory::compile_digest(&ctx.root)?
         || previous.configuration.compilation.environment != relevant_environment()
     {
         return Ok(None);
@@ -470,10 +468,10 @@ pub fn restage(ctx: &Context, previous: &BuildMetadata) -> Result<Option<BuildMe
     }
     let mut metadata = previous.clone();
     metadata.source_digest = source_digest;
-    metadata.project_source = source::project_source(ctx)?;
+    metadata.project_source = project::source(ctx)?;
     metadata.id = bundle_id(&metadata)?;
-    source::verify_source(&ctx.root, &metadata)?;
-    state::write_json(&ctx.cache.join("build.json"), &metadata)?;
+    inventory::verify_source(&ctx.root, &metadata)?;
+    state::write_json(&ctx.build_record(), &metadata)?;
     ctx.runner
         .metadata("build", &serde_json::to_value(&metadata)?)?;
     Ok(Some(metadata))
@@ -489,19 +487,19 @@ pub fn build(ctx: &Context) -> Result<BuildMetadata> {
         "invalid Cargo profile"
     );
     let fingerprint_stage = ctx.runner.stage("fingerprint");
-    let source_digest = source::source_digest(&ctx.root)?;
+    let source_digest = inventory::source_digest(&ctx.root)?;
     let is_dev = ctx.profile == "iterate" || ctx.profile == "dev";
     if !is_dev {
         snapshot(ctx, &source_digest)?;
     }
-    let compile_inputs = source::compile_digest(&ctx.root)?;
-    let validation_inputs = source::validation_digest(&ctx.root)?;
+    let compile_inputs = inventory::compile_digest(&ctx.root)?;
+    let validation_inputs = inventory::validation_digest(&ctx.root)?;
     drop(fingerprint_stage);
-    let project = source::project_source(ctx)?;
+    let project = project::source(ctx)?;
     ctx.runner
         .metadata("source_digest", &json!(source_digest))?;
-    let resolved = source::resolve(ctx)?;
-    let worktree = source::prepare(ctx, &resolved)?;
+    let resolved = upstream::resolve(ctx)?;
+    let worktree = patches::prepare(ctx, &resolved)?;
     let replay = restore_replay(ctx, &worktree, &resolved.revision)?;
     let target_dir = resolved.checkout.join("target");
     let toolchain = Toolchain::capture(ctx, &worktree)?;
@@ -550,10 +548,9 @@ pub fn build(ctx: &Context) -> Result<BuildMetadata> {
     if let Some(report) = &replay {
         verify_replay(report, &configuration)?;
     }
-    let previous: Option<BuildMetadata> = state::read_json(&ctx.cache.join("build.json"))?;
+    let previous = ctx.last_build()?;
     let mut artifacts = BTreeMap::new();
-    // Cargo is the authority for freshness, including build-script dependencies
-    // and toolchain/config changes that a project-only fingerprint cannot see.
+    // Cargo decides freshness: it sees build-script, toolchain and config inputs the fingerprints miss.
     let compile_stage = ctx.runner.stage("compile");
     if binaries.contains(&"wez-vtabs-store") {
         let mut helper = cargo(ctx, &ctx.root, &target_dir, "build")
@@ -585,8 +582,7 @@ pub fn build(ctx: &Context) -> Result<BuildMetadata> {
     if let Some(target) = &requested {
         application = application.args(["--target", target]);
     }
-    // A newly patched workspace must resolve the injected path dependencies.
-    // Preserve the actual resulting lock even when compilation fails.
+    // Records the lock Cargo resolved for the injected path dependencies, even when compilation fails.
     let output = ctx.runner.capture(application);
     preserve_cargo_timings(ctx, &target_dir)?;
     configuration.compilation.locks = capture_locks(ctx, &worktree)?;
@@ -629,7 +625,7 @@ pub fn build(ctx: &Context) -> Result<BuildMetadata> {
     }
 
     configuration.compilation.worktree_digest = worktree_digest(ctx, &worktree)?;
-    let mux_digest = source::mux_digest(ctx, &worktree, &resolved.revision)?;
+    let mux_digest = crate::build_identity::mux_digest(ctx, &worktree, &resolved.revision)?;
     drop(compile_stage);
     let compile_digest = configuration.compile_digest(&resolved.revision)?;
     let validation_digest = configuration.validation_digest(&compile_digest)?;
@@ -668,14 +664,14 @@ pub fn build(ctx: &Context) -> Result<BuildMetadata> {
         artifacts,
     };
     metadata.id = bundle_id(&metadata)?;
-    source::verify_source(&ctx.root, &metadata)?;
-    let latest_project = source::project_source(ctx)?;
+    inventory::verify_source(&ctx.root, &metadata)?;
+    let latest_project = project::source(ctx)?;
     if serde_json::to_value(latest_project)? != serde_json::to_value(&metadata.project_source)? {
         bail!("project revision changed during build; run again");
     }
     ctx.runner
         .metadata("build", &serde_json::to_value(&metadata)?)?;
-    state::write_json(&ctx.cache.join("build.json"), &metadata)?;
+    state::write_json(&ctx.build_record(), &metadata)?;
     Ok(metadata)
 }
 
@@ -752,8 +748,8 @@ pub fn prebuilt(ctx: &Context, metadata: &BuildMetadata, output: &Path) -> Resul
             )?;
         }
     }
-    source::copy_source(&ctx.root, &destination.join("source"))?;
-    state::write_json(&destination.join("build.json"), &relative)?;
+    inventory::copy_source(&ctx.root, &destination.join("source"))?;
+    relative.write(&destination)?;
     state::write_json(
         &destination.join("prebuilt.json"),
         &json!({"tool": "bin/wez-vtabs", "target": metadata.target}),

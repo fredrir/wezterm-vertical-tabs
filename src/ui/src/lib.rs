@@ -16,16 +16,17 @@ pub use element::{ElementId, ScrollArea};
 pub use input::{EditResult, Key, Modifiers, MouseButton, TextEditor, UiInput};
 pub use intent::{HostAction, UiIntent};
 pub use keybinds::{matches_shortcut, shortcut_chord};
+pub use overlays::launcher::{AdoptablePane, CommandEntry, ForeignTab, LaunchMenuConfig};
 pub use ratatui::{buffer::Buffer, layout::Rect};
 pub use runtime::canvas::{HitRegion, RoundedSurface};
 pub use runtime::frame::{FrameUpdate, SurfaceTransform};
 pub use runtime::motion::transition;
 pub use theme::Theme;
-pub use views::launcher::{AdoptablePane, CommandEntry, ForeignTab, LaunchMenuConfig};
 pub use views::sidebar::header_fits;
 
 use actions::Action;
 use events::Pointer;
+use overlays::launcher::Launchers;
 use overlays::{FormKind, Menu, MenuItem, Overlay, Overlays};
 use ratatui::layout::Position;
 use runtime::{
@@ -34,7 +35,7 @@ use runtime::{
     motion::{self, Caret, Effects, Tooltip, Tween},
 };
 use std::time::Duration;
-use views::{launcher::Launchers, settings_page::SettingsPage, sidebar::Sidebar};
+use views::{settings_page::SettingsPage, sidebar::Sidebar};
 use vtabs_core::{Intent, PaneId, TabId};
 
 #[derive(Default)]
@@ -150,13 +151,6 @@ impl SidebarUi {
 
     pub fn invalidate(&mut self) {
         self.frame.dirty = true;
-    }
-    pub fn set_config_owned(&mut self, keys: impl IntoIterator<Item = String>) {
-        let keys = keys.into_iter().collect();
-        if self.settings.config_owned != keys {
-            self.settings.config_owned = keys;
-            self.invalidate();
-        }
     }
     pub fn hit_test(&self, x: u16, y: u16) -> Option<&HitRegion> {
         self.paint

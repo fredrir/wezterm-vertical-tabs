@@ -1,7 +1,7 @@
 use crate::icons;
 use ratatui::style::{Color, Style};
 use std::collections::BTreeMap;
-use vtabs_core::Model;
+use vtabs_core::{Model, settings};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Theme {
@@ -147,11 +147,8 @@ impl Theme {
         self.base().fg(self.accent)
     }
     pub fn parse_color(value: &str) -> Option<Color> {
-        let hex = value.strip_prefix('#')?;
-        if hex.len() != 6 {
-            return None;
-        }
-        let rgb = u32::from_str_radix(hex, 16).ok()?;
-        Some(Color::Rgb((rgb >> 16) as u8, (rgb >> 8) as u8, rgb as u8))
+        settings::valid_color(value)
+            .then(|| value.parse().ok())
+            .flatten()
     }
 }

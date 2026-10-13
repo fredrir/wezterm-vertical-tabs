@@ -11,7 +11,8 @@ use serde_json::{Value, json};
 
 use crate::bundle;
 use crate::process::CommandSpec;
-use crate::state::{self, Context, Lock, ProjectSource};
+use crate::source::{inventory, project, upstream};
+use crate::state::{self, BuildMetadata, Context, Lock, ProjectSource};
 
 const DAY: u64 = 24 * 60 * 60;
 
@@ -99,7 +100,7 @@ fn release_manifest(ctx: &Context, location: &str, temporary: &Path) -> Result<R
         is_hex(revision, 40) || is_hex(revision, 64),
         "release project source must be an exact Git revision"
     );
-    let project = crate::source::project_source(ctx)?;
+    let project = project::source(ctx)?;
     ensure!(
         manifest.project_source.remote == project.remote
             && manifest.project_source.branch == project.branch,
@@ -211,8 +212,7 @@ pub fn queue_daily_update(bundle: &Path, root: &Path) -> Result<()> {
         command.creation_flags(0x08000000);
     }
     let mut child = command.spawn()?;
-    // Reap while the launcher remains alive. An exiting launcher does not
-    // terminate the detached worker or release the worker's transaction locks.
+    // Reaped while the launcher lives; its exit neither stops the worker nor releases its locks.
     std::thread::spawn(move || {
         let _ = child.wait();
     });
@@ -259,7 +259,7 @@ pub fn update(
                 } else {
                     let installed =
                         install_release(ctx, location, &release, temporary.path(), stage_only)?;
-                    state["pruned"] = crate::diagnostics::prune(ctx, None)?;
+                    state["pruned"] = crate::cache::prune(ctx, None)?;
                     state["status"] = json!("ready");
                     state["bundle"] = json!(installed);
                     state["staged"] = json!(stage_only);
@@ -267,14 +267,14 @@ pub fn update(
                 return Ok(());
             }
 
-            let _build_lock = Lock::acquire(&ctx.cache.join("build.lock"))?;
+            let _build_lock = ctx.lock_build()?;
             let installed_source = ctx
                 .root
                 .parent()
                 .is_some_and(|parent| parent.join("build.json").is_file());
             if installed_source && !synced {
-                let project = crate::source::project_source(ctx)?;
-                let checkout = crate::source::refresh_project(ctx, &project.branch)?;
+                let project = project::source(ctx)?;
+                let checkout = project::refresh(ctx, &project.branch)?;
                 let revision = ctx.runner.capture(
                     CommandSpec::new("git")
                         .args(["rev-parse", "HEAD"])
@@ -289,10 +289,9 @@ pub fn update(
                     &json!({"source":project,"revision":revision,"checkout":checkout}),
                 )?;
                 if check_only {
-                    let resolved = crate::source::resolve(ctx)?;
-                    let installed: state::BuildMetadata =
-                        state::read_json(&ctx.root.parent().unwrap().join("build.json"))?
-                            .context("installed build metadata missing")?;
+                    let resolved = upstream::resolve(ctx)?;
+                    let installed = BuildMetadata::read(ctx.root.parent().unwrap())?
+                        .context("installed build metadata missing")?;
                     state["status"] = json!("checked");
                     state["available"] = json!(
                         installed.project_source.revision.as_deref() != Some(&revision)
@@ -306,8 +305,7 @@ pub fn update(
                     checkout.join("tools/Cargo.toml").is_file(),
                     "updated project has no Rust tooling; choose a compatible branch"
                 );
-                // A revision-specific output prevents overwriting a running
-                // updater executable on Windows during a later update.
+                // Per-revision output: Windows cannot overwrite a running updater executable.
                 let target = ctx.cache.join("updaters").join(&revision).join("target");
                 let tool = target
                     .join(env!("WEZ_VTABS_TARGET"))
@@ -358,11 +356,11 @@ pub fn update(
                 state["status"] = json!("project_synced");
                 state["project_revision"] = json!(revision);
             } else if check_only {
-                let resolved = crate::source::resolve(ctx)?;
-                let source_digest = crate::source::source_digest(&ctx.root)?;
+                let resolved = upstream::resolve(ctx)?;
+                let source_digest = inventory::source_digest(&ctx.root)?;
                 let active = crate::install::current_bundle(&ctx.install, false).ok();
-                let installed: Option<state::BuildMetadata> = match active {
-                    Some(path) => state::read_json(&path.join("build.json"))?,
+                let installed = match active {
+                    Some(path) => BuildMetadata::read(&path)?,
                     None => None,
                 };
                 state["status"] = json!("checked");
@@ -378,7 +376,7 @@ pub fn update(
                 let metadata = crate::build::build(ctx)?;
                 let bundle = bundle::package(ctx, &metadata, output, false)?;
                 let installed = crate::install::install(ctx, &bundle, stage_only)?;
-                state["pruned"] = crate::diagnostics::prune(ctx, Some(&_build_lock))?;
+                state["pruned"] = crate::cache::prune(ctx, Some(&_build_lock))?;
                 state["status"] = json!("ready");
                 state["id"] = json!(metadata.id);
                 state["bundle"] = json!(installed);
@@ -396,8 +394,7 @@ pub fn update(
         state::write_json(&ctx.install.join("update.json"), &state)?;
     }
     if let Some(command) = delegate {
-        // The new tool takes its own update/build locks; no parent lock survives
-        // the handoff and developer checkouts are never reset by this path.
+        // The new tool takes its own locks; no parent lock survives the handoff.
         if let Err(error) = ctx.runner.run(command) {
             state = json!({"last_attempt":state::now(),"status":"failed","error":format!("{error:#}"),"reproduction":ctx.runner.directory()});
             state::write_json(&ctx.install.join("update.json"), &state)?;

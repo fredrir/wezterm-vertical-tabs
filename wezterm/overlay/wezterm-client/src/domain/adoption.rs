@@ -58,8 +58,7 @@ pub async fn adopt_into(
         .ok_or_else(|| anyhow!("adopted tab {} is not mirrored", adopted.tab_id))
 }
 
-/// Remote panes this process could show, once per server: through `domains` first,
-/// attaching them when needed, then through every connected domain.
+/// Remote panes this process could show, once per server: `domains` first, then connected ones.
 pub async fn find(domains: &[String]) -> Vec<AdoptablePane> {
     let mux = Mux::get();
     let named: Vec<_> = domains

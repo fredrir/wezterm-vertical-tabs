@@ -23,15 +23,15 @@ cargo xtask check
 | Storage response limits | Count serialized bytes without temporary JSON buffers                             |
 | Helper output           | Buffer JSON writes and flush before exit                                          |
 
-| Measurement | Boundary                                                                                           |
-| ----------- | -------------------------------------------------------------------------------------------------- |
-| Build       | Release profile; locked dependencies                                                               |
-| Timing      | Median nanoseconds per operation; fixture preparation excluded; allocation counting disabled       |
-| Samples     | `VTABS_BENCH_SAMPLES=9`, `VTABS_BENCH_ITERATIONS=40`; 10 warmup operations                         |
-| Output      | CSV: `case,median_ns,median_allocations,median_requested_bytes`                                    |
-| Comparison  | Same harness, dependency lock and machine; stop other builds during measurement                    |
-| Allocations | Rust allocator calls and requested bytes; excludes SQLite's C allocator and process RSS            |
-| Rendering   | Headless integration verifies behavior; benchmark timings exclude GPU and physical display latency |
-| Durability  | SQLite schema, journal policy, atomic writes and revision conflicts remain unchanged               |
+| Measurement | Boundary                                                                                             |
+| ----------- | ---------------------------------------------------------------------------------------------------- |
+| Build       | Release profile; locked dependencies                                                                 |
+| Harness     | Divan; arguments after `--` are Divan options and name filters such as `core`, `ui` or `store`       |
+| Timing      | Fastest, slowest, median and mean per operation; fixture preparation excluded                        |
+| Samples     | Divan defaults; override with `--sample-count` and `--sample-size`                                   |
+| Comparison  | Same harness, dependency lock and machine; stop other builds during measurement                      |
+| Allocations | Divan `AllocProfiler`: Rust allocator calls and bytes; excludes SQLite's C allocator and process RSS |
+| Rendering   | Headless integration verifies behavior; benchmark timings exclude GPU and physical display latency   |
+| Durability  | SQLite schema, journal policy, atomic writes and revision conflicts remain unchanged                 |
 
 Integration commands: [Validation](validation.md).

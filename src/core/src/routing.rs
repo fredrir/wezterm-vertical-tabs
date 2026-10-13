@@ -1,8 +1,8 @@
-use crate::{Space, Tab};
-use schemars::JsonSchema;
+use crate::{Space, Tab, valid_id};
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum MatchField {
     Domain,
@@ -12,13 +12,15 @@ pub enum MatchField {
     Cwd,
     Title,
 }
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct RoutingRule {
     pub remote: Option<bool>,
     #[serde(default)]
     pub fields: Vec<(MatchField, Vec<String>)>,
 }
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct SpaceTemplate {
     pub id: String,
     pub name: String,
@@ -92,6 +94,33 @@ fn glob(pattern: &str, value: &str) -> bool {
     }
     pi == p.len()
 }
+fn variable(name: &str) -> Option<MatchField> {
+    Some(match name {
+        "domain" => MatchField::Domain,
+        "host" => MatchField::Host,
+        "user" => MatchField::User,
+        "proc" | "process" => MatchField::Process,
+        "cwd" => MatchField::Cwd,
+        "title" => MatchField::Title,
+        _ => return None,
+    })
+}
+fn variables(template: &str) -> impl Iterator<Item = MatchField> + '_ {
+    template.split('$').skip(1).filter_map(|suffix| {
+        let n = suffix.bytes().take_while(u8::is_ascii_alphabetic).count();
+        variable(&suffix[..n])
+    })
+}
+impl SpaceTemplate {
+    pub fn reads(&self, field: MatchField) -> bool {
+        self.rules
+            .iter()
+            .any(|rule| rule.fields.iter().any(|(f, _)| *f == field))
+            || [&self.id, &self.name]
+                .into_iter()
+                .any(|text| variables(text).any(|f| f == field))
+    }
+}
 pub(crate) fn expand(template: &str, tab: &Tab) -> Option<String> {
     let mut out = String::new();
     let mut rest = template;
@@ -103,28 +132,16 @@ pub(crate) fn expand(template: &str, tab: &Tab) -> Option<String> {
             out.push('$');
             continue;
         }
-        let key = &rest[..n];
+        let field = variable(&rest[..n])?;
         rest = &rest[n..];
-        let value = match key {
-            "domain" => &tab.domain,
-            "host" => &tab.host,
-            "user" => &tab.user,
-            "proc" | "process" => &tab.process,
-            "cwd" => &tab.cwd,
-            "title" => &tab.title,
-            _ => return None,
-        };
+        let value = fact(tab, field);
         if value.is_empty() {
             return None;
         }
         out.push_str(value);
     }
     out.push_str(rest);
-    if out.is_empty() || out.len() > 128 || out.chars().any(char::is_control) {
-        None
-    } else {
-        Some(out)
-    }
+    valid_id(&out).then_some(out)
 }
 pub(crate) fn route(spaces: &[Space], templates: &[SpaceTemplate], tab: &Tab) -> Option<String> {
     spaces

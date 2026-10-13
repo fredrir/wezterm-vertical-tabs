@@ -1,5 +1,5 @@
 use std::collections::BTreeMap;
-use std::fs::{self, File, OpenOptions};
+use std::fs::{self, File, OpenOptions, TryLockError};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -27,6 +27,20 @@ pub struct Context {
     pub role: Role,
     /// Cross-compilation target; the host when absent.
     pub triple: Option<String>,
+}
+
+impl Context {
+    pub fn build_record(&self) -> PathBuf {
+        self.cache.join("build.json")
+    }
+
+    pub fn last_build(&self) -> Result<Option<BuildMetadata>> {
+        read_json(&self.build_record())
+    }
+
+    pub fn lock_build(&self) -> Result<Lock> {
+        Lock::acquire(&self.cache.join("build.lock"))
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize, clap::ValueEnum)]
@@ -97,6 +111,16 @@ pub struct BuildMetadata {
     pub artifacts: BTreeMap<String, PathBuf>,
 }
 
+impl BuildMetadata {
+    pub fn read(directory: &Path) -> Result<Option<Self>> {
+        read_json(&directory.join("build.json"))
+    }
+
+    pub fn write(&self, directory: &Path) -> Result<()> {
+        write_json(&directory.join("build.json"), self)
+    }
+}
+
 pub fn now() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -144,43 +168,53 @@ pub fn safe_id(value: &str) -> Result<&str> {
     Ok(value)
 }
 
-pub fn hash_bytes(bytes: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(bytes))
+pub fn hex(digest: impl AsRef<[u8]>) -> String {
+    base16ct::lower::encode_string(digest.as_ref())
 }
 
-pub struct Lock(File);
+pub fn hash_bytes(bytes: &[u8]) -> String {
+    hex(Sha256::digest(bytes))
+}
+
+pub fn lease(root: &Path, name: &str) -> PathBuf {
+    root.join("leases").join(format!("{name}.lock"))
+}
+
+pub struct Lock {
+    _file: File,
+}
 
 impl Lock {
-    pub fn acquire(path: &Path) -> Result<Self> {
+    fn open(path: &Path) -> Result<File> {
         fs::create_dir_all(path.parent().context("lock parent missing")?)?;
-        let file = OpenOptions::new()
+        Ok(OpenOptions::new()
             .create(true)
             .truncate(false)
             .read(true)
             .write(true)
-            .open(path)?;
-        fs2::FileExt::lock_exclusive(&file).with_context(|| format!("lock: {}", path.display()))?;
-        Ok(Self(file))
+            .open(path)?)
+    }
+
+    pub fn acquire(path: &Path) -> Result<Self> {
+        let file = Self::open(path)?;
+        file.lock()
+            .with_context(|| format!("lock: {}", path.display()))?;
+        Ok(Self { _file: file })
+    }
+
+    pub fn shared(path: &Path) -> Result<Self> {
+        let file = Self::open(path)?;
+        file.lock_shared()
+            .with_context(|| format!("lock: {}", path.display()))?;
+        Ok(Self { _file: file })
     }
 
     pub fn try_acquire(path: &Path) -> Result<Option<Self>> {
-        fs::create_dir_all(path.parent().context("lock parent missing")?)?;
-        let file = OpenOptions::new()
-            .create(true)
-            .truncate(false)
-            .read(true)
-            .write(true)
-            .open(path)?;
-        match fs2::FileExt::try_lock_exclusive(&file) {
-            Ok(()) => Ok(Some(Self(file))),
-            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => Ok(None),
-            Err(error) => Err(error.into()),
+        let file = Self::open(path)?;
+        match file.try_lock() {
+            Ok(()) => Ok(Some(Self { _file: file })),
+            Err(TryLockError::WouldBlock) => Ok(None),
+            Err(TryLockError::Error(error)) => Err(error.into()),
         }
-    }
-}
-
-impl Drop for Lock {
-    fn drop(&mut self) {
-        let _ = fs2::FileExt::unlock(&self.0);
     }
 }

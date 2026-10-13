@@ -7,7 +7,10 @@ from pathlib import Path
 import pytest
 from filelock import FileLock
 
+from tests.support.environment import clean_env, session_variable, xdg_tree
+
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+EXE = ".exe" if os.name == "nt" else ""
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:
@@ -62,17 +65,7 @@ def project_root() -> Path:
 def isolated_env(tmp_path: Path) -> dict[str, str]:
     root = tmp_path / ".environment"
     root.mkdir()
-    environment = {
-        key: value
-        for key, value in os.environ.items()
-        if not key.startswith(("WEZTERM_", "WEZ_VTABS_"))
-        and key not in {"DISPLAY", "WAYLAND_DISPLAY", "XAUTHORITY"}
-    }
-    for name in ("config", "cache", "data", "state", "runtime"):
-        path = root / name
-        path.mkdir(mode=0o700, exist_ok=True)
-        variable = "XDG_RUNTIME_DIR" if name == "runtime" else f"XDG_{name.upper()}_HOME"
-        environment[variable] = str(path)
+    environment = clean_env() | xdg_tree(root)
     # Deploy defaults are the real /Applications and ~/.local/bin; never reach them.
     environment.update(
         WEZ_VTABS_CACHE=str(root / "vtabs-cache"),
@@ -89,15 +82,38 @@ def isolate_application_environment(
     monkeypatch: pytest.MonkeyPatch, isolated_env: dict[str, str]
 ) -> None:
     for key in tuple(os.environ):
-        if key.startswith(("WEZTERM_", "WEZ_VTABS_")) or key in {
-            "DISPLAY",
-            "WAYLAND_DISPLAY",
-            "XAUTHORITY",
-        }:
+        if session_variable(key):
             monkeypatch.delenv(key, raising=False)
     for key, value in isolated_env.items():
         if key.startswith(("XDG_", "WEZ_VTABS_")) or key == "PYTHONUTF8":
             monkeypatch.setenv(key, value)
+
+
+def cargo_build(
+    tmp_path_factory: pytest.TempPathFactory, worker_id: str, name: str, arguments: list[str]
+) -> Path:
+    """Build once per run under `target/pytest`, shared by every xdist worker."""
+    target = PROJECT_ROOT / "target" / "pytest"
+    target.mkdir(parents=True, exist_ok=True)
+    run_root = tmp_path_factory.getbasetemp()
+    if worker_id != "master":
+        run_root = run_root.parent
+    ready = run_root / f"{name}-ready"
+    with FileLock(target / "build.lock", timeout=180):
+        if not ready.is_file():
+            result = subprocess.run(
+                ["cargo", "build", "--locked", *arguments],
+                cwd=PROJECT_ROOT,
+                env={**os.environ, "CARGO_TARGET_DIR": str(target)},
+                text=True,
+                capture_output=True,
+                timeout=180,
+                check=False,
+            )
+            if result.returncode:
+                pytest.fail(f"{name} build failed:\n{result.stdout}\n{result.stderr}")
+            ready.write_text("ready\n", encoding="utf-8")
+    return target / "debug"
 
 
 @pytest.fixture(scope="session")
@@ -106,48 +122,26 @@ def rust_binaries(
     tmp_path_factory: pytest.TempPathFactory,
     worker_id: str,
 ) -> dict[str, Path]:
-    names = ("gen-schema", "wez-vtabs-store")
-    binary_dir = pytestconfig.getoption("--rust-bin-dir")
-    if binary_dir is None:
-        target = PROJECT_ROOT / "target" / "pytest"
-        target.mkdir(parents=True, exist_ok=True)
-        run_root = tmp_path_factory.getbasetemp()
-        if worker_id != "master":
-            run_root = run_root.parent
-        ready = run_root / "rust-binaries-ready"
-        with FileLock(target / "build.lock", timeout=180):
-            if not ready.is_file():
-                result = subprocess.run(
-                    [
-                        "cargo",
-                        "build",
-                        "--locked",
-                        "-p",
-                        "vtabs-core",
-                        "--bin",
-                        "gen-schema",
-                        "-p",
-                        "vtabs-store",
-                        "--bin",
-                        "wez-vtabs-store",
-                        "--features",
-                        "vtabs-store/sqlite",
-                    ],
-                    cwd=PROJECT_ROOT,
-                    env={**os.environ, "CARGO_TARGET_DIR": str(target)},
-                    text=True,
-                    capture_output=True,
-                    timeout=180,
-                    check=False,
-                )
-                if result.returncode:
-                    pytest.fail(
-                        f"Production Rust tool build failed:\n{result.stdout}\n{result.stderr}"
-                    )
-                ready.write_text("ready\n", encoding="utf-8")
-        binary_dir = target / "debug"
-    suffix = ".exe" if os.name == "nt" else ""
-    binaries = {name: binary_dir.resolve() / f"{name}{suffix}" for name in names}
+    binary_dir = pytestconfig.getoption("--rust-bin-dir") or cargo_build(
+        tmp_path_factory,
+        worker_id,
+        "rust-binaries",
+        [
+            "-p",
+            "vtabs-core",
+            "--bin",
+            "gen-schema",
+            "-p",
+            "vtabs-store",
+            "--bin",
+            "wez-vtabs-store",
+            "--features",
+            "vtabs-core/schema,vtabs-store/sqlite",
+        ],
+    )
+    binaries = {
+        name: binary_dir.resolve() / f"{name}{EXE}" for name in ("gen-schema", "wez-vtabs-store")
+    }
     for name, path in binaries.items():
         if not path.is_file():
             pytest.fail(f"Production Rust binary {name} is missing: {path}")
@@ -160,41 +154,14 @@ def tools_binary(
     tmp_path_factory: pytest.TempPathFactory,
     worker_id: str,
 ) -> Path:
-    """Build the production manager once across workers, without building WezTerm."""
     supplied = pytestconfig.getoption("--tools-bin")
     if supplied is not None:
         binary = supplied.resolve()
     else:
-        target = PROJECT_ROOT / "target" / "pytest"
-        target.mkdir(parents=True, exist_ok=True)
-        run_root = tmp_path_factory.getbasetemp()
-        if worker_id != "master":
-            run_root = run_root.parent
-        ready = run_root / "tools-binary-ready"
-        with FileLock(target / "build.lock", timeout=180):
-            if not ready.is_file():
-                result = subprocess.run(
-                    [
-                        "cargo",
-                        "build",
-                        "--locked",
-                        "--manifest-path",
-                        str(PROJECT_ROOT / "tools/Cargo.toml"),
-                        "--bin",
-                        "wez-vtabs",
-                    ],
-                    cwd=PROJECT_ROOT,
-                    env={**os.environ, "CARGO_TARGET_DIR": str(target)},
-                    text=True,
-                    capture_output=True,
-                    timeout=180,
-                    check=False,
-                )
-                if result.returncode:
-                    pytest.fail(f"Management CLI build failed:\n{result.stdout}\n{result.stderr}")
-                ready.write_text("ready\n", encoding="utf-8")
-        suffix = ".exe" if os.name == "nt" else ""
-        binary = target / "debug" / f"wez-vtabs{suffix}"
+        manifest = str(PROJECT_ROOT / "tools/Cargo.toml")
+        arguments = ["--manifest-path", manifest, "--bin", "wez-vtabs"]
+        binary = cargo_build(tmp_path_factory, worker_id, "tools-binary", arguments)
+        binary /= f"wez-vtabs{EXE}"
     if not binary.is_file():
         pytest.fail(f"Production management CLI is missing: {binary}")
     return binary

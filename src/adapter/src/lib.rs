@@ -2,28 +2,31 @@
 mod adoption;
 mod cells;
 mod centering;
-mod commands;
 mod directory;
 mod facts;
+mod foreign;
 mod hooks;
-mod input;
+mod keys;
 mod location;
 mod lua;
 mod message;
 mod metadata;
+mod mux_ops;
+mod palette;
+mod paste;
 mod repos;
 mod settings_file;
 mod shutdown;
 mod storage;
+mod terminal_program;
 mod transfers;
 mod update;
 
 use crate::termwindow::ui_host::{
     Bounds, Command, Geometry, HideOnEscape, Input, Navigation, Projection, Provider,
-    QuickTerminalConfig, Reservation, RoundedSurface, Snapshot, Surface, TerminalBorder,
-    TerminalKey, TerminalPadding, TerminalProgram, WindowEndpoint, spawn_completed,
+    QuickTerminalConfig, Reservation, RoundedSurface, Snapshot, Surface, TerminalKey,
+    WindowEndpoint, spawn_completed,
 };
-use config::keyassignment::{SpawnCommand, SpawnTabDomain};
 use mux::{BACKING_WORKSPACE_PREFIX, DETACHED_WORKSPACE, QUICK_WORKSPACE_PREFIX};
 use std::{
     collections::HashMap,
@@ -48,7 +51,7 @@ struct Adapter {
     primitives: Vec<RoundedSurface>,
     commands: Vec<Command>,
     palette_commands: Vec<crate::commands::ExpandedCommand>,
-    launcher_entries: Vec<crate::overlay::launcher::Entry>,
+    launcher_entries: Vec<crate::termwindow::ui_host::launcher::Entry>,
     cursor: Option<(usize, usize)>,
     geometry: Geometry,
     config_generation: usize,
@@ -56,11 +59,10 @@ struct Adapter {
     pointer_captured: bool,
     outstanding: Option<u64>,
     hooks: hooks::Hooks,
-    input: input::InputState,
+    input: paste::InputState,
     transfers: transfers::Transfers,
     repos: repos::Repos,
     local_host: String,
-    mux_window: Option<usize>,
     published: Option<u64>,
     metadata: metadata::Refresh,
     adoptable_search: u64,
@@ -76,9 +78,8 @@ impl Adapter {
     fn new(window_id: usize) -> Self {
         let config = lua::configuration();
         let mut app = WindowApp::new(&config.profile);
-        app.set_window_identity(window_id as u64);
-        app.ui_mut().set_chord_label(commands::chord_label);
-        app.set_home(home_dir());
+        app.ui_mut().set_chord_label(palette::chord_label);
+        app.set_home(Some(mux::location::home()));
         if let Err(err) = app.config(config.value()) {
             log::error!("tabs config: {err}");
         }
@@ -106,11 +107,10 @@ impl Adapter {
             pointer_captured: false,
             outstanding: None,
             hooks: hooks::Hooks::default(),
-            input: input::InputState::default(),
+            input: paste::InputState::default(),
             transfers: transfers::Transfers::default(),
             repos: repos::Repos::default(),
             local_host: sysinfo::System::host_name().unwrap_or_default(),
-            mux_window: None,
             published: None,
             metadata: metadata::Refresh::default(),
             adoptable_search: 0,
@@ -129,116 +129,6 @@ impl Adapter {
             }
         }
     }
-    /// Local panes answer at once. A client pane cannot see its process, so its owning
-    /// server is asked and the verdict returns as a `close_check` message.
-    fn check_close(&mut self, tab: core::TabId, pane: Option<core::PaneId>) {
-        let Some(host) = mux::Mux::try_get().and_then(|mux| mux.get_tab(tab as usize)) else {
-            return self.close_checked(tab, pane, None);
-        };
-        let reason = if pane.is_some() {
-            mux::pane::CloseReason::Pane
-        } else {
-            mux::pane::CloseReason::Tab
-        };
-        let (remote, local): (Vec<_>, Vec<_>) = host
-            .iter_panes_ignoring_zoom()
-            .into_iter()
-            .map(|entry| entry.pane)
-            .filter(|entry| pane.is_none_or(|pane| entry.pane_id() as u64 == pane))
-            .partition(|entry| {
-                entry
-                    .downcast_ref::<wezterm_client::pane::ClientPane>()
-                    .is_some()
-            });
-        let busy = local
-            .iter()
-            .find(|entry| !entry.can_close_without_prompting(reason))
-            .map(|entry| process_name(entry.as_ref()));
-        if busy.is_some() || remote.is_empty() {
-            return self.close_checked(tab, pane, busy);
-        }
-        let endpoint = self.mux_window.and_then(|id| self.endpoint(id));
-        promise::spawn::spawn(async move {
-            let mut busy = None;
-            for entry in &remote {
-                let Some(client) = entry.downcast_ref::<wezterm_client::pane::ClientPane>() else {
-                    continue;
-                };
-                // A stock server cannot answer; keep upstream's cautious prompt for it.
-                match client.close_info().await {
-                    Ok(info) if !info.prompt => {}
-                    Ok(info) => busy = Some(info.process),
-                    Err(_) => busy = Some(String::new()),
-                }
-                if busy.is_some() {
-                    break;
-                }
-            }
-            if let Some(endpoint) = endpoint {
-                endpoint.send(Message::CloseCheck {
-                    tab,
-                    pane,
-                    process: busy,
-                });
-            }
-        })
-        .detach();
-    }
-    fn close_checked(
-        &mut self,
-        tab: core::TabId,
-        pane: Option<core::PaneId>,
-        busy: Option<String>,
-    ) {
-        match (pane, busy) {
-            (None, Some(process)) => self.app.ui_mut().confirm_close_tab(tab, &process),
-            (None, None) => self.dispatch(core::Intent::CloseTab(tab)),
-            (Some(pane), Some(process)) => {
-                self.app.ui_mut().confirm_close_pane(tab, pane, &process)
-            }
-            (Some(pane), None) => {
-                self.command(app::Command::Host(core::HostCommand::KillPane(pane)))
-            }
-        }
-    }
-    /// Each pane lands as a split beside the target tab's active pane.
-    fn join(&mut self, panes: Vec<usize>, tab: usize) {
-        let Some(beside) = mux::Mux::get()
-            .get_tab(tab)
-            .and_then(|tab| tab.get_active_pane())
-            .map(|pane| pane.pane_id())
-        else {
-            return;
-        };
-        self.rearrange(async move {
-            for pane in panes {
-                mux::Mux::get()
-                    .split_pane(
-                        beside,
-                        mux::tab::SplitRequest {
-                            target_is_second: true,
-                            ..Default::default()
-                        },
-                        mux::domain::SplitSource::MovePane(pane),
-                        config::keyassignment::SpawnTabDomain::CurrentPaneDomain,
-                    )
-                    .await?;
-            }
-            Ok(())
-        });
-    }
-    /// The mux moves panes asynchronously; a refusal surfaces as the sidebar's error.
-    fn rearrange(&self, work: impl std::future::Future<Output = anyhow::Result<()>> + 'static) {
-        let endpoint = self.mux_window.and_then(|id| self.endpoint(id));
-        promise::spawn::spawn(async move {
-            let Err(error) = work.await else { return };
-            log::warn!("tabs: {error:#}");
-            if let Some(endpoint) = endpoint {
-                endpoint.send(Message::Error(format!("{error:#}")));
-            }
-        })
-        .detach();
-    }
     fn finish_update(&mut self, before: u64) {
         self.hooks.changed(before != self.app.model().revision);
         self.schedule_hooks();
@@ -255,7 +145,6 @@ impl Adapter {
         self.finish_update(before);
     }
     fn command(&mut self, command: app::Command) {
-        use core::HostCommand as C;
         match command {
             app::Command::OpenCommands => self.commands.push(Command::OpenCommandPalette),
             app::Command::RunCommand(id) => {
@@ -277,307 +166,23 @@ impl Adapter {
             app::Command::ConfirmClosePane(tab, pane) => self.check_close(tab, Some(pane)),
             app::Command::ShowTab { window, tab } => self.show_tab(window as usize, tab),
             app::Command::SearchTabs => self.open_tab_navigator(),
-            app::Command::AdoptPane { domain, pane } => {
-                if let Some(id) = self.mux_window {
-                    self.rearrange(adoption::adopt(self.endpoint(id), id, domain, pane));
-                }
-            }
+            app::Command::AdoptPane { domain, pane } => self.rearrange(adoption::adopt(
+                self.endpoint(self.window_id),
+                self.window_id,
+                domain,
+                pane,
+            )),
             app::Command::RequestClipboard => {
                 let token = self.input.request_paste(Instant::now());
                 self.commands.push(Command::Paste(token));
             }
-            app::Command::Host(command) => match command {
-                C::Activate(id) => self.commands.push(Command::Activate(id as usize)),
-                C::Close(id) => self.commands.push(Command::Close(id as usize, false)),
-                C::Rename { id, title } => {
-                    if let Some(tab) = mux::Mux::get().get_tab(id as usize) {
-                        tab.set_title(&title);
-                    }
-                }
-                C::Spawn {
-                    space_id,
-                    launch,
-                    folder_id,
-                } => {
-                    self.transfers.spawn_into(space_id, folder_id);
-                    self.commands.push(Command::Spawn(spawn(launch), false));
-                }
-                C::Reorder { visible_order } => self.reorder(visible_order),
-                C::MoveTabToNewWindow(id) => self.move_to_new_window(id as usize),
-                C::KillPane(pane) => {
-                    let mux = mux::Mux::get();
-                    if let Some((_, _, tab)) = mux.resolve_pane_id(pane as usize) {
-                        if let Some(tab) = mux.get_tab(tab) {
-                            tab.kill_pane(pane as usize);
-                        }
-                    }
-                }
-                C::DetachPane { pane, index } => {
-                    self.transfers.place_detached(index, Instant::now());
-                    let window = self.mux_window;
-                    self.rearrange(async move {
-                        mux::Mux::get()
-                            .move_pane_to_new_tab(pane as usize, window, None)
-                            .await
-                            .map(|_| ())
-                    });
-                }
-                C::JoinPane { pane, tab } => self.join(vec![pane as usize], tab as usize),
-                C::JoinTab { source, tab } => {
-                    let panes = mux::Mux::get()
-                        .get_tab(source as usize)
-                        .map(|tab| tab.iter_panes_ignoring_zoom())
-                        .unwrap_or_default()
-                        .iter()
-                        .map(|entry| entry.pane.pane_id())
-                        .collect();
-                    self.join(panes, tab as usize);
-                }
-                C::FocusPane { tab, pane } => {
-                    let mux = mux::Mux::get();
-                    if let (Some(tab), Some(pane)) =
-                        (mux.get_tab(tab as usize), mux.get_pane(pane as usize))
-                    {
-                        tab.set_active_pane(&pane);
-                    }
-                }
-                C::CustomAction(name) => self.commands.push(Command::Semantic(name)),
-            },
+            app::Command::Host(command) => self.host_command(command),
         }
     }
-    /// Other windows list this one's tabs; republish only when they could have changed.
-    fn publish(&mut self) {
-        let revision = self.app.model().revision;
-        if self.published == Some(revision) {
-            return;
-        }
-        self.published = Some(revision);
-        let model = self.app.model();
-        let home = model.home.as_deref();
-        let window = self.window_id as u64;
-        let tabs = model
-            .spaces
-            .iter()
-            .flat_map(|space| {
-                model
-                    .space_tabs(&space.id)
-                    .into_iter()
-                    .map(move |id| ui::ForeignTab::new(window, &model.tabs[&id], home, &space.name))
-            })
-            .collect();
-        directory::publish(self.window_id, tabs);
-    }
-    /// Windows shown in a GUI list themselves; the mux lists windows of other workspaces.
-    fn sync_foreign(&mut self) {
-        let front_end = crate::frontend::try_front_end();
-        let shown = |id| {
-            front_end
-                .as_ref()
-                .is_some_and(|front_end| front_end.gui_window_for_mux_window(id).is_some())
-        };
-        let mut tabs = directory::foreign(self.window_id, shown);
-        let Some(mux) = mux::Mux::try_get() else {
-            return self.app.set_foreign_tabs(tabs);
-        };
-        let home = self.app.model().home.clone();
-        for id in mux.iter_windows() {
-            if id == self.window_id || shown(id) {
-                continue;
-            }
-            let Some(window) = mux.get_window(id) else {
-                continue;
-            };
-            let place = match window.get_workspace() {
-                workspace
-                    if workspace.starts_with(BACKING_WORKSPACE_PREFIX)
-                        || workspace.starts_with(QUICK_WORKSPACE_PREFIX) =>
-                {
-                    continue;
-                }
-                DETACHED_WORKSPACE => "detached".to_owned(),
-                workspace => workspace.to_owned(),
-            };
-            for tab in window.iter_tabs() {
-                let Some(pane) = tab.get_active_pane() else {
-                    continue;
-                };
-                let cwd = pane
-                    .get_current_working_dir(mux::pane::CachePolicy::AllowStale)
-                    .map(|url| url.path().to_string())
-                    .unwrap_or_default();
-                let location =
-                    location::Location::of(&pane, &cwd, &self.local_host, &mut self.repos);
-                let tab = core::Tab {
-                    id: tab.tab_id() as u64,
-                    title: Some(tab.get_title())
-                        .filter(|title| !title.is_empty())
-                        .unwrap_or_else(|| pane.get_title()),
-                    repo_root: location.repo_root,
-                    home: location.home,
-                    remote: location.remote,
-                    os: location.os,
-                    cwd,
-                    ..Default::default()
-                };
-                tabs.push(ui::ForeignTab::new(
-                    id as u64,
-                    &tab,
-                    home.as_deref(),
-                    &place,
-                ));
-            }
-        }
-        self.app.set_foreign_tabs(tabs);
-    }
-    fn open_tab_navigator(&mut self) {
-        self.sync_foreign();
-        self.app.set_adoptable_panes(Vec::new());
-        self.app.open_tab_navigator();
-        self.adoptable_search += 1;
-        if let Some(endpoint) = self.mux_window.and_then(|id| self.endpoint(id)) {
-            adoption::find(endpoint, self.adoptable_search);
-        }
-    }
-    /// Detached tabs come into this window; others are shown where they live.
-    fn show_tab(&mut self, window: usize, tab: core::TabId) {
-        if self.reattach(tab) {
-            return;
-        }
-        let Some(gui) = crate::frontend::try_front_end()
-            .and_then(|front_end| front_end.gui_window_for_mux_window(window))
-        else {
-            let mux = mux::Mux::get();
-            let Some(workspace) = mux.get_window(window).map(|w| w.get_workspace().to_owned())
-            else {
-                return self.app.ui_mut().set_error("Window closed");
-            };
-            if workspace == DETACHED_WORKSPACE {
-                return self.adopt(tab);
-            }
-            if let Some(mut window) = mux.get_window_mut(window) {
-                if let Some(index) = window.get_tab_idx_for_id(tab as usize) {
-                    window.remember_and_set_active_tab_idx(index);
-                }
-            }
-            return mux.set_active_workspace(&workspace);
-        };
-        gui.window.focus();
-        WindowEndpoint::new(gui.window, window).send(Message::ShowTab(tab));
-    }
-    /// The tab's active pane becomes a tab here and its other panes rejoin it.
-    fn adopt(&mut self, tab: core::TabId) {
-        let Some(host) = mux::Mux::get().get_tab(tab as usize) else {
-            return;
-        };
-        let mut panes = host.iter_panes_ignoring_zoom();
-        panes.sort_by_key(|entry| !entry.is_active);
-        let mut panes = panes.into_iter().map(|entry| entry.pane.pane_id());
-        let Some(first) = panes.next() else {
-            return;
-        };
-        let rest: Vec<_> = panes.collect();
-        let endpoint = self.mux_window.and_then(|id| self.endpoint(id));
-        let id = self.mux_window;
-        self.rearrange(async move {
-            let mux = mux::Mux::get();
-            let (tab, _) = mux.move_pane_to_new_tab(first, id, None).await?;
-            for pane in rest {
-                mux.split_pane(
-                    first,
-                    mux::tab::SplitRequest {
-                        target_is_second: true,
-                        ..Default::default()
-                    },
-                    mux::domain::SplitSource::MovePane(pane),
-                    config::keyassignment::SpawnTabDomain::CurrentPaneDomain,
-                )
-                .await?;
-            }
-            if let Some(endpoint) = endpoint {
-                endpoint.send(Message::ShowTab(tab.tab_id() as u64));
-            }
-            Ok(())
-        });
-    }
-    fn reattach(&mut self, tab: core::TabId) -> bool {
-        let Some(domain) = directory::detached(|records| {
-            let mut domain = None;
-            for record in records {
-                record.show = record.tab.id == tab;
-                if record.show {
-                    domain = Some(record.domain);
-                }
-            }
-            domain
-        }) else {
-            return false;
-        };
-        let Some(domain) = mux::Mux::get().get_domain(domain) else {
-            return true;
-        };
-        let window = self.mux_window;
-        promise::spawn::spawn(async move {
-            if let Err(error) = domain.attach(window).await {
-                log::warn!("tabs reattach: {error:#}");
-            }
-        })
-        .detach();
-        true
-    }
-    /// Only a client domain can reattach, and only while the mux still knows it.
-    fn remember_detached(&self, id: core::TabId) {
-        if let Some(record) =
-            self.transfers
-                .detached_record(id, &self.app, self.window_id, |domain| {
-                    mux::Mux::get()
-                        .get_domain(domain)
-                        .is_some_and(|domain| domain.state() == mux::domain::DomainState::Detached)
-                })
-        {
-            directory::remember(record);
-        }
-    }
-
-    /// Reattached tabs return with new IDs; whichever window receives one restores it.
-    fn restore_reattached(&mut self) {
-        let mux = mux::Mux::get();
-        let model = self.app.model();
-        let returned = directory::detached(|records| {
-            let mut returned = Vec::new();
-            for record in std::mem::take(records) {
-                let Some(domain) = mux.get_domain(record.domain) else {
-                    continue;
-                };
-                if domain.state() == mux::domain::DomainState::Detached {
-                    records.push(record);
-                    continue;
-                }
-                let Some(id) = wezterm_client::domain::ClientDomain::get_client_inner_for_domain(
-                    record.domain,
-                )
-                .ok()
-                .and_then(|inner| inner.remote_to_local_tab_id(record.remote)) else {
-                    continue;
-                };
-                if model.tabs.contains_key(&(id as u64)) {
-                    returned.push((id as u64, record));
-                } else if mux.get_tab(id).is_some() {
-                    records.push(record);
-                }
-            }
-            returned
-        });
-        let mut show = None;
-        for (id, record) in returned {
-            let result = self.app.restore_tab(id, &record.tab);
-            self.apply(result);
-            if record.show {
-                show = Some(id);
-            }
-        }
-        if let Some(id) = show {
-            self.dispatch(core::Intent::ActivateTab(id));
-        }
+    fn show_terminal(&mut self, command: Command) {
+        self.cancel_paste();
+        self.app.ui_mut().interrupt();
+        self.commands.push(command);
     }
     fn schedule_hooks(&mut self) {
         if let Some(endpoint) = self.endpoint(self.window_id) {
@@ -623,299 +228,8 @@ impl Adapter {
             dpi: geometry.dpi.max(1.),
         }
     }
-    fn apply_facts(&mut self, snapshot: facts::Facts) {
-        if !snapshot.focused {
-            self.cancel_paste();
-        }
-        self.app.set_window_identity(snapshot.window_id as u64);
-        self.mux_window = Some(snapshot.window_id);
-        // A pane dragged out to a position becomes a tab there once the mux reports it.
-        let arrived = self.transfers.observe_hosts(
-            snapshot.tabs.iter().map(|tab| tab.id).collect(),
-            Instant::now(),
-        );
-        let before = self.app.model().revision;
-        if self.config_generation != snapshot.config_epoch {
-            self.config_generation = snapshot.config_epoch;
-            self.hooks.configure(lua::hooks_enabled());
-            self.cancel_paste();
-            let config = lua::configuration();
-            self.managed_path = config.managed_path.clone();
-            let result = self.app.config(config.value());
-            self.apply(result);
-        }
-        let repos = &mut self.repos;
-        let local_host = &self.local_host;
-        let mux = mux::Mux::get();
-        let tabs = snapshot
-            .tabs
-            .into_iter()
-            .map(|tab| {
-                let domain = mux.get_domain_by_name(&tab.domain);
-                let launch = domain
-                    .as_ref()
-                    .filter(|domain| domain.spawnable())
-                    .map(|_| core::LaunchSpec {
-                        domain: Some(tab.domain.clone()),
-                        cwd: (!tab.cwd.is_empty()).then_some(tab.cwd.clone()),
-                        ..Default::default()
-                    });
-                let host_tab = mux.get_tab(tab.id);
-                let location = match host_tab.as_ref().and_then(|host| host.get_active_pane()) {
-                    Some(pane) => location::Location::of(&pane, &tab.cwd, local_host, repos),
-                    None => location::Location::unanswered(false, String::new(), &tab.cwd, repos),
-                };
-                let panes = host_tab
-                    .map(|host| host.iter_panes_ignoring_zoom())
-                    .filter(|panes| panes.len() > 1)
-                    .into_iter()
-                    .flatten()
-                    .map(|entry| {
-                        let cwd = entry
-                            .pane
-                            .get_current_working_dir(mux::pane::CachePolicy::AllowStale)
-                            .map(|url| url.path().to_string())
-                            .unwrap_or_default();
-                        let location = location::Location::of(&entry.pane, &cwd, local_host, repos);
-                        core::TabPane {
-                            id: entry.pane.pane_id() as u64,
-                            title: entry.pane.get_title(),
-                            cwd,
-                            repo_root: location.repo_root,
-                            home: location.home,
-                            active: entry.is_active,
-                            remote: location.remote,
-                            os: location.os,
-                            left: entry.left.min(usize::from(u16::MAX)) as u16,
-                            top: entry.top.min(usize::from(u16::MAX)) as u16,
-                            width: entry.width.min(usize::from(u16::MAX)) as u16,
-                            height: entry.height.min(usize::from(u16::MAX)) as u16,
-                        }
-                    })
-                    .collect();
-                core::HostTab {
-                    id: tab.id as u64,
-                    title: tab.title,
-                    cwd: tab.cwd.clone(),
-                    repo_root: location.repo_root,
-                    home: location.home,
-                    domain: tab.domain.clone(),
-                    process: tab.process,
-                    remote: location.remote,
-                    os: location.os,
-                    panes,
-                    unread: tab.unread,
-                    bell: tab.bell,
-                    icon: tab.user_vars.get("icon").cloned().unwrap_or_default(),
-                    launch,
-                    host: tab.user_vars.get("hostname").cloned().unwrap_or(tab.host),
-                    user: tab.user_vars.get("username").cloned().unwrap_or(tab.user),
-                }
-            })
-            .collect::<Vec<_>>();
-        self.hooks.observe(&tabs);
-        let host_tabs = self
-            .transfers
-            .hosts()
-            .iter()
-            .map(|id| *id as u64)
-            .collect::<std::collections::HashSet<_>>();
-        let detached = {
-            let mux = mux::Mux::get();
-            self.app
-                .model()
-                .tabs
-                .iter()
-                .filter_map(|(id, tab)| {
-                    if host_tabs.contains(id) {
-                        return None;
-                    }
-                    let detached = mux.get_domain_by_name(&tab.domain).map_or(true, |domain| {
-                        domain.state() == mux::domain::DomainState::Detached
-                    });
-                    detached.then_some(*id)
-                })
-                .collect::<Vec<_>>()
-        };
-        for id in detached {
-            self.remember_detached(id);
-        }
-        self.transfers.observe_remotes({
-            let mux = mux::Mux::get();
-            tabs.iter()
-                .filter_map(|tab| {
-                    let domain = mux.get_domain_by_name(&tab.domain)?;
-                    let client = domain.downcast_ref::<wezterm_client::domain::ClientDomain>()?;
-                    mux.get_tab(tab.id as usize)?;
-                    Some((
-                        tab.id,
-                        transfers::RemoteTab {
-                            domain: domain.domain_id(),
-                            remote: client.local_to_remote_tab_id(tab.id as usize)?,
-                        },
-                    ))
-                })
-                .collect()
-        });
-        let result = self.app.update(app::HostSnapshot {
-            revision: snapshot.revision,
-            tabs,
-            active_tab: snapshot.active.map(|id| id as u64),
-            metrics: self.app.metrics(),
-            focused: snapshot.focused,
-            configuration_epoch: snapshot.config_epoch as u64,
-        });
-        self.apply(result);
-        self.hooks.changed(before != self.app.model().revision);
-        if let Some((id, index)) = arrived {
-            self.dispatch(core::Intent::MoveTab { id, index });
-        }
-        self.restore_reattached();
-        if let Some(id) = self.transfers.arrived_to_show(&self.app) {
-            self.dispatch(core::Intent::ActivateTab(id));
-        }
-        self.schedule_hooks();
-        self.storage();
-        self.publish();
-    }
-    fn metadata_interval(&self) -> Option<std::time::Duration> {
-        let model = self.app.model();
-        let process_rules = model
-            .spaces
-            .iter()
-            .flat_map(|space| &space.rules)
-            .chain(model.templates.iter().flat_map(|template| &template.rules))
-            .any(|rule| {
-                rule.fields
-                    .iter()
-                    .any(|(field, _)| *field == core::MatchField::Process)
-            });
-        // Lua callbacks may inspect process facts. Notification-only configurations have
-        // no refresh timer and no corresponding idle wakeups.
-        let process_templates = model.templates.iter().any(|template| {
-            [&template.id, &template.name].iter().any(|text| {
-                text.split('$').skip(1).any(|suffix| {
-                    let token = suffix
-                        .split(|character: char| !character.is_ascii_alphabetic())
-                        .next()
-                        .unwrap_or_default();
-                    matches!(token, "proc" | "process")
-                })
-            })
-        });
-        let process_titles = matches!(
-            model.settings.tab_title,
-            core::TabTitle::Process | core::TabTitle::ProcessAndDirectory
-        );
-        (self.hooks.enabled() || process_rules || process_templates || process_titles)
-            .then_some(std::time::Duration::from_secs(2))
-    }
-    /// Applies the sidebar's order to every tab of the mux window, keeping its active tab.
-    fn reorder(&mut self, visible_order: Vec<core::TabId>) {
-        let visible: std::collections::HashSet<_> =
-            visible_order.iter().map(|id| *id as usize).collect();
-        let mut next = visible_order.into_iter();
-        let order: Vec<usize> = self
-            .transfers
-            .hosts()
-            .iter()
-            .map(|id| {
-                if visible.contains(id) {
-                    next.next().unwrap() as usize
-                } else {
-                    *id
-                }
-            })
-            .collect();
-        if let Some(mut window) = mux::Mux::get().get_window_mut(self.window_id) {
-            let active = window.get_active_tab().map(|t| t.tab_id());
-            let known: std::collections::HashSet<_> =
-                window.iter_tabs().map(|t| t.tab_id()).collect();
-            if order.len() == known.len()
-                && order
-                    .iter()
-                    .copied()
-                    .collect::<std::collections::HashSet<_>>()
-                    == known
-            {
-                for (index, id) in order.iter().enumerate() {
-                    let old = window.iter_tabs().position(|t| t.tab_id() == *id).unwrap();
-                    if old != index {
-                        let tab = window.remove_tab_idx(old);
-                        window.insert_tab_at_idx(index, &tab);
-                    }
-                }
-                let index = window.iter_tabs().position(|t| Some(t.tab_id()) == active);
-                if let Some(index) = index {
-                    window.set_active_tab_idx_without_saving(index);
-                }
-            }
-        }
-        self.commands.push(Command::Resync);
-    }
-    /// The new window restores the tab's sidebar state from the exported transfer.
-    fn move_to_new_window(&mut self, id: usize) {
-        let mux = mux::Mux::get();
-        let Some(tab) = mux.get_tab(id) else { return };
-        let context = match self.app.export_transfer(id as u64) {
-            Ok(transfer) => SpawnContext {
-                new_window: true,
-                transfer: Some(transfer),
-                ..SpawnContext::default()
-            },
-            Err(error) => {
-                log::warn!("tabs move: {error}");
-                SpawnContext::default()
-            }
-        };
-        if let Some(pane) = tab.get_active_pane() {
-            if pane
-                .downcast_ref::<wezterm_client::pane::ClientPane>()
-                .is_some()
-            {
-                if tab.count_panes() != Some(1) {
-                    self.message(Message::Error("WezTerm mux supports moving single-pane tabs; this split tab stays in its window".into()));
-                    return;
-                }
-                let pane_id = pane.pane_id();
-                let source_id = self.window_id;
-                let workspace = mux
-                    .get_window(source_id)
-                    .map(|w| w.get_workspace().to_owned());
-                promise::spawn::spawn(async move {
-                    match mux::Mux::get()
-                        .move_pane_to_new_tab(pane_id, None, workspace)
-                        .await
-                    {
-                        Ok((tab, window)) => {
-                            spawn_completed(window, tab.tab_id(), context);
-                        }
-                        Err(error) => log::error!("move tab: {error}"),
-                    }
-                })
-                .detach();
-                return;
-            }
-        }
-        // This operation retains the tab and its entire split tree.
-        let builder = mux.new_empty_window(Some(mux.active_workspace()), None);
-        let destination = *builder;
-        if let Some(mut source) = mux.get_window_mut(self.window_id) {
-            source.remove_tab_id(id);
-        }
-        if let Err(error) = mux.add_tab_to_window(&tab, destination) {
-            let _ = mux.add_tab_to_window(&tab, self.window_id);
-            self.message(Message::Error(format!("move tab: {error}")));
-            return;
-        }
-        spawn_completed(destination, id, context);
-        drop(builder);
-        mux.prune_dead_windows();
-        self.commands.push(Command::Resync);
-    }
     fn schedule_metadata(&mut self) {
-        let schedule = self
-            .metadata_interval()
+        let schedule = metadata::interval(self.app.model(), self.hooks.enabled())
             .filter(|_| !self.transfers.hosts().is_empty())
             .map(|interval| {
                 (
@@ -932,9 +246,7 @@ impl Adapter {
 impl Provider for Adapter {
     fn initialize(&mut self) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + '_>> {
         Box::pin(async move {
-            // Restore public preferences before the host computes its first reservation.
-            // The helper runs asynchronously and has its own bounded timeout; failures
-            // remain in the coordinator's retry queue for the ordinary bound lifecycle.
+            // Preferences load before the first reservation; failures stay queued for retry.
             let Some(request) = self.app.take_storage_request(self.epoch.elapsed()) else {
                 return;
             };
@@ -1026,56 +338,14 @@ impl Provider for Adapter {
         self.dispatch(intent);
     }
     fn open_command_palette(&mut self, commands: Vec<crate::commands::ExpandedCommand>) {
-        self.cancel_paste();
-        self.launcher_entries.clear();
-        let entries = commands::entries(&commands, &self.app.model().settings);
-        self.palette_commands = commands;
-        self.app.ui_mut().open_commands(entries);
+        self.show_palette(commands);
     }
     fn open_launcher(
         &mut self,
         args: config::keyassignment::LauncherActionArgs,
-        launcher: crate::overlay::launcher::LauncherEntries,
+        launcher: crate::termwindow::ui_host::launcher::LauncherEntries,
     ) {
-        self.cancel_paste();
-        self.palette_commands.clear();
-        let entries = launcher
-            .entries
-            .iter()
-            .map(|entry| ui::CommandEntry {
-                label: entry.label.clone(),
-                shortcuts: Vec::new(),
-                description: String::new(),
-            })
-            .collect();
-        self.launcher_entries = launcher.entries;
-        self.app.ui_mut().open_launch_menu(
-            ui::LaunchMenuConfig {
-                title: args.title.unwrap_or_else(|| "Launcher".into()),
-                help_text: args
-                    .help_text
-                    .unwrap_or_else(|| "Enter=launch  Esc=cancel  /=filter".into()),
-                fuzzy_help_text: args
-                    .fuzzy_help_text
-                    .unwrap_or_else(|| "Fuzzy matching: ".into()),
-                alphabet: args
-                    .alphabet
-                    .unwrap_or_else(|| config::configuration().launcher_alphabet.clone()),
-                fuzzy: args
-                    .flags
-                    .contains(config::keyassignment::LauncherFlags::FUZZY),
-                labels:
-                    crate::overlay::quickselect::compute_labels_for_alphabet_with_preserved_case,
-                matches: |query, label| {
-                    crate::overlay::selector::matcher_score(
-                        &crate::overlay::selector::matcher_pattern(query),
-                        label,
-                    )
-                },
-            },
-            entries,
-            launcher.selected,
-        );
+        self.show_launcher(args, launcher);
     }
     fn terminal_input(&mut self, input: Input<'_>, escape: HideOnEscape) -> TerminalKey {
         self.terminal_key(input, escape)
@@ -1211,27 +481,7 @@ impl Provider for Adapter {
         self.app.model().settings.glyph_size
     }
     fn quick_terminal_config(&self) -> QuickTerminalConfig {
-        let settings = &self.app.model().settings;
-        let color = |value: Option<&str>| value.and_then(ui::Theme::parse_color).map(linear_color);
-        let border = settings.quick_terminal_border_color.as_deref();
-        QuickTerminalConfig {
-            size: (
-                settings.quick_terminal_width as f32,
-                settings.quick_terminal_height as f32,
-            ),
-            padding: terminal_padding(&settings.quick_terminal_window_padding),
-            opacity: settings.quick_terminal_opacity as f32,
-            blur: settings.quick_terminal_blur as f32,
-            border: match border {
-                Some("none") => TerminalBorder::None,
-                _ => color(border).map_or(TerminalBorder::Palette, TerminalBorder::Color),
-            },
-            background_color: color(settings.quick_terminal_background_color.as_deref()),
-            auto_hide: settings.quick_terminal_auto_hide,
-            hide_on_escape: hide_on_escape(settings.quick_terminal_hide_on_escape),
-            preserve_shell: settings.quick_terminal_preserve_shell,
-            transition: ui::transition(settings),
-        }
+        terminal_program::quick_terminal(&self.app.model().settings)
     }
     fn prepare_command(&self, command: &mut config::keyassignment::SpawnCommand) {
         if self.app.model().selected_tab.is_none()
@@ -1308,145 +558,6 @@ impl Provider for Adapter {
     }
 }
 
-fn process_name(pane: &dyn mux::pane::Pane) -> String {
-    pane.get_foreground_process_name(mux::pane::CachePolicy::AllowStale)
-        .and_then(|path| {
-            std::path::Path::new(&path)
-                .file_name()
-                .map(|name| name.to_string_lossy().into_owned())
-        })
-        .unwrap_or_default()
-}
-
-fn home_dir() -> Option<String> {
-    config::HOME_DIR.to_str().map(str::to_string)
-}
-
-fn spawn(launch: core::LaunchSpec) -> config::keyassignment::SpawnCommand {
-    config::keyassignment::SpawnCommand {
-        args: (!launch.args.is_empty()).then_some(launch.args),
-        cwd: launch.cwd.map(Into::into),
-        set_environment_variables: launch.env.into_iter().collect(),
-        domain: launch
-            .domain
-            .map(config::keyassignment::SpawnTabDomain::DomainName)
-            .unwrap_or(config::keyassignment::SpawnTabDomain::CurrentPaneDomain),
-        ..Default::default()
-    }
-}
-/// `colors` and `border_color` go through WezTerm's own parsers, as in its config.
-fn terminal_program(program: core::QuickProgram) -> Result<TerminalProgram, String> {
-    let border = match program.border_color.as_deref() {
-        None => None,
-        Some("none") => Some(TerminalBorder::None),
-        Some(text) => Some(TerminalBorder::Color(
-            text.parse::<window::color::SrgbaTuple>()
-                .map_err(|_| format!("invalid border_color {text}"))?
-                .to_linear(),
-        )),
-    };
-    let colors = program.colors.map(palette).transpose()?;
-    Ok(TerminalProgram {
-        spawn: SpawnCommand {
-            args: (!program.args.is_empty()).then_some(program.args),
-            cwd: program.cwd.map(Into::into),
-            set_environment_variables: program.set_environment_variables.into_iter().collect(),
-            domain: match program.domain {
-                None | Some(core::SpawnDomain::CurrentPaneDomain) => {
-                    SpawnTabDomain::CurrentPaneDomain
-                }
-                Some(core::SpawnDomain::DefaultDomain) => SpawnTabDomain::DefaultDomain,
-                Some(core::SpawnDomain::DomainName(name)) => SpawnTabDomain::DomainName(name),
-                Some(core::SpawnDomain::DomainId(id)) => SpawnTabDomain::DomainId(id),
-            },
-            ..Default::default()
-        },
-        width: program.width,
-        height: program.height,
-        padding: terminal_padding(&program.window_padding),
-        opacity: program.window_background_opacity,
-        blur: program.blur.map(f32::from),
-        border,
-        colors,
-        auto_hide: program.auto_hide,
-        hide_on_escape: program.hide_on_escape.map(hide_on_escape),
-        preserve: program.preserve,
-    })
-}
-fn terminal_padding(padding: &core::WindowPadding) -> TerminalPadding {
-    use core::padding::Unit;
-    let side = |side: &Option<core::Dimension>| {
-        let (amount, unit) = side.as_ref()?.parse()?;
-        Some(match unit {
-            Unit::Pixels => config::Dimension::Pixels(amount),
-            Unit::Percent => config::Dimension::Percent(amount / 100.),
-            Unit::Points => config::Dimension::Points(amount),
-            Unit::Cells => config::Dimension::Cells(amount),
-        })
-    };
-    TerminalPadding {
-        left: side(&padding.left),
-        top: side(&padding.top),
-        right: side(&padding.right),
-        bottom: side(&padding.bottom),
-    }
-}
-fn hide_on_escape(mode: core::HideOnEscape) -> HideOnEscape {
-    match mode {
-        core::HideOnEscape::Never => HideOnEscape::Never,
-        core::HideOnEscape::Always => HideOnEscape::Always,
-        core::HideOnEscape::Auto => HideOnEscape::Auto,
-    }
-}
-fn palette(colors: serde_json::Map<String, serde_json::Value>) -> Result<config::Palette, String> {
-    use wezterm_dynamic::{FromDynamic, FromDynamicOptions, UnknownFieldAction};
-    let options = FromDynamicOptions {
-        unknown_fields: UnknownFieldAction::Deny,
-        deprecated_fields: UnknownFieldAction::Warn,
-    };
-    config::Palette::from_dynamic(&dynamic(&serde_json::Value::Object(colors)), options)
-        .map_err(|error| format!("invalid colors: {error}"))
-}
-/// Lua's integer keys, as in `indexed`, arrive as JSON strings.
-fn dynamic(value: &serde_json::Value) -> wezterm_dynamic::Value {
-    use serde_json::Value;
-    use wezterm_dynamic::{ToDynamic, Value as Dynamic};
-    match value {
-        Value::Null => Dynamic::Null,
-        Value::Bool(value) => Dynamic::Bool(*value),
-        Value::Number(number) => match (number.as_u64(), number.as_i64()) {
-            (Some(value), _) => value.to_dynamic(),
-            (_, Some(value)) => value.to_dynamic(),
-            _ => number.as_f64().unwrap_or_default().to_dynamic(),
-        },
-        Value::String(value) => Dynamic::String(value.clone()),
-        Value::Array(items) => Dynamic::Array(items.iter().map(dynamic).collect::<Vec<_>>().into()),
-        Value::Object(fields) => Dynamic::Object(
-            fields
-                .iter()
-                .map(|(key, value)| {
-                    let key = key
-                        .parse::<u64>()
-                        .map_or_else(|_| Dynamic::String(key.clone()), Dynamic::U64);
-                    (key, dynamic(value))
-                })
-                .collect::<std::collections::BTreeMap<_, _>>()
-                .into(),
-        ),
-    }
-}
-#[cfg(test)]
-#[path = "../tests/hook.rs"]
-mod hook_tests;
-
-#[cfg(test)]
-#[path = "../tests/repos.rs"]
-mod repos_tests;
-
-#[cfg(test)]
-#[path = "../tests/modal.rs"]
-mod modal_tests;
-
 fn linear_color(color: ratatui::style::Color) -> window::color::LinearRgba {
     match color {
         ratatui::style::Color::Rgb(r, g, b) => {
@@ -1457,9 +568,9 @@ fn linear_color(color: ratatui::style::Color) -> window::color::LinearRgba {
 }
 
 #[cfg(test)]
-#[path = "../tests/commands.rs"]
-mod command_tests;
+#[path = "../tests/support.rs"]
+mod support;
 
 #[cfg(test)]
-#[path = "../tests/input.rs"]
-mod input_tests;
+#[path = "../tests/modal.rs"]
+mod modal_tests;

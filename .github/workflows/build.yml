@@ -26,9 +26,9 @@ jobs:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
-      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
         with:
-          version: "0.11.16"
+          version: "0.13.0"
           python-version: "3.12"
           enable-cache: true
       - name: Configure cache
@@ -38,19 +38,16 @@ jobs:
           with open(os.environ['GITHUB_ENV'], 'a') as output:
               output.write('WEZ_VTABS_CACHE=' + os.path.join(os.environ['RUNNER_TEMP'], 'wez-vtabs') + '\n')
       - name: Resolve upstream main
-        id: upstream
         shell: python
         run: |
           import os, subprocess
           head = subprocess.check_output(['git', 'ls-remote', 'https://github.com/wezterm/wezterm.git', 'refs/heads/main'], text=True).split()[0]
-          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
-              output.write('head=' + head + '\n')
           with open(os.environ['GITHUB_ENV'], 'a') as output:
               output.write('WEZ_VTABS_UPSTREAM=' + head + '\n')
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
-      - uses: mozilla-actions/sccache-action@v0.0.9
+      - uses: mozilla-actions/sccache-action@v0.0.11
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: . -> target
@@ -73,13 +70,19 @@ jobs:
         if: runner.os == 'Linux'
         shell: bash
         run: |
-          curl --fail --location --retry 3 https://github.com/LuaLS/lua-language-server/releases/download/3.19.1/lua-language-server-3.19.1-linux-x64.tar.gz -o "$RUNNER_TEMP/luals.tar.gz"
-          echo "e9235d2d72ef55bc41cf8c99cda2ed64777682024b4bb81f5dea425060c5cbb8  $RUNNER_TEMP/luals.tar.gz" | sha256sum --check
+          curl --fail --location --retry 3 https://github.com/LuaLS/lua-language-server/releases/download/3.19.2/lua-language-server-3.19.2-linux-x64.tar.gz -o "$RUNNER_TEMP/luals.tar.gz"
+          echo "93ad326b10f6c00911dd8c450fa098332dbd8f9f45d1052f5636a2d54479b947  $RUNNER_TEMP/luals.tar.gz" | sha256sum --check
           mkdir -p "$RUNNER_TEMP/luals"
           tar -xzf "$RUNNER_TEMP/luals.tar.gz" -C "$RUNNER_TEMP/luals"
           echo "$RUNNER_TEMP/luals/bin" >> "$GITHUB_PATH"
       - name: Focused checks
+        if: runner.os != 'Linux'
         run: cargo xtask check --timings
+      - name: Focused, isolated and language-server checks
+        if: runner.os == 'Linux'
+        shell: bash
+        run: >-
+          cargo xtask check --timings -- --run-container --run-luals --basetemp="$RUNNER_TEMP/vtabs-tests"
       - name: Prepare latest main
         run: cargo xtask prepare --timings
       - name: Upstream system dependencies
@@ -88,11 +91,6 @@ jobs:
         run: cargo xtask deps --timings
       - name: build and package
         run: cargo xtask package --timings
-      - name: Isolated and SSH mux tests
-        if: runner.os == 'Linux'
-        shell: bash
-        run: >-
-          cargo xtask test --timings -- --run-container --run-luals --basetemp="$RUNNER_TEMP/vtabs-tests"
       - name: test diagnostics
         uses: actions/upload-artifact@v7
         if: always() && runner.os == 'Linux'

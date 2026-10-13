@@ -46,11 +46,11 @@ Recipes invoke `cargo xtask`. Installed launch entries invoke the bundled Rust b
 
 | `cargo xtask` | Value |
 | --- | --- |
-| `check` | CI: `lint`, Cargo tests and pytest |
+| `check [-- ARGS]` | CI: `lint`, Cargo tests and pytest; pytest arguments after `--` |
 | `package [--bundle PATH]` | Verified bundle, ZIP/tar.gz archive and release manifest in `dist/` |
 | `update --check` / `--manifest PATH_OR_URL` | Installed updater: availability / verified prebuilt release |
 | `launch -- ARGS` | Promote completed pending version and forward GUI arguments |
-| `plan dev --json` | Inputs and execution decisions without fetch/build |
+| `plan [OPERATION] --json` | Inputs and execution decisions without fetch/build; `--explain` prints it first |
 | `patch check --upstream SHA` | Apply patches and overlay in an isolated worktree; 3-way merge on drift |
 | `patch export` | Write the prepared worktree back to `wezterm/`; see **Patches** |
 | `cache inspect` / `cache gc --dry-run --keep N` | Owned run/bundle sizes; pruning preview |
@@ -134,7 +134,7 @@ role = "mux"
 ```sh
 cargo test -p vtabs-store --features sqlite
 cargo build --release --locked -p vtabs-store --features sqlite
-cargo run --quiet --locked -p vtabs-core --bin gen-schema -- json
+cargo run --quiet --locked -p vtabs-core --features schema --bin gen-schema -- json
 ```
 
 **Patches**
@@ -205,7 +205,7 @@ cargo xtask repro /path/to/run/run.json --execute --project-root /path/to/checko
 | Compatibility | Replay rejects incompatible compiler/target/profile/configuration inputs |
 | Logs | Per-command stdout/stderr paths, exit status, elapsed milliseconds |
 | CI | Failed/cancelled jobs upload reports and snapshots on all three platforms |
-| Scope | Prepare/deps/build/check/test/package/generate/patch operations; install/launch inspection only |
+| Scope | Prepare/deps/build/check/test/package/patch operations; install/launch inspection only |
 
 **Prebuilt releases**
 
@@ -238,7 +238,7 @@ uv run --locked pytest -n 2 tests/integration --run-gui --run-container \
 | Worker count | `-n 2`; each test receives separate state and temporary files |
 | Tools binary | `--tools-bin=PATH`; built once under `target/pytest`, coordinated across workers |
 | Rust binaries | Cached project-only build coordinated across workers; `--rust-bin-dir=PATH` uses supplied `gen-schema` and `wez-vtabs-store` |
-| Lua | `lua` or `luajit`; executes `plugin/init.lua` through its public configuration boundary |
+| Lua | `lua`; executes `plugin/init.lua` through its public configuration boundary |
 | LuaCATS | `--run-luals`; requires `lua-language-server`; valid and invalid public option examples |
 | Binaries | `--run-gui --wezterm-bin-dir=PATH`; prebuilt GUI, CLI, mux server and storage helper; focused CLI suites use recorded Cargo artifacts when no directory is supplied |
 | Display | Linux Xvfb and Openbox owned by the fixture; inherited desktop/session endpoints removed |
@@ -251,7 +251,7 @@ uv run --locked pytest -n 2 tests/integration --run-gui --run-container \
 | --- | --- |
 | Unit modules | `cargo test --workspace --all-features`; bodies in `src/<crate>/tests` |
 | Process boundary | `tests/rust` exercises the compiled schema generator and storage helper through pytest |
-| Patched WezTerm | `wezterm/overlay/<crate>/tests/vtabs/*.rs`; run with `just build` |
+| Patched WezTerm | `wezterm/overlay/<crate>/tests/vtabs/*.rs`, `window/tests/macos/*.rs`; run with `just build` |
 
 **Extended GUI scenarios**
 
@@ -263,21 +263,15 @@ uv run --locked python -m tests.scenarios.scenarios \
 uv run --locked python -m tests.scenarios.scenarios \
   --gui /path/to/wezterm-gui --helper /path/to/wez-vtabs-store --domain unix
 
-uv run --locked python -m tests.scenarios.ui_scenarios \
-  --gui /path/to/wezterm-gui --helper /path/to/wez-vtabs-store \
-  --output /tmp/vtabs-ui
-
-uv run --locked python tests/scenarios/tls_fixture.py --wezterm /path/to/wezterm -- \
+uv run --locked python tests/scenarios/tls_fixture.py --mux-server /path/to/wezterm-mux-server -- \
   --gui /path/to/wezterm-gui --helper /path/to/wez-vtabs-store --workspace --effects
 ```
 
 | Scenario | Value |
 | --- | --- |
 | Geometry | Resize/reversal, stable reservation, background tab dimensions and split identities |
-| Navigation | indexed/negative activation, folders, spaces, drag/reorder and sidebar modes |
-| Settings | Dedicated page, filtering, centered editors and preserved terminal geometry |
-| Clipboard | Real OS copy/paste in tab search, settings search and color editor; passive pointer movement |
-| TLS | Temporary CA and certificates, mutual authentication and hostname verification |
+| Navigation | Indexed/negative activation, spaces, workspaces and sidebar modes |
+| TLS | Temporary CA and certificates with mutual authentication |
 | Artifacts | JSON report, sampled geometry, GUI/mux logs and owned-window screenshots |
 | `--capture` | Capture only the fixture's private X11 window |
 | `--baseline-gui PATH` | Compare split sizing with stock at the same viewport |

@@ -1,12 +1,11 @@
 //! WezTerm's `window_padding`, for the quick terminal.
 use crate::settings::{SettingDescriptor, SettingKind};
-use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::fmt;
 
 /// Pixels, or a string with a `px`, `%`, `pt` or `cell` unit, read like WezTerm's `window_padding`.
-#[derive(Clone, Debug, PartialEq, JsonSchema)]
-#[serde(untagged)]
+#[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema), serde(untagged))]
 pub enum Dimension {
     Number(f64),
     Text(String),
@@ -92,7 +91,8 @@ impl<'de> Deserialize<'de> for Dimension {
 }
 
 /// Sides left out follow WezTerm's `window_padding`; a quick program's follow the quick terminal's.
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(deny_unknown_fields)]
 pub struct WindowPadding {
     #[serde(default, skip_serializing_if = "Option::is_none")]

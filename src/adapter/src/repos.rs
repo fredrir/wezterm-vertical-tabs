@@ -22,3 +22,7 @@ impl Repos {
             .as_deref()
     }
 }
+
+#[cfg(test)]
+#[path = "../tests/repos.rs"]
+mod tests;

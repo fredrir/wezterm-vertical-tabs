@@ -19,7 +19,7 @@ index 35ab4fc2181dff39f260b09daae9ff5e20df9324..be4087e6c84dca831f5f88929692591d
          for (tabroot, tab_title) in panes.tabs.into_iter().zip(panes.tab_titles.iter()) {
              let mut cursor = tabroot.into_tree().cursor();
 diff --git a/wezterm/src/cli/mod.rs b/wezterm/src/cli/mod.rs
-index b9325957b1ec065f091bf0c4a860c7b5a8fce272..72f31e31a159e921f008082f1086c9c9bfdf097e 100644
+index b9325957b1ec065f091bf0c4a860c7b5a8fce272..f34f4c2656c7fd0ba3ea601615578bf21db2c9e2 100644
 --- a/wezterm/src/cli/mod.rs
 +++ b/wezterm/src/cli/mod.rs
 @@ -7,6 +7,7 @@ mod activate_pane;
@@ -53,21 +53,22 @@ index b9325957b1ec065f091bf0c4a860c7b5a8fce272..72f31e31a159e921f008082f1086c9c9
      #[command(
          name = "split-pane",
          rename_all = "kebab",
-@@ -103,6 +113,13 @@ Outputs the pane-id for the newly created pane on success"
+@@ -103,6 +113,14 @@ Outputs the pane-id for the newly created pane on success"
      )]
      SplitPane(split_pane::SplitPane),
  
 +    #[command(
 +        name = "replace-pane",
 +        trailing_var_arg = true,
-+        about = "Replace a pane with a fresh shell without changing its layout.\nOutputs the new pane-id on success"
++        about = "Replace a pane with a fresh shell without changing its layout.
++Outputs the new pane-id on success"
 +    )]
 +    ReplacePane(replace_pane::ReplacePane),
 +
      #[command(
          name = "spawn",
          trailing_var_arg = true,
-@@ -183,7 +200,9 @@ async fn run_cli_async(opts: &crate::Opt, cli: CliCommand) -> anyhow::Result<()>
+@@ -183,7 +201,9 @@ async fn run_cli_async(opts: &crate::Opt, cli: CliCommand) -> anyhow::Result<()>
          CliSubCommand::ListClients(cmd) => cmd.run(client).await,
          CliSubCommand::List(cmd) => cmd.run(client).await,
          CliSubCommand::MovePaneToNewTab(cmd) => cmd.run(client).await,

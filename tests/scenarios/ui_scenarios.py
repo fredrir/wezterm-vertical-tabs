@@ -1,19 +1,10 @@
-#!/usr/bin/env python3
-"""Opt-in Linux GUI keyboard, pointer, drag, and screenshot checks on a private display."""
+"""Linux GUI keyboard, pointer, drag, and screenshot checks on a private display."""
 
 from __future__ import annotations
 
-import argparse
 import json
-import sys
-import tempfile
-from pathlib import Path
-
-if __package__ in {None, ""}:
-    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from tests.support.gui import GuiInput
-from tests.support.headless import HeadlessDisplay
 from tests.support.polling import check_process, log_diagnostics, wait_until
 from tests.support.probe import Probe, pane_shape
 
@@ -262,62 +253,3 @@ def scenarios(probe: Probe, gui: GuiInput):
         "screenshots": gui.captures,
         "samples": len(probe.samples),
     }
-
-
-def main():
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--gui", type=Path, required=True)
-    parser.add_argument("--helper", type=Path)
-    parser.add_argument("--output", type=Path)
-    args = parser.parse_args()
-    if sys.platform != "linux":
-        parser.error("This isolated Xvfb fixture requires Linux")
-    output = (args.output or Path(tempfile.mkdtemp(prefix="vtabs-ui-input-"))).resolve()
-    output.mkdir(parents=True, exist_ok=True)
-    if any(output.iterdir()):
-        parser.error("--output must be an empty directory")
-    binary = args.gui.resolve()
-    helper = args.helper.resolve() if args.helper else binary.with_name("wez-vtabs-store")
-    if not binary.is_file() or not helper.is_file():
-        parser.error("GUI and wez-vtabs-store binaries must exist")
-    display, probe, gui = HeadlessDisplay(output / "display"), None, None
-    report = {
-        "gui": str(binary),
-        "gui_modified_ns": binary.stat().st_mtime_ns,
-        "isolation": "private Xvfb display and owned GUI process",
-    }
-    try:
-        display.start()
-        probe = Probe(
-            output / "gui",
-            binary,
-            helper,
-            "local",
-            effects=True,
-            initial_size={"cols": 110, "rows": 40},
-            display=display,
-        )
-        gui = GuiInput(probe, display, output)
-        report.update(scenarios(probe, gui))
-        if report["errors"]:
-            raise AssertionError("; ".join(report["errors"]))
-        report["passed"] = True
-    except BaseException as error:
-        report["passed"], report["error"] = False, str(error)
-        if gui is not None and gui.window is not None:
-            try:
-                gui.capture("failure", pause=0)
-            except Exception:
-                pass
-            report["screenshots"] = gui.captures
-        raise
-    finally:
-        if probe is not None:
-            probe.close()
-        display.close()
-        (output / "report.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
-        print(output, flush=True)
-
-
-if __name__ == "__main__":
-    main()

@@ -165,18 +165,12 @@ fn a_clash_shows_its_owner_and_leaves_bindings_unchanged() {
 
 #[test]
 fn lua_owned_bindings_cannot_be_edited_from_settings() {
-    for host_owned in [false, true] {
-        let (mut ui, mut model) = setup();
-        if host_owned {
-            ui.set_config_owned(["keybinds".into()]);
-        } else {
-            model.config_owned.insert("keybinds".into());
-        }
-        click(&mut ui, &mut model, ElementId::Setting(COMMANDS.into()));
-        assert!(!ui.has_overlay());
-        assert!(!ui.recording_shortcut());
-        assert!(ui.event(&model, UiInput::key(Key::Delete)).is_empty());
-    }
+    let (mut ui, mut model) = setup();
+    model.config_owned.insert("keybinds".into());
+    click(&mut ui, &mut model, ElementId::Setting(COMMANDS.into()));
+    assert!(!ui.has_overlay());
+    assert!(!ui.recording_shortcut());
+    assert!(ui.event(&model, UiInput::key(Key::Delete)).is_empty());
 }
 
 #[test]
@@ -249,20 +243,14 @@ fn removing_a_shortcut_uses_current_bindings_after_a_reload() {
 
 #[test]
 fn removing_a_shortcut_rechecks_lua_ownership_after_it_was_drawn() {
-    for host_owned in [false, true] {
-        let (mut ui, mut model) = setup();
-        let first = keybinds::defaults("commands")[0].clone();
-        open(&mut ui, &mut model);
-        hover(&mut ui, &model, chord(&first));
-        let at = rect(&ui, &ElementId::MenuRemove(format!("chord/{first}")));
-        if host_owned {
-            ui.set_config_owned(["keybinds".into()]);
-        } else {
-            model.config_owned.insert("keybinds".into());
-        }
-        press(&mut ui, &mut model, at);
-        assert!(model.settings.keybinds.is_empty());
-    }
+    let (mut ui, mut model) = setup();
+    let first = keybinds::defaults("commands")[0].clone();
+    open(&mut ui, &mut model);
+    hover(&mut ui, &model, chord(&first));
+    let at = rect(&ui, &ElementId::MenuRemove(format!("chord/{first}")));
+    model.config_owned.insert("keybinds".into());
+    press(&mut ui, &mut model, at);
+    assert!(model.settings.keybinds.is_empty());
 }
 
 #[test]

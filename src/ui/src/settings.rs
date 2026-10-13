@@ -138,9 +138,15 @@ impl<'a> SettingTarget<'a> {
     }
 }
 
+pub(crate) fn managed_in_lua(model: &Model, key: &str) -> bool {
+    model
+        .config_owned
+        .contains(SettingTarget::of(key).setting_key())
+}
+
 impl SidebarUi {
     pub(crate) fn reset_setting(&mut self, model: &Model, key: &str, intents: &mut Vec<UiIntent>) {
-        if self.settings.managed_in_lua(model, key) {
+        if managed_in_lua(model, key) {
             return;
         }
         let target = SettingTarget::of(key);

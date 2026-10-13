@@ -1,6 +1,12 @@
+use super::launch::directory;
+use super::layout::{step, step_cells, Edges, Layout, SHELL_SIZE};
 use super::*;
 use crate::termwindow::ui_host::{HideOnEscape, TerminalPadding};
 use config::Dimension;
+use config::{
+    HorizontalWindowContentAlignment, VerticalWindowContentAlignment, WindowContentAlignment,
+    WindowPadding,
+};
 
 #[test]
 fn terminal_is_centered_in_three_quarters_of_the_window() {

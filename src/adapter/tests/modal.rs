@@ -147,8 +147,7 @@ fn form_completion_publishes_settled_grid_and_pointer_origin() {
 
 #[test]
 fn hidden_sidebar_modals_use_window_bounds_without_resizing_it() {
-    // Adapter construction reads the GUI's current Lua configuration. Initialize
-    // the same thread-local host context as wezterm-gui startup before exercising it.
+    // Adapter construction reads the GUI's Lua configuration from startup's thread context.
     config::designate_this_as_the_main_thread();
     for action in ["tab_navigator", "settings", "create_space"] {
         let mut adapter = Adapter::new(1);
@@ -242,7 +241,7 @@ fn hidden_sidebar_modals_use_window_bounds_without_resizing_it() {
             } else {
                 window::Modifiers::CTRL | window::Modifiers::SHIFT
             };
-            let close = super::input_tests::raw(KeyCode::Char('w'), mods, true);
+            let close = super::support::raw(KeyCode::Char('w'), mods, true);
             assert!(adapter.input(Input::RawKey(&close)));
         }
         assert!(!adapter.app.is_modal());

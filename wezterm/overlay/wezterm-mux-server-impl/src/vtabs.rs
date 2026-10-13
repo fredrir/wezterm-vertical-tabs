@@ -1,5 +1,4 @@
-//! Requests served for this project's clients: close policy, location, adoption, replacement
-//! and spawning beside a pane.
+//! Project requests: close policy, location, adoption, replacement and spawning beside a pane.
 use anyhow::anyhow;
 use codec::*;
 use mux::client::ClientId;
@@ -10,8 +9,7 @@ use portable_pty::CommandBuilder;
 use promise::spawn::spawn_into_main_thread;
 use std::sync::Arc;
 
-/// Another host's mux relays commands built there; like SSH domains, only explicitly set
-/// variables travel and the rest comes from this host.
+/// Commands relayed from another host keep only explicit variables, as SSH domains do.
 pub(crate) fn rebase_relayed(spawn: &mut SpawnV2) {
     if !spawn.workspace.starts_with(mux::BACKING_WORKSPACE_PREFIX) {
         return;
@@ -48,8 +46,7 @@ where
     .detach();
 }
 
-/// The pane's owner sends the key unless closing the pane would not prompt; a relay asks
-/// further along.
+/// The owner sends the key only if closing the pane would prompt; a relay asks further along.
 fn key_down_if_busy<SND>(request: SendKeyDownIfBusy, send_response: SND)
 where
     SND: Fn(anyhow::Result<Pdu>) + Send + 'static,
@@ -124,8 +121,7 @@ async fn respond(pdu: Pdu, client_id: Option<Arc<ClientId>>) -> anyhow::Result<P
     })
 }
 
-/// The pane's owner applies the ordinary local policy; a relay asks further along. A pane
-/// that is gone needs no prompt, and an owner that cannot answer keeps the prompt.
+/// The owner's local policy, via relays; a gone pane needs no prompt, a silent owner keeps it.
 async fn close_info(pane_id: PaneId) -> GetPaneCloseInfoResponse {
     let Some(pane) = Mux::get().get_pane(pane_id) else {
         return GetPaneCloseInfoResponse::default();

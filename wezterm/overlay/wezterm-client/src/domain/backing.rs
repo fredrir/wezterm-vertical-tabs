@@ -8,10 +8,11 @@ use codec::{
     GetCodecVersionResponse, ListPanesResponse, MovePaneToNewTab, SpawnBesidePane, SpawnV2,
 };
 use config::keyassignment::SpawnTabDomain;
-use mux::Mux;
+use mux::domain::Domain;
 use mux::pane::{Pane, PaneId};
 use mux::tab::{PaneEntry, Tab};
 use mux::window::WindowId;
+use mux::Mux;
 use portable_pty::CommandBuilder;
 use std::sync::Arc;
 use wezterm_term::TerminalSize;
@@ -39,8 +40,7 @@ impl ClientDomain {
             .ok_or_else(|| anyhow!("not a client pane"))
     }
 
-    /// Spawns alongside a local pane's server-side process in `workspace`, then
-    /// returns the pane from this client's mirror of the new remote tab.
+    /// Spawns beside a local pane's server-side process in `workspace`; returns its mirror.
     pub async fn spawn_beside_pane(
         &self,
         local_pane_id: PaneId,
@@ -89,9 +89,7 @@ impl ClientDomain {
         Ok(adoptable(&inner, &panes))
     }
 
-    /// Shows a remote pane in a new tab of `window`, or of a new detached window.
-    /// A pane backed elsewhere first moves into a backing tab of this host, so a
-    /// later attach restores it.
+    /// Shows a remote pane in a new tab of `window` or a detached one, backed here for reattach.
     pub async fn adopt_pane(
         &self,
         remote_pane_id: PaneId,
@@ -129,6 +127,38 @@ impl ClientDomain {
             .ok_or_else(|| anyhow!("domain is not attached"))
     }
 
+    /// The local mux owns the new tab; its pane is backed on the server.
+    pub(super) async fn spawn_local_tab(
+        &self,
+        size: TerminalSize,
+        command: Option<CommandBuilder>,
+        command_dir: Option<String>,
+        window: WindowId,
+    ) -> anyhow::Result<Arc<Tab>> {
+        let pane = self.spawn_pane(size, command, command_dir).await?;
+        let tab = Arc::new(Tab::new(&size));
+        tab.assign_pane(&pane);
+        let mux = Mux::get();
+        mux.add_tab_no_panes(&tab);
+        mux.add_tab_to_window(&tab, window)?;
+        Ok(tab)
+    }
+
+    /// The server knows the moved pane by its remote id, within this domain only.
+    pub(super) fn remote_pane_to_move(&self, pane_id: PaneId) -> anyhow::Result<PaneId> {
+        let moved = Mux::get()
+            .get_pane(pane_id)
+            .ok_or_else(|| anyhow!("pane {pane_id} is invalid"))?;
+        anyhow::ensure!(
+            moved.domain_id() == self.domain_id(),
+            "cannot move panes across client domains"
+        );
+        let moved = moved
+            .downcast_ref::<ClientPane>()
+            .ok_or_else(|| anyhow!("pane {pane_id} is not a ClientPane"))?;
+        Ok(moved.remote_pane_id)
+    }
+
     pub(super) async fn spawn_backing_pane(
         &self,
         size: TerminalSize,
@@ -162,8 +192,7 @@ impl ClientDomain {
             "wezterm",
         ));
         Mux::get().add_pane(&pane)?;
-        // Subscribe while the replacement is still offscreen, so readiness and
-        // prompt output arrive without waiting for the GUI's first render poll.
+        // Subscribed while offscreen, so output arrives before the GUI's first render poll.
         let client = inner.client.clone();
         promise::spawn::spawn(async move {
             client
@@ -177,11 +206,15 @@ impl ClientDomain {
     }
 }
 
-/// Identifies the server behind `client`, whichever route reached it.
+/// Identifies the server behind a `local_pane_layout` client, whichever route reached it.
 pub(super) async fn server_identity(
+    local_pane_layout: bool,
     client: &Client,
     version: &GetCodecVersionResponse,
 ) -> Option<String> {
+    if !local_pane_layout {
+        return None;
+    }
     let host = client
         .get_pane_location(codec::GetPaneLocation { pane_id: None })
         .await
@@ -207,8 +240,7 @@ fn is_shown(inner: &ClientInner, remote_pane_id: PaneId) -> bool {
     })
 }
 
-/// Remote panes shown by no domain of this mux, excluding panes the server only
-/// relays and tabs backing another host's panes.
+/// Panes no domain here shows, minus those the server relays or backs for other hosts.
 fn adoptable(inner: &ClientInner, panes: &ListPanesResponse) -> Vec<PaneEntry> {
     let backing = mux::backing_workspace();
     panes

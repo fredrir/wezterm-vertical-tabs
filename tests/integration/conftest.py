@@ -1,11 +1,13 @@
 """Explicit binaries and private display ownership for integration tests."""
 
 import os
+from contextlib import ExitStack
 from pathlib import Path
 
 import pytest
 
 from tests.support.headless import HeadlessDisplay
+from tests.support.probe import Probe
 
 
 @pytest.fixture(scope="session")
@@ -35,3 +37,26 @@ def wezterm_binaries(pytestconfig):
 def headless_display(tmp_path):
     with HeadlessDisplay(tmp_path / "display") as display:
         yield display
+
+
+@pytest.fixture
+def probe_factory(wezterm_binaries, headless_display, tmp_path):
+    probes = []
+
+    def create(name, domain="local", **options):
+        probe = Probe(
+            tmp_path / name,
+            wezterm_binaries["wezterm-gui"],
+            wezterm_binaries["wez-vtabs-store"],
+            domain,
+            server=wezterm_binaries["wezterm-mux-server"],
+            display=headless_display,
+            **options,
+        )
+        probes.append(probe)
+        return probe
+
+    yield create
+    with ExitStack() as cleanup:
+        for probe in probes:
+            cleanup.callback(probe.close)

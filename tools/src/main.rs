@@ -1,28 +1,31 @@
 mod build;
 mod build_identity;
 mod bundle;
+mod cache;
 mod check;
 mod cli;
 mod container;
 mod deploy;
-mod diagnostics;
+mod dev;
 mod install;
+mod plan;
 mod process;
 mod remote;
+mod repro;
+mod setup;
 mod sign;
 mod source;
 mod state;
 mod targets;
 mod update;
-mod watch;
 
 use anyhow::{Context as _, Result};
 use clap::{CommandFactory, Parser, ValueEnum};
 use cli::{Cli, Commands};
 use serde_json::{Value, json};
-use state::{Context, Lock};
+use source::{inventory, patches, project, upstream};
+use state::Context;
 use std::path::{Path, PathBuf};
-use targets::Platform;
 
 fn home() -> PathBuf {
     std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
@@ -99,7 +102,7 @@ fn context(cli: &Cli) -> Result<Context> {
             .collect(),
     )?;
     let development = matches!(&cli.command, Commands::Dev { .. })
-        || matches!(&cli.command,Commands::Plan{operation} if operation == "dev");
+        || matches!(&cli.command, Commands::Plan { operation } if operation == "dev");
     let profile = cli.profile.clone().unwrap_or_else(|| {
         if cli.debug {
             "dev"
@@ -171,38 +174,12 @@ fn elsewhere(
     remote::delegate(ctx, &host, &request(ctx, cli)?, &command).map(Some)
 }
 
-fn setup(ctx: &Context) -> Result<Value> {
-    anyhow::ensure!(!ctx.offline, "setup requires online mode");
-    let resolved = {
-        let _lock = Lock::acquire(&ctx.cache.join("build.lock"))?;
-        let resolved = source::resolve(ctx)?;
-        source::prepare(ctx, &resolved)?;
-        resolved
-    };
-    let worktree = ctx.cache.join("worktree");
-    eprintln!("+ {} --testing", worktree.join("get-deps").display());
-    // Foreground and on the terminal so sudo can prompt.
-    let status = std::process::Command::new(worktree.join("get-deps"))
-        .arg("--testing")
-        .current_dir(&worktree)
-        .env("CI", "yes")
-        .status()
-        .context("start: get-deps")?;
-    anyhow::ensure!(status.success(), "get-deps failed: {status}");
-    ctx.runner.run(
-        process::CommandSpec::new("uv")
-            .args(["sync", "--locked"])
-            .cwd(&ctx.root),
-    )?;
-    Ok(json!({"upstream":resolved.revision,"status":"ready"}))
-}
-
 fn dispatch(ctx: &Context, cli: &Cli) -> Result<(Value, i32)> {
     let value = match &cli.command {
         Commands::Prepare => {
-            let _lock = Lock::acquire(&ctx.cache.join("build.lock"))?;
-            let resolved = source::resolve(ctx)?;
-            let path = source::prepare(ctx, &resolved)?;
+            let _lock = ctx.lock_build()?;
+            let resolved = upstream::resolve(ctx)?;
+            let path = patches::prepare(ctx, &resolved)?;
             json!({"upstream":resolved.revision,"worktree":path})
         }
         Commands::Build(args) => {
@@ -215,57 +192,24 @@ fn dispatch(ctx: &Context, cli: &Cli) -> Result<(Value, i32)> {
                 ..ctx.clone()
             };
             if let Some(platform) = &args.platform {
-                let platform = Platform::parse(platform)?;
-                let output = args.output.clone().unwrap_or_else(|| ctx.root.join("dist"));
-                if platform == Platform::Macos && cfg!(target_os = "macos") {
-                    let _lock = Lock::acquire(&ctx.cache.join("build.lock"))?;
-                    let metadata = build::build(ctx)?;
-                    return Ok((
-                        json!({"bundle":bundle::package(ctx, &metadata, &output, false)?}),
-                        0,
-                    ));
-                }
-                let options = container::Options {
-                    image: args.image.clone(),
-                    runtime: args.container_runtime.clone(),
-                    clean: args.clean_builder,
-                };
-                if ctx.explain {
-                    return Ok((container::plan(ctx, &platform, &options, &output)?, 0));
-                }
-                json!({"bundle":container::build(ctx, &platform, &options, &output)?})
+                container::run(ctx, args, platform)?
             } else {
-                let _lock = Lock::acquire(&ctx.cache.join("build.lock"))?;
+                let _lock = ctx.lock_build()?;
                 serde_json::to_value(build::build(ctx)?)?
             }
         }
-        Commands::Deps => {
-            let _lock = Lock::acquire(&ctx.cache.join("build.lock"))?;
-            let resolved = source::resolve(ctx)?;
-            let worktree = source::prepare(ctx, &resolved)?;
-            anyhow::ensure!(
-                !ctx.offline,
-                "system dependency installation requires online mode"
-            );
-            ctx.runner.run(
-                process::CommandSpec::new(worktree.join("get-deps"))
-                    .cwd(&worktree)
-                    .env("CI", "yes"),
-            )?;
-            json!({"upstream":resolved.revision,"status":"dependencies installed"})
-        }
+        Commands::Deps => setup::deps(ctx)?,
         Commands::Dev {
             watch,
             no_watch,
             debounce_ms,
             args,
         } => {
-            let effective_watch = *watch && !*no_watch;
-            return watch::dev(ctx, effective_watch, *debounce_ms, args)
+            return dev::dev(ctx, *watch && !*no_watch, *debounce_ms, args)
                 .map(|status| (json!({"status":status}), status));
         }
-        Commands::Check => {
-            check::check(ctx)?;
+        Commands::Check { args } => {
+            check::check(ctx, args)?;
             json!({"status":"passed"})
         }
         Commands::Lint { fix, on } => {
@@ -305,20 +249,9 @@ fn dispatch(ctx: &Context, cli: &Cli) -> Result<(Value, i32)> {
                 return Ok(result);
             }
             if *check {
-                let build = diagnostics::doctor(ctx, "build")?;
-                let tests = diagnostics::doctor(ctx, "check")?;
-                let ok = build["ok"] == true && tests["ok"] == true;
-                let checks: Vec<Value> = [&build, &tests]
-                    .iter()
-                    .flat_map(|report| report["checks"].as_array().cloned().unwrap_or_default())
-                    .collect();
-                return Ok((json!({"ok":ok,"checks":checks}), if ok { 0 } else { 1 }));
+                return setup::check(ctx);
             }
-            setup(ctx)?
-        }
-        Commands::Generate { check } => {
-            check::generate(ctx, *check)?;
-            json!({"status":if *check {"current"}else{"generated"}})
+            setup::install(ctx)?
         }
         Commands::Package {
             output,
@@ -334,7 +267,7 @@ fn dispatch(ctx: &Context, cli: &Cli) -> Result<(Value, i32)> {
                     role: role.unwrap_or_default(),
                     ..ctx.clone()
                 };
-                let _lock = Lock::acquire(&ctx.cache.join("build.lock"))?;
+                let _lock = ctx.lock_build()?;
                 let metadata = build::build(ctx)?;
                 let output = output.clone().unwrap_or_else(|| ctx.root.join("dist"));
                 json!({"bundle":bundle::package(ctx,&metadata,&output,!no_archive)?,"build":metadata})
@@ -344,13 +277,8 @@ fn dispatch(ctx: &Context, cli: &Cli) -> Result<(Value, i32)> {
             bundle: existing,
             stage_only,
         } => {
-            // Hold the cache lock through copying the freshly packaged runtime
-            // into its immutable installed version so GC cannot remove it.
-            let _lock = if existing.is_none() {
-                Some(Lock::acquire(&ctx.cache.join("build.lock"))?)
-            } else {
-                None
-            };
+            // Held until the packaged runtime is installed so GC cannot remove it first.
+            let _lock = existing.is_none().then(|| ctx.lock_build()).transpose()?;
             let path = if let Some(path) = existing {
                 path.clone()
             } else {
@@ -358,14 +286,14 @@ fn dispatch(ctx: &Context, cli: &Cli) -> Result<(Value, i32)> {
                 bundle::package(ctx, &metadata, &ctx.cache.join("bundles"), false)?
             };
             let installed = install::install(ctx, &path, *stage_only)?;
-            json!({"installed":installed,"staged":stage_only,"pruned":diagnostics::prune(ctx,_lock.as_ref())?})
+            json!({"installed":installed,"staged":stage_only,"pruned":cache::prune(ctx,_lock.as_ref())?})
         }
         Commands::Prebuild { triple, output } => {
             let ctx = &Context {
                 triple: Some(triple.clone()),
                 ..ctx.clone()
             };
-            let _lock = Lock::acquire(&ctx.cache.join("build.lock"))?;
+            let _lock = ctx.lock_build()?;
             let metadata = build::build(ctx)?;
             json!({"prebuilt":build::prebuilt(ctx, &metadata, output)?})
         }
@@ -397,11 +325,9 @@ fn dispatch(ctx: &Context, cli: &Cli) -> Result<(Value, i32)> {
                 (None, None, Some(path)) => deploy::Source::Prebuilt(path),
                 (None, None, None) => deploy::Source::Build,
             };
-            let _lock = if matches!(source, deploy::Source::Build | deploy::Source::Prebuilt(_)) {
-                Some(Lock::acquire(&ctx.cache.join("build.lock"))?)
-            } else {
-                None
-            };
+            let _lock = matches!(source, deploy::Source::Build | deploy::Source::Prebuilt(_))
+                .then(|| ctx.lock_build())
+                .transpose()?;
             let targets = deploy::Targets::resolve(app.clone(), bin.clone(), *no_app);
             let value = deploy::deploy(ctx, source, &targets, _lock.as_ref())?;
             if let Some(revision) = value["upstream"]["revision"].as_str() {
@@ -427,12 +353,7 @@ fn dispatch(ctx: &Context, cli: &Cli) -> Result<(Value, i32)> {
             let status = install::launch(ctx, args)?;
             return Ok((json!({"status":status}), status));
         }
-        Commands::Doctor { operation } => {
-            let value = diagnostics::doctor(ctx, operation)?;
-            let status = if value["ok"] == true { 0 } else { 1 };
-            return Ok((value, status));
-        }
-        Commands::Plan { operation } => diagnostics::plan(ctx, operation)?,
+        Commands::Plan { operation } => plan::plan(ctx, operation)?,
         Commands::Status { to } => {
             let plan = targets::plan(Some(targets::LOCAL), to.to.as_deref())?;
             match plan.to {
@@ -442,29 +363,24 @@ fn dispatch(ctx: &Context, cli: &Cli) -> Result<(Value, i32)> {
                 _ => install::status(&ctx.install)?,
             }
         }
-        Commands::Versions => install::versions(&ctx.install)?,
-        Commands::Rollback { id } => {
-            json!({"active":install::rollback(&ctx.install,id.as_deref())?})
-        }
         Commands::Cache { command } => match command {
             cli::CacheCommand::Inspect => {
-                diagnostics::cache(ctx, false, true, diagnostics::Retention::uniform(5))?
+                cache::cache(ctx, false, true, cache::Retention::uniform(5))?
             }
             cli::CacheCommand::Gc { dry_run, keep } => {
-                diagnostics::cache(ctx, true, *dry_run, diagnostics::Retention::uniform(*keep))?
+                cache::cache(ctx, true, *dry_run, cache::Retention::uniform(*keep))?
             }
         },
         Commands::Patch { command } => {
-            let _lock = Lock::acquire(&ctx.cache.join("build.lock"))?;
+            let _lock = ctx.lock_build()?;
             match command {
-                cli::PatchCommand::Check => source::patch_check(ctx)?,
-                cli::PatchCommand::Export => source::patch_export(ctx)?,
+                cli::PatchCommand::Check => patches::check(ctx)?,
+                cli::PatchCommand::Export => patches::export(ctx)?,
             }
         }
         Commands::Repro { report, execute } => {
-            diagnostics::reproduce(ctx, report, *execute, cli.project_root.is_some())?
+            repro::reproduce(ctx, report, *execute, cli.project_root.is_some())?
         }
-        Commands::Manifest { bundle: path } => bundle::write_manifest(path)?,
         Commands::Verify { bundle: path } => serde_json::to_value(bundle::verify(path)?)?,
     };
     Ok((value, 0))
@@ -479,37 +395,17 @@ fn execute() -> Result<i32> {
     let cancellation = ctx.runner.clone();
     ctrlc::set_handler(move || cancellation.cancel()).context("install cancellation handler")?;
     let result = (|| -> Result<(Value, i32)> {
-        if matches!(
-            cli.command,
-            Commands::Prepare
-                | Commands::Deps
-                | Commands::Patch { .. }
-                | Commands::Check
-                | Commands::Lint { .. }
-                | Commands::Test { .. }
-                | Commands::Setup { .. }
-                | Commands::Generate { .. }
-        ) {
-            let project = source::project_source(&ctx)?;
-            ctx.runner
-                .metadata("project_source", &serde_json::to_value(project)?)?;
-            source::copy_source(&ctx.root, &ctx.runner.directory().join("source"))?;
+        if cli.command.snapshots_source() {
+            project::source(&ctx)?;
+            inventory::copy_source(&ctx.root, &ctx.runner.directory().join("source"))?;
             ctx.runner.metadata("source_snapshot", &json!("source"))?;
         }
         if cli.explain
-            && matches!(
-                cli.command,
-                Commands::Build(..)
-                    | Commands::Package { .. }
-                    | Commands::Deploy { .. }
-                    | Commands::Dev { .. }
-                    | Commands::Prepare
-            )
-            && !matches!(&cli.command, Commands::Build(args) if args.platform.is_some())
+            && let Some(operation) = cli.command.explained_operation()
         {
             eprintln!(
                 "{}",
-                serde_json::to_string_pretty(&diagnostics::plan(&ctx, "build")?)?
+                serde_json::to_string_pretty(&plan::plan(&ctx, operation)?)?
             );
         }
         dispatch(&ctx, &cli)
@@ -541,7 +437,7 @@ fn execute() -> Result<i32> {
             if ctx.root.join("Cargo.toml").is_file()
                 && !ctx.runner.directory().join("source").is_dir()
             {
-                match source::copy_source(&ctx.root, &ctx.runner.directory().join("source")) {
+                match inventory::copy_source(&ctx.root, &ctx.runner.directory().join("source")) {
                     Ok(()) => {
                         let _ = ctx.runner.metadata("source_snapshot", &json!("source"));
                     }

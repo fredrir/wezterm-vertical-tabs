@@ -81,26 +81,26 @@ pub fn deploy(
         Source::Rollback(id) => (install::rollback(&ctx.install, id)?, Value::Null),
         Source::Bundle(path) => (
             install::install(ctx, path, false)?,
-            crate::diagnostics::prune(ctx, build_lock)?,
+            crate::cache::prune(ctx, build_lock)?,
         ),
         Source::Build => {
             let metadata = build::build(ctx)?;
             let bundle = bundle::package(ctx, &metadata, &ctx.cache.join("bundles"), false)?;
             (
                 install::install(ctx, &bundle, false)?,
-                crate::diagnostics::prune(ctx, build_lock)?,
+                crate::cache::prune(ctx, build_lock)?,
             )
         }
         Source::Prebuilt(path) => {
             let bundle = bundle::package_prebuilt(ctx, path, &ctx.cache.join("bundles"))?;
             (
                 install::install(ctx, &bundle, false)?,
-                crate::diagnostics::prune(ctx, build_lock)?,
+                crate::cache::prune(ctx, build_lock)?,
             )
         }
     };
-    let metadata = crate::state::read_json::<BuildMetadata>(&installed.join("build.json"))?
-        .context("installed version metadata missing")?;
+    let metadata =
+        BuildMetadata::read(&installed)?.context("installed version metadata missing")?;
     let role = metadata.role;
     // Headless versions have no application; never replace one with them.
     let targets = &Targets {
@@ -125,12 +125,10 @@ pub fn deploy(
         "links": links,
         "upstream": {"revision": metadata.upstream, "pinned": pinned.is_some()},
         "pruned": pruned,
-        "next": "Quit and reopen WezTerm to run this version",
     }))
 }
 
-/// Plugin changes should not pull a newer WezTerm and its full rebuild along; only an
-/// explicit `--upstream` moves past the revision the last deploy used on any machine.
+/// Keeps the revision the last deploy used on any machine; only `--upstream` moves past it.
 fn pin_upstream(ctx: &Context) -> Result<Option<Context>> {
     if ctx.upstream.is_some() {
         return Ok(None);

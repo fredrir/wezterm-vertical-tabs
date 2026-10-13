@@ -7,6 +7,7 @@ use crate::input::{Modifiers, MouseButton};
 use crate::intent::UiIntent;
 use crate::overlays::Overlay;
 use crate::runtime::motion;
+use crate::settings::managed_in_lua;
 use crate::views::settings_page::Range;
 use crate::views::tab_name;
 use ratatui::layout::Position;
@@ -195,7 +196,7 @@ impl SidebarUi {
                 }
             }
             (MouseButton::Left, Some(ElementId::Slider(key))) => {
-                if !self.settings.managed_in_lua(model, &key) {
+                if !managed_in_lua(model, &key) {
                     self.settings.editing.cancel_entry();
                     self.caret.stop();
                     self.settings_focus_setting(model, &key);
@@ -350,9 +351,7 @@ impl SidebarUi {
         else {
             return;
         };
-        let Some(range) =
-            vtabs_core::settings::descriptor(key).and_then(|field| Range::of(&field.kind))
-        else {
+        let Some(range) = Range::for_key(key) else {
             return;
         };
         let at = (f32::from(x) - f32::from(track.x) + self.pointer.fraction.0 - 1.)

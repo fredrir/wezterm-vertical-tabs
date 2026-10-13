@@ -1,24 +1,23 @@
 # Validation
 
-| Check                                | Command                                                                                            |
-| ------------------------------------ | -------------------------------------------------------------------------------------------------- |
-| Project checks                       | `just check`                                                                                       |
-| Fast behavior suite                  | `uv run --locked pytest -n 2`                                                                      |
-| LuaCATS contracts                    | `uv run --locked pytest -n 2 --run-luals`                                                          |
-| GUI, PTY and transport integration   | `uv run --locked pytest -n 2 --run-gui --run-container --run-luals --wezterm-bin-dir=/path/to/bin` |
-| Host regressions                     | `just build`                                                                                       |
-| Extended geometry and physical input | [Development](development.md)                                                                      |
+| Check                         | Command                                                                                            |
+| ----------------------------- | -------------------------------------------------------------------------------------------------- |
+| Project checks                | `cargo xtask check`                                                                                |
+| Fast behavior suite           | `uv run --locked pytest -n 2`                                                                      |
+| LuaCATS contracts             | `uv run --locked pytest -n 2 --run-luals`                                                          |
+| GUI and transport integration | `uv run --locked pytest -n 2 --run-gui --run-container --run-luals --wezterm-bin-dir=/path/to/bin` |
+| Host regressions              | `just build`                                                                                       |
+| Extended geometry scenarios   | [Development](development.md)                                                                      |
 
 | Boundary            | Verified behavior                                                                                                           |
 | ------------------- | --------------------------------------------------------------------------------------------------------------------------- |
-| Rust processes      | Generated schema, bounded storage errors, atomic conflict rollback, concurrent writers and mux incarnation isolation        |
+| Rust processes      | Generated schema, bounded storage errors, atomic conflict rollback and concurrent writers                                   |
 | Lua plugin          | Headless configuration, capability failures, options, semantic hooks and action dispatch through the production entrypoint  |
 | Lua Language Server | Valid public options accepted; invalid option types and choices diagnosed                                                   |
-| PTY                 | Real management CLI and installed `wez-vtabs` launcher output and exit status                                               |
 | Startup             | Local and Unix mux render content; attached remote tabs use the current viewport without a physical resize                  |
 | Shutdown            | Owned application quits through its public action and exits successfully before fixture cleanup                             |
 | SSH mux             | Containerized loopback transport, temporary keys, rejected unknown key, new/close lifecycle                                 |
-| TLS mux             | Certificate and hostname verification, mutual authentication, tab lifecycle and key cleanup                                 |
+| TLS mux             | Temporary CA, mutual authentication, owner-only keys, tab lifecycle and key cleanup                                         |
 | Geometry            | Resizing, left/right sidebar, expanded/hidden sidebar, integrated chrome, tiny windows, fonts, zoom and fullscreen          |
 | Splits              | Pane identities and topology retained; active and background tabs remain sized consistently                                 |
 | Mouse               | Tab activation, folder expand/collapse, tab reorder and folder assignment                                                   |
@@ -45,5 +44,5 @@
 | CPU samples          | Fixture reports cover host work and software rendering; exclude GPU completion and physical presentation                         |
 | Device checks        | Physical IME, monitor transitions, macOS traffic controls and input-to-display latency need device profiling                     |
 | Platforms            | Build workflow checks macOS, Linux and Windows; automated physical UI tests run on isolated Linux displays                       |
-| Restoration          | Durable catalogs/settings; live membership requires a verified mux incarnation unavailable from the current upstream integration |
+| Restoration          | Durable catalogs/settings; tab membership resets after GUI restart                                                               |
 | Remote moves         | Remote single-pane moves supported; remote split moves remain limited by upstream APIs                                           |

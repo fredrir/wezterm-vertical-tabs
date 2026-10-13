@@ -1,4 +1,4 @@
-use super::*;
+use super::{core::HostTab, *};
 
 fn discover(app: &mut WindowApp, revision: u64, active: TabId) {
     app.update(HostSnapshot {
@@ -112,8 +112,9 @@ fn canceled_failed_spawn_never_assigns_a_later_terminal() {
     let token = app.reserve_spawn_in_folder(&folder).unwrap();
     app.cancel_spawn(&token);
     discover(&mut app, 2, 2);
+    let revision = app.model().revision;
     let update = app.spawn_completed_with_token(2, token).unwrap();
-    assert!(!update.model_changed);
+    assert_eq!(app.model().revision, revision);
     assert!(update.commands.is_empty());
     assert!(app.model().tabs[&2].folder_id.is_none());
 }
@@ -126,23 +127,16 @@ fn tampered_folder_token_cannot_modify_or_consume_a_valid_pending_spawn() {
     tampered.folder_id = None;
     discover(&mut app, 2, 2);
     app.cancel_spawn(&tampered);
-    assert!(
-        !app.spawn_completed_with_token(2, tampered)
-            .unwrap()
-            .model_changed
-    );
-    assert!(
-        app.spawn_completed_with_token(2, token.clone())
-            .unwrap()
-            .model_changed
-    );
+    let completes = |app: &mut WindowApp, token: SpawnToken| {
+        let revision = app.model().revision;
+        app.spawn_completed_with_token(2, token).unwrap();
+        app.model().revision != revision
+    };
+    assert!(!completes(&mut app, tampered));
+    assert!(completes(&mut app, token.clone()));
     assert_eq!(
         app.model().tabs[&2].folder_id.as_deref(),
         Some(folder.as_str())
     );
-    assert!(
-        !app.spawn_completed_with_token(2, token)
-            .unwrap()
-            .model_changed
-    );
+    assert!(!completes(&mut app, token));
 }

@@ -110,7 +110,7 @@ fn quick_programs_read_wezterm_values() {
         let value = lua.load(source).eval::<mlua::Value>().unwrap();
         match parse_action(&lua, value).map_err(|error| error.to_string())? {
             core::Action::Ui(core::UiAction::QuickProgram(program)) => {
-                super::super::terminal_program(*program)
+                super::super::terminal_program::quick_program(*program)
             }
             other => Err(format!("{other:?}")),
         }

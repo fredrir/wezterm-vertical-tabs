@@ -29,6 +29,74 @@ pub struct Reservation {
     pub width: f32,
     pub right: bool,
 }
+impl Reservation {
+    fn scaled(self, dpi: f32) -> f32 {
+        (self.width * dpi / 96.).round()
+    }
+}
+/// Leaves the terminal at least two cells of `available`.
+fn clamp_reserved(width: f32, available: f32, cell_width: f32) -> f32 {
+    width.clamp(0., (available - cell_width * 2.).max(0.))
+}
+
+/// Sidebar, header and frame gutter around the window padding, in pixels.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Insets {
+    pub left: f32,
+    pub top: f32,
+    pub right: f32,
+    pub bottom: f32,
+}
+impl Insets {
+    fn new(right_side: bool, width: f32, top: f32, gutter: f32) -> Self {
+        let (left, right) = if right_side { (0., width) } else { (width, 0.) };
+        Self {
+            left: left + gutter,
+            top: top + gutter,
+            right: right + gutter,
+            bottom: gutter,
+        }
+    }
+    pub fn pad(
+        self,
+        left: usize,
+        top: usize,
+        right: usize,
+        bottom: usize,
+    ) -> (usize, usize, usize, usize) {
+        (
+            left + self.left as usize,
+            top + self.top as usize,
+            right + self.right as usize,
+            bottom + self.bottom as usize,
+        )
+    }
+}
+impl super::UiHost {
+    /// The first window is sized around its terminal, so only its width bounds the sidebar.
+    pub fn initial_insets(
+        &self,
+        config: &config::ConfigHandle,
+        fonts: &wezterm_font::FontConfiguration,
+        render_metrics: &crate::utilsprites::RenderMetrics,
+        terminal: &wezterm_term::TerminalSize,
+    ) -> Insets {
+        let dpi = terminal.dpi as f32;
+        let reservation = self.provider.reservation();
+        let requested = reservation.scaled(dpi);
+        let width = clamp_reserved(
+            requested,
+            terminal.pixel_width as f32 + requested,
+            render_metrics.cell_size.width as f32,
+        );
+        Insets::new(
+            reservation.right,
+            width,
+            TermWindow::vtabs_titlebar_height_impl(config, fonts, dpi, false),
+            TermWindow::vtabs_frame_gutter_impl(dpi),
+        )
+    }
+}
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Geometry {
     pub sidebar: Bounds,
@@ -93,12 +161,52 @@ impl TermWindow {
             - padding
             - 2. * self.vtabs_frame_gutter())
         .max(0.);
-        (request.width * self.dimensions.dpi as f32 / 96.)
-            .round()
-            .clamp(
-                0.,
-                (available - self.render_metrics.cell_size.width as f32 * 2.).max(0.),
-            )
+        clamp_reserved(
+            request.scaled(self.dimensions.dpi as f32),
+            available,
+            self.render_metrics.cell_size.width as f32,
+        )
+    }
+    pub fn vtabs_insets(&self) -> Insets {
+        let gutter = self.vtabs_frame_gutter();
+        Insets {
+            left: self.vtabs_left_width() + gutter,
+            top: self.vtabs_content_top() + gutter,
+            right: self.vtabs_right_width() + gutter,
+            bottom: gutter,
+        }
+    }
+    /// Pane backgrounds fill to the window edges, minus the sidebar, header or quick terminal.
+    pub fn vtabs_pane_background(
+        &self,
+        pos: &mux::tab::PositionedPane,
+        rect: window::RectF,
+    ) -> window::RectF {
+        if let Some(bounds) = self.terminal_overlay_content(pos.pane.pane_id()) {
+            return euclid::rect(bounds.x, bounds.y, bounds.width, bounds.height);
+        }
+        let rightmost = pos.left + pos.width >= self.terminal_size.cols as usize;
+        let left = if pos.left == 0 {
+            self.vtabs_left_width()
+        } else {
+            0.
+        };
+        let top = if pos.top == 0 {
+            self.vtabs_content_top()
+        } else {
+            0.
+        };
+        let right = if rightmost {
+            self.vtabs_right_width()
+        } else {
+            0.
+        };
+        euclid::rect(
+            rect.origin.x + left,
+            rect.origin.y + top,
+            rect.size.width - left - right,
+            rect.size.height - top,
+        )
     }
     pub fn vtabs_left_width(&self) -> f32 {
         if self

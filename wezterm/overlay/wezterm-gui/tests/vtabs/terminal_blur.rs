@@ -20,8 +20,7 @@ fn backdrop_blur_softens_content_only_inside_the_rounded_frame() {
             height: 64,
             depth_or_array_layers: 1,
         };
-        // Exercise both linear and sRGB surface formats, including asymmetric content
-        // to catch upside-down framebuffer sampling.
+        // Linear and sRGB formats; asymmetric content catches upside-down sampling.
         let pixels: Vec<u8> = (0..64)
             .flat_map(|y| {
                 (0..64).flat_map(move |x| {

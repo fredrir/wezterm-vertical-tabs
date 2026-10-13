@@ -11,10 +11,25 @@ use std::sync::{
 use std::time::{Duration, Instant};
 
 use anyhow::{Context as _, Result, bail, ensure};
+use process_wrap::std::{ChildWrapper, CommandWrap};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::state::{now, write_json};
+
+/// A process group (Unix) or job object (Windows), so a kill reaches every descendant.
+pub fn spawn_group(command: Command) -> std::io::Result<Box<dyn ChildWrapper>> {
+    let mut command = CommandWrap::from(command);
+    #[cfg(unix)]
+    command.wrap(process_wrap::std::ProcessGroup::leader());
+    #[cfg(windows)]
+    command
+        .wrap(process_wrap::std::JobObject)
+        .wrap(process_wrap::std::CreationFlags(
+            windows::Win32::System::Threading::CREATE_NO_WINDOW,
+        ));
+    command.spawn()
+}
 
 #[derive(Clone, Debug)]
 pub struct CommandSpec {
@@ -298,21 +313,10 @@ impl Runner {
                 .stdin(Stdio::null())
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped());
-            #[cfg(unix)]
-            {
-                use std::os::unix::process::CommandExt;
-                command.process_group(0);
-            }
-            #[cfg(windows)]
-            {
-                use std::os::windows::process::CommandExt;
-                command.creation_flags(0x08000000);
-            }
-            let mut child = command
-                .spawn()
+            let mut child = spawn_group(command)
                 .with_context(|| format!("start: {}", spec.program.to_string_lossy()))?;
-            let stdout = child.stdout.take().context("stdout missing")?;
-            let stderr = child.stderr.take().context("stderr missing")?;
+            let stdout = child.stdout().take().context("stdout missing")?;
+            let stderr = child.stderr().take().context("stderr missing")?;
             let deverbose = spec.deverbose;
             let out =
                 std::thread::spawn(move || pump(stdout, stdout_file, !capture, capture, false));
@@ -328,19 +332,7 @@ impl Runner {
                     } else {
                         "command timed out"
                     });
-                    #[cfg(unix)]
-                    unsafe {
-                        libc::kill(-(child.id() as i32), libc::SIGKILL);
-                    }
-                    #[cfg(windows)]
-                    {
-                        let _ = Command::new("taskkill")
-                            .args(["/PID", &child.id().to_string(), "/T", "/F"])
-                            .stdout(Stdio::null())
-                            .stderr(Stdio::null())
-                            .status();
-                    }
-                    let _ = child.kill();
+                    let _ = child.start_kill();
                     break child.wait()?;
                 }
                 std::thread::sleep(Duration::from_millis(20));
@@ -358,18 +350,7 @@ impl Runner {
                     } else {
                         "subprocess retained output streams"
                     });
-                    #[cfg(unix)]
-                    unsafe {
-                        libc::kill(-(child.id() as i32), libc::SIGKILL);
-                    }
-                    #[cfg(windows)]
-                    {
-                        let _ = Command::new("taskkill")
-                            .args(["/PID", &child.id().to_string(), "/T", "/F"])
-                            .stdout(Stdio::null())
-                            .stderr(Stdio::null())
-                            .status();
-                    }
+                    let _ = child.start_kill();
                     stopped = true;
                 }
                 if stopped && draining.elapsed() >= Duration::from_secs(3) {

@@ -72,8 +72,7 @@ impl TermWindow {
         let maximized = self
             .window_state
             .intersects(window::WindowState::MAXIMIZED | window::WindowState::FULL_SCREEN);
-        // AppKit owns MacOsNative controls and their hit testing. Other styles reuse
-        // the existing window button elements and actions without tab UI.
+        // AppKit owns native controls; other styles reuse WezTerm's window buttons, not tabs.
         let buttons = if self.config.integrated_title_button_style
             == window::IntegratedTitleButtonStyle::MacOsNative
         {

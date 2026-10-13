@@ -1,9 +1,9 @@
+mod navigation;
 mod rows;
 mod spaces;
 mod tab;
 
 pub(crate) use rows::{SettingsPlace, SidebarRow, Slot};
-pub(crate) use tab::InlineRename;
 
 use crate::components::button::Button;
 use crate::components::row::{Content, Row, Trailing};
@@ -16,6 +16,7 @@ use crate::runtime::canvas::{Canvas, RoundedSurface};
 use ratatui::layout::Rect;
 use rows::GROUP_GAP;
 use std::collections::BTreeSet;
+use tab::InlineRename;
 use vtabs_core::{Model, SpaceId, TabId};
 
 const DROP_BAR: f32 = 0.14;

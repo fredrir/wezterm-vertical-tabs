@@ -1,4 +1,5 @@
 use super::{
+    core::HostTab,
     store::{self, Operation, Record, Request, Response},
     *,
 };
@@ -158,31 +159,10 @@ fn reserved_spawn_activates_captured_space_when_interaction_unchanged() {
     assert_eq!(app.model().selected_tab, Some(3));
     assert_eq!(app.projection().active, Some(3));
     assert!(app.projection().visible.contains(&3));
-    // The snapshot already reports tab 3 active; repairing the empty projection
-    // can select it before arrival delivery without requiring a duplicate host activation.
+    // The snapshot already reports tab 3 active, so no other tab is activated.
     assert!(result.commands.iter().all(|command| {
         !matches!(command, Command::Host(HostCommand::Activate(id)) if *id != 3)
     }));
-}
-#[test]
-fn unverified_session_ids_cannot_restore_assignment() {
-    let mut app = app();
-    let request = app.take_storage_request(Duration::ZERO).unwrap();
-    let record = Record {
-        key: store::Key {
-            scope: store::Scope::Session {
-                profile: "default".into(),
-                incarnation: "unverified".into(),
-            },
-            entity: "tab:1".into(),
-            field: "membership".into(),
-        },
-        value: Some(json!({"space":"home","manual":true,"pinned":true})),
-        revision: 1,
-    };
-    app.complete_storage(success(&request, vec![record]))
-        .unwrap();
-    assert!(!app.model().tabs[&1].pinned);
 }
 #[test]
 fn storage_requests_coalesce_and_old_completion_cannot_clear_newer_write() {

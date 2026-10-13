@@ -11,9 +11,30 @@ use std::{
     },
     time::Duration,
 };
+use vtabs_app::core;
 use window::{Window, WindowOps};
 
 type Panes = Vec<(usize, Arc<dyn Pane>)>;
+
+/// Lua callbacks may inspect process facts; without any reader there is no refresh timer.
+pub fn interval(model: &core::Model, hooks_enabled: bool) -> Option<Duration> {
+    let process = core::MatchField::Process;
+    let process_rules = model
+        .spaces
+        .iter()
+        .flat_map(|space| &space.rules)
+        .any(|rule| rule.fields.iter().any(|(field, _)| *field == process));
+    let process_templates = model
+        .templates
+        .iter()
+        .any(|template| template.reads(process));
+    let process_titles = matches!(
+        model.settings.tab_title,
+        core::TabTitle::Process | core::TabTitle::ProcessAndDirectory
+    );
+    (hooks_enabled || process_rules || process_templates || process_titles)
+        .then_some(Duration::from_secs(2))
+}
 
 #[derive(Default)]
 pub struct Refresh {

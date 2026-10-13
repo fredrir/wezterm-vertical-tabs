@@ -108,7 +108,7 @@ return config
 | Padding | `quick_terminal_window_padding = { left, top, right, bottom }`, read like WezTerm's `window_padding` inside the border: numbers are pixels, strings take `px`, `%` (of the quick terminal), `pt` or `cell`; unset sides follow `window_padding` |
 | Alignment | Leftover space follows WezTerm's `window_content_alignment` |
 | Opacity | `quick_terminal_opacity = 1.0` (opaque); below `1` reveals underlying WezTerm content; text stays opaque |
-| Blur | `quick_terminal_blur = 0`; radius `0`–`64` logical pixels behind the rounded frame, applies with opacity below `1` |
+| Blur | `quick_terminal_blur = 0`; radius `0` to `64` logical pixels behind the rounded frame, applies with opacity below `1` |
 | Colors | `quick_terminal_background_color`, `quick_terminal_border_color`: `#RRGGBB`; unset follows the terminal palette (border uses foreground at 22% opacity); clear the Settings field to restore |
 | Border | `quick_terminal_border_color = "none"` hides the border |
 
@@ -135,8 +135,8 @@ Keys follow WezTerm's `SpawnCommand` and config names; anything left out follows
 | `domain` | `SpawnTabDomain` as in WezTerm: `'DefaultDomain'`, `'CurrentPaneDomain'`, `{ DomainName = 'name' }`, `{ DomainId = 1 }`; default the active pane's domain |
 | `width`, `height` | Window fraction above 0, at most 1; default `quick_terminal_width`, `quick_terminal_height` |
 | `window_padding` | Sides as in `quick_terminal_window_padding`; unset sides follow it |
-| `window_background_opacity` | `0`–`1`; default `quick_terminal_opacity` |
-| `blur` | `0`–`64`; default `quick_terminal_blur` |
+| `window_background_opacity` | `0` to `1`; default `quick_terminal_opacity` |
+| `blur` | `0` to `64`; default `quick_terminal_blur` |
 | `colors` | WezTerm `colors` table over the terminal palette, color objects included; `background` also fills the frame over `quick_terminal_background_color` |
 | `border_color` | Any WezTerm color or `'none'`; default `quick_terminal_border_color`, drawn from the program's foreground when unset |
 | `auto_hide`, `hide_on_escape` | Default `quick_terminal_auto_hide`, `quick_terminal_hide_on_escape` |

@@ -51,7 +51,7 @@ fn helpers(ctx: &Context) -> Result<PathBuf> {
             "--bin",
             "wez-vtabs-store",
             "--features",
-            "vtabs-store/sqlite",
+            "vtabs-core/schema,vtabs-store/sqlite",
         ]),
     ))?;
     Ok(target.join("debug"))
@@ -64,7 +64,6 @@ fn schema(ctx: &Context, directory: &std::path::Path, check: bool) -> Result<()>
         "gen-schema"
     });
     for (format, path) in [
-        ("lua", "plugin/schema.lua"),
         ("types", "plugin/types/vtabs.lua"),
         ("markdown", "docs/options.md"),
     ] {
@@ -77,10 +76,6 @@ fn schema(ctx: &Context, directory: &std::path::Path, check: bool) -> Result<()>
     Ok(())
 }
 
-pub fn generate(ctx: &Context, check: bool) -> Result<()> {
-    schema(ctx, &helpers(ctx)?, check)
-}
-
 fn format(ctx: &Context) -> Result<()> {
     ctx.runner
         .run(uv(ctx).args(["run", "--locked", "ruff", "check", "--fix"]))?;
@@ -89,7 +84,7 @@ fn format(ctx: &Context) -> Result<()> {
     ctx.runner.run(cargo(ctx).args(["fmt", "--all"]))?;
     ctx.runner
         .run(cargo(ctx).args(["fmt", "--manifest-path", "src/adapter/Cargo.toml"]))?;
-    generate(ctx, false)
+    schema(ctx, &helpers(ctx)?, false)
 }
 
 /// Static checks; `fix` first rewrites formatting and generated files.
@@ -137,14 +132,14 @@ pub fn lint(ctx: &Context, fix: bool) -> Result<PathBuf> {
     Ok(directory)
 }
 
-pub fn check(ctx: &Context) -> Result<()> {
+pub fn check(ctx: &Context, args: &[String]) -> Result<()> {
     let _stage = ctx.runner.stage("check");
     let directory = lint(ctx, false)?;
     ctx.runner.run(locked(
         ctx,
         cargo(ctx).args(["test", "--workspace", "--all-features"]),
     ))?;
-    pytest(ctx, Suite::All, &[], Some(directory))
+    pytest(ctx, Suite::All, args, Some(directory))
 }
 
 fn bench(ctx: &Context, args: &[String]) -> Result<()> {
@@ -181,7 +176,7 @@ fn pytest(ctx: &Context, suite: Suite, args: &[String], binaries: Option<PathBuf
         ]),
         Suite::Tls => command.args([
             "tests/scenarios/test_tls.py",
-            "tests/integration/test_gui.py",
+            "tests/integration/test_lifecycle.py",
             "--run-gui",
             "-k",
             "tls",
@@ -208,10 +203,9 @@ pub fn test(ctx: &Context, suite: Suite, args: &[String]) -> Result<()> {
         ))?;
     }
     if matches!(suite, Suite::Gui | Suite::Ssh | Suite::Tls) {
+        let last = ctx.last_build()?;
         if !args.iter().any(|arg| arg.starts_with("--wezterm-bin-dir"))
-            && let Some(metadata) = crate::state::read_json::<crate::state::BuildMetadata>(
-                &ctx.cache.join("build.json"),
-            )?
+            && let Some(metadata) = &last
             && let Some(directory) = metadata
                 .artifacts
                 .get("wezterm-gui")
@@ -232,8 +226,7 @@ pub fn test(ctx: &Context, suite: Suite, args: &[String]) -> Result<()> {
                     .find(|args| args[0] == "--wezterm-bin-dir")
                     .map(|args| PathBuf::from(&args[1]))
             });
-        if let Some(metadata) =
-            crate::state::read_json::<crate::state::BuildMetadata>(&ctx.cache.join("build.json"))?
+        if let Some(metadata) = last
             && requested.as_ref().and_then(|path| path.canonicalize().ok())
                 == metadata
                     .artifacts

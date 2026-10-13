@@ -64,9 +64,10 @@ impl HeapQuadAllocator {
                         v1 + (v2 - v1) * (y - top) / (bottom - top),
                     ]
                 };
-                for (vertex, (x, y)) in vertices
-                    .iter_mut()
-                    .zip([(x1, y1), (x2, y1), (x1, y2), (x2, y2)])
+                for (vertex, (x, y)) in
+                    vertices
+                        .iter_mut()
+                        .zip([(x1, y1), (x2, y1), (x1, y2), (x2, y2)])
                 {
                     vertex.position = [x, y];
                     vertex.tex = uv(x, y);

@@ -8,12 +8,13 @@ import shutil
 import subprocess
 import time
 import uuid
-from contextlib import ExitStack
+from contextlib import ExitStack, suppress
 from pathlib import Path
 
+from tests.support.environment import clean_env, xdg_tree
 from tests.support.headless import HeadlessDisplay
 from tests.support.polling import check_process, log_diagnostics, wait_until
-from tests.support.process import stop_process
+from tests.support.process import spawn_logged, stop_process
 
 CONFIG = r"""
 local wezterm = require 'wezterm'
@@ -172,7 +173,6 @@ local function start()
 end
 wezterm.on('update-status',start)
 wezterm.on('window-config-reloaded',start)
-return cfg
 """
 
 
@@ -195,6 +195,7 @@ class Probe:
         resize_rounds=1,
         tls_config=None,
         display=None,
+        extra_lua="",
     ):
         self.root, self.gui, self.vtabs = root, gui, vtabs
         self.display = display or HeadlessDisplay(root / "display")
@@ -203,7 +204,7 @@ class Probe:
         self.resize_rounds = resize_rounds
         self.capture_enabled = capture
         self.identity = "vtabs-" + uuid.uuid4().hex
-        self.processes, self.outputs, self.samples, self.latest = [], [], [], {}
+        self.processes, self.samples, self.latest = [], [], {}
         self.offset, self.pending, self.command_id, self.window = 0, "", 0, None
         root.mkdir(parents=True)
         binaries = root / "bin"
@@ -218,21 +219,9 @@ class Probe:
         if helper:
             shutil.copy2(helper, binaries / helper.name)
             helper = binaries / helper.name
-        for name in ("config", "cache", "data", "state", "runtime"):
-            (root / name).mkdir()
-        (root / "runtime").chmod(0o700)
-        self.env = {
-            key: value
-            for key, value in self.display.env.items()
-            if not key.startswith(("WEZTERM_", "WEZ_VTABS_"))
-        }
+        self.env = clean_env(self.display.env) | xdg_tree(root)
         self.env.update(
             {
-                "XDG_CONFIG_HOME": str(root / "config"),
-                "XDG_CACHE_HOME": str(root / "cache"),
-                "XDG_DATA_HOME": str(root / "data"),
-                "XDG_STATE_HOME": str(root / "state"),
-                "XDG_RUNTIME_DIR": str(root / "runtime"),
                 "WEZ_VTABS_DB": str(root / "state.sqlite"),
                 "WEZ_VTABS_SCENARIO": str(root),
                 "WEZ_VTABS_SCENARIO_ID": self.identity,
@@ -258,29 +247,12 @@ class Probe:
         if tls_config:
             (root / "tls.json").write_text(tls_config.read_text(encoding="utf-8"), encoding="utf-8")
         self.config = root / "wezterm.lua"
-        self.config.write_text(CONFIG, encoding="utf-8")
+        self.config.write_text(f"{CONFIG}{extra_lua}\nreturn cfg\n", encoding="utf-8")
 
-    def start_process(self, args, log, env=None):
+    def start_process(self, args, log):
         self.display.assert_live()
-        process_env = dict(env or self.env)
-        process_env.update({"DISPLAY": self.display.env["DISPLAY"], "GDK_BACKEND": "x11"})
-        for key in (
-            "WAYLAND_DISPLAY",
-            "XAUTHORITY",
-            "DBUS_SESSION_BUS_ADDRESS",
-            "SSH_AUTH_SOCK",
-        ):
-            process_env.pop(key, None)
-        output = (self.root / log).open("wb")
-        self.outputs.append(output)
-        process = subprocess.Popen(
-            [str(value) for value in args],
-            env=process_env,
-            stdin=subprocess.DEVNULL,
-            stdout=output,
-            stderr=subprocess.STDOUT,
-            start_new_session=os.name != "nt",
-        )
+        env = {**self.env, "DISPLAY": self.display.env["DISPLAY"], "GDK_BACKEND": "x11"}
+        process = spawn_logged(args, self.root / log, env=env)
         self.processes.append(process)
         return process
 
@@ -404,6 +376,10 @@ class Probe:
     def intent(self, value, window=None):
         return self.send("intent", value, window)
 
+    def setting(self, key, value):
+        self.intent({"SetSetting": {"key": key, "value": value}})
+        return self.wait(lambda state: state["model"]["settings"][key] == value)
+
     def capture(self, name):
         if not self.capture_enabled:
             return
@@ -438,17 +414,14 @@ class Probe:
         with ExitStack() as cleanup:
             if self.owns_display:
                 cleanup.callback(self.display.close)
-            for output in self.outputs:
-                cleanup.callback(output.close)
             for process in self.processes:
                 cleanup.callback(stop_process, process, timeout_seconds=3)
-            # Only windows created in this process/workspace receive close actions.
-            for window in list(self.latest):
-                try:
+            # Only windows created in this process/workspace receive close actions, once.
+            while self.latest:
+                window, _ = self.latest.popitem()
+                with suppress(OSError):
                     self.send("close_window", window=window)
                     time.sleep(0.08)
-                except OSError:
-                    pass
 
 
 def pane_shape(state):

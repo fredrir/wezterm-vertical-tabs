@@ -1,6 +1,7 @@
 mod codec;
 
-use codec::{Field, profile_values, session_values};
+use crate::{Update, WindowApp};
+use codec::{Field, profile_values};
 use serde_json::{Value, json};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -21,33 +22,29 @@ struct Flight {
 }
 pub(crate) struct Persistence {
     profile: Scope,
-    session: Option<Scope>,
     known: BTreeMap<Key, Record>,
     observed: BTreeMap<Key, Value>,
     dirty: BTreeMap<Key, Option<Value>>,
     touched: BTreeSet<Key>,
-    reads: Vec<Scope>,
+    read: bool,
     flight: Option<Flight>,
     deadline: Option<Duration>,
     failures: u8,
-    window_id: Option<u64>,
 }
 
 impl Persistence {
     pub fn new(model: &Model) -> Self {
         let profile = Scope::profile(&model.profile);
         Self {
-            profile: profile.clone(),
-            session: None,
-            known: BTreeMap::new(),
             observed: profile_values(model, &profile),
+            profile,
+            known: BTreeMap::new(),
             dirty: BTreeMap::new(),
             touched: BTreeSet::new(),
-            reads: vec![profile],
+            read: true,
             flight: None,
             deadline: Some(Duration::ZERO),
             failures: 0,
-            window_id: None,
         }
     }
     pub fn deadline(&self) -> Option<Duration> {
@@ -58,107 +55,40 @@ impl Persistence {
         }
     }
     pub fn pending(&self) -> bool {
-        self.flight.is_some() || !self.dirty.is_empty() || !self.reads.is_empty()
+        self.flight.is_some() || !self.dirty.is_empty() || self.read
     }
-    pub fn set_window_identity(&mut self, id: u64) {
-        self.window_id = Some(id);
+    fn reading(flight: &Flight) -> bool {
+        flight
+            .operations
+            .iter()
+            .any(|op| matches!(op, Operation::Read { .. }))
     }
     pub fn refresh(&mut self, now: Duration) {
-        for scope in std::iter::once(self.profile.clone()).chain(self.session.clone()) {
-            let reading = self.flight.as_ref().is_some_and(|f| {
-                f.operations
-                    .iter()
-                    .any(|op| matches!(op,Operation::Read{scope:active}if active==&scope))
-            });
-            if !reading && !self.reads.contains(&scope) {
-                self.reads.push(scope);
-            }
+        if !self.flight.as_ref().is_some_and(Self::reading) {
+            self.read = true;
         }
         self.failures = 0;
-        if !self.reads.is_empty() {
+        if self.read {
             self.deadline = Some(now);
         }
     }
-    pub fn set_session(&mut self, model: &Model, incarnation: Option<String>) {
-        let session = incarnation
-            .filter(|s| !s.is_empty() && s.len() <= 256)
-            .map(|incarnation| Scope::Session {
-                profile: model.profile.clone(),
-                incarnation,
-            });
-        if session == self.session {
-            return;
-        }
-        self.dirty
-            .retain(|key, _| !matches!(key.scope, Scope::Session { .. }));
-        self.observed
-            .retain(|key, _| !matches!(key.scope, Scope::Session { .. }));
-        self.known
-            .retain(|key, _| !matches!(key.scope, Scope::Session { .. }));
-        self.reads
-            .retain(|scope| !matches!(scope, Scope::Session { .. }));
-        self.session = session;
-        if let Some(scope) = &self.session {
-            self.reads.push(scope.clone());
-            self.deadline = Some(Duration::ZERO);
-        }
-    }
     pub fn observe(&mut self, model: &Model, now: Duration) {
-        let mut values = profile_values(model, &self.profile);
-        if let Some(scope) = &self.session {
-            values.extend(session_values(model, scope, self.window_id));
-        }
-        self.observe_values(values, now, false);
-    }
-    pub fn observe_session(&mut self, model: &Model, now: Duration) {
-        if let Some(scope) = &self.session {
-            self.observe_values(session_values(model, scope, self.window_id), now, true);
-        }
-    }
-    pub fn restore_discovered(&mut self, model: &mut Model) -> Result<bool, Error> {
-        let Some(scope) = &self.session else {
-            return Ok(false);
-        };
-        let changed = codec::restore_memberships(
-            model,
-            scope,
-            self.known
-                .iter()
-                .filter(|(key, _)| !self.touched.contains(*key))
-                .filter_map(|(key, record)| record.value.as_ref().map(|value| (key, value))),
-        )?;
-        if changed {
-            self.observed.retain(|key, _| &key.scope != scope);
-            self.observed
-                .extend(session_values(model, scope, self.window_id));
-        }
-        Ok(changed)
-    }
-    fn observe_values(&mut self, values: BTreeMap<Key, Value>, now: Duration, session_only: bool) {
+        let values = profile_values(model, &self.profile);
         for (key, value) in &values {
             if self.observed.get(key) != Some(value)
-                || (!session_only
-                    && self.known.get(key).and_then(|r| r.value.as_ref()) != Some(value))
+                || self.known.get(key).and_then(|r| r.value.as_ref()) != Some(value)
             {
                 self.dirty.insert(key.clone(), Some(value.clone()));
                 self.touched.insert(key.clone());
             }
         }
         for key in self.observed.keys() {
-            if (!session_only || matches!(key.scope, Scope::Session { .. }))
-                && !values.contains_key(key)
-            {
+            if !values.contains_key(key) {
                 self.dirty.insert(key.clone(), None);
                 self.touched.insert(key.clone());
             }
         }
-        if session_only {
-            self.observed
-                .retain(|key, _| !matches!(key.scope, Scope::Session { .. }));
-            self.observed.extend(values);
-        } else {
-            self.observed = values;
-        }
+        self.observed = values;
         if !self.dirty.is_empty() {
             self.deadline = Some(now + WRITE_DELAY);
         }
@@ -170,11 +100,10 @@ impl Persistence {
         {
             return None;
         }
-        let operations = if !self.reads.is_empty() {
-            self.reads
-                .drain(..)
-                .map(|scope| Operation::Read { scope })
-                .collect()
+        let operations = if std::mem::take(&mut self.read) {
+            vec![Operation::Read {
+                scope: self.profile.clone(),
+            }]
         } else {
             self.dirty
                 .iter()
@@ -230,31 +159,21 @@ impl Persistence {
             return Err(Error("Unsupported storage protocol".into()));
         }
         if let Some(error) = response.error {
-            let id = response.request_id;
-            self.failed(id, now);
+            self.failed(response.request_id, now);
             if error.code == vtabs_store::ErrorCode::Conflict {
-                self.reads.push(self.profile.clone());
-                if let Some(scope) = &self.session {
-                    self.reads.push(scope.clone());
-                }
+                self.read = true;
             }
             return Err(Error(format!("Storage: {}", error.message)));
         }
         let flight = self.flight.take().unwrap();
-        let read = flight
-            .operations
-            .iter()
-            .any(|o| matches!(o, Operation::Read { .. }));
+        let read = Self::reading(&flight);
         for record in response.records {
-            if record.key.scope == self.profile || self.session.as_ref() == Some(&record.key.scope)
-            {
+            if record.key.scope == self.profile {
                 self.known.insert(record.key.clone(), record);
             }
         }
         if read {
-            // Folder order is one semantic field, but simultaneous creation in two GUI
-            // clients must retain both new IDs. Local reorder wins for existing entries;
-            // append remote additions unless this client explicitly deleted that folder.
+            // Local reorders win, remote additions append unless this client deleted that folder.
             let key = Field::FolderOrder.key(&self.profile);
             if let (Some(Some(local)), Some(remote)) = (
                 self.dirty.get(&key),
@@ -314,8 +233,7 @@ impl Persistence {
             false
         };
         self.failures = 0;
-        self.deadline =
-            (!self.dirty.is_empty() || !self.reads.is_empty()).then_some(now + WRITE_DELAY);
+        self.deadline = (!self.dirty.is_empty() || self.read).then_some(now + WRITE_DELAY);
         Ok(changed)
     }
     fn restore(&mut self, model: &mut Model) -> Result<bool, Error> {
@@ -332,15 +250,8 @@ impl Persistence {
                 .filter(|(key, _)| self.touched.contains(*key))
                 .map(|(k, v)| (k.clone(), v.clone())),
         );
-        let mut changed = codec::restore_profile(model, &self.profile, &values)?;
-        if let Some(scope) = &self.session {
-            changed |= codec::restore_session(model, scope, self.window_id, &values)?;
-        }
+        let changed = codec::restore_profile(model, &self.profile, &values)?;
         self.observed = profile_values(model, &self.profile);
-        if let Some(scope) = &self.session {
-            self.observed
-                .extend(session_values(model, scope, self.window_id));
-        }
         Ok(changed)
     }
     pub fn failed(&mut self, id: u64, now: Duration) {
@@ -348,13 +259,7 @@ impl Persistence {
             return;
         }
         let flight = self.flight.take().unwrap();
-        for op in flight.operations {
-            if let Operation::Read { scope } = op
-                && !self.reads.contains(&scope)
-            {
-                self.reads.push(scope);
-            }
-        }
+        self.read |= Self::reading(&flight);
         self.failures = self.failures.saturating_add(1);
         self.deadline = (self.failures < MAX_RETRIES)
             .then_some(now + Duration::from_secs(1u64 << self.failures));
@@ -364,5 +269,41 @@ impl Persistence {
         if self.pending() {
             self.deadline = Some(now);
         }
+    }
+}
+
+impl WindowApp {
+    pub fn storage_deadline(&self) -> Option<Duration> {
+        self.storage.deadline()
+    }
+    pub fn refresh_storage(&mut self) {
+        self.storage.refresh(self.now);
+    }
+    pub fn take_storage_request(&mut self, now: Duration) -> Option<Request> {
+        self.now = now;
+        self.storage.take_request(now)
+    }
+    pub fn complete_storage(&mut self, response: Response) -> Result<Update, Error> {
+        if self.storage.complete(&mut self.model, response, self.now)? {
+            self.ui.invalidate();
+        }
+        Ok(Update::default())
+    }
+    pub fn storage_failed(&mut self, request_id: u64, message: impl Into<String>) {
+        let message = message.into();
+        self.storage.failed(request_id, self.now);
+        if !self.errors.contains(&message) {
+            self.errors.push(message);
+        }
+    }
+    pub fn retry_storage(&mut self) {
+        self.storage.retry(self.now);
+    }
+    pub fn restart_storage_after_cancel(&mut self, request_id: u64) {
+        self.storage.failed(request_id, self.now);
+        self.storage.retry(self.now);
+    }
+    pub fn storage_pending(&self) -> bool {
+        self.storage.pending()
     }
 }

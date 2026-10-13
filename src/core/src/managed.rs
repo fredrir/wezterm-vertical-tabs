@@ -1,14 +1,14 @@
 use crate::{Space, SpaceTemplate, lua};
-use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 
 /// The plugin-owned Lua file the settings UI rewrites; hand edits are reloaded by WezTerm.
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(default, deny_unknown_fields)]
 pub struct Managed {
-    #[schemars(with = "crate::settings::Overrides")]
+    #[cfg_attr(feature = "schema", schemars(with = "crate::settings::Overrides"))]
     pub settings: BTreeMap<String, Value>,
     pub spaces: Vec<Space>,
     pub templates: Vec<SpaceTemplate>,

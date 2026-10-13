@@ -45,8 +45,7 @@ impl Mux {
         let result = async {
             self.add_pane(&pane)?;
             if wait_for_ready {
-                // Keep the old screen until the replacement has drawn its first
-                // prompt. Older shells still work: the wait is bounded.
+                // The old screen stays until the first prompt; a bounded wait suits old shells.
                 let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
                 while !pane.copy_user_vars().contains_key("WEZTERM_PANE_READY")
                     && !pane.is_dead()

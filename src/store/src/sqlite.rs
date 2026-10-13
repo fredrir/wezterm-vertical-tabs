@@ -28,18 +28,8 @@ fn valid_component(value: &str) -> Result<(), StoreError> {
     Ok(())
 }
 
-fn validate_scope(scope: &Scope) -> Result<(), StoreError> {
-    match scope {
-        Scope::Profile { profile } => valid_component(profile)?,
-        Scope::Session {
-            profile,
-            incarnation,
-        } => {
-            valid_component(profile)?;
-            valid_component(incarnation)?;
-        }
-    }
-    Ok(())
+fn validate_scope(Scope::Profile { profile }: &Scope) -> Result<(), StoreError> {
+    valid_component(profile)
 }
 
 fn scope_id(scope: &Scope) -> Result<String, StoreError> {

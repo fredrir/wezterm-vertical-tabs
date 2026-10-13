@@ -23,7 +23,7 @@ index bc0b6968a101ab827af15c23ba076d694fe864c6..0d154a0cf300511ed38a34fc854035c2
  fn client_domains(config: &config::ConfigHandle) -> Vec<ClientDomainConfig> {
      let mut domains = vec![];
 diff --git a/wezterm-mux-server-impl/src/sessionhandler.rs b/wezterm-mux-server-impl/src/sessionhandler.rs
-index 5dc535f86152d991641661ca9a5dc568755885e4..a0ecae30ba1d728703e3de5151f8e1cc7049a7fb 100644
+index 5dc535f86152d991641661ca9a5dc568755885e4..105d39ffc73efb88e8eb9ef812773977a5f8e79c 100644
 --- a/wezterm-mux-server-impl/src/sessionhandler.rs
 +++ b/wezterm-mux-server-impl/src/sessionhandler.rs
 @@ -44,6 +44,8 @@ pub(crate) struct PerPane {
@@ -35,12 +35,11 @@ index 5dc535f86152d991641661ca9a5dc568755885e4..a0ecae30ba1d728703e3de5151f8e1cc
      seqno: SequenceNo,
      config_generation: usize,
      pub(crate) notifications: Vec<Alert>,
-@@ -179,6 +181,16 @@ fn maybe_push_pane_changes(
+@@ -179,6 +181,15 @@ fn maybe_push_pane_changes(
          per_pane.notifications.push(Alert::PaletteChanged);
          per_pane.sent_initial_palette = true;
      }
-+    // A newly attached client must see metadata from before it connected, even
-+    // when the owning shell is idle. Subsequent changes use the existing alerts.
++    // A new client sees user vars set before it attached, even while the shell is idle.
 +    if !per_pane.sent_initial_user_vars {
 +        per_pane.sent_initial_user_vars = true;
 +        per_pane.notifications.extend(
@@ -52,11 +51,11 @@ index 5dc535f86152d991641661ca9a5dc568755885e4..a0ecae30ba1d728703e3de5151f8e1cc
      for alert in per_pane.notifications.drain(..) {
          match alert {
              Alert::PaletteChanged => {
-@@ -246,6 +258,16 @@ impl SessionHandler {
+@@ -246,6 +257,16 @@ impl SessionHandler {
              let pane = mux
                  .get_pane(pane_id)
                  .ok_or_else(|| anyhow!("no such pane {}", pane_id))?;
-+            // Clients learn panes from ListPanes and drop deltas for others, which would mark them sent.
++            // Clients drop deltas for panes ListPanes hasn't shown them, yet they'd count as sent.
 +            {
 +                let mut per_pane = per_pane.lock().unwrap();
 +                if !per_pane.listed {
@@ -69,7 +68,7 @@ index 5dc535f86152d991641661ca9a5dc568755885e4..a0ecae30ba1d728703e3de5151f8e1cc
              maybe_push_pane_changes(&pane, sender, per_pane)?;
              Ok::<(), anyhow::Error>(())
          })
-@@ -284,6 +306,16 @@ impl SessionHandler {
+@@ -284,6 +305,16 @@ impl SessionHandler {
  
          match decoded.pdu {
              Pdu::Ping(Ping {}) => send_response(Ok(Pdu::Pong(Pong {}))),
@@ -86,7 +85,7 @@ index 5dc535f86152d991641661ca9a5dc568755885e4..a0ecae30ba1d728703e3de5151f8e1cc
              Pdu::SetWindowWorkspace(SetWindowWorkspace {
                  window_id,
                  workspace,
-@@ -718,7 +750,8 @@ impl SessionHandler {
+@@ -718,7 +749,8 @@ impl SessionHandler {
                  .detach();
              }
  
@@ -96,7 +95,7 @@ index 5dc535f86152d991641661ca9a5dc568755885e4..a0ecae30ba1d728703e3de5151f8e1cc
                  let client_id = self.client_id.clone();
                  spawn_into_main_thread(async move {
                      schedule_domain_spawn_v2(spawn, send_response, client_id);
-@@ -1006,6 +1039,12 @@ impl SessionHandler {
+@@ -1006,6 +1038,12 @@ impl SessionHandler {
              | Pdu::UnitResponse { .. }
              | Pdu::LivenessResponse { .. }
              | Pdu::GetPaneDirectionResponse { .. }
@@ -109,7 +108,7 @@ index 5dc535f86152d991641661ca9a5dc568755885e4..a0ecae30ba1d728703e3de5151f8e1cc
              | Pdu::SearchScrollbackResponse { .. }
              | Pdu::GetLinesResponse { .. }
              | Pdu::GetCodecVersionResponse { .. }
-@@ -1134,3 +1173,7 @@ async fn move_pane(
+@@ -1134,3 +1172,7 @@ async fn move_pane(
          window_id,
      }))
  }

@@ -1,10 +1,10 @@
 use crate::padding::{Dimension, WindowPadding};
-use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum Side {
     #[default]
@@ -12,7 +12,8 @@ pub enum Side {
     Right,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum RailMode {
     #[default]
@@ -20,7 +21,8 @@ pub enum RailMode {
     Hidden,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum HideOnEscape {
     Never,
@@ -30,7 +32,8 @@ pub enum HideOnEscape {
     Auto,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum TabTitle {
     #[default]
@@ -85,7 +88,8 @@ pub struct Settings {
     pub menus: Vec<MenuEntry>,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct MenuEntry {
     pub id: String,
     pub label: String,
@@ -456,9 +460,6 @@ pub const DESCRIPTORS: &[SettingDescriptor] = &[
     },
 ];
 
-pub fn descriptors() -> &'static [SettingDescriptor] {
-    DESCRIPTORS
-}
 pub fn descriptor(key: &str) -> Option<&'static SettingDescriptor> {
     DESCRIPTORS.iter().find(|d| d.key == key)
 }
@@ -522,8 +523,17 @@ impl Settings {
     }
     pub fn set(&mut self, key: &str, value: Value) -> Result<(), String> {
         validate_value(key, &value)?;
+        self.merge([(key, &value)])
+    }
+    /// Values must already pass `validate_value`.
+    pub(crate) fn merge<'a, K: AsRef<str>>(
+        &mut self,
+        values: impl IntoIterator<Item = (K, &'a Value)>,
+    ) -> Result<(), String> {
         let mut all = serde_json::to_value(&*self).map_err(|e| e.to_string())?;
-        all[key] = value;
+        for (key, value) in values {
+            all[key.as_ref()] = value.clone();
+        }
         *self = serde_json::from_value(all).map_err(|e| e.to_string())?;
         Ok(())
     }
@@ -539,8 +549,10 @@ impl Settings {
 }
 
 /// Schema marker for a partial settings table; Lua types come from `DESCRIPTORS`.
+#[cfg(feature = "schema")]
 pub struct Overrides;
-impl JsonSchema for Overrides {
+#[cfg(feature = "schema")]
+impl schemars::JsonSchema for Overrides {
     fn schema_name() -> std::borrow::Cow<'static, str> {
         "Settings".into()
     }
@@ -550,8 +562,10 @@ impl JsonSchema for Overrides {
 }
 
 /// Schema for a setting name, enumerated from `DESCRIPTORS`.
+#[cfg(feature = "schema")]
 pub struct Key;
-impl JsonSchema for Key {
+#[cfg(feature = "schema")]
+impl schemars::JsonSchema for Key {
     fn schema_name() -> std::borrow::Cow<'static, str> {
         "SettingKey".into()
     }
