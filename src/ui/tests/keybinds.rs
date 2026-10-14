@@ -93,6 +93,71 @@ fn commands(model: &Model) -> Vec<String> {
     keybinds::bindings(&model.settings, "commands")
 }
 
+fn text(ui: &SidebarUi, rect: Rect) -> String {
+    (rect.x..rect.right())
+        .map(|x| ui.buffer()[(x, rect.y)].symbol())
+        .collect()
+}
+
+fn caps(ui: &SidebarUi, row: Rect) -> Vec<Rect> {
+    ui.rounded_surfaces()
+        .iter()
+        .map(|surface| surface.rect)
+        .filter(|rect| *rect != row && rect.y == row.y && rect.intersection(row) == *rect)
+        .collect()
+}
+
+#[test]
+fn settings_and_editor_box_each_key_and_preserve_a_literal_plus() {
+    let (mut ui, mut model) = setup();
+    model.settings.keybinds.insert(
+        "commands".into(),
+        vec!["Ctrl+Alt+Left".into(), "Ctrl++".into()],
+    );
+    model.revision += 1;
+    ui.set_chord_label(|chord| chord.replace("Left", "←"));
+    draw(&mut ui, &model);
+    let row = rect(&ui, &ElementId::Setting(COMMANDS.into()));
+    let cards = caps(&ui, row);
+    let labels: Vec<_> = cards.iter().map(|rect| text(&ui, *rect)).collect();
+    assert_eq!(labels, [" Ctrl ", " Alt ", " ← ", " Ctrl ", " + "]);
+    assert!(cards[3].x > cards[2].right(), "separate alternative chords");
+    assert_eq!(text(&ui, row).matches('+').count(), 1);
+
+    open(&mut ui, &mut model);
+    draw(&mut ui, &model);
+    let row = rect(&ui, &chord("Ctrl+Alt+Left"));
+    let labels: Vec<_> = caps(&ui, row).iter().map(|rect| text(&ui, *rect)).collect();
+    assert_eq!(labels, [" Ctrl ", " Alt ", " ← "]);
+}
+
+#[test]
+fn narrow_settings_keep_chords_whole_and_expose_hidden_bindings_in_the_tooltip() {
+    let (mut ui, mut model) = setup();
+    model.settings.keybinds.insert(
+        "commands".into(),
+        vec!["Ctrl+Alt+Left".into(), "Ctrl+Shift+Right".into()],
+    );
+    model.revision += 1;
+    ui.set_chord_label(str::to_owned);
+    for width in [1, 8, 24, 40, 60, 80, 110] {
+        let area = Rect::new(2, 3, width, 42);
+        ui.render(&model, area, Duration::ZERO);
+        let row = rect(&ui, &ElementId::Setting(COMMANDS.into()));
+        let cards = caps(&ui, row);
+        assert_eq!(cards.len() % 3, 0, "{width}: never show a partial chord");
+        for card in &cards {
+            assert_eq!(card.intersection(area), *card);
+        }
+        if cards.len() < 6 && width >= 8 {
+            assert!(text(&ui, row).contains('…'), "{width}: indicate overflow");
+        }
+        let hit = ui.hit_regions().iter().find(|hit| hit.rect == row).unwrap();
+        assert!(hit.tooltip.contains("Ctrl+Alt+Left"));
+        assert!(hit.tooltip.contains("Ctrl+Shift+Right"));
+    }
+}
+
 #[test]
 fn launcher_adds_replaces_removes_and_resets_a_plugin_shortcut() {
     let (mut ui, mut model) = setup();

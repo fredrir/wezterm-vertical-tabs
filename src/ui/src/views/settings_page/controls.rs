@@ -3,7 +3,7 @@ use super::catalog::{Changed, action, choice_label, heading, sections, visible_e
 use super::range::{Range, number};
 use crate::components::scrollbar::Scrollbar;
 use crate::components::text_input::TextInput;
-use crate::components::{EDGE_INSET, ICON_CELLS, SURFACE_RADIUS, list};
+use crate::components::{EDGE_INSET, ICON_CELLS, SURFACE_RADIUS, keycaps, list};
 use crate::element::{ElementId, ScrollArea};
 use crate::icons;
 use crate::input::display_text;
@@ -140,7 +140,14 @@ impl SettingsPage {
             (Color::Reset, theme.background)
         };
         cx.surface(rect, fill, SURFACE_RADIUS, EDGE_INSET);
-        cx.hit(id, rect, "");
+        let tooltip = action(field).map_or_else(String::new, |action| {
+            keybinds::bindings(&model.settings, action)
+                .iter()
+                .map(|chord| (self.chord_label)(chord))
+                .collect::<Vec<_>>()
+                .join("   ")
+        });
+        cx.hit(id, rect, tooltip);
         let pad = padding(rect.width);
         let content = Rect::new(
             rect.x + pad,
@@ -204,15 +211,16 @@ impl SettingsPage {
             let chords = keybinds::bindings(&model.settings, action)
                 .iter()
                 .map(|chord| (self.chord_label)(chord))
-                .collect::<Vec<_>>()
-                .join("   ");
-            let width = (chords.width() as u16).min(area.width * 2 / 3);
-            cx.write(
-                Rect::new(area.right() - width, area.y, width, 1),
-                Line::from(chords).alignment(Alignment::Right),
+                .collect::<Vec<_>>();
+            let width = area.width * 2 / 3;
+            let used = keycaps::render(
+                &chords,
+                Rect::new(row.edge - width, area.y, width, area.height),
+                Alignment::Right,
                 theme.base().bg(row.base).fg(fg),
+                cx,
             );
-            return width;
+            return area.right().saturating_sub(row.edge - used);
         }
         if let Some(range) = Range::of(&field.kind) {
             return self.slider(field.key, range, number(model, field.key), area, row, cx);

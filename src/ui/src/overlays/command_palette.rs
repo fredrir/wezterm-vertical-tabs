@@ -1,14 +1,14 @@
-use crate::components::row::{Content, Row, Trailing};
+use crate::components::row::{Content, Row, RowLayout, Trailing};
 use crate::components::scrollbar::Scrollbar;
 use crate::components::search_field::{Record, SearchField};
-use crate::components::{ROW_INSET, list};
+use crate::components::{ROW_INSET, TRAILING_CELLS, keycaps, list};
 use crate::element::{ElementId, ScrollArea};
 use crate::icons;
 use crate::input::{TextEditor, display_text};
 use crate::overlays::Menu;
 use crate::overlays::launcher::LauncherKind;
 use crate::runtime::canvas::Canvas;
-use ratatui::layout::Rect;
+use ratatui::layout::{Alignment, Rect};
 use tachyonfx::CenteredShrink;
 use unicode_width::UnicodeWidthStr;
 
@@ -161,6 +161,26 @@ pub(crate) fn palette(cx: &mut Canvas, area: Rect, menu: &mut Menu) -> Rect {
             break;
         }
         let label = display_text(&item.label);
+        let boxed = binding && (item.id.starts_with("chord/") || item.id == "rejected");
+        let mut paint_keys = |cx: &mut Canvas, layout: &RowLayout| {
+            let hint = (item.hint.width() as u16).min(layout.content.width / 2);
+            let trailing = if item.remove.is_some() {
+                TRAILING_CELLS
+            } else {
+                0
+            };
+            let area = Rect {
+                width: layout.content.width.saturating_sub(hint + trailing),
+                ..layout.content
+            };
+            keycaps::render(
+                std::slice::from_ref(&label),
+                area,
+                Alignment::Left,
+                layout.style,
+                cx,
+            );
+        };
         let layout = Row {
             icon_color: item.icon_color,
             index: item.index,
@@ -176,7 +196,11 @@ pub(crate) fn palette(cx: &mut Canvas, area: Rect, menu: &mut Menu) -> Rect {
                 ElementId::Menu(item.id.clone()),
                 rect,
                 item.icon,
-                Content::Label(&label),
+                if boxed {
+                    Content::Custom(&mut paint_keys)
+                } else {
+                    Content::Label(&label)
+                },
             )
         }
         .render(cx);

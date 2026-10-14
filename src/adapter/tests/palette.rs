@@ -15,6 +15,42 @@ fn command(brief: &str, doc: &str, action: KeyAssignment) -> crate::commands::Ex
 }
 
 #[test]
+fn arrow_shortcuts_use_bundled_glyphs_for_logical_and_physical_keys() {
+    for (name, key, physical, glyph) in [
+        (
+            "Left",
+            KeyCode::LeftArrow,
+            window::PhysKeyCode::LeftArrow,
+            '\u{f177}',
+        ),
+        (
+            "Up",
+            KeyCode::UpArrow,
+            window::PhysKeyCode::UpArrow,
+            '\u{f176}',
+        ),
+        (
+            "Right",
+            KeyCode::RightArrow,
+            window::PhysKeyCode::RightArrow,
+            '\u{f178}',
+        ),
+        (
+            "Down",
+            KeyCode::DownArrow,
+            window::PhysKeyCode::DownArrow,
+            '\u{f175}',
+        ),
+    ] {
+        let mods = Modifiers::CTRL | Modifiers::ALT;
+        let label = shortcut_label(&key, mods);
+        assert!(label.ends_with(glyph));
+        assert_eq!(shortcut_label(&KeyCode::Physical(physical), mods), label);
+        assert_eq!(chord_label(&format!("Ctrl+Alt+{name}")), label);
+    }
+}
+
+#[test]
 fn filtered_commands_execute_the_original_assignment_and_dismiss_the_palette() {
     config::designate_this_as_the_main_thread();
     let mut adapter = Adapter::new(9891);

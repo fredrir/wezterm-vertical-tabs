@@ -1,4 +1,5 @@
 pub(crate) mod button;
+pub(crate) mod keycaps;
 pub(crate) mod list;
 pub(crate) mod row;
 pub(crate) mod scrollbar;

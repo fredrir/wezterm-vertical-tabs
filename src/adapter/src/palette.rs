@@ -122,6 +122,12 @@ pub(super) fn shortcut_label(key: &KeyCode, mods: Modifiers) -> String {
     }
     let rendering = config::configuration().ui_key_cap_rendering;
     let key = match key {
+        // These arrows come from the UI's bundled Symbols Nerd Font Mono;
+        // ordinary Unicode arrows depend on the user's text-font fallback.
+        KeyCode::LeftArrow => "\u{f177}".to_owned(),
+        KeyCode::UpArrow => "\u{f176}".to_owned(),
+        KeyCode::RightArrow => "\u{f178}".to_owned(),
+        KeyCode::DownArrow => "\u{f175}".to_owned(),
         KeyCode::Char('\u{7f}') => "Delete".to_owned(),
         KeyCode::Char('\u{8}') => "Backspace".to_owned(),
         key => crate::inputmap::ui_key(&key, rendering),
