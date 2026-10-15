@@ -203,11 +203,6 @@ pub(crate) fn space_actions(model: &Model, id: &str) -> Vec<MenuItem> {
         return Vec::new();
     };
     let mut items = vec![
-        MenuItem::new(
-            "select",
-            "Select",
-            Action::Domain(Intent::SelectSpace(id.into())),
-        ),
         MenuItem::new("rename", "Rename", Action::RenameSpace(id.into())).binding("rename_space"),
         MenuItem::new("icon", "Edit icon", Action::EditSpaceIcon(id.into()))
             .binding("edit_space_icon"),
@@ -227,7 +222,8 @@ pub(crate) fn space_actions(model: &Model, id: &str) -> Vec<MenuItem> {
                 index: at.saturating_sub(1),
             }),
         )
-        .binding("move_space_up"),
+        .binding("move_space_up")
+        .enabled(at > 0),
         MenuItem::new(
             "down",
             "Move down",
@@ -236,13 +232,12 @@ pub(crate) fn space_actions(model: &Model, id: &str) -> Vec<MenuItem> {
                 index: at + 1,
             }),
         )
-        .binding("move_space_down"),
+        .binding("move_space_down")
+        .enabled(at + 1 < model.spaces.len()),
         MenuItem::new("delete", "Delete space", Action::DeleteSpace(id.into()))
-            .binding("delete_space"),
+            .binding("delete_space")
+            .enabled(model.spaces.len() > 1),
     ];
-    items[5].enabled = at > 0;
-    items[6].enabled = at + 1 < model.spaces.len();
-    items[7].enabled = model.spaces.len() > 1;
     number_actions(&mut items);
     items
 }

@@ -70,6 +70,11 @@ impl MenuItem {
         self.binding = Some(action);
         self
     }
+
+    pub(crate) fn enabled(mut self, enabled: bool) -> Self {
+        self.enabled = enabled;
+        self
+    }
 }
 
 #[derive(Clone, Debug)]

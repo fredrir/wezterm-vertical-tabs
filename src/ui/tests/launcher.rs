@@ -299,9 +299,7 @@ fn tab_context_menu_matches_tab_actions_and_takes_digits() {
     ));
 }
 
-const SPACE_ACTIONS: [&str; 8] = [
-    "select", "rename", "icon", "accent", "rules", "up", "down", "delete",
-];
+const SPACE_ACTIONS: [&str; 7] = ["rename", "icon", "accent", "rules", "up", "down", "delete"];
 
 fn open_space_actions(ui: &mut SidebarUi, model: &Model) {
     ui.event(
@@ -342,7 +340,7 @@ fn disabled_space_action_digits_do_not_edit_the_query_or_delete_the_final_space(
     let model = model();
     let mut ui = SidebarUi::new();
     open_space_actions(&mut ui, &model);
-    for key in ['6', '7', '8'] {
+    for key in ['5', '6', '7'] {
         assert!(
             ui.event(&model, UiInput::key(Key::Character(key)))
                 .is_empty()
@@ -350,7 +348,7 @@ fn disabled_space_action_digits_do_not_edit_the_query_or_delete_the_final_space(
         draw(&mut ui, &model);
         assert_eq!(results(&ui), SPACE_ACTIONS);
     }
-    ui.event(&model, UiInput::key(Key::Character('2')));
+    ui.event(&model, UiInput::key(Key::Character('1')));
     ui.event(&model, UiInput::Text("Renamed".into()));
     assert!(
         matches!(ui.event(&model, UiInput::key(Key::Enter)).as_slice(),
@@ -373,7 +371,12 @@ fn space_context_menu_and_launcher_share_actions_and_target_their_own_space() {
     open_space_actions(&mut ui, &model);
     assert_eq!(results(&ui), SPACE_ACTIONS);
     assert!(
-        matches!(ui.event(&model, UiInput::key(Key::Character('6'))).as_slice(),
+        ui.event(&model, UiInput::key(Key::Character('6')))
+            .is_empty()
+    );
+    assert!(ui.has_overlay());
+    assert!(
+        matches!(ui.event(&model, UiInput::key(Key::Character('5'))).as_slice(),
         [UiIntent::Domain(Intent::MoveSpace { id, index: 0 })] if id == &model.selected_space)
     );
     draw(&mut ui, &model);
@@ -395,8 +398,46 @@ fn space_context_menu_and_launcher_share_actions_and_target_their_own_space() {
     draw(&mut ui, &model);
     assert_eq!(results(&ui), SPACE_ACTIONS);
     assert!(
-        matches!(ui.event(&model, UiInput::key(Key::Character('7'))).as_slice(),
+        ui.event(&model, UiInput::key(Key::Character('5')))
+            .is_empty()
+    );
+    assert!(ui.has_overlay());
+    assert!(
+        matches!(ui.event(&model, UiInput::key(Key::Character('6'))).as_slice(),
         [UiIntent::Domain(Intent::MoveSpace { id, index: 1 })] if id == &original)
+    );
+}
+
+#[test]
+fn space_actions_can_move_a_middle_space_in_both_directions_and_delete_it() {
+    let mut model = model();
+    for name in ["Work", "Personal"] {
+        model
+            .dispatch(Intent::CreateSpace { name: name.into() })
+            .unwrap();
+    }
+    let middle = model.spaces[1].id.clone();
+    model.dispatch(Intent::SelectSpace(middle.clone())).unwrap();
+
+    for (key, expected) in [('5', 0), ('6', 2)] {
+        let mut ui = SidebarUi::new();
+        open_space_actions(&mut ui, &model);
+        assert!(
+            matches!(ui.event(&model, UiInput::key(Key::Character(key))).as_slice(),
+            [UiIntent::Domain(Intent::MoveSpace { id, index })]
+                if id == &middle && *index == expected)
+        );
+    }
+
+    let mut ui = SidebarUi::new();
+    open_space_actions(&mut ui, &model);
+    assert!(
+        ui.event(&model, UiInput::key(Key::Character('7')))
+            .is_empty()
+    );
+    assert!(
+        matches!(ui.event(&model, UiInput::key(Key::Enter)).as_slice(),
+        [UiIntent::Domain(Intent::DeleteSpace { id, destination: None })] if id == &middle)
     );
 }
 
