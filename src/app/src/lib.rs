@@ -272,6 +272,9 @@ impl WindowApp {
     pub fn open_tab_actions(&mut self) {
         self.ui.open_tab_actions(&self.model);
     }
+    pub fn open_space_actions(&mut self) {
+        self.ui.open_space_actions(&self.model);
+    }
     pub fn set_foreign_tabs(&mut self, tabs: Vec<ui::ForeignTab>) {
         self.ui.set_foreign_tabs(tabs);
     }

@@ -241,7 +241,7 @@ impl SidebarUi {
         }
     }
 
-    /// Plain menus and tab actions run the item bound to an unmodified key; disabled items swallow it.
+    /// Plain menus and action launchers run unmodified keys; disabled items swallow them.
     fn menu_shortcut(
         &mut self,
         model: &Model,
@@ -257,7 +257,14 @@ impl SidebarUi {
         }
         let items = match &menu.search {
             None => &menu.items,
-            Some(search) if search.kind == LauncherKind::TabActions => &search.all_items,
+            Some(search)
+                if matches!(
+                    search.kind,
+                    LauncherKind::TabActions | LauncherKind::SpaceActions
+                ) =>
+            {
+                &search.all_items
+            }
             Some(_) => return false,
         };
         let pressed = c.to_string();

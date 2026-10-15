@@ -9,6 +9,8 @@ pub(super) const CATEGORIES: &[(&str, &str, &str)] = &[
     ("layout", "Layout", icons::LAYOUT),
     ("quick_terminal", "Quick terminal", icons::TERMINAL),
     ("appearance", "Tabs", icons::TAB),
+    ("spaces", "Spaces", icons::SPACE),
+    ("folders", "Folders", icons::FOLDER),
     ("theme", "Colors", icons::PALETTE),
     ("motion", "Motion", icons::MOTION),
     ("behavior", "General", icons::TUNE),
@@ -137,7 +139,11 @@ impl SettingsPage {
                 _ => std::slice::from_ref(field),
             })
             .chain(keybinds::DESCRIPTORS.iter())
-            .filter(|field| self.category == "all" || field.group == self.category)
+            .filter(|field| {
+                self.category == "all"
+                    || field.group == self.category
+                    || (self.category == "keybinds" && action(field).is_some())
+            })
             .chain(borrowed)
             .filter(|field| {
                 query.is_empty()
@@ -149,6 +155,8 @@ impl SettingsPage {
         // Remote glyphs close the Colors tab, after the quick terminal colors.
         if self.category == "theme" {
             fields.sort_by_key(|field| distros::id(field.key).is_some());
+        } else if self.category == "all" {
+            fields.sort_by_key(|field| CATEGORIES.iter().position(|(id, ..)| *id == field.group));
         }
         fields
     }

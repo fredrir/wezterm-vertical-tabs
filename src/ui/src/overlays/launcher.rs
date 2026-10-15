@@ -3,7 +3,7 @@ use crate::components::scrollbar::Scrollbar;
 use crate::element::ElementId;
 use crate::input::{Key, Modifiers, TextEditor};
 use crate::intent::{HostAction, UiIntent};
-use crate::overlays::context_menus::tab_actions;
+use crate::overlays::context_menus::{space_actions, tab_actions};
 use crate::overlays::keybinds::Binding;
 use crate::overlays::{Menu, MenuItem, Overlay, next_enabled};
 use crate::views::{tab_machine, tab_name};
@@ -17,6 +17,7 @@ pub(crate) enum LauncherKind {
     Keybinds,
     LaunchMenu,
     TabActions,
+    SpaceActions,
 }
 
 /// The host supplies its matching and label rules to preserve native launcher behavior.
@@ -441,6 +442,16 @@ impl SidebarUi {
             "Tab actions",
             "No tab actions",
             tab_actions(model, id),
+            0,
+        );
+    }
+
+    pub fn open_space_actions(&mut self, model: &Model) {
+        self.open_launcher(
+            LauncherKind::SpaceActions,
+            "Space actions",
+            "No space actions",
+            space_actions(model, &model.selected_space),
             0,
         );
     }

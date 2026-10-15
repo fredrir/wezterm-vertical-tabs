@@ -50,3 +50,36 @@ fn empty_lua_tables_disable_an_action_without_restoring_its_defaults() {
     assert!(keybinds::bindings(&settings, "commands").is_empty());
     assert_eq!(settings.get("keybinds"), Some(json!({"commands": []})));
 }
+
+#[test]
+fn every_registered_action_can_be_rebound_and_round_tripped() {
+    keybinds::validate(&Default::default()).unwrap();
+    for field in keybinds::DESCRIPTORS {
+        let action = field.key.strip_prefix("shortcut.").unwrap();
+        let mut settings = Settings::default();
+        settings.set("keybinds", json!({action: ["F12"]})).unwrap();
+        let restored: Settings =
+            serde_json::from_value(serde_json::to_value(settings).unwrap()).unwrap();
+        assert_eq!(keybinds::action(&restored, "F12"), Some(action));
+    }
+}
+
+#[test]
+fn space_actions_default_can_be_reassigned_or_disabled() {
+    let mut settings = Settings::default();
+    assert_eq!(
+        keybinds::action(&settings, "Super+Shift+j"),
+        Some("space_actions")
+    );
+    settings
+        .set("keybinds", json!({"space_actions": []}))
+        .unwrap();
+    assert_eq!(keybinds::action(&settings, "Super+Shift+j"), None);
+    settings
+        .set("keybinds", json!({"space_actions": ["F12"]}))
+        .unwrap();
+    assert_eq!(keybinds::action(&settings, "Super+Shift+j"), None);
+    assert_eq!(keybinds::action(&settings, "F12"), Some("space_actions"));
+    settings.keyboard_shortcuts = false;
+    assert_eq!(keybinds::action(&settings, "F12"), None);
+}

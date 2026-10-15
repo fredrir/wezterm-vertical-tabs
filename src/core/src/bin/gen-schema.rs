@@ -1,7 +1,7 @@
 //! Generate optional Lua types and a machine-readable schema from the Rust authority.
 use serde_json::{Map, Value};
 use std::fmt::Write;
-use vtabs_core::{SettingKind, Settings, distros, settings};
+use vtabs_core::{SettingKind, Settings, distros, keybinds, settings};
 
 const PREFIX: &str = "Tabs";
 
@@ -199,7 +199,7 @@ fn setting_type(kind: &SettingKind) -> String {
             .collect::<Vec<_>>()
             .join("|"),
         SettingKind::List => "TabsMenuEntry[]".into(),
-        SettingKind::Keybinds => "table<string, string[]>".into(),
+        SettingKind::Keybinds => "table<TabsShortcut, string[]>".into(),
     }
 }
 
@@ -244,6 +244,17 @@ const API: &str = r#"---@class TabsHooks
 
 fn types() -> String {
     let mut out = String::from("-- Generated from vtabs-core; edit the Rust types.\n---@meta\n\n");
+    writeln!(
+        out,
+        "---@alias TabsShortcut {}\n",
+        keybinds::DESCRIPTORS
+            .iter()
+            .filter_map(|field| field.key.strip_prefix("shortcut."))
+            .map(|action| format!("'{action}'"))
+            .collect::<Vec<_>>()
+            .join("|")
+    )
+    .unwrap();
     settings_class(&mut out, "TabsSettings", false);
     settings_class(&mut out, "TabsTheme", true);
     for (name, schema) in definitions() {

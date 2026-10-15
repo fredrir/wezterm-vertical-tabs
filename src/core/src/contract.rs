@@ -13,6 +13,7 @@ pub enum UiAction {
     CreateSpace,
     Navigator,
     TabActions,
+    SpaceActions,
     QuickTerminal,
     RetryStorage,
     #[serde(rename = "QuickTerminal")]

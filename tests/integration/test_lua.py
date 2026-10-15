@@ -32,11 +32,17 @@ CONSUMERS = {
     "tabs.apply_to_config({}, {settings = {width = 280, side = 'left'}, settings_file = '/tmp/x.lua'})\n",
     "invalid-options": "local tabs = require 'plugin.init'\n"
     "tabs.apply_to_config({}, {settings = {width = 'wide', side = 'up'}})\n",
+    "keybinds": "local tabs = require 'plugin.init'\n"
+    "tabs.apply_to_config({}, {settings = {keybinds = {rename_tab = {'F12'}, "
+    "edit_space_accent = {'Ctrl+Alt+a'}, space_2 = {'Ctrl+Alt+2'}, space_actions = {}}}})\n",
+    "invalid-keybinds": "local tabs = require 'plugin.init'\n"
+    "tabs.apply_to_config({}, {settings = {keybinds = {rename_tab = 'F12'}}})\n",
     "managed": "---@type TabsManaged\n"
     "return { settings = { width = 300 }, spaces = { { id = 'notes', name = 'Notes' } } }\n",
     "invalid-managed": "---@type TabsManaged\nreturn { settings = { side = 'up' } }\n",
     "action": "local tabs = require 'plugin.init'\n"
-    "tabs.action('navigator')\ntabs.action({ ResetSetting = 'width' })\n",
+    "tabs.action('navigator')\ntabs.action('space_actions')\n"
+    "tabs.action({ ResetSetting = 'width' })\n",
     "invalid-action": "local tabs = require 'plugin.init'\ntabs.action('navigate')\n",
     "program": "local tabs = require 'plugin.init'\n"
     "tabs.action({ QuickTerminal = { args = { 'lazygit' }, domain = { DomainName = 'local' },\n"

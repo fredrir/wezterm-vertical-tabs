@@ -345,3 +345,298 @@ fn recording_in_search_lists_the_actions_bound_to_a_chord() {
         "typing returns to a text search"
     );
 }
+
+fn action_model() -> Model {
+    let mut model = Model::default();
+    model.settings.animations = false;
+    model
+        .reconcile(
+            (1..=3)
+                .map(|id| vtabs_core::HostTab {
+                    id,
+                    title: format!("Tab {id}"),
+                    ..Default::default()
+                })
+                .collect(),
+            Some(2),
+            true,
+        )
+        .unwrap();
+    model
+}
+
+fn bind_and_run(ui: &mut SidebarUi, model: &mut Model, action: &str) -> Vec<UiIntent> {
+    model
+        .settings
+        .set("keybinds", serde_json::json!({action: ["F12"]}))
+        .unwrap();
+    ui.event(model, UiInput::key(Key::Function(12)))
+}
+
+fn domain(intents: &[UiIntent]) -> Vec<Intent> {
+    intents
+        .iter()
+        .filter_map(|intent| match intent {
+            UiIntent::Domain(intent) => Some(intent.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn assigned_tab_actions_target_the_current_tab_and_toggle_pin_state() {
+    let mut model = action_model();
+    let mut ui = SidebarUi::new();
+    for (action, expected) in [
+        (
+            "pin_tab",
+            Intent::PinTab {
+                id: 2,
+                pinned: true,
+            },
+        ),
+        ("move_tab_top", Intent::MoveTab { id: 2, index: 0 }),
+        ("move_tab_bottom", Intent::MoveTab { id: 2, index: 3 }),
+        ("move_tab_window", Intent::MoveTabToNewWindow(2)),
+        ("return_tab_auto", Intent::ReturnToAuto(2)),
+    ] {
+        assert_eq!(
+            domain(&bind_and_run(&mut ui, &mut model, action)),
+            [expected],
+            "{action}"
+        );
+    }
+    model
+        .dispatch(Intent::PinTab {
+            id: 2,
+            pinned: true,
+        })
+        .unwrap();
+    assert_eq!(
+        domain(&bind_and_run(&mut ui, &mut model, "pin_tab")),
+        [Intent::PinTab {
+            id: 2,
+            pinned: false
+        }]
+    );
+    assert!(bind_and_run(&mut ui, &mut model, "rename_tab").is_empty());
+    assert!(ui.text_input_active());
+    ui.event(&model, UiInput::Text("Named by shortcut".into()));
+    assert_eq!(
+        domain(&ui.event(&model, UiInput::key(Key::Enter))),
+        [Intent::RenameTab {
+            id: 2,
+            title: "Named by shortcut".into()
+        }]
+    );
+}
+
+#[test]
+fn bulk_close_shortcuts_keep_confirmation_and_disabled_action_checks() {
+    for (action, expected) in [
+        ("close_tabs_below", Intent::CloseBelow(2)),
+        ("close_other_tabs", Intent::CloseOthers(2)),
+    ] {
+        let mut model = action_model();
+        let mut ui = SidebarUi::new();
+        assert!(bind_and_run(&mut ui, &mut model, action).is_empty());
+        assert!(ui.has_overlay());
+        assert_eq!(
+            domain(&ui.event(&model, UiInput::key(Key::Enter))),
+            [expected]
+        );
+    }
+    let mut model = action_model();
+    model.dispatch(Intent::ActivateTab(3)).unwrap();
+    let mut ui = SidebarUi::new();
+    assert!(bind_and_run(&mut ui, &mut model, "close_tabs_below").is_empty());
+    assert!(!ui.has_overlay());
+}
+
+#[test]
+fn move_tab_shortcuts_choose_a_space_or_folder_before_dispatching() {
+    let mut model = action_model();
+    let original = model.selected_space.clone();
+    model
+        .dispatch(Intent::CreateSpace {
+            name: "Work".into(),
+        })
+        .unwrap();
+    let destination = model.selected_space.clone();
+    model.dispatch(Intent::SelectSpace(original)).unwrap();
+    model
+        .dispatch(Intent::CreateFolder {
+            name: "Projects".into(),
+        })
+        .unwrap();
+    let folder = model.folders[0].id.clone();
+    for (action, expected) in [
+        (
+            "move_tab_space",
+            Intent::AssignTab {
+                id: 2,
+                space_id: destination,
+            },
+        ),
+        (
+            "move_tab_folder",
+            Intent::AssignFolder {
+                tab_id: 2,
+                folder_id: Some(folder),
+            },
+        ),
+    ] {
+        let mut ui = SidebarUi::new();
+        assert!(bind_and_run(&mut ui, &mut model, action).is_empty());
+        assert!(ui.has_overlay());
+        assert_eq!(
+            domain(&ui.event(&model, UiInput::key(Key::Enter))),
+            [expected]
+        );
+    }
+}
+
+#[test]
+fn numbered_space_shortcuts_follow_order_and_ignore_missing_spaces() {
+    let mut model = Model::default();
+    let mut ui = SidebarUi::new();
+    for number in 2..=9 {
+        model
+            .dispatch(Intent::CreateSpace {
+                name: format!("Space {number}"),
+            })
+            .unwrap();
+    }
+    let last = model.spaces[8].id.clone();
+    model
+        .dispatch(Intent::MoveSpace { id: last, index: 0 })
+        .unwrap();
+    for number in 1..=9 {
+        let expected = Intent::SelectSpace(model.spaces[number - 1].id.clone());
+        assert_eq!(
+            domain(&bind_and_run(
+                &mut ui,
+                &mut model,
+                &format!("space_{number}")
+            )),
+            [expected]
+        );
+    }
+    let mut empty = Model::default();
+    assert!(bind_and_run(&mut ui, &mut empty, "space_2").is_empty());
+    assert!(!ui.has_overlay());
+}
+
+#[test]
+fn space_editing_shortcuts_open_the_existing_editors() {
+    for (action, text, expected) in [
+        (
+            "rename_space",
+            "Renamed",
+            Intent::RenameSpace {
+                id: "home".into(),
+                name: "Renamed".into(),
+            },
+        ),
+        (
+            "edit_space_icon",
+            "W",
+            Intent::EditSpace {
+                id: "home".into(),
+                icon: "W".into(),
+                accent: None,
+                rules: vec![],
+            },
+        ),
+        (
+            "edit_space_accent",
+            "#123456",
+            Intent::EditSpace {
+                id: "home".into(),
+                icon: "◉".into(),
+                accent: Some("#123456".into()),
+                rules: vec![],
+            },
+        ),
+        (
+            "edit_space_rules",
+            "[]",
+            Intent::EditSpace {
+                id: "home".into(),
+                icon: "◉".into(),
+                accent: None,
+                rules: vec![],
+            },
+        ),
+    ] {
+        let mut model = Model::default();
+        let mut ui = SidebarUi::new();
+        assert!(bind_and_run(&mut ui, &mut model, action).is_empty());
+        assert!(ui.text_input_active(), "{action}");
+        ui.event(&model, UiInput::Text(text.into()));
+        assert_eq!(
+            domain(&ui.event(&model, UiInput::key(Key::Enter))),
+            [expected],
+            "{action}"
+        );
+    }
+}
+
+#[test]
+fn folder_shortcuts_use_the_current_tabs_folder() {
+    let mut model = action_model();
+    model
+        .dispatch(Intent::CreateFolder {
+            name: "Work".into(),
+        })
+        .unwrap();
+    let folder = model.folders[0].id.clone();
+    model
+        .dispatch(Intent::AssignFolder {
+            tab_id: 2,
+            folder_id: Some(folder.clone()),
+        })
+        .unwrap();
+    let mut ui = SidebarUi::new();
+    for (action, expected) in [
+        ("toggle_folder", Intent::ToggleFolder(folder.clone())),
+        ("new_tab_in_folder", Intent::NewTabInFolder(folder.clone())),
+        ("delete_folder", Intent::DeleteFolder(folder)),
+    ] {
+        assert_eq!(
+            domain(&bind_and_run(&mut ui, &mut model, action)),
+            [expected]
+        );
+    }
+    assert!(bind_and_run(&mut ui, &mut model, "move_folder_up").is_empty());
+    assert!(bind_and_run(&mut ui, &mut model, "move_folder_down").is_empty());
+}
+
+#[test]
+fn tab_actions_are_inert_without_a_tab_and_while_settings_are_open() {
+    for action in [
+        "rename_tab",
+        "pin_tab",
+        "move_tab_top",
+        "move_tab_bottom",
+        "move_tab_space",
+        "move_tab_folder",
+        "move_tab_window",
+        "close_tabs_below",
+        "close_other_tabs",
+        "return_tab_auto",
+    ] {
+        for (mut model, settings) in [(Model::default(), false), (action_model(), true)] {
+            let mut ui = SidebarUi::new();
+            if settings {
+                ui.open_settings();
+            }
+            assert!(
+                bind_and_run(&mut ui, &mut model, action).is_empty(),
+                "{action}"
+            );
+            assert!(!ui.has_overlay(), "{action}");
+            assert_eq!(ui.content_page(), settings);
+        }
+    }
+}

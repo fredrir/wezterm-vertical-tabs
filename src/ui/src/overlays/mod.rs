@@ -1,7 +1,7 @@
 mod color_picker;
 mod colors;
 pub(crate) mod command_palette;
-mod context_menus;
+pub(crate) mod context_menus;
 pub(crate) mod dialog;
 mod forms;
 mod keybinds;
@@ -26,6 +26,7 @@ pub(crate) struct MenuItem {
     pub label: String,
     pub hint: String,
     pub shortcuts: Vec<String>,
+    pub binding: Option<&'static str>,
     pub keywords: String,
     pub action: Action,
     /// Shown as a trailing remove control on hover, and run by Delete.
@@ -57,11 +58,17 @@ impl MenuItem {
             label: label.into(),
             hint: String::new(),
             shortcuts: Vec::new(),
+            binding: None,
             keywords: String::new(),
             action,
             remove: None,
             enabled: true,
         }
+    }
+
+    pub(crate) fn binding(mut self, action: &'static str) -> Self {
+        self.binding = Some(action);
+        self
     }
 }
 

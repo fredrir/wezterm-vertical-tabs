@@ -43,6 +43,7 @@ return config
 | Search tabs | `Cmd+K` | `Ctrl+Shift+K` |
 | Command palette | `Cmd+P` | `Ctrl+Shift+P` |
 | Tab actions | `Cmd+Shift+E` | `Ctrl+Shift+E` |
+| Space actions | `Cmd+Shift+J` | `Ctrl+Shift+J` |
 | Quick terminal | Ctrl + backtick | Ctrl + backtick |
 | Toggle sidebar | `Cmd+B` | `Ctrl+Shift+B` |
 | Close tab | `Cmd+W` | `Ctrl+Shift+W` |
@@ -59,6 +60,9 @@ return config
 | Name | Value |
 | --- | --- |
 | Keyboard preference | Disable `keyboard_shortcuts` to use custom Lua bindings |
+| Assign shortcuts | Settings → Tabs, Spaces, Folders or the related category; also listed in Keybinds and All. Click an action to record, replace or remove shortcuts |
+| Action shortcuts | Tab, space and folder operations start unassigned; existing navigation and launcher defaults remain. `space_1`–`space_9` select spaces by their current order |
+| Shortcut targets | Current tab or space; folder actions use the focused folder or the current tab's folder. Destination pickers and confirmations stay in place |
 | Command palette | Shared searchable launcher; includes WezTerm commands and `augment-command-palette` entries; custom bindings use `wezterm.action.ActivateCommandPalette` |
 | Launcher | `ShowLauncher` and `ShowLauncherArgs` open the sidebar launcher; configure entries with standard `config.launch_menu` |
 | Terminal Control keys | Ordinary Control shortcuts remain available to the shell |
@@ -66,6 +70,7 @@ return config
 | Search | Centered palette of sidebar rows; Up/Down select, Left/Right edit the query, Enter opens; matches name, title or index |
 | Search scope | Current space (indexed), other spaces, filter-hidden, other windows (`window N`), other workspaces, disconnected domains |
 | Tab actions | Launcher for the current tab; same items as the tab context menu; `1`-`9` run the first nine |
+| Space actions | Searchable launcher for the current space, including empty spaces; same items as the space context menu; `1`-`8` select actions |
 | Search `__detached` | Moves the tab into this window; other workspaces switch; disconnected domains reattach |
 | Search unadopted | Remote panes no mux shows, from connected remotes and `hooks.adoptable`; Enter adopts into this window |
 | `__detached` windows | Never shown on their own; when only they remain the GUI quits (`quit_when_all_windows_are_closed`); reconnecting spawns a fresh tab |
@@ -270,6 +275,7 @@ vtabs.apply_to_config(config, {
 | `'create_space'` | Open the create-space form |
 | `'navigator'` | Open the visible-tab navigator |
 | `'tab_actions'` | Open actions for the current tab |
+| `'space_actions'` | Open actions for the current space |
 | `'retry_storage'` | Retry a failed durable operation |
 | `{ QuickTerminal = { args = { 'lazygit' } } }` | Toggle a quick program |
 | `{ CreateSpace = { name = 'Work' } }` | Create and select a space |

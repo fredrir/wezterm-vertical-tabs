@@ -1,8 +1,10 @@
 -- Generated from vtabs-core; edit the Rust types.
 ---@meta
 
+---@alias TabsShortcut 'settings'|'tabs'|'commands'|'tab_actions'|'space_actions'|'quick_terminal'|'rail'|'new_tab'|'close'|'refresh'|'tab_1'|'tab_2'|'tab_3'|'tab_4'|'tab_5'|'tab_6'|'tab_7'|'tab_8'|'tab_9'|'next_tab'|'previous_tab'|'rename_tab'|'pin_tab'|'move_tab_top'|'move_tab_bottom'|'move_tab_space'|'move_tab_folder'|'move_tab_window'|'close_tabs_below'|'close_other_tabs'|'return_tab_auto'|'create_space'|'rename_space'|'edit_space_icon'|'edit_space_accent'|'edit_space_rules'|'move_space_up'|'move_space_down'|'delete_space'|'toggle_space'|'space_1'|'space_2'|'space_3'|'space_4'|'space_5'|'space_6'|'space_7'|'space_8'|'space_9'|'new_folder'|'new_tab_in_folder'|'toggle_folder'|'rename_folder'|'move_folder_up'|'move_folder_down'|'delete_folder'|'reset_settings'|'previous_space'|'next_space'
+
 ---@class TabsSettings
----@field keybinds? table<string, string[]> Shortcuts supplied by this plugin
+---@field keybinds? table<TabsShortcut, string[]> Shortcuts supplied by this plugin
 ---@field width? integer Width in logical pixels
 ---@field side? 'left'|'right' Sidebar edge
 ---@field rail? 'expanded'|'hidden' Sidebar visibility
@@ -168,7 +170,7 @@
 ---@field width? integer
 
 --- Sidebar surfaces opened by `vtabs.action`, besides domain intents.
----@alias TabsUiAction 'settings'|'create_space'|'navigator'|'tab_actions'|'quick_terminal'|'retry_storage'|{ QuickTerminal: TabsQuickProgram }
+---@alias TabsUiAction 'settings'|'create_space'|'navigator'|'tab_actions'|'space_actions'|'quick_terminal'|'retry_storage'|{ QuickTerminal: TabsQuickProgram }
 
 --- Input to the window-level `theme` and `footer` hooks.
 ---@class TabsWindowContext

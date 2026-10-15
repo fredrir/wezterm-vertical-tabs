@@ -118,6 +118,7 @@ impl Adapter {
                     core::Action::Ui(core::UiAction::CreateSpace) => self.app.open_create_space(),
                     core::Action::Ui(core::UiAction::Navigator) => self.open_tab_navigator(),
                     core::Action::Ui(core::UiAction::TabActions) => self.app.open_tab_actions(),
+                    core::Action::Ui(core::UiAction::SpaceActions) => self.app.open_space_actions(),
                     core::Action::Ui(core::UiAction::QuickTerminal) => {
                         self.command(app::Command::QuickTerminal)
                     }

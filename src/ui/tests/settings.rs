@@ -863,3 +863,58 @@ fn settings_tab_stays_out_of_pinned_tabs() {
     draw(&mut ui, &model);
     assert_eq!(order(&ui), [T(1), T(2), T(3), S]);
 }
+
+#[test]
+fn every_shortcut_appears_once_in_its_category_keybinds_and_all() {
+    for field in vtabs_core::keybinds::DESCRIPTORS {
+        for category in [field.group, "keybinds", "all"] {
+            let (mut ui, model) = settings(category);
+            click(&mut ui, &model, ElementId::SettingsSearch);
+            ui.event(&model, UiInput::Text(field.key.into()));
+            draw(&mut ui, &model);
+            assert_eq!(
+                selected_rows(&ui)
+                    .iter()
+                    .filter(|key| key.as_str() == field.key)
+                    .count(),
+                1,
+                "{category}: {}",
+                field.key
+            );
+        }
+    }
+}
+
+#[test]
+fn editing_a_shortcut_in_tabs_updates_keybinds_and_all() {
+    let (mut ui, mut model) = settings("appearance");
+    click(&mut ui, &model, ElementId::SettingsSearch);
+    ui.event(&model, UiInput::Text("shortcut.rename_tab".into()));
+    click(
+        &mut ui,
+        &model,
+        ElementId::Setting("shortcut.rename_tab".into()),
+    );
+    assert!(ui.recording_keybind());
+    let intents = ui.event(&model, UiInput::RecordShortcut("F12".into()));
+    model
+        .settings
+        .set("keybinds", set(&intents, "keybinds").unwrap())
+        .unwrap();
+    model.revision += 1;
+    ui.event(&model, UiInput::RecordShortcut(String::new()));
+    for category in ["keybinds", "all"] {
+        click(
+            &mut ui,
+            &model,
+            ElementId::SettingsCategory(category.into()),
+        );
+        draw(&mut ui, &model);
+        let row = ui
+            .hit_regions()
+            .iter()
+            .find(|hit| hit.id == ElementId::Setting("shortcut.rename_tab".into()))
+            .unwrap();
+        assert!(row.tooltip.contains("F12"));
+    }
+}

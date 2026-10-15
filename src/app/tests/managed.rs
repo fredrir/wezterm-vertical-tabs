@@ -177,7 +177,11 @@ fn invalid_file_content_is_rejected_before_anything_is_published() {
 #[test]
 fn keybind_edits_survive_managed_file_reload_and_reset_to_defaults() {
     let mut app = configured(json!({"managed": {}}));
-    let bindings = json!({"commands": ["F12", "Ctrl+Alt+p"], "refresh": []});
+    let bindings = json!({
+        "commands": ["F12", "Ctrl+Alt+p"], "refresh": [],
+        "rename_tab": ["F11"], "space_actions": ["F10"], "space_2": ["F9"],
+        "edit_space_accent": ["F8"],
+    });
     set(&mut app, "keybinds", bindings.clone());
     let source = app.take_managed_write().unwrap();
     assert!(source.contains("keybinds"));

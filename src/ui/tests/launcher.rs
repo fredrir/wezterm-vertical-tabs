@@ -298,3 +298,123 @@ fn tab_context_menu_matches_tab_actions_and_takes_digits() {
         })]
     ));
 }
+
+const SPACE_ACTIONS: [&str; 8] = [
+    "select", "rename", "icon", "accent", "rules", "up", "down", "delete",
+];
+
+fn open_space_actions(ui: &mut SidebarUi, model: &Model) {
+    ui.event(
+        model,
+        UiInput::Key {
+            key: Key::Character('j'),
+            modifiers: Modifiers {
+                super_key: true,
+                shift: true,
+                ..Default::default()
+            },
+        },
+    );
+    ui.render(model, Rect::new(0, 0, 110, 42), Duration::ZERO);
+}
+
+#[test]
+fn space_actions_shortcut_opens_in_an_empty_space_and_filters_actions() {
+    let model = model();
+    let mut ui = SidebarUi::new();
+    open_space_actions(&mut ui, &model);
+    assert_eq!(results(&ui), SPACE_ACTIONS);
+    ui.event(&model, UiInput::Text("accent".into()));
+    draw(&mut ui, &model);
+    assert_eq!(results(&ui), ["accent"]);
+    assert!(ui.event(&model, UiInput::key(Key::Enter)).is_empty());
+    assert!(ui.text_input_active());
+    ui.event(&model, UiInput::Text("#123456".into()));
+    assert!(
+        matches!(ui.event(&model, UiInput::key(Key::Enter)).as_slice(),
+        [UiIntent::Domain(Intent::EditSpace { id, accent: Some(accent), .. })]
+            if id == &model.selected_space && accent == "#123456")
+    );
+}
+
+#[test]
+fn disabled_space_action_digits_do_not_edit_the_query_or_delete_the_final_space() {
+    let model = model();
+    let mut ui = SidebarUi::new();
+    open_space_actions(&mut ui, &model);
+    for key in ['6', '7', '8'] {
+        assert!(
+            ui.event(&model, UiInput::key(Key::Character(key)))
+                .is_empty()
+        );
+        draw(&mut ui, &model);
+        assert_eq!(results(&ui), SPACE_ACTIONS);
+    }
+    ui.event(&model, UiInput::key(Key::Character('2')));
+    ui.event(&model, UiInput::Text("Renamed".into()));
+    assert!(
+        matches!(ui.event(&model, UiInput::key(Key::Enter)).as_slice(),
+        [UiIntent::Domain(Intent::RenameSpace { id, name })]
+            if id == &model.selected_space && name == "Renamed")
+    );
+}
+
+#[test]
+fn space_context_menu_and_launcher_share_actions_and_target_their_own_space() {
+    let mut model = model();
+    let original = model.selected_space.clone();
+    model
+        .dispatch(Intent::CreateSpace {
+            name: "Work".into(),
+        })
+        .unwrap();
+    let mut ui = SidebarUi::new();
+    ui.set_layout(32, 0);
+    open_space_actions(&mut ui, &model);
+    assert_eq!(results(&ui), SPACE_ACTIONS);
+    assert!(
+        matches!(ui.event(&model, UiInput::key(Key::Character('6'))).as_slice(),
+        [UiIntent::Domain(Intent::MoveSpace { id, index: 0 })] if id == &model.selected_space)
+    );
+    draw(&mut ui, &model);
+    let space = ui
+        .hit_regions()
+        .iter()
+        .find(|hit| hit.id == ElementId::Space(original.clone()))
+        .unwrap()
+        .rect;
+    ui.event(
+        &model,
+        UiInput::PointerDown {
+            x: space.x,
+            y: space.y,
+            button: MouseButton::Right,
+            modifiers: Modifiers::default(),
+        },
+    );
+    draw(&mut ui, &model);
+    assert_eq!(results(&ui), SPACE_ACTIONS);
+    assert!(
+        matches!(ui.event(&model, UiInput::key(Key::Character('7'))).as_slice(),
+        [UiIntent::Domain(Intent::MoveSpace { id, index: 1 })] if id == &original)
+    );
+}
+
+#[test]
+fn space_launcher_obeys_custom_binding_and_global_shortcut_switch() {
+    let mut model = model();
+    model
+        .settings
+        .set("keybinds", serde_json::json!({"space_actions": ["F12"]}))
+        .unwrap();
+    let mut ui = SidebarUi::new();
+    open_space_actions(&mut ui, &model);
+    assert!(!ui.has_overlay());
+    ui.event(&model, UiInput::key(Key::Function(12)));
+    draw(&mut ui, &model);
+    assert_eq!(results(&ui), SPACE_ACTIONS);
+    ui.event(&model, UiInput::key(Key::Escape));
+    model.settings.keyboard_shortcuts = false;
+    ui.event(&model, UiInput::key(Key::Function(12)));
+    assert!(!ui.has_overlay());
+}

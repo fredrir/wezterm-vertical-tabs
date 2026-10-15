@@ -77,100 +77,14 @@ impl SidebarUi {
                 self.menu(tab.display_title(), items);
             }
             ElementId::Folder(id) => {
-                let Some(folder) = model.folders.iter().find(|f| f.id == id) else {
-                    return;
-                };
-                let index = model
-                    .selected_folders()
-                    .position(|f| f.id == id)
-                    .unwrap_or(0);
-                self.menu(
-                    &folder.name,
-                    vec![
-                        MenuItem::new(
-                            "new-tab",
-                            "New tab in folder",
-                            Action::Domain(Intent::NewTabInFolder(id.clone())),
-                        ),
-                        MenuItem::new(
-                            "toggle",
-                            if folder.collapsed {
-                                "Expand"
-                            } else {
-                                "Collapse"
-                            },
-                            Action::Domain(Intent::ToggleFolder(id.clone())),
-                        ),
-                        MenuItem::new("rename", "Rename folder", Action::RenameFolder(id.clone())),
-                        MenuItem::new(
-                            "up",
-                            "Move up",
-                            Action::Domain(Intent::MoveFolder {
-                                id: id.clone(),
-                                index: index.saturating_sub(1),
-                            }),
-                        ),
-                        MenuItem::new(
-                            "down",
-                            "Move down",
-                            Action::Domain(Intent::MoveFolder {
-                                id: id.clone(),
-                                index: index + 1,
-                            }),
-                        ),
-                        MenuItem::new(
-                            "ungroup",
-                            "Ungroup tabs",
-                            Action::Domain(Intent::DeleteFolder(id)),
-                        ),
-                    ],
-                );
+                if let Some(folder) = model.folders.iter().find(|f| f.id == id) {
+                    self.menu(&folder.name, folder_actions(model, &id));
+                }
             }
             ElementId::Space(id) => {
-                let Some(space) = model.spaces.iter().find(|space| space.id == id) else {
-                    return;
-                };
-                let at = model
-                    .spaces
-                    .iter()
-                    .position(|space| space.id == id)
-                    .unwrap_or(0);
-                let mut items = vec![
-                    MenuItem::new(
-                        "select",
-                        "Select",
-                        Action::Domain(Intent::SelectSpace(id.clone())),
-                    ),
-                    MenuItem::new("rename", "Rename", Action::RenameSpace(id.clone())),
-                    MenuItem::new("icon", "Edit icon", Action::EditSpaceIcon(id.clone())),
-                    MenuItem::new("accent", "Edit accent", Action::EditSpaceAccent(id.clone())),
-                    MenuItem::new(
-                        "rules",
-                        "Edit routing rules",
-                        Action::EditSpaceRules(id.clone()),
-                    ),
-                    MenuItem::new(
-                        "up",
-                        "Move up",
-                        Action::Domain(Intent::MoveSpace {
-                            id: id.clone(),
-                            index: at.saturating_sub(1),
-                        }),
-                    ),
-                    MenuItem::new(
-                        "down",
-                        "Move down",
-                        Action::Domain(Intent::MoveSpace {
-                            id: id.clone(),
-                            index: (at + 1).min(model.spaces.len() - 1),
-                        }),
-                    ),
-                    MenuItem::new("delete", "Delete space", Action::DeleteSpace(id)),
-                ];
-                items[5].enabled = at > 0;
-                items[6].enabled = at + 1 < model.spaces.len();
-                items[7].enabled = model.spaces.len() > 1;
-                self.menu(&space.name, items);
+                if let Some(space) = model.spaces.iter().find(|space| space.id == id) {
+                    self.menu(&space.name, space_actions(model, &id));
+                }
             }
             ElementId::Setting(key) => {
                 let title = SettingTarget::of(&key)
@@ -215,7 +129,7 @@ pub(crate) fn tab_actions(model: &Model, id: TabId) -> Vec<MenuItem> {
             .any(|other| *other != id && model.tabs.get(other).is_some_and(|tab| !tab.pinned))
     };
     let mut items = vec![
-        MenuItem::new("rename", "Rename", Action::RenameTab(id)),
+        MenuItem::new("rename", "Rename", Action::RenameTab(id)).binding("rename_tab"),
         MenuItem::new(
             "pin",
             if tab.pinned { "Unpin" } else { "Pin" },
@@ -223,12 +137,14 @@ pub(crate) fn tab_actions(model: &Model, id: TabId) -> Vec<MenuItem> {
                 id,
                 pinned: !tab.pinned,
             }),
-        ),
+        )
+        .binding("pin_tab"),
         MenuItem::new(
             "move-top",
             "Move to top",
             Action::Domain(Intent::MoveTab { id, index: 0 }),
-        ),
+        )
+        .binding("move_tab_top"),
         MenuItem::new(
             "move-bottom",
             "Move to bottom",
@@ -236,15 +152,19 @@ pub(crate) fn tab_actions(model: &Model, id: TabId) -> Vec<MenuItem> {
                 id,
                 index: visible.len(),
             }),
-        ),
-        MenuItem::new("move-space", "Move to space ›", Action::MoveTab(id)),
-        MenuItem::new("move-folder", "Move to folder ›", Action::MoveToFolder(id)),
+        )
+        .binding("move_tab_bottom"),
+        MenuItem::new("move-space", "Move to space ›", Action::MoveTab(id))
+            .binding("move_tab_space"),
+        MenuItem::new("move-folder", "Move to folder ›", Action::MoveToFolder(id))
+            .binding("move_tab_folder"),
         MenuItem::new(
             "move-window",
             "Move to new window",
             Action::Domain(Intent::MoveTabToNewWindow(id)),
-        ),
-        MenuItem::new("close", "Close tab", Action::CloseTab(id)),
+        )
+        .binding("move_tab_window"),
+        MenuItem::new("close", "Close tab", Action::CloseTab(id)).binding("close"),
         MenuItem::new(
             "close-below",
             "Close tabs below",
@@ -252,7 +172,8 @@ pub(crate) fn tab_actions(model: &Model, id: TabId) -> Vec<MenuItem> {
                 label: "Close unpinned tabs below?".into(),
                 action: Box::new(Action::Domain(Intent::CloseBelow(id))),
             },
-        ),
+        )
+        .binding("close_tabs_below"),
         MenuItem::new(
             "close-others",
             "Close other tabs",
@@ -260,14 +181,126 @@ pub(crate) fn tab_actions(model: &Model, id: TabId) -> Vec<MenuItem> {
                 label: "Close other unpinned tabs?".into(),
                 action: Box::new(Action::Domain(Intent::CloseOthers(id))),
             },
-        ),
+        )
+        .binding("close_other_tabs"),
     ];
     items[8].enabled = closable(below);
     items[9].enabled = closable(visible);
-    for (digit, item) in ('1'..='9').zip(&mut items) {
+    number_actions(&mut items);
+    items
+}
+
+fn number_actions(items: &mut [MenuItem]) {
+    for (digit, item) in ('1'..='9').zip(items) {
         item.hint = digit.to_string();
         item.shortcuts = vec![item.hint.clone()];
     }
+}
+
+/// Shared by the context menu, launcher and configurable shortcuts.
+pub(crate) fn space_actions(model: &Model, id: &str) -> Vec<MenuItem> {
+    let Some(at) = model.spaces.iter().position(|space| space.id == id) else {
+        return Vec::new();
+    };
+    let mut items = vec![
+        MenuItem::new(
+            "select",
+            "Select",
+            Action::Domain(Intent::SelectSpace(id.into())),
+        ),
+        MenuItem::new("rename", "Rename", Action::RenameSpace(id.into())).binding("rename_space"),
+        MenuItem::new("icon", "Edit icon", Action::EditSpaceIcon(id.into()))
+            .binding("edit_space_icon"),
+        MenuItem::new("accent", "Edit accent", Action::EditSpaceAccent(id.into()))
+            .binding("edit_space_accent"),
+        MenuItem::new(
+            "rules",
+            "Edit routing rules",
+            Action::EditSpaceRules(id.into()),
+        )
+        .binding("edit_space_rules"),
+        MenuItem::new(
+            "up",
+            "Move up",
+            Action::Domain(Intent::MoveSpace {
+                id: id.into(),
+                index: at.saturating_sub(1),
+            }),
+        )
+        .binding("move_space_up"),
+        MenuItem::new(
+            "down",
+            "Move down",
+            Action::Domain(Intent::MoveSpace {
+                id: id.into(),
+                index: at + 1,
+            }),
+        )
+        .binding("move_space_down"),
+        MenuItem::new("delete", "Delete space", Action::DeleteSpace(id.into()))
+            .binding("delete_space"),
+    ];
+    items[5].enabled = at > 0;
+    items[6].enabled = at + 1 < model.spaces.len();
+    items[7].enabled = model.spaces.len() > 1;
+    number_actions(&mut items);
+    items
+}
+
+pub(crate) fn folder_actions(model: &Model, id: &str) -> Vec<MenuItem> {
+    let Some((index, folder)) = model
+        .selected_folders()
+        .enumerate()
+        .find(|(_, f)| f.id == id)
+    else {
+        return Vec::new();
+    };
+    let mut items = vec![
+        MenuItem::new(
+            "new-tab",
+            "New tab in folder",
+            Action::Domain(Intent::NewTabInFolder(id.into())),
+        )
+        .binding("new_tab_in_folder"),
+        MenuItem::new(
+            "toggle",
+            if folder.collapsed {
+                "Expand"
+            } else {
+                "Collapse"
+            },
+            Action::Domain(Intent::ToggleFolder(id.into())),
+        )
+        .binding("toggle_folder"),
+        MenuItem::new("rename", "Rename folder", Action::RenameFolder(id.into()))
+            .binding("rename_folder"),
+        MenuItem::new(
+            "up",
+            "Move up",
+            Action::Domain(Intent::MoveFolder {
+                id: id.into(),
+                index: index.saturating_sub(1),
+            }),
+        )
+        .binding("move_folder_up"),
+        MenuItem::new(
+            "down",
+            "Move down",
+            Action::Domain(Intent::MoveFolder {
+                id: id.into(),
+                index: index + 1,
+            }),
+        )
+        .binding("move_folder_down"),
+        MenuItem::new(
+            "ungroup",
+            "Ungroup tabs",
+            Action::Domain(Intent::DeleteFolder(id.into())),
+        )
+        .binding("delete_folder"),
+    ];
+    items[3].enabled = index > 0;
+    items[4].enabled = index + 1 < model.selected_folders().count();
     items
 }
 
