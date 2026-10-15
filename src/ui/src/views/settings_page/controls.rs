@@ -18,10 +18,9 @@ use vtabs_core::{Dimension, Model, SettingDescriptor, SettingKind, distros, keyb
 
 const VALUE_CELLS: u16 = 5;
 
-/// The card cell boxed controls end on, the fill beneath them, and whether they are dimmed.
+/// The fill beneath the controls and whether they are dimmed.
 #[derive(Clone, Copy)]
 struct RowCtx {
-    edge: u16,
     base: Color,
     muted: bool,
 }
@@ -44,8 +43,9 @@ impl SettingsPage {
         if fields.is_empty() {
             self.max_scroll = 0;
             if area.height > 0 {
+                let pad = u16::from(area.width > 1);
                 cx.write(
-                    Rect::new(area.x + 2, area.y, area.width.saturating_sub(2), 1),
+                    Rect::new(area.x + pad, area.y, area.width - pad, 1),
                     "No results",
                     theme.muted(),
                 );
@@ -83,19 +83,14 @@ impl SettingsPage {
             scrollbar.render(ScrollArea::Settings, cx);
         }
         let changed = Changed::new(&model.settings);
-        let pad = padding(list.width);
         let mut y = list.y;
         for index in self.scroll..end(self.scroll) {
             let field = fields[index];
             let above = heading(&sections, index);
             if let Some(name) = sections[index] {
+                let pad = u16::from(list.width > 1);
                 cx.write(
-                    Rect::new(
-                        list.x + pad,
-                        y + above - 1,
-                        list.width.saturating_sub(pad),
-                        1,
-                    ),
+                    Rect::new(list.x + pad, y + above - 1, list.width - pad, 1),
                     name,
                     theme.muted().add_modifier(Modifier::BOLD),
                 );
@@ -148,23 +143,15 @@ impl SettingsPage {
                 .join("   ")
         });
         cx.hit(id, rect, tooltip);
-        let pad = padding(rect.width);
-        let content = Rect::new(
-            rect.x + pad,
-            rect.y,
-            rect.width.saturating_sub(pad * 2),
-            rect.height,
-        );
         let row = RowCtx {
-            edge: rect.right(),
             base,
             muted: owned || dimmed(model, field.key),
         };
-        let mut used = self.control(model, field, content, row, cx);
-        if owned && content.width > used + 4 {
+        let mut used = self.control(model, field, rect, row, cx);
+        if owned && rect.width > used + 4 {
             used += ICON_CELLS;
             cx.write(
-                Rect::new(content.right() - used, content.y, 2, 1),
+                Rect::new(rect.right() - used, rect.y, 2, 1),
                 icons::LOCK,
                 theme.base().bg(fill).fg(theme.muted),
             );
@@ -181,11 +168,12 @@ impl SettingsPage {
             let color = theme.host(true, id).unwrap_or(fg);
             Span::styled(format!("{}  ", icons::host(true, id)), style.fg(color))
         });
+        let pad = u16::from(rect.width > 1);
         cx.write(
             Rect::new(
-                content.x,
-                content.y,
-                content.width.saturating_sub(used + 1),
+                rect.x + pad,
+                rect.y,
+                rect.width.saturating_sub(used + 1 + pad),
                 1,
             ),
             glyph
@@ -196,7 +184,7 @@ impl SettingsPage {
         );
     }
 
-    /// Text ends on the content edge and boxes on the card edge; returns the content cells used.
+    /// Controls end on the row's right edge; returns the cells used.
     fn control(
         &mut self,
         model: &Model,
@@ -213,14 +201,13 @@ impl SettingsPage {
                 .map(|chord| (self.chord_label)(chord))
                 .collect::<Vec<_>>();
             let width = area.width * 2 / 3;
-            let used = keycaps::render(
+            return keycaps::render(
                 &chords,
-                Rect::new(row.edge - width, area.y, width, area.height),
+                Rect::new(area.right() - width, area.y, width, area.height),
                 Alignment::Right,
                 theme.base().bg(row.base).fg(fg),
                 cx,
             );
-            return area.right().saturating_sub(row.edge - used);
         }
         if let Some(range) = Range::of(&field.kind) {
             return self.slider(field.key, range, number(model, field.key), area, row, cx);
@@ -252,7 +239,7 @@ impl SettingsPage {
         if area.width < width + (area.width / 3).min(16) {
             return 0;
         }
-        let pill = Rect::new(row.edge - width, area.y, width, area.height);
+        let pill = Rect::new(area.right() - width, area.y, width, area.height);
         let fill = theme.lift(row.base, 8);
         cx.fill(flush(pill, fill, 7.0));
         cx.write(
@@ -307,7 +294,7 @@ impl SettingsPage {
         );
         if let Some(entry) = entry {
             let x = text.x.saturating_sub(2);
-            let field = Rect::new(x, area.y, row.edge.saturating_sub(x), area.height);
+            let field = Rect::new(x, area.y, area.right().saturating_sub(x), area.height);
             let surface = theme.lift(row.base, 10);
             cx.fill(flush(field, surface, 6.0));
             let typed = (entry.text().width() as u16 + 1).clamp(2, text.width);
@@ -316,8 +303,9 @@ impl SettingsPage {
                 .shift(if area.height == 2 { 0.5 } else { 0.0 })
                 .render(Rect::new(text.right() - typed, text.y, typed, 1), cx);
         } else {
+            let pad = u16::from(text.width > 1);
             cx.write(
-                text,
+                Rect::new(text.x, text.y, text.width - pad, 1),
                 Line::from(range.label(value)).alignment(Alignment::Right),
                 theme.base().bg(row.base).fg(row.fg(theme)),
             );
@@ -378,20 +366,12 @@ fn flush(rect: Rect, fill: Color, radius: f32) -> RoundedSurface {
     }
 }
 
-fn padding(width: u16) -> u16 {
-    if width >= 24 {
-        2
-    } else {
-        u16::from(width >= 4)
-    }
-}
-
 fn switch(cx: &mut Canvas, area: Rect, row: RowCtx, on: bool) -> u16 {
     if area.width < 6 {
         return 0;
     }
     let theme = cx.theme;
-    let track = Rect::new(row.edge - 4, area.y, 4, area.height);
+    let track = Rect::new(area.right() - 4, area.y, 4, area.height);
     let (rail, knob) = match (on, row.muted) {
         (true, false) => (theme.accent, theme.background),
         (true, true) => (theme.lift(row.base, 30), row.base),

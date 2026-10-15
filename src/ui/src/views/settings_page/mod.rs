@@ -16,8 +16,9 @@ use crate::input::TextEditor;
 use crate::runtime::canvas::Canvas;
 use catalog::CATEGORIES;
 use editing::Editing;
-use ratatui::layout::Rect;
+use ratatui::layout::{Alignment, Rect};
 use ratatui::style::Modifier;
+use ratatui::text::Line;
 use unicode_width::UnicodeWidthStr;
 use vtabs_core::Model;
 
@@ -213,8 +214,16 @@ impl SettingsPage {
             }
             return area.bottom();
         };
+        let mut remaining = chips.len() as u16;
+        let mut extra = area.width
+            - chips.iter().map(|(_, (_, width, _))| width).sum::<u16>()
+            - (remaining - 1);
         let mut x = area.x;
         for (id, (text, width, inset)) in chips {
+            let grow = extra / remaining;
+            let width = width + grow;
+            extra -= grow;
+            remaining -= 1;
             self.chip(
                 id,
                 &text,
@@ -248,10 +257,10 @@ impl SettingsPage {
         if selected {
             style = style.add_modifier(Modifier::BOLD);
         }
-        let inset = inset.min(rect.width / 2);
+        let inset = inset.min(rect.width.saturating_sub(1) / 2);
         cx.write(
-            Rect::new(rect.x + inset, rect.y, rect.width - inset, 1),
-            text.to_owned(),
+            Rect::new(rect.x + inset, rect.y, rect.width - inset * 2, 1),
+            Line::from(text.to_owned()).alignment(Alignment::Center),
             style,
         );
         cx.hit(id, rect, "");

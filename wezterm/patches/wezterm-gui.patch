@@ -192,6 +192,26 @@ index 7188ca213f3259ae7affef37a5fc1dfabbc6f023..008a0ee0769f0fbedf0b6a716750ee25
      let window_mod = get_or_create_sub_module(lua, "gui")?;
  
      window_mod.set(
+diff --git a/wezterm-gui/src/shapecache.rs b/wezterm-gui/src/shapecache.rs
+index e01ea4d7a3b321a1bde273212603c7ab97b9a77e..abb58f3703d6da68c4de67cf2c2ed933eda8240b 100644
+--- a/wezterm-gui/src/shapecache.rs
++++ b/wezterm-gui/src/shapecache.rs
+@@ -25,6 +25,7 @@ pub struct ShapedInfo {
+     pub glyph: Rc<CachedGlyph>,
+     pub pos: GlyphPosition,
+     pub block_key: Option<BlockKey>,
++    pub only_char: Option<char>,
+ }
+ 
+ impl ShapedInfo {
+@@ -47,6 +48,7 @@ impl ShapedInfo {
+                 },
+                 glyph: Rc::clone(glyph),
+                 block_key: info.only_char.and_then(BlockKey::from_char),
++                only_char: info.only_char,
+             });
+         }
+         pos
 diff --git a/wezterm-gui/src/spawn.rs b/wezterm-gui/src/spawn.rs
 index 28b9db9a5233be9a368c0df317e593eef8833c6a..915505a3e1d421a5d45e7057db34fd2150767618 100644
 --- a/wezterm-gui/src/spawn.rs
@@ -756,10 +776,28 @@ index e190b6508f94f57d2474199b0dd83e8a75cc540a..52394f5110b1ca3da192ce83df2b0241
                          vb.indices.glium().slice(0..index_count).unwrap(),
                          gl_state.glyph_prog.as_ref().unwrap(),
 diff --git a/wezterm-gui/src/termwindow/render/mod.rs b/wezterm-gui/src/termwindow/render/mod.rs
-index 1cb777d76d0b2cbdbfda617f8f40725713d3c30b..0f5eccbfe5ad90ea0fc88332f05437db64608598 100644
+index 1cb777d76d0b2cbdbfda617f8f40725713d3c30b..e33031631da4414f626ab951b36738ed2574275f 100644
 --- a/wezterm-gui/src/termwindow/render/mod.rs
 +++ b/wezterm-gui/src/termwindow/render/mod.rs
-@@ -362,10 +362,14 @@ impl crate::TermWindow {
+@@ -38,6 +38,7 @@ pub mod borders;
+ pub mod corners;
+ pub mod draw;
+ pub mod fancy_tab_bar;
++mod glyph_alignment;
+ pub mod paint;
+ pub mod pane;
+ pub mod screen_line;
+@@ -165,6 +166,9 @@ pub struct RenderScreenLineParams<'a> {
+     /// rather than using monospace cell based positions.
+     pub use_pixel_positioning: bool,
+ 
++    /// Center UI icons by their raster bounds instead of the terminal baseline.
++    pub center_icons: bool,
++
+     pub render_metrics: RenderMetrics,
+     pub shape_key: Option<LineToEleShapeCacheKey>,
+     pub password_input: bool,
+@@ -362,10 +366,14 @@ impl crate::TermWindow {
              .window_padding
              .bottom
              .evaluate_as_pixels(v_context);
@@ -806,7 +844,7 @@ index 3136f28e23d85c70d903a4a8b87d24f09b002c18..291bfc8affe3c2a5ba6a0fdac35f23b1
              .context("paint_window_borders")?;
          drop(layers);
 diff --git a/wezterm-gui/src/termwindow/render/pane.rs b/wezterm-gui/src/termwindow/render/pane.rs
-index 4af46389d8cf8479f1de450902f95bfb9ff6f4d7..5967dad316f72903e631b1a73551cfbc88c9219f 100644
+index 4af46389d8cf8479f1de450902f95bfb9ff6f4d7..aafa0ca4c40ebd7895e6bed03a021d94c5cf0434 100644
 --- a/wezterm-gui/src/termwindow/render/pane.rs
 +++ b/wezterm-gui/src/termwindow/render/pane.rs
 @@ -34,7 +34,8 @@ impl crate::TermWindow {
@@ -901,7 +939,15 @@ index 4af46389d8cf8479f1de450902f95bfb9ff6f4d7..5967dad316f72903e631b1a73551cfbc
                  item_type: UIItemType::BelowScrollThumb,
              });
  
-@@ -644,6 +653,7 @@ impl crate::TermWindow {
+@@ -523,6 +532,7 @@ impl crate::TermWindow {
+                                 render_metrics: self.term_window.render_metrics,
+                                 shape_key: Some(shape_key),
+                                 password_input,
++                                center_icons: false,
+                             },
+                             &mut TripleLayerQuadAllocator::Heap(&mut buf),
+                         )
+@@ -644,6 +654,7 @@ impl crate::TermWindow {
                  (pos.height as f32 * cell_height) + height_delta as f32
              },
          );
@@ -909,6 +955,37 @@ index 4af46389d8cf8479f1de450902f95bfb9ff6f4d7..5967dad316f72903e631b1a73551cfbc
  
          // Bounds for the terminal cells
          let content_rect = euclid::rect(
+diff --git a/wezterm-gui/src/termwindow/render/screen_line.rs b/wezterm-gui/src/termwindow/render/screen_line.rs
+index c930e47c6f7e3042fab10e486b6c62d61a62c45d..06fb123bb7795b0cec8539f3d14d4ee54cd1fc6d 100644
+--- a/wezterm-gui/src/termwindow/render/screen_line.rs
++++ b/wezterm-gui/src/termwindow/render/screen_line.rs
+@@ -528,6 +528,14 @@ impl crate::TermWindow {
+                     }
+ 
+                     if let Some(texture) = texture {
++                        if params.center_icons {
++                            top = super::glyph_alignment::top(
++                                info.only_char,
++                                top,
++                                cell_height,
++                                texture.coords.size.height as f32 * height_scale,
++                            );
++                        }
+                         // TODO: clipping, but we can do that based on pixels
+ 
+                         let pos_x = cluster_x_pos
+diff --git a/wezterm-gui/src/termwindow/render/tab_bar.rs b/wezterm-gui/src/termwindow/render/tab_bar.rs
+index 0bf46f4cce1b5a9b17fbe8dd6284b2e60eba1243..d024fcb5399a12305b723dd932a0bb3c156a6d64 100644
+--- a/wezterm-gui/src/termwindow/render/tab_bar.rs
++++ b/wezterm-gui/src/termwindow/render/tab_bar.rs
+@@ -99,6 +99,7 @@ impl crate::TermWindow {
+                 render_metrics: self.render_metrics,
+                 shape_key: None,
+                 password_input: false,
++                center_icons: false,
+             },
+             layers,
+         )?;
 diff --git a/wezterm-gui/src/termwindow/resize.rs b/wezterm-gui/src/termwindow/resize.rs
 index 86de9b8bcf7ad2798963def6f7d6715659936c26..026ada2d07c398a994c4b68022a9a17cca65d780 100644
 --- a/wezterm-gui/src/termwindow/resize.rs

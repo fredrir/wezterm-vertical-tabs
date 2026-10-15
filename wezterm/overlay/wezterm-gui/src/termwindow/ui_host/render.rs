@@ -543,6 +543,7 @@ impl TermWindow {
                         render_metrics: self.render_metrics,
                         shape_key: None,
                         password_input: false,
+                        center_icons: true,
                     },
                     &mut TripleLayerQuadAllocator::Heap(&mut quads),
                 )?;
