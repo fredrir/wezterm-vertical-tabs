@@ -191,7 +191,7 @@ impl Model {
         tab.space_id = space_id;
         tab.manual_assignment = true;
         if self.selected_tab == Some(id) {
-            self.select_space_and_activate(self.selected_space.clone(), commands);
+            self.activate_tab(id, commands)?;
         }
         Ok(Change::Durable)
     }

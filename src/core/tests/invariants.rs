@@ -54,6 +54,60 @@ fn external_id_activation_follows_space() {
     assert_eq!(m.selected_tab, Some(3));
 }
 #[test]
+fn moving_active_tab_follows_it_to_the_destination_space() {
+    for destination in ["work", "empty"] {
+        let mut m = model();
+        m.dispatch(Intent::SelectSpace("work".into())).unwrap();
+        m.dispatch(Intent::SelectSpace("home".into())).unwrap();
+        let transition = m
+            .dispatch(Intent::AssignTab {
+                id: 1,
+                space_id: destination.into(),
+            })
+            .unwrap();
+        assert!(transition.durable_changed);
+        assert_eq!(transition.commands, [HostCommand::Activate(1)]);
+        assert_eq!(m.selected_space, destination);
+        assert_eq!(m.selected_tab, Some(1));
+        assert_eq!(m.tabs[&1].space_id, destination);
+        assert!(m.tabs[&1].manual_assignment);
+        assert_eq!(
+            m.visible_ids(),
+            if destination == "work" {
+                &[1, 3][..]
+            } else {
+                &[1][..]
+            }
+        );
+        m.reconcile(vec![tab(1), tab(2), tab(3)], Some(1), false)
+            .unwrap();
+        assert_eq!(m.selected_space, destination);
+        assert_eq!(m.selected_tab, Some(1));
+        m.dispatch(Intent::SelectSpace("home".into())).unwrap();
+        assert_eq!(m.selected_tab, Some(2));
+        m.dispatch(Intent::SelectSpace(destination.into())).unwrap();
+        assert_eq!(m.selected_tab, Some(1));
+    }
+}
+#[test]
+fn moving_inactive_tab_preserves_current_space_and_selection() {
+    for destination in ["work", "empty"] {
+        let mut m = model();
+        let transition = m
+            .dispatch(Intent::AssignTab {
+                id: 2,
+                space_id: destination.into(),
+            })
+            .unwrap();
+        assert!(transition.durable_changed);
+        assert!(transition.commands.is_empty());
+        assert_eq!(m.tabs[&2].space_id, destination);
+        assert_eq!(m.selected_space, "home");
+        assert_eq!(m.selected_tab, Some(1));
+        assert_eq!(m.visible_ids(), &[1]);
+    }
+}
+#[test]
 fn closing_visible_final_tab_keeps_empty_space_even_if_mux_selects_hidden() {
     let mut m = model();
     m.dispatch(Intent::SelectSpace("work".into())).unwrap();

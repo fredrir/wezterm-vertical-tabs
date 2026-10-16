@@ -143,8 +143,8 @@ fn assigning_across_spaces_and_unpinning_clear_membership() {
         })
         .unwrap();
     assert!(model.tabs[&1].folder_id.is_none());
-    assert_eq!(model.selected_tab, Some(2));
-    model.dispatch(Intent::SelectSpace("work".into())).unwrap();
+    assert_eq!(model.selected_space, "work");
+    assert_eq!(model.selected_tab, Some(1));
     let work = create(&mut model, "Work tools");
     assign(&mut model, 2, &work);
     assert_eq!(model.tabs[&2].space_id, "work");
@@ -160,6 +160,39 @@ fn assigning_across_spaces_and_unpinning_clear_membership() {
     assign(&mut model, 2, &work);
     model.dispatch(Intent::ReturnToAuto(2)).unwrap();
     assert!(model.tabs[&2].folder_id.is_none());
+}
+
+#[test]
+fn moving_to_another_spaces_folder_follows_only_the_active_tab() {
+    for id in [1, 2] {
+        let mut model = model();
+        model.dispatch(Intent::SelectSpace("work".into())).unwrap();
+        let folder = create(&mut model, "Work tools");
+        model
+            .dispatch(Intent::ToggleFolder(folder.clone()))
+            .unwrap();
+        model.dispatch(Intent::SelectSpace("home".into())).unwrap();
+        let transition = model
+            .dispatch(Intent::AssignFolder {
+                tab_id: id,
+                folder_id: Some(folder.clone()),
+            })
+            .unwrap();
+        assert_eq!(model.tabs[&id].space_id, "work");
+        assert_eq!(model.tabs[&id].folder_id.as_deref(), Some(folder.as_str()));
+        assert_eq!(model.selected_tab, Some(1));
+        if id == 1 {
+            assert_eq!(model.selected_space, "work");
+            assert_eq!(model.visible_ids(), &[1]);
+            assert_eq!(transition.commands, [HostCommand::Activate(1)]);
+            assert!(!model.folders[0].collapsed);
+        } else {
+            assert_eq!(model.selected_space, "home");
+            assert_eq!(model.visible_ids(), &[1, 3, 4, 5, 6]);
+            assert!(transition.commands.is_empty());
+            assert!(model.folders[0].collapsed);
+        }
+    }
 }
 
 #[test]

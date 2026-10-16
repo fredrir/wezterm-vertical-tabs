@@ -75,7 +75,7 @@ impl Model {
         }
         tab.folder_id = folder_id;
         if self.selected_tab == Some(tab_id) && tab.space_id != self.selected_space {
-            self.select_space_and_activate(self.selected_space.clone(), commands);
+            self.activate_tab(tab_id, commands)?;
         }
         Ok(Change::Durable)
     }
