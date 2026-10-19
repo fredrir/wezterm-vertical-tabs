@@ -333,7 +333,7 @@ fn space_title(model: &Model, rect: Rect, cx: &mut Canvas) {
     } else if cx.row_hovered(&ElementId::SpaceTitle) {
         icons::EXPANDED
     } else {
-        icons::SPACE
+        space.map_or(icons::SPACE, |space| icons::space_header(&space.icon))
     };
     let name = space.map_or("Space", |space| space.name.as_str());
     let label = display_text(name);

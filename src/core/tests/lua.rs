@@ -30,7 +30,7 @@ fn managed_files_omit_runtime_and_default_space_fields() {
     let source = managed.to_lua();
     assert!(source.starts_with("-- Managed by vertical-tabs"));
     assert!(source.contains("---@type TabsManaged\nreturn {"));
-    assert!(source.contains(r#"spaces = { { icon = "◉", id = "notes", name = "Notes" } }"#));
+    assert!(source.contains(r#"spaces = { { icon = "󰌨", id = "notes", name = "Notes" } }"#));
     assert!(source.contains("settings = { width = 300 }"));
     assert!(!source.contains("collapsed"));
     assert!(!source.contains("rules"));

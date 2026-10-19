@@ -36,7 +36,7 @@ impl Space {
         Self {
             id: id.into(),
             name: name.into(),
-            icon: "◉".into(),
+            icon: "\u{f0328}".into(),
             accent: None,
             rules: Vec::new(),
             template: None,

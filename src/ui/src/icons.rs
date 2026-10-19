@@ -28,6 +28,7 @@ pub(crate) const MOTION: &str = "\u{f0a8f}";
 pub(crate) const TUNE: &str = "\u{f1542}";
 pub(crate) const KEYBOARD_OUTLINE: &str = "\u{f097b}";
 const SPACE_DOT: &str = "\u{f0ec3}";
+const HOME: &str = "\u{f02dc}";
 
 pub(crate) fn index(index: Option<usize>) -> Option<&'static str> {
     const DIGITS: [&str; 9] = [
@@ -46,6 +47,13 @@ pub(crate) fn index(index: Option<usize>) -> Option<&'static str> {
 
 pub(crate) fn space(icon: &str) -> &str {
     if icon == "◉" { SPACE_DOT } else { icon }
+}
+
+pub(crate) fn space_header(icon: &str) -> &str {
+    match space(icon.trim()) {
+        "" | HOME | SPACE_DOT => SPACE,
+        icon => icon,
+    }
 }
 
 const MACHINES: &[(&str, &str)] = &[

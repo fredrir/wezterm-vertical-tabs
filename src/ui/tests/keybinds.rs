@@ -553,7 +553,7 @@ fn space_editing_shortcuts_open_the_existing_editors() {
             "#123456",
             Intent::EditSpace {
                 id: "home".into(),
-                icon: "◉".into(),
+                icon: "\u{f0328}".into(),
                 accent: Some("#123456".into()),
                 rules: vec![],
             },
@@ -563,7 +563,7 @@ fn space_editing_shortcuts_open_the_existing_editors() {
             "[]",
             Intent::EditSpace {
                 id: "home".into(),
-                icon: "◉".into(),
+                icon: "\u{f0328}".into(),
                 accent: None,
                 rules: vec![],
             },
