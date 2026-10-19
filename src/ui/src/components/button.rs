@@ -3,6 +3,7 @@ use crate::components::{DROP_TINT, ROW_INSET, SURFACE_RADIUS};
 use crate::element::ElementId;
 use crate::runtime::canvas::{Canvas, RoundedSurface};
 use ratatui::layout::{Alignment, Rect};
+use ratatui::style::Color;
 use ratatui::text::Line;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -23,6 +24,7 @@ pub(crate) struct Button<'a> {
     kind: Kind,
     tooltip: String,
     selected: bool,
+    icon_color: Option<Color>,
     label_right_padding: u16,
 }
 
@@ -43,6 +45,7 @@ impl<'a> Button<'a> {
             kind,
             tooltip: String::new(),
             selected: false,
+            icon_color: None,
             label_right_padding: 0,
         }
     }
@@ -52,6 +55,10 @@ impl<'a> Button<'a> {
     }
     pub fn selected(mut self, selected: bool) -> Self {
         self.selected = selected;
+        self
+    }
+    pub fn icon_color(mut self, color: Option<Color>) -> Self {
+        self.icon_color = color;
         self
     }
     pub fn label_right_padding(mut self, padding: u16) -> Self {
@@ -91,7 +98,11 @@ impl<'a> Button<'a> {
             square: true,
             ..RoundedSurface::new(visual, fill, 8.0, inset + cx.press_inset(&self.id))
         });
-        let fg = if active { theme.accent } else { theme.muted };
+        let fg = if active {
+            self.icon_color.unwrap_or(theme.accent)
+        } else {
+            theme.muted
+        };
         cx.write(
             Rect::new(visual.x, rect.y, visual.width, 1),
             Line::from(self.label.to_owned()).alignment(Alignment::Center),

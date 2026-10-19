@@ -3,6 +3,7 @@ use crate::components::list;
 use crate::element::ElementId;
 use crate::icons;
 use crate::runtime::canvas::Canvas;
+use crate::theme::Theme;
 use crate::views::sidebar::{Sidebar, View};
 use ratatui::layout::Rect;
 use unicode_segmentation::UnicodeSegmentation;
@@ -58,6 +59,7 @@ impl Sidebar {
             };
             let activity = self.space_activity.contains(&space.id);
             Button::icon(ElementId::Space(space.id.clone()), &label)
+                .icon_color(space.accent.as_deref().and_then(Theme::parse_color))
                 .tooltip(format!(
                     "{}{}",
                     space.name,

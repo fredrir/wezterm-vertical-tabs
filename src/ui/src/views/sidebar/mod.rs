@@ -13,6 +13,7 @@ use crate::events::DropTarget;
 use crate::icons;
 use crate::input::display_text;
 use crate::runtime::canvas::{Canvas, RoundedSurface};
+use crate::theme::Theme;
 use ratatui::layout::Rect;
 use rows::GROUP_GAP;
 use std::collections::BTreeSet;
@@ -336,6 +337,10 @@ fn space_title(model: &Model, rect: Rect, cx: &mut Canvas) {
         space.map_or(icons::SPACE, |space| icons::space_header(&space.icon))
     };
     let name = space.map_or("Space", |space| space.name.as_str());
+    let accent = space
+        .and_then(|space| space.accent.as_deref())
+        .and_then(Theme::parse_color)
+        .unwrap_or(cx.theme.accent);
     let label = display_text(name);
     let tooltip = format!(
         "{name}\n{} pinned tabs and folders",
@@ -343,7 +348,8 @@ fn space_title(model: &Model, rect: Rect, cx: &mut Canvas) {
     );
     Row {
         tooltip: Some(tooltip),
-        muted: true,
+        foreground: Some(accent),
+        selected_foreground: Some(accent),
         trailing: Some(Trailing {
             id: ElementId::CreateFolder,
             icon: icons::PLUS,

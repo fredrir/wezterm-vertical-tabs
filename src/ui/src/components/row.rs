@@ -25,6 +25,7 @@ pub(crate) struct Row<'a> {
     pub icon: &'a str,
     pub icon_color: Option<Color>,
     pub foreground: Option<Color>,
+    pub selected_foreground: Option<Color>,
     pub index: Option<usize>,
     pub content: Content<'a>,
     pub tooltip: Option<String>,
@@ -44,6 +45,7 @@ impl<'a> Row<'a> {
             icon,
             icon_color: None,
             foreground: None,
+            selected_foreground: None,
             index: None,
             content,
             tooltip: None,
@@ -98,7 +100,9 @@ impl Row<'_> {
         if ghost {
             style = style.fg(theme.lift(theme.background, 30));
         } else if self.selected || aimed || hovered {
-            style = style.fg(theme.selected_text());
+            style = style.fg(self
+                .selected_foreground
+                .unwrap_or_else(|| theme.selected_text()));
         } else if self.muted && !focused {
             style = style.fg(theme.muted);
         }

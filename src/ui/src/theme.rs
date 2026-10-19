@@ -59,14 +59,7 @@ impl Theme {
         self.tab_foreground = optional(&settings.tab_foreground);
         self.selected_foreground = optional(&settings.selected_foreground);
         self.local_glyph = optional(&settings.local_glyph_color);
-        self.accent = model
-            .spaces
-            .iter()
-            .find(|space| space.id == model.selected_space)
-            .and_then(|space| space.accent.as_deref())
-            .and_then(Self::parse_color)
-            .or_else(|| Self::parse_color(&settings.accent))
-            .unwrap_or(self.accent);
+        self.accent = Self::parse_color(&settings.accent).unwrap_or(self.accent);
         self.sync_surfaces();
     }
 
