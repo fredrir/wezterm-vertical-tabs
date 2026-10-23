@@ -128,6 +128,301 @@ index 5e7ca47b34740368a5d3847761b645e635e7157c..72de33a31e0c6246ec5a99b8908ca676
      }
  }
  
+diff --git a/wezterm-gui/src/overlay/copy.rs b/wezterm-gui/src/overlay/copy.rs
+index 327cb4baf7cabac4b8026378639613e8aa22c61f..fb2d5479e9ee07aecc1944c5ddf7ba0d0d2997dc 100644
+--- a/wezterm-gui/src/overlay/copy.rs
++++ b/wezterm-gui/src/overlay/copy.rs
+@@ -19,8 +19,6 @@ use std::collections::HashMap;
+ use std::ops::Range;
+ use std::sync::Arc;
+ use std::time::Duration;
+-use termwiz::cell::{Cell, CellAttributes};
+-use termwiz::color::AnsiColor;
+ use termwiz::lineedit::{LineEditBuffer, Movement};
+ use termwiz::surface::{CursorVisibility, SequenceNo, SEQ_ZERO};
+ use unicode_segmentation::*;
+@@ -32,6 +30,9 @@ use wezterm_term::{
+ };
+ use window::{KeyCode as WKeyCode, Modifiers, WindowOps};
+ 
++mod search;
++pub use search::{Highlights, SearchView};
++
+ lazy_static::lazy_static! {
+     static ref SAVED_PATTERN: Mutex<HashMap<TabId, Pattern>> = Mutex::new(HashMap::new());
+ }
+@@ -85,6 +86,7 @@ struct CopyRenderable {
+     searching: Option<Searching>,
+     pending_jump: Option<PendingJump>,
+     last_jump: Option<Jump>,
++    search: search::Presentation,
+ }
+ 
+ struct Searching {
+@@ -162,6 +164,7 @@ impl CopyOverlay {
+             searching: None,
+             pending_jump: None,
+             last_jump: None,
++            search: Default::default(),
+         };
+ 
+         let search_row = render.compute_search_row();
+@@ -196,7 +199,11 @@ impl CopyOverlay {
+             render
+                 .search_line
+                 .set_line_and_cursor(&params.pattern, params.pattern.len());
+-            render.schedule_update_search();
++            if params.pattern.is_empty() {
++                render.update_search();
++            } else {
++                render.schedule_update_search();
++            }
+         }
+         let search_row = render.compute_search_row();
+         render.dirty_results.add(search_row);
+@@ -333,7 +340,10 @@ impl CopyRenderable {
+             promise::spawn::spawn(async move {
+                 let limit = None;
+                 log::trace!("Searching for {pattern:?} in {range:?}");
+-                let results = pane.search(pattern.clone(), range.clone(), limit).await?;
++                let results = pane
++                    .search(pattern.clone(), range.clone(), limit)
++                    .await
++                    .unwrap_or_default();
+ 
+                 let pane_id = pane.pane_id();
+                 let mut results = Some(results);
+@@ -400,7 +410,10 @@ impl CopyRenderable {
+         promise::spawn::spawn(async move {
+             let limit = None;
+             log::trace!("Searching for {pattern:?} in {range:?}");
+-            let results = pane.search(pattern.clone(), range.clone(), limit).await?;
++            let results = pane
++                .search(pattern.clone(), range.clone(), limit)
++                .await
++                .unwrap_or_default();
+ 
+             let pane_id = pane.pane_id();
+             let mut results = Some(results);
+@@ -1342,18 +1355,10 @@ impl Pane for CopyOverlay {
+     fn get_cursor_position(&self) -> StableCursorPosition {
+         let renderer = self.render.lock();
+         if renderer.editing_search {
+-            // place in the search box
+-            // Padding between the start of the editable line and the left side of the terminal
+-            const SEARCH_CURSOR_PADDING: usize = 8;
+-            let cursor = unicode_column_width(
+-                &renderer.search_line.get_line()[0..renderer.search_line.get_cursor()],
+-                None,
+-            );
++            // The search widget draws its own text cursor
+             StableCursorPosition {
+-                x: SEARCH_CURSOR_PADDING + cursor,
+-                y: renderer.compute_search_row(),
+-                shape: termwiz::surface::CursorShape::SteadyBlock,
+-                visibility: termwiz::surface::CursorVisibility::Visible,
++                visibility: CursorVisibility::Hidden,
++                ..renderer.cursor
+             }
+         } else {
+             renderer.cursor
+@@ -1394,13 +1399,9 @@ impl Pane for CopyOverlay {
+             renderer.update_search();
+         }
+         renderer.check_for_resize();
+-        let dims = self.get_dimensions();
+-        let search_row = renderer.compute_search_row();
+ 
+         struct OverlayLines<'a> {
+             with_lines: &'a mut dyn WithPaneLines,
+-            dims: RenderableDimensions,
+-            search_row: StableRowIndex,
+             renderer: &'a mut CopyRenderable,
+         }
+ 
+@@ -1408,8 +1409,6 @@ impl Pane for CopyOverlay {
+             lines,
+             &mut OverlayLines {
+                 with_lines,
+-                dims,
+-                search_row,
+                 renderer: &mut *renderer,
+             },
+         );
+@@ -1417,83 +1416,24 @@ impl Pane for CopyOverlay {
+         impl<'a> WithPaneLines for OverlayLines<'a> {
+             fn with_lines_mut(&mut self, first_row: StableRowIndex, lines: &mut [&mut Line]) {
+                 let mut overlay_lines = vec![];
+-                let config = config::configuration();
+-                let colors = &config.resolved_palette;
++                let highlights = self.renderer.search.highlights();
+ 
+                 for (idx, line) in lines.iter_mut().enumerate() {
+                     let mut line: Line = line.clone();
+ 
+                     let stable_idx = idx as StableRowIndex + first_row;
+                     self.renderer.dirty_results.remove(stable_idx);
+-                    let pattern = self.renderer.get_pattern();
+-                    if stable_idx == self.search_row
+-                        && (self.renderer.editing_search || !pattern.is_empty())
+-                    {
+-                        // Replace with search UI
+-                        let rev = CellAttributes::default().set_reverse(true).clone();
+-                        line.fill_range(0..self.dims.cols, &Cell::new(' ', rev.clone()), SEQ_ZERO);
+-                        let mode = &match pattern {
+-                            Pattern::CaseSensitiveString(_) => "case-sensitive",
+-                            Pattern::CaseInSensitiveString(_) => "ignore-case",
+-                            Pattern::CaseSmartString(_) => "smart-case",
+-                            Pattern::Regex(_) => "regex",
+-                        };
+-
+-                        let remain = match &self.renderer.searching {
+-                            Some(Searching { remain, .. }) => {
+-                                format!(" searching {remain} lines")
+-                            }
+-                            None => String::new(),
+-                        };
+-
+-                        line.overlay_text_with_attribute(
+-                            0,
+-                            &format!(
+-                                "Search: {} ({}/{} matches. {}{remain})",
+-                                *pattern,
+-                                self.renderer.result_pos.map(|x| x + 1).unwrap_or(0),
+-                                self.renderer.results.len(),
+-                                mode
+-                            ),
+-                            rev,
+-                            SEQ_ZERO,
+-                        );
+-                        self.renderer.last_bar_pos = Some(self.search_row);
+-                        line.clear_appdata();
+-                    } else if let Some(matches) = self.renderer.by_line.get(&stable_idx) {
++                    if let Some(matches) = self.renderer.by_line.get(&stable_idx) {
+                         for m in matches {
+                             // highlight
+                             for cell_idx in m.range.clone() {
+                                 if let Some(cell) =
+                                     line.cells_mut_for_attr_changes_only().get_mut(cell_idx)
+                                 {
+-                                    if Some(m.result_index) == self.renderer.result_pos {
+-                                        cell.attrs_mut()
+-                                            .set_background(
+-                                                colors
+-                                                    .copy_mode_active_highlight_bg
+-                                                    .unwrap_or(AnsiColor::Yellow.into()),
+-                                            )
+-                                            .set_foreground(
+-                                                colors
+-                                                    .copy_mode_active_highlight_fg
+-                                                    .unwrap_or(AnsiColor::Black.into()),
+-                                            )
+-                                            .set_reverse(false);
+-                                    } else {
+-                                        cell.attrs_mut()
+-                                            .set_background(
+-                                                colors
+-                                                    .copy_mode_inactive_highlight_bg
+-                                                    .unwrap_or(AnsiColor::Fuchsia.into()),
+-                                            )
+-                                            .set_foreground(
+-                                                colors
+-                                                    .copy_mode_inactive_highlight_fg
+-                                                    .unwrap_or(AnsiColor::Black.into()),
+-                                            )
+-                                            .set_reverse(false);
+-                                    }
++                                    highlights.apply(
++                                        cell.attrs_mut(),
++                                        Some(m.result_index) == self.renderer.result_pos,
++                                    );
+                                 }
+                             }
+                         }
+@@ -1515,77 +1455,24 @@ impl Pane for CopyOverlay {
+         }
+ 
+         renderer.check_for_resize();
+-        let dims = self.get_dimensions();
+ 
+         let (top, mut lines) = self.delegate.get_lines(lines);
++        let highlights = renderer.search.highlights();
+ 
+-        let config = config::configuration();
+-        let colors = &config.resolved_palette;
+-
+-        // Process the lines; for the search row we want to render instead
+-        // the search UI.
+         // For rows with search results, we want to highlight the matching ranges
+-        let search_row = renderer.compute_search_row();
+         for (idx, line) in lines.iter_mut().enumerate() {
+             let stable_idx = idx as StableRowIndex + top;
+             renderer.dirty_results.remove(stable_idx);
+-            let pattern = renderer.get_pattern();
+-            if stable_idx == search_row && (renderer.editing_search || !pattern.is_empty()) {
+-                // Replace with search UI
+-                let rev = CellAttributes::default().set_reverse(true).clone();
+-                line.fill_range(0..dims.cols, &Cell::new(' ', rev.clone()), SEQ_ZERO);
+-                let mode = &match pattern {
+-                    Pattern::CaseSensitiveString(_) => "case-sensitive",
+-                    Pattern::CaseInSensitiveString(_) => "ignore-case",
+-                    Pattern::CaseSmartString(_) => "smart-case",
+-                    Pattern::Regex(_) => "regex",
+-                };
+-                line.overlay_text_with_attribute(
+-                    0,
+-                    &format!(
+-                        "Search: {} ({}/{} matches. {})",
+-                        *pattern,
+-                        renderer.result_pos.map(|x| x + 1).unwrap_or(0),
+-                        renderer.results.len(),
+-                        mode
+-                    ),
+-                    rev,
+-                    SEQ_ZERO,
+-                );
+-                renderer.last_bar_pos = Some(search_row);
+-            } else if let Some(matches) = renderer.by_line.get(&stable_idx) {
++            if let Some(matches) = renderer.by_line.get(&stable_idx) {
+                 for m in matches {
+                     // highlight
+                     for cell_idx in m.range.clone() {
+                         if let Some(cell) = line.cells_mut_for_attr_changes_only().get_mut(cell_idx)
+                         {
+-                            if Some(m.result_index) == renderer.result_pos {
+-                                cell.attrs_mut()
+-                                    .set_background(
+-                                        colors
+-                                            .copy_mode_active_highlight_bg
+-                                            .unwrap_or(AnsiColor::Yellow.into()),
+-                                    )
+-                                    .set_foreground(
+-                                        colors
+-                                            .copy_mode_active_highlight_fg
+-                                            .unwrap_or(AnsiColor::Black.into()),
+-                                    )
+-                                    .set_reverse(false);
+-                            } else {
+-                                cell.attrs_mut()
+-                                    .set_background(
+-                                        colors
+-                                            .copy_mode_inactive_highlight_bg
+-                                            .unwrap_or(AnsiColor::Fuchsia.into()),
+-                                    )
+-                                    .set_foreground(
+-                                        colors
+-                                            .copy_mode_inactive_highlight_fg
+-                                            .unwrap_or(AnsiColor::Black.into()),
+-                                    )
+-                                    .set_reverse(false);
+-                            }
++                            highlights.apply(
++                                cell.attrs_mut(),
++                                Some(m.result_index) == renderer.result_pos,
++                            );
+                         }
+                     }
+                 }
 diff --git a/wezterm-gui/src/quad.rs b/wezterm-gui/src/quad.rs
 index d51f897810923b53d385e72a38ed62eeb5a6179b..0b648ec7b7ac3c72e374412ec687a8958c2c2488 100644
 --- a/wezterm-gui/src/quad.rs
@@ -155,10 +450,10 @@ index 219d707f81b6616960f084baef44e7aab77e611b..bd96b285172e39ed46aafde00677a878
  
  impl RenderLayer {
 diff --git a/wezterm-gui/src/scripting/guiwin.rs b/wezterm-gui/src/scripting/guiwin.rs
-index 9fe468782ab707ed8c65a999b7bd4d69cdce21c0..69b3e875c3a661e328d462ee09c81f0b9a97647d 100644
+index 9fe468782ab707ed8c65a999b7bd4d69cdce21c0..d3755027aa2f0d0d25b303e3ffeea5f44659064a 100644
 --- a/wezterm-gui/src/scripting/guiwin.rs
 +++ b/wezterm-gui/src/scripting/guiwin.rs
-@@ -133,6 +133,21 @@ impl UserData for GuiWin {
+@@ -133,6 +133,33 @@ impl UserData for GuiWin {
              };
              Ok(dims)
          });
@@ -173,6 +468,18 @@ index 9fe468782ab707ed8c65a999b7bd4d69cdce21c0..69b3e875c3a661e328d462ee09c81f0b
 +                            .and_then(|mux| mux.get_pane(pane_id))
 +                            .and_then(|pane| term_window.input_selection(&*pane));
 +                        tx.try_send(selected).ok();
++                    })));
++                rx.recv().await.map_err(mlua::Error::external)
++            },
++        );
++        methods.add_async_method(
++            "get_copy_cursor",
++            |_, this, pane: UserDataRef<MuxPane>| async move {
++                let (tx, rx) = smol::channel::bounded(1);
++                let pane_id = pane.0;
++                this.window
++                    .notify(TermWindowNotif::Apply(Box::new(move |term_window| {
++                        tx.try_send(term_window.copy_cursor(pane_id)).ok();
 +                    })));
 +                rx.recv().await.map_err(mlua::Error::external)
 +            },
@@ -305,19 +612,20 @@ index d66908074090d5a2b541a5a5065c3311a78906f5..046cacbbfc1d4b48715c045412e85a01
          // any key table rules. Therefore, we should pop all `until_unknown`
          // entries from the stack.
 diff --git a/wezterm-gui/src/termwindow/mod.rs b/wezterm-gui/src/termwindow/mod.rs
-index 27567d9dd36028a6de7b943a35a791532340cfe3..aa2666e6c1f67773eede794d48301e2d44dc0f6f 100644
+index 27567d9dd36028a6de7b943a35a791532340cfe3..e850c2e02045de9837b0d34786ef6b87c81f32cf 100644
 --- a/wezterm-gui/src/termwindow/mod.rs
 +++ b/wezterm-gui/src/termwindow/mod.rs
-@@ -1,5 +1,8 @@
+@@ -1,5 +1,9 @@
  #![allow(clippy::range_plus_one)]
  
 +mod terminal_overlay;
 +mod input_selection;
++mod copy_search;
 +pub mod ui_host;
  use super::renderstate::*;
  use super::utilsprites::RenderMetrics;
  use crate::colorease::ColorEase;
-@@ -391,6 +394,8 @@ pub struct TermWindow {
+@@ -391,6 +395,8 @@ pub struct TermWindow {
      leader_is_down: Option<std::time::Instant>,
      dead_key_status: DeadKeyStatus,
      key_table_state: KeyTableState,
@@ -326,7 +634,7 @@ index 27567d9dd36028a6de7b943a35a791532340cfe3..aa2666e6c1f67773eede794d48301e2d
      show_tab_bar: bool,
      show_scroll_bar: bool,
      tab_bar: TabBarState,
-@@ -506,7 +511,8 @@ impl TermWindow {
+@@ -506,7 +512,8 @@ impl TermWindow {
  
                  let can_close = mux
                      .get_window(mux_window_id)
@@ -336,7 +644,7 @@ index 27567d9dd36028a6de7b943a35a791532340cfe3..aa2666e6c1f67773eede794d48301e2d
                  if can_close {
                      mux.kill_window(self.mux_window_id);
                      window.close();
-@@ -529,6 +535,7 @@ impl TermWindow {
+@@ -529,6 +536,7 @@ impl TermWindow {
      fn focus_changed(&mut self, focused: bool, window: &Window) {
          log::trace!("Setting focus to {:?}", focused);
          self.focused = if focused { Some(Instant::now()) } else { None };
@@ -344,7 +652,7 @@ index 27567d9dd36028a6de7b943a35a791532340cfe3..aa2666e6c1f67773eede794d48301e2d
          self.quad_generation += 1;
          self.load_os_parameters();
  
-@@ -591,6 +598,7 @@ impl TermWindow {
+@@ -591,6 +599,7 @@ impl TermWindow {
          let dpi = config.dpi.unwrap_or_else(|| ::window::default_dpi()) as usize;
          let fontconfig = Rc::new(FontConfiguration::new(Some(config.clone()), dpi)?);
  
@@ -352,7 +660,7 @@ index 27567d9dd36028a6de7b943a35a791532340cfe3..aa2666e6c1f67773eede794d48301e2d
          let mux = Mux::get();
          let size = match mux.get_active_tab_for_window(mux_window_id) {
              Some(tab) => tab.get_size(),
-@@ -607,7 +615,7 @@ impl TermWindow {
+@@ -607,7 +616,7 @@ impl TermWindow {
  
          // Initially we have only a single tab, so take that into account
          // for the tab bar state.
@@ -361,7 +669,7 @@ index 27567d9dd36028a6de7b943a35a791532340cfe3..aa2666e6c1f67773eede794d48301e2d
          let tab_bar_height = if show_tab_bar {
              Self::tab_bar_pixel_height_impl(&config, &fontconfig, &render_metrics)? as usize
          } else {
-@@ -653,6 +661,9 @@ impl TermWindow {
+@@ -653,6 +662,9 @@ impl TermWindow {
          };
          let padding_top = config.window_padding.top.evaluate_as_pixels(v_context) as usize;
          let padding_bottom = config.window_padding.bottom.evaluate_as_pixels(v_context) as usize;
@@ -371,7 +679,7 @@ index 27567d9dd36028a6de7b943a35a791532340cfe3..aa2666e6c1f67773eede794d48301e2d
  
          let mut dimensions = Dimensions {
              pixel_width: (terminal_size.pixel_width + padding_left + padding_right) as usize,
-@@ -713,6 +724,8 @@ impl TermWindow {
+@@ -713,6 +725,8 @@ impl TermWindow {
              input_map: InputMap::new(&config),
              leader_is_down: None,
              dead_key_status: DeadKeyStatus::None,
@@ -380,7 +688,7 @@ index 27567d9dd36028a6de7b943a35a791532340cfe3..aa2666e6c1f67773eede794d48301e2d
              show_tab_bar,
              show_scroll_bar: config.enable_scroll_bar,
              tab_bar: TabBarState::default(),
-@@ -890,6 +903,7 @@ impl TermWindow {
+@@ -890,6 +904,7 @@ impl TermWindow {
              myself.load_os_parameters();
              window.show();
              myself.subscribe_to_pane_updates();
@@ -388,7 +696,7 @@ index 27567d9dd36028a6de7b943a35a791532340cfe3..aa2666e6c1f67773eede794d48301e2d
              myself.emit_window_event("window-config-reloaded", None);
              myself.emit_status_event();
          }
-@@ -945,6 +959,7 @@ impl TermWindow {
+@@ -945,6 +960,7 @@ impl TermWindow {
              }
              WindowEvent::FocusChanged(focused) => {
                  self.focus_changed(focused, window);
@@ -396,7 +704,7 @@ index 27567d9dd36028a6de7b943a35a791532340cfe3..aa2666e6c1f67773eede794d48301e2d
                  Ok(true)
              }
              WindowEvent::MouseEvent(event) => {
-@@ -996,6 +1011,7 @@ impl TermWindow {
+@@ -996,6 +1012,7 @@ impl TermWindow {
                  } else {
                      log::trace!("DeadKeyStatus now: {:?}", status);
                  }
@@ -404,7 +712,7 @@ index 27567d9dd36028a6de7b943a35a791532340cfe3..aa2666e6c1f67773eede794d48301e2d
                  self.dead_key_status = status;
                  self.update_title();
                  // Ensure that we repaint so that any composing
-@@ -1115,6 +1131,9 @@ impl TermWindow {
+@@ -1115,6 +1132,9 @@ impl TermWindow {
              anyhow::anyhow!("{}", e)
          }
  
@@ -414,7 +722,7 @@ index 27567d9dd36028a6de7b943a35a791532340cfe3..aa2666e6c1f67773eede794d48301e2d
          match notif {
              TermWindowNotif::InvalidateShapeCache => {
                  self.shape_generation += 1;
-@@ -1346,12 +1365,7 @@ impl TermWindow {
+@@ -1346,12 +1366,7 @@ impl TermWindow {
                  self.invalidate_fancy_tab_bar();
                  self.invalidate_modal();
  
@@ -428,7 +736,7 @@ index 27567d9dd36028a6de7b943a35a791532340cfe3..aa2666e6c1f67773eede794d48301e2d
                  self.update_title();
                  window.invalidate();
              }
-@@ -1417,6 +1431,9 @@ impl TermWindow {
+@@ -1417,6 +1432,9 @@ impl TermWindow {
      }
  
      fn is_pane_visible(&mut self, pane_id: PaneId) -> bool {
@@ -438,7 +746,7 @@ index 27567d9dd36028a6de7b943a35a791532340cfe3..aa2666e6c1f67773eede794d48301e2d
          let mux = Mux::get();
          let tab = match mux.get_active_tab_for_window(self.mux_window_id) {
              Some(tab) => tab,
-@@ -1743,18 +1760,15 @@ impl TermWindow {
+@@ -1743,18 +1761,15 @@ impl TermWindow {
              }
          };
          self.config = config.clone();
@@ -460,7 +768,7 @@ index 27567d9dd36028a6de7b943a35a791532340cfe3..aa2666e6c1f67773eede794d48301e2d
          *self.cursor_blink_state.borrow_mut() = ColorEase::new(
              config.cursor_blink_rate,
              config.cursor_blink_ease_in,
-@@ -1900,6 +1914,9 @@ impl TermWindow {
+@@ -1900,6 +1915,9 @@ impl TermWindow {
      }
  
      fn window_contains_pane(&mut self, pane_id: PaneId) -> bool {
@@ -470,7 +778,7 @@ index 27567d9dd36028a6de7b943a35a791532340cfe3..aa2666e6c1f67773eede794d48301e2d
          let mux = Mux::get();
  
          let (_domain, window_id, _tab_id) = match mux.resolve_pane_id(pane_id) {
-@@ -1959,6 +1976,8 @@ impl TermWindow {
+@@ -1959,6 +1977,8 @@ impl TermWindow {
          self.update_title_impl();
      }
  
@@ -479,7 +787,7 @@ index 27567d9dd36028a6de7b943a35a791532340cfe3..aa2666e6c1f67773eede794d48301e2d
      fn update_title_impl(&mut self) {
          let mux = Mux::get();
          let window = match mux.get_window(self.mux_window_id) {
-@@ -1970,6 +1989,7 @@ impl TermWindow {
+@@ -1970,6 +1990,7 @@ impl TermWindow {
          let active_tab = tabs.iter().find(|t| t.is_active).cloned();
          let active_pane = panes.iter().find(|p| p.is_active).cloned();
  
@@ -487,7 +795,7 @@ index 27567d9dd36028a6de7b943a35a791532340cfe3..aa2666e6c1f67773eede794d48301e2d
          let border = self.get_os_border();
          let tab_bar_height = self.tab_bar_pixel_height().unwrap_or(0.);
          let tab_bar_y = if self.config.tab_bar_at_bottom {
-@@ -2011,6 +2031,7 @@ impl TermWindow {
+@@ -2011,6 +2032,7 @@ impl TermWindow {
                  window.invalidate();
              }
          }
@@ -495,7 +803,7 @@ index 27567d9dd36028a6de7b943a35a791532340cfe3..aa2666e6c1f67773eede794d48301e2d
  
          let tabs_count = window.count_tabs();
          if tabs_count == 0 {
-@@ -2075,11 +2096,7 @@ impl TermWindow {
+@@ -2075,11 +2097,7 @@ impl TermWindow {
          if let Some(window) = self.window.as_ref() {
              window.set_title(&title);
  
@@ -508,7 +816,7 @@ index 27567d9dd36028a6de7b943a35a791532340cfe3..aa2666e6c1f67773eede794d48301e2d
  
              // If the number of tabs changed and caused the tab bar to
              // hide/show, then we'll need to resize things.  It is simplest
-@@ -2119,7 +2136,7 @@ impl TermWindow {
+@@ -2119,7 +2137,7 @@ impl TermWindow {
              } else {
                  0.0
              };
@@ -517,7 +825,7 @@ index 27567d9dd36028a6de7b943a35a791532340cfe3..aa2666e6c1f67773eede794d48301e2d
  
              let r = Rect::new(
                  Point::new(
-@@ -2402,6 +2419,9 @@ impl TermWindow {
+@@ -2402,6 +2420,9 @@ impl TermWindow {
      }
  
      fn show_launcher_impl(&mut self, args: LauncherActionArgs, initial_choice_idx: usize) {
@@ -527,7 +835,7 @@ index 27567d9dd36028a6de7b943a35a791532340cfe3..aa2666e6c1f67773eede794d48301e2d
          let mux_window_id = self.mux_window_id;
          let window = self.window.as_ref().unwrap().clone();
  
-@@ -2587,6 +2607,9 @@ impl TermWindow {
+@@ -2587,6 +2608,9 @@ impl TermWindow {
          assignment: &KeyAssignment,
      ) -> anyhow::Result<PerformAssignmentResult> {
          use KeyAssignment::*;
@@ -537,7 +845,7 @@ index 27567d9dd36028a6de7b943a35a791532340cfe3..aa2666e6c1f67773eede794d48301e2d
  
          if let Some(modal) = self.get_modal() {
              if modal.perform_assignment(assignment, self) {
-@@ -2601,6 +2624,9 @@ impl TermWindow {
+@@ -2601,6 +2625,9 @@ impl TermWindow {
  
          let window = self.window.as_ref().map(|w| w.clone());
  
@@ -547,7 +855,17 @@ index 27567d9dd36028a6de7b943a35a791532340cfe3..aa2666e6c1f67773eede794d48301e2d
          match assignment {
              ActivateKeyTable {
                  name,
-@@ -3042,6 +3068,7 @@ impl TermWindow {
+@@ -2864,7 +2891,8 @@ impl TermWindow {
+                     if let Some(existing) = pane.downcast_ref::<CopyOverlay>() {
+                         let mut params = existing.get_params();
+                         params.editing_search = true;
+-                        if !pattern.is_empty() {
++                        // An explicit pattern applies even when empty, so its type does too
++                        if !matches!(pattern, Pattern::CurrentSelectionOrEmptyString) {
+                             params.pattern = self.resolve_search_pattern(pattern.clone(), &pane);
+                         }
+                         existing.apply_params(params);
+@@ -3042,6 +3070,7 @@ impl TermWindow {
                              size,
                              Some(src_window_id),
                              term_config,
@@ -555,7 +873,7 @@ index 27567d9dd36028a6de7b943a35a791532340cfe3..aa2666e6c1f67773eede794d48301e2d
                          )
                          .await
                          {
-@@ -3211,6 +3238,9 @@ impl TermWindow {
+@@ -3211,6 +3240,9 @@ impl TermWindow {
          }
      }
      fn close_current_pane(&mut self, confirm: bool) {
@@ -565,7 +883,7 @@ index 27567d9dd36028a6de7b943a35a791532340cfe3..aa2666e6c1f67773eede794d48301e2d
          let mux_window_id = self.mux_window_id;
          let mux = Mux::get();
          let tab = match mux.get_active_tab_for_window(mux_window_id) {
-@@ -3251,9 +3281,7 @@ impl TermWindow {
+@@ -3251,9 +3283,7 @@ impl TermWindow {
  
          let tab_id = tab.tab_id();
          if confirm && !tab.can_close_without_prompting(CloseReason::Tab) {
@@ -576,7 +894,7 @@ index 27567d9dd36028a6de7b943a35a791532340cfe3..aa2666e6c1f67773eede794d48301e2d
  
              let window = self.window.clone().unwrap();
              let (overlay, future) = start_overlay(self, &tab, move |tab_id, term| {
-@@ -3267,6 +3295,9 @@ impl TermWindow {
+@@ -3267,6 +3297,9 @@ impl TermWindow {
      }
  
      fn close_current_tab(&mut self, confirm: bool) {
@@ -586,7 +904,7 @@ index 27567d9dd36028a6de7b943a35a791532340cfe3..aa2666e6c1f67773eede794d48301e2d
          let mux = Mux::get();
          let tab = match mux.get_active_tab_for_window(self.mux_window_id) {
              Some(tab) => tab,
-@@ -3394,6 +3425,9 @@ impl TermWindow {
+@@ -3394,6 +3427,9 @@ impl TermWindow {
      /// an active overlay (such as search or copy mode) then that will
      /// be returned.
      pub fn get_active_pane_or_overlay(&self) -> Option<Arc<dyn Pane>> {
@@ -596,7 +914,7 @@ index 27567d9dd36028a6de7b943a35a791532340cfe3..aa2666e6c1f67773eede794d48301e2d
          let mux = Mux::get();
          let tab = match mux.get_active_tab_for_window(self.mux_window_id) {
              Some(tab) => tab,
-@@ -3421,6 +3455,9 @@ impl TermWindow {
+@@ -3421,6 +3457,9 @@ impl TermWindow {
      }
  
      fn get_splits(&mut self) -> Vec<PositionedSplit> {
@@ -606,7 +924,7 @@ index 27567d9dd36028a6de7b943a35a791532340cfe3..aa2666e6c1f67773eede794d48301e2d
          let mux = Mux::get();
          let tab = match mux.get_active_tab_for_window(self.mux_window_id) {
              Some(tab) => tab,
-@@ -3456,6 +3493,9 @@ impl TermWindow {
+@@ -3456,6 +3495,9 @@ impl TermWindow {
      }
  
      fn get_tab_information(&mut self) -> Vec<TabInformation> {
@@ -616,7 +934,7 @@ index 27567d9dd36028a6de7b943a35a791532340cfe3..aa2666e6c1f67773eede794d48301e2d
          let mux = Mux::get();
          let window = match mux.get_window(self.mux_window_id) {
              Some(window) => window,
-@@ -3529,6 +3569,16 @@ impl TermWindow {
+@@ -3529,6 +3571,16 @@ impl TermWindow {
      }
  
      fn get_panes_to_render(&self) -> Vec<PositionedPane> {
@@ -633,7 +951,7 @@ index 27567d9dd36028a6de7b943a35a791532340cfe3..aa2666e6c1f67773eede794d48301e2d
          let mux = Mux::get();
          let tab = match mux.get_active_tab_for_window(self.mux_window_id) {
              Some(tab) => tab,
-@@ -3592,6 +3642,7 @@ impl TermWindow {
+@@ -3592,6 +3644,7 @@ impl TermWindow {
      }
  
      pub fn assign_overlay(&mut self, tab_id: TabId, overlay: Arc<dyn Pane>) {
@@ -641,7 +959,7 @@ index 27567d9dd36028a6de7b943a35a791532340cfe3..aa2666e6c1f67773eede794d48301e2d
          self.cancel_overlay_for_tab(tab_id, None);
          self.tab_state(tab_id).overlay.replace(OverlayState {
              pane: overlay,
-@@ -3621,6 +3672,7 @@ impl TermWindow {
+@@ -3621,6 +3674,7 @@ impl TermWindow {
  
  impl Drop for TermWindow {
      fn drop(&mut self) {
@@ -813,7 +1131,7 @@ index 1cb777d76d0b2cbdbfda617f8f40725713d3c30b..e33031631da4414f626ab951b36738ed
                  h_context.pixel_cell
              } else {
 diff --git a/wezterm-gui/src/termwindow/render/paint.rs b/wezterm-gui/src/termwindow/render/paint.rs
-index 3136f28e23d85c70d903a4a8b87d24f09b002c18..291bfc8affe3c2a5ba6a0fdac35f23b14ae8e42e 100644
+index 3136f28e23d85c70d903a4a8b87d24f09b002c18..c82eed3b30577f04f0dc2f2302663e3231d3d47f 100644
 --- a/wezterm-gui/src/termwindow/render/paint.rs
 +++ b/wezterm-gui/src/termwindow/render/paint.rs
 @@ -162,6 +162,7 @@ impl crate::TermWindow {
@@ -833,11 +1151,12 @@ index 3136f28e23d85c70d903a4a8b87d24f09b002c18..291bfc8affe3c2a5ba6a0fdac35f23b1
          let focused = self.focused.is_some();
          let window_is_transparent =
              !self.window_background.is_empty() || self.config.window_background_opacity != 1.0;
-@@ -272,6 +273,9 @@ impl crate::TermWindow {
+@@ -272,6 +273,10 @@ impl crate::TermWindow {
              self.paint_tab_bar(&mut layers).context("paint_tab_bar")?;
          }
  
 +        self.paint_vtabs_ui().context("UI")?;
++        self.paint_copy_search().context("copy search")?;
 +        self.paint_terminal_overlay().context("terminal overlay")?;
 +
          self.paint_window_borders(&mut layers)

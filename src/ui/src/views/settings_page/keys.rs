@@ -368,6 +368,7 @@ impl SidebarUi {
             }
             SettingKind::Color | SettingKind::OptionalColor | SettingKind::Border => {
                 let default = target.value(&Settings::default());
+                let widget = self.theme.search(&Settings::default());
                 let fallback = match key {
                     "quick_terminal_background_color" => {
                         self.host.page_background.unwrap_or(self.theme.background)
@@ -376,6 +377,13 @@ impl SidebarUi {
                     "hover_background" => self.theme.hovered(),
                     "tab_foreground" | "local_glyph_color" => self.theme.tab_text(),
                     "selected_foreground" => self.theme.selected_text(),
+                    "search_background_color" => widget.background,
+                    "search_border_color" => widget.border.unwrap_or(widget.muted),
+                    "search_text_color" => widget.text,
+                    "search_muted_color" => widget.muted,
+                    "search_error_color" => widget.error,
+                    "search_active_match_color" => widget.active_match.0,
+                    "search_match_color" => widget.other_match.0,
                     _ => self.theme.accent,
                 };
                 self.open_color_form(

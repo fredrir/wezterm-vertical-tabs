@@ -15,6 +15,7 @@ mod mux_ops;
 mod palette;
 mod paste;
 mod repos;
+mod search;
 mod settings_file;
 mod shutdown;
 mod storage;
@@ -24,8 +25,8 @@ mod update;
 
 use crate::termwindow::ui_host::{
     Bounds, Command, Geometry, HideOnEscape, Input, Navigation, Projection, Provider,
-    QuickTerminalConfig, Reservation, RoundedSurface, Snapshot, Surface, TerminalKey,
-    WindowEndpoint, spawn_completed,
+    QuickTerminalConfig, Reservation, RoundedSurface, SearchPalette, Snapshot, Surface,
+    TerminalKey, WindowEndpoint, spawn_completed,
 };
 use mux::{BACKING_WORKSPACE_PREFIX, DETACHED_WORKSPACE, QUICK_WORKSPACE_PREFIX};
 use std::{
@@ -482,6 +483,9 @@ impl Provider for Adapter {
     }
     fn quick_terminal_config(&self) -> QuickTerminalConfig {
         terminal_program::quick_terminal(&self.app.model().settings)
+    }
+    fn search_palette(&self) -> SearchPalette {
+        search::palette(self.app.ui().theme(), &self.app.model().settings)
     }
     fn selected_space(&self) -> &str {
         &self.app.model().selected_space

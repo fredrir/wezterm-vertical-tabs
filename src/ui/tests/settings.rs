@@ -1,7 +1,8 @@
+use ratatui::style::Color;
 use serde_json::{Value, json};
 use std::time::Duration;
 use vtabs_core::{Dimension, HostTab, Intent, Model};
-use vtabs_ui::{ElementId, Key, Modifiers, MouseButton, Rect, SidebarUi, UiInput, UiIntent};
+use vtabs_ui::{ElementId, Key, Modifiers, MouseButton, Rect, SidebarUi, Theme, UiInput, UiIntent};
 
 fn draw(ui: &mut SidebarUi, model: &Model) {
     ui.render(model, Rect::new(0, 0, 110, 70), Duration::ZERO);
@@ -226,6 +227,75 @@ fn border_color_takes_none_to_hide_the_border() {
         set(&intents, "quick_terminal_border_color"),
         Some(json!("none"))
     );
+}
+
+#[test]
+fn search_border_takes_none_and_its_other_colors_do_not() {
+    for (key, expected) in [
+        ("search_border_color", Some(json!("none"))),
+        ("search_text_color", None),
+    ] {
+        let (mut ui, model) = settings("search");
+        click(&mut ui, &model, ElementId::Setting(key.into()));
+        ui.event(&model, UiInput::key(Key::Backspace));
+        ui.event(&model, UiInput::Text("None".into()));
+        let intents = ui.event(&model, UiInput::key(Key::Enter));
+        assert_eq!(set(&intents, key), expected, "{key}");
+    }
+}
+
+fn theme(change: impl FnOnce(&mut vtabs_core::Settings)) -> (Theme, vtabs_core::Settings) {
+    let mut model = Model::default();
+    change(&mut model.settings);
+    let mut ui = SidebarUi::new();
+    draw(&mut ui, &model);
+    (ui.theme().clone(), model.settings)
+}
+
+#[test]
+fn search_colors_follow_the_palette_with_readable_text() {
+    let (dark, settings) = theme(|_| {});
+    let search = dark.search(&settings);
+    assert_eq!(search.background, dark.card);
+    assert_eq!(search.text, dark.foreground);
+    assert_eq!(search.muted, dark.muted);
+    assert_eq!(search.accent, dark.accent);
+    assert_eq!(search.error, dark.danger);
+    assert_eq!(search.active_match, (dark.accent, dark.background));
+    assert_eq!(search.other_match, (dark.selected, dark.foreground));
+    assert!(
+        search
+            .border
+            .is_some_and(|border| border != search.background)
+    );
+
+    let (light, settings) = theme(|settings| {
+        settings.background = "#ffffff".into();
+        settings.foreground = "#1f2328".into();
+        settings.accent = "#0969da".into();
+        settings.selected_background = "#ddf4ff".into();
+    });
+    let search = light.search(&settings);
+    let (Color::Rgb(r, g, b), Color::Rgb(dr, dg, db)) = (search.error, light.danger) else {
+        panic!("{search:?}");
+    };
+    assert!(r < dr && g < dg && b < db, "{search:?}");
+    assert_eq!(search.active_match.1, light.background);
+    assert_eq!(search.other_match.1, light.foreground);
+}
+
+#[test]
+fn search_colors_take_explicit_settings() {
+    let (theme, mut settings) = theme(|_| {});
+    settings.search_background_color = Some("#102030".into());
+    settings.search_border_color = Some("none".into());
+    settings.search_error_color = Some("#ff0000".into());
+    settings.search_active_match_color = Some("#ffffff".into());
+    let search = theme.search(&settings);
+    assert_eq!(search.background, Color::Rgb(0x10, 0x20, 0x30));
+    assert_eq!(search.border, None);
+    assert_eq!(search.error, Color::Rgb(255, 0, 0));
+    assert_eq!(search.active_match.0, Color::Rgb(255, 255, 255));
 }
 
 #[test]
@@ -698,10 +768,22 @@ fn shared_color_settings_appear_once_in_each_relevant_category() {
                 "local_glyph_color",
             ][..],
         ),
+        (
+            "search",
+            &[
+                "search_background_color",
+                "search_border_color",
+                "search_text_color",
+                "search_muted_color",
+                "search_error_color",
+                "search_active_match_color",
+                "search_match_color",
+            ][..],
+        ),
     ] {
         for category in [group, "theme", "all"] {
             let (mut ui, model) = settings(category);
-            ui.render(&model, Rect::new(0, 0, 110, 200), Duration::ZERO);
+            ui.render(&model, Rect::new(0, 0, 110, 240), Duration::ZERO);
             let rows = selected_rows(&ui);
             for key in keys {
                 assert_eq!(

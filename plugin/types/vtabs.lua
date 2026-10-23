@@ -18,6 +18,13 @@
 ---@field quick_terminal_auto_hide? boolean Hide the quick terminal when the window loses focus
 ---@field quick_terminal_preserve_shell? boolean Keep the shell when hidden; disable to start a fresh shell each time
 ---@field quick_terminal_hide_on_escape? 'never'|'always'|'auto' Auto hides only while nothing runs in the shell
+---@field search_background_color? string Copy mode search widget; null follows Background
+---@field search_border_color? string Null blends the background toward Foreground; none hides it
+---@field search_text_color? string Query text; null follows Foreground
+---@field search_muted_color? string Prompt and match count; null follows Muted
+---@field search_error_color? string Count and border without matches; null is a red legible on the widget
+---@field search_active_match_color? string Current match highlight; null follows Accent
+---@field search_match_color? string Other match highlights; null follows Selection
 ---@field animations? boolean Enable finite visual transitions
 ---@field reduced_motion? boolean Suppress transitions
 ---@field animation_ms? integer Transition duration in milliseconds
@@ -109,7 +116,7 @@
 ---@field fields? { [1]: TabsMatchField, [2]: string[] }[]
 ---@field remote? boolean
 
----@alias TabsSettingKey 'keybinds'|'width'|'side'|'rail'|'quick_terminal_width'|'quick_terminal_height'|'quick_terminal_window_padding'|'quick_terminal_blur'|'quick_terminal_opacity'|'quick_terminal_border_color'|'quick_terminal_background_color'|'quick_terminal_auto_hide'|'quick_terminal_preserve_shell'|'quick_terminal_hide_on_escape'|'animations'|'reduced_motion'|'animation_ms'|'cards'|'show_indexes'|'show_metadata'|'show_close'|'tab_glyphs'|'glyph_size'|'tab_title'|'confirm_close'|'accent'|'background'|'foreground'|'muted'|'selected_background'|'hover_background'|'tab_foreground'|'selected_foreground'|'local_glyph_color'|'distro_colors'|'keyboard_shortcuts'|'default_domain'|'menus'
+---@alias TabsSettingKey 'keybinds'|'width'|'side'|'rail'|'quick_terminal_width'|'quick_terminal_height'|'quick_terminal_window_padding'|'quick_terminal_blur'|'quick_terminal_opacity'|'quick_terminal_border_color'|'quick_terminal_background_color'|'quick_terminal_auto_hide'|'quick_terminal_preserve_shell'|'quick_terminal_hide_on_escape'|'search_background_color'|'search_border_color'|'search_text_color'|'search_muted_color'|'search_error_color'|'search_active_match_color'|'search_match_color'|'animations'|'reduced_motion'|'animation_ms'|'cards'|'show_indexes'|'show_metadata'|'show_close'|'tab_glyphs'|'glyph_size'|'tab_title'|'confirm_close'|'accent'|'background'|'foreground'|'muted'|'selected_background'|'hover_background'|'tab_foreground'|'selected_foreground'|'local_glyph_color'|'distro_colors'|'keyboard_shortcuts'|'default_domain'|'menus'
 
 ---@class TabsSpace
 ---@field accent? string

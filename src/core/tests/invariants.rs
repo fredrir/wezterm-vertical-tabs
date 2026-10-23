@@ -396,6 +396,36 @@ fn quick_terminal_border_can_be_hidden() {
 }
 
 #[test]
+fn search_colors_follow_the_palette_until_set_and_only_the_border_takes_none() {
+    let mut settings = Settings::default();
+    let keys = [
+        "search_background_color",
+        "search_border_color",
+        "search_text_color",
+        "search_muted_color",
+        "search_error_color",
+        "search_active_match_color",
+        "search_match_color",
+    ];
+    for key in keys {
+        assert_eq!(settings.get(key), Some(json!(null)), "{key}");
+        settings.set(key, json!("#012aFE")).unwrap();
+        settings.set(key, json!(null)).unwrap();
+        let before = settings.clone();
+        for value in [json!("red"), json!("#12345g"), json!(42)] {
+            assert!(settings.set(key, value).is_err(), "{key}");
+            assert_eq!(settings, before);
+        }
+        assert_eq!(
+            settings.set(key, json!("none")).is_ok(),
+            key == "search_border_color",
+            "{key}"
+        );
+        assert!(!settings::is_theme(key));
+    }
+}
+
+#[test]
 fn quick_terminal_padding_reads_sides_like_wezterm() {
     use padding::{Dimension, Unit, WindowPadding};
     let mut settings = Settings::default();

@@ -1,7 +1,10 @@
 use crate::icons;
 use ratatui::style::{Color, Style};
 use std::collections::BTreeMap;
-use vtabs_core::{Model, settings};
+use vtabs_core::{Model, Settings, settings};
+
+/// WCAG contrast for text, the least a derived text color keeps against its fill.
+const LEGIBLE: f32 = 4.5;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Theme {
@@ -18,6 +21,19 @@ pub struct Theme {
     pub tab_foreground: Option<Color>,
     pub selected_foreground: Option<Color>,
     pub local_glyph: Option<Color>,
+}
+
+/// Copy mode search: the widget and the match highlights, with text for each highlight.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Search {
+    pub background: Color,
+    pub border: Option<Color>,
+    pub text: Color,
+    pub muted: Color,
+    pub accent: Color,
+    pub error: Color,
+    pub active_match: (Color, Color),
+    pub other_match: (Color, Color),
 }
 
 impl Default for Theme {
@@ -123,6 +139,50 @@ impl Theme {
         self.selected_foreground.unwrap_or(self.accent)
     }
 
+    /// Unset search colors follow this palette.
+    pub fn search(&self, settings: &Settings) -> Search {
+        let color = |value: &Option<String>| value.as_deref().and_then(Self::parse_color);
+        let background = color(&settings.search_background_color).unwrap_or(self.card);
+        let border = match settings.search_border_color.as_deref() {
+            Some("none") => None,
+            value => Some(
+                value
+                    .and_then(Self::parse_color)
+                    .unwrap_or_else(|| self.lift(background, 14)),
+            ),
+        };
+        let active = color(&settings.search_active_match_color).unwrap_or(self.accent);
+        let other = color(&settings.search_match_color).unwrap_or(self.selected);
+        Search {
+            background,
+            border,
+            text: color(&settings.search_text_color).unwrap_or(self.foreground),
+            muted: color(&settings.search_muted_color).unwrap_or(self.muted),
+            accent: self.accent,
+            error: color(&settings.search_error_color)
+                .unwrap_or_else(|| self.legible(self.danger, background)),
+            active_match: (active, self.text_on(active)),
+            other_match: (other, self.text_on(other)),
+        }
+    }
+
+    /// `color` blended toward the foreground until it reads as text on `fill`.
+    fn legible(&self, color: Color, fill: Color) -> Color {
+        (0..=12)
+            .map(|step| Self::blend(color, self.foreground, step * 5))
+            .find(|candidate| contrast(*candidate, fill) >= LEGIBLE)
+            .unwrap_or(self.foreground)
+    }
+
+    /// Whichever of the foreground and background reads better on `fill`.
+    fn text_on(&self, fill: Color) -> Color {
+        if contrast(self.foreground, fill) >= contrast(self.background, fill) {
+            self.foreground
+        } else {
+            self.background
+        }
+    }
+
     pub fn base(&self) -> Style {
         Style::default().bg(self.background).fg(self.foreground)
     }
@@ -144,4 +204,24 @@ impl Theme {
             .then(|| value.parse().ok())
             .flatten()
     }
+}
+
+fn luminance(color: Color) -> f32 {
+    let Color::Rgb(r, g, b) = color else {
+        return 0.;
+    };
+    let linear = |channel: u8| {
+        let value = f32::from(channel) / 255.;
+        if value <= 0.04045 {
+            value / 12.92
+        } else {
+            ((value + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    0.2126 * linear(r) + 0.7152 * linear(g) + 0.0722 * linear(b)
+}
+
+fn contrast(a: Color, b: Color) -> f32 {
+    let (a, b) = (luminance(a), luminance(b));
+    (a.max(b) + 0.05) / (a.min(b) + 0.05)
 }

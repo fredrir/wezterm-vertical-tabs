@@ -153,6 +153,17 @@ Keys follow WezTerm's `SpawnCommand` and config names; anything left out follows
 | Toggle | Same binding hides; another binding or the quick terminal shortcut replaces it; another `preserve` binding running the same command reopens a preserved program in the current space with its own settings |
 | Hide | Repeat binding, click outside, close-tab shortcut; Escape follows `hide_on_escape`, where `"auto"` hides only while nothing runs in the program |
 
+**Copy mode search**
+
+| Name | Value |
+| --- | --- |
+| Widget | Floats at the top right of the pane in copy mode while its pattern is edited or not empty; replaces WezTerm's bottom search bar |
+| Contents | `/`, the query with its cursor, and the match count (`2 of 7`, counted from the newest); `No results` turns the count and border red |
+| Mode | Shown only when not smart case: `Aa` case sensitive, `aa` ignore case, `.*` regex |
+| Colors | Settings → Search, or `search_*` keys in Lua `settings`; unset keys follow the theme, as do match highlights |
+| `act.Search` | In copy mode, an explicit pattern applies even when empty: `act.Search { CaseSmartString = '' }` edits an empty smart case query |
+| `window:get_copy_cursor(pane)` | `{ x, y }` copy mode cursor (cell, stable row) while `pane` has a copy overlay; otherwise `nil` |
+
 **Launcher**
 
 ```lua

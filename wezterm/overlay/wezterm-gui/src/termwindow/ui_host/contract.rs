@@ -10,7 +10,7 @@ use std::{
     time::{Duration, Instant},
 };
 use termwiz::surface::Line;
-use window::color::LinearRgba;
+use window::color::{LinearRgba, SrgbaTuple};
 use window::{DeadKeyStatus, KeyEvent, MouseEvent, Window};
 
 /// A rounded shape in cell coordinates relative to `Geometry::ui_bounds`.
@@ -187,6 +187,20 @@ impl QuickTerminalConfig {
     }
 }
 
+/// Copy mode search: the floating widget and the match highlights it shares a palette with.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SearchPalette {
+    pub background: SrgbaTuple,
+    pub border: Option<SrgbaTuple>,
+    pub text: SrgbaTuple,
+    pub muted: SrgbaTuple,
+    pub accent: SrgbaTuple,
+    pub error: SrgbaTuple,
+    /// Background and text.
+    pub active_match: (SrgbaTuple, SrgbaTuple),
+    pub other_match: (SrgbaTuple, SrgbaTuple),
+}
+
 pub trait Provider {
     fn initialize(&mut self) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + '_>>;
     fn reservation(&self) -> Reservation;
@@ -209,6 +223,7 @@ pub trait Provider {
     fn terminal_input(&mut self, input: Input<'_>, escape: HideOnEscape) -> TerminalKey;
     fn glyph_scale(&self) -> f64;
     fn quick_terminal_config(&self) -> QuickTerminalConfig;
+    fn search_palette(&self) -> SearchPalette;
     fn selected_space(&self) -> &str;
     fn space_exists(&self, id: &str) -> bool;
     fn message(&mut self, message: Message);

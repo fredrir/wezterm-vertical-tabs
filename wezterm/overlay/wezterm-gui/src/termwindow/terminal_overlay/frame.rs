@@ -174,17 +174,14 @@ impl TermWindow {
             let content = layout.content;
             let offset = (drawn.origin.0 - content.x, drawn.origin.1 - content.y);
             let inner = painted.inner;
-            quads.apply_transformed(
-                &mut layers,
-                offset,
-                1.,
-                (
-                    drawn.origin.0.max(inner.x) - x,
-                    drawn.origin.1.max(inner.y) - y,
-                    (drawn.origin.0 + content.width).min(inner.x + inner.width) - x,
-                    (drawn.origin.1 + content.height).min(inner.y + inner.height) - y,
-                ),
+            let clip = (
+                drawn.origin.0.max(inner.x) - x,
+                drawn.origin.1.max(inner.y) - y,
+                (drawn.origin.0 + content.width).min(inner.x + inner.width) - x,
+                (drawn.origin.1 + content.height).min(inner.y + inner.height) - y,
             );
+            quads.apply_transformed(&mut layers, offset, 1., clip);
+            self.paint_copy_search_moved(ZINDEX + 1, &pos, offset, clip)?;
         }
         Ok(())
     }

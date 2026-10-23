@@ -21,7 +21,7 @@ pub use ratatui::{buffer::Buffer, layout::Rect};
 pub use runtime::canvas::{HitRegion, RoundedSurface};
 pub use runtime::frame::{FrameUpdate, SurfaceTransform};
 pub use runtime::motion::transition;
-pub use theme::Theme;
+pub use theme::{Search, Theme};
 pub use views::sidebar::header_fits;
 
 use actions::Action;
