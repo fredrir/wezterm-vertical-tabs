@@ -72,6 +72,11 @@ where
 
 async fn respond(pdu: Pdu, client_id: Option<Arc<ClientId>>) -> anyhow::Result<Pdu> {
     let (name, adopt) = match pdu {
+        Pdu::GetMuxSession(_) => {
+            return Ok(Pdu::GetMuxSessionResponse(GetMuxSessionResponse {
+                session: mux_session().to_owned(),
+            }))
+        }
         Pdu::GetPaneCloseInfo(GetPaneCloseInfo { pane_id }) => {
             return Ok(Pdu::GetPaneCloseInfoResponse(close_info(pane_id).await))
         }
@@ -118,6 +123,20 @@ async fn respond(pdu: Pdu, client_id: Option<Arc<ClientId>>) -> anyhow::Result<P
                 window_id,
             })
         }
+    })
+}
+
+fn mux_session() -> &'static str {
+    use std::hash::{Hash, Hasher};
+    static SESSION: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    SESSION.get_or_init(|| {
+        let mut host = std::collections::hash_map::DefaultHasher::new();
+        sysinfo::System::host_name().hash(&mut host);
+        let epoch = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("mux session clock precedes Unix epoch")
+            .as_nanos();
+        format!("{:016x}-{:x}-{epoch:x}", host.finish(), std::process::id())
     })
 }
 

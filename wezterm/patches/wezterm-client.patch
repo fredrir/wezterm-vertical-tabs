@@ -1,5 +1,5 @@
 diff --git a/wezterm-client/src/client.rs b/wezterm-client/src/client.rs
-index df3351365d125f21db6bc987fcbf4d3a61fefe5f..6d58bab81d6b604ddc867c8acbe573d4cc477761 100644
+index df3351365d125f21db6bc987fcbf4d3a61fefe5f..d8e69b8549bda6cd3d10a0ad12668e1c2dc85e89 100644
 --- a/wezterm-client/src/client.rs
 +++ b/wezterm-client/src/client.rs
 @@ -141,11 +141,16 @@ async fn process_unilateral_inner_async(
@@ -19,10 +19,11 @@ index df3351365d125f21db6bc987fcbf4d3a61fefe5f..6d58bab81d6b604ddc867c8acbe573d4
          None => {
              log::debug!("got {decoded:?}, pane not found locally, resync");
              client_domain.resync().await?;
-@@ -1340,8 +1345,32 @@ impl Client {
+@@ -1340,8 +1345,33 @@ impl Client {
  
      rpc!(ping, Ping = (), Pong);
      rpc!(list_panes, ListPanes = (), ListPanesResponse);
++    rpc!(get_mux_session, GetMuxSession = (), GetMuxSessionResponse);
 +    rpc!(
 +        get_pane_close_info,
 +        GetPaneCloseInfo,

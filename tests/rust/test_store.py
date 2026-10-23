@@ -89,6 +89,29 @@ async def test_null_preference_and_deleted_preference_remain_distinct(request_st
     assert restored["records"][0]["revision"] > revision
 
 
+async def test_exact_reads_preserve_revisions_and_tombstones_without_loading_other_keys(
+    request_store,
+):
+    scope = {"kind": "mux_session", "profile": "test", "session": "surviving-mux"}
+    current = {"scope": scope, "entity": "tab:7", "field": "space"}
+    unrelated = {**current, "entity": "tab:8"}
+    missing = {**current, "field": "folder"}
+    written = await request_store([put(current, "work"), put(unrelated, "docs")])
+    restored = await request_store(
+        [{"op": "read_key", "key": current}, {"op": "read_key", "key": missing}]
+    )
+    assert restored["revision"] == written["revision"]
+    assert restored["records"] == [written["records"][0]]
+
+    deleted = await request_store(
+        [{"op": "delete", "key": current, "expected_revision": written["records"][0]["revision"]}]
+    )
+    restored = await request_store([{"op": "read_key", "key": current}])
+    assert restored["revision"] == deleted["revision"]
+    assert restored["records"] == deleted["records"]
+    assert "value" not in restored["records"][0]
+
+
 @pytest.mark.parametrize(
     ("payload", "error_code", "request_id"),
     [

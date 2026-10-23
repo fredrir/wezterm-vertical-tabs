@@ -72,6 +72,7 @@ impl WindowApp {
         }
         candidate.revision = self.model.revision.wrapping_add(1);
         self.model = candidate;
+        self.storage.observe_host_tabs(&self.model, self.now);
         self.ui.invalidate();
         Ok(true)
     }

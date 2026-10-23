@@ -25,7 +25,7 @@ pub use settings::{
     HideOnEscape, RailMode, SettingDescriptor, SettingKind, Settings, Side, TabTitle,
 };
 pub use space::{DEFAULT_SPACE, Folder, Space, SpaceId};
-pub use tab::{HostTab, LaunchSpec, PaneId, Tab, TabId, TabPane};
+pub use tab::{HostTab, LaunchSpec, PaneId, Tab, TabId, TabIdentity, TabPane};
 
 #[cfg(test)]
 #[path = "../tests/folders.rs"]

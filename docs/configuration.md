@@ -82,7 +82,7 @@ return config
 | Ungrouping | Drop onto New Tab to ungroup and unpin; Remove from folder keeps the pin; processes remain running |
 | Pinned order | Pinned tabs and folders precede New Tab; ordinary tabs follow |
 | Space assignment | Drop a tab on a bottom space control or use Move to space |
-| Folder persistence | Catalog, names and collapse state persist; live membership follows the session boundary in [Boundaries](limitations.md) |
+| Folder persistence | Catalog, names and collapse state persist; surviving mux tabs restore folder membership after GUI restart, as described in [Boundaries](limitations.md) |
 | Tab title | `tab_title`: directory, process, pane title or process and directory; double-click renames in place, Enter saves, Escape cancels, an empty title restores the source |
 | Tab icon | Active pane's machine, `󰒋` when splits span machines; each split then reads `GLYPH/name`; `tab_glyphs = false` hides them |
 | Tab index | Replaces the row's icon while hovered, for `Cmd+1`-`Cmd+9` (`show_indexes`) |

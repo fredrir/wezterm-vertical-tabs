@@ -75,6 +75,7 @@ impl WindowApp {
                 folder_id: Some(folder_id),
             })?;
         }
+        self.storage.observe(&self.model, self.now);
         if token.selection_epoch == self.selection_epoch {
             return self.dispatch(Intent::ActivateTab(tab_id));
         }

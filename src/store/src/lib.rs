@@ -16,9 +16,16 @@ pub const MAX_KEY_BYTES: usize = 256;
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Scope {
     Profile { profile: String },
+    MuxSession { profile: String, session: String },
 }
 
 impl Scope {
+    pub fn profile_name(&self) -> &str {
+        match self {
+            Self::Profile { profile } | Self::MuxSession { profile, .. } => profile,
+        }
+    }
+
     pub fn profile(profile: impl Into<String>) -> Self {
         Self::Profile {
             profile: profile.into(),
@@ -59,6 +66,9 @@ fn present_value<'de, D: serde::Deserializer<'de>>(
 pub enum Operation {
     Read {
         scope: Scope,
+    },
+    ReadKey {
+        key: Key,
     },
     Put {
         key: Key,

@@ -4,7 +4,7 @@ use crate::{
     persistence,
 };
 use serde_json::Value;
-use std::{collections::BTreeMap, time::Duration};
+use std::collections::BTreeMap;
 
 /// Serialized only for an explicit in-GUI move. No content or pane layout is represented.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
@@ -15,6 +15,8 @@ pub struct WindowTransfer {
     pub spaces: Vec<core::Space>,
     #[serde(default)]
     pub folders: Vec<core::Folder>,
+    #[serde(default)]
+    pub deleted_folders: Vec<String>,
     pub templates: Vec<core::SpaceTemplate>,
     pub preferences: BTreeMap<String, Value>,
     pub configuration: BTreeMap<String, Value>,
@@ -36,6 +38,7 @@ impl WindowApp {
             profile: self.model.profile.clone(),
             spaces: self.model.spaces.clone(),
             folders: self.model.folders.clone(),
+            deleted_folders: self.storage.deleted_folders(),
             templates: self.model.templates.clone(),
             preferences: self.model.managed_settings().clone(),
             configuration: self.model.configured_settings().clone(),
@@ -65,6 +68,16 @@ impl WindowApp {
             .model
             .load_catalog(transfer.spaces, transfer.templates)?;
         candidate.model.load_folders(transfer.folders)?;
+        if transfer.deleted_folders.iter().any(|id| {
+            !core::valid_id(id)
+                || candidate
+                    .model
+                    .folders
+                    .iter()
+                    .any(|folder| &folder.id == id)
+        }) {
+            return Err(Error("Invalid transferred folder deletion".into()));
+        }
         candidate
             .model
             .load_managed_settings(transfer.preferences)?;
@@ -76,9 +89,8 @@ impl WindowApp {
             candidate.managed.touch();
         }
         candidate.model.import_transferred_tab(transfer.tab)?;
-        candidate.storage = persistence::Persistence::new(&candidate.model);
-        // Preserve current public edits while a source-window helper is still draining.
-        candidate.storage.observe(&candidate.model, Duration::ZERO);
+        candidate.storage =
+            persistence::Persistence::from_transfer(&candidate.model, &transfer.deleted_folders);
         candidate.ui.set_chord_label(self.ui.chord_label());
         *self = candidate;
         Ok(())

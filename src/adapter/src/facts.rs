@@ -167,6 +167,20 @@ fn host_tab(
             ..Default::default()
         });
     let host_tab = mux.get_tab(tab.id);
+    let identities = host_tab
+        .as_ref()
+        .into_iter()
+        .flat_map(|host| host.iter_panes_ignoring_zoom())
+        .filter_map(|entry| {
+            entry
+                .pane
+                .downcast_ref::<wezterm_client::pane::ClientPane>()?
+                .persistence_identity()
+                .map(|(session, entity)| core::TabIdentity { session, entity })
+        })
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect();
     let location = match host_tab.as_ref().and_then(|host| host.get_active_pane()) {
         Some(pane) => location::Location::of(&pane, &tab.cwd, local_host, repos),
         None => location::Location::unanswered(false, String::new(), &tab.cwd, repos),
@@ -201,6 +215,7 @@ fn host_tab(
         .collect();
     core::HostTab {
         id: tab.id as u64,
+        identities,
         title: tab.title,
         cwd: tab.cwd.clone(),
         repo_root: location.repo_root,

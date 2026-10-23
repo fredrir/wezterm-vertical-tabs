@@ -6,6 +6,15 @@ use portable_pty::CommandBuilder;
 use serde::{Deserialize, Serialize};
 use wezterm_term::TerminalSize;
 
+/// Identifies this running mux, independently of route names and GUI-local IDs.
+#[derive(Deserialize, Serialize, PartialEq, Debug)]
+pub struct GetMuxSession {}
+
+#[derive(Deserialize, Serialize, PartialEq, Debug)]
+pub struct GetMuxSessionResponse {
+    pub session: String,
+}
+
 #[derive(Deserialize, Serialize, PartialEq, Debug)]
 pub struct ReplacePane {
     pub pane_id: PaneId,

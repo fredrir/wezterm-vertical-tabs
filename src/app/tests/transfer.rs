@@ -112,6 +112,7 @@ fn old_window_transfer_without_folders_remains_compatible() {
     source.update(snapshot(1)).unwrap();
     let mut value = serde_json::to_value(source.export_transfer(1).unwrap()).unwrap();
     value.as_object_mut().unwrap().remove("folders");
+    value.as_object_mut().unwrap().remove("deleted_folders");
     value["tab"].as_object_mut().unwrap().remove("folder_id");
     let transfer = serde_json::from_value(value).unwrap();
     let mut destination = WindowApp::default();

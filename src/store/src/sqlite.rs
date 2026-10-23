@@ -28,8 +28,12 @@ fn valid_component(value: &str) -> Result<(), StoreError> {
     Ok(())
 }
 
-fn validate_scope(Scope::Profile { profile }: &Scope) -> Result<(), StoreError> {
-    valid_component(profile)
+fn validate_scope(scope: &Scope) -> Result<(), StoreError> {
+    valid_component(scope.profile_name())?;
+    if let Scope::MuxSession { session, .. } = scope {
+        valid_component(session)?;
+    }
+    Ok(())
 }
 
 fn scope_id(scope: &Scope) -> Result<String, StoreError> {
@@ -82,7 +86,7 @@ fn validate(request: &Request) -> Result<(), StoreError> {
                 }
                 key
             }
-            Operation::Delete { key, .. } => key,
+            Operation::ReadKey { key } | Operation::Delete { key, .. } => key,
         };
         validate_scope(&key.scope)?;
         valid_component(&key.entity)?;
@@ -211,7 +215,7 @@ pub fn execute(connection: &mut Connection, request: &Request) -> Result<Respons
     let has_writes = request
         .operations
         .iter()
-        .any(|operation| !matches!(operation, Operation::Read { .. }));
+        .any(|operation| matches!(operation, Operation::Put { .. } | Operation::Delete { .. }));
     let behavior = if has_writes {
         TransactionBehavior::Immediate
     } else {
@@ -272,6 +276,31 @@ pub fn execute(connection: &mut Connection, request: &Request) -> Result<Respons
                                 entity,
                                 field,
                             },
+                            value,
+                            revision,
+                        },
+                    )?;
+                }
+            }
+            Operation::ReadKey { key } => {
+                let row = transaction
+                    .prepare_cached("SELECT value,revision FROM fields WHERE scope=?1 AND entity=?2 AND field=?3")
+                    .map_err(database)?
+                    .query_row(params![scope_id(&key.scope)?, key.entity, key.field], |row| {
+                        Ok((row.get::<_, Option<String>>(0)?, row_revision(row, 1)?))
+                    })
+                    .optional()
+                    .map_err(database)?;
+                if let Some((serialized, revision)) = row {
+                    let value = serialized
+                        .map(|text| serde_json::from_str(&text))
+                        .transpose()
+                        .map_err(|error| StoreError::new(ErrorCode::Database, error.to_string()))?;
+                    append_record(
+                        &mut response.records,
+                        &mut record_bytes,
+                        Record {
+                            key: key.clone(),
                             value,
                             revision,
                         },

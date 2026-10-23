@@ -10,7 +10,8 @@
 | Runtime tools | Python, Git, Rust and platform build dependencies required for source updates |
 | Rendering | Retained Ratatui text with rounded surfaces and window framing |
 | Animation | TachyonFX modifies cells; it is not a GPU shader language |
-| Restart | Tab assignments, pins and folder membership reset after GUI restart or reconnect; folder catalogs and settings persist |
+| Restart | Surviving mux tabs restore their space assignments, pins and folder membership per profile after GUI restart or reconnect; requires this build's mux server. Local shells are not recreated |
+| Mux identity | Placement belongs to the running server session, independent of GUI IDs and connection route names; a restarted server starts fresh |
 | Tab tearoff | Local moves preserve the whole split tree. Remote single-pane tabs can move; remote split-tab moves are rejected because upstream only exposes pane moves |
 | Repository marker | Owning mux resolves home and repository root; stock servers label remote directories as `/NAME` |
 | Multiple GUI clients | Normal upstream shared-mux focus and resize semantics still apply |
@@ -39,5 +40,5 @@
 | Client-pane metadata | `pane:get_metadata().remote_pane_id`; ID on the immediately connected mux |
 | Activation | Updated GUI/CLI and owning mux server; restart required for existing domains |
 | Reattachment | Live TLS reconnects retain panes; unix/SSH disconnects close their panes; the next attach adopts orphaned `__backing:<host>` tabs into `__detached` |
-| Server identity | Host name, executable and config path; routes to one server share adopted panes |
+| Server identity | Running mux session; older servers fall back to host name, executable and config path for adoption |
 | Connection progress | Mux servers log it; no tab or window opens, so WezTerm-multiplexed SSH prompts fail; use keys or an agent |

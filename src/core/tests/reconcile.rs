@@ -222,6 +222,10 @@ fn new_host_tab_uses_selected_space_and_application_defaults() {
         .unwrap();
     let facts = HostTab {
         id: 7,
+        identities: vec![crate::TabIdentity {
+            session: "server".into(),
+            entity: "tab:7".into(),
+        }],
         title: "Host title".into(),
         icon: "!".into(),
         cwd: "/work/project".into(),
@@ -249,6 +253,7 @@ fn new_host_tab_uses_selected_space_and_application_defaults() {
 
     let tab = &model.tabs[&7];
     assert_eq!(tab.id, facts.id);
+    assert_eq!(tab.identities, facts.identities);
     assert_eq!(tab.title, facts.title);
     assert_eq!(tab.icon, facts.icon);
     assert_eq!(tab.cwd, facts.cwd);

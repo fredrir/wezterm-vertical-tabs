@@ -265,7 +265,7 @@ fn acknowledge_write(app: &mut WindowApp, request: &Request) {
                 value: None,
                 revision: 1,
             }),
-            Operation::Read { .. } => None,
+            Operation::Read { .. } | Operation::ReadKey { .. } => None,
         })
         .collect();
     app.complete_storage(response(request, records)).unwrap();

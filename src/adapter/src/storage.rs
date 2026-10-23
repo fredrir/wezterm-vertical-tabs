@@ -110,11 +110,10 @@ pub fn request(endpoint: WindowEndpoint, request: Request) {
                 let key = match operation {
                     vtabs_store::Operation::Put { key, .. }
                     | vtabs_store::Operation::Delete { key, .. } => key,
-                    vtabs_store::Operation::Read { .. } => return None,
+                    vtabs_store::Operation::Read { .. }
+                    | vtabs_store::Operation::ReadKey { .. } => return None,
                 };
-                Some(match &key.scope {
-                    vtabs_store::Scope::Profile { profile } => profile.clone(),
-                })
+                Some(key.scope.profile_name().to_owned())
             })
             .collect::<std::collections::BTreeSet<_>>();
         let result = invoke(request).await.map_err(|error| error.to_string());

@@ -15,6 +15,17 @@ use url::Url;
 use wezterm_term::{KeyCode, KeyModifiers, StableRowIndex};
 
 impl ClientPane {
+    /// Stable while the mux survives. Pane identities survive adoption into a new backing tab.
+    pub fn persistence_identity(&self) -> Option<(String, String)> {
+        let session = self.client.server.as_deref()?.strip_prefix("session:")?;
+        let entity = if self.client.local_pane_layout {
+            format!("pane:{}", self.remote_pane_id)
+        } else {
+            format!("tab:{}", self.remote_tab_id())
+        };
+        Some((session.to_owned(), entity))
+    }
+
     pub(crate) fn update_remote_tab_id(&self, tab_id: TabId) {
         self.remote_tab_id.store(tab_id, Ordering::Relaxed);
     }

@@ -148,6 +148,7 @@ impl WindowApp {
             && (self.host_revision.is_none() || self.host_active != snapshot.active_tab);
         self.model
             .reconcile(snapshot.tabs, snapshot.active_tab, follow)?;
+        self.storage.reconcile_tabs(&mut self.model, self.now)?;
         // The host activated another tab; a closed tab beneath the page is not a switch away.
         if follow
             && old_active != self.model.selected_tab
@@ -290,6 +291,7 @@ impl WindowApp {
             previous.pinned,
             previous.folder_id.as_deref(),
         )?;
+        self.storage.observe(&self.model, self.now);
         match previous.title_override.clone() {
             Some(title) => self.dispatch(Intent::RenameTab { id, title }),
             None => Ok(Update::default()),
@@ -346,6 +348,10 @@ mod managed_tests;
 #[cfg(test)]
 #[path = "../tests/persistence.rs"]
 mod persistence_tests;
+
+#[cfg(test)]
+#[path = "../tests/tab_persistence.rs"]
+mod tab_persistence_tests;
 
 #[cfg(test)]
 #[path = "../tests/transfer.rs"]

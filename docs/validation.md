@@ -44,5 +44,5 @@
 | CPU samples          | Fixture reports cover host work and software rendering; exclude GPU completion and physical presentation                         |
 | Device checks        | Physical IME, monitor transitions, macOS traffic controls and input-to-display latency need device profiling                     |
 | Platforms            | Build workflow checks macOS, Linux and Windows; automated physical UI tests run on isolated Linux displays                       |
-| Restoration          | Durable catalogs/settings; tab membership resets after GUI restart                                                               |
+| Restoration          | Durable catalogs/settings; surviving mux tabs restore spaces, pins and folders across GUI restart; new server sessions do not reuse old placement |
 | Remote moves         | Remote single-pane moves supported; remote split moves remain limited by upstream APIs                                           |

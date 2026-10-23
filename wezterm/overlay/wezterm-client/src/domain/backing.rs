@@ -206,12 +206,23 @@ impl ClientDomain {
     }
 }
 
-/// Identifies the server behind a `local_pane_layout` client, whichever route reached it.
+/// A running server has one session across routes; older servers only support adoption identity.
 pub(super) async fn server_identity(
     local_pane_layout: bool,
     client: &Client,
     version: &GetCodecVersionResponse,
 ) -> Option<String> {
+    if let Ok(response) = client.get_mux_session().await {
+        if !response.session.is_empty()
+            && response.session.len() <= 128
+            && response
+                .session
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'-')
+        {
+            return Some(format!("session:{}", response.session));
+        }
+    }
     if !local_pane_layout {
         return None;
     }

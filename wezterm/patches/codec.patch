@@ -1,5 +1,5 @@
 diff --git a/codec/src/lib.rs b/codec/src/lib.rs
-index 8aed584c2d4aa46b949ab53605774fe762fa0d34..3fc3e2fd15365fabba294199e2811390ab9b739e 100644
+index 8aed584c2d4aa46b949ab53605774fe762fa0d34..f0e726aef4eb0030a973c713dc2f1c0f8633dc52 100644
 --- a/codec/src/lib.rs
 +++ b/codec/src/lib.rs
 @@ -37,6 +37,9 @@ use thiserror::Error;
@@ -12,7 +12,7 @@ index 8aed584c2d4aa46b949ab53605774fe762fa0d34..3fc3e2fd15365fabba294199e2811390
  #[derive(Error, Debug)]
  #[error("Corrupt Response: {0}")]
  pub struct CorruptResponse(String);
-@@ -503,6 +506,21 @@ pdu! {
+@@ -503,6 +506,23 @@ pdu! {
      GetPaneDirection: 60,
      GetPaneDirectionResponse: 61,
      AdjustPaneSize: 62,
@@ -31,10 +31,12 @@ index 8aed584c2d4aa46b949ab53605774fe762fa0d34..3fc3e2fd15365fabba294199e2811390
 +    FindAdoptablePanesResponse: 78,
 +    SendKeyDownIfBusy: 79,
 +    SendKeyDownIfBusyResponse: 80,
++    GetMuxSession: 81,
++    GetMuxSessionResponse: 82,
  }
  
  impl Pdu {
-@@ -513,6 +531,7 @@ impl Pdu {
+@@ -513,6 +533,7 @@ impl Pdu {
          match self {
              Self::WriteToPane(_)
              | Self::SendKeyDown(_)

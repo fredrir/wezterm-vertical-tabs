@@ -5,6 +5,13 @@ use std::collections::BTreeMap;
 pub type TabId = u64;
 pub type PaneId = u64;
 
+/// A surviving mux session and its tab (or a pane in a locally owned layout).
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct TabIdentity {
+    pub session: String,
+    pub entity: String,
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct LaunchSpec {
@@ -62,6 +69,7 @@ impl TabPane {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct HostTab {
     pub id: TabId,
+    pub identities: Vec<TabIdentity>,
     pub title: String,
     pub icon: String,
     pub cwd: String,
@@ -85,6 +93,8 @@ pub struct HostTab {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Tab {
     pub id: TabId,
+    #[serde(skip)]
+    pub identities: Vec<TabIdentity>,
     pub title: String,
     #[serde(default)]
     pub icon: String,
@@ -154,6 +164,7 @@ impl Tab {
     pub(crate) fn reconcile_host_metadata(&mut self, incoming: HostTab) -> bool {
         let HostTab {
             id,
+            identities,
             title,
             icon,
             cwd,
@@ -180,8 +191,8 @@ impl Tab {
             };
         }
         update!(
-            id, title, icon, cwd, repo_root, home, domain, host, user, process, remote, os, panes,
-            unread, bell
+            id, identities, title, icon, cwd, repo_root, home, domain, host, user, process, remote,
+            os, panes, unread, bell
         );
         // Discovery supplies only domain and cwd, so a captured launch is kept.
         if self.launch.is_none() && launch.is_some() {

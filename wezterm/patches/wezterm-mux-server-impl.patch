@@ -23,7 +23,7 @@ index bc0b6968a101ab827af15c23ba076d694fe864c6..0d154a0cf300511ed38a34fc854035c2
  fn client_domains(config: &config::ConfigHandle) -> Vec<ClientDomainConfig> {
      let mut domains = vec![];
 diff --git a/wezterm-mux-server-impl/src/sessionhandler.rs b/wezterm-mux-server-impl/src/sessionhandler.rs
-index 5dc535f86152d991641661ca9a5dc568755885e4..105d39ffc73efb88e8eb9ef812773977a5f8e79c 100644
+index 5dc535f86152d991641661ca9a5dc568755885e4..845f31c393e9a68e40a97a0b06345e3d9482c59e 100644
 --- a/wezterm-mux-server-impl/src/sessionhandler.rs
 +++ b/wezterm-mux-server-impl/src/sessionhandler.rs
 @@ -44,6 +44,8 @@ pub(crate) struct PerPane {
@@ -68,11 +68,12 @@ index 5dc535f86152d991641661ca9a5dc568755885e4..105d39ffc73efb88e8eb9ef812773977
              maybe_push_pane_changes(&pane, sender, per_pane)?;
              Ok::<(), anyhow::Error>(())
          })
-@@ -284,6 +305,16 @@ impl SessionHandler {
+@@ -284,6 +305,17 @@ impl SessionHandler {
  
          match decoded.pdu {
              Pdu::Ping(Ping {}) => send_response(Ok(Pdu::Pong(Pong {}))),
-+            pdu @ (Pdu::GetPaneCloseInfo(_)
++            pdu @ (Pdu::GetMuxSession(_)
++            | Pdu::GetPaneCloseInfo(_)
 +            | Pdu::GetPaneLocation(_)
 +            | Pdu::ListAdoptablePanes(_)
 +            | Pdu::AdoptPane(_)
@@ -85,7 +86,7 @@ index 5dc535f86152d991641661ca9a5dc568755885e4..105d39ffc73efb88e8eb9ef812773977
              Pdu::SetWindowWorkspace(SetWindowWorkspace {
                  window_id,
                  workspace,
-@@ -718,7 +749,8 @@ impl SessionHandler {
+@@ -718,7 +750,8 @@ impl SessionHandler {
                  .detach();
              }
  
@@ -95,10 +96,11 @@ index 5dc535f86152d991641661ca9a5dc568755885e4..105d39ffc73efb88e8eb9ef812773977
                  let client_id = self.client_id.clone();
                  spawn_into_main_thread(async move {
                      schedule_domain_spawn_v2(spawn, send_response, client_id);
-@@ -1006,6 +1038,12 @@ impl SessionHandler {
+@@ -1006,6 +1039,13 @@ impl SessionHandler {
              | Pdu::UnitResponse { .. }
              | Pdu::LivenessResponse { .. }
              | Pdu::GetPaneDirectionResponse { .. }
++            | Pdu::GetMuxSessionResponse { .. }
 +            | Pdu::GetPaneCloseInfoResponse { .. }
 +            | Pdu::GetPaneLocationResponse { .. }
 +            | Pdu::ListAdoptablePanesResponse { .. }
@@ -108,7 +110,7 @@ index 5dc535f86152d991641661ca9a5dc568755885e4..105d39ffc73efb88e8eb9ef812773977
              | Pdu::SearchScrollbackResponse { .. }
              | Pdu::GetLinesResponse { .. }
              | Pdu::GetCodecVersionResponse { .. }
-@@ -1134,3 +1172,7 @@ async fn move_pane(
+@@ -1134,3 +1174,7 @@ async fn move_pane(
          window_id,
      }))
  }
