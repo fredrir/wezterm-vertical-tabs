@@ -1,6 +1,6 @@
 //! Remote pane operations: mirrored launches and this host's backing workspace.
 use crate::client::Client;
-use crate::domain::snapshot::leaves;
+use crate::domain::snapshot::{forget_panes, leaves};
 use crate::domain::{ClientDomain, ClientInner};
 use crate::pane::ClientPane;
 use anyhow::anyhow;
@@ -206,22 +206,37 @@ impl ClientDomain {
     }
 }
 
+const SESSION: &str = "session:";
+
+impl ClientInner {
+    pub(crate) fn server(&self) -> Option<String> {
+        self.server.lock().unwrap().clone()
+    }
+
+    /// The running mux session; a restarted server starts a new one.
+    pub(crate) fn session(&self) -> Option<String> {
+        self.server()?.strip_prefix(SESSION).map(str::to_owned)
+    }
+}
+
+async fn mux_session(client: &Client) -> Option<String> {
+    let session = client.get_mux_session().await.ok()?.session;
+    let valid = !session.is_empty()
+        && session.len() <= 128
+        && session
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-');
+    valid.then(|| format!("{SESSION}{session}"))
+}
+
 /// A running server has one session across routes; older servers only support adoption identity.
 pub(super) async fn server_identity(
     local_pane_layout: bool,
     client: &Client,
     version: &GetCodecVersionResponse,
 ) -> Option<String> {
-    if let Ok(response) = client.get_mux_session().await {
-        if !response.session.is_empty()
-            && response.session.len() <= 128
-            && response
-                .session
-                .bytes()
-                .all(|b| b.is_ascii_alphanumeric() || b == b'-')
-        {
-            return Some(format!("session:{}", response.session));
-        }
+    if let Some(session) = mux_session(client).await {
+        return Some(session);
     }
     if !local_pane_layout {
         return None;
@@ -241,6 +256,26 @@ pub(super) async fn server_identity(
         host.hostname,
         version.executable_path.display()
     ))
+}
+
+/// A reconnect can reach a restarted server, whose new panes reuse the dead panes' IDs.
+pub(super) async fn follow_restart(inner: &ClientInner) {
+    let Some(current) = mux_session(&inner.client).await else {
+        return;
+    };
+    let previous = inner.server.lock().unwrap().replace(current.clone());
+    if restarted(previous.as_deref(), &current) && inner.local_pane_layout {
+        log::warn!(
+            "domain {}: server restarted; dropping its panes",
+            inner.local_domain_id
+        );
+        forget_panes(inner, |_| false);
+    }
+}
+
+/// Only two sessions can tell a restart from an older server's identity.
+fn restarted(previous: Option<&str>, current: &str) -> bool {
+    previous.is_some_and(|previous| previous.starts_with(SESSION) && previous != current)
 }
 
 /// Whether a client domain of this mux shows the remote pane, by any route.
@@ -327,3 +362,7 @@ fn adopt_into(
 #[cfg(test)]
 #[path = "../../tests/vtabs/spawn.rs"]
 mod vtabs_spawn_tests;
+
+#[cfg(test)]
+#[path = "../../tests/vtabs/session.rs"]
+mod vtabs_session_tests;

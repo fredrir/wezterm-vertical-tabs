@@ -17,13 +17,13 @@ use wezterm_term::{KeyCode, KeyModifiers, StableRowIndex};
 impl ClientPane {
     /// Stable while the mux survives. Pane identities survive adoption into a new backing tab.
     pub fn persistence_identity(&self) -> Option<(String, String)> {
-        let session = self.client.server.as_deref()?.strip_prefix("session:")?;
+        let session = self.client.session()?;
         let entity = if self.client.local_pane_layout {
             format!("pane:{}", self.remote_pane_id)
         } else {
             format!("tab:{}", self.remote_tab_id())
         };
-        Some((session.to_owned(), entity))
+        Some((session, entity))
     }
 
     pub(crate) fn update_remote_tab_id(&self, tab_id: TabId) {
@@ -38,7 +38,9 @@ impl ClientPane {
     pub(crate) fn shows(&self, inner: &ClientInner, remote_pane_id: PaneId) -> bool {
         self.remote_pane_id == remote_pane_id
             && (self.client.local_domain_id == inner.local_domain_id
-                || (inner.server.is_some() && self.client.server == inner.server))
+                || inner
+                    .server()
+                    .is_some_and(|server| self.client.server() == Some(server)))
     }
 
     /// Load the visible screen, directory and owner before this proxy enters the local split tree.

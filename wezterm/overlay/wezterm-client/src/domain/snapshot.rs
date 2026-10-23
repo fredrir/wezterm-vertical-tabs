@@ -122,19 +122,24 @@ impl ClientDomain {
                 }
             }
         }
-        let mux = Mux::get();
-        for pane in mux.iter_panes() {
-            if pane.domain_id() == inner.local_domain_id {
-                if let Some(client) = pane.downcast_ref::<ClientPane>() {
-                    if !present.contains(&client.remote_pane_id()) {
-                        client.ignore_next_kill();
-                        mux.remove_pane(pane.pane_id());
-                    }
+        forget_panes(inner, |pane| present.contains(&pane.remote_pane_id()));
+    }
+}
+
+/// Removes this domain's panes `keep` rejects without killing remote processes behind their IDs.
+pub(super) fn forget_panes(inner: &ClientInner, keep: impl Fn(&ClientPane) -> bool) {
+    let mux = Mux::get();
+    for pane in mux.iter_panes() {
+        if pane.domain_id() == inner.local_domain_id {
+            if let Some(client) = pane.downcast_ref::<ClientPane>() {
+                if !keep(client) {
+                    client.ignore_next_kill();
+                    mux.remove_pane(pane.pane_id());
                 }
             }
         }
-        inner.expire_stale_mappings();
     }
+    inner.expire_stale_mappings();
 }
 
 /// Source tabs a resync moved panes out of.

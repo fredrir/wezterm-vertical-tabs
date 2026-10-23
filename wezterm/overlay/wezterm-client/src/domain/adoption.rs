@@ -80,12 +80,7 @@ pub async fn find(domains: &[String]) -> Vec<AdoptablePane> {
         .filter(|domain| {
             layout(domain)
                 .and_then(ClientDomain::inner)
-                .is_some_and(|inner| {
-                    inner
-                        .server
-                        .clone()
-                        .is_none_or(|server| servers.insert(server))
-                })
+                .is_some_and(|inner| inner.server().is_none_or(|server| servers.insert(server)))
         })
         .collect();
     let found = futures::future::join_all(reachable.iter().map(located)).await;

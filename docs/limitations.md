@@ -39,6 +39,6 @@
 | Lua capability | `wezterm.mux.supports_local_pane_layout`; `wezterm.mux.local_pane_layout_domains` = `{ "tls", "unix", "ssh" }` |
 | Client-pane metadata | `pane:get_metadata().remote_pane_id`; ID on the immediately connected mux |
 | Activation | Updated GUI/CLI and owning mux server; restart required for existing domains |
-| Reattachment | Live TLS reconnects retain panes; unix/SSH disconnects close their panes; the next attach adopts orphaned `__backing:<host>` tabs into `__detached` |
+| Reattachment | Live TLS reconnects retain panes unless the server restarted; unix/SSH disconnects close their panes; the next attach adopts orphaned `__backing:<host>` tabs into `__detached` |
 | Server identity | Running mux session; older servers fall back to host name, executable and config path for adoption |
 | Connection progress | Mux servers log it; no tab or window opens, so WezTerm-multiplexed SSH prompts fail; use keys or an agent |
