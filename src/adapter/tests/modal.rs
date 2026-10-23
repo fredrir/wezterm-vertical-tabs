@@ -115,13 +115,15 @@ fn form_completion_publishes_settled_grid_and_pointer_origin() {
         adapter.render(geometry, Instant::now());
         adapter.app.open_create_space();
         adapter.render(geometry, Instant::now());
+        assert!(adapter.overlay_surface());
         assert_eq!(adapter.surface.columns, 139);
         adapter.ui_input(ui::UiInput::Text("Complete".into()));
         adapter.ui_input(ui::UiInput::Key {
             key: ui::Key::Enter,
             modifiers: ui::Modifiers::default(),
         });
-        assert!(adapter.overlay_surface());
+        // Dispatch settles the submitted form before the next frame is measured.
+        assert!(!adapter.overlay_surface());
         let before = adapter.surface.revision;
         adapter.render(geometry, Instant::now());
         assert_eq!(
