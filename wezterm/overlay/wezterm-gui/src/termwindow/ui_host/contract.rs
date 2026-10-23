@@ -209,6 +209,8 @@ pub trait Provider {
     fn terminal_input(&mut self, input: Input<'_>, escape: HideOnEscape) -> TerminalKey;
     fn glyph_scale(&self) -> f64;
     fn quick_terminal_config(&self) -> QuickTerminalConfig;
+    fn selected_space(&self) -> &str;
+    fn space_exists(&self, id: &str) -> bool;
     fn message(&mut self, message: Message);
     fn projection(&self) -> Projection;
     fn commands(&mut self) -> Vec<Command>;

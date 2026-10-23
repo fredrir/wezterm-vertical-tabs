@@ -1,4 +1,4 @@
-use super::launch::directory;
+use super::launch::{directory, quick_workspace};
 use super::layout::{step, step_cells, Edges, Layout, SHELL_SIZE};
 use super::*;
 use crate::termwindow::ui_host::{HideOnEscape, TerminalPadding};
@@ -378,6 +378,99 @@ fn preserved_shell_launch_can_finish_while_hidden() {
     state.hide(true, |_| true);
     assert!(state.complete(pending, None));
     assert!(!state.visible());
+}
+
+#[test]
+fn spaces_keep_separate_shell_launches_and_sizes() {
+    let mut terminal = TerminalOverlay::default();
+    terminal.select_space("home", true, |_| true);
+    let home = terminal.session.clone();
+    home.borrow_mut().show(None, true, |_| true);
+    let pending = home.borrow_mut().launch_shell();
+    adjust(&mut home.borrow_mut(), true, 0.9);
+
+    terminal.select_space("work", true, |_| true);
+    assert!(!home.borrow().visible());
+    assert!(!terminal.session.borrow().visible());
+    assert_eq!(terminal.session.borrow().size(SHELL_SIZE), SHELL_SIZE);
+    assert!(matches!(
+        terminal
+            .session
+            .borrow_mut()
+            .show(None, true, |_| true)
+            .next,
+        Open::ResolveShell
+    ));
+    let work_pending = terminal.session.borrow_mut().launch_shell();
+    assert_eq!(terminal.sessions().count(), 2);
+    // A completion for the old space must not hide or replace the current one.
+    assert!(home.borrow_mut().complete(pending, None));
+    assert!(terminal.session.borrow().visible());
+    assert!(terminal.select_space("work", true, |_| true).is_none());
+
+    terminal.select_space("home", true, |_| true);
+    assert!(Rc::ptr_eq(&home, &terminal.session));
+    assert_eq!(terminal.session.borrow().size(SHELL_SIZE), (0.9, 0.75));
+    terminal.select_space("work", true, |_| true);
+    assert!(matches!(
+        terminal
+            .session
+            .borrow_mut()
+            .show(None, true, |_| true)
+            .next,
+        Open::Pending
+    ));
+    assert!(terminal.session.borrow_mut().complete(work_pending, None));
+}
+
+#[test]
+fn switching_spaces_respects_shell_and_program_preservation() {
+    for preserve_shell in [false, true] {
+        let mut terminal = TerminalOverlay::default();
+        terminal.select_space("home", preserve_shell, |_| true);
+        let pending = terminal.session.borrow_mut().launch_shell();
+        let spec = program("lazygit", true);
+        let program_pending = open_program(&mut terminal.session.borrow_mut(), spec.clone());
+        terminal.select_space("work", preserve_shell, |_| true);
+        assert!(!terminal.session.borrow().reusable(&spec, |_| true));
+        terminal.select_space("home", preserve_shell, |_| true);
+        let mut state = terminal.session.borrow_mut();
+        assert!(!state.visible());
+        assert_eq!(state.complete(pending, None), preserve_shell);
+        assert!(state.reusable(&spec, |_| true));
+        assert!(state.complete(program_pending, None));
+    }
+}
+
+#[test]
+fn deleting_a_space_releases_its_sessions_and_pending_launches() {
+    let mut terminal = TerminalOverlay::default();
+    terminal.select_space("home", true, |_| true);
+    terminal.session.borrow_mut().launch_shell();
+    open_program(&mut terminal.session.borrow_mut(), program("yazi", true));
+    let deleted = Rc::downgrade(&terminal.session);
+    terminal.select_space("work", true, |_| true);
+    terminal.retain_spaces(|space| space == "work");
+    assert!(deleted.upgrade().is_none());
+    assert_eq!(terminal.sessions().count(), 1);
+    let remaining = Rc::downgrade(&terminal.session);
+    drop(terminal);
+    assert!(remaining.upgrade().is_none());
+}
+
+#[test]
+fn remote_quick_workspaces_distinguish_spaces_windows_and_programs() {
+    let domain: Arc<dyn Domain> = Arc::new(mux::domain::LocalDomain::new("local").unwrap());
+    let home = quick_workspace(&domain, 1, "home", Slot::Shell(1));
+    assert!(mux::is_hidden_workspace(&home));
+    assert_eq!(home, quick_workspace(&domain, 1, "home", Slot::Shell(2)));
+    for other in [
+        quick_workspace(&domain, 1, "work", Slot::Shell(1)),
+        quick_workspace(&domain, 2, "home", Slot::Shell(1)),
+        quick_workspace(&domain, 1, "home", Slot::Program(1)),
+    ] {
+        assert_ne!(home, other);
+    }
 }
 
 #[test]

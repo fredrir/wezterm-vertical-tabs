@@ -59,6 +59,60 @@ def change_directory(gui, directory):
 
 @pytest.mark.gui
 @pytest.mark.parametrize("domain", ["local", "unix"])
+def test_quick_terminals_belong_to_their_space(probe_factory, tmp_path, domain):
+    probe = probe_factory(domain, domain)
+    gui = GuiInput(probe, tmp_path)
+    initial = probe.start()
+    gui.attach()
+    home = initial["model"]["selected_space"]
+
+    def open_shell():
+        probe.intent("quick_terminal")
+        return quick(probe.wait(lambda state: quick(state)["visible"] and quick(state)["pane"]))[
+            "pane"
+        ]
+
+    def record(value, name):
+        gui.text(f'{value}; echo $$ > "$WEZ_VTABS_SCENARIO/{name}-pid"')
+        gui.key("Return")
+        probe.wait(lambda state: (probe.root / f"{name}-pid").exists())
+        return int((probe.root / f"{name}-pid").read_text())
+
+    home_pane = open_shell()
+    home_pid = record("QT_SPACE=home", "home")
+    probe.intent({"CreateSpace": {"name": "Work"}})
+    created = probe.wait(lambda state: state["model"]["selected_space"] != home)
+    work = created["model"]["selected_space"]
+    assert not quick(created)["visible"]
+    assert quick(created)["pane"] is None
+    assert created["tabs"] == initial["tabs"]
+
+    work_pane = open_shell()
+    work_pid = record("QT_SPACE=work", "work")
+    assert work_pane != home_pane
+    assert work_pid != home_pid
+    for space, pane, value in [(home, home_pane, "home"), (work, work_pane, "work")]:
+        probe.intent({"SelectSpace": space})
+        selected = probe.wait(lambda state, space=space: state["model"]["selected_space"] == space)
+        assert not quick(selected)["visible"]
+        assert open_shell() == pane
+        gui.text(f'printf "%s" "$QT_SPACE" > "$WEZ_VTABS_SCENARIO/{value}-value"')
+        gui.key("Return")
+        probe.wait(lambda state, value=value: (probe.root / f"{value}-value").exists())
+        assert (probe.root / f"{value}-value").read_text() == value
+
+    # Display names do not change the session's identity.
+    probe.intent({"RenameSpace": {"id": work, "name": "Renamed"}})
+    probe.wait(lambda state: any(s["name"] == "Renamed" for s in state["model"]["spaces"]))
+    assert open_shell() == work_pane
+    probe.intent({"DeleteSpace": {"id": work, "destination": home}})
+    probe.wait(lambda state: state["model"]["selected_space"] == home and not alive(work_pid))
+    assert alive(home_pid)
+    assert open_shell() == home_pane
+
+
+@pytest.mark.gui
+@pytest.mark.parametrize("domain", ["local", "unix"])
 def test_quick_terminal_preserves_its_shell_without_creating_a_tab(probe_factory, tmp_path, domain):
     probe = probe_factory(
         domain,

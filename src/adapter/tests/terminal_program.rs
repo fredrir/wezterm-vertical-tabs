@@ -3,6 +3,30 @@ use super::*;
 use window::KeyCode;
 
 #[test]
+fn terminal_spaces_follow_selection_and_keep_their_identity_when_renamed() {
+    config::designate_this_as_the_main_thread();
+    let mut adapter = Adapter::new(9932);
+    let home = adapter.selected_space().to_owned();
+    adapter.dispatch(core::Intent::CreateSpace {
+        name: "Work".into(),
+    });
+    let work = adapter.selected_space().to_owned();
+    assert_ne!(home, work);
+    assert!(adapter.space_exists(&home));
+    adapter.dispatch(core::Intent::RenameSpace {
+        id: work.clone(),
+        name: "Renamed".into(),
+    });
+    assert_eq!(adapter.selected_space(), work);
+    adapter.dispatch(core::Intent::DeleteSpace {
+        id: work.clone(),
+        destination: Some(home.clone()),
+    });
+    assert_eq!(adapter.selected_space(), home);
+    assert!(!adapter.space_exists(&work));
+}
+
+#[test]
 fn quick_programs_toggle_by_their_command() {
     config::designate_this_as_the_main_thread();
     let mut adapter = Adapter::new(9917);

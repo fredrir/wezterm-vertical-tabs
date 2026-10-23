@@ -483,6 +483,12 @@ impl Provider for Adapter {
     fn quick_terminal_config(&self) -> QuickTerminalConfig {
         terminal_program::quick_terminal(&self.app.model().settings)
     }
+    fn selected_space(&self) -> &str {
+        &self.app.model().selected_space
+    }
+    fn space_exists(&self, id: &str) -> bool {
+        self.app.model().spaces.iter().any(|space| space.id == id)
+    }
     fn prepare_command(&self, command: &mut config::keyassignment::SpawnCommand) {
         if self.app.model().selected_tab.is_none()
             && matches!(

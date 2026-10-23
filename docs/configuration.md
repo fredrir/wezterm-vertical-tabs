@@ -105,7 +105,8 @@ return config
 | Shortcut | Ctrl + backtick; configurable as `quick_terminal` in Settings → Keybinds |
 | Hide | Escape, repeat shortcut, click outside, close-tab shortcut; `quick_terminal_auto_hide = true` also hides on focus loss (default `false`) |
 | Escape | `quick_terminal_hide_on_escape`: `"auto"` (default) hides only while nothing runs in the shell, judged by the pane's owning mux like closing a tab; `"always"`; `"never"` |
-| Session | `quick_terminal_preserve_shell = true` (default) keeps one shell per window running while hidden; `false` ends it when hidden and starts fresh on opening |
+| Session | `quick_terminal_preserve_shell = true` (default) keeps one shell per space in each window running while hidden; `false` ends it when hidden and starts fresh on opening |
+| Spaces | Switching spaces hides the quick terminal; reopening returns to that space's shell. Deleting a space ends its quick shell and preserved programs |
 | Start | Beside the active pane when a shell is created: same host, domain and directory |
 | Mux without `local_pane_layout` | Shell lives in a hidden workspace on the mux server; reattached after a GUI restart when preserved; follows `replace-pane` |
 | Lua action | `vtabs.action("quick_terminal")`; available with plugin shortcuts disabled |
@@ -149,7 +150,7 @@ Keys follow WezTerm's `SpawnCommand` and config names; anything left out follows
 | Resize | Axes without `width`/`height` share the quick terminal's resized size; set axes resize only that program |
 | Domain | A mux without `local_pane_layout` spawns it in a hidden workspace beside one of the domain's panes and needs this build's mux server |
 | Session | Starts fresh on each opening unless `preserve`; ends when hidden or when the program exits |
-| Toggle | Same binding hides; another binding or the quick terminal shortcut replaces it; another `preserve` binding running the same command reopens a preserved program with its own settings |
+| Toggle | Same binding hides; another binding or the quick terminal shortcut replaces it; another `preserve` binding running the same command reopens a preserved program in the current space with its own settings |
 | Hide | Repeat binding, click outside, close-tab shortcut; Escape follows `hide_on_escape`, where `"auto"` hides only while nothing runs in the program |
 
 **Launcher**

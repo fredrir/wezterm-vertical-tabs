@@ -14,7 +14,7 @@ use mux::tab::{PositionedPane, TabId};
 use mux::window::WindowId as MuxWindowId;
 use mux::Mux;
 use portable_pty::CommandBuilder;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 use std::{cell::RefCell, rc::Rc, sync::Arc};
 use wezterm_client::domain::ClientDomain;
@@ -28,7 +28,7 @@ mod frame;
 mod launch;
 mod layout;
 mod session;
-use session::{Open, Session, Slot};
+use session::{Hidden, Open, Session, Slot};
 
 /// The quick terminal's render layer, above the sidebar UI's.
 const ZINDEX: i8 = 6;
@@ -36,7 +36,38 @@ const ZINDEX: i8 = 6;
 #[derive(Default)]
 pub(super) struct TerminalOverlay {
     session: Rc<RefCell<Session>>,
+    space: Option<String>,
+    inactive: HashMap<String, Rc<RefCell<Session>>>,
     blur: RefCell<Option<blur::BackdropBlur>>,
+}
+
+impl TerminalOverlay {
+    fn sessions(&self) -> impl Iterator<Item = &Rc<RefCell<Session>>> {
+        std::iter::once(&self.session).chain(self.inactive.values())
+    }
+
+    fn select_space(
+        &mut self,
+        space: &str,
+        preserve_shell: bool,
+        alive: impl Fn(&Arc<dyn Pane>) -> bool,
+    ) -> Option<Hidden> {
+        if self.space.as_deref() == Some(space) {
+            return None;
+        }
+        let hidden = self.session.borrow_mut().hide(preserve_shell, alive);
+        let next = self.inactive.remove(space).unwrap_or_default();
+        let previous = std::mem::replace(&mut self.session, next);
+        if let Some(previous_space) = self.space.replace(space.to_owned()) {
+            self.inactive.insert(previous_space, previous);
+        }
+        self.blur.borrow_mut().take();
+        Some(hidden)
+    }
+
+    fn retain_spaces(&mut self, exists: impl Fn(&str) -> bool) {
+        self.inactive.retain(|space, _| exists(space));
+    }
 }
 
 fn mirrored_tab(pane: &Arc<dyn Pane>) -> Option<TabId> {
@@ -76,16 +107,35 @@ fn corner_radius(dpi: u32) -> f32 {
 }
 
 impl TermWindow {
+    pub(super) fn sync_terminal_overlay_space(&mut self) {
+        let Some(ui) = &mut self.ui_host else {
+            return;
+        };
+        let hidden = ui.terminal.select_space(
+            ui.provider.selected_space(),
+            ui.provider.quick_terminal_config().preserve_shell,
+            alive,
+        );
+        let provider = &ui.provider;
+        ui.terminal
+            .retain_spaces(|space| provider.space_exists(space));
+        if let Some(hidden) = hidden {
+            self.finish_hiding_terminal_overlay(hidden);
+        }
+    }
+
     pub(super) fn terminal_overlays_can_close(&self) -> bool {
         self.ui_host
             .iter()
             .chain(self.vtabs_suspended.values())
             .all(|ui| {
-                let state = ui.terminal.session.borrow();
-                let idle = state
-                    .panes()
-                    .all(|pane| pane.can_close_without_prompting(mux::pane::CloseReason::Window));
-                idle
+                ui.terminal.sessions().all(|session| {
+                    let state = session.borrow();
+                    let idle = state.panes().all(|pane| {
+                        pane.can_close_without_prompting(mux::pane::CloseReason::Window)
+                    });
+                    idle
+                })
             })
     }
 
@@ -111,9 +161,11 @@ impl TermWindow {
 
     pub(super) fn terminal_overlay_owns(&self, pane_id: PaneId) -> bool {
         self.ui_host.as_ref().is_some_and(|ui| {
-            let state = ui.terminal.session.borrow();
-            let owned = state.panes().any(|pane| pane.pane_id() == pane_id);
-            owned
+            ui.terminal.sessions().any(|session| {
+                let state = session.borrow();
+                let owned = state.panes().any(|pane| pane.pane_id() == pane_id);
+                owned
+            })
         })
     }
 
@@ -177,13 +229,17 @@ impl TermWindow {
                 .session
                 .borrow_mut()
                 .hide(ui.provider.quick_terminal_config().preserve_shell, alive);
-            for pane in &hidden.unfocus {
-                pane.focus_changed(false);
-            }
-            for pane in &hidden.discarded {
-                remove(pane);
-            }
             ui.terminal.blur.borrow_mut().take();
+            self.finish_hiding_terminal_overlay(hidden);
+        }
+    }
+
+    fn finish_hiding_terminal_overlay(&mut self, hidden: Hidden) {
+        for pane in &hidden.unfocus {
+            pane.focus_changed(false);
+        }
+        for pane in &hidden.discarded {
+            remove(pane);
         }
         self.current_mouse_capture = None;
         self.current_mouse_buttons.clear();
@@ -249,34 +305,29 @@ impl TermWindow {
     pub(super) fn resize_terminal_overlay(&mut self) {
         if let Some(ui) = &self.ui_host {
             let config = ui.provider.quick_terminal_config();
-            let refresh = ui.terminal.session.borrow_mut().refresh(
-                config,
-                &self.config,
-                Instant::now(),
-                alive,
-            );
-            if refresh.changed {
-                self.quad_generation += 1;
+            for session in ui.terminal.sessions() {
+                let mut state = session.borrow_mut();
+                let refresh = state.refresh(config, &self.config, Instant::now(), alive);
+                if refresh.changed {
+                    self.quad_generation += 1;
+                }
+                for update in refresh.configurations {
+                    update
+                        .pane
+                        .set_config(term_config(&self.config, update.colors.as_ref()));
+                }
+                for pane in &refresh.discarded {
+                    remove(pane);
+                }
+                if let Some(pane) = state.follow() {
+                    pane.set_config(term_config(&self.config, None));
+                    pane.focus_changed(
+                        state
+                            .shown()
+                            .is_some_and(|shown| shown.pane_id() == pane.pane_id()),
+                    );
+                }
             }
-            for update in refresh.configurations {
-                update
-                    .pane
-                    .set_config(term_config(&self.config, update.colors.as_ref()));
-            }
-            for pane in &refresh.discarded {
-                remove(pane);
-            }
-        }
-        let replacement = self
-            .ui_host
-            .as_ref()
-            .and_then(|ui| ui.terminal.session.borrow_mut().follow());
-        if let Some(pane) = replacement {
-            pane.set_config(Arc::new(config::TermConfig::with_config(
-                self.config.clone(),
-            )));
-            let shown = self.terminal_overlay_pane();
-            pane.focus_changed(shown.is_some_and(|shown| shown.pane_id() == pane.pane_id()));
         }
         let Some(pane) = self.terminal_overlay_pane() else {
             return;

@@ -13,8 +13,13 @@ pub(super) struct Launch {
     cwd: Option<String>,
 }
 
-/// Keyed by the server window, which outlives this GUI, so a restart finds what it left.
-pub(super) fn quick_workspace(domain: &Arc<dyn Domain>, window: MuxWindowId, slot: Slot) -> String {
+/// Keyed by the server window and stable space ID, so a restart finds the right shell.
+pub(super) fn quick_workspace(
+    domain: &Arc<dyn Domain>,
+    window: MuxWindowId,
+    space: &str,
+    slot: Slot,
+) -> String {
     let window = domain
         .downcast_ref::<ClientDomain>()
         .and_then(|client| client.local_to_remote_window_id(window))
@@ -23,7 +28,7 @@ pub(super) fn quick_workspace(domain: &Arc<dyn Domain>, window: MuxWindowId, slo
         Slot::Shell(_) => "shell",
         Slot::Program(_) => "program",
     };
-    format!("{}{window}:{kind}", mux::QUICK_WORKSPACE_PREFIX)
+    format!("{}{window}:{space}:{kind}", mux::QUICK_WORKSPACE_PREFIX)
 }
 
 pub(super) fn quick_panes(workspace: &str) -> Vec<Arc<dyn Pane>> {
@@ -146,6 +151,7 @@ impl TermWindow {
             return;
         };
         let preserve_shell = ui.provider.quick_terminal_config().preserve_shell;
+        let space = ui.provider.selected_space().to_owned();
         let state_ref = ui.terminal.session.clone();
         if let Some(pane) = self.get_active_pane_or_overlay() {
             pane.focus_changed(false);
@@ -197,7 +203,7 @@ impl TermWindow {
             }
         };
         if let Target::Beside(domain, _) = &launch.target {
-            let workspace = quick_workspace(domain, self.mux_window_id, Slot::Shell(0));
+            let workspace = quick_workspace(domain, self.mux_window_id, &space, Slot::Shell(0));
             let panes = quick_panes(&workspace);
             if !preserve_shell {
                 panes.iter().for_each(remove);
@@ -219,6 +225,10 @@ impl TermWindow {
         let Some(window) = self.window.clone() else {
             return;
         };
+        let Some(ui) = &self.ui_host else {
+            return;
+        };
+        let space = ui.provider.selected_space().to_owned();
         let state = Rc::downgrade(state);
         let size = self.terminal_overlay_layout().size;
         let config = self.config.clone();
@@ -242,7 +252,7 @@ impl TermWindow {
                         let client = domain
                             .downcast_ref::<ClientDomain>()
                             .ok_or_else(|| anyhow::anyhow!("not a client domain"))?;
-                        let workspace = quick_workspace(&domain, window_id, slot);
+                        let workspace = quick_workspace(&domain, window_id, &space, slot);
                         // Programs a quit GUI couldn't end would otherwise outlive it.
                         if state.upgrade().is_some_and(|state| {
                             state.borrow_mut().sweep_workspace(slot, &workspace)

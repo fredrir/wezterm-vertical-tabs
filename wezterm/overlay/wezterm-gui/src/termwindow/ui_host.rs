@@ -254,6 +254,7 @@ impl TermWindow {
             }
         }
         self.ui_host = Some(ui);
+        self.sync_terminal_overlay_space();
         self.vtabs_commands(commands);
         self.vtabs_schedule_provider(self.mux_window_id);
         self.vtabs_apply_reservation(before);
