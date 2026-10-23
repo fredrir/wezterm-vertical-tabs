@@ -53,6 +53,7 @@ impl SidebarUi {
 
     /// Host tab moves reach the settings tab through the same order as the sidebar.
     pub fn move_settings(&mut self, model: &Model, index: usize) {
+        self.prepare(model, self.frame.now);
         let mut slots = self.sidebar.slots(model, self.settings.listed);
         if !slots.contains(&Slot::Settings) {
             return;
@@ -71,6 +72,7 @@ impl SidebarUi {
     }
 
     fn settings_slot(&mut self, model: &Model) -> Option<isize> {
+        self.prepare(model, self.frame.now);
         self.sidebar.ensure_rows(model, self.settings.listed);
         self.sidebar
             .settings_place

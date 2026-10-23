@@ -138,6 +138,7 @@ impl WindowApp {
             return Err(Error("Stale snapshot".into()));
         }
         validate_metrics(snapshot.metrics)?;
+        self.ui.prepare(&self.model, self.now);
         let old_active = self.model.selected_tab;
         let config_changed = self.configuration_epoch != snapshot.configuration_epoch;
         let incoming_spawn = !self.pending_spawns.is_empty()
@@ -149,6 +150,7 @@ impl WindowApp {
         self.model
             .reconcile(snapshot.tabs, snapshot.active_tab, follow)?;
         self.storage.reconcile_tabs(&mut self.model, self.now)?;
+        self.ui.prepare(&self.model, self.now);
         // The host activated another tab; a closed tab beneath the page is not a switch away.
         if follow
             && old_active != self.model.selected_tab
@@ -185,6 +187,7 @@ impl WindowApp {
         if self.teardown {
             return Ok(Update::default());
         }
+        self.ui.prepare(&self.model, self.now);
         let old_active = self.model.selected_tab;
         let old_space = self.model.selected_space.clone();
         let activates = matches!(
@@ -195,6 +198,7 @@ impl WindowApp {
                 | Intent::ActivateLast
         );
         let transition = self.model.dispatch(intent)?;
+        self.ui.prepare(&self.model, self.now);
         // Every activation leaves the settings page, whichever surface asked for it.
         if activates {
             self.ui.hide_settings();
@@ -262,6 +266,7 @@ impl WindowApp {
             .min()
     }
     pub fn open_settings(&mut self) {
+        self.ui.prepare(&self.model, self.now);
         self.ui.open_settings();
     }
     pub fn open_create_space(&mut self) {

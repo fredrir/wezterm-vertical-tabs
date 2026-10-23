@@ -829,6 +829,95 @@ fn settings_tab_drags_among_open_tabs_like_any_tab() {
 }
 
 #[test]
+fn settings_tab_position_and_search_belong_to_their_space() {
+    let (mut ui, mut model) = with_tabs(3);
+    use ElementId::{SettingsTab as S, Tab as T};
+    drag(&mut ui, &mut model, S, T(1), false);
+    click(&mut ui, &model, ElementId::SettingsSearch);
+    ui.event(&model, UiInput::Text("width".into()));
+    draw(&mut ui, &model);
+    let home_fields = selected_rows(&ui);
+    assert!(!home_fields.is_empty());
+
+    model
+        .dispatch(Intent::CreateSpace {
+            name: "Other".into(),
+        })
+        .unwrap();
+    let other = model.selected_space.clone();
+    model
+        .dispatch(Intent::AssignTab {
+            id: 3,
+            space_id: other.clone(),
+        })
+        .unwrap();
+    draw(&mut ui, &model);
+    assert!(!ui.content_page());
+    assert!(!ui.text_input_active());
+    assert_eq!(order(&ui), [T(3)]);
+
+    ui.open_settings();
+    click(&mut ui, &model, ElementId::SettingsSearch);
+    ui.event(&model, UiInput::Text("opacity".into()));
+    draw(&mut ui, &model);
+    let other_fields = selected_rows(&ui);
+    assert!(!other_fields.is_empty());
+    assert_ne!(home_fields, other_fields);
+    assert_eq!(order(&ui), [T(3), S]);
+
+    model.dispatch(Intent::SelectSpace("home".into())).unwrap();
+    draw(&mut ui, &model);
+    assert!(ui.content_page());
+    assert_eq!(order(&ui), [S, T(1), T(2)]);
+    assert_eq!(selected_rows(&ui), home_fields);
+    ui.close_settings();
+    draw(&mut ui, &model);
+    assert_eq!(order(&ui), [T(1), T(2)]);
+
+    model.dispatch(Intent::SelectSpace(other)).unwrap();
+    draw(&mut ui, &model);
+    assert!(ui.content_page());
+    assert_eq!(order(&ui), [T(3), S]);
+    assert_eq!(selected_rows(&ui), other_fields);
+}
+
+#[test]
+fn deleting_a_space_discards_its_settings_page() {
+    for delete_selected in [false, true] {
+        let (mut ui, mut model) = with_tabs(1);
+        draw(&mut ui, &model);
+        model
+            .dispatch(Intent::CreateSpace {
+                name: "Other".into(),
+            })
+            .unwrap();
+        let other = model.spaces.last().unwrap().clone();
+        draw(&mut ui, &model);
+        ui.open_settings();
+        if !delete_selected {
+            model.dispatch(Intent::SelectSpace("home".into())).unwrap();
+            draw(&mut ui, &model);
+        }
+        model
+            .dispatch(Intent::DeleteSpace {
+                id: other.id.clone(),
+                destination: None,
+            })
+            .unwrap();
+        draw(&mut ui, &model);
+        assert!(ui.content_page());
+
+        let mut spaces = model.spaces.clone();
+        spaces.push(other.clone());
+        model.load_catalog(spaces, vec![]).unwrap();
+        model.dispatch(Intent::SelectSpace(other.id)).unwrap();
+        draw(&mut ui, &model);
+        assert!(!ui.content_page());
+        assert!(order(&ui).is_empty());
+    }
+}
+
+#[test]
 fn tabs_drop_beside_the_settings_tab_without_moving_it() {
     let (mut ui, mut model) = with_tabs(3);
     use ElementId::{SettingsTab as S, Tab as T};

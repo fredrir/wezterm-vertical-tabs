@@ -121,6 +121,42 @@ fn settings_drafts_are_canceled_when_an_overlay_takes_input() {
 }
 
 #[test]
+fn switching_spaces_cancels_settings_input_before_the_next_frame() {
+    for mode in ["entry", "slider", "recording"] {
+        let mut model = model();
+        let mut ui = SidebarUi::new();
+        ui.open_settings();
+        draw(&mut ui, &model);
+        let mut intents = Vec::new();
+        match mode {
+            "entry" => ui.start_entry(&model, "width", Some('4')),
+            "slider" => ui.settings.editing.preview_slider("width", 400.),
+            "recording" => ui.toggle_settings_recording(&mut intents),
+            _ => unreachable!(),
+        }
+        model
+            .dispatch(Intent::CreateSpace {
+                name: "Other".into(),
+            })
+            .unwrap();
+        ui.prepare(&model, Duration::ZERO);
+        assert!(!ui.content_page());
+        assert!(!ui.text_input_active());
+        assert!(!ui.is_modal());
+
+        model.dispatch(Intent::SelectSpace("home".into())).unwrap();
+        ui.prepare(&model, Duration::ZERO);
+        ui.prepare(&model, Duration::ZERO);
+        assert!(ui.content_page());
+        assert!(!ui.text_input_active());
+        assert!(!ui.settings.editing.recording());
+        ui.commit_entry(&mut intents);
+        assert!(intents.is_empty());
+        assert!(ui.settings.editing.commit_slider("width").is_none());
+    }
+}
+
+#[test]
 fn settings_entry_commits_once_and_cancel_drops_the_draft() {
     let model = model();
     let mut ui = SidebarUi::new();

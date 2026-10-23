@@ -34,9 +34,12 @@ use runtime::{
     frame::Frame,
     motion::{self, Caret, Effects, Tooltip, Tween},
 };
-use std::time::Duration;
-use views::{settings_page::SettingsPage, sidebar::Sidebar};
-use vtabs_core::{Intent, PaneId, TabId};
+use std::{collections::BTreeMap, time::Duration};
+use views::{
+    settings_page::SettingsPage,
+    sidebar::{SettingsPlace, Sidebar},
+};
+use vtabs_core::{Intent, Model, PaneId, SpaceId, TabId};
 
 #[derive(Default)]
 pub struct SidebarUi {
@@ -51,6 +54,8 @@ pub struct SidebarUi {
     effects: Effects,
     sidebar: Sidebar,
     settings: SettingsPage,
+    settings_space: Option<SpaceId>,
+    settings_by_space: BTreeMap<SpaceId, (SettingsPage, Option<SettingsPlace>)>,
     overlays: Overlays,
     launchers: Launchers,
 }
@@ -224,6 +229,41 @@ impl SidebarUi {
             self.focused = None;
         }
         self.frame.dirty = true;
+    }
+    fn sync_settings_space(&mut self, model: &Model) {
+        if self.settings_space.as_ref() != Some(&model.selected_space)
+            && let Some(previous) = self.settings_space.replace(model.selected_space.clone())
+        {
+            if self.settings.open {
+                self.interrupt();
+                self.pointer.cancel_drag();
+                self.pointer.press = None;
+                self.pointer.origin = None;
+            }
+            if self.focused.as_ref().is_some_and(|id| {
+                id.on_settings_page()
+                    || matches!(id, ElementId::SettingsTab | ElementId::CloseSettingsTab)
+            }) {
+                self.focused = None;
+                self.caret.stop();
+            }
+            self.cancel_settings_input();
+            self.settings.query.set_preedit("", None);
+            let (mut settings, place) = self
+                .settings_by_space
+                .remove(&model.selected_space)
+                .unwrap_or_default();
+            settings.chord_label = self.settings.chord_label;
+            let previous_settings = std::mem::replace(&mut self.settings, settings);
+            let previous_place = std::mem::replace(&mut self.sidebar.settings_place, place);
+            self.settings_by_space
+                .insert(previous, (previous_settings, previous_place));
+            self.sidebar.rows_revision = None;
+            self.sidebar.reveal_settings = self.settings.open;
+            self.frame.dirty = true;
+        }
+        self.settings_by_space
+            .retain(|id, _| model.spaces.iter().any(|space| &space.id == id));
     }
     /// Leaves the page for the tab beneath; it stays listed like any background tab.
     pub fn hide_settings(&mut self) {

@@ -317,3 +317,81 @@ fn any_tab_activation_leaves_the_settings_page_and_releases_its_search() {
     app.dispatch(Intent::ActivateTab(1)).unwrap();
     assert!(!app.ui().content_page());
 }
+
+#[test]
+fn settings_pages_open_and_close_independently_in_each_space() {
+    let mut app = app();
+    app.open_settings();
+    app.dispatch(Intent::CreateSpace {
+        name: "Other".into(),
+    })
+    .unwrap();
+    let other = app.model().selected_space.clone();
+    assert!(!app.ui().content_page());
+    assert!(!app.is_modal());
+
+    app.dispatch(Intent::AssignTab {
+        id: 2,
+        space_id: other.clone(),
+    })
+    .unwrap();
+    app.activate_index(-1).unwrap();
+    assert!(!app.ui().content_page());
+    app.open_settings();
+
+    app.dispatch(Intent::SelectSpace("home".into())).unwrap();
+    app.update(snapshot(2, Some(1), vec![tab(1), tab(2)]))
+        .unwrap();
+    assert!(app.ui().content_page());
+    app.ui_mut().close_settings();
+
+    app.dispatch(Intent::SelectSpace(other.clone())).unwrap();
+    app.update(snapshot(3, Some(2), vec![tab(1), tab(2)]))
+        .unwrap();
+    assert!(app.ui().content_page());
+    app.activate_index(0).unwrap();
+    assert!(!app.ui().content_page());
+    app.activate_index(-1).unwrap();
+    assert!(app.ui().content_page());
+
+    app.dispatch(Intent::SelectSpace("home".into())).unwrap();
+    app.activate_index(-1).unwrap();
+    assert!(!app.ui().content_page());
+    app.dispatch(Intent::SelectSpace(other)).unwrap();
+    assert!(app.ui().content_page());
+}
+
+#[test]
+fn activating_another_spaces_tab_preserves_the_page_in_the_space_left_behind() {
+    for host_activation in [false, true] {
+        let mut app = app();
+        app.dispatch(Intent::CreateSpace {
+            name: "Other".into(),
+        })
+        .unwrap();
+        let other = app.model().selected_space.clone();
+        app.dispatch(Intent::AssignTab {
+            id: 2,
+            space_id: other.clone(),
+        })
+        .unwrap();
+        app.open_settings();
+        app.dispatch(Intent::SelectSpace("home".into())).unwrap();
+        app.open_settings();
+
+        if host_activation {
+            app.update(snapshot(2, Some(2), vec![tab(1), tab(2)]))
+                .unwrap();
+        } else {
+            app.dispatch(Intent::ActivateTab(2)).unwrap();
+        }
+        assert_eq!(app.model().selected_space, other);
+        assert!(!app.ui().content_page());
+        app.dispatch(Intent::SelectSpace("home".into())).unwrap();
+        assert!(app.ui().content_page());
+        app.dispatch(Intent::SelectSpace(other)).unwrap();
+        assert!(!app.ui().content_page());
+        app.activate_index(-1).unwrap();
+        assert!(app.ui().content_page());
+    }
+}

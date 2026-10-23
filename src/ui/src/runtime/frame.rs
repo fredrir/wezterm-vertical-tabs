@@ -77,6 +77,7 @@ impl SidebarUi {
             if self.overlays.should_dismiss(model) {
                 self.dismiss();
             }
+            self.sync_settings_space(model);
             self.frame.prepared_revision = Some(model.revision);
         }
         if self.tooltip.tick(now, self.pointer.hovered.is_some()) {
@@ -130,7 +131,6 @@ impl SidebarUi {
             if self.sidebar.last_space.as_ref() != Some(&model.selected_space) {
                 self.sidebar.reveal_selection = true;
                 self.sidebar.scroll = 0;
-                self.sidebar.settings_place = None;
                 if let Some(index) = model
                     .spaces
                     .iter()
