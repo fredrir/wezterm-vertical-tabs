@@ -498,7 +498,7 @@ index 3461571fbd0cb8c2e3906de7924df4589c617fbf..e80787bb90ae27df10484faae49d270a
  mod mousestate;
  mod renderable;
 diff --git a/wezterm-client/src/pane/renderable.rs b/wezterm-client/src/pane/renderable.rs
-index 68fa518f8305eec2035c9a69b7f2b9946ed89e56..d2702bcf8f4239d45754a15de4b8870b2bc378ec 100644
+index 68fa518f8305eec2035c9a69b7f2b9946ed89e56..c0b0c11f24dfb9eb6f5dc652de5752576afcc13a 100644
 --- a/wezterm-client/src/pane/renderable.rs
 +++ b/wezterm-client/src/pane/renderable.rs
 @@ -1,5 +1,6 @@
@@ -508,7 +508,62 @@ index 68fa518f8305eec2035c9a69b7f2b9946ed89e56..d2702bcf8f4239d45754a15de4b8870b
  use anyhow::anyhow;
  use codec::*;
  use config::{configuration, ConfigHandle};
-@@ -68,6 +69,7 @@ pub struct RenderableInner {
+@@ -53,6 +54,54 @@ impl LineEntry {
+     }
+ }
+ 
++// Compare content independently of upstream sequence numbers and compressed storage.
++fn same_line_contents(a: &Line, b: &Line) -> bool {
++    a.len() == b.len()
++        && a.is_double_width() == b.is_double_width()
++        && a.is_double_height_top() == b.is_double_height_top()
++        && a.is_double_height_bottom() == b.is_double_height_bottom()
++        && a.bidi_info() == b.bidi_info()
++        && a.visible_cells().count() == b.visible_cells().count()
++        && a.visible_cells()
++            .zip(b.visible_cells())
++            .all(|(a, b)| a.cell_index() == b.cell_index() && a.same_contents(&b))
++}
++
++fn update_line(
++    prior: Option<LineEntry>,
++    mut line: Line,
++    fetch_start: Option<Instant>,
++    seqno: &mut SequenceNo,
++) -> Option<LineEntry> {
++    // A pushed line or a newer fetch may have overtaken this response.
++    if let Some(start) = fetch_start {
++        match &prior {
++            Some(LineEntry::Fetching(then) | LineEntry::LineAndFetching(_, then))
++                if *then == start => {}
++            _ => return prior,
++        }
++    }
++
++    if let Some(LineEntry::Line(old) | LineEntry::Stale(old) | LineEntry::LineAndFetching(old, _)) =
++        prior
++    {
++        if same_line_contents(&old, &line) {
++            // Keep the local stamp: even an identical cursor row is sent on every update.
++            return Some(LineEntry::Line(old));
++        }
++    }
++
++    // A relaying mux must report newly arrived content after the seqno its client saw,
++    // including fetched lines whose upstream stamp predates the most recent update.
++    *seqno = (*seqno + 1).max(line.current_seqno());
++    line.update_last_change_seqno(*seqno);
++    Some(LineEntry::Line(line))
++}
++
++#[cfg(test)]
++#[path = "../../tests/vtabs/renderable.rs"]
++mod vtabs_renderable_tests;
++
+ pub struct RenderableInner {
+     pub client: Arc<ClientInner>,
+     remote_pane_id: PaneId,
+@@ -68,6 +117,7 @@ pub struct RenderableInner {
      lines: LruCache<StableRowIndex, LineEntry>,
      pub title: String,
      pub working_dir: Option<Url>,
@@ -516,7 +571,7 @@ index 68fa518f8305eec2035c9a69b7f2b9946ed89e56..d2702bcf8f4239d45754a15de4b8870b
      pub seqno: SequenceNo,
  
      fetch_limiter: RateLimiter,
-@@ -99,7 +101,7 @@ impl RenderableInner {
+@@ -99,7 +149,7 @@ impl RenderableInner {
              client: Arc::clone(client),
              remote_pane_id,
              local_pane_id,
@@ -525,7 +580,7 @@ index 68fa518f8305eec2035c9a69b7f2b9946ed89e56..d2702bcf8f4239d45754a15de4b8870b
              dead: false,
              poll_in_progress: AtomicBool::new(false),
              poll_interval: BASE_POLL_INTERVAL,
-@@ -110,6 +112,7 @@ impl RenderableInner {
+@@ -110,6 +160,7 @@ impl RenderableInner {
              ),
              title: title.to_string(),
              working_dir: None,
@@ -533,7 +588,7 @@ index 68fa518f8305eec2035c9a69b7f2b9946ed89e56..d2702bcf8f4239d45754a15de4b8870b
              fetch_limiter,
              last_send_time: now,
              last_recv_time: now,
-@@ -297,6 +300,19 @@ impl RenderableInner {
+@@ -297,6 +348,19 @@ impl RenderableInner {
          self.cursor_position.y += lines.len().saturating_sub(1) as StableRowIndex;
      }
  
@@ -553,7 +608,7 @@ index 68fa518f8305eec2035c9a69b7f2b9946ed89e56..d2702bcf8f4239d45754a15de4b8870b
      pub fn update_last_send(&mut self) {
          self.last_send_time = Instant::now();
          self.poll_interval = BASE_POLL_INTERVAL;
-@@ -351,14 +367,21 @@ impl RenderableInner {
+@@ -351,14 +415,20 @@ impl RenderableInner {
          }
          self.dimensions = delta.dimensions;
          self.title = delta.title;
@@ -573,43 +628,53 @@ index 68fa518f8305eec2035c9a69b7f2b9946ed89e56..d2702bcf8f4239d45754a15de4b8870b
              self.local_pane_id
          );
 -        self.seqno = delta.seqno;
-+        self.advance_seqno(delta.seqno);
  
          let config = configuration();
          for (stable_row, line) in bonus_lines {
-@@ -434,11 +457,18 @@ impl RenderableInner {
-         self.lines = lines;
+@@ -454,42 +524,10 @@ impl RenderableInner {
+     ) {
+         line.scan_and_create_hyperlinks(&config.hyperlink_rules);
+ 
+-        let entry = if let Some(fetch_start) = fetch_start {
+-            // If we're completing a fetch, only replace entries that were
+-            // set to fetching as part of our fetch.  If they are now longer
+-            // tagged that way, then someone came along after us and changed
+-            // the state, so we should leave it alone
+-
+-            match self.lines.pop(&stable_row) {
+-                Some(LineEntry::LineAndFetching(_, then)) | Some(LineEntry::Fetching(then))
+-                    if fetch_start == then =>
+-                {
+-                    log::trace!(
+-                        "row {} fetch done -> Line seq={} vs self.seq={}",
+-                        stable_row,
+-                        line.current_seqno(),
+-                        self.seqno
+-                    );
+-                    line.update_last_change_seqno(self.seqno);
+-                    LineEntry::Line(line)
+-                }
+-                Some(e) => {
+-                    // It changed since we started: leave it alone!
+-                    log::trace!(
+-                        "row {} {:?} changed since fetch started at {:?}, so leave it be",
+-                        stable_row,
+-                        e.kind(),
+-                        fetch_start
+-                    );
+-                    self.lines.put(stable_row, e);
+-                    return;
+-                }
+-                None => return,
+-            }
+-        } else {
+-            LineEntry::Line(line)
+-        };
+-        self.lines.put(stable_row, entry);
++        let prior = self.lines.pop(&stable_row);
++        if let Some(entry) = update_line(prior, line, fetch_start, &mut self.seqno) {
++            self.lines.put(stable_row, entry);
++        }
      }
  
-+    // A relaying mux only reports lines stamped after the seqno its client last saw
-+    fn advance_seqno(&mut self, at_least: SequenceNo) {
-+        self.seqno = (self.seqno + 1).max(at_least);
-+    }
-+
-     fn make_stale(&mut self, stable_row: StableRowIndex) {
-         match self.lines.pop(&stable_row) {
-             Some(LineEntry::Stale(old))
-             | Some(LineEntry::Line(old))
-             | Some(LineEntry::LineAndFetching(old, _)) => {
-+                let mut old = old;
-+                old.update_last_change_seqno(self.seqno);
-                 self.lines.put(stable_row, LineEntry::Stale(old));
-             }
-             Some(LineEntry::Fetching(_)) | None => {}
-@@ -487,6 +517,7 @@ impl RenderableInner {
-                 None => return,
-             }
-         } else {
-+            line.update_last_change_seqno(self.seqno);
-             LineEntry::Line(line)
-         };
-         self.lines.put(stable_row, entry);
-@@ -549,6 +580,8 @@ impl RenderableInner {
-                     let config = configuration();
- 
-                     log::trace!("fetch complete for {:?} at {:?}", to_fetch, now);
-+                    let newest = lines.iter().map(|(_, line)| line.current_seqno()).max();
-+                    inner.advance_seqno(newest.unwrap_or(SEQ_ZERO));
-                     for (stable_row, line) in lines.into_iter() {
-                         inner.put_line(stable_row, line, &config, Some(now));
-                     }
+     fn schedule_fetch_lines(&mut self, to_fetch: RangeSet<StableRowIndex>, now: Instant) {
