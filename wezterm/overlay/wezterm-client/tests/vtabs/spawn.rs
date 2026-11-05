@@ -6,6 +6,9 @@ fn mirrored_spawn_rejects_invalid_targets_before_connecting() {
     use mux::Mux;
     use std::sync::Arc;
 
+    let _serial = crate::domain::vtabs_window_tests::MUX_TEST_LOCK
+        .lock()
+        .unwrap();
     let mux = Arc::new(Mux::new(None));
     Mux::set_mux(&mux);
     struct Cleanup;
